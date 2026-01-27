@@ -60,12 +60,20 @@ pub async fn ask_fndr(
     state: State<'_, Arc<AppState>>,
     query: String,
 ) -> Result<String, String> {
-    // 1. Retrieve relevant context using keyword search for now (fastest for prototype)
+    // 1. Check if we have ANY memories first
+    let stats = state.inner().store.get_stats()
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    
+    if stats.total_records == 0 {
+        return Ok("I haven't captured any memories yet! Please keep me running in the background for a few minutes while you browse or work.".to_string());
+    }
+
+    // 2. Retrieve relevant context using keyword search
     let search_results = state.inner().store.keyword_search(&query, 5)
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     if search_results.is_empty() {
-        return Ok("I couldn't find any relevant memories to answer that question.".to_string());
+        return Ok(format!("I found {} memories in total, but none of them seem to match '{}'. Try a broader question!", stats.total_records, query));
     }
 
     // 2. Assemble context string

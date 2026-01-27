@@ -59,7 +59,7 @@ impl InferenceEngine {
         if ocr_text.trim().is_empty() { return String::new(); }
 
         let prompt = format!(
-            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nSummarize the OCR text into one concise, human-readable sentence. Ignore UI noise. Do not include introductory phrases like 'Here is a summary'.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nRAW OCR: \"{}\"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nSummarize the OCR text into one concise, human-readable sentence. Ignore UI noise. DO NOT include introductory phrases like 'Here is a summary' or 'Here is a concise, human-readable summary of the OCR text'.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nRAW OCR: \"{}\"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
             ocr_text
         );
 
@@ -69,7 +69,7 @@ impl InferenceEngine {
     /// Answer contextual questions using retrieved memories (RAG)
     pub async fn answer(&self, question: &str, context_str: &str) -> String {
         let prompt = format!(
-            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are FNDR, a helpful local memory assistant. Answer the user based ONLY on the provided context. Be conversational and concise.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nCONTEXT:\n{}\n\nQUESTION: {}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are FNDR, a helpful local memory assistant. Answer the user based ONLY on the provided context. Be conversational and concise. DO NOT include introductory phrases like 'Here is a summary' or 'Here is a concise, human-readable summary of the OCR text'. RETURN ONLY THE ANSWER, DO NOT include any additional text.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nCONTEXT:\n{}\n\nQUESTION: {}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
             context_str, question
         );
 

@@ -36,7 +36,7 @@ function App() {
         <div className="app">
             <header className="app-header">
                 <div className="logo">
-                    <span className="logo-icon">🔍</span>
+                    <span className="logo-icon">⌘</span>
                     <h1>FNDR</h1>
                 </div>
                 <div className="status-badge">
