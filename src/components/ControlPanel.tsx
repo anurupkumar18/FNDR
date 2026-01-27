@@ -7,6 +7,9 @@ import {
     setBlocklist,
     deleteAllData,
     getStats,
+    getRetentionDays,
+    setRetentionDays,
+    deleteOlderThan,
     Stats,
 } from "../api/tauri";
 import "./ControlPanel.css";
@@ -21,6 +24,8 @@ export function ControlPanel({ status }: ControlPanelProps) {
     const [newApp, setNewApp] = useState("");
     const [stats, setStats] = useState<Stats | null>(null);
     const [confirmDelete, setConfirmDelete] = useState(false);
+    const [retentionDays, setRetentionDaysState] = useState<number>(7);
+    const [retentionBusy, setRetentionBusy] = useState(false);
 
     useEffect(() => {
         if (isOpen) {
@@ -30,11 +35,38 @@ export function ControlPanel({ status }: ControlPanelProps) {
 
     const loadData = async () => {
         try {
-            const [bl, st] = await Promise.all([getBlocklist(), getStats()]);
+            const [bl, st, ret] = await Promise.all([
+                getBlocklist(),
+                getStats(),
+                getRetentionDays(),
+            ]);
             setBlocklistState(bl);
             setStats(st);
+            setRetentionDaysState(ret);
         } catch (e) {
             console.error("Failed to load data:", e);
+        }
+    };
+
+    const handleRetentionChange = async (days: number) => {
+        try {
+            await setRetentionDays(days);
+            setRetentionDaysState(days);
+        } catch (e) {
+            console.error("Failed to set retention:", e);
+        }
+    };
+
+    const handleRunRetentionNow = async () => {
+        if (retentionDays === 0) return;
+        setRetentionBusy(true);
+        try {
+            const deleted = await deleteOlderThan(retentionDays);
+            if (deleted > 0) await loadData();
+            setRetentionBusy(false);
+        } catch (e) {
+            console.error("Failed to run retention:", e);
+            setRetentionBusy(false);
         }
     };
 
@@ -116,6 +148,36 @@ export function ControlPanel({ status }: ControlPanelProps) {
                     </div>
 
                     <div className="panel-section">
+                        <h3>Data retention</h3>
+                        <p className="panel-hint">
+                            Auto-remove memories older than this. Applied on startup and when you run it now.
+                        </p>
+                        <div className="retention-row">
+                            <select
+                                className="retention-select"
+                                value={retentionDays}
+                                onChange={(e) =>
+                                    handleRetentionChange(Number(e.target.value))
+                                }
+                            >
+                                <option value={7}>7 days</option>
+                                <option value={30}>30 days</option>
+                                <option value={90}>90 days</option>
+                                <option value={0}>Forever</option>
+                            </select>
+                            {retentionDays > 0 && (
+                                <button
+                                    className="run-retention-btn"
+                                    onClick={handleRunRetentionNow}
+                                    disabled={retentionBusy}
+                                >
+                                    {retentionBusy ? "…" : "Run now"}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="panel-section">
                         <h3>Statistics</h3>
                         {stats && (
                             <div className="stats-grid">
@@ -165,6 +227,17 @@ export function ControlPanel({ status }: ControlPanelProps) {
                         >
                             {confirmDelete ? "Click again to confirm" : "🗑️ Delete All Data"}
                         </button>
+                    </div>
+
+                    <div className="panel-section about-section">
+                        <h3>About &amp; privacy</h3>
+                        <p className="about-text">
+                            FNDR runs 100% on your Mac. We never store screenshots
+                            or send data to the cloud. Screen content is turned into
+                            text and vectors locally; raw pixels are discarded
+                            immediately. You can pause capture, block specific apps,
+                            and delete or limit data at any time.
+                        </p>
                     </div>
                 </div>
             )}

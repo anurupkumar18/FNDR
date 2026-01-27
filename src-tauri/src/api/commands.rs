@@ -68,9 +68,17 @@ pub async fn ask_fndr(
         return Ok("I haven't captured any memories yet! Please keep me running in the background for a few minutes while you browse or work.".to_string());
     }
 
-    // 2. Retrieve relevant context using keyword search
-    let search_results = state.inner().store.keyword_search(&query, 5)
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    // 2. Retrieve relevant context via hybrid search (semantic + keyword, RRF) for better RAG
+    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let search_results = HybridSearcher::search(
+        &state.inner().store,
+        &embedder,
+        &query,
+        5,
+        None,
+        None,
+    )
+    .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     if search_results.is_empty() {
         return Ok(format!("I found {} memories in total, but none of them seem to match '{}'. Try a broader question!", stats.total_records, query));
@@ -155,4 +163,45 @@ pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), Stri
 #[tauri::command]
 pub async fn get_stats(state: State<'_, Arc<AppState>>) -> Result<Stats, String> {
     state.inner().store.get_stats().map_err(|e: Box<dyn std::error::Error>| e.to_string())
+}
+
+/// Get retention days (0 = keep forever)
+#[tauri::command]
+pub async fn get_retention_days(state: State<'_, Arc<AppState>>) -> Result<u32, String> {
+    Ok(state.inner().config.read().retention_days)
+}
+
+/// Set retention days (0 = keep forever)
+#[tauri::command]
+pub async fn set_retention_days(
+    state: State<'_, Arc<AppState>>,
+    days: u32,
+) -> Result<(), String> {
+    let mut config = state.inner().config.write();
+    config.retention_days = days;
+    config.save().map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    Ok(())
+}
+
+/// Get unique app names for filter dropdown
+#[tauri::command]
+pub async fn get_app_names(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
+    state
+        .inner()
+        .store
+        .get_app_names()
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())
+}
+
+/// Delete records older than the given number of days; returns count deleted
+#[tauri::command]
+pub async fn delete_older_than(
+    state: State<'_, Arc<AppState>>,
+    days: u32,
+) -> Result<usize, String> {
+    state
+        .inner()
+        .store
+        .delete_older_than(days)
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }

@@ -26,8 +26,9 @@ impl HybridSearcher {
 
         let semantic_results = store.vector_search(&query_embedding, limit * 2, time_filter, app_filter)?;
 
-        // Get keyword results
-        let keyword_results = store.keyword_search(query, limit * 2)?;
+        // Get keyword results (with same filters for consistency)
+        let keyword_results =
+            store.keyword_search(query, limit * 2, time_filter, app_filter)?;
 
         // RRF Fusion
         let fused = Self::rrf_fusion(&semantic_results, &keyword_results, limit);

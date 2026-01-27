@@ -80,6 +80,60 @@
     letter-spacing: 0.05em;
 }
 
+.panel-hint {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin: -0.5rem 0 0.75rem 0;
+    line-height: 1.4;
+}
+
+.retention-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.retention-select {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.run-retention-btn {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: none;
+    background: rgba(99, 102, 241, 0.3);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.run-retention-btn:hover:not(:disabled) {
+    background: rgba(99, 102, 241, 0.5);
+}
+
+.run-retention-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.about-section {
+    border-bottom: none;
+}
+
+.about-text {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin: 0;
+}
+
 .toggle-btn {
     width: 100%;
     padding: 0.75rem;

@@ -3,7 +3,7 @@ import { SearchBar } from "./components/SearchBar";
 import { Timeline } from "./components/Timeline";
 import { ControlPanel } from "./components/ControlPanel";
 import { useSearch } from "./hooks/useSearch";
-import { getStatus, CaptureStatus } from "./api/tauri";
+import { getStatus, getAppNames, CaptureStatus } from "./api/tauri";
 import "./styles/App.css";
 
 import { AskFndr } from "./components/AskFndr";
@@ -11,10 +11,16 @@ import { AskFndr } from "./components/AskFndr";
 function App() {
     const [query, setQuery] = useState("");
     const [timeFilter, setTimeFilter] = useState<string | null>(null);
-    const appFilter = null; // Filter not implemented in UI yet
+    const [appFilter, setAppFilter] = useState<string | null>(null);
+    const [appNames, setAppNames] = useState<string[]>([]);
     const [status, setStatus] = useState<CaptureStatus | null>(null);
 
     const { results, isLoading, error } = useSearch(query, timeFilter, appFilter);
+
+    // Load app names for filter (once and when status refreshes so new apps appear)
+    useEffect(() => {
+        getAppNames().then(setAppNames).catch(() => setAppNames([]));
+    }, [status?.frames_captured]);
 
     // Poll status every 2 seconds
     useEffect(() => {
@@ -58,6 +64,9 @@ function App() {
                     onChange={setQuery}
                     timeFilter={timeFilter}
                     onTimeFilterChange={setTimeFilter}
+                    appFilter={appFilter}
+                    onAppFilterChange={setAppFilter}
+                    appNames={appNames}
                 />
 
                 {error && <div className="error-banner">{error}</div>}
