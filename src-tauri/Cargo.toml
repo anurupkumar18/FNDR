@@ -1,0 +1,92 @@
+[package]
+name = "fndr"
+version = "0.1.0"
+edition = "2021"
+description = "FNDR - Privacy-first local memory search"
+authors = ["FNDR Team"]
+license = "MIT"
+repository = ""
+default-run = "fndr"
+
+[lib]
+name = "fndr_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "fndr"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Image processing
+image = { version = "0.23", default-features = false, features = ["png", "jpeg"] }
+
+# Hashing for deduplication
+img_hash = "3.2"
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Configuration
+directories = "5"
+toml = "0.8"
+
+# LanceDB (vector database) - Disabled for prototype due to dep conflicts
+# lancedb = "0.13"
+# arrow-array = "53"
+# arrow-schema = "53"
+
+# ONNX Runtime for embeddings (disabled for prototype, using hash-based embeddings)
+# ort = { version = "2.0.0-rc.11", default-features = false }
+
+# Tokenization - use simpler approach
+# tokenizers = "0.20"
+
+# Tantivy for full-text search
+tantivy = "0.22"
+
+# Concurrency
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+
+# AI Inference (llama-cpp-2)
+llama-cpp-2 = { version = "0.1", features = ["metal"] } # Metal acceleration for Mac
+# Add reqwest for model downloading if not already present
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+
+# macOS specific
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSString", "NSData", "NSDictionary", "NSArray"] }
+objc2-app-kit = { version = "0.2", features = ["NSWorkspace", "NSRunningApplication", "NSImage"] }
+block2 = "0.5"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

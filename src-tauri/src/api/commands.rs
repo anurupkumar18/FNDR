@@ -1,0 +1,150 @@
+//! Tauri command handlers
+
+use crate::embed::Embedder;
+use crate::search::HybridSearcher;
+use crate::store::{SearchResult, Stats};
+use crate::AppState;
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use tauri::State;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureStatus {
+    pub is_capturing: bool,
+    pub is_paused: bool,
+    pub is_incognito: bool,
+    pub frames_captured: u64,
+    pub frames_dropped: u64,
+    pub last_capture_time: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchRequest {
+    pub query: String,
+    pub time_filter: Option<String>,
+    pub app_filter: Option<String>,
+    pub limit: Option<usize>,
+}
+
+/// Search for memories
+#[tauri::command]
+pub async fn search(
+    state: State<'_, Arc<AppState>>,
+    query: String,
+    time_filter: Option<String>,
+    app_filter: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>, String> {
+    let limit = limit.unwrap_or(20);
+
+    // Create embedder for this search
+    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+
+    let results = HybridSearcher::search(
+        &state.inner().store,
+        &embedder,
+        &query,
+        limit,
+        time_filter.as_deref(),
+        app_filter.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(results)
+}
+
+/// Ask FNDR a question about your memories (RAG)
+#[tauri::command]
+pub async fn ask_fndr(
+    state: State<'_, Arc<AppState>>,
+    query: String,
+) -> Result<String, String> {
+    // 1. Retrieve relevant context using keyword search for now (fastest for prototype)
+    let search_results = state.inner().store.keyword_search(&query, 5)
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+
+    if search_results.is_empty() {
+        return Ok("I couldn't find any relevant memories to answer that question.".to_string());
+    }
+
+    // 2. Assemble context string
+    let mut context_parts = Vec::new();
+    for res in search_results {
+        let time = chrono::DateTime::<chrono::Utc>::from_utc(
+            chrono::NaiveDateTime::from_timestamp_opt(res.timestamp / 1000, 0).unwrap(),
+            chrono::Utc
+        );
+        context_parts.push(format!(
+            "[{}] App: {}, Text: {}",
+            time.format("%Y-%m-%d %H:%M:%S"),
+            res.app_name,
+            res.text.chars().take(500).collect::<String>()
+        ));
+    }
+    let context = context_parts.join("\n\n---\n\n");
+
+    // 3. Generate answer using local LLM
+    let answer = state.inner().inference.answer(&query, &context).await;
+
+    Ok(answer)
+}
+
+/// Get capture status
+#[tauri::command]
+pub async fn get_status(state: State<'_, Arc<AppState>>) -> Result<CaptureStatus, String> {
+    Ok(CaptureStatus {
+        is_capturing: state.inner().is_capturing(),
+        is_paused: state.inner().is_paused.load(Ordering::SeqCst),
+        is_incognito: state.inner().is_incognito.load(Ordering::SeqCst),
+        frames_captured: state.inner().frames_captured.load(Ordering::Relaxed),
+        frames_dropped: state.inner().frames_dropped.load(Ordering::Relaxed),
+        last_capture_time: state.inner().last_capture_time.load(Ordering::Relaxed),
+    })
+}
+
+/// Pause capture
+#[tauri::command]
+pub async fn pause_capture(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.inner().pause();
+    Ok(())
+}
+
+/// Resume capture
+#[tauri::command]
+pub async fn resume_capture(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.inner().resume();
+    Ok(())
+}
+
+/// Get blocklist
+#[tauri::command]
+pub async fn get_blocklist(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
+    let config = state.inner().config.read();
+    Ok(config.blocklist.clone())
+}
+
+/// Set blocklist
+#[tauri::command]
+pub async fn set_blocklist(
+    state: State<'_, Arc<AppState>>,
+    apps: Vec<String>,
+) -> Result<(), String> {
+    let mut config = state.inner().config.write();
+    config.blocklist = apps;
+    config.save().map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    Ok(())
+}
+
+/// Delete all data
+#[tauri::command]
+pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.inner().store.delete_all().map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    Ok(())
+}
+
+/// Get statistics
+#[tauri::command]
+pub async fn get_stats(state: State<'_, Arc<AppState>>) -> Result<Stats, String> {
+    state.inner().store.get_stats().map_err(|e: Box<dyn std::error::Error>| e.to_string())
+}

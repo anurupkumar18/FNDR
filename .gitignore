@@ -1,0 +1,10 @@
+node_modules/
+target/
+dist/
+*.gguf
+memories.json
+.DS_Store
+.env
+*.log
+src-tauri/target/
+src-tauri/models/*.gguf
