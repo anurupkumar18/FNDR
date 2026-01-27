@@ -57,10 +57,32 @@
   color: var(--text-primary);
 }
 
+.filter-bar,
 .filters {
   display: flex;
+  align-items: center;
   gap: 0.5rem;
   margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.filter-app-select {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  min-width: 140px;
+}
+
+.filter-app-select:hover,
+.filter-app-select:focus {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: var(--text-primary);
+  outline: none;
 }
 
 .filter-btn {

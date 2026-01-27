@@ -119,20 +119,55 @@ impl Store {
         Ok(results)
     }
 
-    /// Keyword search (simple substring match)
+    /// Keyword search (simple substring match) with optional time and app filters
     pub fn keyword_search(
         &self,
         query: &str,
         limit: usize,
+        time_filter: Option<&str>,
+        app_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
         let records = self.records.read().unwrap();
         let query_lower = query.to_lowercase();
 
-        let mut matched: Vec<&MemoryRecord> = records.iter().filter(|r| {
-            r.text.to_lowercase().contains(&query_lower) || 
-            r.app_name.to_lowercase().contains(&query_lower) ||
-            r.window_title.to_lowercase().contains(&query_lower)
-        }).collect();
+        let mut matched: Vec<&MemoryRecord> = records
+            .iter()
+            .filter(|r| {
+                if let Some(tf) = time_filter {
+                    let now = chrono::Utc::now();
+                    match tf {
+                        "today" => {
+                            let today = now.format("%Y-%m-%d").to_string();
+                            if r.day_bucket != today {
+                                return false;
+                            }
+                        }
+                        "yesterday" => {
+                            let yesterday =
+                                (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+                            if r.day_bucket != yesterday {
+                                return false;
+                            }
+                        }
+                        "week" => {
+                            let week_ago = (now - chrono::Duration::days(7)).timestamp_millis();
+                            if r.timestamp < week_ago {
+                                return false;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(app) = app_filter {
+                    if r.app_name != app {
+                        return false;
+                    }
+                }
+                r.text.to_lowercase().contains(&query_lower)
+                    || r.app_name.to_lowercase().contains(&query_lower)
+                    || r.window_title.to_lowercase().contains(&query_lower)
+            })
+            .collect();
 
         // Sort by timestamp descending (newest first)
         matched.sort_by_key(|r| std::cmp::Reverse(r.timestamp));
@@ -193,6 +228,16 @@ impl Store {
         }
         self.save()?;
         Ok(())
+    }
+
+    /// Get sorted list of unique app names (for filter dropdown)
+    pub fn get_app_names(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let records = self.records.read().unwrap();
+        let mut names: std::collections::HashSet<String> =
+            records.iter().map(|r| r.app_name.clone()).collect();
+        let mut list: Vec<String> = names.drain().collect();
+        list.sort();
+        Ok(list)
     }
 
     /// Delete records older than days

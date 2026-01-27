@@ -68,6 +68,22 @@ export async function getStats(): Promise<Stats> {
     return invoke("get_stats");
 }
 
+export async function getAppNames(): Promise<string[]> {
+    return invoke("get_app_names");
+}
+
+export async function getRetentionDays(): Promise<number> {
+    return invoke("get_retention_days");
+}
+
+export async function setRetentionDays(days: number): Promise<void> {
+    return invoke("set_retention_days", { days });
+}
+
+export async function deleteOlderThan(days: number): Promise<number> {
+    return invoke("delete_older_than", { days });
+}
+
 export async function askFndr(query: string): Promise<string> {
     return invoke("ask_fndr", { query });
 }

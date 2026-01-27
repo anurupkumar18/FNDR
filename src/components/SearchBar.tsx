@@ -5,6 +5,9 @@ interface SearchBarProps {
     onChange: (value: string) => void;
     timeFilter: string | null;
     onTimeFilterChange: (filter: string | null) => void;
+    appFilter: string | null;
+    onAppFilterChange: (app: string | null) => void;
+    appNames: string[];
 }
 
 export function SearchBar({
@@ -12,6 +15,9 @@ export function SearchBar({
     onChange,
     timeFilter,
     onTimeFilterChange,
+    appFilter,
+    onAppFilterChange,
+    appNames,
 }: SearchBarProps) {
     const timeOptions = [
         { id: null, label: "All Time" },
@@ -44,6 +50,19 @@ export function SearchBar({
                         {opt.label}
                     </button>
                 ))}
+                <select
+                    className="filter-app-select"
+                    value={appFilter ?? ""}
+                    onChange={(e) => onAppFilterChange(e.target.value || null)}
+                    title="Filter by app"
+                >
+                    <option value="">All apps</option>
+                    {appNames.map((name) => (
+                        <option key={name} value={name}>
+                            {name}
+                        </option>
+                    ))}
+                </select>
             </div>
         </div>
     );

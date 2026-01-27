@@ -1,6 +1,10 @@
+import { useState, useEffect } from "react";
 import { SearchResult } from "../api/tauri";
 import { MemoryCard } from "./MemoryCard";
 import "./Timeline.css";
+
+const INITIAL_VISIBLE = 80;
+const LOAD_MORE_STEP = 80;
 
 interface TimelineProps {
     results: SearchResult[];
@@ -8,7 +12,23 @@ interface TimelineProps {
     query: string;
 }
 
+function formatDay(timestamp: number): string {
+    return new Date(timestamp).toLocaleDateString(undefined, {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+    });
+}
+
 export function Timeline({ results, isLoading, query }: TimelineProps) {
+    const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
+
+    // Reset visible count when search query changes
+    useEffect(() => {
+        setVisibleCount(INITIAL_VISIBLE);
+    }, [query]);
+
     if (isLoading) {
         return (
             <div className="timeline-loading">
@@ -37,25 +57,30 @@ export function Timeline({ results, isLoading, query }: TimelineProps) {
         );
     }
 
-    // Group results by day
+    const visibleResults = results.slice(0, visibleCount);
+    const hasMore = results.length > visibleCount;
+    const remaining = results.length - visibleCount;
+
+    // Group visible results by day
     const groups: Record<string, SearchResult[]> = {};
-    results.forEach((r) => {
-        const date = new Date(r.timestamp);
-        const day = date.toLocaleDateString(undefined, {
-            weekday: "long",
-            year: "numeric",
-            month: "long",
-            day: "numeric",
-        });
+    visibleResults.forEach((r) => {
+        const day = formatDay(r.timestamp);
         if (!groups[day]) groups[day] = [];
         groups[day].push(r);
     });
+
+    const handleLoadMore = () => {
+        setVisibleCount((n) => Math.min(n + LOAD_MORE_STEP, results.length));
+    };
 
     return (
         <div className="timeline">
             {Object.entries(groups).map(([day, dayResults]) => {
                 const filtered = filterConsecutiveSimilar(dayResults);
-                const durationMinutes = Math.round((dayResults[0].timestamp - dayResults[dayResults.length - 1].timestamp) / 60000);
+                const durationMinutes = Math.round(
+                    (dayResults[0].timestamp - dayResults[dayResults.length - 1].timestamp) /
+                        60000
+                );
 
                 return (
                     <div key={day} className="timeline-day">
@@ -75,6 +100,13 @@ export function Timeline({ results, isLoading, query }: TimelineProps) {
                     </div>
                 );
             })}
+            {hasMore && (
+                <div className="timeline-load-more">
+                    <button type="button" className="load-more-btn" onClick={handleLoadMore}>
+                        Load more — show {Math.min(LOAD_MORE_STEP, remaining)} of {remaining} remaining
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

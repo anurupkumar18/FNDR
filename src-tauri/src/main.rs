@@ -33,6 +33,15 @@ fn main() {
             let store = Store::new(&data_dir)?;
             tracing::info!("Store initialized at {:?}", data_dir);
 
+            // Apply retention: remove records older than config.retention_days (0 = keep forever)
+            if config.retention_days > 0 {
+                match store.delete_older_than(config.retention_days) {
+                    Ok(n) if n > 0 => tracing::info!("Retention: removed {} old records", n),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Retention cleanup failed: {}", e),
+                }
+            }
+
             // Initialize AI Engine (blocking for start)
             let handle = app.handle().clone();
             let inference = tauri::async_runtime::block_on(async move {
@@ -66,6 +75,10 @@ fn main() {
             api::commands::set_blocklist,
             api::commands::delete_all_data,
             api::commands::get_stats,
+            api::commands::get_retention_days,
+            api::commands::set_retention_days,
+            api::commands::delete_older_than,
+            api::commands::get_app_names,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

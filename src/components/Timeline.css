@@ -124,3 +124,26 @@
     color: var(--accent);
     font-weight: 600;
 }
+
+.timeline-load-more {
+    display: flex;
+    justify-content: center;
+    padding: 1.5rem;
+}
+
+.load-more-btn {
+    padding: 0.6rem 1.25rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.06);
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.load-more-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    border-color: rgba(99, 102, 241, 0.4);
+}
