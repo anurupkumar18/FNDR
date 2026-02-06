@@ -33,6 +33,9 @@
             "dmg",
             "app"
         ],
+        "resources": {
+            "models/*": "models/"
+        },
         "icon": [
             "icons/icon.png"
         ],

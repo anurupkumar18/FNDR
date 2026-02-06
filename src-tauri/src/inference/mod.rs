@@ -31,15 +31,44 @@ impl InferenceEngine {
         let backend = LlamaBackend::init()?;
         let backend = Arc::new(backend);
 
-        let model_path = PathBuf::from("models/Llama-3.2-1B-Instruct-Q4_K_M.gguf");
+        // Try multiple locations for model file (dev vs release)
+        let model_name = "Llama-3.2-1B-Instruct-Q4_K_M.gguf";
+        let possible_paths = vec![
+            // Dev mode: relative to src-tauri
+            PathBuf::from(format!("models/{}", model_name)),
+            // Dev mode: relative to project root
+            PathBuf::from(format!("src-tauri/models/{}", model_name)),
+            // Release: next to executable
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("models").join(model_name)))
+                .unwrap_or_default(),
+            // Release: in Resources folder (macOS bundle)
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| {
+                    p.parent()
+                        .map(|d| d.join("../Resources/models").join(model_name))
+                })
+                .unwrap_or_default(),
+            // Absolute fallback
+            dirs::data_dir()
+                .unwrap_or_default()
+                .join("fndr/models")
+                .join(model_name),
+        ];
 
-        if !model_path.exists() {
-            tracing::error!(
-                "Model file not found at {:?}. AI features will be disabled.",
-                model_path
-            );
-            return Err("Model file missing. Run ./download_model.sh to get the model.".into());
-        }
+        let model_path = possible_paths
+            .into_iter()
+            .find(|p| p.exists())
+            .ok_or_else(|| {
+                tracing::error!(
+                    "Model file not found in any location. AI features will be disabled."
+                );
+                "Model file missing. Run ./download_model.sh to get the model."
+            })?;
+
+        tracing::info!("Loading model from {:?}", model_path);
 
         let model_params = LlamaModelParams::default();
         let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)?;

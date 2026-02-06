@@ -128,7 +128,20 @@ impl VlmEngine {
 
     /// Resolve model path, trying primary then fallback
     fn resolve_model_path(preferred_size: &str) -> Result<(PathBuf, String), VlmError> {
-        let models_dir = PathBuf::from("models");
+        // Try multiple locations for model files (dev vs release)
+        let possible_dirs = vec![
+            PathBuf::from("models"),
+            PathBuf::from("src-tauri/models"),
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("models")))
+                .unwrap_or_default(),
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("../Resources/models")))
+                .unwrap_or_default(),
+            dirs::data_dir().unwrap_or_default().join("fndr/models"),
+        ];
 
         // Define model configurations
         let model_configs = [
@@ -136,30 +149,33 @@ impl VlmEngine {
             ("256M", "SmolVLM-256M-Instruct-Q4_K_M.gguf"),
         ];
 
-        // Try preferred model first
+        // Try preferred model first in all directories
         let preferred_config = model_configs
             .iter()
             .find(|(size, _)| *size == preferred_size)
             .or_else(|| model_configs.first())
             .unwrap();
 
-        let primary_path = models_dir.join(preferred_config.1);
-
-        if primary_path.exists() {
-            return Ok((primary_path, preferred_config.0.to_string()));
+        for dir in &possible_dirs {
+            let path = dir.join(preferred_config.1);
+            if path.exists() {
+                return Ok((path, preferred_config.0.to_string()));
+            }
         }
 
-        // Try fallback models
+        // Try fallback models in all directories
         for (size, filename) in &model_configs {
             if *size != preferred_size {
-                let fallback_path = models_dir.join(filename);
-                if fallback_path.exists() {
-                    tracing::warn!(
-                        "Primary VLM model (SmolVLM-{}) not found, using fallback (SmolVLM-{})",
-                        preferred_size,
-                        size
-                    );
-                    return Ok((fallback_path, size.to_string()));
+                for dir in &possible_dirs {
+                    let fallback_path = dir.join(filename);
+                    if fallback_path.exists() {
+                        tracing::warn!(
+                            "Primary VLM model (SmolVLM-{}) not found, using fallback (SmolVLM-{})",
+                            preferred_size,
+                            size
+                        );
+                        return Ok((fallback_path, size.to_string()));
+                    }
                 }
             }
         }
