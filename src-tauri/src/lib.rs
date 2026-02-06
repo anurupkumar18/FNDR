@@ -11,6 +11,7 @@ pub mod ocr;
 pub mod privacy;
 pub mod search;
 pub mod store;
+pub mod tasks;
 pub mod telemetry;
 
 use config::Config;

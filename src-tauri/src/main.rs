@@ -104,6 +104,9 @@ fn main() {
             api::commands::set_retention_days,
             api::commands::delete_older_than,
             api::commands::get_app_names,
+            api::commands::get_todos,
+            api::commands::dismiss_todo,
+            api::commands::execute_todo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

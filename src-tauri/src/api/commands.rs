@@ -224,3 +224,93 @@ pub async fn delete_older_than(
         .delete_older_than(days)
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }
+
+// ========== Task Commands ==========
+
+use crate::tasks::{parse_tasks_from_llm_response, Task, TaskStore};
+use parking_lot::Mutex;
+use std::sync::OnceLock;
+
+// Global task store (singleton pattern for now)
+static TASK_STORE: OnceLock<Mutex<TaskStore>> = OnceLock::new();
+
+fn get_task_store() -> &'static Mutex<TaskStore> {
+    TASK_STORE.get_or_init(|| {
+        let data_dir = dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("fndr");
+        Mutex::new(
+            TaskStore::new(&data_dir)
+                .unwrap_or_else(|_| TaskStore::new(&std::path::PathBuf::from(".")).unwrap()),
+        )
+    })
+}
+
+/// Get extracted todos/reminders from recent memories
+#[tauri::command]
+pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, String> {
+    // Get recent memories (last 24 hours)
+    let memories = state
+        .inner()
+        .store
+        .get_recent_memories(24)
+        .map_err(|e| e.to_string())?;
+
+    if memories.is_empty() {
+        return Ok(get_task_store()
+            .lock()
+            .get_active_tasks()
+            .iter()
+            .map(|t| (*t).clone())
+            .collect());
+    }
+
+    // Combine memory text for LLM
+    let combined_text: String = memories
+        .iter()
+        .take(10) // Limit to 10 most recent
+        .map(|m| format!("[{}] {}: {}", m.app_name, m.window_title, m.snippet))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Extract new todos via LLM
+    let llm_response = state.inner().inference.extract_todos(&combined_text).await;
+
+    // Parse and add new tasks
+    let new_tasks = parse_tasks_from_llm_response(&llm_response, "FNDR");
+    let mut store = get_task_store().lock();
+
+    for task in new_tasks {
+        let _ = store.add_task(task);
+    }
+
+    // Return all active tasks
+    Ok(store
+        .get_active_tasks()
+        .iter()
+        .map(|t| (*t).clone())
+        .collect())
+}
+
+/// Dismiss a task
+#[tauri::command]
+pub async fn dismiss_todo(task_id: String) -> Result<bool, String> {
+    get_task_store()
+        .lock()
+        .dismiss_task(&task_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Mark a task for CUA execution
+#[tauri::command]
+pub async fn execute_todo(task_id: String) -> Result<Task, String> {
+    let store = get_task_store().lock();
+    let task = store
+        .get_active_tasks()
+        .into_iter()
+        .find(|t| t.id == task_id)
+        .cloned()
+        .ok_or_else(|| "Task not found".to_string())?;
+
+    Ok(task)
+}

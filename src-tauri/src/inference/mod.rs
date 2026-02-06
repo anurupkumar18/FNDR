@@ -118,6 +118,20 @@ impl InferenceEngine {
         self.complete(&prompt, 100).await
     }
 
+    /// Extract actionable todos/reminders from memory text
+    pub async fn extract_todos(&self, memories_text: &str) -> String {
+        if memories_text.trim().is_empty() {
+            return String::new();
+        }
+
+        let prompt = format!(
+            "<|im_start|>system\nExtract actionable tasks from screen captures. Output format:\n- TODO: [task]\n- REMINDER: [reminder]\n- FOLLOWUP: [followup]\nOnly list clear, specific actions. Skip vague items. Max 5 items.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+            memories_text.chars().take(2000).collect::<String>()
+        );
+
+        self.complete(&prompt, 200).await
+    }
+
     async fn complete(&self, prompt: &str, max_tokens: i32) -> String {
         let mut ctx = self.context.lock();
 

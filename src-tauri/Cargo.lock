@@ -964,6 +964,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "directories",
+ "dirs",
  "image",
  "img_hash",
  "llama-cpp-2",

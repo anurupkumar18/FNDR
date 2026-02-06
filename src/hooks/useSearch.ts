@@ -22,7 +22,7 @@ export function useSearch(
             setError(null);
 
             try {
-                const res = await search(query, timeFilter, appFilter);
+                const res = await search(query, timeFilter ?? undefined, appFilter ?? undefined);
                 setResults(res);
             } catch (e) {
                 setError(e instanceof Error ? e.message : "Search failed");

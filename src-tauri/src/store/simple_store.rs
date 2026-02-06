@@ -1,5 +1,5 @@
 //! Simple in-memory storage with JSON persistence
-//! 
+//!
 //! Replaces LanceDB for the prototype to avoid dependency conflicts.
 //! Implements naive vector search (cosine similarity) and keyword search.
 
@@ -37,7 +37,10 @@ impl Store {
     }
 
     /// Add a batch of records
-    pub fn add_batch(&self, new_records: &[MemoryRecord]) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn add_batch(
+        &self,
+        new_records: &[MemoryRecord],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         {
             let mut records = self.records.write().unwrap();
             records.extend_from_slice(new_records);
@@ -67,45 +70,63 @@ impl Store {
         app_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
         let records = self.records.read().unwrap();
-        
+
         // Filter candidates
-        let candidates: Vec<&MemoryRecord> = records.iter().filter(|r| {
-            if let Some(tf) = time_filter {
-                let now = chrono::Utc::now();
-                match tf {
-                    "today" => {
-                        let today = now.format("%Y-%m-%d").to_string();
-                        if r.day_bucket != today { return false; }
+        let candidates: Vec<&MemoryRecord> = records
+            .iter()
+            .filter(|r| {
+                if let Some(tf) = time_filter {
+                    let now = chrono::Utc::now();
+                    match tf {
+                        "today" => {
+                            let today = now.format("%Y-%m-%d").to_string();
+                            if r.day_bucket != today {
+                                return false;
+                            }
+                        }
+                        "yesterday" => {
+                            let yesterday = (now - chrono::Duration::days(1))
+                                .format("%Y-%m-%d")
+                                .to_string();
+                            if r.day_bucket != yesterday {
+                                return false;
+                            }
+                        }
+                        "week" => {
+                            let week_ago = (now - chrono::Duration::days(7)).timestamp_millis();
+                            if r.timestamp < week_ago {
+                                return false;
+                            }
+                        }
+                        _ => {}
                     }
-                    "yesterday" => {
-                        let yesterday = (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
-                        if r.day_bucket != yesterday { return false; }
-                    }
-                    "week" => {
-                        let week_ago = (now - chrono::Duration::days(7)).timestamp_millis();
-                        if r.timestamp < week_ago { return false; }
-                    }
-                    _ => {}
                 }
-            }
-            if let Some(app) = app_filter {
-                if r.app_name != app { return false; }
-            }
-            true
-        }).collect();
+                if let Some(app) = app_filter {
+                    if r.app_name != app {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
 
         // Calculate scores
-        let mut scored: Vec<(f32, &MemoryRecord)> = candidates.iter().map(|&r| {
-            let score = cosine_similarity(query_embedding, &r.embedding);
-            (score, r)
-        }).collect();
+        let mut scored: Vec<(f32, &MemoryRecord)> = candidates
+            .iter()
+            .map(|&r| {
+                let score = cosine_similarity(query_embedding, &r.embedding);
+                (score, r)
+            })
+            .collect();
 
         // Sort by score descending
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
         // Create results
-        let results = scored.into_iter().take(limit).map(|(score, r)| {
-            SearchResult {
+        let results = scored
+            .into_iter()
+            .take(limit)
+            .map(|(score, r)| SearchResult {
                 id: r.id.clone(),
                 timestamp: r.timestamp,
                 app_name: r.app_name.clone(),
@@ -113,8 +134,8 @@ impl Store {
                 text: r.text.clone(),
                 snippet: r.snippet.clone(),
                 score,
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(results)
     }
@@ -143,8 +164,9 @@ impl Store {
                             }
                         }
                         "yesterday" => {
-                            let yesterday =
-                                (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+                            let yesterday = (now - chrono::Duration::days(1))
+                                .format("%Y-%m-%d")
+                                .to_string();
                             if r.day_bucket != yesterday {
                                 return false;
                             }
@@ -172,8 +194,10 @@ impl Store {
         // Sort by timestamp descending (newest first)
         matched.sort_by_key(|r| std::cmp::Reverse(r.timestamp));
 
-        let results = matched.into_iter().take(limit).map(|r| {
-            SearchResult {
+        let results = matched
+            .into_iter()
+            .take(limit)
+            .map(|r| SearchResult {
                 id: r.id.clone(),
                 timestamp: r.timestamp,
                 app_name: r.app_name.clone(),
@@ -181,8 +205,8 @@ impl Store {
                 text: r.text.clone(),
                 snippet: r.snippet.clone(),
                 score: 1.0,
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(results)
     }
@@ -190,7 +214,7 @@ impl Store {
     /// Get statistics
     pub fn get_stats(&self) -> Result<Stats, Box<dyn std::error::Error>> {
         let records = self.records.read().unwrap();
-        
+
         let total_records = records.len();
         let mut days = std::collections::HashSet::new();
         let mut app_counts: HashMap<String, usize> = HashMap::new();
@@ -244,7 +268,7 @@ impl Store {
     pub fn delete_older_than(&self, days: u32) -> Result<usize, Box<dyn std::error::Error>> {
         let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
         let cutoff_ms = cutoff.timestamp_millis();
-        
+
         let mut records = self.records.write().unwrap();
         let initial_len = records.len();
         records.retain(|r| r.timestamp >= cutoff_ms);
@@ -254,8 +278,26 @@ impl Store {
             drop(records); // Release lock before saving
             self.save()?;
         }
-        
+
         Ok(deleted)
+    }
+
+    /// Get recent memories (last N hours) for task extraction
+    pub fn get_recent_memories(
+        &self,
+        hours: u32,
+    ) -> Result<Vec<MemoryRecord>, Box<dyn std::error::Error>> {
+        let cutoff = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
+        let cutoff_ms = cutoff.timestamp_millis();
+
+        let records = self.records.read().unwrap();
+        let recent: Vec<MemoryRecord> = records
+            .iter()
+            .filter(|r| r.timestamp >= cutoff_ms)
+            .cloned()
+            .collect();
+
+        Ok(recent)
     }
 }
 
@@ -263,7 +305,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot_product: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    
+
     if norm_a == 0.0 || norm_b == 0.0 {
         0.0
     } else {
