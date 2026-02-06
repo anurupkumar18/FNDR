@@ -6,8 +6,6 @@ import { useSearch } from "./hooks/useSearch";
 import { getStatus, getAppNames, CaptureStatus } from "./api/tauri";
 import "./styles/App.css";
 
-import { AskFndr } from "./components/AskFndr";
-
 function App() {
     const [query, setQuery] = useState("");
     const [timeFilter, setTimeFilter] = useState<string | null>(null);
@@ -17,7 +15,7 @@ function App() {
 
     const { results, isLoading, error } = useSearch(query, timeFilter, appFilter);
 
-    // Load app names for filter (once and when status refreshes so new apps appear)
+    // Load app names for filter
     useEffect(() => {
         getAppNames().then(setAppNames).catch(() => setAppNames([]));
     }, [status?.frames_captured]);
@@ -57,32 +55,26 @@ function App() {
             </header>
 
             <main className="app-main">
-                <AskFndr />
-
-                <SearchBar
-                    value={query}
-                    onChange={setQuery}
-                    timeFilter={timeFilter}
-                    onTimeFilterChange={setTimeFilter}
-                    appFilter={appFilter}
-                    onAppFilterChange={setAppFilter}
-                    appNames={appNames}
-                />
-
-                {error && <div className="error-banner">{error}</div>}
-
-                {results.length > 0 && query && (
-                    <div className="search-stats">
-                        <span className="stats-icon">📊</span>
-                        <div className="stats-text">
-                            Detected <strong>{results.length}</strong> related moments
-                            {results.length > 1 && ` over a period of ${Math.round((results[0].timestamp - results[results.length - 1].timestamp) / 60000)} minutes`}
-                        </div>
+                {error && (
+                    <div className="error-banner">
+                        {error}
                     </div>
                 )}
 
                 <Timeline results={results} isLoading={isLoading} query={query} />
             </main>
+
+            {/* Bottom Overlay Search Bar */}
+            <SearchBar
+                value={query}
+                onChange={setQuery}
+                timeFilter={timeFilter}
+                onTimeFilterChange={setTimeFilter}
+                appFilter={appFilter}
+                onAppFilterChange={setAppFilter}
+                appNames={appNames}
+                resultCount={results.length}
+            />
 
             <ControlPanel status={status} />
         </div>

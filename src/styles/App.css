@@ -1,112 +1,23 @@
-/* .app {
-    display: flex;
-    flex-direction: column;
-    min-height: 100vh;
-}
-
-.app-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem 2rem;
-    background: rgba(255, 255, 255, 0.02);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.logo {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.logo-icon {
-    font-size: 1.5rem;
-}
-
-.logo h1 {
-    font-size: 1.5rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, var(--accent), #a855f7);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
-.status-badge {
-    font-size: 0.875rem;
-}
-
-.status-active {
-    color: #4ade80;
-}
-
-.status-paused {
-    color: #fde047;
-}
-
-.status-idle {
-    color: var(--text-secondary);
-}
-
-.app-main {
-    flex: 1;
-    padding: 0 2rem 2rem;
-    max-width: 900px;
-    width: 100%;
-    margin: 0 auto;
-}
-
-.error-banner {
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    margin-bottom: 2rem;
-    color: #fca5a5;
-    font-size: 0.9rem;
-}
-
-.search-stats {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem 1.25rem;
-    background: rgba(99, 102, 241, 0.08);
-    border: 1px solid rgba(99, 102, 241, 0.2);
-    border-radius: 12px;
-    margin-bottom: 1.5rem;
-    color: var(--text-secondary);
-    font-size: 0.95rem;
-}
-
-.stats-icon {
-    font-size: 1.25rem;
-}
-
-.stats-text strong {
-    color: var(--text-primary);
-} */
-
-
 .app {
     display: flex;
     flex-direction: column;
     min-height: 100vh;
-    background: #0f0f11;
-    color: #e7e7e4;
-    font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg-primary);
 }
 
-/* ---------- Header ---------- */
-
+/* ========== Header ========== */
 .app-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1.25rem 2rem;
-    background: rgba(255, 255, 255, 0.04);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    backdrop-filter: blur(8px);
+    padding: 1rem 2rem;
+    background: rgba(250, 249, 246, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(62, 39, 35, 0.06);
 }
 
 .logo {
@@ -117,89 +28,72 @@
 
 .logo-icon {
     font-size: 1.4rem;
-    opacity: 0.9;
+    color: var(--accent);
 }
 
 .logo h1 {
-    font-size: 1.45rem;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    background: linear-gradient(135deg,
-            #f5f5f4,
-            #d6d3d1);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: var(--text-primary);
 }
 
-/* ---------- Status ---------- */
-
+/* ========== Status Badge ========== */
 .status-badge {
     font-size: 0.85rem;
-    padding: 0.35rem 0.75rem;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.05);
+    font-weight: 600;
+    padding: 0.4rem 1rem;
+    border-radius: var(--radius-full);
+    background: var(--bg-secondary);
 }
 
 .status-active {
-    color: #86efac;
+    color: var(--success);
 }
 
 .status-paused {
-    color: #fde68a;
+    color: #F59E0B;
 }
 
 .status-idle {
-    color: #a8a29e;
+    color: var(--text-muted);
 }
 
-/* ---------- Main ---------- */
-
+/* ========== Main Content ========== */
 .app-main {
     flex: 1;
-    padding: 1.5rem 2rem 2.5rem;
-    max-width: 900px;
+    padding: 2rem;
+    padding-bottom: 180px;
+    /* Space for overlay search */
     width: 100%;
+    max-width: 1600px;
     margin: 0 auto;
 }
 
-/* ---------- Error Banner ---------- */
-
+/* ========== Error Banner ========== */
 .error-banner {
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid rgba(239, 68, 68, 0.25);
-    border-radius: 14px;
-    padding: 0.9rem 1.1rem;
-    margin-bottom: 2rem;
-    color: #fecaca;
+    background: var(--danger-light);
+    border: 1px solid rgba(198, 40, 40, 0.2);
+    border-radius: var(--radius-md);
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+    color: var(--danger);
     font-size: 0.9rem;
-    line-height: 1.4;
-}
-
-/* ---------- Search Stats ---------- */
-
-.search-stats {
-    display: flex;
-    align-items: center;
-    gap: 0.85rem;
-    padding: 0.9rem 1.2rem;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-    margin-bottom: 1.75rem;
-    color: #d6d3d1;
-    font-size: 0.95rem;
-    box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.04),
-        0 10px 30px rgba(0, 0, 0, 0.25);
-}
-
-.stats-icon {
-    font-size: 1.15rem;
-    opacity: 0.85;
-}
-
-.stats-text strong {
-    color: #f5f5f4;
     font-weight: 500;
+}
+
+/* ========== Responsive ========== */
+@media (max-width: 768px) {
+    .app-header {
+        padding: 1rem;
+    }
+
+    .app-main {
+        padding: 1rem;
+        padding-bottom: 200px;
+    }
+
+    .logo h1 {
+        font-size: 1.25rem;
+    }
 }

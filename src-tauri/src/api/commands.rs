@@ -56,29 +56,23 @@ pub async fn search(
 
 /// Ask FNDR a question about your memories (RAG)
 #[tauri::command]
-pub async fn ask_fndr(
-    state: State<'_, Arc<AppState>>,
-    query: String,
-) -> Result<String, String> {
+pub async fn ask_fndr(state: State<'_, Arc<AppState>>, query: String) -> Result<String, String> {
     // 1. Check if we have ANY memories first
-    let stats = state.inner().store.get_stats()
+    let stats = state
+        .inner()
+        .store
+        .get_stats()
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
-    
+
     if stats.total_records == 0 {
         return Ok("I haven't captured any memories yet! Please keep me running in the background for a few minutes while you browse or work.".to_string());
     }
 
     // 2. Retrieve relevant context via hybrid search (semantic + keyword, RRF) for better RAG
     let embedder = Embedder::new().map_err(|e| e.to_string())?;
-    let search_results = HybridSearcher::search(
-        &state.inner().store,
-        &embedder,
-        &query,
-        5,
-        None,
-        None,
-    )
-    .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    let search_results =
+        HybridSearcher::search(&state.inner().store, &embedder, &query, 5, None, None)
+            .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     if search_results.is_empty() {
         return Ok(format!("I found {} memories in total, but none of them seem to match '{}'. Try a broader question!", stats.total_records, query));
@@ -89,7 +83,7 @@ pub async fn ask_fndr(
     for res in search_results {
         let time = chrono::DateTime::<chrono::Utc>::from_utc(
             chrono::NaiveDateTime::from_timestamp_opt(res.timestamp / 1000, 0).unwrap(),
-            chrono::Utc
+            chrono::Utc,
         );
         context_parts.push(format!(
             "[{}] App: {}, Text: {}",
@@ -104,6 +98,22 @@ pub async fn ask_fndr(
     let answer = state.inner().inference.answer(&query, &context).await;
 
     Ok(answer)
+}
+
+/// Summarize a memory in detail using LLM
+#[tauri::command]
+pub async fn summarize_memory(
+    state: State<'_, Arc<AppState>>,
+    app_name: String,
+    window_title: String,
+    text: String,
+) -> Result<String, String> {
+    let summary = state
+        .inner()
+        .inference
+        .summarize_memory_detail(&app_name, &window_title, &text)
+        .await;
+    Ok(summary)
 }
 
 /// Get capture status
@@ -148,21 +158,31 @@ pub async fn set_blocklist(
 ) -> Result<(), String> {
     let mut config = state.inner().config.write();
     config.blocklist = apps;
-    config.save().map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    config
+        .save()
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
     Ok(())
 }
 
 /// Delete all data
 #[tauri::command]
 pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.inner().store.delete_all().map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    state
+        .inner()
+        .store
+        .delete_all()
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
     Ok(())
 }
 
 /// Get statistics
 #[tauri::command]
 pub async fn get_stats(state: State<'_, Arc<AppState>>) -> Result<Stats, String> {
-    state.inner().store.get_stats().map_err(|e: Box<dyn std::error::Error>| e.to_string())
+    state
+        .inner()
+        .store
+        .get_stats()
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }
 
 /// Get retention days (0 = keep forever)
@@ -173,13 +193,12 @@ pub async fn get_retention_days(state: State<'_, Arc<AppState>>) -> Result<u32, 
 
 /// Set retention days (0 = keep forever)
 #[tauri::command]
-pub async fn set_retention_days(
-    state: State<'_, Arc<AppState>>,
-    days: u32,
-) -> Result<(), String> {
+pub async fn set_retention_days(state: State<'_, Arc<AppState>>, days: u32) -> Result<(), String> {
     let mut config = state.inner().config.write();
     config.retention_days = days;
-    config.save().map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    config
+        .save()
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
     Ok(())
 }
 

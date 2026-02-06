@@ -6,19 +6,19 @@ pub mod api;
 pub mod capture;
 pub mod config;
 pub mod embed;
+pub mod inference;
 pub mod ocr;
 pub mod privacy;
 pub mod search;
 pub mod store;
 pub mod telemetry;
-pub mod inference;
 
 use config::Config;
+use inference::{InferenceEngine, VlmEngine};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use store::Store;
-use inference::InferenceEngine;
 
 /// Application state shared across threads
 pub struct AppState {
@@ -30,10 +30,17 @@ pub struct AppState {
     pub frames_dropped: AtomicU64,
     pub last_capture_time: AtomicU64,
     pub inference: Arc<InferenceEngine>,
+    /// Vision Language Model for intelligent screen analysis (optional)
+    pub vlm: Option<Arc<VlmEngine>>,
 }
 
 impl AppState {
-    pub fn new(config: Config, store: Store, inference: InferenceEngine) -> Self {
+    pub fn new(
+        config: Config,
+        store: Store,
+        inference: InferenceEngine,
+        vlm: Option<VlmEngine>,
+    ) -> Self {
         Self {
             config: RwLock::new(config),
             store,
@@ -43,6 +50,7 @@ impl AppState {
             frames_dropped: AtomicU64::new(0),
             last_capture_time: AtomicU64::new(0),
             inference: Arc::new(inference),
+            vlm: vlm.map(Arc::new),
         }
     }
 

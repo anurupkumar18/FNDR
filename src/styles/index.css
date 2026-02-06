@@ -1,10 +1,28 @@
 :root {
-    --bg-primary: #0f0f13;
-    --bg-secondary: #1a1a21;
-    --text-primary: #f1f1f4;
-    --text-secondary: #8b8b9e;
-    --accent: #6366f1;
-    --accent-hover: #818cf8;
+    /* Theme: Beige, Brown, Royal Blue - NO GRADIENT */
+    --bg-primary: #FAF9F6;
+    --bg-secondary: #F0EAD6;
+    --bg-tertiary: #E8DFC5;
+    --text-primary: #3E2723;
+    --text-secondary: #5D4037;
+    --text-muted: #8D6E63;
+    --accent: #4169E1;
+    --accent-hover: #27408B;
+    --accent-light: rgba(65, 105, 225, 0.1);
+    --danger: #C62828;
+    --danger-light: rgba(198, 40, 40, 0.1);
+    --success: #2E7D32;
+    --success-light: rgba(46, 125, 50, 0.1);
+    --radius-sm: 12px;
+    --radius-md: 20px;
+    --radius-lg: 28px;
+    --radius-full: 100px;
+    --shadow-soft: 0 4px 20px rgba(62, 39, 35, 0.06);
+    --shadow-medium: 0 8px 32px rgba(62, 39, 35, 0.1);
+    --shadow-strong: 0 16px 48px rgba(62, 39, 35, 0.14);
+    --transition-fast: 0.15s ease;
+    --transition-normal: 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+    --transition-slow: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 * {
@@ -17,24 +35,27 @@ html,
 body,
 #root {
     height: 100%;
+    overflow-x: hidden;
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
-        Ubuntu, Cantarell, sans-serif;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
     background: var(--bg-primary);
     color: var(--text-primary);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    line-height: 1.5;
 }
 
 ::selection {
-    background: rgba(99, 102, 241, 0.4);
+    background: rgba(65, 105, 225, 0.25);
+    color: var(--text-primary);
 }
 
+/* Scrollbar - Light Theme */
 ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
 }
 
 ::-webkit-scrollbar-track {
@@ -42,10 +63,27 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 4px;
+    background: rgba(93, 64, 55, 0.15);
+    border-radius: 100px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.25);
+    background: rgba(93, 64, 55, 0.25);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+/* Utility classes */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }

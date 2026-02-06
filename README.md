@@ -48,6 +48,8 @@ FNDR is a local-only screen history search and AI assistant for macOS. It captur
 - **Frontend**: React + Vite + Vanilla CSS
 - **Backend**: Rust + Tauri
 - **AI Engine**: `llama-cpp-2` (GGUF inference)
+  - **Text LLM**: Llama 3.2 1B for summarization and RAG
+  - **Vision LLM**: SmolVLM 500M/256M for intelligent screen understanding
 - **OCR**: Apple Vision Framework
 - **Storage**: JSON-based vector store (SimpleStore)
 

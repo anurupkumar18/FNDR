@@ -52,8 +52,7 @@ unsafe fn create_image_request_handler(data: &NSData) -> Result<Retained<AnyObje
     let options = NSDictionary::<AnyObject, AnyObject>::new();
 
     let handler = msg_send_id![cls, alloc];
-    let handler: Retained<AnyObject> =
-        msg_send_id![handler, initWithData:data options:&*options];
+    let handler: Retained<AnyObject> = msg_send_id![handler, initWithData:data options:&*options];
     Ok(handler)
 }
 
@@ -72,7 +71,8 @@ unsafe fn create_text_request() -> Result<Retained<AnyObject>, String> {
 }
 
 unsafe fn perform_request(handler: &AnyObject, request: &AnyObject) -> Result<(), String> {
-    let request_retained = unsafe { Retained::retain(request as *const AnyObject as *mut AnyObject).unwrap() };
+    let request_retained =
+        unsafe { Retained::retain(request as *const AnyObject as *mut AnyObject).unwrap() };
     let requests = NSArray::from_id_slice(&[request_retained]);
 
     let mut error: *mut AnyObject = std::ptr::null_mut();
@@ -133,14 +133,33 @@ fn normalize_text(text: &str) -> String {
     // Common macOS/App UI noise to ignore
     let noise_patterns = [
         "File Edit View Window Help",
-        "Mon Jan 26", // Specific dates can be noise if repeated on every frame
+        "Mon Jan",
+        "Tue Feb",
+        "Wed Mar",
+        "Thu Apr",
+        "Fri May",
+        "Sat Jun",
+        "Sun Jul", // Date prefixes
         "Apple Inc.",
         "System Settings",
         "Finder",
         "com.apple.",
         "com.google.",
-        "Antigravity", // Filter out FNDR's own UI text if it appears in captures
+        "Antigravity", // Filter out FNDR's own UI text
         "FNDR",
+        "Login",
+        "Password",
+        "Sign in",
+        "Sign up", // Login screens
+        "Version",
+        "Build",
+        "Copyright", // Metadata
+        "PM",
+        "AM", // Time markers usually alone on a line
+        "%",
+        "KB",
+        "MB",
+        "GB", // File sizes alone
     ];
 
     for line in text.lines() {

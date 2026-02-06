@@ -87,3 +87,11 @@ export async function deleteOlderThan(days: number): Promise<number> {
 export async function askFndr(query: string): Promise<string> {
     return invoke("ask_fndr", { query });
 }
+
+export async function summarizeMemory(
+    appName: string,
+    windowTitle: string,
+    text: string
+): Promise<string> {
+    return invoke("summarize_memory", { appName, windowTitle, text });
+}

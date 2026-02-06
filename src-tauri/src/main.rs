@@ -46,10 +46,34 @@ fn main() {
             let handle = app.handle().clone();
             let inference = tauri::async_runtime::block_on(async move {
                 fndr_lib::inference::InferenceEngine::new().await
-            }).map_err(|e| format!("Failed to init AI engine: {}", e))?;
+            })
+            .map_err(|e| format!("Failed to init AI engine: {}", e))?;
+
+            // Initialize VLM Engine (optional, based on config)
+            let vlm = if config.use_vlm {
+                tracing::info!(
+                    "Initializing VLM engine (SmolVLM-{})...",
+                    config.vlm_model_size
+                );
+                match tauri::async_runtime::block_on(async {
+                    fndr_lib::inference::VlmEngine::new(&config.vlm_model_size).await
+                }) {
+                    Ok(engine) => {
+                        tracing::info!("VLM engine initialized successfully");
+                        Some(engine)
+                    }
+                    Err(e) => {
+                        tracing::warn!("VLM initialization failed (will use OCR only): {}", e);
+                        None
+                    }
+                }
+            } else {
+                tracing::info!("VLM disabled in config");
+                None
+            };
 
             // Create app state
-            let state = Arc::new(AppState::new(config, store, inference));
+            let state = Arc::new(AppState::new(config, store, inference, vlm));
 
             // Start capture pipeline
             let capture_state = state.clone();
@@ -68,6 +92,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             api::commands::search,
             api::commands::ask_fndr,
+            api::commands::summarize_memory,
             api::commands::get_status,
             api::commands::pause_capture,
             api::commands::resume_capture,

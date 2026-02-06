@@ -24,6 +24,20 @@ pub struct Config {
     pub redact_mode: bool,
     /// Minimum text length to store
     pub min_text_length: usize,
+    /// Enable VLM for intelligent image understanding
+    #[serde(default = "default_use_vlm")]
+    pub use_vlm: bool,
+    /// VLM model size: "500M" (primary) or "256M" (fallback/faster)
+    #[serde(default = "default_vlm_model_size")]
+    pub vlm_model_size: String,
+}
+
+fn default_use_vlm() -> bool {
+    true
+}
+
+fn default_vlm_model_size() -> String {
+    "500M".to_string()
 }
 
 impl Default for Config {
@@ -43,6 +57,8 @@ impl Default for Config {
             ],
             redact_mode: false,
             min_text_length: 20,
+            use_vlm: true,
+            vlm_model_size: "500M".to_string(),
         }
     }
 }

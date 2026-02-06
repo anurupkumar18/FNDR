@@ -9,8 +9,6 @@ mod sampling;
 pub use dedupe::PerceptualHasher;
 pub use sampling::AdaptiveSampler;
 
-use crate::api::commands::CaptureStatus;
-use crate::inference::InferenceEngine;
 use crate::ocr::OcrEngine;
 use crate::privacy::Blocklist;
 use crate::store::MemoryRecord;
@@ -28,7 +26,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
     let sampler = AdaptiveSampler::new();
     let ocr = OcrEngine::new()?;
     // Embedder is replaced by AI-enhanced summaries for this phase
-    // let embedder = Embedder::new()?; 
+    // let embedder = Embedder::new()?;
 
     // Batch buffer
     let mut batch: Vec<MemoryRecord> = Vec::new();
@@ -51,7 +49,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             if let Err(e) = state.store.add_batch(&batch) {
                 tracing::error!("Failed to flush batch: {}", e);
             } else {
-                tracing::info!("Flushed {} records in {:?}", batch.len(), flush_start.elapsed());
+                tracing::info!(
+                    "Flushed {} records in {:?}",
+                    batch.len(),
+                    flush_start.elapsed()
+                );
             }
             batch.clear();
             last_flush = Instant::now();
@@ -88,7 +90,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         };
 
         // Deduplication check
-        let force_capture = last_forced_capture.elapsed().as_secs() >= config.forced_capture_interval;
+        let force_capture =
+            last_forced_capture.elapsed().as_secs() >= config.forced_capture_interval;
         let is_duplicate = hasher.is_duplicate(&image_data, config.dedupe_threshold);
 
         if is_duplicate && !force_capture {
@@ -122,9 +125,27 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
-        // AI Summarization
-        let summary = state.inference.summarize(&text).await;
-        tracing::info!("AI Summary generated: {}", summary);
+        // AI Analysis (VLM if available, LLM summarization as fallback)
+        let snippet = if let Some(ref vlm) = state.vlm {
+            // Use VLM for intelligent screen analysis
+            let vlm_start = std::time::Instant::now();
+            let analysis = vlm.analyze_screen(&text, &app_name).await;
+            tracing::info!("VLM analysis ({:?}): {}", vlm_start.elapsed(), &analysis);
+            if analysis.is_empty() {
+                text.clone()
+            } else {
+                analysis
+            }
+        } else {
+            // Fallback to LLM summarization
+            let summary = state.inference.summarize(&text).await;
+            tracing::info!("LLM Summary: {}", summary);
+            if summary.is_empty() {
+                text.clone()
+            } else {
+                summary
+            }
+        };
 
         // Create record
         let now = chrono::Utc::now();
@@ -135,13 +156,15 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             app_name: app_name.clone(),
             window_title: window_title.clone(),
             text: text.clone(),
-            snippet: if summary.is_empty() { text } else { summary },
+            snippet,
             embedding: vec![0.0; 384], // Placeholder for now, simple_store uses keyword search
         };
         batch.push(record);
 
         state.frames_captured.fetch_add(1, Ordering::Relaxed);
-        state.last_capture_time.store(now.timestamp_millis() as u64, Ordering::Relaxed);
+        state
+            .last_capture_time
+            .store(now.timestamp_millis() as u64, Ordering::Relaxed);
 
         // Drop image data immediately (important for memory)
         drop(image_data);
