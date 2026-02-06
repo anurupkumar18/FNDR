@@ -22,8 +22,8 @@ export function useSearch(
             setError(null);
 
             try {
-                const res = await search(query, timeFilter ?? undefined, appFilter ?? undefined);
-                setResults(res);
+                const res = await search(query, timeFilter ?? undefined, appFilter ?? undefined, 10);
+                setResults(res.slice(0, 10)); // Top-k results
             } catch (e) {
                 setError(e instanceof Error ? e.message : "Search failed");
                 setResults([]);

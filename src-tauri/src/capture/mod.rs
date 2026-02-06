@@ -129,7 +129,10 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let snippet = if let Some(ref vlm) = state.vlm {
             // Use VLM for intelligent screen analysis
             let vlm_start = std::time::Instant::now();
-            let analysis = vlm.analyze_screen(&text, &app_name).await;
+            let analysis: String = vlm
+                .analyze_screen(&text, &app_name)
+                .await
+                .unwrap_or_default();
             tracing::info!("VLM analysis ({:?}): {}", vlm_start.elapsed(), &analysis);
             if analysis.is_empty() {
                 text.clone()

@@ -29,12 +29,16 @@
     },
     "bundle": {
         "active": true,
-        "targets": "all",
+        "targets": [
+            "dmg",
+            "app"
+        ],
         "icon": [
             "icons/icon.png"
         ],
         "macOS": {
             "entitlements": "Entitlements.plist",
+            "infoPlist": "Info.plist",
             "minimumSystemVersion": "13.0"
         }
     }

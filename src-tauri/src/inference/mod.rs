@@ -24,21 +24,21 @@ unsafe impl Send for InferenceEngine {}
 unsafe impl Sync for InferenceEngine {}
 
 impl InferenceEngine {
-    /// Initialize the engine (uses LiquidAI LFM2.5 1.2B)
+    /// Initialize the engine (uses Meta Llama 3.2 1B)
     pub async fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        tracing::info!("Initializing local LLM via llama-cpp (LiquidAI LFM2.5 1.2B)...");
+        tracing::info!("Initializing local LLM via llama-cpp (Llama 3.2 1B)...");
 
         let backend = LlamaBackend::init()?;
         let backend = Arc::new(backend);
 
-        let model_path = PathBuf::from("models/LFM2.5-1.2B-Instruct-Q4_K_M.gguf");
+        let model_path = PathBuf::from("models/Llama-3.2-1B-Instruct-Q4_K_M.gguf");
 
         if !model_path.exists() {
             tracing::error!(
                 "Model file not found at {:?}. AI features will be disabled.",
                 model_path
             );
-            return Err("Model file missing. Run ./download_model.sh to get LFM2.5.".into());
+            return Err("Model file missing. Run ./download_model.sh to get the model.".into());
         }
 
         let model_params = LlamaModelParams::default();
@@ -65,9 +65,8 @@ impl InferenceEngine {
             return String::new();
         }
 
-        // LFM2.5 uses ChatML format: <|im_start|>role\n...<|im_end|>
         let prompt = format!(
-            "<|im_start|>system\nOne sentence summary. Start with the action.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nOne sentence summary. Start with action.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
             ocr_text.chars().take(800).collect::<String>()
         );
 
@@ -77,7 +76,7 @@ impl InferenceEngine {
     /// Answer contextual questions using retrieved memories (RAG)
     pub async fn answer(&self, question: &str, context_str: &str) -> String {
         let prompt = format!(
-            "<|im_start|>system\nAnswer directly. No preamble.<|im_end|>\n<|im_start|>user\nContext:\n{}\n\nQ: {}<|im_end|>\n<|im_start|>assistant\n",
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nAnswer directly. No preamble.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nContext:\n{}\n\nQ: {}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
             context_str.chars().take(1000).collect::<String>(), question
         );
 
@@ -96,7 +95,7 @@ impl InferenceEngine {
         }
 
         let prompt = format!(
-            "<|im_start|>system\nExtract key info. Format:\nACTIVITY: [what user was doing]\nDETAILS: [names, dates, numbers, key text]\nStart immediately with ACTIVITY.<|im_end|>\n<|im_start|>user\n{}: {}\n{}<|im_end|>\n<|im_start|>assistant\nACTIVITY: ",
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nExtract key info.\nACTIVITY: what user was doing\nDETAILS: names, dates, numbers<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}: {}\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nACTIVITY: ",
             app_name, window_title, text.chars().take(1000).collect::<String>()
         );
 
@@ -111,7 +110,7 @@ impl InferenceEngine {
 
         let combined_text = results.join("\n---\n");
         let prompt = format!(
-            "<|im_start|>system\nCombine into one paragraph. Max 40 words. Start directly.<|im_end|>\n<|im_start|>user\nQuery: {}\nSnippets:\n{}<|im_end|>\n<|im_start|>assistant\n",
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCombine into one paragraph. Max 40 words.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nQuery: {}\nSnippets:\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
             query, combined_text.chars().take(800).collect::<String>()
         );
 
@@ -125,7 +124,7 @@ impl InferenceEngine {
         }
 
         let prompt = format!(
-            "<|im_start|>system\nExtract actionable tasks from screen captures. Output format:\n- TODO: [task]\n- REMINDER: [reminder]\n- FOLLOWUP: [followup]\nOnly list clear, specific actions. Skip vague items. Max 5 items.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nExtract tasks from screen captures. Format:\n- TODO: [task]\n- REMINDER: [time-based item]\nMax 5 items. Only clear actions.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
             memories_text.chars().take(2000).collect::<String>()
         );
 

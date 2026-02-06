@@ -43,7 +43,7 @@ fn main() {
             }
 
             // Initialize AI Engine (blocking for start)
-            let handle = app.handle().clone();
+            let _handle = app.handle().clone();
             let inference = tauri::async_runtime::block_on(async move {
                 fndr_lib::inference::InferenceEngine::new().await
             })

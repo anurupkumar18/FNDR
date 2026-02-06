@@ -1,29 +1,22 @@
 #!/bin/bash
 # Helper to download AI models for FNDR
-# Downloads: LiquidAI LFM2.5 1.2B (fast hybrid), SmolVLM 500M, SmolVLM 256M
+# Downloads: Meta Llama 3.2 1B, SmolVLM 500M, SmolVLM 256M
 
 MODEL_DIR="src-tauri/models"
 mkdir -p "$MODEL_DIR"
 
 # ============================================
-# Text LLM: LiquidAI LFM2.5 1.2B (hybrid, edge-optimized)
+# Text LLM: Meta Llama 3.2 1B Instruct
 # ============================================
-LLM_URL="https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf"
-LLM_PATH="$MODEL_DIR/LFM2.5-1.2B-Instruct-Q4_K_M.gguf"
+LLM_URL="https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+LLM_PATH="$MODEL_DIR/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 
 if [ -f "$LLM_PATH" ]; then
-    echo "✅ LFM2.5 already exists at $LLM_PATH"
+    echo "✅ Llama 3.2 1B already exists at $LLM_PATH"
 else
-    echo "📥 Downloading LiquidAI LFM2.5 1.2B GGUF (~731MB)..."
+    echo "📥 Downloading Meta Llama 3.2 1B GGUF (~700MB)..."
     curl -L "$LLM_URL" -o "$LLM_PATH"
-    echo "✅ LFM2.5 download complete."
-fi
-
-# Also clean up old Llama model if exists
-OLD_LLAMA="$MODEL_DIR/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
-if [ -f "$OLD_LLAMA" ]; then
-    echo "🧹 Removing old Llama model..."
-    rm "$OLD_LLAMA"
+    echo "✅ Llama 3.2 1B download complete."
 fi
 
 # ============================================
@@ -76,6 +69,6 @@ fi
 
 echo ""
 echo "🎉 All models downloaded successfully!"
-echo "   Text LLM:     $LLM_PATH (LiquidAI LFM2.5 hybrid)"
+echo "   Text LLM:     $LLM_PATH "
 echo "   VLM Primary:  $VLM_500M_PATH"
 echo "   VLM Fallback: $VLM_256M_PATH"
