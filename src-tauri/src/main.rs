@@ -4,12 +4,15 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use fndr_lib::{api, capture, config::Config, store::Store, AppState};
+use fndr_lib::{api, capture, config::Config, graph::GraphStore, store::Store, AppState};
 use std::sync::Arc;
 use tauri::Manager;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
+    // Load .env file
+    dotenvy::dotenv().ok();
+
     // Initialize logging
     tracing_subscriber::registry()
         .with(
@@ -36,6 +39,11 @@ fn main() {
             let data_dir = app.path().app_data_dir()?;
             let store = Store::new(&data_dir)?;
             tracing::info!("Store initialized at {:?}", data_dir);
+            let graph = GraphStore::new(&data_dir)?;
+            tracing::info!("Graph store initialized at {:?}", data_dir);
+            if let Err(err) = fndr_lib::meeting::init(data_dir.clone()) {
+                tracing::warn!("Meeting subsystem initialization failed: {}", err);
+            }
 
             // Apply retention: remove records older than config.retention_days (0 = keep forever)
             if config.retention_days > 0 {
@@ -77,7 +85,7 @@ fn main() {
             };
 
             // Create app state
-            let state = Arc::new(AppState::new(config, store, inference, vlm));
+            let state = Arc::new(AppState::new(config, store, graph, inference, vlm));
 
             // Start capture pipeline
             let capture_state = state.clone();
@@ -90,14 +98,39 @@ fn main() {
                 });
             });
 
+            let mcp_state = state.clone();
             app.manage(state);
+
+            if let Err(err) =
+                fndr_lib::meeting::bind_runtime(app.handle().clone(), mcp_state.clone())
+            {
+                tracing::warn!("Meeting auto-monitor initialization failed: {}", err);
+            }
+
+            // Start MCP server so FNDR is discoverable by external MCP clients.
+            if let Err(err) =
+                tauri::async_runtime::block_on(fndr_lib::mcp::start(mcp_state, None, None))
+            {
+                tracing::warn!("MCP server startup failed: {}", err);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             api::commands::search,
+            api::commands::summarize_search,
             api::commands::ask_fndr,
+            api::commands::reconstruct_memory,
             api::commands::summarize_memory,
             api::commands::get_status,
+            api::commands::get_mcp_server_status,
+            api::commands::start_mcp_server,
+            api::commands::stop_mcp_server,
+            api::commands::get_meeting_status,
+            api::commands::start_meeting_recording,
+            api::commands::stop_meeting_recording,
+            api::commands::list_meetings,
+            api::commands::get_meeting_transcript,
+            api::commands::search_meeting_transcripts,
             api::commands::pause_capture,
             api::commands::resume_capture,
             api::commands::get_blocklist,
@@ -111,6 +144,13 @@ fn main() {
             api::commands::get_todos,
             api::commands::dismiss_todo,
             api::commands::execute_todo,
+            // Agent SDK commands
+            api::commands::start_agent_task,
+            api::commands::get_agent_status,
+            api::commands::stop_agent,
+            // Graph visualization commands
+            api::commands::get_graph_data,
+            api::commands::search_graph,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

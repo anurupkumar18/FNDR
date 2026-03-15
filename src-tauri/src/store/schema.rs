@@ -2,6 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
+fn default_text_embedding() -> Vec<f32> {
+    vec![0.0; 384]
+}
+
+fn default_image_embedding() -> Vec<f32> {
+    vec![0.0; 512]
+}
+
 /// A single memory record stored in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRecord {
@@ -13,14 +21,30 @@ pub struct MemoryRecord {
     pub day_bucket: String,
     /// Application name
     pub app_name: String,
+    /// Application bundle identifier
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
     /// Window title
     pub window_title: String,
+    /// Session identifier for temporal grouping
+    #[serde(default)]
+    pub session_id: String,
     /// Extracted text content
     pub text: String,
     /// Concise summary
     pub snippet: String,
-    /// Embedding vector
+    /// Text embedding vector
+    #[serde(default = "default_text_embedding")]
     pub embedding: Vec<f32>,
+    /// Image embedding vector (CLIP-compatible dimension)
+    #[serde(default = "default_image_embedding")]
+    pub image_embedding: Vec<f32>,
+    /// Persisted screenshot path
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_path: Option<String>,
+    /// URL of the page (for browser windows)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// Search result returned to the UI
@@ -29,10 +53,19 @@ pub struct SearchResult {
     pub id: String,
     pub timestamp: i64,
     pub app_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
     pub window_title: String,
+    #[serde(default)]
+    pub session_id: String,
     pub text: String,
     pub snippet: String,
     pub score: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_path: Option<String>,
+    /// URL of the page (for browser windows)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// Statistics about stored data

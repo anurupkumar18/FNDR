@@ -220,6 +220,54 @@
     gap: 0.5rem;
 }
 
+.mcp-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.mcp-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.6rem;
+    border-radius: var(--radius-full);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.mcp-pill.running {
+    background: var(--success-light);
+    color: var(--success);
+}
+
+.mcp-pill.stopped {
+    background: rgba(245, 158, 11, 0.12);
+    color: #B45309;
+}
+
+.mcp-link-row {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.mcp-link-input {
+    flex: 1;
+    background: var(--bg-secondary);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: 0.75rem;
+    font-size: 0.82rem;
+    color: var(--text-primary);
+}
+
+.mcp-error {
+    margin: 0.75rem 0 0 0;
+    font-size: 0.8rem;
+    color: var(--danger);
+}
+
 .retention-select {
     flex: 1;
     background: var(--bg-secondary);

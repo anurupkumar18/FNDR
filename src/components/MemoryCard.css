@@ -120,6 +120,10 @@
     margin-top: 1rem;
     padding-top: 0.75rem;
     border-top: 1px solid rgba(62, 39, 35, 0.06);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
 }
 
 .card-window-title {
@@ -128,4 +132,23 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+}
+
+.card-url {
+    font-size: 0.75rem;
+    color: var(--accent);
+    text-decoration: none;
+    padding: 4px 8px;
+    border-radius: var(--radius-xs, 4px);
+    background: rgba(65, 105, 225, 0.1);
+    white-space: nowrap;
+    transition: all var(--transition-fast, 0.15s);
+    flex-shrink: 0;
+}
+
+.card-url:hover {
+    background: rgba(65, 105, 225, 0.2);
+    transform: scale(1.02);
 }

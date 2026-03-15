@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { summarizeSearch, SearchResult } from "../api/tauri";
 import "./SearchBar.css";
 
 interface SearchBarProps {
@@ -10,6 +11,7 @@ interface SearchBarProps {
     onAppFilterChange: (filter: string | null) => void;
     appNames: string[];
     resultCount: number;
+    searchResults: SearchResult[];
 }
 
 export function SearchBar({
@@ -21,38 +23,42 @@ export function SearchBar({
     onAppFilterChange,
     appNames,
     resultCount,
+    searchResults,
 }: SearchBarProps) {
     const [summary, setSummary] = useState<string | null>(null);
     const [isSummarizing, setIsSummarizing] = useState(false);
 
     // Generate summary when search results change
     useEffect(() => {
-        if (!value.trim() || resultCount === 0) {
+        if (!value.trim() || resultCount === 0 || searchResults.length === 0) {
             setSummary(null);
+            setIsSummarizing(false);
             return;
         }
 
-        const generateSummary = async () => {
-            setIsSummarizing(true);
-            // Debounce and simulate summary generation
-            await new Promise(r => setTimeout(r, 800));
+        // Show loading state immediately while debouncing
+        setIsSummarizing(true);
+        setSummary(null);
 
-            const timeContext = timeFilter === "1h" ? "in the last hour" :
-                timeFilter === "24h" ? "today" :
-                    timeFilter === "7d" ? "this week" : "across your memories";
+        const timer = setTimeout(async () => {
+            try {
+                // Extract snippets from top 5 results
+                const snippets = searchResults
+                    .slice(0, 5)
+                    .map(r => `[${r.app_name}] ${r.snippet}`);
 
-            const appContext = appFilter ? ` while using ${appFilter}` : "";
+                const aiSummary = await summarizeSearch(value, snippets);
+                setSummary(aiSummary || "Found relevant memories.");
+            } catch (err) {
+                console.error("Summary generation failed:", err);
+                setSummary(`Found ${resultCount} relevant memories.`);
+            } finally {
+                setIsSummarizing(false);
+            }
+        }, 600);
 
-            setSummary(
-                `Found ${resultCount} memories ${timeContext}${appContext} related to "${value}". ` +
-                `These span multiple sessions where you were working on similar topics.`
-            );
-            setIsSummarizing(false);
-        };
-
-        const timer = setTimeout(generateSummary, 400);
         return () => clearTimeout(timer);
-    }, [value, resultCount, timeFilter, appFilter]);
+    }, [value, resultCount]); // Only depend on key triggers
 
     return (
         <div className="search-overlay">
@@ -102,27 +108,37 @@ export function SearchBar({
                 </div>
 
                 <div className="search-filters">
-                    <select
-                        value={timeFilter || ""}
-                        onChange={(e) => onTimeFilterChange(e.target.value || null)}
-                        className={`filter-select ${timeFilter ? "active" : ""}`}
-                    >
-                        <option value="">⏱ Any Time</option>
-                        <option value="1h">Last Hour</option>
-                        <option value="24h">Last 24 Hours</option>
-                        <option value="7d">Last 7 Days</option>
-                    </select>
+                    <div className="select-wrapper">
+                        <select
+                            value={timeFilter || ""}
+                            onChange={(e) => onTimeFilterChange(e.target.value || null)}
+                            className={`filter-select ${timeFilter ? "active" : ""}`}
+                        >
+                            <option value="">⏱ Any Time</option>
+                            <option value="1h">Last Hour</option>
+                            <option value="24h">Last 24 Hours</option>
+                            <option value="7d">Last 7 Days</option>
+                        </select>
+                        <svg className="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <path d="M6 9l6 6 6-6" />
+                        </svg>
+                    </div>
 
-                    <select
-                        value={appFilter || ""}
-                        onChange={(e) => onAppFilterChange(e.target.value || null)}
-                        className={`filter-select ${appFilter ? "active" : ""}`}
-                    >
-                        <option value="">📱 All Apps</option>
-                        {appNames.map((name) => (
-                            <option key={name} value={name}>{name}</option>
-                        ))}
-                    </select>
+                    <div className="select-wrapper">
+                        <select
+                            value={appFilter || ""}
+                            onChange={(e) => onAppFilterChange(e.target.value || null)}
+                            className={`filter-select ${appFilter ? "active" : ""}`}
+                        >
+                            <option value="">📱 All Apps</option>
+                            {appNames.map((name) => (
+                                <option key={name} value={name}>{name}</option>
+                            ))}
+                        </select>
+                        <svg className="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <path d="M6 9l6 6 6-6" />
+                        </svg>
+                    </div>
                 </div>
             </div>
         </div>

@@ -1,0 +1,234 @@
+/* ========== Agent Panel Overlay ========== */
+.agent-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.agent-panel {
+    background: white;
+    border-radius: var(--radius-lg, 16px);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    width: 90%;
+    max-width: 480px;
+    overflow: hidden;
+    animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* ========== Header ========== */
+.agent-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    background: linear-gradient(135deg, rgba(65, 105, 225, 0.05) 0%, transparent 100%);
+}
+
+.agent-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.agent-icon {
+    font-size: 1.5rem;
+}
+
+.agent-title h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary, #1a1a1a);
+}
+
+.btn-close {
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1rem;
+    color: var(--text-muted, #666);
+    transition: all 0.15s;
+}
+
+.btn-close:hover {
+    background: rgba(0, 0, 0, 0.1);
+    color: var(--text-primary, #1a1a1a);
+}
+
+/* ========== Body ========== */
+.agent-body {
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.agent-task,
+.agent-status,
+.agent-message {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.agent-task .label,
+.agent-status .label,
+.agent-message .label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted, #888);
+}
+
+.agent-task .value {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary, #1a1a1a);
+}
+
+.agent-status .value {
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 20px;
+    display: inline-block;
+    width: fit-content;
+}
+
+.status-running .value {
+    background: rgba(59, 130, 246, 0.1);
+    color: #3b82f6;
+}
+
+.status-completed .value {
+    background: rgba(34, 197, 94, 0.1);
+    color: #22c55e;
+}
+
+.status-error .value {
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+}
+
+.status-idle .value {
+    background: rgba(156, 163, 175, 0.1);
+    color: #6b7280;
+}
+
+.agent-message .value {
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--text-secondary, #555);
+    margin: 0;
+    padding: 10px 12px;
+    background: var(--bg-secondary, #f5f5f5);
+    border-radius: 8px;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+/* ========== Setup Note ========== */
+.agent-setup {
+    padding: 1rem;
+    background: rgba(251, 191, 36, 0.1);
+    border-radius: 8px;
+    border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.setup-note {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--text-primary, #1a1a1a);
+}
+
+.setup-note code {
+    background: rgba(0, 0, 0, 0.08);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+}
+
+.btn-setup {
+    display: inline-block;
+    font-size: 0.85rem;
+    color: var(--accent, #4169e1);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.btn-setup:hover {
+    text-decoration: underline;
+}
+
+/* ========== Footer ========== */
+.agent-footer {
+    padding: 1rem 1.5rem;
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.btn-stop {
+    padding: 10px 20px;
+    border: none;
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+    font-weight: 600;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.btn-stop:hover {
+    background: rgba(239, 68, 68, 0.2);
+}
+
+.btn-done {
+    padding: 10px 20px;
+    border: none;
+    background: var(--accent, #4169e1);
+    color: white;
+    font-weight: 600;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.btn-done:hover {
+    filter: brightness(1.1);
+}

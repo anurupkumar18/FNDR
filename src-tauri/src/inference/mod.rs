@@ -7,9 +7,25 @@ use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 use parking_lot::Mutex;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 mod vlm;
+
+/// Global shared LlamaBackend singleton.
+/// Both InferenceEngine and VlmEngine must share one backend instance
+/// to avoid BackendAlreadyInitialized panics from Metal/CPU init.
+static LLAMA_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
+
+pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, Box<dyn std::error::Error + Send + Sync>>
+{
+    if let Some(backend) = LLAMA_BACKEND.get() {
+        return Ok(Arc::clone(backend));
+    }
+    let backend = Arc::new(LlamaBackend::init()?);
+    // If another thread raced us, that's fine – just return our copy
+    let _ = LLAMA_BACKEND.set(Arc::clone(&backend));
+    Ok(backend)
+}
 pub use vlm::VlmEngine;
 
 /// AI Inference Engine for FNDR using llama-cpp-2
@@ -28,8 +44,7 @@ impl InferenceEngine {
     pub async fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         tracing::info!("Initializing local LLM via llama-cpp (Llama 3.2 1B)...");
 
-        let backend = LlamaBackend::init()?;
-        let backend = Arc::new(backend);
+        let backend = get_or_init_backend()?;
 
         // Try multiple locations for model file (dev vs release)
         let model_name = "Llama-3.2-1B-Instruct-Q4_K_M.gguf";
@@ -167,7 +182,8 @@ impl InferenceEngine {
         // In llama-cpp-2 wrapper, context management is through KvCache
         ctx.clear_kv_cache();
 
-        let tokens_list = match self.model.str_to_token(prompt, AddBos::Always) {
+        // Use AddBos::Never because our prompt template already starts with <|begin_of_text|>
+        let tokens_list = match self.model.str_to_token(prompt, AddBos::Never) {
             Ok(t) => t,
             Err(e) => {
                 tracing::error!("Tokenization failed: {}", e);

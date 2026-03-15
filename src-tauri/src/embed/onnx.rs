@@ -36,10 +36,7 @@ impl Embedder {
             return Ok(Vec::new());
         }
 
-        let embeddings: Vec<Vec<f32>> = texts
-            .iter()
-            .map(|text| self.embed_single(text))
-            .collect();
+        let embeddings: Vec<Vec<f32>> = texts.iter().map(|text| self.embed_single(text)).collect();
 
         Ok(embeddings)
     }
@@ -63,7 +60,11 @@ impl Embedder {
         // 2. Character frequency components
         let char_freqs: Vec<f32> = (b'a'..=b'z')
             .map(|c| {
-                let count = text.to_lowercase().chars().filter(|&ch| ch == c as char).count();
+                let count = text
+                    .to_lowercase()
+                    .chars()
+                    .filter(|&ch| ch == c as char)
+                    .count();
                 count as f32 / (text.len().max(1) as f32)
             })
             .collect();

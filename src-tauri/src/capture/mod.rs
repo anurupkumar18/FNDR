@@ -9,6 +9,7 @@ mod sampling;
 pub use dedupe::PerceptualHasher;
 pub use sampling::AdaptiveSampler;
 
+use crate::embed::{ClipEmbedder, Embedder};
 use crate::ocr::OcrEngine;
 use crate::privacy::Blocklist;
 use crate::store::MemoryRecord;
@@ -25,8 +26,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
     let mut hasher = PerceptualHasher::new();
     let sampler = AdaptiveSampler::new();
     let ocr = OcrEngine::new()?;
-    // Embedder is replaced by AI-enhanced summaries for this phase
-    // let embedder = Embedder::new()?;
+    let text_embedder = Embedder::new()?;
+    let image_embedder = ClipEmbedder::new();
 
     // Batch buffer
     let mut batch: Vec<MemoryRecord> = Vec::new();
@@ -70,7 +71,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let sleep_duration = Duration::from_secs_f64(1.0 / fps);
 
         // Get active application info
-        let (app_name, window_title) = macos::get_frontmost_app_info();
+        let app_context = macos::get_frontmost_app_info();
+        let app_name = app_context.app_name.clone();
+        let window_title = app_context.window_title.clone();
 
         // Check blocklist
         if Blocklist::is_blocked(&app_name, &config.blocklist) {
@@ -152,17 +155,49 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         // Create record
         let now = chrono::Utc::now();
+
+        // Extract URL from browser windows
+        let url = macos::get_browser_url(&app_name);
+        if let Some(ref u) = url {
+            tracing::info!("Captured URL: {}", u);
+        }
+
         let record = MemoryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: now.timestamp_millis(),
             day_bucket: now.format("%Y-%m-%d").to_string(),
             app_name: app_name.clone(),
+            bundle_id: app_context.bundle_id.clone(),
             window_title: window_title.clone(),
+            session_id: format!(
+                "{}-{}",
+                now.format("%Y%m%d"),
+                app_context
+                    .bundle_id
+                    .clone()
+                    .unwrap_or_else(|| app_name.to_lowercase().replace(' ', "_"))
+            ),
             text: text.clone(),
             snippet,
-            embedding: vec![0.0; 384], // Placeholder for now, simple_store uses keyword search
+            embedding: text_embedder
+                .embed_batch(&[text.clone()])
+                .ok()
+                .and_then(|mut vectors| vectors.drain(..).next())
+                .unwrap_or_else(|| vec![0.0; 384]),
+            image_embedding: image_embedder.embed_image(&image_data),
+            screenshot_path: persist_screenshot(
+                &state.store.data_dir(),
+                &now.format("%Y%m%d").to_string(),
+                &image_data,
+            ),
+            url,
         };
         batch.push(record);
+        if let Some(last) = batch.last() {
+            if let Err(err) = state.graph.ingest_memory(last) {
+                tracing::warn!("Failed to ingest memory into graph: {}", err);
+            }
+        }
 
         state.frames_captured.fetch_add(1, Ordering::Relaxed);
         state
@@ -173,5 +208,23 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         drop(image_data);
 
         tokio::time::sleep(sleep_duration).await;
+    }
+}
+
+fn persist_screenshot(
+    data_dir: &std::path::Path,
+    day_bucket: &str,
+    image_data: &[u8],
+) -> Option<String> {
+    let frames_dir = data_dir.join("frames").join(day_bucket);
+    if std::fs::create_dir_all(&frames_dir).is_err() {
+        return None;
+    }
+    let file_name = format!("{}.png", uuid::Uuid::new_v4());
+    let path = frames_dir.join(file_name);
+    if std::fs::write(&path, image_data).is_ok() {
+        Some(path.to_string_lossy().to_string())
+    } else {
+        None
     }
 }

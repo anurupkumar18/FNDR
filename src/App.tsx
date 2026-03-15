@@ -3,8 +3,12 @@ import { SearchBar } from "./components/SearchBar";
 import { Timeline } from "./components/Timeline";
 import { ControlPanel } from "./components/ControlPanel";
 import { TodoModal } from "./components/TodoModal";
+import { AgentPanel } from "./components/AgentPanel";
+import { MemoryReconstructionPanel } from "./components/MemoryReconstructionPanel";
+import { GraphPanel } from "./components/GraphPanel";
+import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
 import { useSearch } from "./hooks/useSearch";
-import { getStatus, getAppNames, CaptureStatus, Task } from "./api/tauri";
+import { getStatus, getAppNames, CaptureStatus, Task, startAgentTask } from "./api/tauri";
 import "./styles/App.css";
 
 function App() {
@@ -13,7 +17,9 @@ function App() {
     const [appFilter, setAppFilter] = useState<string | null>(null);
     const [appNames, setAppNames] = useState<string[]>([]);
     const [status, setStatus] = useState<CaptureStatus | null>(null);
-    const [_executingTask, setExecutingTask] = useState<Task | null>(null);
+    const [showAgentPanel, setShowAgentPanel] = useState(false);
+    const [showGraphPanel, setShowGraphPanel] = useState(false);
+    const [showMeetingPanel, setShowMeetingPanel] = useState(false);
 
     const { results, isLoading, error } = useSearch(query, timeFilter, appFilter);
 
@@ -41,11 +47,19 @@ function App() {
         return () => clearInterval(interval);
     }, []);
 
-    const handleExecuteTask = (task: Task) => {
-        setExecutingTask(task);
-        // TODO: Launch CUA agent with task
-        console.log("Executing task with CUA:", task);
-        alert(`🤖 CUA Agent would now execute:\n\n"${task.title}"\n\nThis feature requires CUA setup.`);
+    const handleExecuteTask = async (task: Task) => {
+        try {
+            // Start the agent
+            await startAgentTask(
+                task.title,
+                task.linked_urls,
+                task.linked_memory_ids.map((id) => `linked memory: ${id}`)
+            );
+            setShowAgentPanel(true);
+        } catch (err) {
+            console.error("Failed to start agent:", err);
+            alert(`Failed to start agent: ${err}`);
+        }
     };
 
     return (
@@ -55,36 +69,58 @@ function App() {
                     <span className="logo-icon">⌘</span>
                     <h1>FNDR</h1>
                 </div>
-                <div className="status-badge">
-                    {status?.is_capturing ? (
-                        <span className="status-active">● Capturing</span>
-                    ) : status?.is_paused ? (
-                        <span className="status-paused">⏸ Paused</span>
-                    ) : (
-                        <span className="status-idle">○ Idle</span>
-                    )}
+                <div className="header-actions">
+                    <button
+                        className={`meeting-toggle-btn ${showMeetingPanel ? "active" : ""}`}
+                        onClick={() => setShowMeetingPanel(!showMeetingPanel)}
+                        title="Toggle Meeting Recorder"
+                    >
+                        🎙️ Meetings
+                    </button>
+                    <button
+                        className={`graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
+                        onClick={() => setShowGraphPanel(!showGraphPanel)}
+                        title="Toggle Knowledge Graph"
+                    >
+                        🕸️ Graph
+                    </button>
+                    <div className="status-badge">
+                        {status?.is_capturing ? (
+                            <span className="status-active">● Capturing</span>
+                        ) : status?.is_paused ? (
+                            <span className="status-paused">⏸ Paused</span>
+                        ) : (
+                            <span className="status-idle">○ Idle</span>
+                        )}
+                    </div>
                 </div>
             </header>
 
             <main className="app-main">
-                {error && (
-                    <div className="error-banner">
-                        {error}
-                    </div>
-                )}
+                <div className={`main-layout ${query.trim() ? "with-reconstruction" : ""}`}>
+                    <section className="main-column">
+                        {error && (
+                            <div className="error-banner">
+                                {error}
+                            </div>
+                        )}
 
-                {/* Show Todo Modal on home page (no search) */}
-                {showTodoModal && (
-                    <TodoModal
-                        isVisible={true}
-                        onExecuteTask={handleExecuteTask}
-                    />
-                )}
+                        {/* Show Todo Modal on home page (no search) */}
+                        {showTodoModal && (
+                            <TodoModal
+                                isVisible={true}
+                                onExecuteTask={handleExecuteTask}
+                            />
+                        )}
 
-                {/* Show Timeline when searching or has results */}
-                {!showTodoModal && (
-                    <Timeline results={results} isLoading={isLoading} query={query} />
-                )}
+                        {/* Show Timeline when searching or has results */}
+                        {!showTodoModal && (
+                            <Timeline results={results} isLoading={isLoading} query={query} />
+                        )}
+                    </section>
+
+                    <MemoryReconstructionPanel query={query} />
+                </div>
             </main>
 
             {/* Bottom Overlay Search Bar */}
@@ -97,9 +133,28 @@ function App() {
                 onAppFilterChange={setAppFilter}
                 appNames={appNames}
                 resultCount={results.length}
+                searchResults={results}
             />
 
             <ControlPanel status={status} />
+
+            {/* Agent Panel Overlay */}
+            <AgentPanel
+                isVisible={showAgentPanel}
+                onClose={() => setShowAgentPanel(false)}
+            />
+
+            {/* Knowledge Graph Panel */}
+            <GraphPanel
+                isVisible={showGraphPanel}
+                onClose={() => setShowGraphPanel(false)}
+            />
+
+            <MeetingRecorderPanel
+                isVisible={showMeetingPanel}
+                onClose={() => setShowMeetingPanel(false)}
+                onOpenAgent={() => setShowAgentPanel(true)}
+            />
         </div>
     );
 }

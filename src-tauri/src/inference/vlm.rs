@@ -90,9 +90,8 @@ impl VlmEngine {
             model_path
         );
 
-        let backend = LlamaBackend::init()
+        let backend = crate::inference::get_or_init_backend()
             .map_err(|e| VlmError::InitializationError(format!("Backend init failed: {}", e)))?;
-        let backend = Arc::new(backend);
 
         let model_params = LlamaModelParams::default();
         let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
@@ -291,7 +290,8 @@ impl VlmEngine {
         // Tokenize input
         let tokens_list = self
             .model
-            .str_to_token(prompt, AddBos::Always)
+            // Use AddBos::Never because prompt template already includes <|begin_of_text|>
+            .str_to_token(prompt, AddBos::Never)
             .map_err(|e| VlmError::TokenizationError(e.to_string()))?;
 
         // Create batch with appropriate size

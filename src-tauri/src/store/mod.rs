@@ -3,5 +3,5 @@
 mod schema;
 mod simple_store;
 
-pub use schema::{MemoryRecord, SearchResult, Stats, AppCount};
+pub use schema::{AppCount, MemoryRecord, SearchResult, Stats};
 pub use simple_store::Store;

@@ -24,11 +24,11 @@ impl HybridSearcher {
         let query_embedding = embedder.embed_batch(&[query.to_string()])?;
         let query_embedding = query_embedding.into_iter().next().unwrap_or_default();
 
-        let semantic_results = store.vector_search(&query_embedding, limit * 2, time_filter, app_filter)?;
+        let semantic_results =
+            store.vector_search(&query_embedding, limit * 2, time_filter, app_filter)?;
 
         // Get keyword results (with same filters for consistency)
-        let keyword_results =
-            store.keyword_search(query, limit * 2, time_filter, app_filter)?;
+        let keyword_results = store.keyword_search(query, limit * 2, time_filter, app_filter)?;
 
         // RRF Fusion
         let fused = Self::rrf_fusion(&semantic_results, &keyword_results, limit);
@@ -83,18 +83,28 @@ impl HybridSearcher {
         // Re-sort after decay
         results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
+        // Apply relevance threshold: only return results with score >= 50% of top result
+        if let Some((max_score, _)) = results.first() {
+            let threshold = max_score * 0.5;
+            results.retain(|(score, _)| *score >= threshold);
+        }
+
+        // Cap at reasonable limit (20 max) to prevent UI overload
+        let max_results = limit.min(20);
+
         // Deduplicate similar results
         let mut seen_texts: Vec<String> = Vec::new();
         let mut deduped = Vec::new();
 
         for (_, result) in results {
-            let text_hash = &result.text[..result.text.len().min(100)];
+            let text_preview: String = result.text.chars().take(100).collect();
+            let text_hash = text_preview.as_str();
             if !seen_texts.iter().any(|t| t == text_hash) {
                 seen_texts.push(text_hash.to_string());
                 deduped.push(result);
             }
 
-            if deduped.len() >= limit {
+            if deduped.len() >= max_results {
                 break;
             }
         }
@@ -114,19 +124,27 @@ mod tests {
                 id: "1".to_string(),
                 timestamp: 1000,
                 app_name: "App".to_string(),
+                bundle_id: None,
                 window_title: "Title".to_string(),
+                session_id: "session".to_string(),
                 text: "Hello world".to_string(),
                 snippet: "Hello...".to_string(),
                 score: 0.9,
+                screenshot_path: None,
+                url: None,
             },
             SearchResult {
                 id: "2".to_string(),
                 timestamp: 2000,
                 app_name: "App".to_string(),
+                bundle_id: None,
                 window_title: "Title".to_string(),
+                session_id: "session".to_string(),
                 text: "Goodbye world".to_string(),
                 snippet: "Goodbye...".to_string(),
                 score: 0.8,
+                screenshot_path: None,
+                url: None,
             },
         ];
 
@@ -134,13 +152,17 @@ mod tests {
             id: "2".to_string(),
             timestamp: 2000,
             app_name: "App".to_string(),
+            bundle_id: None,
             window_title: "Title".to_string(),
+            session_id: "session".to_string(),
             text: "Goodbye world".to_string(),
             snippet: "Goodbye...".to_string(),
             score: 1.0,
+            screenshot_path: None,
+            url: None,
         }];
 
-        let fused = HybridSearcher::rrf_fusion(&semantic, &keyword, 10);
+        let fused = HybridSearcher::rrf_fusion(&semantic, &keyword, 1000);
 
         // Result "2" should be ranked higher due to appearing in both
         assert!(!fused.is_empty());

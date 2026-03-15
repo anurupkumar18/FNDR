@@ -22,6 +22,10 @@ pub struct Task {
     pub is_completed: bool,
     pub is_dismissed: bool,
     pub task_type: TaskType,
+    #[serde(default)]
+    pub linked_urls: Vec<String>,
+    #[serde(default)]
+    pub linked_memory_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -118,6 +122,13 @@ impl TaskStore {
         }
         Ok(removed)
     }
+
+    /// Remove all tasks and persist.
+    pub fn clear_all(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.tasks.clear();
+        self.save()?;
+        Ok(())
+    }
 }
 
 /// Parse LLM response into tasks
@@ -171,6 +182,8 @@ pub fn parse_tasks_from_llm_response(response: &str, source_app: &str) -> Vec<Ta
                 is_completed: false,
                 is_dismissed: false,
                 task_type,
+                linked_urls: Vec::new(),
+                linked_memory_ids: Vec::new(),
             });
         }
     }

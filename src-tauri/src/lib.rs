@@ -6,7 +6,10 @@ pub mod api;
 pub mod capture;
 pub mod config;
 pub mod embed;
+pub mod graph;
 pub mod inference;
+pub mod mcp;
+pub mod meeting;
 pub mod ocr;
 pub mod privacy;
 pub mod search;
@@ -15,6 +18,7 @@ pub mod tasks;
 pub mod telemetry;
 
 use config::Config;
+use graph::GraphStore;
 use inference::{InferenceEngine, VlmEngine};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,6 +29,7 @@ use store::Store;
 pub struct AppState {
     pub config: RwLock<Config>,
     pub store: Store,
+    pub graph: GraphStore,
     pub is_paused: AtomicBool,
     pub is_incognito: AtomicBool,
     pub frames_captured: AtomicU64,
@@ -39,12 +44,14 @@ impl AppState {
     pub fn new(
         config: Config,
         store: Store,
+        graph: GraphStore,
         inference: InferenceEngine,
         vlm: Option<VlmEngine>,
     ) -> Self {
         Self {
             config: RwLock::new(config),
             store,
+            graph,
             is_paused: AtomicBool::new(false),
             is_incognito: AtomicBool::new(false),
             frames_captured: AtomicU64::new(0),

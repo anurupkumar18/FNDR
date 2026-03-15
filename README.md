@@ -15,11 +15,14 @@ FNDR sits in your background, recording snapshots of your workspace. It indexes 
 - **"Ask FNDR" (RAG)**: Retrieval-Augmented Generation using a local LLM to answer questions about your history.
 - **AI Summaries**: Turns messy OCR fragments into clean, human-readable event descriptions.
 - **Todo Extraction**: Automatically identifies potential tasks and reminders from your screen history.
+- **URL Capture**: Automatically saves website URLs from browser windows for quick navigation back to sources.
+- **Agent Task Execution**: Execute todos using Claude Agent SDK (requires API key).
+- **MCP Server**: Built-in local Model Context Protocol server for connecting FNDR to external MCP clients.
+- **Offline Meeting Recorder**: Local meeting session recording, segmented audio capture, transcript timeline, export, and agent handoff.
 - **Privacy Controls**: Built-in blocklist to exclude sensitive applications and incognito mode.
 - **High Performance**: Native Rust core with Metal acceleration for Apple Silicon.
 
 ### Planned Features (What's Next)
-- **CUA Agent Execution**: Actually executing the todos it finds (e.g., "Send that email").
 - **Enhanced Vector Store**: Migration to LanceDB for scalable, persistent vector search.
 - **Advanced Idle Detection**: Smarter capture logic based on user activity.
 - **Multi-Monitor Support**: Comprehensive capture across all connected displays.
@@ -32,7 +35,9 @@ FNDR sits in your background, recording snapshots of your workspace. It indexes 
 | **Inference** | ✅ Working | Llama 3.2 1B runs locally with Metal acceleration. |
 | **VLM** | ✅ Working | SmolVLM integration is operational on M-series chips. |
 | **OCR** | ✅ Working | Fast and accurate via Apple Vision Framework. |
-| **Todo Extraction** | 🟡 Partial | Extraction works; execution agent is a prototype. |
+| **URL Capture** | ✅ Working | Captures URLs from Safari, Chrome, Arc, Brave, Edge. |
+| **Todo Extraction** | ✅ Working | Extraction and agent execution are functional. |
+| **Agent SDK** | ✅ Working | Claude Agent SDK integration (requires API key). |
 | **Persistence** | 🟡 Partial | Using JSON storage; migration to DB planned. |
 
 ## 🛠 How to Run
@@ -43,6 +48,7 @@ FNDR sits in your background, recording snapshots of your workspace. It indexes 
 - **Rust Toolchain**: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - **Node.js & npm**: [LTS version recommended](https://nodejs.org/).
 - **CMake**: Required for building AI inference libraries (`brew install cmake`).
+- **ffmpeg**: Required for local meeting audio recording (`brew install ffmpeg`).
 
 ### Execution Steps
 1. **Clone the repository**:
@@ -58,12 +64,21 @@ FNDR sits in your background, recording snapshots of your workspace. It indexes 
    ./download_model.sh
    ```
 
-3. **Install UI Dependencies**:
+3. **Set up Agent SDK** (Optional, for task execution):
+   ```bash
+   # Install Claude Agent SDK
+   pip install claude-agent-sdk
+   
+   # Set your API key (get one from https://console.anthropic.com/)
+   export ANTHROPIC_API_KEY="your-api-key-here"
+   ```
+
+4. **Install UI Dependencies**:
    ```bash
    npm install
    ```
 
-4. **Launch Developer Mode**:
+5. **Launch Developer Mode**:
    ```bash
    npm run tauri dev
    ```
@@ -91,6 +106,32 @@ FNDR/
 
 ## 🛡 Privacy Note
 All processing happens **100% locally** on your machine. No text, images, or queries are ever sent to any cloud provider or external server.
+
+## 🔌 MCP Connection
+- FNDR starts a local MCP server at `http://127.0.0.1:8799/mcp` by default.
+- In FNDR Settings, use the **MCP Server** section to start/stop the server and copy the link.
+- Exposed tools:
+  - `search_memories`
+  - `ask_fndr`
+  - `get_fndr_stats`
+  - `start_meeting`
+  - `stop_meeting`
+  - `get_meeting_transcript`
+  - `search_meeting_transcripts`
+
+## 🎙️ Meeting Recorder Notes
+- Open **Meetings** in the header to view live auto-captured meeting notes.
+- FNDR auto-detects meeting sessions (Zoom / Meet / Teams / Webex signals) and starts/stops recording automatically.
+- Audio chunks are stored under FNDR app data in `meetings/<meeting_id>/audio/`.
+- Transcripts are persisted in local indexes and exported to `meetings/<meeting_id>/transcript.md` when a session stops.
+- A Finder-visible copy is written to `~/Documents/FNDR Meetings/*.md`.
+- On session end, FNDR also ingests the markdown transcript into unified FNDR memory (`app_name = FNDR Meetings`).
+- Transcription backend priority:
+  1. `FNDR_PARAKEET_COMMAND` (custom Parakeet runner command)
+  2. bundled sidecar `src-tauri/sidecar/parakeet_runner.py` (requires `python3` + `faster-whisper`)
+  3. `python3 -m whisper` fallback
+- Install sidecar transcription dependencies with:
+  - `pip install -r src-tauri/sidecar/requirements.txt`
 
 ## 📄 License
 MIT

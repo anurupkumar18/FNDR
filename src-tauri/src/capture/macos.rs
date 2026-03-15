@@ -5,11 +5,18 @@
 use image::ImageEncoder;
 use objc2_app_kit::NSWorkspace;
 
+#[derive(Debug, Clone)]
+pub struct FrontmostAppContext {
+    pub app_name: String,
+    pub bundle_id: Option<String>,
+    pub window_title: String,
+}
+
 /// Capture the main screen and return PNG data
 pub fn capture_screen() -> Result<Vec<u8>, String> {
     unsafe {
         // Get main display
-        let display_id = core_graphics::display::CGMainDisplayID();
+        let _display_id = core_graphics::display::CGMainDisplayID();
 
         // Create image from display
         let image = core_graphics::display::CGDisplay::screenshot(
@@ -46,7 +53,7 @@ fn image_to_png(image: &core_graphics::image::CGImage) -> Result<Vec<u8>, String
         let start = row * bytes_per_row;
         let end = start + (width * 4);
         if end <= bytes.len() {
-            // ScreenCaptureKit/CoreGraphics usually returns BGRA. 
+            // ScreenCaptureKit/CoreGraphics usually returns BGRA.
             // We need to convert it to RGBA for the image crate and OCR.
             let row_bytes = &bytes[start..end];
             for chunk in row_bytes.chunks_exact(4) {
@@ -86,7 +93,7 @@ fn image_to_png(image: &core_graphics::image::CGImage) -> Result<Vec<u8>, String
 }
 
 /// Get information about the frontmost application
-pub fn get_frontmost_app_info() -> (String, String) {
+pub fn get_frontmost_app_info() -> FrontmostAppContext {
     unsafe {
         let workspace = NSWorkspace::sharedWorkspace();
         let app = workspace.frontmostApplication();
@@ -97,15 +104,103 @@ pub fn get_frontmost_app_info() -> (String, String) {
             .map(|s| s.to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
-        // Window title would require Accessibility API
-        // For prototype, use bundle identifier as fallback
-        let window_title = app
+        let bundle_id = app
             .as_ref()
             .and_then(|a| a.bundleIdentifier())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "".to_string());
+            .map(|s| s.to_string());
 
-        (app_name, window_title)
+        let window_title = get_front_window_title(&app_name)
+            .or_else(|| bundle_id.clone())
+            .unwrap_or_default();
+
+        FrontmostAppContext {
+            app_name,
+            bundle_id,
+            window_title,
+        }
+    }
+}
+
+/// Best-effort active window title via AppleScript (requires Accessibility permissions for generic fallback).
+fn get_front_window_title(app_name: &str) -> Option<String> {
+    let app_lower = app_name.to_lowercase();
+    let script = if app_lower.contains("safari") {
+        r#"tell application "Safari" to get name of current tab of front window"#
+    } else if app_lower.contains("chrome") {
+        r#"tell application "Google Chrome" to get title of active tab of front window"#
+    } else if app_lower.contains("arc") {
+        r#"tell application "Arc" to get title of active tab of front window"#
+    } else if app_lower.contains("brave") {
+        r#"tell application "Brave Browser" to get title of active tab of front window"#
+    } else if app_lower.contains("edge") {
+        r#"tell application "Microsoft Edge" to get title of active tab of front window"#
+    } else {
+        r#"tell application "System Events"
+                tell (first process whose frontmost is true)
+                    if (count of windows) > 0 then
+                        return name of front window
+                    end if
+                end tell
+            end tell"#
+    };
+
+    match std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if title.is_empty() {
+                None
+            } else {
+                Some(title)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Get the current URL from the frontmost browser window using AppleScript
+pub fn get_browser_url(app_name: &str) -> Option<String> {
+    let app_lower = app_name.to_lowercase();
+
+    let script = if app_lower.contains("safari") {
+        r#"tell application "Safari" to get URL of current tab of front window"#
+    } else if app_lower.contains("chrome") {
+        r#"tell application "Google Chrome" to get URL of active tab of front window"#
+    } else if app_lower.contains("firefox") {
+        // Firefox doesn't support AppleScript well, try via UI scripting
+        return None;
+    } else if app_lower.contains("arc") {
+        r#"tell application "Arc" to get URL of active tab of front window"#
+    } else if app_lower.contains("brave") {
+        r#"tell application "Brave Browser" to get URL of active tab of front window"#
+    } else if app_lower.contains("edge") {
+        r#"tell application "Microsoft Edge" to get URL of active tab of front window"#
+    } else {
+        return None;
+    };
+
+    // Run osascript to get the URL
+    match std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+    {
+        Ok(output) => {
+            if output.status.success() {
+                let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    Some(url)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        Err(_) => None,
     }
 }
 
@@ -169,7 +264,10 @@ mod core_graphics {
             pub fn null() -> Self {
                 Self {
                     origin: CGPoint { x: 0.0, y: 0.0 },
-                    size: CGSize { width: 0.0, height: 0.0 },
+                    size: CGSize {
+                        width: 0.0,
+                        height: 0.0,
+                    },
                 }
             }
         }

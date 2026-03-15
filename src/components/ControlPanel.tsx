@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import {
     CaptureStatus,
+    McpServerStatus,
     pauseCapture,
     resumeCapture,
     getBlocklist,
@@ -10,6 +11,9 @@ import {
     getRetentionDays,
     setRetentionDays,
     deleteOlderThan,
+    getMcpServerStatus,
+    startMcpServer,
+    stopMcpServer,
     Stats,
 } from "../api/tauri";
 import "./ControlPanel.css";
@@ -29,6 +33,9 @@ export function ControlPanel({ status }: ControlPanelProps) {
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [retentionDays, setRetentionDaysState] = useState<number>(7);
     const [retentionBusy, setRetentionBusy] = useState(false);
+    const [mcpStatus, setMcpStatus] = useState<McpServerStatus | null>(null);
+    const [mcpBusy, setMcpBusy] = useState(false);
+    const [copiedMcpLink, setCopiedMcpLink] = useState(false);
 
     useEffect(() => {
         if (isOpen) {
@@ -49,14 +56,16 @@ export function ControlPanel({ status }: ControlPanelProps) {
 
     const loadData = async () => {
         try {
-            const [bl, st, ret] = await Promise.all([
+            const [bl, st, ret, mcp] = await Promise.all([
                 getBlocklist(),
                 getStats(),
                 getRetentionDays(),
+                getMcpServerStatus(),
             ]);
             setBlocklistState(bl);
             setStats(st);
             setRetentionDaysState(ret);
+            setMcpStatus(mcp);
         } catch (e) {
             console.error("Failed to load data:", e);
         }
@@ -129,6 +138,29 @@ export function ControlPanel({ status }: ControlPanelProps) {
             loadData();
         } catch (e) {
             console.error("Failed to delete data:", e);
+        }
+    };
+
+    const handleToggleMcpServer = async () => {
+        setMcpBusy(true);
+        try {
+            const updated = mcpStatus?.running ? await stopMcpServer() : await startMcpServer();
+            setMcpStatus(updated);
+        } catch (e) {
+            console.error("Failed to toggle MCP server:", e);
+        } finally {
+            setMcpBusy(false);
+        }
+    };
+
+    const handleCopyMcpLink = async () => {
+        if (!mcpStatus?.endpoint) return;
+        try {
+            await navigator.clipboard.writeText(mcpStatus.endpoint);
+            setCopiedMcpLink(true);
+            setTimeout(() => setCopiedMcpLink(false), 1500);
+        } catch (e) {
+            console.error("Failed to copy MCP endpoint:", e);
         }
     };
 
@@ -224,6 +256,38 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                         </button>
                                     )}
                                 </div>
+                            </section>
+
+                            <section className="panel-section">
+                                <h3>MCP Server</h3>
+                                <p className="section-hint">
+                                    Connect FNDR to external tools via Model Context Protocol.
+                                </p>
+                                <div className="mcp-status-row">
+                                    <span className={`mcp-pill ${mcpStatus?.running ? "running" : "stopped"}`}>
+                                        {mcpStatus?.running ? "Running" : "Stopped"}
+                                    </span>
+                                    <button
+                                        className="btn-secondary"
+                                        onClick={handleToggleMcpServer}
+                                        disabled={mcpBusy}
+                                    >
+                                        {mcpBusy ? "..." : mcpStatus?.running ? "Stop" : "Start"}
+                                    </button>
+                                </div>
+                                <div className="mcp-link-row">
+                                    <input
+                                        className="mcp-link-input"
+                                        value={mcpStatus?.endpoint ?? "http://127.0.0.1:8799/mcp"}
+                                        readOnly
+                                    />
+                                    <button className="btn-primary" onClick={handleCopyMcpLink}>
+                                        {copiedMcpLink ? "Copied" : "Copy Link"}
+                                    </button>
+                                </div>
+                                {mcpStatus?.last_error && (
+                                    <p className="mcp-error">{mcpStatus.last_error}</p>
+                                )}
                             </section>
                         </>
                     )}

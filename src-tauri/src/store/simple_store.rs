@@ -36,6 +36,14 @@ impl Store {
         })
     }
 
+    /// Return the storage directory that contains persisted memory artifacts.
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
     /// Add a batch of records
     pub fn add_batch(
         &self,
@@ -74,40 +82,7 @@ impl Store {
         // Filter candidates
         let candidates: Vec<&MemoryRecord> = records
             .iter()
-            .filter(|r| {
-                if let Some(tf) = time_filter {
-                    let now = chrono::Utc::now();
-                    match tf {
-                        "today" => {
-                            let today = now.format("%Y-%m-%d").to_string();
-                            if r.day_bucket != today {
-                                return false;
-                            }
-                        }
-                        "yesterday" => {
-                            let yesterday = (now - chrono::Duration::days(1))
-                                .format("%Y-%m-%d")
-                                .to_string();
-                            if r.day_bucket != yesterday {
-                                return false;
-                            }
-                        }
-                        "week" => {
-                            let week_ago = (now - chrono::Duration::days(7)).timestamp_millis();
-                            if r.timestamp < week_ago {
-                                return false;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(app) = app_filter {
-                    if r.app_name != app {
-                        return false;
-                    }
-                }
-                true
-            })
+            .filter(|r| matches_filters(r, time_filter, app_filter))
             .collect();
 
         // Calculate scores
@@ -130,10 +105,14 @@ impl Store {
                 id: r.id.clone(),
                 timestamp: r.timestamp,
                 app_name: r.app_name.clone(),
+                bundle_id: r.bundle_id.clone(),
                 window_title: r.window_title.clone(),
+                session_id: r.session_id.clone(),
                 text: r.text.clone(),
                 snippet: r.snippet.clone(),
                 score,
+                screenshot_path: r.screenshot_path.clone(),
+                url: r.url.clone(),
             })
             .collect();
 
@@ -154,40 +133,10 @@ impl Store {
         let mut matched: Vec<&MemoryRecord> = records
             .iter()
             .filter(|r| {
-                if let Some(tf) = time_filter {
-                    let now = chrono::Utc::now();
-                    match tf {
-                        "today" => {
-                            let today = now.format("%Y-%m-%d").to_string();
-                            if r.day_bucket != today {
-                                return false;
-                            }
-                        }
-                        "yesterday" => {
-                            let yesterday = (now - chrono::Duration::days(1))
-                                .format("%Y-%m-%d")
-                                .to_string();
-                            if r.day_bucket != yesterday {
-                                return false;
-                            }
-                        }
-                        "week" => {
-                            let week_ago = (now - chrono::Duration::days(7)).timestamp_millis();
-                            if r.timestamp < week_ago {
-                                return false;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(app) = app_filter {
-                    if r.app_name != app {
-                        return false;
-                    }
-                }
-                r.text.to_lowercase().contains(&query_lower)
-                    || r.app_name.to_lowercase().contains(&query_lower)
-                    || r.window_title.to_lowercase().contains(&query_lower)
+                matches_filters(r, time_filter, app_filter)
+                    && (r.text.to_lowercase().contains(&query_lower)
+                        || r.app_name.to_lowercase().contains(&query_lower)
+                        || r.window_title.to_lowercase().contains(&query_lower))
             })
             .collect();
 
@@ -201,10 +150,14 @@ impl Store {
                 id: r.id.clone(),
                 timestamp: r.timestamp,
                 app_name: r.app_name.clone(),
+                bundle_id: r.bundle_id.clone(),
                 window_title: r.window_title.clone(),
+                session_id: r.session_id.clone(),
                 text: r.text.clone(),
                 snippet: r.snippet.clone(),
                 score: 1.0,
+                screenshot_path: r.screenshot_path.clone(),
+                url: r.url.clone(),
             })
             .collect();
 
@@ -299,6 +252,92 @@ impl Store {
 
         Ok(recent)
     }
+
+    /// Get one memory record by id.
+    pub fn get_memory_by_id(
+        &self,
+        memory_id: &str,
+    ) -> Result<Option<MemoryRecord>, Box<dyn std::error::Error>> {
+        let records = self.records.read().unwrap();
+        Ok(records.iter().find(|r| r.id == memory_id).cloned())
+    }
+
+    /// Return recently captured URLs (newest first).
+    pub fn get_recent_urls(&self, limit: usize) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let records = self.records.read().unwrap();
+        let mut urls: Vec<(i64, String)> = records
+            .iter()
+            .filter_map(|r| r.url.as_ref().map(|u| (r.timestamp, u.clone())))
+            .collect();
+        urls.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
+
+        let mut unique = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (_, url) in urls {
+            if seen.insert(url.clone()) {
+                unique.push(url);
+            }
+            if unique.len() >= limit {
+                break;
+            }
+        }
+        Ok(unique)
+    }
+}
+
+fn matches_filters(
+    record: &MemoryRecord,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+) -> bool {
+    if let Some(tf) = time_filter {
+        let now = chrono::Utc::now();
+        match tf {
+            "1h" => {
+                if record.timestamp < (now - chrono::Duration::hours(1)).timestamp_millis() {
+                    return false;
+                }
+            }
+            "24h" => {
+                if record.timestamp < (now - chrono::Duration::hours(24)).timestamp_millis() {
+                    return false;
+                }
+            }
+            "7d" => {
+                if record.timestamp < (now - chrono::Duration::days(7)).timestamp_millis() {
+                    return false;
+                }
+            }
+            "today" => {
+                let today = now.format("%Y-%m-%d").to_string();
+                if record.day_bucket != today {
+                    return false;
+                }
+            }
+            "yesterday" => {
+                let yesterday = (now - chrono::Duration::days(1))
+                    .format("%Y-%m-%d")
+                    .to_string();
+                if record.day_bucket != yesterday {
+                    return false;
+                }
+            }
+            "week" => {
+                if record.timestamp < (now - chrono::Duration::days(7)).timestamp_millis() {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(app) = app_filter {
+        if record.app_name != app {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {

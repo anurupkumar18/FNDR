@@ -10,9 +10,7 @@ pub struct PerceptualHasher {
 
 impl PerceptualHasher {
     pub fn new() -> Self {
-        let hasher = HasherConfig::new()
-            .hash_size(8, 8)
-            .to_hasher();
+        let hasher = HasherConfig::new().hash_size(8, 8).to_hasher();
         Self {
             hasher,
             last_hash: None,
@@ -63,7 +61,8 @@ mod tests {
         // Create a simple test image
         let img = image::DynamicImage::new_rgb8(100, 100);
         let mut buf = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
 
         // First image is never duplicate
         assert!(!hasher.is_duplicate(&buf, 5));
@@ -78,7 +77,11 @@ mod tests {
         // Create two different images
         let img1 = image::DynamicImage::new_rgb8(100, 100);
         let mut buf1 = Vec::new();
-        img1.write_to(&mut std::io::Cursor::new(&mut buf1), image::ImageFormat::Png).unwrap();
+        img1.write_to(
+            &mut std::io::Cursor::new(&mut buf1),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
 
         let mut img2 = image::RgbImage::new(100, 100);
         for pixel in img2.pixels_mut() {
@@ -86,7 +89,11 @@ mod tests {
         }
         let img2 = image::DynamicImage::ImageRgb8(img2);
         let mut buf2 = Vec::new();
-        img2.write_to(&mut std::io::Cursor::new(&mut buf2), image::ImageFormat::Png).unwrap();
+        img2.write_to(
+            &mut std::io::Cursor::new(&mut buf2),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
 
         assert!(!hasher.is_duplicate(&buf1, 5));
         assert!(!hasher.is_duplicate(&buf2, 5));

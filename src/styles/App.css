@@ -38,6 +38,67 @@
     color: var(--text-primary);
 }
 
+/* ========== Header Actions ========== */
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.graph-toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 0.35rem 0.9rem;
+    border-radius: var(--radius-full);
+    border: 1px solid rgba(62, 39, 35, 0.1);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.meeting-toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 0.35rem 0.9rem;
+    border-radius: var(--radius-full);
+    border: 1px solid rgba(62, 39, 35, 0.1);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.meeting-toggle-btn:hover {
+    background: rgba(65, 105, 225, 0.1);
+    border-color: rgba(65, 105, 225, 0.28);
+    color: #27408B;
+}
+
+.meeting-toggle-btn.active {
+    background: rgba(65, 105, 225, 0.15);
+    border-color: rgba(65, 105, 225, 0.4);
+    color: #27408B;
+}
+
+.graph-toggle-btn:hover {
+    background: rgba(167, 139, 250, 0.08);
+    border-color: rgba(167, 139, 250, 0.25);
+    color: #7c3aed;
+}
+
+.graph-toggle-btn.active {
+    background: rgba(167, 139, 250, 0.12);
+    border-color: rgba(167, 139, 250, 0.35);
+    color: #7c3aed;
+}
+
 /* ========== Status Badge ========== */
 .status-badge {
     font-size: 0.85rem;
@@ -70,6 +131,21 @@
     margin: 0 auto;
 }
 
+.main-layout {
+    display: block;
+}
+
+.main-layout.with-reconstruction {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+    gap: 1.2rem;
+    align-items: start;
+}
+
+.main-column {
+    min-width: 0;
+}
+
 /* ========== Error Banner ========== */
 .error-banner {
     background: var(--danger-light);
@@ -91,6 +167,10 @@
     .app-main {
         padding: 1rem;
         padding-bottom: 200px;
+    }
+
+    .main-layout.with-reconstruction {
+        grid-template-columns: 1fr;
     }
 
     .logo h1 {

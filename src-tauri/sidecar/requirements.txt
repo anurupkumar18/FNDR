@@ -1,0 +1,3 @@
+graphiti-core[falkordb,anthropic]
+anthropic>=0.40.0
+faster-whisper>=1.0.0
