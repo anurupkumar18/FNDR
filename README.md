@@ -1,5 +1,81 @@
 # FNDR
 
+Here is a comprehensive `README.md` file for the FNDR project, incorporating the system architecture, features, and the vision for an agentic future.
+
+***
+
+# ⌘ FNDR
+### The "Cmd+F" for your digital life. 
+
+**Team:** Anurup Kumar, Felipe Marin Pena, Kunj Rathod, Minh Le  
+**Course:** CS 4000 Capstone 2025-2026
+
+---
+
+## 📖 Overview
+Modern knowledge work produces vast amounts of transient digital information—error messages, unsaved drafts, and context that traditional file searches cannot find. While recent industry attempts (like Microsoft Recall) have tried to solve this by continuously recording the screen, they created a massive "Privacy Paradox," turning the user's device into a security honeypot by storing raw screenshots.
+
+**FNDR is a local-first, privacy-preserving semantic memory system for macOS**. It fundamentally reframes the problem: *you don't need to store what the user saw; you only need to store what it meant*. 
+
+By using an **"Instant Distillation"** pipeline, FNDR captures screen activity, extracts text and semantic context immediately, converts it into vector embeddings, and **irreversibly destroys all raw visual data**.
+
+---
+
+## ✨ Key Features
+
+*   **Total Semantic Recall:** Search your past activity by meaning, intent, or vague memory (e.g., "the document where I was angry about the delay") rather than exact keywords. 
+*   **Hybrid Intelligence Search:** Combines Vector Search (for semantic relevance) and Full-Text Search (for exact keywords) using Reciprocal Rank Fusion (RRF) for high-precision results.
+*   **Semantic Reconstruction Cards:** FNDR never stores or displays raw screenshots. Search results are stylized cards showing the app icon, window title, and an OCR text snippet with search terms highlighted.
+*   **Temporal Memory & Timelines:** Ask time-based questions like "What was I working on last Tuesday?" or scrub through a virtualized daily timeline of reconstructed activity.
+*   **Strict Privacy Controls:** Includes an app/website blocklist to prevent capturing sensitive apps (e.g., 1Password, banking), an "Incognito Mode" pause toggle, and clear data deletion options.
+*   **The Agentic Future (Memory → Action):** FNDR goes beyond passive Q&A. It acts as a continuous, local context engine that extracts TODOs and passes them to local AI agents. In the future, FNDR will fuel parallel autonomous agents to orchestrate workflows across your apps without needing manual prompting.
+
+---
+
+## 🏗️ Architecture & How It Works
+
+FNDR is engineered in **Rust** to enforce memory safety and maintain a sub-1% CPU resource footprint so it can run continuously in the background.
+
+1.  **High-Performance Capture:** Uses macOS `ScreenCaptureKit` for zero-copy streaming directly from the GPU, sampling at an efficient 0.5–1 FPS.
+2.  **pHash Deduplication:** Downsamples frames to 32x32 and uses Perceptual Hashing to calculate visual similarity. If the screen hasn't changed, the frame is instantly dropped, saving up to 90% of processing power.
+3.  **Vision OCR:** Frames with significant changes are passed to Apple's Vision Framework, utilizing the hardware-accelerated Neural Engine (ANE) to extract text.
+4.  **Instant Distillation (Zeroization):** The moment text is extracted, the raw pixel data and memory buffers are securely sanitized using Rust's `zeroize` crate, preventing ghost data from remaining in memory.
+5.  **Local Embedding:** The text is processed through the `all-MiniLM-L6-v2` transformer model (via ONNX Runtime or Candle) to generate 384-dimensional semantic vectors.
+6.  **Serverless Storage:** Vectors and metadata are stored in **LanceDB**, an embedded database allowing zero-copy reads and hybrid (Vector + FTS) search.
+
+---
+
+## 🛡️ Defense-In-Depth (Security)
+
+FNDR assumes that even a database of numbers (vectors) could be a honeypot if someone attempts an "Embedding Inversion" attack. We implement two core defenses:
+*   **Dimensionality Reduction:** Vectors are subjected to Principal Component Analysis (PCA) or Binary Quantization to reduce dimensions (e.g., from 384 to 128), destroying the fine-grained data needed to reconstruct readable text.
+*   **Differential Privacy:** A noise vector drawn from a Laplacian distribution is added to the embeddings before storage, ensuring retrieval accuracy while making text reconstruction highly unreliable.
+
+---
+
+## 🛠️ Tech Stack
+
+| Component | Library/Tool | Role |
+| :--- | :--- | :--- |
+| **Backend / Core** | Rust | Memory-safe systems programming & daemon logic |
+| **Frontend UI** | Tauri v2 + React | Lightweight native webview replacing Electron |
+| **Screen Capture** | `screencapturekit-rs` | macOS zero-copy screen recording |
+| **OCR** | Apple Vision Framework | Native text extraction via `objc2` |
+| **Machine Learning** | `candle` / ONNX | Local LLM and embedding inference on ANE/Metal |
+| **Database** | LanceDB | Local, embedded vector storage & FTS |
+| **UI Virtualization** | `react-window` | Efficient rendering of up to 10k timeline elements |
+
+---
+
+## 🚀 Getting Started 
+
+*(Note: FNDR is under active development as a CS 4000 Capstone Project).*
+
+1. **Initial Setup:** On first launch, the onboarding wizard will guide you through FNDR's local-first philosophy.
+2. **Permissions:** You will be prompted to grant macOS `Screen Recording` and `Accessibility` permissions so FNDR can capture context.
+3. **Model Download:** The system will automatically download the necessary local AI models (e.g., Llama, SmolVLM, MiniLM) directly to your machine. No API keys or cloud subscriptions are required.
+4. **Run:** FNDR will securely run in the background. Use your global hotkey to open the FNDR search bar and start querying your memory.
+
 
 
 ## Getting started
