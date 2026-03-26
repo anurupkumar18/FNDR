@@ -24,7 +24,7 @@ const SEGMENTS_INDEX: &str = "segments.json";
 const SEGMENT_SECONDS: i64 = 20;
 const STATUS_EVENT: &str = "meeting://status";
 const SEGMENT_EVENT: &str = "meeting://segment";
-const FORCED_MODEL: &str = "parakeet-v3-small";
+const FORCED_MODEL: &str = "parakeet-tdt-0.6b-v3";
 const AUTO_POLL_SECONDS: u64 = 5;
 const AUTO_START_HITS: u8 = 2;
 const AUTO_STOP_IDLE_SECONDS: u64 = 90;
@@ -1116,13 +1116,19 @@ fn transcribe_segment(
 
 fn detect_transcription_backend() -> String {
     if std::env::var("FNDR_PARAKEET_COMMAND").is_ok() {
-        return "parakeet-v3-small".to_string();
+        return "parakeet-tdt-0.6b-v3".to_string();
     }
     if resolve_parakeet_sidecar().is_some() {
-        return "parakeet-v3-small".to_string();
-    }
-    if has_python_module("whisper") {
-        return "whisper-small-fallback".to_string();
+        if has_python_module("nemo") {
+            return "parakeet-tdt-0.6b-v3".to_string();
+        }
+        if has_python_module("faster_whisper") {
+            return "faster-whisper-small".to_string();
+        }
+        if has_python_module("whisper") {
+            return "whisper-small-fallback".to_string();
+        }
+        return "sidecar-no-backend".to_string();
     }
     "unavailable".to_string()
 }
@@ -1159,7 +1165,8 @@ fn transcribe_with_sidecar(segment_path: &Path, errors: &mut Vec<String>) -> Opt
 }
 
 fn maybe_bootstrap_python_backend(force: bool) {
-    if has_python_module("faster_whisper") || has_python_module("whisper") {
+    // Consider ready if the best backend (nemo) OR a good fallback is available
+    if has_python_module("nemo") || has_python_module("faster_whisper") {
         return;
     }
 
@@ -1227,8 +1234,12 @@ fn maybe_bootstrap_python_backend(force: bool) {
         return;
     }
 
-    tracing::info!("Bootstrapping faster-whisper + openai-whisper via pip in venv...");
-    let _ = Command::new(pip_path)
+    tracing::info!("Bootstrapping NeMo Parakeet + faster-whisper + openai-whisper via pip in venv...");
+    // Install in priority order: NeMo Parakeet (best quality) → faster-whisper → openai-whisper
+    let _ = Command::new(&pip_path)
+        .args(["install", "--upgrade", "nemo_toolkit[asr]"])
+        .status();
+    let _ = Command::new(&pip_path)
         .args(["install", "faster-whisper", "openai-whisper"])
         .status();
 }

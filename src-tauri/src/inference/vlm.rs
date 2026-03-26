@@ -1,7 +1,7 @@
 //! Vision Language Model (VLM) inference engine
 //!
-//! Uses SmolVLM for intelligent image understanding beyond OCR.
-//! Primary: SmolVLM-500M, Fallback: SmolVLM-256M
+//! Uses Gemma 3 4B for intelligent image understanding via OCR context.
+//! Primary: gemma-3-4b-it-q4_0.gguf
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -85,7 +85,7 @@ impl VlmEngine {
         let (model_path, size_label) = Self::resolve_model_path(model_size)?;
 
         tracing::info!(
-            "Initializing VLM engine (SmolVLM-{}) from {:?}...",
+            "Initializing VLM engine (Gemma-{}) from {:?}...",
             size_label,
             model_path
         );
@@ -111,7 +111,7 @@ impl VlmEngine {
         })?;
 
         tracing::info!(
-            "VLM engine initialized successfully (SmolVLM-{}, ctx_size={})",
+            "VLM engine initialized successfully (Gemma-{}, ctx_size={})",
             size_label,
             config.context_size
         );
@@ -144,8 +144,8 @@ impl VlmEngine {
 
         // Define model configurations
         let model_configs = [
-            ("500M", "SmolVLM-500M-Instruct-Q4_K_M.gguf"),
-            ("256M", "SmolVLM-256M-Instruct-Q4_K_M.gguf"),
+            ("4B", "gemma-3-4b-it-q4_0.gguf"),
+            ("4B", "gemma-3-4b-it-q4_0.gguf"),
         ];
 
         // Try preferred model first in all directories
@@ -169,7 +169,7 @@ impl VlmEngine {
                     let fallback_path = dir.join(filename);
                     if fallback_path.exists() {
                         tracing::warn!(
-                            "Primary VLM model (SmolVLM-{}) not found, using fallback (SmolVLM-{})",
+                            "Primary VLM model (Gemma-{}) not found, using fallback (Gemma-{})",
                             preferred_size,
                             size
                         );
@@ -180,7 +180,7 @@ impl VlmEngine {
         }
 
         Err(VlmError::ModelNotFound(
-            "No VLM model found. Please run ./download_model.sh to download SmolVLM models."
+            "No VLM model found. Please run ./download_model.sh to download Gemma models."
                 .to_string(),
         ))
     }
@@ -270,11 +270,7 @@ impl VlmEngine {
     /// Build a properly formatted prompt
     fn build_prompt(&self, system_message: &str, user_message: &str) -> String {
         format!(
-            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n\
-            {}\
-            <|eot_id|><|start_header_id|>user<|end_header_id|>\n\n\
-            {}\
-            <|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+            "<start_of_turn>user\n{}\n\n{}<end_of_turn>\n<start_of_turn>model\n",
             system_message, user_message
         )
     }
@@ -290,8 +286,8 @@ impl VlmEngine {
         // Tokenize input
         let tokens_list = self
             .model
-            // Use AddBos::Never because prompt template already includes <|begin_of_text|>
-            .str_to_token(prompt, AddBos::Never)
+            // Use AddBos::Always to include standard BOS token for Gemma
+            .str_to_token(prompt, AddBos::Always)
             .map_err(|e| VlmError::TokenizationError(e.to_string()))?;
 
         // Create batch with appropriate size
@@ -391,14 +387,14 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires model files
     async fn test_vlm_initialization() {
-        let engine = VlmEngine::new("500M").await;
+        let engine = VlmEngine::new("4B").await;
         assert!(engine.is_ok());
     }
 
     #[tokio::test]
     #[ignore] // Requires model files
     async fn test_describe_screen() {
-        let engine = VlmEngine::new("500M").await.unwrap();
+        let engine = VlmEngine::new("4B").await.unwrap();
         let result = engine.describe_screen("File Edit View").await;
         assert!(result.is_ok());
         assert!(!result.unwrap().is_empty());

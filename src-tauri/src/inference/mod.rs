@@ -47,7 +47,7 @@ impl InferenceEngine {
         let backend = get_or_init_backend()?;
 
         // Try multiple locations for model file (dev vs release)
-        let model_name = "Llama-3.2-1B-Instruct-Q4_K_M.gguf";
+        let model_name = "gemma-3-4b-it-q4_0.gguf";
         let possible_paths = vec![
             // Dev mode: relative to src-tauri
             PathBuf::from(format!("models/{}", model_name)),
@@ -110,7 +110,7 @@ impl InferenceEngine {
         }
 
         let prompt = format!(
-            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nOne sentence summary. Start with action.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+            "<start_of_turn>user\nOne sentence summary. Start with action.\n\n{}<end_of_turn>\n<start_of_turn>model\n",
             ocr_text.chars().take(800).collect::<String>()
         );
 
@@ -120,7 +120,7 @@ impl InferenceEngine {
     /// Answer contextual questions using retrieved memories (RAG)
     pub async fn answer(&self, question: &str, context_str: &str) -> String {
         let prompt = format!(
-            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nAnswer directly. No preamble.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nContext:\n{}\n\nQ: {}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+            "<start_of_turn>user\nAnswer directly. No preamble.\n\nContext:\n{}\n\nQ: {}<end_of_turn>\n<start_of_turn>model\n",
             context_str.chars().take(1000).collect::<String>(), question
         );
 
@@ -139,7 +139,7 @@ impl InferenceEngine {
         }
 
         let prompt = format!(
-            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nExtract key info.\nACTIVITY: what user was doing\nDETAILS: names, dates, numbers<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}: {}\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nACTIVITY: ",
+            "<start_of_turn>user\nExtract key info.\nACTIVITY: what user was doing\nDETAILS: names, dates, numbers\n\n{}: {}\n{}<end_of_turn>\n<start_of_turn>model\nACTIVITY: ",
             app_name, window_title, text.chars().take(1000).collect::<String>()
         );
 
@@ -154,7 +154,7 @@ impl InferenceEngine {
 
         let combined_text = results.join("\n---\n");
         let prompt = format!(
-            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCombine into one paragraph. Max 40 words.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nQuery: {}\nSnippets:\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+            "<start_of_turn>user\nCombine into one paragraph. Max 40 words.\n\nQuery: {}\nSnippets:\n{}<end_of_turn>\n<start_of_turn>model\n",
             query, combined_text.chars().take(800).collect::<String>()
         );
 
@@ -168,7 +168,7 @@ impl InferenceEngine {
         }
 
         let prompt = format!(
-            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nExtract tasks from screen captures. Format:\n- TODO: [task]\n- REMINDER: [time-based item]\nMax 5 items. Only clear actions.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+            "<start_of_turn>user\nExtract tasks from screen captures. Format:\n- TODO: [task]\n- REMINDER: [time-based item]\nMax 5 items. Only clear actions.\n\n{}<end_of_turn>\n<start_of_turn>model\n",
             memories_text.chars().take(2000).collect::<String>()
         );
 
@@ -182,8 +182,8 @@ impl InferenceEngine {
         // In llama-cpp-2 wrapper, context management is through KvCache
         ctx.clear_kv_cache();
 
-        // Use AddBos::Never because our prompt template already starts with <|begin_of_text|>
-        let tokens_list = match self.model.str_to_token(prompt, AddBos::Never) {
+        // Use AddBos::Always because our prompt template doesn't explicitly include the <bos> token
+        let tokens_list = match self.model.str_to_token(prompt, AddBos::Always) {
             Ok(t) => t,
             Err(e) => {
                 tracing::error!("Tokenization failed: {}", e);

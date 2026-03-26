@@ -64,7 +64,7 @@ fn main() {
             // Initialize VLM Engine (optional, based on config)
             let vlm = if config.use_vlm {
                 tracing::info!(
-                    "Initializing VLM engine (SmolVLM-{})...",
+                    "Initializing VLM engine (Gemma-{})...",
                     config.vlm_model_size
                 );
                 match tauri::async_runtime::block_on(async {
