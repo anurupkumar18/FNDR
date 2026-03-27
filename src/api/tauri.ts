@@ -21,6 +21,7 @@ export interface CaptureStatus {
     frames_captured: number;
     frames_dropped: number;
     last_capture_time: number;
+    ai_model_loaded: boolean;
 }
 
 export interface McpServerStatus {

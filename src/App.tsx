@@ -7,6 +7,7 @@ import { AgentPanel } from "./components/AgentPanel";
 import { MemoryReconstructionPanel } from "./components/MemoryReconstructionPanel";
 import { GraphPanel } from "./components/GraphPanel";
 import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
+import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
 import { useSearch } from "./hooks/useSearch";
 import { getStatus, getAppNames, CaptureStatus, Task, startAgentTask } from "./api/tauri";
@@ -122,6 +123,11 @@ function App() {
                             <div className="error-banner">
                                 {error}
                             </div>
+                        )}
+
+                        {/* Show AI Model Download Banner if inference is missing */}
+                        {status && !status.ai_model_loaded && (
+                            <ModelDownloadBanner />
                         )}
 
                         {/* Show Todo Modal on home page (no search) */}

@@ -1,0 +1,95 @@
+.model-download-banner {
+    background: rgba(255, 165, 0, 0.05);
+    border: 1px solid rgba(255, 165, 0, 0.2);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 24px;
+    color: var(--text-primary, #ffffff);
+}
+
+.banner-header h3 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: #ffa500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.banner-header p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-secondary, #a0a0a0);
+    line-height: 1.4;
+}
+
+.banner-error {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: rgba(255, 50, 50, 0.1);
+    border: 1px solid rgba(255, 50, 50, 0.3);
+    border-radius: 6px;
+    color: #ff5555;
+    font-size: 13px;
+}
+
+.banner-action-area {
+    margin-top: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.banner-download-btn {
+    background: rgba(255, 165, 0, 0.15);
+    border: 1px solid rgba(255, 165, 0, 0.3);
+    color: #ffa500;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.banner-download-btn:hover:not(:disabled) {
+    background: rgba(255, 165, 0, 0.25);
+    border-color: rgba(255, 165, 0, 0.5);
+}
+
+.banner-download-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.banner-meta {
+    font-size: 12px;
+    color: var(--text-secondary, #a0a0a0);
+}
+
+.banner-progress-area {
+    margin-top: 16px;
+}
+
+.banner-progress-details {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-secondary, #a0a0a0);
+    margin-bottom: 6px;
+}
+
+.banner-progress-bar {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.banner-progress-fill {
+    height: 100%;
+    background: #ffa500;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}

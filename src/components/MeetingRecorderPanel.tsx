@@ -176,6 +176,8 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                             {status?.is_recording
                                 ? `Recording: ${status.current_title ?? "Detected meeting"}`
                                 : "FNDR will auto-start when it detects Zoom/Meet/Teams/Webex sessions."}
+                            <br/><br/>
+                            <small><em>Note: If this is your first meeting, the FNDR background agent will silently download the 2.5GB Parakeet transcription model. It may take 1-3 minutes.</em></small>
                         </p>
                         <p className="meeting-subtle">
                             Segments: {status?.segment_count ?? 0} • Audio: {status?.ffmpeg_available ? "ready" : "missing"} • Model: Parakeet V3 Small

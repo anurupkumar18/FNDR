@@ -22,6 +22,7 @@ pub struct CaptureStatus {
     pub frames_captured: u64,
     pub frames_dropped: u64,
     pub last_capture_time: u64,
+    pub ai_model_loaded: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +186,7 @@ pub async fn get_status(state: State<'_, Arc<AppState>>) -> Result<CaptureStatus
         frames_captured: state.inner().frames_captured.load(Ordering::Relaxed),
         frames_dropped: state.inner().frames_dropped.load(Ordering::Relaxed),
         last_capture_time: state.inner().last_capture_time.load(Ordering::Relaxed),
+        ai_model_loaded: state.inner().inference.is_some(),
     })
 }
 
