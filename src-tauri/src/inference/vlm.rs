@@ -316,11 +316,18 @@ impl VlmEngine {
 
         let mut result = String::new();
         let mut n_cur = tokens_list.len() as i32;
+        
+        // The first time we sample, we want the logits from the last token of the prompt batch.
+        // For subsequent generation steps, the batch only contains 1 token, so the index is 0.
+        let mut batch_idx_to_sample = (tokens_list.len() - 1) as i32;
 
         // Generate tokens
         for _ in 0..max_tokens {
-            // Sampler needs context and batch index (usually 0 for single generation)
-            let token = sampler.sample(&ctx, 0);
+            // Sampler needs context and the batch index where logits were calculated
+            let token = sampler.sample(&ctx, batch_idx_to_sample);
+            
+            // For all next iterations, the batch will be of size 1
+            batch_idx_to_sample = 0;
 
             // Check for end-of-generation
             if self.model.is_eog_token(token) {
