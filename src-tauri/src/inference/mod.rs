@@ -92,7 +92,9 @@ impl InferenceEngine {
         // This is safe since InferenceEngine is a singleton for the application lifetime.
         let model_ref: &'static LlamaModel = Box::leak(Box::new(model));
 
-        let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(2048));
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(2048))
+            .with_n_batch(8192);
 
         let context = model_ref.new_context(&backend, ctx_params)?;
 

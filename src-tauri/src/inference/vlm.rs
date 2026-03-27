@@ -100,11 +100,13 @@ impl VlmEngine {
         // Leak the model to get a 'static reference (singleton pattern)
         let model_ref: &'static LlamaModel = Box::leak(Box::new(model));
 
-        let ctx_params = LlamaContextParams::default().with_n_ctx(Some(
-            NonZeroU32::new(config.context_size).ok_or_else(|| {
-                VlmError::InitializationError("Context size must be non-zero".to_string())
-            })?,
-        ));
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(Some(
+                NonZeroU32::new(config.context_size).ok_or_else(|| {
+                    VlmError::InitializationError("Context size must be non-zero".to_string())
+                })?,
+            ))
+            .with_n_batch(config.context_size);
 
         let context = model_ref.new_context(&backend, ctx_params).map_err(|e| {
             VlmError::InitializationError(format!("Context creation failed: {}", e))

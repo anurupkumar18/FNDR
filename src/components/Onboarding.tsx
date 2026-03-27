@@ -364,6 +364,14 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                 </div>
             )}
 
+            {isDownloading && !progress && (
+                <div style={{ marginBottom: 24, padding: "24px 0", textAlign: "center" }}>
+                    <span className="ob-icon pulse" style={{ display: "inline-block", fontSize: 24, marginBottom: 12 }}>⚙️</span>
+                    <div className="ob-download-title">Preparing Download...</div>
+                    <div className="ob-download-subtitle">Connecting to huggingface.co</div>
+                </div>
+            )}
+
             {error && <div className="ob-error-box">{error}</div>}
 
             {!isDownloading && (

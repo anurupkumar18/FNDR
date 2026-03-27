@@ -69,6 +69,11 @@ export function ModelDownloadBanner() {
                         <div className="banner-progress-fill" style={{ width: `${progress.percent}%` }} />
                     </div>
                 </div>
+            ) : isDownloading && !progress ? (
+                <div className="banner-progress-area" style={{ textAlign: "center", fontStyle: "italic", opacity: 0.8 }}>
+                    <span className="ob-icon pulse" style={{ marginRight: 8 }}>⚙️</span>
+                    Preparing Download... Connecting to HuggingFace
+                </div>
             ) : (
                 <div className="banner-action-area">
                     <button className="banner-download-btn" onClick={handleDownload} disabled={!selected}>
