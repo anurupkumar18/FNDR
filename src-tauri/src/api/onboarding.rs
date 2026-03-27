@@ -380,6 +380,10 @@ pub async fn download_model(app: AppHandle, model_id: String, download_url: Stri
     Ok(())
 }
 
+fn emit_log(app: &AppHandle, msg: &str) {
+    let _ = app.emit("model-download-log", msg.to_string());
+}
+
 async fn do_download(
     app: &AppHandle,
     model_id: &str,
@@ -387,6 +391,9 @@ async fn do_download(
     filename: &str,
 ) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
+
+    emit_log(app, &format!("Starting download task for {} ({})", model_id, filename));
+    emit_log(app, "Checking local app data directories...");
 
     let models_dir = app
         .path()
@@ -399,13 +406,23 @@ async fn do_download(
 
     // Get HF token from env if available (for gated models)
     let hf_token = std::env::var("HF_TOKEN").ok();
+    if hf_token.is_some() {
+        emit_log(app, "Found HF_TOKEN in environment mapped variables.");
+    } else {
+        emit_log(app, "No HF_TOKEN found in environment. Public models only.");
+    }
 
+    emit_log(app, "Building reqwest HTTP client (15s connect timeout)...");
     let client = reqwest::Client::builder()
         .user_agent("FNDR/1.0")
         .connect_timeout(std::time::Duration::from_secs(15))
         // We don't set an overall timeout since downloads are large, but we could set a read timeout if supported
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let msg = format!("HTTP client build failed: {}", e);
+            emit_log(app, &msg);
+            msg
+        })?;
 
     let mut request = client.get(url);
     if let Some(token) = hf_token {
@@ -417,15 +434,24 @@ async fn do_download(
     // Support resume via Range header
     let resume_from = dest_path.metadata().map(|m| m.len()).unwrap_or(0);
     if resume_from > 0 {
+        emit_log(app, &format!("Found existing partial file, attempting resume from byte {}", resume_from));
         request = request.header("Range", format!("bytes={}-", resume_from));
     }
 
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    emit_log(app, &format!("Sending HTTP GET request to {}...", url));
+    let response = request.send().await.map_err(|e| {
+        let msg = format!("HTTP request failed or hung: {}", e);
+        emit_log(app, &msg);
+        msg
+    })?;
 
     let status_code = response.status().as_u16();
+    emit_log(app, &format!("Received HTTP status code: {}", status_code));
 
     if !response.status().is_success() && status_code != 206 {
-        return Err(format!("Server returned {}", response.status()));
+        let msg = format!("Server returned {}", response.status());
+        emit_log(app, &format!("Fatal Error: {}", msg));
+        return Err(msg);
     }
 
     // If we sent a Range header but the server responded with 200 (full content)

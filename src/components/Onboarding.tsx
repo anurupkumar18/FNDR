@@ -12,6 +12,7 @@ import {
     listAvailableModels,
     downloadModel,
     onDownloadProgress,
+    onDownloadLog,
 } from "../api/onboarding";
 import { getStatus } from "../api/tauri";
 import "./Onboarding.css";
@@ -262,6 +263,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     const [progress, setProgress] = useState<DownloadProgress | null>(null);
     const [isDownloading, setIsDownloading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [logs, setLogs] = useState<string[]>([]);
 
     // Keep refs to the latest values so the listener closure never captures stale state.
     // This also prevents the listener from being re-registered on every state change.
@@ -288,8 +290,15 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     // and async unlisten meant old listeners were never cleaned up → memory leak +
     // duplicate onSave calls that could silently drop the "done" event.
     useEffect(() => {
-        let unlisten: (() => void) | null = null;
+        let unlistenProgress: (() => void) | null = null;
+        let unlistenLogs: (() => void) | null = null;
         let cancelled = false;
+
+        onDownloadLog((msg) => {
+            setLogs((prev) => [...prev, msg].slice(-20));
+        }).then((u) => {
+            if (cancelled) u(); else unlistenLogs = u;
+        });
 
         onDownloadProgress((p) => {
             setProgress(p);
@@ -313,15 +322,24 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
             if (cancelled) {
                 u(); // Component already unmounted before the promise resolved
             } else {
-                unlisten = u;
+                unlistenProgress = u;
             }
         });
 
         return () => {
             cancelled = true;
-            unlisten?.();
+            unlistenProgress?.();
+            unlistenLogs?.();
         };
     }, []); // Empty deps — register once; refs handle dynamic values
+
+    // Auto-scroll logs to bottom
+    const logsEndRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (logsEndRef.current) {
+            logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+        }
+    }, [logs]);
 
     async function handleDownload() {
         if (!selected) return;
@@ -330,6 +348,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
             return;
         }
         setError(null);
+        setLogs([]);
         setIsDownloading(true);
         try {
             await downloadModel(selected.id, selected.download_url, selected.filename);
@@ -403,6 +422,26 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                     <span className="ob-icon pulse" style={{ display: "inline-block", fontSize: 24, marginBottom: 12 }}>⚙️</span>
                     <div className="ob-download-title">Preparing Download...</div>
                     <div className="ob-download-subtitle">Connecting to huggingface.co</div>
+                </div>
+            )}
+
+            {isDownloading && logs.length > 0 && (
+                <div className="ob-download-logs" style={{
+                    background: "rgba(0,0,0,0.2)",
+                    borderRadius: 8,
+                    padding: 12,
+                    fontSize: 11,
+                    fontFamily: "monospace",
+                    color: "rgba(255,255,255,0.7)",
+                    height: 120,
+                    overflowY: "auto",
+                    marginBottom: 24,
+                    textAlign: "left"
+                }}>
+                    {logs.map((L, i) => (
+                        <div key={i} style={{ marginBottom: 4 }}>{L}</div>
+                    ))}
+                    <div ref={logsEndRef} />
                 </div>
             )}
 

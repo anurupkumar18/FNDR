@@ -93,7 +93,11 @@ export function onDownloadProgress(handler: (p: DownloadProgress) => void): Prom
         handler(event.payload);
     });
 }
-
+export function onDownloadLog(handler: (msg: string) => void): Promise<() => void> {
+    return listen<string>("model-download-log", (event) => {
+        handler(event.payload);
+    });
+}
 export async function deleteAiModel(filename: string): Promise<void> {
     return invoke("delete_ai_model", { filename });
 }

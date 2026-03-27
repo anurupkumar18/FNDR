@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { DownloadProgress, ModelInfo, listAvailableModels, downloadModel, onDownloadProgress } from "../api/onboarding";
+import { DownloadProgress, ModelInfo, listAvailableModels, downloadModel, onDownloadProgress, onDownloadLog } from "../api/onboarding";
 import "./ModelDownloadBanner.css";
 
 export function ModelDownloadBanner() {
@@ -7,6 +7,7 @@ export function ModelDownloadBanner() {
     const [progress, setProgress] = useState<DownloadProgress | null>(null);
     const [isDownloading, setIsDownloading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [logs, setLogs] = useState<string[]>([]);
 
     useEffect(() => {
         listAvailableModels().then((ms) => {
@@ -16,7 +17,13 @@ export function ModelDownloadBanner() {
     }, []);
 
     useEffect(() => {
-        let unlisten: (() => void) | null = null;
+        let unlistenProgress: (() => void) | null = null;
+        let unlistenLogs: (() => void) | null = null;
+
+        onDownloadLog((msg) => {
+            setLogs((prev) => [...prev, msg].slice(-10));
+        }).then((u) => { unlistenLogs = u; });
+
         onDownloadProgress((p) => {
             setProgress(p);
             if (p.done && !p.error) {
@@ -27,13 +34,18 @@ export function ModelDownloadBanner() {
                 setError(p.error);
                 setIsDownloading(false);
             }
-        }).then((u) => { unlisten = u; });
-        return () => { unlisten?.(); };
+        }).then((u) => { unlistenProgress = u; });
+
+        return () => {
+            unlistenProgress?.();
+            unlistenLogs?.();
+        };
     }, []);
 
     async function handleDownload() {
         if (!selected) return;
         setError(null);
+        setLogs([]);
         setIsDownloading(true);
         try {
             await downloadModel(selected.id, selected.download_url, selected.filename);
@@ -74,7 +86,25 @@ export function ModelDownloadBanner() {
                     <span className="ob-icon pulse" style={{ marginRight: 8 }}>⚙️</span>
                     Preparing Download... Connecting to HuggingFace
                 </div>
-            ) : (
+            ) : null}
+
+            {isDownloading && logs.length > 0 && (
+                <div style={{
+                    marginTop: 12,
+                    background: "rgba(0,0,0,0.3)",
+                    padding: "8px 12px",
+                    borderRadius: 6,
+                    fontFamily: "monospace",
+                    fontSize: 10,
+                    color: "rgba(255,255,255,0.6)",
+                    height: 80,
+                    overflowY: "auto"
+                }}>
+                    {logs.map((L, i) => <div key={i}>{L}</div>)}
+                </div>
+            )}
+
+            {!isDownloading && (
                 <div className="banner-action-area">
                     <button className="banner-download-btn" onClick={handleDownload} disabled={!selected}>
                         Download {selected?.name} ({selected?.size_label})
