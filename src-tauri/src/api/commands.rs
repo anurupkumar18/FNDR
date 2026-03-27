@@ -70,11 +70,13 @@ pub async fn summarize_search(
         return Ok(String::new());
     }
 
-    let summary = state
-        .inner()
-        .inference
-        .summarize_search_results(&query, &results_snippets)
-        .await;
+    let summary = if let Some(engine) = &state.inner().inference {
+        engine
+            .summarize_search_results(&query, &results_snippets)
+            .await
+    } else {
+        String::new()
+    };
 
     Ok(summary)
 }
@@ -105,11 +107,13 @@ pub async fn summarize_memory(
     window_title: String,
     text: String,
 ) -> Result<String, String> {
-    let summary = state
-        .inner()
-        .inference
-        .summarize_memory_detail(&app_name, &window_title, &text)
-        .await;
+    let summary = if let Some(engine) = &state.inner().inference {
+        engine
+            .summarize_memory_detail(&app_name, &window_title, &text)
+            .await
+    } else {
+        String::new()
+    };
     Ok(summary)
 }
 
@@ -163,7 +167,11 @@ async fn run_memory_reconstruction(
     }
 
     let context = context_parts.join("\n");
-    reconstruction.answer = app_state.inference.answer(query, &context).await;
+    reconstruction.answer = if let Some(engine) = &app_state.inference {
+        engine.answer(query, &context).await
+    } else {
+        "AI intelligence is disabled (model missing).".to_string()
+    };
     Ok(reconstruction)
 }
 
@@ -411,7 +419,11 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .join("\n");
 
     // Extract new todos via LLM
-    let llm_response = state.inner().inference.extract_todos(&combined_text).await;
+    let llm_response = if let Some(engine) = &state.inner().inference {
+        engine.extract_todos(&combined_text).await
+    } else {
+        String::new()
+    };
 
     // Parse and add new tasks
     let new_tasks = parse_tasks_from_llm_response(&llm_response, "FNDR");

@@ -221,7 +221,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             tracing::info!("VLM analysis ({:?}): {}", vlm_start.elapsed(), &analysis);
             if analysis.is_empty() { text.clone() } else { analysis }
         } else {
-            let summary = state.inference.summarize(&text).await;
+            let summary = if let Some(engine) = &state.inference {
+                engine.summarize(&text).await
+            } else {
+                String::new()
+            };
             tracing::info!("LLM Summary: {}", summary);
             if summary.is_empty() { text.clone() } else { summary }
         };

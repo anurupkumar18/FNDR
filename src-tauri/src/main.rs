@@ -54,12 +54,20 @@ fn main() {
                 }
             }
 
-            // Initialize AI Engine (blocking for start)
+            // Initialize AI Engine (optional, based on model presence)
             let _handle = app.handle().clone();
-            let inference = tauri::async_runtime::block_on(async move {
+            let inference = match tauri::async_runtime::block_on(async move {
                 fndr_lib::inference::InferenceEngine::new().await
-            })
-            .map_err(|e| format!("Failed to init AI engine: {}", e))?;
+            }) {
+                Ok(engine) => {
+                    tracing::info!("AI inference engine initialized successfully");
+                    Some(Arc::new(engine))
+                }
+                Err(e) => {
+                    tracing::warn!("AI inference initialization failed: {}", e);
+                    None
+                }
+            };
 
             // Initialize VLM Engine (optional, based on config)
             let vlm = if config.use_vlm {
@@ -72,7 +80,7 @@ fn main() {
                 }) {
                     Ok(engine) => {
                         tracing::info!("VLM engine initialized successfully");
-                        Some(engine)
+                        Some(Arc::new(engine))
                     }
                     Err(e) => {
                         tracing::warn!("VLM initialization failed (will use OCR only): {}", e);

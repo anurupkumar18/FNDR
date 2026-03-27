@@ -35,7 +35,7 @@ pub struct AppState {
     pub frames_captured: AtomicU64,
     pub frames_dropped: AtomicU64,
     pub last_capture_time: AtomicU64,
-    pub inference: Arc<InferenceEngine>,
+    pub inference: Option<Arc<InferenceEngine>>,
     /// Vision Language Model for intelligent screen analysis (optional)
     pub vlm: Option<Arc<VlmEngine>>,
 }
@@ -45,8 +45,8 @@ impl AppState {
         config: Config,
         store: Store,
         graph: GraphStore,
-        inference: InferenceEngine,
-        vlm: Option<VlmEngine>,
+        inference: Option<Arc<InferenceEngine>>,
+        vlm: Option<Arc<VlmEngine>>,
     ) -> Self {
         Self {
             config: RwLock::new(config),
@@ -57,8 +57,8 @@ impl AppState {
             frames_captured: AtomicU64::new(0),
             frames_dropped: AtomicU64::new(0),
             last_capture_time: AtomicU64::new(0),
-            inference: Arc::new(inference),
-            vlm: vlm.map(Arc::new),
+            inference,
+            vlm,
         }
     }
 

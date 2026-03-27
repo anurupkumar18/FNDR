@@ -764,13 +764,18 @@ async fn run_ask_fndr(app_state: Arc<AppState>, args: AskFndrArgs) -> Result<Val
         .collect::<Vec<_>>()
         .join("\n");
 
+    let answer_future = async {
+        if let Some(engine) = &app_state.inference {
+            engine.answer(&args.query, &context).await
+        } else {
+            "AI intelligence is disabled (model missing).".to_string()
+        }
+    };
+
     // 30-second timeout on LLM inference so slow models don't block forever
-    let answer = tokio::time::timeout(
-        Duration::from_secs(30),
-        app_state.inference.answer(&args.query, &context),
-    )
-    .await
-    .unwrap_or_else(|_| "Inference timed out after 30 seconds.".to_string());
+    let answer = tokio::time::timeout(Duration::from_secs(30), answer_future)
+        .await
+        .unwrap_or_else(|_| "Inference timed out after 30 seconds.".to_string());
 
     let sources: Vec<Value> = results
         .iter()
