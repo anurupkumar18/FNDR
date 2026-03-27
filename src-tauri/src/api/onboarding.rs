@@ -365,12 +365,16 @@ async fn do_download(
 
     let client = reqwest::Client::builder()
         .user_agent("FNDR/1.0")
+        .connect_timeout(std::time::Duration::from_secs(15))
+        // We don't set an overall timeout since downloads are large, but we could set a read timeout if supported
         .build()
         .map_err(|e| e.to_string())?;
 
     let mut request = client.get(url);
     if let Some(token) = hf_token {
-        request = request.header("Authorization", format!("Bearer {}", token));
+        // Automatically trim any stray quotes the user may have left in their .env
+        let clean_token = token.trim_matches(|c| c == '\'' || c == '"');
+        request = request.header("Authorization", format!("Bearer {}", clean_token));
     }
 
     // Support resume via Range header

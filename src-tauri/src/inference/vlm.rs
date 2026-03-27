@@ -286,11 +286,24 @@ impl VlmEngine {
         ctx.clear_kv_cache();
 
         // Tokenize input
-        let tokens_list = self
+        let mut tokens_list = self
             .model
             // Use AddBos::Always to include standard BOS token for Gemma
             .str_to_token(prompt, AddBos::Always)
             .map_err(|e| VlmError::TokenizationError(e.to_string()))?;
+
+        // Truncate to ensure the batch never exceeds context_size (cparams.n_batch)
+        let max_prompt_len = self.config.context_size.saturating_sub(max_tokens as u32).saturating_sub(1) as usize;
+        if tokens_list.len() > max_prompt_len {
+            tracing::warn!(
+                "Prompt tokens ({}) > context limit ({}), truncating...",
+                tokens_list.len(),
+                max_prompt_len
+            );
+            // Drain excess tokens from the beginning and keep the BOS intact
+            let excess = tokens_list.len() - max_prompt_len;
+            tokens_list.drain(1..1 + excess);
+        }
 
         // Create batch with appropriate size
         let batch_size = (tokens_list.len() + max_tokens as usize).max(512);

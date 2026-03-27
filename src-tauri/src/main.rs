@@ -10,16 +10,17 @@ use tauri::Manager;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
-    // Load .env file
-    dotenvy::dotenv().ok();
+    // Load environment variables from .env if present
+    let _ = dotenvy::dotenv();
 
     // Initialize logging
+    use tracing_subscriber::{fmt, EnvFilter};
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
+            EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "fndr=info,fndr_lib=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(fmt::layer())
         .init();
 
     tracing::info!("Starting FNDR...");
