@@ -151,6 +151,15 @@ fn main() {
             // Graph visualization commands
             api::commands::get_graph_data,
             api::commands::search_graph,
+            // Onboarding commands
+            api::onboarding::get_onboarding_state,
+            api::onboarding::save_onboarding_state,
+            api::onboarding::request_biometric_auth,
+            api::onboarding::check_permissions,
+            api::onboarding::open_system_settings,
+            api::onboarding::list_available_models,
+            api::onboarding::download_model,
+            api::onboarding::check_model_exists,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

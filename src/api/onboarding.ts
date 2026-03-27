@@ -1,0 +1,95 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+// ── Onboarding state ──────────────────────────────────────────────────────
+
+export type OnboardingStep =
+    | "welcome"
+    | "biometrics"
+    | "privacy_promise"
+    | "permissions"
+    | "model_download"
+    | "indexing_started"
+    | "complete";
+
+export interface OnboardingState {
+    step: OnboardingStep;
+    biometric_enabled: boolean;
+    screen_permission: boolean;
+    accessibility_permission: boolean;
+    model_downloaded: boolean;
+    model_id: string | null;
+}
+
+export async function getOnboardingState(): Promise<OnboardingState> {
+    return invoke<OnboardingState>("get_onboarding_state");
+}
+
+export async function saveOnboardingState(state: OnboardingState): Promise<void> {
+    return invoke("save_onboarding_state", { state });
+}
+
+// ── Biometrics ────────────────────────────────────────────────────────────
+
+export async function requestBiometricAuth(reason: string): Promise<boolean> {
+    return invoke<boolean>("request_biometric_auth", { reason });
+}
+
+// ── Permissions ───────────────────────────────────────────────────────────
+
+export interface PermissionsStatus {
+    screen_recording: boolean;
+    accessibility: boolean;
+    microphone: boolean;
+}
+
+export async function checkPermissions(): Promise<PermissionsStatus> {
+    return invoke<PermissionsStatus>("check_permissions");
+}
+
+export async function openSystemSettings(pane: "screen-recording" | "accessibility" | "microphone"): Promise<void> {
+    return invoke("open_system_settings", { pane });
+}
+
+// ── Models ────────────────────────────────────────────────────────────────
+
+export interface ModelInfo {
+    id: string;
+    name: string;
+    description: string;
+    size_bytes: number;
+    size_label: string;
+    quality_label: string;
+    speed_label: string;
+    ram_gb: number;
+    recommended: boolean;
+    filename: string;
+    download_url: string;
+}
+
+export async function listAvailableModels(): Promise<ModelInfo[]> {
+    return invoke<ModelInfo[]>("list_available_models");
+}
+
+export async function downloadModel(modelId: string, downloadUrl: string, filename: string): Promise<void> {
+    return invoke("download_model", { modelId, downloadUrl, filename });
+}
+
+export async function checkModelExists(filename: string): Promise<boolean> {
+    return invoke<boolean>("check_model_exists", { filename });
+}
+
+export interface DownloadProgress {
+    model_id: string;
+    bytes_downloaded: number;
+    total_bytes: number;
+    percent: number;
+    done: boolean;
+    error: string | null;
+}
+
+export function onDownloadProgress(handler: (p: DownloadProgress) => void): Promise<() => void> {
+    return listen<DownloadProgress>("model-download-progress", (event) => {
+        handler(event.payload);
+    });
+}

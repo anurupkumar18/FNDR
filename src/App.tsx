@@ -7,8 +7,10 @@ import { AgentPanel } from "./components/AgentPanel";
 import { MemoryReconstructionPanel } from "./components/MemoryReconstructionPanel";
 import { GraphPanel } from "./components/GraphPanel";
 import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
+import { Onboarding } from "./components/Onboarding";
 import { useSearch } from "./hooks/useSearch";
 import { getStatus, getAppNames, CaptureStatus, Task, startAgentTask } from "./api/tauri";
+import { getOnboardingState } from "./api/onboarding";
 import "./styles/App.css";
 
 function App() {
@@ -20,11 +22,17 @@ function App() {
     const [showAgentPanel, setShowAgentPanel] = useState(false);
     const [showGraphPanel, setShowGraphPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
+    const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
 
     const { results, isLoading, error } = useSearch(query, timeFilter, appFilter);
 
-    // Show todo modal when no search and no results
-    const showTodoModal = !query && results.length === 0 && !isLoading;
+    // Check if onboarding is complete on first mount
+    useEffect(() => {
+        getOnboardingState()
+            .then((s) => setOnboardingDone(s.step === "complete"))
+            .catch(() => setOnboardingDone(true)); // If state can't load, skip onboarding
+    }, []);
+
 
     // Load app names for filter
     useEffect(() => {
@@ -61,6 +69,17 @@ function App() {
             alert(`Failed to start agent: ${err}`);
         }
     };
+
+    // Show todo modal when no search and no results
+    const showTodoModal = !query && results.length === 0 && !isLoading;
+
+    // Show nothing until we know the onboarding state
+    if (onboardingDone === null) return null;
+
+    // Show onboarding if not complete
+    if (!onboardingDone) {
+        return <Onboarding onComplete={() => setOnboardingDone(true)} />;
+    }
 
     return (
         <div className="app">

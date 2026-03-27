@@ -8,3 +8,5 @@ memories.json
 *.log
 src-tauri/target/
 src-tauri/models/*.gguf
+src-tauri/models/
+src-tauri/models/
