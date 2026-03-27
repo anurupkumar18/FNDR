@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
     MeetingRecorderStatus,
     MeetingSession,
@@ -6,6 +6,7 @@ import {
     getMeetingStatus,
     listMeetings,
     getMeetingTranscript,
+    startMeetingRecording,
     stopMeetingRecording,
     startAgentTask,
 } from "../api/tauri";
@@ -20,96 +21,135 @@ interface MeetingRecorderPanelProps {
 export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: MeetingRecorderPanelProps) {
     const [status, setStatus] = useState<MeetingRecorderStatus | null>(null);
     const [meetings, setMeetings] = useState<MeetingSession[]>([]);
-    const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
+    const [selectedId, setSelectedId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<MeetingTranscript | null>(null);
-    const [loading, setLoading] = useState(false);
+    const [transcriptLoading, setTranscriptLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const selectedMeeting = useMemo(
-        () => meetings.find((m) => m.id === selectedMeetingId) ?? null,
-        [meetings, selectedMeetingId]
-    );
+    // New-recording form
+    const [showNewForm, setShowNewForm] = useState(false);
+    const [newTitle, setNewTitle] = useState("");
+    const [startBusy, setStartBusy] = useState(false);
 
-    const refresh = async (preferCurrent = true) => {
-        if (!isVisible) return;
-        setLoading(true);
+    // Live elapsed timer while recording
+    const [elapsed, setElapsed] = useState(0);
+
+    // View mode for transcript pane
+    const [viewSegments, setViewSegments] = useState(false);
+
+    const selectedMeeting = meetings.find((m) => m.id === selectedId) ?? null;
+
+    // ── Refresh ──────────────────────────────────────────────────────────────
+    const refresh = useCallback(async (autoSelectCurrent = true) => {
         try {
-            const [meetingStatus, meetingList] = await Promise.all([
-                getMeetingStatus(),
-                listMeetings(),
-            ]);
-
-            setStatus(meetingStatus);
-            setMeetings(meetingList);
-
-            const nextId = preferCurrent
-                ? meetingStatus.current_meeting_id ?? selectedMeetingId ?? meetingList[0]?.id ?? null
-                : selectedMeetingId ?? meetingList[0]?.id ?? null;
-
-            setSelectedMeetingId(nextId);
-            if (nextId) {
-                const data = await getMeetingTranscript(nextId);
-                setTranscript(data);
-            } else {
-                setTranscript(null);
-            }
+            const [s, list] = await Promise.all([getMeetingStatus(), listMeetings()]);
+            setStatus(s);
+            setMeetings(list);
             setError(null);
+
+            // Auto-select: prefer current recording, then keep existing selection, then first
+            if (autoSelectCurrent) {
+                const next =
+                    s.current_meeting_id ??
+                    (list.find((m) => m.id === selectedId)?.id) ??
+                    list[0]?.id ??
+                    null;
+                if (next && next !== selectedId) {
+                    setSelectedId(next);
+                    loadTranscript(next);
+                }
+            }
         } catch (err) {
             setError(String(err));
-        } finally {
-            setLoading(false);
         }
-    };
+    }, [selectedId]);
 
+    // ── Polling ───────────────────────────────────────────────────────────────
     useEffect(() => {
         if (!isVisible) return;
-
-        let mounted = true;
-        const run = async () => {
-            if (!mounted) return;
-            await refresh(true);
-        };
-
-        run();
-        const interval = window.setInterval(run, 4000);
-
-        return () => {
-            mounted = false;
-            window.clearInterval(interval);
-        };
+        refresh(true);
+        const id = window.setInterval(() => refresh(true), 4000);
+        return () => window.clearInterval(id);
     }, [isVisible]);
 
-    const handleSelectMeeting = async (meetingId: string) => {
-        setSelectedMeetingId(meetingId);
+    // ── Elapsed timer while recording ─────────────────────────────────────────
+    useEffect(() => {
+        if (!status?.is_recording || !status.started_at) {
+            setElapsed(0);
+            return;
+        }
+        const tick = () => setElapsed(Math.floor((Date.now() - status.started_at!) / 1000));
+        tick();
+        const id = window.setInterval(tick, 1000);
+        return () => window.clearInterval(id);
+    }, [status?.is_recording, status?.started_at]);
+
+    // ── Load transcript ───────────────────────────────────────────────────────
+    const loadTranscript = async (id: string) => {
+        setTranscriptLoading(true);
         try {
-            const data = await getMeetingTranscript(meetingId);
+            const data = await getMeetingTranscript(id);
             setTranscript(data);
         } catch (err) {
             setError(String(err));
+        } finally {
+            setTranscriptLoading(false);
         }
     };
 
-    const handleCopyTranscript = async () => {
+    const handleSelectMeeting = (id: string) => {
+        setSelectedId(id);
+        loadTranscript(id);
+    };
+
+    // ── Start / Stop ──────────────────────────────────────────────────────────
+    const handleStart = async () => {
+        if (!newTitle.trim()) return;
+        setStartBusy(true);
+        setError(null);
+        try {
+            await startMeetingRecording(newTitle.trim(), []);
+            setNewTitle("");
+            setShowNewForm(false);
+            await refresh(true);
+        } catch (err) {
+            setError(String(err));
+        } finally {
+            setStartBusy(false);
+        }
+    };
+
+    const handleStop = async () => {
+        setError(null);
+        try {
+            await stopMeetingRecording();
+            await refresh(true);
+        } catch (err) {
+            setError(String(err));
+        }
+    };
+
+    // ── Export / Agent ────────────────────────────────────────────────────────
+    const handleCopy = async () => {
         if (!transcript?.full_text) return;
         await navigator.clipboard.writeText(transcript.full_text);
     };
 
-    const handleExportMarkdown = () => {
+    const handleExportMd = () => {
         if (!transcript) return;
-        const content = transcript.full_text
-            ? transcript.full_text
-            : "(No transcript yet)";
         const lines = [
             `# ${transcript.meeting.title}`,
             "",
-            `- Model: ${transcript.meeting.model}`,
-            `- Started: ${new Date(transcript.meeting.start_timestamp).toLocaleString()}`,
+            `Started: ${new Date(transcript.meeting.start_timestamp).toLocaleString()}`,
+            transcript.meeting.end_timestamp
+                ? `Ended: ${new Date(transcript.meeting.end_timestamp).toLocaleString()}`
+                : "",
+            `Duration: ${formatDuration(transcript.meeting.duration_seconds)}`,
             "",
             "## Transcript",
             "",
-            content,
-            "",
-        ];
+            transcript.full_text || "(No transcript yet)",
+        ].filter((l) => l !== null);
         downloadText(`${safeName(transcript.meeting.title)}.md`, lines.join("\n"), "text/markdown");
     };
 
@@ -124,127 +164,243 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
 
     const handleAttachToAgent = async () => {
         if (!transcript?.full_text) return;
-        const clipped = transcript.full_text.slice(0, 9000);
         await startAgentTask(
-            `Summarize meeting and generate action items: ${transcript.meeting.title}`,
+            `Summarize meeting and extract action items: ${transcript.meeting.title}`,
             [],
-            [`Meeting transcript:\n${clipped}`]
+            [`Meeting transcript:\n${transcript.full_text.slice(0, 9000)}`]
         );
         onOpenAgent();
-    };
-
-    const handleStopNow = async () => {
-        try {
-            await stopMeetingRecording();
-            await refresh(true);
-        } catch (err) {
-            setError(String(err));
-        }
     };
 
     if (!isVisible) return null;
 
     return (
-        <div className="meeting-panel">
-            <header className="meeting-panel-header">
-                <div className="meeting-headline">
-                    <h2>Meeting Notes</h2>
-                    <p>FNDR auto-detects calls and records with Parakeet V3 Small.</p>
-                    <p>Transcription runs right after a meeting ends, then is saved to Documents/FNDR Meetings.</p>
+        <div className="mp-overlay">
+            {/* ── Header ──────────────────────────────────────────────────── */}
+            <header className="mp-header">
+                <div className="mp-header-left">
+                    <h2 className="mp-title">Meeting Notes</h2>
+                    <p className="mp-subtitle">
+                        Transcription runs locally on your Mac · saved to Documents/FNDR Meetings
+                    </p>
                 </div>
-                <div className="meeting-header-actions">
-                    <button className="meeting-ghost-btn" onClick={() => refresh(true)} disabled={loading}>
-                        {loading ? "Refreshing..." : "Refresh"}
-                    </button>
-                    <button className="meeting-close-btn" onClick={onClose}>Close</button>
+                <div className="mp-header-actions">
+                    {!status?.is_recording && (
+                        <button
+                            className="mp-btn-primary"
+                            onClick={() => setShowNewForm((v) => !v)}
+                        >
+                            {showNewForm ? "Cancel" : "＋ New Recording"}
+                        </button>
+                    )}
+                    {status?.is_recording && (
+                        <button className="mp-btn-stop" onClick={handleStop}>
+                            ⏹ Stop Recording
+                        </button>
+                    )}
+                    <button className="mp-btn-ghost" onClick={onClose}>✕ Close</button>
                 </div>
             </header>
 
-            <div className="meeting-panel-body">
-                <aside className="meeting-sidebar">
-                    <section className="meeting-card meeting-card-primary">
-                        <div className="meeting-live-row">
-                            <div>
-                                <span className={`meeting-dot ${status?.is_recording ? "live" : "idle"}`} />
-                                <strong>{status?.is_recording ? "Meeting in progress" : "Auto monitor active"}</strong>
-                            </div>
-                            {status?.is_recording && (
-                                <button className="meeting-ghost-btn" onClick={handleStopNow}>Stop Now</button>
-                            )}
-                        </div>
-                        <p className="meeting-subtle">
-                            {status?.is_recording
-                                ? `Recording: ${status.current_title ?? "Detected meeting"}`
-                                : "FNDR will auto-start when it detects Zoom/Meet/Teams/Webex sessions."}
-                            <br/><br/>
-                            <small><em>Note: If this is your first meeting, the FNDR background agent will silently download the 2.5GB Parakeet transcription model. It may take 1-3 minutes.</em></small>
-                        </p>
-                        <p className="meeting-subtle">
-                            Segments: {status?.segment_count ?? 0} • Audio: {status?.ffmpeg_available ? "ready" : "missing"} • Model: Parakeet V3 Small
-                        </p>
-                    </section>
+            {/* ── New Recording Form ───────────────────────────────────────── */}
+            {showNewForm && (
+                <div className="mp-new-form">
+                    <input
+                        className="mp-new-input"
+                        type="text"
+                        placeholder="Meeting title (e.g. Q2 Sync, Design Review…)"
+                        value={newTitle}
+                        onChange={(e) => setNewTitle(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleStart()}
+                        autoFocus
+                    />
+                    <button
+                        className="mp-btn-primary"
+                        onClick={handleStart}
+                        disabled={startBusy || !newTitle.trim()}
+                    >
+                        {startBusy ? "Starting…" : "Start"}
+                    </button>
+                </div>
+            )}
 
-                    <section className="meeting-card">
-                        <h3>Recent Meetings</h3>
-                        <div className="meeting-list">
-                            {meetings.length === 0 && <p className="meeting-empty">No meetings captured yet.</p>}
-                            {meetings.map((meeting) => (
-                                <button
-                                    key={meeting.id}
-                                    className={`meeting-list-item ${selectedMeetingId === meeting.id ? "active" : ""}`}
-                                    onClick={() => handleSelectMeeting(meeting.id)}
-                                >
-                                    <span className="meeting-title">{meeting.title}</span>
-                                    <span className="meeting-sub">
-                                        {new Date(meeting.start_timestamp).toLocaleString()} • {meeting.segment_count} segments
-                                    </span>
-                                </button>
-                            ))}
+            {/* ── Error banner ─────────────────────────────────────────────── */}
+            {error && (
+                <div className="mp-error-bar">
+                    {error}
+                    <button className="mp-error-close" onClick={() => setError(null)}>✕</button>
+                </div>
+            )}
+
+            {/* ── Body ─────────────────────────────────────────────────────── */}
+            <div className="mp-body">
+                {/* Sidebar */}
+                <aside className="mp-sidebar">
+                    {/* Live status card */}
+                    <div className={`mp-status-card ${status?.is_recording ? "recording" : "idle"}`}>
+                        <div className="mp-status-top">
+                            <span className={`mp-dot ${status?.is_recording ? "live" : "idle"}`} />
+                            <strong>
+                                {status?.is_recording
+                                    ? status.current_title ?? "Recording…"
+                                    : "No active recording"}
+                            </strong>
                         </div>
-                    </section>
+                        {status?.is_recording && (
+                            <div className="mp-status-meta">
+                                {formatDuration(elapsed)} elapsed · {status.segment_count} segments
+                            </div>
+                        )}
+                        {!status?.is_recording && (
+                            <p className="mp-status-hint">
+                                {status?.ffmpeg_available
+                                    ? "Click \u201c\uff0b New Recording\u201d to start, or FNDR will auto-detect Zoom / Meet / Teams."
+                                    : "ffmpeg not found \u2014 audio capture unavailable. Install via Homebrew: brew install ffmpeg"}
+                            </p>
+                        )}
+                        {!status?.ffmpeg_available && (
+                            <div className="mp-ffmpeg-warning">
+                                ffmpeg missing · install with: <code>brew install ffmpeg</code>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Meeting list */}
+                    <div className="mp-meetings-section">
+                        <h3 className="mp-section-label">Recent Meetings</h3>
+                        {meetings.length === 0 ? (
+                            <div className="mp-empty-list">
+                                <span className="mp-empty-icon">🎙️</span>
+                                <p>No meetings yet.<br />Start a recording above.</p>
+                            </div>
+                        ) : (
+                            <div className="mp-meeting-list">
+                                {meetings.map((m) => (
+                                    <button
+                                        key={m.id}
+                                        className={`mp-meeting-item ${selectedId === m.id ? "active" : ""} ${m.status === "recording" ? "live" : ""}`}
+                                        onClick={() => handleSelectMeeting(m.id)}
+                                    >
+                                        <div className="mp-meeting-item-top">
+                                            {m.status === "recording" && <span className="mp-dot live small" />}
+                                            <span className="mp-meeting-name">{m.title}</span>
+                                        </div>
+                                        <span className="mp-meeting-detail">
+                                            {new Date(m.start_timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                            {m.duration_seconds > 0 && ` · ${formatDuration(m.duration_seconds)}`}
+                                            {m.segment_count > 0 && ` · ${m.segment_count} seg`}
+                                        </span>
+                                        <span className={`mp-meeting-status-badge ${m.status}`}>
+                                            {m.status === "recording" ? "Live" : m.status === "stopped" ? "Done" : "Error"}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </aside>
 
-                <section className="meeting-main">
-                    <div className="meeting-main-header">
-                        <div>
-                            <h3>{selectedMeeting?.title ?? "Transcript"}</h3>
-                            <p>{selectedMeeting ? `${selectedMeeting.segment_count} segments` : "Select a meeting"}</p>
+                {/* Main transcript pane */}
+                <main className="mp-main">
+                    {!selectedMeeting ? (
+                        <div className="mp-transcript-empty">
+                            <span className="mp-empty-icon large">📝</span>
+                            <p>Select a meeting from the list to view its transcript.</p>
                         </div>
-                        <div className="meeting-export-row">
-                            <button className="meeting-ghost-btn" onClick={handleCopyTranscript} disabled={!transcript?.full_text}>
-                                Copy
-                            </button>
-                            <button className="meeting-ghost-btn" onClick={handleExportMarkdown} disabled={!transcript}>
-                                Markdown
-                            </button>
-                            <button className="meeting-ghost-btn" onClick={handleExportJson} disabled={!transcript}>
-                                JSON
-                            </button>
-                            <button className="meeting-primary-btn" onClick={handleAttachToAgent} disabled={!transcript?.full_text}>
-                                Attach to Run
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="meeting-transcript">
-                        {!transcript && <p className="meeting-empty">No transcript selected.</p>}
-                        {transcript?.segments.map((segment) => (
-                            <article key={segment.id} className="segment-row">
-                                <div className="segment-time">
-                                    {formatTime(segment.start_timestamp)} - {formatTime(segment.end_timestamp)}
+                    ) : (
+                        <>
+                            {/* Transcript header */}
+                            <div className="mp-transcript-header">
+                                <div className="mp-transcript-title-group">
+                                    <h3>{selectedMeeting.title}</h3>
+                                    <p className="mp-transcript-meta">
+                                        {new Date(selectedMeeting.start_timestamp).toLocaleString()}
+                                        {selectedMeeting.duration_seconds > 0 && ` · ${formatDuration(selectedMeeting.duration_seconds)}`}
+                                        {selectedMeeting.segment_count > 0 && ` · ${selectedMeeting.segment_count} segments`}
+                                    </p>
                                 </div>
-                                <div className="segment-text">{segment.text || "(empty segment)"}</div>
-                            </article>
-                        ))}
-                    </div>
-                </section>
-            </div>
+                                <div className="mp-transcript-actions">
+                                    <div className="mp-view-toggle">
+                                        <button
+                                            className={`mp-view-btn ${!viewSegments ? "active" : ""}`}
+                                            onClick={() => setViewSegments(false)}
+                                        >
+                                            Full text
+                                        </button>
+                                        <button
+                                            className={`mp-view-btn ${viewSegments ? "active" : ""}`}
+                                            onClick={() => setViewSegments(true)}
+                                        >
+                                            Segments
+                                        </button>
+                                    </div>
+                                    <button className="mp-btn-ghost" onClick={handleCopy} disabled={!transcript?.full_text}>
+                                        Copy
+                                    </button>
+                                    <button className="mp-btn-ghost" onClick={handleExportMd} disabled={!transcript}>
+                                        .md
+                                    </button>
+                                    <button className="mp-btn-ghost" onClick={handleExportJson} disabled={!transcript}>
+                                        .json
+                                    </button>
+                                    <button
+                                        className="mp-btn-primary"
+                                        onClick={handleAttachToAgent}
+                                        disabled={!transcript?.full_text}
+                                    >
+                                        Ask AI
+                                    </button>
+                                </div>
+                            </div>
 
-            {error && <div className="meeting-error">{error}</div>}
+                            {/* Transcript body */}
+                            <div className="mp-transcript-body">
+                                {transcriptLoading ? (
+                                    <div className="mp-transcript-loading">Loading transcript…</div>
+                                ) : !transcript ? (
+                                    <div className="mp-transcript-empty-inner">No transcript data.</div>
+                                ) : !viewSegments ? (
+                                    /* Full text view */
+                                    <div className="mp-full-text">
+                                        {transcript.full_text ? (
+                                            <p>{transcript.full_text}</p>
+                                        ) : (
+                                            <div className="mp-transcript-empty-inner">
+                                                {selectedMeeting.status === "recording"
+                                                    ? "Transcription in progress — segments will appear as the recording progresses."
+                                                    : "No transcript available yet. Transcription runs after the meeting ends."}
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    /* Segments view */
+                                    <div className="mp-segments">
+                                        {transcript.segments.length === 0 ? (
+                                            <div className="mp-transcript-empty-inner">No segments yet.</div>
+                                        ) : (
+                                            transcript.segments.map((seg) => (
+                                                <div key={seg.id} className="mp-segment">
+                                                    <span className="mp-segment-time">
+                                                        {formatTimestamp(seg.start_timestamp)} – {formatTimestamp(seg.end_timestamp)}
+                                                    </span>
+                                                    <p className="mp-segment-text">
+                                                        {seg.text || <em>(empty)</em>}
+                                                    </p>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </>
+                    )}
+                </main>
+            </div>
         </div>
     );
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function safeName(title: string): string {
     return title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "meeting";
 }
@@ -252,14 +408,24 @@ function safeName(title: string): string {
 function downloadText(filename: string, content: string, mime: string) {
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    link.click();
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
     URL.revokeObjectURL(url);
 }
 
-function formatTime(ts: number): string {
+function formatDuration(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`;
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return `${h}h ${rm}m`;
+}
+
+function formatTimestamp(ts: number): string {
     return new Date(ts).toLocaleTimeString(undefined, {
         hour: "2-digit",
         minute: "2-digit",

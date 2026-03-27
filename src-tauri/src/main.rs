@@ -169,6 +169,7 @@ fn main() {
             api::onboarding::list_available_models,
             api::onboarding::download_model,
             api::onboarding::check_model_exists,
+            api::onboarding::delete_ai_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

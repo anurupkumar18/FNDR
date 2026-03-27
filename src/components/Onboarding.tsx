@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
     OnboardingState,
     OnboardingStep,
@@ -263,31 +263,65 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     const [isDownloading, setIsDownloading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    useEffect(() => {
-        listAvailableModels().then((ms) => {
-            setModels(ms);
-            const preferred = ms.find((m) => m.recommended) ?? ms[0];
-            setSelected(preferred ?? null);
-        });
-    }, []);
+    // Keep refs to the latest values so the listener closure never captures stale state.
+    // This also prevents the listener from being re-registered on every state change.
+    const selectedRef = useRef(selected);
+    const stateRef = useRef(state);
+    const onSaveRef = useRef(onSave);
+    selectedRef.current = selected;
+    stateRef.current = state;
+    onSaveRef.current = onSave;
 
     useEffect(() => {
+        listAvailableModels()
+            .then((ms) => {
+                setModels(ms);
+                const preferred = ms.find((m) => m.recommended) ?? ms[0];
+                setSelected(preferred ?? null);
+            })
+            .catch((e) => setError(`Failed to load models: ${String(e)}`));
+    }, []);
+
+    // Register the download-progress listener exactly once. Using refs above means
+    // this closure always sees fresh selected/state/onSave without re-registering.
+    // The previous bug: state+onSave in deps caused re-registration on every save call,
+    // and async unlisten meant old listeners were never cleaned up → memory leak +
+    // duplicate onSave calls that could silently drop the "done" event.
+    useEffect(() => {
         let unlisten: (() => void) | null = null;
+        let cancelled = false;
+
         onDownloadProgress((p) => {
             setProgress(p);
             if (p.done && !p.error) {
                 setIsDownloading(false);
-                if (selected) {
-                    onSave({ ...state, step: "indexing_started", model_downloaded: true, model_id: selected.id });
+                const current = selectedRef.current;
+                if (current) {
+                    onSaveRef.current({
+                        ...stateRef.current,
+                        step: "indexing_started",
+                        model_downloaded: true,
+                        model_id: current.id,
+                    });
                 }
             }
             if (p.error) {
                 setError(p.error);
                 setIsDownloading(false);
             }
-        }).then((u) => { unlisten = u; });
-        return () => { unlisten?.(); };
-    }, [selected, state, onSave]);
+        }).then((u) => {
+            if (cancelled) {
+                u(); // Component already unmounted before the promise resolved
+            } else {
+                unlisten = u;
+            }
+        });
+
+        return () => {
+            cancelled = true;
+            unlisten?.();
+        };
+    }, []); // Empty deps — register once; refs handle dynamic values
 
     async function handleDownload() {
         if (!selected) return;

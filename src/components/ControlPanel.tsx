@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
     CaptureStatus,
     McpServerStatus,
@@ -16,13 +16,21 @@ import {
     stopMcpServer,
     Stats,
 } from "../api/tauri";
+import {
+    ModelInfo,
+    DownloadProgress,
+    listAvailableModels,
+    downloadModel,
+    deleteAiModel,
+    onDownloadProgress,
+} from "../api/onboarding";
 import "./ControlPanel.css";
 
 interface ControlPanelProps {
     status: CaptureStatus | null;
 }
 
-type Tab = "settings" | "stats" | "privacy";
+type Tab = "settings" | "model" | "stats" | "privacy";
 
 export function ControlPanel({ status }: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
@@ -37,11 +45,51 @@ export function ControlPanel({ status }: ControlPanelProps) {
     const [mcpBusy, setMcpBusy] = useState(false);
     const [copiedMcpLink, setCopiedMcpLink] = useState(false);
 
+    // Model tab state
+    const [models, setModels] = useState<ModelInfo[]>([]);
+    const [modelsLoading, setModelsLoading] = useState(false);
+    const [downloadingId, setDownloadingId] = useState<string | null>(null);
+    const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+    const [modelError, setModelError] = useState<string | null>(null);
+    const [confirmDeleteModel, setConfirmDeleteModel] = useState<string | null>(null);
+    const unlistenRef = useRef<(() => void) | null>(null);
+
     useEffect(() => {
         if (isOpen) {
             loadData();
         }
     }, [isOpen]);
+
+    useEffect(() => {
+        if (isOpen && activeTab === "model") {
+            loadModels();
+        }
+    }, [isOpen, activeTab]);
+
+    // Register download-progress listener once
+    useEffect(() => {
+        let cancelled = false;
+        onDownloadProgress((p) => {
+            setDownloadProgress(p);
+            if (p.done && !p.error) {
+                setDownloadingId(null);
+                setDownloadProgress(null);
+                loadModels();
+            }
+            if (p.error) {
+                setModelError(p.error);
+                setDownloadingId(null);
+                setDownloadProgress(null);
+            }
+        }).then((u) => {
+            if (cancelled) u();
+            else unlistenRef.current = u;
+        });
+        return () => {
+            cancelled = true;
+            unlistenRef.current?.();
+        };
+    }, []);
 
     // Close on escape
     useEffect(() => {
@@ -68,6 +116,48 @@ export function ControlPanel({ status }: ControlPanelProps) {
             setMcpStatus(mcp);
         } catch (e) {
             console.error("Failed to load data:", e);
+        }
+    };
+
+    const loadModels = async () => {
+        setModelsLoading(true);
+        setModelError(null);
+        try {
+            const ms = await listAvailableModels();
+            setModels(ms);
+        } catch (e) {
+            setModelError(String(e));
+        } finally {
+            setModelsLoading(false);
+        }
+    };
+
+    const handleDownloadModel = async (model: ModelInfo) => {
+        if (downloadingId) return;
+        if (model.download_url === "already_downloaded") return;
+        setModelError(null);
+        setDownloadingId(model.id);
+        setDownloadProgress(null);
+        try {
+            await downloadModel(model.id, model.download_url, model.filename);
+        } catch (e) {
+            setModelError(String(e));
+            setDownloadingId(null);
+        }
+    };
+
+    const handleDeleteModel = async (model: ModelInfo) => {
+        if (confirmDeleteModel !== model.id) {
+            setConfirmDeleteModel(model.id);
+            return;
+        }
+        setConfirmDeleteModel(null);
+        setModelError(null);
+        try {
+            await deleteAiModel(model.filename);
+            await loadModels();
+        } catch (e) {
+            setModelError(String(e));
         }
     };
 
@@ -164,9 +254,12 @@ export function ControlPanel({ status }: ControlPanelProps) {
         }
     };
 
+    function fmtBytes(b: number) {
+        return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
+    }
+
     return (
         <>
-            {/* Settings Toggle Button */}
             <button
                 className="settings-toggle"
                 onClick={() => setIsOpen(!isOpen)}
@@ -178,42 +271,28 @@ export function ControlPanel({ status }: ControlPanelProps) {
                 </svg>
             </button>
 
-            {/* Backdrop */}
             {isOpen && <div className="panel-backdrop" onClick={() => setIsOpen(false)} />}
 
-            {/* Panel */}
             <aside className={`settings-panel ${isOpen ? "open" : ""}`}>
                 <header className="panel-header">
                     <h2>Settings</h2>
-                    <button className="panel-close" onClick={() => setIsOpen(false)} aria-label="Close">
-                        ✕
-                    </button>
+                    <button className="panel-close" onClick={() => setIsOpen(false)} aria-label="Close">✕</button>
                 </header>
 
-                {/* Tabs */}
                 <nav className="panel-tabs">
-                    <button
-                        className={`tab ${activeTab === "settings" ? "active" : ""}`}
-                        onClick={() => setActiveTab("settings")}
-                    >
-                        ⚙️ General
-                    </button>
-                    <button
-                        className={`tab ${activeTab === "stats" ? "active" : ""}`}
-                        onClick={() => setActiveTab("stats")}
-                    >
-                        📊 Stats
-                    </button>
-                    <button
-                        className={`tab ${activeTab === "privacy" ? "active" : ""}`}
-                        onClick={() => setActiveTab("privacy")}
-                    >
-                        🔒 Privacy
-                    </button>
+                    {(["settings", "model", "stats", "privacy"] as Tab[]).map((t) => (
+                        <button
+                            key={t}
+                            className={`tab ${activeTab === t ? "active" : ""}`}
+                            onClick={() => setActiveTab(t)}
+                        >
+                            {t === "settings" ? "⚙️ General" : t === "model" ? "🧠 Model" : t === "stats" ? "📊 Stats" : "🔒 Privacy"}
+                        </button>
+                    ))}
                 </nav>
 
                 <div className="panel-content">
-                    {/* Settings Tab */}
+                    {/* General Tab */}
                     {activeTab === "settings" && (
                         <>
                             <section className="panel-section">
@@ -232,9 +311,7 @@ export function ControlPanel({ status }: ControlPanelProps) {
 
                             <section className="panel-section">
                                 <h3>Data Retention</h3>
-                                <p className="section-hint">
-                                    Automatically remove old memories to save space.
-                                </p>
+                                <p className="section-hint">Automatically remove old memories to save space.</p>
                                 <div className="retention-controls">
                                     <select
                                         value={retentionDays}
@@ -247,11 +324,7 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                         <option value={0}>Forever</option>
                                     </select>
                                     {retentionDays > 0 && (
-                                        <button
-                                            className="btn-secondary"
-                                            onClick={handleRunRetentionNow}
-                                            disabled={retentionBusy}
-                                        >
+                                        <button className="btn-secondary" onClick={handleRunRetentionNow} disabled={retentionBusy}>
                                             {retentionBusy ? "..." : "Run Now"}
                                         </button>
                                     )}
@@ -260,36 +333,93 @@ export function ControlPanel({ status }: ControlPanelProps) {
 
                             <section className="panel-section">
                                 <h3>MCP Server</h3>
-                                <p className="section-hint">
-                                    Connect FNDR to external tools via Model Context Protocol.
-                                </p>
+                                <p className="section-hint">Connect FNDR to external tools via Model Context Protocol.</p>
                                 <div className="mcp-status-row">
                                     <span className={`mcp-pill ${mcpStatus?.running ? "running" : "stopped"}`}>
                                         {mcpStatus?.running ? "Running" : "Stopped"}
                                     </span>
-                                    <button
-                                        className="btn-secondary"
-                                        onClick={handleToggleMcpServer}
-                                        disabled={mcpBusy}
-                                    >
+                                    <button className="btn-secondary" onClick={handleToggleMcpServer} disabled={mcpBusy}>
                                         {mcpBusy ? "..." : mcpStatus?.running ? "Stop" : "Start"}
                                     </button>
                                 </div>
                                 <div className="mcp-link-row">
-                                    <input
-                                        className="mcp-link-input"
-                                        value={mcpStatus?.endpoint ?? "http://127.0.0.1:8799/mcp"}
-                                        readOnly
-                                    />
+                                    <input className="mcp-link-input" value={mcpStatus?.endpoint ?? "http://127.0.0.1:8799/mcp"} readOnly />
                                     <button className="btn-primary" onClick={handleCopyMcpLink}>
                                         {copiedMcpLink ? "Copied" : "Copy Link"}
                                     </button>
                                 </div>
-                                {mcpStatus?.last_error && (
-                                    <p className="mcp-error">{mcpStatus.last_error}</p>
-                                )}
+                                {mcpStatus?.last_error && <p className="mcp-error">{mcpStatus.last_error}</p>}
                             </section>
                         </>
+                    )}
+
+                    {/* Model Tab */}
+                    {activeTab === "model" && (
+                        <section className="panel-section">
+                            <h3>AI Model</h3>
+                            <p className="section-hint">
+                                The on-device model powers search summaries and memory Q&A.
+                                {status?.ai_model_loaded
+                                    ? " A model is currently loaded."
+                                    : " No model is currently loaded."}
+                            </p>
+
+                            {modelError && <div className="model-error">{modelError}</div>}
+
+                            {modelsLoading && <p className="section-hint">Loading…</p>}
+
+                            {!modelsLoading && models.map((model) => {
+                                const isDownloaded = model.download_url === "already_downloaded";
+                                const isDownloading = downloadingId === model.id;
+                                const confirmingDelete = confirmDeleteModel === model.id;
+
+                                return (
+                                    <div key={model.id} className={`model-row ${isDownloaded ? "downloaded" : ""}`}>
+                                        <div className="model-row-info">
+                                            <div className="model-row-name">
+                                                {model.name}
+                                                {isDownloaded && <span className="model-badge-downloaded">Downloaded</span>}
+                                                {model.recommended && !isDownloaded && <span className="model-badge-recommended">Recommended</span>}
+                                            </div>
+                                            <div className="model-row-meta">{model.size_label} · {model.speed_label} · ~{model.ram_gb} GB RAM</div>
+                                            <div className="model-row-desc">{model.description}</div>
+                                        </div>
+
+                                        {isDownloading ? (
+                                            <div className="model-dl-progress">
+                                                {downloadProgress ? (
+                                                    <>
+                                                        <div className="model-dl-bar-wrap">
+                                                            <div className="model-dl-bar-fill" style={{ width: `${downloadProgress.percent.toFixed(1)}%` }} />
+                                                        </div>
+                                                        <span className="model-dl-pct">
+                                                            {fmtBytes(downloadProgress.bytes_downloaded)} / {fmtBytes(downloadProgress.total_bytes)} ({downloadProgress.percent.toFixed(0)}%)
+                                                        </span>
+                                                    </>
+                                                ) : (
+                                                    <span className="model-dl-pct">Connecting…</span>
+                                                )}
+                                            </div>
+                                        ) : isDownloaded ? (
+                                            <button
+                                                className={`btn-danger-sm ${confirmingDelete ? "confirm" : ""}`}
+                                                onClick={() => handleDeleteModel(model)}
+                                            >
+                                                {confirmingDelete ? "Confirm delete" : "Delete"}
+                                            </button>
+                                        ) : (
+                                            <button
+                                                className="btn-primary-sm"
+                                                onClick={() => handleDownloadModel(model)}
+                                                disabled={!!downloadingId}
+                                            >
+                                                Download
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </section>
                     )}
 
                     {/* Stats Tab */}
@@ -310,13 +440,10 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                     <span className="stat-label">Days Active</span>
                                 </div>
                             </div>
-
                             <div className="profile-section">
                                 <h3>Profile</h3>
                                 <div className="profile-card">
-                                    <div className="profile-avatar">
-                                        👤
-                                    </div>
+                                    <div className="profile-avatar">👤</div>
                                     <div className="profile-info">
                                         <span className="profile-name">Local User</span>
                                         <span className="profile-detail">All data stored locally on your Mac</span>
@@ -331,9 +458,7 @@ export function ControlPanel({ status }: ControlPanelProps) {
                         <>
                             <section className="panel-section">
                                 <h3>Blocked Apps</h3>
-                                <p className="section-hint">
-                                    These apps will not be captured.
-                                </p>
+                                <p className="section-hint">These apps will not be captured.</p>
                                 <div className="blocklist">
                                     {blocklist.length === 0 ? (
                                         <p className="blocklist-empty">No apps blocked</p>

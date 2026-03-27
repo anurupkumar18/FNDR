@@ -13,6 +13,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+// ---------------------------------------------------------------------------
+// macOS framework bindings for permission checks
+// ---------------------------------------------------------------------------
+
+/// CGPreflightScreenCaptureAccess — returns true if the calling process has
+/// Screen Recording (screen capture) permission. Available since macOS 10.15.
+/// Using the proper CoreGraphics API instead of osascript, which was incorrectly
+/// testing Accessibility permission rather than Screen Recording.
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+}
+
+/// Force-link AVFoundation so that the AVCaptureDevice ObjC class is available
+/// at runtime when we call it through the objc2 message-send machinery.
+#[cfg(target_os = "macos")]
+#[link(name = "AVFoundation", kind = "framework")]
+extern "C" {}
+
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
@@ -134,11 +154,9 @@ pub struct PermissionsStatus {
 
 #[tauri::command]
 pub async fn check_permissions() -> Result<PermissionsStatus, String> {
-    // Screen Recording: try a zero-byte capture — if it fails or returns placeholder,
-    // we don't have permission.
     let screen = check_screen_recording_permission();
     let accessibility = check_accessibility_permission();
-    let microphone = check_microphone_permission().await;
+    let microphone = check_microphone_permission();
 
     Ok(PermissionsStatus {
         screen_recording: screen,
@@ -148,18 +166,22 @@ pub async fn check_permissions() -> Result<PermissionsStatus, String> {
 }
 
 fn check_screen_recording_permission() -> bool {
-    // CGDisplayCreateImage returns null when screen recording is not granted.
-    // We approximate this by checking if the quartz display services are available.
-    // A more accurate check would invoke CGPreflightScreenCaptureAccess() via FFI,
-    // but osascript is simpler and works for our purposes.
-    let output = std::process::Command::new("osascript")
-        .args(["-e", "tell application \"System Events\" to get name of first process whose frontmost is true"])
-        .output();
-
-    output.map(|o| o.status.success()).unwrap_or(false)
+    // Use CGPreflightScreenCaptureAccess() — the correct macOS API for checking
+    // Screen Recording permission without triggering a system prompt.
+    // Previously this used osascript talking to System Events, which only succeeds
+    // when *Accessibility* permission is granted, not Screen Recording, causing
+    // users with Screen Recording (but no Accessibility) to be stuck on this step.
+    #[cfg(target_os = "macos")]
+    {
+        unsafe { CGPreflightScreenCaptureAccess() }
+    }
+    #[cfg(not(target_os = "macos"))]
+    { true }
 }
 
 fn check_accessibility_permission() -> bool {
+    // osascript querying System Events requires Accessibility permission,
+    // so success/failure accurately reflects that grant.
     let output = std::process::Command::new("osascript")
         .args([
             "-e",
@@ -170,17 +192,32 @@ fn check_accessibility_permission() -> bool {
     output.map(|o| o.status.success()).unwrap_or(false)
 }
 
-async fn check_microphone_permission() -> bool {
-    // Check via AVCaptureDevice — simplest available path without extra dep
-    let output = tokio::process::Command::new("osascript")
-        .args([
-            "-e",
-            "tell application \"System Events\" to return true",
-        ])
-        .output()
-        .await;
+fn check_microphone_permission() -> bool {
+    // Call +[AVCaptureDevice authorizationStatusForMediaType:] via the ObjC runtime.
+    // The AVFoundation framework is linked above.
+    // AVAuthorizationStatus: notDetermined=0, restricted=1, denied=2, authorized=3.
+    // Previously this osascript always returned true regardless of actual permission.
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::runtime::AnyClass;
+        use objc2_foundation::ns_string;
 
-    output.map(|o| o.status.success()).unwrap_or(false)
+        let Some(cls) = AnyClass::get("AVCaptureDevice") else {
+            // AVFoundation unavailable (very old macOS) — treat as unknown/false
+            return false;
+        };
+
+        // AVMediaTypeAudio constant value is the string literal "soun"
+        let media_type = ns_string!("soun");
+
+        let status: i64 = unsafe {
+            objc2::msg_send![cls, authorizationStatusForMediaType: media_type]
+        };
+
+        status == 3 // AVAuthorizationStatusAuthorized
+    }
+    #[cfg(not(target_os = "macos"))]
+    { true }
 }
 
 #[tauri::command]
@@ -385,22 +422,39 @@ async fn do_download(
 
     let response = request.send().await.map_err(|e| e.to_string())?;
 
-    if !response.status().is_success() && response.status().as_u16() != 206 {
+    let status_code = response.status().as_u16();
+
+    if !response.status().is_success() && status_code != 206 {
         return Err(format!("Server returned {}", response.status()));
     }
+
+    // If we sent a Range header but the server responded with 200 (full content)
+    // instead of 206 (partial content), the server doesn't support resume.
+    // Delete the partial file and restart from scratch to avoid file corruption.
+    let resume_from = if resume_from > 0 && status_code == 200 {
+        tracing::warn!("Server does not support range requests; restarting download from scratch");
+        let _ = tokio::fs::remove_file(&dest_path).await;
+        0u64
+    } else {
+        resume_from
+    };
 
     let total_bytes = response
         .content_length()
         .unwrap_or(0)
         + resume_from;
 
-    let mut file = tokio::fs::OpenOptions::new()
+    let raw_file = tokio::fs::OpenOptions::new()
         .create(true)
         .append(resume_from > 0)
-        .write(!{ resume_from > 0 })
+        .write(!(resume_from > 0))
         .open(&dest_path)
         .await
         .map_err(|e| e.to_string())?;
+
+    // BufWriter batches small chunk writes into larger I/O operations,
+    // reducing syscall overhead for the thousands of chunks in a multi-GB download.
+    let mut file = tokio::io::BufWriter::new(raw_file);
 
     let mut bytes_downloaded = resume_from;
     let mut stream = response.bytes_stream();
@@ -455,4 +509,23 @@ pub async fn check_model_exists(app: AppHandle, filename: String) -> Result<bool
         .map_err(|e| e.to_string())?
         .join("models");
     Ok(models_dir.join(&filename).exists())
+}
+
+#[tauri::command]
+pub async fn delete_ai_model(app: AppHandle, filename: String) -> Result<(), String> {
+    // Sanitize: only allow bare filenames, no path traversal
+    let fname = std::path::Path::new(&filename);
+    if fname.components().count() != 1 || filename.contains('/') || filename.contains('\\') {
+        return Err("Invalid filename".into());
+    }
+    let path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models")
+        .join(fname);
+    if path.exists() {
+        tokio::fs::remove_file(&path).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }

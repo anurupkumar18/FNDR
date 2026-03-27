@@ -35,10 +35,16 @@ function App() {
     }, []);
 
 
-    // Load app names for filter
+    // Load app names for filter — refresh every 30s, not on every captured frame.
+    // Previously this triggered on every status poll (every 2s via frames_captured
+    // change), causing a redundant IPC call every 2 seconds.
     useEffect(() => {
-        getAppNames().then(setAppNames).catch(() => setAppNames([]));
-    }, [status?.frames_captured]);
+        getAppNames().then(setAppNames).catch(() => {});
+        const id = setInterval(() => {
+            getAppNames().then(setAppNames).catch(() => {});
+        }, 30_000);
+        return () => clearInterval(id);
+    }, []);
 
     // Poll status every 2 seconds
     useEffect(() => {
