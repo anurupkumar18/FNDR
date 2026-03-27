@@ -230,7 +230,7 @@ pub struct ModelInfo {
 pub async fn list_available_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
     let models_dir = app
         .path()
-        .resource_dir()
+        .app_data_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("models");
 
@@ -353,7 +353,7 @@ async fn do_download(
 
     let models_dir = app
         .path()
-        .resource_dir()
+        .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("models");
 
@@ -447,7 +447,7 @@ async fn do_download(
 pub async fn check_model_exists(app: AppHandle, filename: String) -> Result<bool, String> {
     let models_dir = app
         .path()
-        .resource_dir()
+        .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("models");
     Ok(models_dir.join(&filename).exists())

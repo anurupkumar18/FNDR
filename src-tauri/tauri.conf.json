@@ -34,8 +34,8 @@
             "app"
         ],
         "resources": {
-            "models/*": "models/",
-            "sidecar/parakeet_runner.py": "sidecar/parakeet_runner.py"
+            "sidecar/parakeet_runner.py": "sidecar/parakeet_runner.py",
+            "sidecar/fastvlm_runner.py": "sidecar/fastvlm_runner.py"
         },
         "icon": [
             "icons/icon.png"
