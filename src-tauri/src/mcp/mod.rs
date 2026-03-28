@@ -610,7 +610,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "start_meeting",
-                "description": "Start a meeting recording session (Parakeet V3 Small).",
+                "description": "Start a meeting recording session (Whisper large-v3 turbo GGUF on demand).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -765,10 +765,10 @@ async fn run_ask_fndr(app_state: Arc<AppState>, args: AskFndrArgs) -> Result<Val
         .join("\n");
 
     let answer_future = async {
-        if let Some(engine) = &app_state.inference {
-            engine.answer(&args.query, &context).await
-        } else {
-            "AI intelligence is disabled (model missing).".to_string()
+        match app_state.ensure_inference_engine().await {
+            Ok(Some(engine)) => engine.answer(&args.query, &context).await,
+            Ok(None) => "AI intelligence is disabled until Qwen3-VL is downloaded.".to_string(),
+            Err(err) => format!("AI intelligence is temporarily unavailable: {}", err),
         }
     };
 
@@ -833,8 +833,9 @@ async fn run_stop_meeting() -> Result<Value, JsonRpcError> {
 }
 
 async fn run_get_meeting_transcript(args: GetMeetingTranscriptArgs) -> Result<Value, JsonRpcError> {
-    let transcript =
-        meeting::get_meeting_transcript(&args.meeting_id).map_err(internal_tool_error)?;
+    let transcript = meeting::get_meeting_transcript(&args.meeting_id)
+        .await
+        .map_err(internal_tool_error)?;
     Ok(tool_success(json!({ "transcript": transcript })))
 }
 

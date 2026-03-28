@@ -33,7 +33,7 @@ pub struct Config {
 }
 
 fn default_use_vlm() -> bool {
-    true
+    false
 }
 
 fn default_vlm_model_size() -> String {
@@ -57,7 +57,7 @@ impl Default for Config {
             ],
             redact_mode: false,
             min_text_length: 20,
-            use_vlm: true,
+            use_vlm: false,
             vlm_model_size: "4B".to_string(),
         }
     }

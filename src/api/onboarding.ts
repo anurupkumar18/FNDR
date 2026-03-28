@@ -75,6 +75,14 @@ export async function downloadModel(modelId: string, downloadUrl: string, filena
     return invoke("download_model", { modelId, downloadUrl, filename });
 }
 
+export type ModelDownloadState =
+    | "idle"
+    | "preparing"
+    | "downloading"
+    | "finalizing"
+    | "completed"
+    | "failed";
+
 export async function checkModelExists(filename: string): Promise<boolean> {
     return invoke<boolean>("check_model_exists", { filename });
 }
@@ -88,16 +96,56 @@ export interface DownloadProgress {
     error: string | null;
 }
 
+export interface ModelDownloadStatus {
+    state: ModelDownloadState;
+    model_id: string | null;
+    filename: string | null;
+    download_url: string | null;
+    destination_path: string | null;
+    temp_path: string | null;
+    bytes_downloaded: number;
+    total_bytes: number;
+    percent: number;
+    done: boolean;
+    error: string | null;
+    logs: string[];
+    updated_at_ms: number;
+}
+
+export interface AiRuntimeStatus {
+    ai_model_available: boolean;
+    ai_model_loaded: boolean;
+    vlm_loaded: boolean;
+    loaded_model_id: string | null;
+    loaded_model_path: string | null;
+}
+
 export function onDownloadProgress(handler: (p: DownloadProgress) => void): Promise<() => void> {
     return listen<DownloadProgress>("model-download-progress", (event) => {
         handler(event.payload);
     });
 }
+
+export function onDownloadStatus(handler: (status: ModelDownloadStatus) => void): Promise<() => void> {
+    return listen<ModelDownloadStatus>("model-download-status", (event) => {
+        handler(event.payload);
+    });
+}
+
 export function onDownloadLog(handler: (msg: string) => void): Promise<() => void> {
     return listen<string>("model-download-log", (event) => {
         handler(event.payload);
     });
 }
+
+export async function getModelDownloadStatus(): Promise<ModelDownloadStatus> {
+    return invoke<ModelDownloadStatus>("get_model_download_status");
+}
+
+export async function refreshAiModels(): Promise<AiRuntimeStatus> {
+    return invoke<AiRuntimeStatus>("refresh_ai_models");
+}
+
 export async function deleteAiModel(filename: string): Promise<void> {
     return invoke("delete_ai_model", { filename });
 }

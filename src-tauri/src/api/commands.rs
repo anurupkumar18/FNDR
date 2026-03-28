@@ -7,12 +7,13 @@ use crate::meeting::{
     self, MeetingRecorderStatus, MeetingSearchResult, MeetingSession, MeetingTranscript,
 };
 use crate::search::HybridSearcher;
+use crate::speech;
 use crate::store::{SearchResult, Stats};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureStatus {
@@ -22,7 +23,9 @@ pub struct CaptureStatus {
     pub frames_captured: u64,
     pub frames_dropped: u64,
     pub last_capture_time: u64,
+    pub ai_model_available: bool,
     pub ai_model_loaded: bool,
+    pub loaded_model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +34,18 @@ pub struct SearchRequest {
     pub time_filter: Option<String>,
     pub app_filter: Option<String>,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceTranscriptionResult {
+    pub text: String,
+    pub backend: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeechSynthesisResult {
+    pub audio_path: String,
+    pub voice_id: String,
 }
 
 /// Search for memories
@@ -71,12 +86,17 @@ pub async fn summarize_search(
         return Ok(String::new());
     }
 
-    let summary = if let Some(engine) = &state.inner().inference {
-        engine
-            .summarize_search_results(&query, &results_snippets)
-            .await
-    } else {
-        String::new()
+    let summary = match state.inner().ensure_inference_engine().await {
+        Ok(Some(engine)) => {
+            engine
+                .summarize_search_results(&query, &results_snippets)
+                .await
+        }
+        Ok(None) => String::new(),
+        Err(err) => {
+            tracing::warn!("Failed to lazy-load AI model for search summary: {}", err);
+            String::new()
+        }
     };
 
     Ok(summary)
@@ -108,12 +128,17 @@ pub async fn summarize_memory(
     window_title: String,
     text: String,
 ) -> Result<String, String> {
-    let summary = if let Some(engine) = &state.inner().inference {
-        engine
-            .summarize_memory_detail(&app_name, &window_title, &text)
-            .await
-    } else {
-        String::new()
+    let summary = match state.inner().ensure_inference_engine().await {
+        Ok(Some(engine)) => {
+            engine
+                .summarize_memory_detail(&app_name, &window_title, &text)
+                .await
+        }
+        Ok(None) => String::new(),
+        Err(err) => {
+            tracing::warn!("Failed to lazy-load AI model for memory summary: {}", err);
+            String::new()
+        }
     };
     Ok(summary)
 }
@@ -168,10 +193,10 @@ async fn run_memory_reconstruction(
     }
 
     let context = context_parts.join("\n");
-    reconstruction.answer = if let Some(engine) = &app_state.inference {
-        engine.answer(query, &context).await
-    } else {
-        "AI intelligence is disabled (model missing).".to_string()
+    reconstruction.answer = match app_state.ensure_inference_engine().await {
+        Ok(Some(engine)) => engine.answer(query, &context).await,
+        Ok(None) => "AI intelligence is disabled until Qwen3-VL is downloaded.".to_string(),
+        Err(err) => format!("AI intelligence is temporarily unavailable: {}", err),
     };
     Ok(reconstruction)
 }
@@ -186,7 +211,9 @@ pub async fn get_status(state: State<'_, Arc<AppState>>) -> Result<CaptureStatus
         frames_captured: state.inner().frames_captured.load(Ordering::Relaxed),
         frames_dropped: state.inner().frames_dropped.load(Ordering::Relaxed),
         last_capture_time: state.inner().last_capture_time.load(Ordering::Relaxed),
-        ai_model_loaded: state.inner().inference.is_some(),
+        ai_model_available: state.inner().ai_model_available(),
+        ai_model_loaded: state.inner().ai_model_loaded(),
+        loaded_model_id: state.inner().loaded_model_id(),
     })
 }
 
@@ -243,7 +270,7 @@ pub async fn list_meetings() -> Result<Vec<MeetingSession>, String> {
 /// Get full transcript for a meeting
 #[tauri::command]
 pub async fn get_meeting_transcript(meeting_id: String) -> Result<MeetingTranscript, String> {
-    meeting::get_meeting_transcript(&meeting_id)
+    meeting::get_meeting_transcript(&meeting_id).await
 }
 
 /// Search across meeting transcripts
@@ -253,6 +280,40 @@ pub async fn search_meeting_transcripts(
     limit: Option<usize>,
 ) -> Result<Vec<MeetingSearchResult>, String> {
     meeting::search_meeting_transcripts(&query, limit.unwrap_or(20))
+}
+
+/// Transcribe a short voice input clip for voice search and voice control
+#[tauri::command]
+pub async fn transcribe_voice_input(
+    app: AppHandle,
+    audio_bytes: Vec<u8>,
+    mime_type: Option<String>,
+) -> Result<VoiceTranscriptionResult, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let text =
+        speech::transcribe_audio_bytes(&app_data_dir, &audio_bytes, mime_type.as_deref()).await?;
+
+    Ok(VoiceTranscriptionResult {
+        text,
+        backend: "whisper-large-v3-turbo-gguf".to_string(),
+    })
+}
+
+/// Synthesize a short spoken response for the FNDR UI
+#[tauri::command]
+pub async fn speak_text(
+    app: AppHandle,
+    text: String,
+    voice_id: Option<String>,
+) -> Result<SpeechSynthesisResult, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let voice_id = voice_id.unwrap_or_else(|| "tara".to_string());
+    let audio_path = speech::synthesize_speech(&app_data_dir, &text, Some(&voice_id)).await?;
+
+    Ok(SpeechSynthesisResult {
+        audio_path: audio_path.to_string_lossy().to_string(),
+        voice_id,
+    })
 }
 
 /// Pause capture
@@ -421,10 +482,13 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .join("\n");
 
     // Extract new todos via LLM
-    let llm_response = if let Some(engine) = &state.inner().inference {
-        engine.extract_todos(&combined_text).await
-    } else {
-        String::new()
+    let llm_response = match state.inner().ensure_inference_engine().await {
+        Ok(Some(engine)) => engine.extract_todos(&combined_text).await,
+        Ok(None) => String::new(),
+        Err(err) => {
+            tracing::warn!("Failed to lazy-load AI model for todo extraction: {}", err);
+            String::new()
+        }
     };
 
     // Parse and add new tasks

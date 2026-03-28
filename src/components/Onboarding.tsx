@@ -3,7 +3,6 @@ import {
     OnboardingState,
     OnboardingStep,
     ModelInfo,
-    DownloadProgress,
     getOnboardingState,
     saveOnboardingState,
     requestBiometricAuth,
@@ -11,10 +10,10 @@ import {
     openSystemSettings,
     listAvailableModels,
     downloadModel,
-    onDownloadProgress,
-    onDownloadLog,
+    refreshAiModels,
 } from "../api/onboarding";
 import { getStatus } from "../api/tauri";
+import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
 import "./Onboarding.css";
 
 // ── Helper: step index for progress dots ─────────────────────────────────
@@ -216,7 +215,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
                     key: "microphone" as const,
                     icon: "🎙",
                     label: "Microphone",
-                    desc: "Optional — for meeting transcription",
+                    desc: "Optional — for meeting transcription, voice search, and voice control",
                     pane: "microphone" as const,
                 },
             ].map(({ key, icon, label, desc, pane }) => (
@@ -260,19 +259,10 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
 function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [selected, setSelected] = useState<ModelInfo | null>(null);
-    const [progress, setProgress] = useState<DownloadProgress | null>(null);
-    const [isDownloading, setIsDownloading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [logs, setLogs] = useState<string[]>([]);
-
-    // Keep refs to the latest values so the listener closure never captures stale state.
-    // This also prevents the listener from being re-registered on every state change.
-    const selectedRef = useRef(selected);
-    const stateRef = useRef(state);
-    const onSaveRef = useRef(onSave);
-    selectedRef.current = selected;
-    stateRef.current = state;
-    onSaveRef.current = onSave;
+    const [pendingModelId, setPendingModelId] = useState<string | null>(null);
+    const [isActivatingModel, setIsActivatingModel] = useState(false);
+    const downloadStatus = useModelDownloadStatus();
 
     useEffect(() => {
         listAvailableModels()
@@ -284,85 +274,91 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
             .catch((e) => setError(`Failed to load models: ${String(e)}`));
     }, []);
 
-    // Register the download-progress listener exactly once. Using refs above means
-    // this closure always sees fresh selected/state/onSave without re-registering.
-    // The previous bug: state+onSave in deps caused re-registration on every save call,
-    // and async unlisten meant old listeners were never cleaned up → memory leak +
-    // duplicate onSave calls that could silently drop the "done" event.
     useEffect(() => {
-        let unlistenProgress: (() => void) | null = null;
-        let unlistenLogs: (() => void) | null = null;
+        if (!pendingModelId || downloadStatus.model_id !== pendingModelId) {
+            return;
+        }
+
+        if (downloadStatus.state === "failed" && downloadStatus.error) {
+            setError(downloadStatus.error);
+            setPendingModelId(null);
+            return;
+        }
+
+        if (downloadStatus.state !== "completed" || downloadStatus.error) {
+            return;
+        }
+
         let cancelled = false;
+        const completedModelId = downloadStatus.model_id ?? pendingModelId;
+        setPendingModelId(null);
+        setIsActivatingModel(true);
 
-        onDownloadLog((msg) => {
-            setLogs((prev) => [...prev, msg].slice(-20));
-        }).then((u) => {
-            if (cancelled) u(); else unlistenLogs = u;
-        });
-
-        onDownloadProgress((p) => {
-            setProgress(p);
-            if (p.done && !p.error) {
-                setIsDownloading(false);
-                const current = selectedRef.current;
-                if (current) {
-                    onSaveRef.current({
-                        ...stateRef.current,
+        void (async () => {
+            try {
+                await refreshAiModels();
+            } catch (refreshError) {
+                console.error("Failed to refresh AI models after onboarding download:", refreshError);
+            } finally {
+                if (!cancelled) {
+                    setIsActivatingModel(false);
+                    onSave({
+                        ...state,
                         step: "indexing_started",
                         model_downloaded: true,
-                        model_id: current.id,
+                        model_id: completedModelId,
                     });
                 }
             }
-            if (p.error) {
-                setError(p.error);
-                setIsDownloading(false);
-            }
-        }).then((u) => {
-            if (cancelled) {
-                u(); // Component already unmounted before the promise resolved
-            } else {
-                unlistenProgress = u;
-            }
-        });
+        })();
 
         return () => {
             cancelled = true;
-            unlistenProgress?.();
-            unlistenLogs?.();
         };
-    }, []); // Empty deps — register once; refs handle dynamic values
+    }, [downloadStatus.error, downloadStatus.model_id, downloadStatus.state, onSave, pendingModelId, state]);
+
+    const activeDownloadStatus =
+        pendingModelId && downloadStatus.model_id === pendingModelId ? downloadStatus : null;
+    const isDownloading =
+        isActivatingModel ||
+        (activeDownloadStatus !== null &&
+            ["preparing", "downloading", "finalizing"].includes(activeDownloadStatus.state));
 
     // Auto-scroll logs to bottom
     const logsEndRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
-        if (logsEndRef.current) {
+        if (logsEndRef.current && activeDownloadStatus) {
             logsEndRef.current.scrollIntoView({ behavior: "smooth" });
         }
-    }, [logs]);
+    }, [activeDownloadStatus]);
 
     async function handleDownload() {
         if (!selected) return;
         if (selected.download_url === "already_downloaded") {
+            setIsActivatingModel(true);
+            try {
+                await refreshAiModels();
+            } catch (refreshError) {
+                console.error("Failed to activate existing AI model during onboarding:", refreshError);
+            } finally {
+                setIsActivatingModel(false);
+            }
             onSave({ ...state, step: "indexing_started", model_downloaded: true, model_id: selected.id });
             return;
         }
         setError(null);
-        setLogs([]);
-        setIsDownloading(true);
+        setPendingModelId(selected.id);
         try {
             await downloadModel(selected.id, selected.download_url, selected.filename);
         } catch (e: unknown) {
             setError(String(e));
-            setIsDownloading(false);
+            setPendingModelId(null);
         }
     }
 
-    function handleSkip() {
-        onSave({ ...state, step: "indexing_started", model_downloaded: false });
-    }
-
     const alreadyDownloaded = selected?.download_url === "already_downloaded";
+    const activeModelName =
+        models.find((model) => model.id === activeDownloadStatus?.model_id)?.name ?? selected?.name;
 
     function fmtBytes(b: number) {
         return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
@@ -371,8 +367,11 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     return (
         <>
             <span className="ob-icon">🧠</span>
-            <h1 className="ob-title">Choose your on-device AI</h1>
-            <p className="ob-subtitle">Runs entirely on your Mac. No internet after download.</p>
+            <h1 className="ob-title">Download FNDR&apos;s local Qwen model</h1>
+            <p className="ob-subtitle">
+                Qwen3-VL 4B is the required on-device model for summaries, memory Q&amp;A, and smarter indexing.
+                Optional helpers like Whisper, Orpheus, and FastVLM only load later if you actually use those features.
+            </p>
 
             {!isDownloading && (
                 <div className="ob-model-cards">
@@ -383,7 +382,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                             className={`ob-model-card ${selected?.id === m.id ? "selected" : ""} ${m.download_url === "already_downloaded" ? "already-downloaded" : ""}`}
                             onClick={() => setSelected(m)}
                         >
-                            {m.recommended && <span className="ob-model-badge">Recommended</span>}
+                            {m.recommended && <span className="ob-model-badge">Required</span>}
                             {m.download_url === "already_downloaded" && (
                                 <span className="ob-model-badge downloaded">Downloaded</span>
                             )}
@@ -399,33 +398,73 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                 </div>
             )}
 
-            {isDownloading && progress && (
+            {!isDownloading && (
+                <div className="ob-privacy-list" style={{ marginBottom: 24 }}>
+                    {[
+                        {
+                            icon: "✅",
+                            title: "Required right now",
+                            body: "Qwen3-VL powers the core FNDR experience and is the only model you need to finish setup.",
+                        },
+                        {
+                            icon: "🖼",
+                            title: "FastVLM stays optional",
+                            body: "Apple FastVLM is no longer on the hot path. We can bring it in later for screenshot-heavy features only.",
+                        },
+                        {
+                            icon: "🎙",
+                            title: "Voice models stay optional",
+                            body: "Whisper and Orpheus are only downloaded when you use meeting transcription, voice search, voice control, or text to speech.",
+                        },
+                    ].map(({ icon, title, body }) => (
+                        <div className="ob-privacy-item" key={title}>
+                            <span className="ob-privacy-icon">{icon}</span>
+                            <div className="ob-privacy-text">
+                                <strong>{title}</strong>
+                                <span>{body}</span>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {isDownloading && activeDownloadStatus?.state === "downloading" && (
                 <div style={{ marginBottom: 24 }}>
                     <div className="ob-download-info">
-                        <div className="ob-download-title">Downloading {selected?.name}…</div>
+                        <div className="ob-download-title">Downloading {activeModelName}…</div>
                         <div className="ob-download-subtitle">
-                            {fmtBytes(progress.bytes_downloaded)} / {fmtBytes(progress.total_bytes)}
+                            {fmtBytes(activeDownloadStatus.bytes_downloaded)} / {fmtBytes(activeDownloadStatus.total_bytes)}
                         </div>
                     </div>
                     <div className="ob-progress-bar-wrap">
                         <div
                             className="ob-progress-bar-fill"
-                            style={{ width: `${progress.percent.toFixed(1)}%` }}
+                            style={{ width: `${activeDownloadStatus.percent.toFixed(1)}%` }}
                         />
                     </div>
-                    <div className="ob-progress-label">{progress.percent.toFixed(0)}%</div>
+                    <div className="ob-progress-label">{activeDownloadStatus.percent.toFixed(0)}%</div>
                 </div>
             )}
 
-            {isDownloading && !progress && (
+            {isDownloading && (!activeDownloadStatus || activeDownloadStatus.state !== "downloading") && (
                 <div style={{ marginBottom: 24, padding: "24px 0", textAlign: "center" }}>
                     <span className="ob-icon pulse" style={{ display: "inline-block", fontSize: 24, marginBottom: 12 }}>⚙️</span>
-                    <div className="ob-download-title">Preparing Download...</div>
-                    <div className="ob-download-subtitle">Connecting to huggingface.co</div>
+                    <div className="ob-download-title">
+                        {isActivatingModel
+                            ? "Loading model into FNDR..."
+                            : activeDownloadStatus?.state === "finalizing"
+                                ? "Finalizing model file..."
+                                : "Preparing Download..."}
+                    </div>
+                    <div className="ob-download-subtitle">
+                        {activeDownloadStatus?.destination_path
+                            ? activeDownloadStatus.destination_path
+                            : "Connecting to huggingface.co"}
+                    </div>
                 </div>
             )}
 
-            {isDownloading && logs.length > 0 && (
+            {isDownloading && (
                 <div className="ob-download-logs" style={{
                     background: "rgba(0,0,0,0.2)",
                     borderRadius: 8,
@@ -438,7 +477,10 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                     marginBottom: 24,
                     textAlign: "left"
                 }}>
-                    {logs.map((L, i) => (
+                    <div style={{ color: "var(--accent)" }}>
+                        [Stage: {activeDownloadStatus?.state ?? (isActivatingModel ? "activating" : "pending")} | Logs: {activeDownloadStatus?.logs.length ?? 0}]
+                    </div>
+                    {activeDownloadStatus?.logs.map((L, i) => (
                         <div key={i} style={{ marginBottom: 4 }}>{L}</div>
                     ))}
                     <div ref={logsEndRef} />
@@ -458,9 +500,6 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                         {alreadyDownloaded
                             ? `Use ${selected?.name}`
                             : `Download ${selected?.name ?? ""} · ${selected?.size_label ?? ""}`}
-                    </button>
-                    <button className="ob-btn-ghost" onClick={handleSkip}>
-                        Skip for now — start with search only
                     </button>
                 </>
             )}
@@ -517,6 +556,10 @@ function StepIndexingStarted({ state, onSave }: { state: OnboardingState; onSave
             <div className="ob-search-teaser">
                 Try searching: "the article I was reading earlier" or "that Figma file"
             </div>
+
+            <p className="ob-subtitle" style={{ marginTop: 16 }}>
+                Qwen will warm up automatically when FNDR needs it. Meeting transcription and extra vision helpers stay off until you use them.
+            </p>
 
             <button
                 id="ob-open-fndr"

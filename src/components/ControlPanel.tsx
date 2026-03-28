@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
     CaptureStatus,
     McpServerStatus,
@@ -18,12 +18,12 @@ import {
 } from "../api/tauri";
 import {
     ModelInfo,
-    DownloadProgress,
     listAvailableModels,
     downloadModel,
     deleteAiModel,
-    onDownloadProgress,
+    refreshAiModels,
 } from "../api/onboarding";
+import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
 import "./ControlPanel.css";
 
 interface ControlPanelProps {
@@ -49,10 +49,10 @@ export function ControlPanel({ status }: ControlPanelProps) {
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [modelsLoading, setModelsLoading] = useState(false);
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
-    const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
     const [modelError, setModelError] = useState<string | null>(null);
     const [confirmDeleteModel, setConfirmDeleteModel] = useState<string | null>(null);
-    const unlistenRef = useRef<(() => void) | null>(null);
+    const [isActivatingModel, setIsActivatingModel] = useState(false);
+    const downloadStatus = useModelDownloadStatus();
 
     useEffect(() => {
         if (isOpen) {
@@ -65,31 +65,6 @@ export function ControlPanel({ status }: ControlPanelProps) {
             loadModels();
         }
     }, [isOpen, activeTab]);
-
-    // Register download-progress listener once
-    useEffect(() => {
-        let cancelled = false;
-        onDownloadProgress((p) => {
-            setDownloadProgress(p);
-            if (p.done && !p.error) {
-                setDownloadingId(null);
-                setDownloadProgress(null);
-                loadModels();
-            }
-            if (p.error) {
-                setModelError(p.error);
-                setDownloadingId(null);
-                setDownloadProgress(null);
-            }
-        }).then((u) => {
-            if (cancelled) u();
-            else unlistenRef.current = u;
-        });
-        return () => {
-            cancelled = true;
-            unlistenRef.current?.();
-        };
-    }, []);
 
     // Close on escape
     useEffect(() => {
@@ -119,9 +94,8 @@ export function ControlPanel({ status }: ControlPanelProps) {
         }
     };
 
-    const loadModels = async () => {
+    const loadModels = useCallback(async () => {
         setModelsLoading(true);
-        setModelError(null);
         try {
             const ms = await listAvailableModels();
             setModels(ms);
@@ -130,14 +104,74 @@ export function ControlPanel({ status }: ControlPanelProps) {
         } finally {
             setModelsLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        if (!downloadingId || downloadStatus.model_id !== downloadingId) {
+            return;
+        }
+
+        if (downloadStatus.state === "failed" && downloadStatus.error) {
+            setModelError(downloadStatus.error);
+            setDownloadingId(null);
+            void loadModels();
+            return;
+        }
+
+        if (downloadStatus.state !== "completed" || downloadStatus.error) {
+            return;
+        }
+
+        let cancelled = false;
+        setDownloadingId(null);
+        setIsActivatingModel(true);
+
+        void (async () => {
+            try {
+                const runtime = await refreshAiModels();
+                if (!runtime.ai_model_available && !cancelled) {
+                    setModelError(
+                        `Model download finished, but FNDR still cannot see Qwen at ${downloadStatus.destination_path ?? "disk"}.`,
+                    );
+                }
+            } catch (refreshError) {
+                if (!cancelled) {
+                    setModelError(`Model downloaded, but FNDR failed to refresh the runtime: ${String(refreshError)}`);
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsActivatingModel(false);
+                    void loadModels();
+                }
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [downloadStatus.destination_path, downloadStatus.error, downloadStatus.model_id, downloadStatus.state, downloadingId, loadModels]);
 
     const handleDownloadModel = async (model: ModelInfo) => {
         if (downloadingId) return;
-        if (model.download_url === "already_downloaded") return;
         setModelError(null);
+
+        if (model.download_url === "already_downloaded") {
+            setIsActivatingModel(true);
+            try {
+                const runtime = await refreshAiModels();
+                if (!runtime.ai_model_available) {
+                    setModelError("Qwen is supposed to be on disk, but FNDR could not find the local model files.");
+                }
+            } catch (e) {
+                setModelError(String(e));
+            } finally {
+                setIsActivatingModel(false);
+                await loadModels();
+            }
+            return;
+        }
+
         setDownloadingId(model.id);
-        setDownloadProgress(null);
         try {
             await downloadModel(model.id, model.download_url, model.filename);
         } catch (e) {
@@ -358,10 +392,12 @@ export function ControlPanel({ status }: ControlPanelProps) {
                         <section className="panel-section">
                             <h3>AI Model</h3>
                             <p className="section-hint">
-                                The on-device model powers search summaries and memory Q&A.
-                                {status?.ai_model_loaded
-                                    ? " A model is currently loaded."
-                                    : " No model is currently loaded."}
+                                Qwen3-VL is FNDR&apos;s required local model for summaries, Q&amp;A, and smarter indexing.
+                                {status?.ai_model_available
+                                    ? status?.ai_model_loaded
+                                        ? " It is currently loaded in memory."
+                                        : " It is downloaded and will load automatically when needed."
+                                    : " It is not downloaded yet."}
                             </p>
 
                             {modelError && <div className="model-error">{modelError}</div>}
@@ -372,6 +408,7 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                 const isDownloaded = model.download_url === "already_downloaded";
                                 const isDownloading = downloadingId === model.id;
                                 const confirmingDelete = confirmDeleteModel === model.id;
+                                const shouldShowActivate = isDownloaded && !status?.ai_model_loaded;
 
                                 return (
                                     <div key={model.id} className={`model-row ${isDownloaded ? "downloaded" : ""}`}>
@@ -387,19 +424,32 @@ export function ControlPanel({ status }: ControlPanelProps) {
 
                                         {isDownloading ? (
                                             <div className="model-dl-progress">
-                                                {downloadProgress ? (
+                                                {downloadStatus.state === "downloading" ? (
                                                     <>
                                                         <div className="model-dl-bar-wrap">
-                                                            <div className="model-dl-bar-fill" style={{ width: `${downloadProgress.percent.toFixed(1)}%` }} />
+                                                            <div className="model-dl-bar-fill" style={{ width: `${downloadStatus.percent.toFixed(1)}%` }} />
                                                         </div>
                                                         <span className="model-dl-pct">
-                                                            {fmtBytes(downloadProgress.bytes_downloaded)} / {fmtBytes(downloadProgress.total_bytes)} ({downloadProgress.percent.toFixed(0)}%)
+                                                            {fmtBytes(downloadStatus.bytes_downloaded)} / {fmtBytes(downloadStatus.total_bytes)} ({downloadStatus.percent.toFixed(0)}%)
                                                         </span>
                                                     </>
                                                 ) : (
-                                                    <span className="model-dl-pct">Connecting…</span>
+                                                    <span className="model-dl-pct">
+                                                        {isActivatingModel
+                                                            ? "Loading model…"
+                                                            : downloadStatus.state === "finalizing"
+                                                                ? "Finalizing…"
+                                                                : "Connecting…"}
+                                                    </span>
                                                 )}
                                             </div>
+                                        ) : shouldShowActivate ? (
+                                            <button
+                                                className="btn-primary-sm"
+                                                onClick={() => handleDownloadModel(model)}
+                                            >
+                                                Load Now
+                                            </button>
                                         ) : isDownloaded ? (
                                             <button
                                                 className={`btn-danger-sm ${confirmingDelete ? "confirm" : ""}`}
@@ -419,6 +469,31 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                     </div>
                                 );
                             })}
+
+                            {(downloadingId || isActivatingModel) && (
+                                <div style={{
+                                    marginTop: 16,
+                                    background: "rgba(255,255,255,0.04)",
+                                    border: "1px solid rgba(255,255,255,0.08)",
+                                    borderRadius: 10,
+                                    padding: 12,
+                                    fontFamily: "monospace",
+                                    fontSize: 11,
+                                    color: "rgba(255,255,255,0.75)",
+                                    maxHeight: 140,
+                                    overflowY: "auto"
+                                }}>
+                                    <div style={{ color: "rgba(255,255,255,0.95)", marginBottom: 8 }}>
+                                        Stage: {isActivatingModel ? "activating" : downloadStatus.state}
+                                    </div>
+                                    {downloadStatus.destination_path && (
+                                        <div style={{ marginBottom: 8 }}>{downloadStatus.destination_path}</div>
+                                    )}
+                                    {downloadStatus.logs.map((line, index) => (
+                                        <div key={index} style={{ marginBottom: 4 }}>{line}</div>
+                                    ))}
+                                </div>
+                            )}
                         </section>
                     )}
 

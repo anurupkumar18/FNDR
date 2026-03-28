@@ -21,7 +21,9 @@ export interface CaptureStatus {
     frames_captured: number;
     frames_dropped: number;
     last_capture_time: number;
+    ai_model_available: boolean;
     ai_model_loaded: boolean;
+    loaded_model_id: string | null;
 }
 
 export interface McpServerStatus {
@@ -130,6 +132,16 @@ export interface MemoryReconstruction {
     structural_context: string[];
 }
 
+export interface VoiceTranscriptionResult {
+    text: string;
+    backend: string;
+}
+
+export interface SpeechSynthesisResult {
+    audio_path: string;
+    voice_id: string;
+}
+
 // Search functions
 export async function search(
     query: string,
@@ -208,6 +220,20 @@ export async function searchMeetingTranscripts(
     limit?: number
 ): Promise<MeetingSearchResult[]> {
     return invoke<MeetingSearchResult[]>("search_meeting_transcripts", { query, limit });
+}
+
+export async function transcribeVoiceInput(
+    audioBytes: number[],
+    mimeType?: string
+): Promise<VoiceTranscriptionResult> {
+    return invoke<VoiceTranscriptionResult>("transcribe_voice_input", { audioBytes, mimeType });
+}
+
+export async function speakText(
+    text: string,
+    voiceId?: string
+): Promise<SpeechSynthesisResult> {
+    return invoke<SpeechSynthesisResult>("speak_text", { text, voiceId });
 }
 
 export async function pauseCapture(): Promise<void> {

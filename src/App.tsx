@@ -30,8 +30,8 @@ function App() {
     // Check if onboarding is complete on first mount
     useEffect(() => {
         getOnboardingState()
-            .then((s) => setOnboardingDone(s.step === "complete"))
-            .catch(() => setOnboardingDone(true)); // If state can't load, skip onboarding
+            .then((s) => setOnboardingDone(s.step === "complete" && s.model_downloaded))
+            .catch(() => setOnboardingDone(false));
     }, []);
 
 
@@ -131,8 +131,8 @@ function App() {
                             </div>
                         )}
 
-                        {/* Show AI Model Download Banner if inference is missing */}
-                        {status && !status.ai_model_loaded && (
+                        {/* Show AI Model Download Banner only when the required Qwen model is missing from disk */}
+                        {status && !status.ai_model_available && (
                             <ModelDownloadBanner />
                         )}
 
@@ -162,6 +162,8 @@ function App() {
                 onTimeFilterChange={setTimeFilter}
                 appFilter={appFilter}
                 onAppFilterChange={setAppFilter}
+                onSetMeetingPanelOpen={setShowMeetingPanel}
+                onSetGraphPanelOpen={setShowGraphPanel}
                 appNames={appNames}
                 resultCount={results.length}
                 searchResults={results}

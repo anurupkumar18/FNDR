@@ -1,8 +1,8 @@
 //! Capture pipeline
 //!
 //! Handles screen capture, deduplication, and frame processing.
-//! FastVLM (Apple FastVLM-0.5B) runs as an async sidecar on each screenshot
-//! to augment the stored snippet with true visual understanding.
+//! Qwen handles the core local summarization path, while optional accelerators
+//! like FastVLM stay off the hot path until a dedicated feature needs them.
 
 mod dedupe;
 mod macos;
@@ -23,11 +23,13 @@ use std::time::{Duration, Instant};
 
 /// Resolve the FastVLM sidecar Python script path.
 /// Checks both the packaged app bundle and the dev-time source tree.
+#[allow(dead_code)]
 fn resolve_fastvlm_sidecar() -> Option<PathBuf> {
     // Packaged: <exe>/../Resources/sidecar/fastvlm_runner.py
-    let packaged = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("../Resources/sidecar/fastvlm_runner.py")));
+    let packaged = std::env::current_exe().ok().and_then(|p| {
+        p.parent()
+            .map(|d| d.join("../Resources/sidecar/fastvlm_runner.py"))
+    });
     if let Some(ref p) = packaged {
         if p.exists() {
             return Some(p.clone());
@@ -57,6 +59,7 @@ fn python_cmd_for_sidecar() -> PathBuf {
 /// Call the FastVLM sidecar with a screenshot path.
 /// Returns the visual description on success, or None if the sidecar is
 /// unavailable / times out / returns a sentinel error string.
+#[allow(dead_code)]
 async fn call_fastvlm(screenshot_path: &str) -> Option<String> {
     let sidecar = resolve_fastvlm_sidecar()?;
     let python = python_cmd_for_sidecar();
@@ -211,23 +214,22 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
-        // AI Analysis (VLM on OCR text if available, LLM summarization as fallback)
-        let snippet = if let Some(ref vlm) = state.vlm {
-            let vlm_start = std::time::Instant::now();
-            let analysis = vlm
-                .analyze_screen(&text, &app_name)
-                .await
-                .unwrap_or_default();
-            tracing::info!("VLM analysis ({:?}): {}", vlm_start.elapsed(), &analysis);
-            if analysis.is_empty() { text.clone() } else { analysis }
-        } else {
-            let summary = if let Some(engine) = &state.inference {
-                engine.summarize(&text).await
-            } else {
+        // Keep the hot capture path simple: Qwen is the required core model and
+        // loads lazily on first real use, while optional vision accelerators stay
+        // off unless a dedicated feature explicitly requests them.
+        let summary = match state.ensure_inference_engine().await {
+            Ok(Some(engine)) => engine.summarize(&text).await,
+            Ok(None) => String::new(),
+            Err(err) => {
+                tracing::warn!("Lazy AI model init failed during capture: {}", err);
                 String::new()
-            };
-            tracing::info!("LLM Summary: {}", summary);
-            if summary.is_empty() { text.clone() } else { summary }
+            }
+        };
+        tracing::info!("LLM Summary: {}", summary);
+        let final_snippet = if summary.is_empty() {
+            text.clone()
+        } else {
+            summary
         };
 
         // Persist screenshot first (needed for FastVLM)
@@ -242,23 +244,6 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &now.format("%Y%m%d").to_string(),
             &image_data,
         );
-
-        // ── FastVLM augmentation ─────────────────────────────────────────────
-        // Run on the actual PNG for true visual understanding. This enriches
-        // the snippet with content that OCR alone misses (charts, images, UI).
-        // Runs async with a 15-second timeout so it never blocks the pipeline.
-        let visual_description = if let Some(ref path) = screenshot_path {
-            call_fastvlm(path).await
-        } else {
-            None
-        };
-
-        // Merge: keep the structural snippet + append visual context
-        let final_snippet = match visual_description {
-            Some(visual) => format!("{} | Visual: {}", snippet, visual),
-            None => snippet,
-        };
-        // ── End FastVLM augmentation ─────────────────────────────────────────
 
         let record = MemoryRecord {
             id: uuid::Uuid::new_v4().to_string(),

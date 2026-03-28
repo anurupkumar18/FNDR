@@ -1,57 +1,108 @@
-import { useState, useEffect } from "react";
-import { DownloadProgress, ModelInfo, listAvailableModels, downloadModel, onDownloadProgress, onDownloadLog } from "../api/onboarding";
+import { useCallback, useEffect, useState } from "react";
+import {
+    ModelInfo,
+    downloadModel,
+    listAvailableModels,
+    refreshAiModels,
+} from "../api/onboarding";
+import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
 import "./ModelDownloadBanner.css";
 
 export function ModelDownloadBanner() {
     const [selected, setSelected] = useState<ModelInfo | null>(null);
-    const [progress, setProgress] = useState<DownloadProgress | null>(null);
-    const [isDownloading, setIsDownloading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [logs, setLogs] = useState<string[]>([]);
+    const [pendingModelId, setPendingModelId] = useState<string | null>(null);
+    const [isActivatingModel, setIsActivatingModel] = useState(false);
+    const downloadStatus = useModelDownloadStatus();
 
-    useEffect(() => {
-        listAvailableModels().then((ms) => {
+    const loadModels = useCallback(async () => {
+        const ms = await listAvailableModels();
+        setSelected((currentSelected) => {
             const preferred = ms.find((m) => m.recommended) ?? ms[0];
-            setSelected(preferred ?? null);
+            if (currentSelected) {
+                return ms.find((model) => model.id === currentSelected.id) ?? preferred ?? null;
+            }
+            return preferred ?? null;
         });
     }, []);
 
     useEffect(() => {
-        let unlistenProgress: (() => void) | null = null;
-        let unlistenLogs: (() => void) | null = null;
+        loadModels().catch((loadError) => {
+            setError(`Failed to load models: ${String(loadError)}`);
+        });
+    }, [loadModels]);
 
-        onDownloadLog((msg) => {
-            setLogs((prev) => [...prev, msg].slice(-10));
-        }).then((u) => { unlistenLogs = u; });
+    useEffect(() => {
+        if (!pendingModelId || downloadStatus.model_id !== pendingModelId) {
+            return;
+        }
 
-        onDownloadProgress((p) => {
-            setProgress(p);
-            if (p.done && !p.error) {
-                setIsDownloading(false);
-                alert("AI Model downloaded successfully! Please completely quit and restart FNDR to enable AI intelligence.");
+        if (downloadStatus.state === "failed" && downloadStatus.error) {
+            setError(downloadStatus.error);
+            setPendingModelId(null);
+            void loadModels();
+            return;
+        }
+
+        if (downloadStatus.state !== "completed" || downloadStatus.error) {
+            return;
+        }
+
+        let cancelled = false;
+        setPendingModelId(null);
+        setIsActivatingModel(true);
+
+        void (async () => {
+            try {
+                const runtime = await refreshAiModels();
+                if (!runtime.ai_model_available && !cancelled) {
+                    setError(
+                        `Model download finished, but FNDR still cannot see the Qwen model at ${downloadStatus.destination_path ?? "disk"}.`,
+                    );
+                }
+            } catch (refreshError) {
+                if (!cancelled) {
+                    setError(`Model downloaded, but FNDR could not refresh model state: ${String(refreshError)}`);
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsActivatingModel(false);
+                    void loadModels();
+                }
             }
-            if (p.error) {
-                setError(p.error);
-                setIsDownloading(false);
-            }
-        }).then((u) => { unlistenProgress = u; });
+        })();
 
         return () => {
-            unlistenProgress?.();
-            unlistenLogs?.();
+            cancelled = true;
         };
-    }, []);
+    }, [downloadStatus.destination_path, downloadStatus.error, downloadStatus.model_id, downloadStatus.state, loadModels, pendingModelId]);
 
     async function handleDownload() {
         if (!selected) return;
         setError(null);
-        setLogs([]);
-        setIsDownloading(true);
+
+        if (selected.download_url === "already_downloaded") {
+            setIsActivatingModel(true);
+            try {
+                const runtime = await refreshAiModels();
+                if (!runtime.ai_model_available) {
+                    setError("Qwen is supposed to be on disk, but FNDR could not find the local model files.");
+                }
+            } catch (refreshError) {
+                setError(String(refreshError));
+            } finally {
+                setIsActivatingModel(false);
+                void loadModels();
+            }
+            return;
+        }
+
+        setPendingModelId(selected.id);
         try {
             await downloadModel(selected.id, selected.download_url, selected.filename);
         } catch (e: unknown) {
             setError(String(e));
-            setIsDownloading(false);
+            setPendingModelId(null);
         }
     }
 
@@ -59,36 +110,58 @@ export function ModelDownloadBanner() {
         return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
     }
 
+    const activeDownloadStatus =
+        pendingModelId && downloadStatus.model_id === pendingModelId ? downloadStatus : null;
+    const isDownloading =
+        isActivatingModel ||
+        (activeDownloadStatus !== null &&
+            ["preparing", "downloading", "finalizing"].includes(activeDownloadStatus.state));
+    const alreadyDownloaded = selected?.download_url === "already_downloaded";
+    const activeModelName =
+        (activeDownloadStatus && selected?.id === activeDownloadStatus.model_id ? selected.name : selected?.name)
+            ?? "AI model";
+
     return (
         <div className="model-download-banner">
             <div className="banner-header">
-                <h3>⚠️ AI Intelligence is Disabled</h3>
+                <h3>⚠️ Qwen Model Required</h3>
                 <p>
-                    FNDR is currently running in OCR-only mode because the local AI model is missing. 
-                    Search works, but semantic questioning and meeting summaries require the model.
+                    FNDR is in OCR-only mode because the required local Qwen3-VL model is missing.
+                    Search still works, but memory Q&A, summaries, and smarter indexing need the core model on disk.
                 </p>
             </div>
-            
+
             {error && <div className="banner-error">{error}</div>}
 
-            {isDownloading && progress ? (
+            {isDownloading && activeDownloadStatus?.state === "downloading" ? (
                 <div className="banner-progress-area">
                     <div className="banner-progress-details">
-                        <span>Downloading {selected?.name}...</span>
-                        <span>{fmtBytes(progress.bytes_downloaded)} / {fmtBytes(progress.total_bytes)} ({progress.percent.toFixed(0)}%)</span>
+                        <span>Downloading {activeModelName}...</span>
+                        <span>
+                            {fmtBytes(activeDownloadStatus.bytes_downloaded)} / {fmtBytes(activeDownloadStatus.total_bytes)} ({activeDownloadStatus.percent.toFixed(0)}%)
+                        </span>
                     </div>
                     <div className="banner-progress-bar">
-                        <div className="banner-progress-fill" style={{ width: `${progress.percent}%` }} />
+                        <div className="banner-progress-fill" style={{ width: `${activeDownloadStatus.percent}%` }} />
                     </div>
+                    {activeDownloadStatus.destination_path && (
+                        <div style={{ marginTop: 8, fontSize: 11, opacity: 0.75 }}>
+                            {activeDownloadStatus.destination_path}
+                        </div>
+                    )}
                 </div>
-            ) : isDownloading && !progress ? (
+            ) : isDownloading ? (
                 <div className="banner-progress-area" style={{ textAlign: "center", fontStyle: "italic", opacity: 0.8 }}>
                     <span className="ob-icon pulse" style={{ marginRight: 8 }}>⚙️</span>
-                    Preparing Download... Connecting to HuggingFace
+                    {isActivatingModel
+                        ? "Loading model into FNDR"
+                        : activeDownloadStatus?.state === "finalizing"
+                            ? "Finalizing model on disk"
+                            : "Preparing download and connecting to HuggingFace"}
                 </div>
             ) : null}
 
-            {isDownloading && logs.length > 0 && (
+            {isDownloading && (activeDownloadStatus?.logs.length ?? 0) > 0 && (
                 <div style={{
                     marginTop: 12,
                     background: "rgba(0,0,0,0.3)",
@@ -100,14 +173,19 @@ export function ModelDownloadBanner() {
                     height: 80,
                     overflowY: "auto"
                 }}>
-                    {logs.map((L, i) => <div key={i}>{L}</div>)}
+                    <div style={{ color: "rgba(255,255,255,0.9)", marginBottom: 6 }}>
+                        Stage: {activeDownloadStatus?.state ?? (isActivatingModel ? "activating" : "pending")}
+                    </div>
+                    {activeDownloadStatus?.logs.map((line, index) => <div key={index}>{line}</div>)}
                 </div>
             )}
 
             {!isDownloading && (
                 <div className="banner-action-area">
                     <button className="banner-download-btn" onClick={handleDownload} disabled={!selected}>
-                        Download {selected?.name} ({selected?.size_label})
+                        {alreadyDownloaded
+                            ? `Load ${selected?.name ?? "Qwen"}`
+                            : `Download ${selected?.name ?? "Qwen"} (${selected?.size_label ?? ""})`}
                     </button>
                     <span className="banner-meta">Memory: ~{selected?.ram_gb} GB RAM</span>
                 </div>

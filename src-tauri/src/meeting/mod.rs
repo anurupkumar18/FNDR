@@ -3,7 +3,7 @@
 //! This module provides local-only meeting recording with automatic session
 //! detection, segmented audio capture, and local transcription.
 
-use crate::{store::MemoryRecord, AppState};
+use crate::{speech, store::MemoryRecord, AppState};
 use parking_lot::{Mutex, RwLock};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -24,18 +24,10 @@ const SEGMENTS_INDEX: &str = "segments.json";
 const SEGMENT_SECONDS: i64 = 20;
 const STATUS_EVENT: &str = "meeting://status";
 const SEGMENT_EVENT: &str = "meeting://segment";
-const FORCED_MODEL: &str = "parakeet-tdt-0.6b-v3";
+const FORCED_MODEL: &str = "whisper-large-v3-turbo-gguf";
 const AUTO_POLL_SECONDS: u64 = 5;
 const AUTO_START_HITS: u8 = 2;
 const AUTO_STOP_IDLE_SECONDS: u64 = 90;
-const PY_BACKEND_BOOTSTRAP_COOLDOWN_MS: i64 = 300_000;
-
-#[derive(Debug)]
-struct BackendBootstrapState {
-    last_attempt_ms: i64,
-}
-
-static PY_BACKEND_BOOTSTRAP_STATE: OnceLock<Mutex<BackendBootstrapState>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeetingSession {
@@ -499,7 +491,7 @@ pub fn list_meetings() -> Result<Vec<MeetingSession>, String> {
     Ok(store.list_meetings())
 }
 
-pub fn get_meeting_transcript(meeting_id: &str) -> Result<MeetingTranscript, String> {
+pub async fn get_meeting_transcript(meeting_id: &str) -> Result<MeetingTranscript, String> {
     let store = get_store()?;
     if let Some(meeting) = store.get_meeting(meeting_id) {
         let segments = store.get_segments_for_meeting(meeting_id);
@@ -507,8 +499,8 @@ pub fn get_meeting_transcript(meeting_id: &str) -> Result<MeetingTranscript, Str
             && segments.iter().any(|s| should_retry_segment_text(&s.text));
 
         if needs_reprocess {
-            maybe_bootstrap_python_backend(true);
-            let _ = transcribe_meeting_postprocess(store.as_ref(), meeting_id, &meeting.model);
+            let _ =
+                transcribe_meeting_postprocess(store.as_ref(), meeting_id, &meeting.model).await;
             let repaired = store.get_transcript(meeting_id)?;
             let markdown = build_meeting_markdown(&repaired);
             let session_path = store.write_transcript_file(meeting_id, &markdown).ok();
@@ -690,9 +682,7 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
     let _ = recorder.wait();
     let _ = worker.await;
 
-    // Force one bootstrap attempt when meeting ends before final transcription pass.
-    maybe_bootstrap_python_backend(true);
-    if let Err(err) = transcribe_meeting_postprocess(store.as_ref(), &meeting_id, &model) {
+    if let Err(err) = transcribe_meeting_postprocess(store.as_ref(), &meeting_id, &model).await {
         tracing::warn!("Post-meeting transcription pass failed: {}", err);
     }
 
@@ -773,8 +763,6 @@ async fn auto_monitor_loop(app_handle: AppHandle, app_state: Arc<AppState>) {
 }
 
 async fn repair_failed_transcripts_once(app_state: Arc<AppState>) {
-    maybe_bootstrap_python_backend(true);
-
     let store = match get_store() {
         Ok(store) => store,
         Err(err) => {
@@ -795,7 +783,7 @@ async fn repair_failed_transcripts_once(app_state: Arc<AppState>) {
         }
 
         if let Err(err) =
-            transcribe_meeting_postprocess(store.as_ref(), &meeting.id, &meeting.model)
+            transcribe_meeting_postprocess(store.as_ref(), &meeting.id, &meeting.model).await
         {
             tracing::warn!(
                 "Meeting transcript repair failed for {}: {}",
@@ -929,6 +917,11 @@ async fn segment_worker(
     app_handle: Option<AppHandle>,
 ) {
     let mut processed: HashSet<PathBuf> = HashSet::new();
+    let app_data_dir = store
+        .root_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| store.root_dir.clone());
 
     loop {
         let stopping = stop_flag.load(Ordering::SeqCst);
@@ -956,7 +949,7 @@ async fn segment_worker(
             let start_timestamp = meeting_started_at + (index as i64 * SEGMENT_SECONDS * 1000);
             let end_timestamp = start_timestamp + (SEGMENT_SECONDS * 1000);
 
-            let segment = MeetingSegment {
+            let mut segment = MeetingSegment {
                 id: Uuid::new_v4().to_string(),
                 meeting_id: meeting_id.clone(),
                 index,
@@ -975,6 +968,25 @@ async fn segment_worker(
                 if let Ok(status) = recorder_status() {
                     let _ = handle.emit(STATUS_EVENT, &status);
                 }
+            }
+
+            let live_text = match transcribe_segment(&file_path, &model, &app_data_dir).await {
+                Ok(text) => text,
+                Err(err) => {
+                    let size = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
+                    if size < 32_000 {
+                        String::new()
+                    } else {
+                        format!("[Transcription unavailable for segment {}: {}]", index, err)
+                    }
+                }
+            };
+
+            if let Err(err) = store.set_segment_text(&meeting_id, index, live_text.clone()) {
+                tracing::warn!("Failed to persist live segment transcript: {}", err);
+            } else if let Some(handle) = app_handle.as_ref() {
+                segment.text = live_text;
+                let _ = handle.emit(SEGMENT_EVENT, &segment);
             }
 
             processed.insert(file_path);
@@ -1048,284 +1060,78 @@ fn spawn_ffmpeg_recorder(segment_pattern: &Path) -> Result<Child, String> {
         .map_err(|e| format!("Failed to start ffmpeg meeting recorder: {e}"))
 }
 
-fn transcribe_segment(
+async fn transcribe_segment(
     segment_path: &Path,
     model: &str,
-    output_dir: &Path,
+    app_data_dir: &Path,
 ) -> Result<String, String> {
-    let mut errors: Vec<String> = Vec::new();
-
-    if let Ok(custom_cmd) = std::env::var("FNDR_PARAKEET_COMMAND") {
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(custom_cmd)
-            .env(
-                "FNDR_AUDIO_PATH",
-                segment_path.to_string_lossy().to_string(),
-            )
-            .env("FNDR_TRANSCRIPT_MODEL", model)
-            .env(
-                "FNDR_TRANSCRIPT_OUTPUT_DIR",
-                output_dir.to_string_lossy().to_string(),
-            )
-            .output()
-            .map_err(|e| format!("Parakeet command failed to start: {e}"))?;
+    if let Ok(custom_cmd) = std::env::var("FNDR_MEETING_TRANSCRIBE_COMMAND")
+        .or_else(|_| std::env::var("FNDR_PARAKEET_COMMAND"))
+    {
+        let audio = segment_path.to_path_buf();
+        let model_name = model.to_string();
+        let app_data = app_data_dir.to_path_buf();
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new("sh")
+                .arg("-c")
+                .arg(custom_cmd)
+                .env("FNDR_AUDIO_PATH", audio.to_string_lossy().to_string())
+                .env("FNDR_TRANSCRIPT_MODEL", model_name)
+                .env(
+                    "FNDR_TRANSCRIPT_APP_DATA_DIR",
+                    app_data.to_string_lossy().to_string(),
+                )
+                .output()
+        })
+        .await
+        .map_err(|e| format!("Custom meeting transcription task failed: {e}"))?
+        .map_err(|e| format!("Custom meeting transcription command failed to start: {e}"))?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !stdout.is_empty() {
                 return Ok(stdout);
             }
-            errors.push("FNDR_PARAKEET_COMMAND returned empty output".to_string());
-        } else {
-            errors.push(format!(
-                "FNDR_PARAKEET_COMMAND failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
+            return Err("Custom meeting transcription command returned empty output".to_string());
         }
+
+        return Err(format!(
+            "Custom meeting transcription command failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
 
-    if let Some(text) = transcribe_with_sidecar(segment_path, &mut errors) {
-        return Ok(text);
-    }
-
-    if let Some(text) = transcribe_with_python_whisper(segment_path, output_dir, &mut errors) {
-        return Ok(text);
-    }
-
-    maybe_bootstrap_python_backend(false);
-
-    if let Some(text) = transcribe_with_sidecar(segment_path, &mut errors) {
-        return Ok(text);
-    }
-
-    if let Some(text) = transcribe_with_python_whisper(segment_path, output_dir, &mut errors) {
-        return Ok(text);
-    }
-
-    let why = if errors.is_empty() {
-        "No backend produced transcript text".to_string()
+    let text = speech::transcribe_audio_file(app_data_dir, segment_path).await?;
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        Err("Whisper GGUF runner returned empty transcript".to_string())
     } else {
-        errors.join(" | ")
-    };
-    Err(format!(
-        "Parakeet backend unavailable after auto-bootstrap. {}",
-        why
-    ))
+        Ok(text)
+    }
 }
 
 fn detect_transcription_backend() -> String {
-    if std::env::var("FNDR_PARAKEET_COMMAND").is_ok() {
-        return "parakeet-tdt-0.6b-v3".to_string();
+    if std::env::var("FNDR_MEETING_TRANSCRIBE_COMMAND").is_ok()
+        || std::env::var("FNDR_PARAKEET_COMMAND").is_ok()
+    {
+        return "custom-transcriber".to_string();
     }
-    if resolve_parakeet_sidecar().is_some() {
-        if has_python_module("nemo") {
-            return "parakeet-tdt-0.6b-v3".to_string();
-        }
-        if has_python_module("faster_whisper") {
-            return "faster-whisper-small".to_string();
-        }
-        if has_python_module("whisper") {
-            return "whisper-small-fallback".to_string();
-        }
-        return "sidecar-no-backend".to_string();
+    if speech::resolve_sidecar("whisper_gguf_runner.py").is_some() {
+        return "whisper-large-v3-turbo-gguf (on-demand)".to_string();
     }
     "unavailable".to_string()
 }
 
-fn transcribe_with_sidecar(segment_path: &Path, errors: &mut Vec<String>) -> Option<String> {
-    let sidecar_path = resolve_parakeet_sidecar()?;
-    let python_cmd = python_for_sidecar().unwrap_or_else(|| PathBuf::from("python3"));
-    let output = Command::new(python_cmd)
-        .arg(sidecar_path)
-        .arg(segment_path.to_string_lossy().to_string())
-        .output();
-    let Ok(output) = output else {
-        errors.push("failed to launch sidecar python process".to_string());
-        return None;
-    };
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if !stdout.is_empty() {
-            errors.push(format!("parakeet sidecar: {}", stdout));
-        }
-        if !stderr.is_empty() {
-            errors.push(format!("parakeet sidecar stderr: {}", stderr));
-        }
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
-        errors.push("parakeet sidecar returned empty transcript".to_string());
-        None
-    } else {
-        Some(stdout)
-    }
-}
-
-fn maybe_bootstrap_python_backend(force: bool) {
-    // Consider ready if the best backend (nemo) OR a good fallback is available
-    if has_python_module("nemo") || has_python_module("faster_whisper") {
-        return;
-    }
-
-    let state = PY_BACKEND_BOOTSTRAP_STATE
-        .get_or_init(|| Mutex::new(BackendBootstrapState { last_attempt_ms: 0 }));
-    {
-        let mut state = state.lock();
-        let now = now_ms();
-        if !force && now - state.last_attempt_ms < PY_BACKEND_BOOTSTRAP_COOLDOWN_MS {
-            return;
-        }
-        state.last_attempt_ms = now;
-    }
-
-    if !command_exists("python3") {
-        return;
-    }
-
-    let _ = Command::new("python3")
-        .args(["-m", "ensurepip", "--upgrade"])
-        .status();
-    let _ = Command::new("python3")
-        .args(["-m", "pip", "install", "--user", "--upgrade", "pip"])
-        .status();
-    let _ = Command::new("python3")
-        .args([
-            "-m",
-            "pip",
-            "install",
-            "--user",
-            "faster-whisper",
-            "openai-whisper",
-        ])
-        .status();
-
-    let Some(docs_root) = dirs::document_dir() else {
-        return;
-    };
-    let venv_path = docs_root.join("FNDR Meetings").join("venv");
-    let is_windows = cfg!(target_os = "windows");
-
-    // 1. Create venv if it doesn't exist
-    if !venv_path.exists() {
-        tracing::info!("Creating FNDR meetings Python venv at {:?}", venv_path);
-        let status = Command::new("python3")
-            .args(["-m", "venv", &venv_path.to_string_lossy()])
-            .status()
-            .ok();
-
-        if status.map_or(true, |s| !s.success()) {
-            tracing::warn!("Failed to create python venv");
-            return;
-        }
-    }
-
-    // 2. Install dependencies inside the venv
-    let pip_path = if is_windows {
-        venv_path.join("Scripts").join("pip")
-    } else {
-        venv_path.join("bin").join("pip")
-    };
-
-    if !pip_path.exists() {
-        tracing::warn!("Pip binary not found in venv {:?}", pip_path);
-        return;
-    }
-
-    tracing::info!("Bootstrapping NeMo Parakeet + faster-whisper + openai-whisper via pip in venv...");
-    // Install in priority order: NeMo Parakeet (best quality) → faster-whisper → openai-whisper
-    let _ = Command::new(&pip_path)
-        .args(["install", "--upgrade", "nemo_toolkit[asr]"])
-        .status();
-    let _ = Command::new(&pip_path)
-        .args(["install", "faster-whisper", "openai-whisper"])
-        .status();
-}
-
-fn transcribe_with_python_whisper(
-    segment_path: &Path,
-    output_dir: &Path,
-    errors: &mut Vec<String>,
-) -> Option<String> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(py) = python_for_sidecar() {
-        candidates.push(py);
-    }
-    candidates.push(PathBuf::from("python3"));
-
-    for py in candidates {
-        let status = Command::new(&py)
-            .args([
-                "-m",
-                "whisper",
-                &segment_path.to_string_lossy(),
-                "--model",
-                "small",
-                "--output_dir",
-                &output_dir.to_string_lossy(),
-                "--output_format",
-                "txt",
-                "--fp16",
-                "False",
-            ])
-            .status();
-
-        let Ok(status) = status else {
-            errors.push(format!("failed to launch python whisper via {:?}", py));
-            continue;
-        };
-        if !status.success() {
-            errors.push(format!("python whisper exited non-zero via {:?}", py));
-            continue;
-        }
-
-        let stem = segment_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("segment");
-        let txt_path = output_dir.join(format!("{stem}.txt"));
-        match fs::read_to_string(txt_path) {
-            Ok(content) => {
-                let text = content.trim().to_string();
-                if !text.is_empty() {
-                    return Some(text);
-                }
-                errors.push("python whisper produced empty transcript".to_string());
-            }
-            Err(_) => errors.push("python whisper did not write txt output".to_string()),
-        }
-    }
-    None
-}
-
-fn python_for_sidecar() -> Option<PathBuf> {
-    let docs_root = dirs::document_dir()?;
-    let venv_path = docs_root.join("FNDR Meetings").join("venv");
-    if cfg!(target_os = "windows") {
-        let p = venv_path.join("Scripts").join("python");
-        if p.exists() {
-            return Some(p);
-        }
-    } else {
-        let p = venv_path.join("bin").join("python3");
-        if p.exists() {
-            return Some(p);
-        }
-        let p2 = venv_path.join("bin").join("python");
-        if p2.exists() {
-            return Some(p2);
-        }
-    }
-    None
-}
-
-fn transcribe_meeting_postprocess(
+async fn transcribe_meeting_postprocess(
     store: &MeetingStore,
     meeting_id: &str,
     model: &str,
 ) -> Result<(), String> {
+    let app_data_dir = store
+        .root_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| store.root_dir.clone());
     let segments = store.get_segments_for_meeting(meeting_id);
     for segment in segments {
         if !should_retry_segment_text(&segment.text) {
@@ -1333,12 +1139,7 @@ fn transcribe_meeting_postprocess(
         }
 
         let audio_path = PathBuf::from(&segment.audio_chunk_path);
-        let audio_dir = audio_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-
-        let text = match transcribe_segment(&audio_path, model, &audio_dir) {
+        let text = match transcribe_segment(&audio_path, model, &app_data_dir).await {
             Ok(text) => text,
             Err(err) => {
                 let size = fs::metadata(&audio_path).map(|m| m.len()).unwrap_or(0);
@@ -1359,54 +1160,13 @@ fn transcribe_meeting_postprocess(
     Ok(())
 }
 
-fn resolve_parakeet_sidecar() -> Option<PathBuf> {
-    let packaged = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .map(|p| p.join("../Resources/sidecar/parakeet_runner.py"));
-
-    if let Some(path) = packaged {
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sidecar/parakeet_runner.py");
-    if dev.exists() {
-        Some(dev)
-    } else {
-        None
-    }
-}
-
 fn should_retry_segment_text(text: &str) -> bool {
     let trimmed = text.trim();
     trimmed.is_empty()
         || trimmed.starts_with("[Transcription unavailable for segment")
         || trimmed.contains("backend unavailable")
-        || trimmed.starts_with("[parakeet-runner unavailable")
-        || trimmed.starts_with("[parakeet-runner produced empty output")
-}
-
-fn has_python_module(module: &str) -> bool {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(py) = python_for_sidecar() {
-        candidates.push(py);
-    }
-    candidates.push(PathBuf::from("python3"));
-
-    for py in candidates {
-        let status = Command::new(py)
-            .arg("-c")
-            .arg(format!("import {module}"))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if status.map(|s| s.success()).unwrap_or(false) {
-            return true;
-        }
-    }
-    false
+        || trimmed.contains("Whisper GGUF runner returned empty transcript")
+        || trimmed.contains("Custom meeting transcription command returned empty output")
 }
 
 fn build_meeting_markdown(transcript: &MeetingTranscript) -> String {

@@ -7,10 +7,11 @@
 //!   - Model download with streaming progress events
 //!   - Opening System Settings panes
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // ---------------------------------------------------------------------------
@@ -33,7 +34,7 @@ extern "C" {
 #[link(name = "AVFoundation", kind = "framework")]
 extern "C" {}
 
-use crate::AppState;
+use crate::{load_ai_engines, models, AppState};
 
 // ---------------------------------------------------------------------------
 // Onboarding state (persisted as JSON in app data dir)
@@ -87,11 +88,21 @@ impl Default for OnboardingState {
     }
 }
 
+fn normalize_onboarding_state(mut state: OnboardingState) -> OnboardingState {
+    if !state.model_downloaded
+        && matches!(
+            state.step,
+            OnboardingStep::IndexingStarted | OnboardingStep::Complete
+        )
+    {
+        state.step = OnboardingStep::ModelDownload;
+    }
+
+    state
+}
+
 fn onboarding_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     Ok(dir.join("onboarding.json"))
 }
 
@@ -101,20 +112,32 @@ pub async fn get_onboarding_state(app: AppHandle) -> Result<OnboardingState, Str
     if !path.exists() {
         return Ok(OnboardingState::default());
     }
-    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
+
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            tracing::warn!("Failed to read onboarding state at {:?}: {}", path, err);
+            return Ok(OnboardingState::default());
+        }
+    };
+
+    match serde_json::from_str::<OnboardingState>(&raw) {
+        Ok(state) => Ok(normalize_onboarding_state(state)),
+        Err(err) => {
+            tracing::warn!("Failed to parse onboarding state at {:?}: {}", path, err);
+            Ok(OnboardingState::default())
+        }
+    }
 }
 
 #[tauri::command]
-pub async fn save_onboarding_state(
-    app: AppHandle,
-    state: OnboardingState,
-) -> Result<(), String> {
+pub async fn save_onboarding_state(app: AppHandle, state: OnboardingState) -> Result<(), String> {
     let path = onboarding_path(&app)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let json = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
+    let normalized_state = normalize_onboarding_state(state);
+    let json = serde_json::to_string_pretty(&normalized_state).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())
 }
 
@@ -176,7 +199,9 @@ fn check_screen_recording_permission() -> bool {
         unsafe { CGPreflightScreenCaptureAccess() }
     }
     #[cfg(not(target_os = "macos"))]
-    { true }
+    {
+        true
+    }
 }
 
 fn check_accessibility_permission() -> bool {
@@ -210,14 +235,15 @@ fn check_microphone_permission() -> bool {
         // AVMediaTypeAudio constant value is the string literal "soun"
         let media_type = ns_string!("soun");
 
-        let status: i64 = unsafe {
-            objc2::msg_send![cls, authorizationStatusForMediaType: media_type]
-        };
+        let status: i64 =
+            unsafe { objc2::msg_send![cls, authorizationStatusForMediaType: media_type] };
 
         status == 3 // AVAuthorizationStatusAuthorized
     }
     #[cfg(not(target_os = "macos"))]
-    { true }
+    {
+        true
+    }
 }
 
 #[tauri::command]
@@ -265,72 +291,34 @@ pub struct ModelInfo {
 
 #[tauri::command]
 pub async fn list_available_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
-    let models_dir = app
+    let app_data_dir = app
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("models");
+        .unwrap_or_else(|_| PathBuf::from("."));
 
-    let gemma_exists = models_dir.join("gemma-3-4b-it-q4_0.gguf").exists();
-    let llama_exists = models_dir.join("llama-3.2-3b-q4_0.gguf").exists();
-    let gemma1b_exists = models_dir.join("gemma-3-1b-it-q4_0.gguf").exists();
-
-    Ok(vec![
-        ModelInfo {
-            id: "gemma-3-4b".into(),
-            name: "Gemma 3 · 4B".into(),
-            description: "Best for daily use and complex questions.".into(),
-            size_bytes: 2_400_000_000,
-            size_label: "2.4 GB".into(),
-            quality_label: "Best".into(),
-            speed_label: "Fast".into(),
-            ram_gb: 4.0,
-            recommended: true,
-            filename: "gemma-3-4b-it-q4_0.gguf".into(),
-            download_url: "https://huggingface.co/google/gemma-3-4b-it-qat-q4_0-gguf/resolve/main/gemma-3-4b-it-q4_0.gguf".into(),
-        },
-        ModelInfo {
-            id: "llama-3.2-3b".into(),
-            name: "Llama 3.2 · 3B".into(),
-            description: "Faster answers, great for quick lookups.".into(),
-            size_bytes: 1_800_000_000,
-            size_label: "1.8 GB".into(),
-            quality_label: "Good".into(),
-            speed_label: "Faster".into(),
-            ram_gb: 3.0,
-            recommended: false,
-            filename: "llama-3.2-3b-q4_0.gguf".into(),
-            download_url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf".into(),
-        },
-        ModelInfo {
-            id: "gemma-3-1b".into(),
-            name: "Gemma 3 · 1B".into(),
-            description: "Minimal footprint, instant responses.".into(),
-            size_bytes: 700_000_000,
-            size_label: "700 MB".into(),
-            quality_label: "Basic".into(),
-            speed_label: "Fastest".into(),
-            ram_gb: 1.5,
-            recommended: false,
-            filename: "gemma-3-1b-it-q4_0.gguf".into(),
-            download_url: "https://huggingface.co/google/gemma-3-1b-it-qat-q4_0-gguf/resolve/main/gemma-3-1b-it-q4_0.gguf".into(),
-        },
-    ]
-    .into_iter()
-    .map(|mut m| {
-        let downloaded = match m.id.as_str() {
-            "gemma-3-4b" => gemma_exists,
-            "llama-3.2-3b" => llama_exists,
-            "gemma-3-1b" => gemma1b_exists,
-            _ => false,
-        };
-        // Signal as already downloaded if present
-        if downloaded {
-            m.download_url = "already_downloaded".into();
-        }
-        m
-    })
-    .collect())
+    Ok(models::catalog()
+        .iter()
+        .map(|model| {
+            let downloaded = models::is_model_available(model.id, Some(app_data_dir.as_path()));
+            ModelInfo {
+                id: model.id.to_string(),
+                name: model.name.to_string(),
+                description: model.description.to_string(),
+                size_bytes: model.size_bytes,
+                size_label: model.size_label.to_string(),
+                quality_label: model.quality_label.to_string(),
+                speed_label: model.speed_label.to_string(),
+                ram_gb: model.ram_gb,
+                recommended: model.recommended,
+                filename: model.filename.to_string(),
+                download_url: if downloaded {
+                    "already_downloaded".to_string()
+                } else {
+                    model.download_url.to_string()
+                },
+            }
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -347,13 +335,187 @@ pub struct DownloadProgress {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelDownloadStatus {
+    pub state: String,
+    pub model_id: Option<String>,
+    pub filename: Option<String>,
+    pub download_url: Option<String>,
+    pub destination_path: Option<String>,
+    pub temp_path: Option<String>,
+    pub bytes_downloaded: u64,
+    pub total_bytes: u64,
+    pub percent: f32,
+    pub done: bool,
+    pub error: Option<String>,
+    pub logs: Vec<String>,
+    pub updated_at_ms: i64,
+}
+
+impl Default for ModelDownloadStatus {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_string(),
+            model_id: None,
+            filename: None,
+            download_url: None,
+            destination_path: None,
+            temp_path: None,
+            bytes_downloaded: 0,
+            total_bytes: 0,
+            percent: 0.0,
+            done: false,
+            error: None,
+            logs: Vec::new(),
+            updated_at_ms: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiRuntimeStatus {
+    pub ai_model_available: bool,
+    pub ai_model_loaded: bool,
+    pub vlm_loaded: bool,
+    pub loaded_model_id: Option<String>,
+    pub loaded_model_path: Option<String>,
+}
+
 static DOWNLOAD_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+static DOWNLOAD_STATUS: OnceLock<Mutex<ModelDownloadStatus>> = OnceLock::new();
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+fn download_status_store() -> &'static Mutex<ModelDownloadStatus> {
+    DOWNLOAD_STATUS.get_or_init(|| Mutex::new(ModelDownloadStatus::default()))
+}
+
+fn mutate_download_status<F>(app: &AppHandle, f: F)
+where
+    F: FnOnce(&mut ModelDownloadStatus),
+{
+    let snapshot = {
+        let mut status = download_status_store().lock();
+        f(&mut status);
+        status.updated_at_ms = now_ms();
+        status.clone()
+    };
+    let _ = app.emit("model-download-status", snapshot);
+}
+
+fn replace_download_status(app: &AppHandle, status: ModelDownloadStatus) {
+    let snapshot = {
+        let mut current = download_status_store().lock();
+        *current = status;
+        current.updated_at_ms = now_ms();
+        current.clone()
+    };
+    let _ = app.emit("model-download-status", snapshot);
+}
+
+fn emit_download_log(app: &AppHandle, msg: &str) {
+    tracing::info!("[MODEL DOWNLOAD] {}", msg);
+
+    let snapshot = {
+        let mut status = download_status_store().lock();
+        status.logs.push(msg.to_string());
+        if status.logs.len() > 50 {
+            let overflow = status.logs.len() - 50;
+            status.logs.drain(0..overflow);
+        }
+        status.updated_at_ms = now_ms();
+        status.clone()
+    };
+
+    let _ = app.emit("model-download-log", msg.to_string());
+    let _ = app.emit("model-download-status", snapshot);
+}
+
+fn emit_download_progress(app: &AppHandle, progress: DownloadProgress) {
+    let snapshot = {
+        let mut status = download_status_store().lock();
+        status.model_id = Some(progress.model_id.clone());
+        status.bytes_downloaded = progress.bytes_downloaded;
+        status.total_bytes = progress.total_bytes;
+        status.percent = progress.percent;
+        status.done = progress.done;
+        status.error = progress.error.clone();
+
+        if progress.error.is_some() {
+            status.state = "failed".to_string();
+        } else if progress.done {
+            status.state = "completed".to_string();
+        } else {
+            status.state = "downloading".to_string();
+        }
+
+        status.updated_at_ms = now_ms();
+        status.clone()
+    };
+
+    let _ = app.emit("model-download-progress", progress);
+    let _ = app.emit("model-download-status", snapshot);
+}
+
+fn emit_download_failure(app: &AppHandle, model_id: &str, error: String) {
+    let (bytes_downloaded, total_bytes, percent) = {
+        let mut status = download_status_store().lock();
+        status.state = "failed".to_string();
+        status.model_id = Some(model_id.to_string());
+        status.done = true;
+        status.error = Some(error.clone());
+        status.updated_at_ms = now_ms();
+        (status.bytes_downloaded, status.total_bytes, status.percent)
+    };
+
+    emit_download_progress(
+        app,
+        DownloadProgress {
+            model_id: model_id.to_string(),
+            bytes_downloaded,
+            total_bytes,
+            percent,
+            done: true,
+            error: Some(error),
+        },
+    );
+}
 
 #[tauri::command]
-pub async fn download_model(app: AppHandle, model_id: String, download_url: String, filename: String) -> Result<(), String> {
+pub async fn download_model(
+    app: AppHandle,
+    model_id: String,
+    download_url: String,
+    filename: String,
+) -> Result<(), String> {
     if DOWNLOAD_IN_PROGRESS.swap(true, Ordering::SeqCst) {
         return Err("A download is already in progress".into());
     }
+
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dest_path = models::models_dir(app_data_dir.as_path()).join(&filename);
+    let temp_path = models::partial_model_path(app_data_dir.as_path(), &filename);
+
+    replace_download_status(
+        &app,
+        ModelDownloadStatus {
+            state: "preparing".to_string(),
+            model_id: Some(model_id.clone()),
+            filename: Some(filename.clone()),
+            download_url: Some(download_url.clone()),
+            destination_path: Some(dest_path.display().to_string()),
+            temp_path: Some(temp_path.display().to_string()),
+            bytes_downloaded: 0,
+            total_bytes: 0,
+            percent: 0.0,
+            done: false,
+            error: None,
+            logs: Vec::new(),
+            updated_at_ms: now_ms(),
+        },
+    );
 
     let app_clone = app.clone();
     let model_id_clone = model_id.clone();
@@ -362,17 +524,7 @@ pub async fn download_model(app: AppHandle, model_id: String, download_url: Stri
         let result = do_download(&app_clone, &model_id_clone, &download_url, &filename).await;
 
         if let Err(ref e) = result {
-            let _ = app_clone.emit(
-                "model-download-progress",
-                DownloadProgress {
-                    model_id: model_id_clone.clone(),
-                    bytes_downloaded: 0,
-                    total_bytes: 0,
-                    percent: 0.0,
-                    done: true,
-                    error: Some(e.clone()),
-                },
-            );
+            emit_download_failure(&app_clone, &model_id_clone, e.clone());
         }
         DOWNLOAD_IN_PROGRESS.store(false, Ordering::SeqCst);
     });
@@ -380,8 +532,51 @@ pub async fn download_model(app: AppHandle, model_id: String, download_url: Stri
     Ok(())
 }
 
-fn emit_log(app: &AppHandle, msg: &str) {
-    let _ = app.emit("model-download-log", msg.to_string());
+#[tauri::command]
+pub async fn get_model_download_status() -> Result<ModelDownloadStatus, String> {
+    Ok(download_status_store().lock().clone())
+}
+
+#[tauri::command]
+pub async fn refresh_ai_models(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<AiRuntimeStatus, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let config = state.inner().config.read().clone();
+    let preferred_model_id = models::preferred_model_id_from_onboarding(app_data_dir.as_path());
+    let ai_model_available =
+        models::resolve_model(preferred_model_id.as_deref(), Some(app_data_dir.as_path()))
+            .is_some();
+    let loaded_ai = load_ai_engines(
+        app_data_dir.as_path(),
+        &config,
+        preferred_model_id.as_deref(),
+    )
+    .await;
+
+    let loaded_model_id = loaded_ai
+        .inference
+        .as_ref()
+        .map(|engine| engine.model_id().to_string());
+    let loaded_model_path = loaded_ai
+        .inference
+        .as_ref()
+        .map(|engine| engine.model_path().display().to_string());
+    let ai_model_loaded = loaded_ai.inference.is_some();
+    let vlm_loaded = loaded_ai.vlm.is_some();
+
+    state
+        .inner()
+        .replace_ai_engines(loaded_ai.inference, loaded_ai.vlm);
+
+    Ok(AiRuntimeStatus {
+        ai_model_available,
+        ai_model_loaded,
+        vlm_loaded,
+        loaded_model_id,
+        loaded_model_path,
+    })
 }
 
 async fn do_download(
@@ -392,35 +587,60 @@ async fn do_download(
 ) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
 
-    emit_log(app, &format!("Starting download task for {} ({})", model_id, filename));
-    emit_log(app, "Checking local app data directories...");
+    emit_download_log(
+        app,
+        &format!("Starting download task for {} ({})", model_id, filename),
+    );
+    emit_download_log(app, "Checking local app data directories...");
 
-    let models_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let models_dir = models::models_dir(app_data_dir.as_path());
 
     std::fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
     let dest_path = models_dir.join(filename);
+    let partial_path = models::partial_model_path(app_data_dir.as_path(), filename);
+
+    mutate_download_status(app, |status| {
+        status.destination_path = Some(dest_path.display().to_string());
+        status.temp_path = Some(partial_path.display().to_string());
+    });
+
+    if dest_path.exists() {
+        let file_size = dest_path.metadata().map(|meta| meta.len()).unwrap_or(0);
+        emit_download_log(
+            app,
+            "Model file already exists. Marking download as complete.",
+        );
+        emit_download_progress(
+            app,
+            DownloadProgress {
+                model_id: model_id.to_string(),
+                bytes_downloaded: file_size,
+                total_bytes: file_size,
+                percent: 100.0,
+                done: true,
+                error: None,
+            },
+        );
+        return Ok(());
+    }
 
     // Get HF token from env if available (for gated models)
     let hf_token = std::env::var("HF_TOKEN").ok();
     if hf_token.is_some() {
-        emit_log(app, "Found HF_TOKEN in environment mapped variables.");
+        emit_download_log(app, "Found HF_TOKEN in environment mapped variables.");
     } else {
-        emit_log(app, "No HF_TOKEN found in environment. Public models only.");
+        emit_download_log(app, "No HF_TOKEN found in environment. Public models only.");
     }
 
-    emit_log(app, "Building reqwest HTTP client (15s connect timeout)...");
+    emit_download_log(app, "Building reqwest HTTP client (15s connect timeout)...");
     let client = reqwest::Client::builder()
         .user_agent("FNDR/1.0")
         .connect_timeout(std::time::Duration::from_secs(15))
-        // We don't set an overall timeout since downloads are large, but we could set a read timeout if supported
         .build()
         .map_err(|e| {
             let msg = format!("HTTP client build failed: {}", e);
-            emit_log(app, &msg);
+            emit_download_log(app, &msg);
             msg
         })?;
 
@@ -432,25 +652,38 @@ async fn do_download(
     }
 
     // Support resume via Range header
-    let resume_from = dest_path.metadata().map(|m| m.len()).unwrap_or(0);
+    let resume_from = partial_path.metadata().map(|m| m.len()).unwrap_or(0);
     if resume_from > 0 {
-        emit_log(app, &format!("Found existing partial file, attempting resume from byte {}", resume_from));
+        emit_download_log(
+            app,
+            &format!(
+                "Found existing partial file, attempting resume from byte {}",
+                resume_from
+            ),
+        );
         request = request.header("Range", format!("bytes={}-", resume_from));
     }
 
-    emit_log(app, &format!("Sending HTTP GET request to {}...", url));
+    emit_download_log(app, &format!("Sending HTTP GET request to {}...", url));
     let response = request.send().await.map_err(|e| {
         let msg = format!("HTTP request failed or hung: {}", e);
-        emit_log(app, &msg);
+        emit_download_log(app, &msg);
         msg
     })?;
 
-    let status_code = response.status().as_u16();
-    emit_log(app, &format!("Received HTTP status code: {}", status_code));
+    let response_status = response.status();
+    let status_code = response_status.as_u16();
+    emit_download_log(app, &format!("Received HTTP status code: {}", status_code));
 
-    if !response.status().is_success() && status_code != 206 {
-        let msg = format!("Server returned {}", response.status());
-        emit_log(app, &format!("Fatal Error: {}", msg));
+    if !response_status.is_success() && status_code != 206 {
+        let body_preview = response.text().await.unwrap_or_default().replace('\n', " ");
+        let body_preview = body_preview.chars().take(240).collect::<String>();
+        let msg = if body_preview.trim().is_empty() {
+            format!("Server returned {}", response_status)
+        } else {
+            format!("Server returned {}: {}", response_status, body_preview)
+        };
+        emit_download_log(app, &format!("Fatal Error: {}", msg));
         return Err(msg);
     }
 
@@ -459,22 +692,24 @@ async fn do_download(
     // Delete the partial file and restart from scratch to avoid file corruption.
     let resume_from = if resume_from > 0 && status_code == 200 {
         tracing::warn!("Server does not support range requests; restarting download from scratch");
-        let _ = tokio::fs::remove_file(&dest_path).await;
+        emit_download_log(
+            app,
+            "Server ignored the resume request. Restarting from byte 0 to avoid corruption.",
+        );
+        let _ = tokio::fs::remove_file(&partial_path).await;
         0u64
     } else {
         resume_from
     };
 
-    let total_bytes = response
-        .content_length()
-        .unwrap_or(0)
-        + resume_from;
+    let total_bytes = response.content_length().unwrap_or(0) + resume_from;
 
     let raw_file = tokio::fs::OpenOptions::new()
         .create(true)
+        .write(true)
         .append(resume_from > 0)
-        .write(!(resume_from > 0))
-        .open(&dest_path)
+        .truncate(resume_from == 0)
+        .open(&partial_path)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -497,8 +732,8 @@ async fn do_download(
             0.0
         };
 
-        let _ = app.emit(
-            "model-download-progress",
+        emit_download_progress(
+            app,
             DownloadProgress {
                 model_id: model_id.to_string(),
                 bytes_downloaded,
@@ -510,10 +745,23 @@ async fn do_download(
         );
     }
 
+    mutate_download_status(app, |status| {
+        status.state = "finalizing".to_string();
+    });
+    emit_download_log(app, "Flushing model file to disk...");
     file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+    emit_download_log(
+        app,
+        "Promoting partial download into the live models directory...",
+    );
+    tokio::fs::rename(&partial_path, &dest_path)
+        .await
+        .map_err(|e| format!("Failed to finalize model file: {}", e))?;
+    emit_download_log(app, &format!("Model ready at {}", dest_path.display()));
 
-    let _ = app.emit(
-        "model-download-progress",
+    emit_download_progress(
+        app,
         DownloadProgress {
             model_id: model_id.to_string(),
             bytes_downloaded,
@@ -529,29 +777,46 @@ async fn do_download(
 
 #[tauri::command]
 pub async fn check_model_exists(app: AppHandle, filename: String) -> Result<bool, String> {
-    let models_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
-    Ok(models_dir.join(&filename).exists())
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(models::models_dir(app_data_dir.as_path())
+        .join(&filename)
+        .exists())
 }
 
 #[tauri::command]
-pub async fn delete_ai_model(app: AppHandle, filename: String) -> Result<(), String> {
+pub async fn delete_ai_model(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    filename: String,
+) -> Result<(), String> {
     // Sanitize: only allow bare filenames, no path traversal
     let fname = std::path::Path::new(&filename);
     if fname.components().count() != 1 || filename.contains('/') || filename.contains('\\') {
         return Err("Invalid filename".into());
     }
-    let path = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models")
-        .join(fname);
-    if path.exists() {
-        tokio::fs::remove_file(&path).await.map_err(|e| e.to_string())?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let models_dir = models::models_dir(app_data_dir.as_path());
+    let final_path = models_dir.join(fname);
+    let partial_path = models::partial_model_path(app_data_dir.as_path(), &filename);
+
+    let should_unload = state
+        .inner()
+        .inference_engine()
+        .map(|engine| engine.model_path() == final_path.as_path())
+        .unwrap_or(false);
+    if should_unload {
+        state.inner().replace_ai_engines(None, None);
+    }
+
+    if final_path.exists() {
+        tokio::fs::remove_file(&final_path)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    if partial_path.exists() {
+        tokio::fs::remove_file(&partial_path)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }

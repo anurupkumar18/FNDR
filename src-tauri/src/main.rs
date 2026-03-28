@@ -17,8 +17,7 @@ fn main() {
     use tracing_subscriber::{fmt, EnvFilter};
     tracing_subscriber::registry()
         .with(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "fndr=info,fndr_lib=info".into()),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "fndr=info,fndr_lib=info".into()),
         )
         .with(fmt::layer())
         .init();
@@ -55,46 +54,17 @@ fn main() {
                 }
             }
 
-            // Initialize AI Engine (optional, based on model presence)
-            let _handle = app.handle().clone();
-            let inference = match tauri::async_runtime::block_on(async move {
-                fndr_lib::inference::InferenceEngine::new().await
-            }) {
-                Ok(engine) => {
-                    tracing::info!("AI inference engine initialized successfully");
-                    Some(Arc::new(engine))
-                }
-                Err(e) => {
-                    tracing::warn!("AI inference initialization failed: {}", e);
-                    None
-                }
-            };
-
-            // Initialize VLM Engine (optional, based on config)
-            let vlm = if config.use_vlm {
-                tracing::info!(
-                    "Initializing VLM engine (Gemma-{})...",
-                    config.vlm_model_size
-                );
-                match tauri::async_runtime::block_on(async {
-                    fndr_lib::inference::VlmEngine::new(&config.vlm_model_size).await
-                }) {
-                    Ok(engine) => {
-                        tracing::info!("VLM engine initialized successfully");
-                        Some(Arc::new(engine))
-                    }
-                    Err(e) => {
-                        tracing::warn!("VLM initialization failed (will use OCR only): {}", e);
-                        None
-                    }
-                }
-            } else {
-                tracing::info!("VLM disabled in config");
-                None
-            };
+            tracing::info!("AI runtime will load lazily when FNDR first needs it");
 
             // Create app state
-            let state = Arc::new(AppState::new(config, store, graph, inference, vlm));
+            let state = Arc::new(AppState::new(
+                data_dir.clone(),
+                config,
+                store,
+                graph,
+                None,
+                None,
+            ));
 
             // Start capture pipeline
             let capture_state = state.clone();
@@ -140,6 +110,8 @@ fn main() {
             api::commands::list_meetings,
             api::commands::get_meeting_transcript,
             api::commands::search_meeting_transcripts,
+            api::commands::transcribe_voice_input,
+            api::commands::speak_text,
             api::commands::pause_capture,
             api::commands::resume_capture,
             api::commands::get_blocklist,
@@ -168,6 +140,8 @@ fn main() {
             api::onboarding::open_system_settings,
             api::onboarding::list_available_models,
             api::onboarding::download_model,
+            api::onboarding::get_model_download_status,
+            api::onboarding::refresh_ai_models,
             api::onboarding::check_model_exists,
             api::onboarding::delete_ai_model,
         ])
