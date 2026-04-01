@@ -54,6 +54,7 @@ pub async fn search(
         time_filter.as_deref(),
         app_filter.as_deref(),
     )
+    .await
     .map_err(|e| e.to_string())?;
 
     Ok(results)
@@ -288,6 +289,7 @@ pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), Stri
         .inner()
         .store
         .delete_all()
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     // 2. Clear knowledge graph
@@ -319,6 +321,7 @@ pub async fn get_stats(state: State<'_, Arc<AppState>>) -> Result<Stats, String>
         .inner()
         .store
         .get_stats()
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }
 
@@ -346,6 +349,7 @@ pub async fn get_app_names(state: State<'_, Arc<AppState>>) -> Result<Vec<String
         .inner()
         .store
         .get_app_names()
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }
 
@@ -359,6 +363,7 @@ pub async fn delete_older_than(
         .inner()
         .store
         .delete_older_than(days)
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }
 

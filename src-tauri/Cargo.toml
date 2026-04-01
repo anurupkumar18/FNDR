@@ -59,10 +59,11 @@ directories = "5"
 toml = "0.8"
 dotenvy = "0.15"
 
-# LanceDB (vector database) - Disabled for prototype due to dep conflicts
-# lancedb = "0.13"
-# arrow-array = "53"
-# arrow-schema = "53"
+# LanceDB (vector database)
+lancedb = "0.27"
+arrow-array = "57"
+arrow-schema = "57"
+futures = "0.3"
 
 # ONNX Runtime for embeddings (disabled for prototype, using hash-based embeddings)
 # ort = { version = "2.0.0-rc.11", default-features = false }
