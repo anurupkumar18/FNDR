@@ -728,7 +728,7 @@ async fn auto_monitor_loop(app_handle: AppHandle, app_state: Arc<AppState>) {
     let mut idle_seconds: u64 = 0;
 
     loop {
-        let signal = detect_meeting_signal(&app_state);
+        let signal = detect_meeting_signal(&app_state).await;
         let status = recorder_status().unwrap_or(MeetingRecorderStatus {
             is_recording: false,
             current_meeting_id: None,
@@ -843,9 +843,9 @@ struct MeetingSignal {
     title: String,
 }
 
-fn detect_meeting_signal(app_state: &AppState) -> Option<MeetingSignal> {
+async fn detect_meeting_signal(app_state: &AppState) -> Option<MeetingSignal> {
     let now = now_ms();
-    let memories = app_state.store.get_recent_memories(1).ok()?;
+    let memories = app_state.store.get_recent_memories(1).await.ok()?;
 
     for memory in memories.iter().rev().take(80) {
         if now - memory.timestamp > 60_000 {

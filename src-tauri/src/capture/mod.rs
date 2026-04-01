@@ -47,7 +47,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let should_flush = batch.len() >= max_batch_size || last_flush.elapsed() >= flush_interval;
         if should_flush && !batch.is_empty() {
             let flush_start = Instant::now();
-            if let Err(e) = state.store.add_batch(&batch) {
+            if let Err(e) = state.store.add_batch(&batch).await {
                 tracing::error!("Failed to flush batch: {}", e);
             } else {
                 tracing::info!(
