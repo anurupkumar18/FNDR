@@ -727,6 +727,7 @@ async fn run_search_memories(
         args.time_filter.as_deref(),
         args.app_filter.as_deref(),
     )
+    .await
     .map_err(internal_tool_error)?;
 
     Ok(tool_success(json!({
@@ -739,6 +740,7 @@ async fn run_search_memories(
 async fn run_ask_fndr(app_state: Arc<AppState>, args: AskFndrArgs) -> Result<Value, JsonRpcError> {
     let embedder = Embedder::new().map_err(internal_tool_error)?;
     let results = HybridSearcher::search(&app_state.store, &embedder, &args.query, 8, None, None)
+        .await
         .map_err(internal_tool_error)?;
 
     if results.is_empty() {

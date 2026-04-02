@@ -246,14 +246,14 @@ impl GraphStore {
         related_urls_for_task_from_snapshot(&snapshot, task_id)
     }
 
-    pub fn reconstruct(
+    pub async fn reconstruct(
         &self,
         store: &Store,
         embedder: &Embedder,
         query: &str,
         limit: usize,
     ) -> Result<MemoryReconstruction, Box<dyn std::error::Error>> {
-        let results = HybridSearcher::search(store, embedder, query, limit, None, None)?;
+        let results = HybridSearcher::search(store, embedder, query, limit, None, None).await?;
         let cards = self.map_cards(results);
         let structural_context = self.structural_context_for_query(query);
 

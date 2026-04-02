@@ -6,10 +6,11 @@
 use super::schema::{AppCount, MemoryRecord, SearchResult, Stats};
 use arrow_array::{
     Array, FixedSizeListArray, Float32Array, Int64Array, RecordBatch, RecordBatchIterator,
-    StringArray,
+    RecordBatchReader, StringArray,
 };
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 use futures::TryStreamExt;
+use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Connection, Table};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -67,7 +68,7 @@ impl Store {
         let batch = records_to_batch(records)?;
         let schema = Arc::new(memory_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
-        self.table.add(Box::new(iter)).execute().await?;
+        self.table.add(Box::new(iter) as Box<dyn RecordBatchReader + Send>).execute().await?;
         Ok(())
     }
 
@@ -89,7 +90,7 @@ impl Store {
             .limit(limit);
 
         if let Some(f) = filter {
-            vq = vq.filter(f);
+            vq = vq.only_if(f);
         }
 
         let batches: Vec<RecordBatch> = vq.execute().await?.try_collect().await?;
@@ -121,7 +122,7 @@ impl Store {
         let batches: Vec<RecordBatch> = self
             .table
             .query()
-            .filter(filter)
+            .only_if(filter)
             .limit(limit)
             .execute()
             .await?
@@ -258,7 +259,7 @@ impl Store {
         let batches: Vec<RecordBatch> = self
             .table
             .query()
-            .filter(format!("timestamp >= {cutoff_ms}"))
+            .only_if(format!("timestamp >= {cutoff_ms}"))
             .execute()
             .await?
             .try_collect()
@@ -280,7 +281,7 @@ impl Store {
         let batches: Vec<RecordBatch> = self
             .table
             .query()
-            .filter(format!("id = '{id}'"))
+            .only_if(format!("id = '{id}'"))
             .limit(1)
             .execute()
             .await?
@@ -304,7 +305,7 @@ impl Store {
         let batches: Vec<RecordBatch> = self
             .table
             .query()
-            .filter("url IS NOT NULL".to_string())
+            .only_if("url IS NOT NULL")
             .execute()
             .await?
             .try_collect()
@@ -639,7 +640,7 @@ async fn open_or_create_table(db_path: &Path) -> Result<Table, lancedb::Error> {
             std::iter::empty::<Result<RecordBatch, ArrowError>>(),
             schema,
         );
-        conn.create_table(TABLE_NAME, Box::new(empty))
+        conn.create_table(TABLE_NAME, Box::new(empty) as Box<dyn RecordBatchReader + Send>)
             .execute()
             .await
     }
@@ -665,7 +666,7 @@ async fn migrate_from_json(table: &Table, json_path: &Path) {
             let batch = records_to_batch(chunk)?;
             let schema = Arc::new(memory_schema());
             let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
-            table.add(Box::new(iter)).execute().await?;
+            table.add(Box::new(iter) as Box<dyn RecordBatchReader + Send>).execute().await?;
         }
 
         // Rename the JSON file so we don't migrate again on next start.

@@ -519,7 +519,9 @@ pub fn get_meeting_transcript(meeting_id: &str) -> Result<MeetingTranscript, Str
             if let Some(path) = transcript_path.clone() {
                 let _ = store.set_transcript_path(meeting_id, Some(path.clone()));
                 if let Some(state) = runtime().lock().app_state.clone() {
-                    let _ = ingest_transcript_into_fndr_memory(state, &repaired, Some(&path));
+                    let _ = tokio::runtime::Handle::current().block_on(
+                        ingest_transcript_into_fndr_memory(state, &repaired, Some(&path)),
+                    );
                 }
             }
         }
@@ -707,7 +709,7 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
 
     if let Some(state) = app_state {
         if let Err(err) =
-            ingest_transcript_into_fndr_memory(state, &transcript, transcript_path.as_deref())
+            ingest_transcript_into_fndr_memory(state, &transcript, transcript_path.as_deref()).await
         {
             tracing::warn!(
                 "Failed to ingest meeting transcript into FNDR memory: {}",
@@ -826,7 +828,7 @@ async fn repair_failed_transcripts_once(app_state: Arc<AppState>) {
         if let Some(path) = transcript_path.clone() {
             let _ = store.set_transcript_path(&meeting.id, Some(path.clone()));
             if let Err(err) =
-                ingest_transcript_into_fndr_memory(app_state.clone(), &transcript, Some(&path))
+                ingest_transcript_into_fndr_memory(app_state.clone(), &transcript, Some(&path)).await
             {
                 tracing::warn!(
                     "Failed to ingest repaired transcript {} into memory: {}",
@@ -1432,7 +1434,7 @@ fn build_meeting_markdown(transcript: &MeetingTranscript) -> String {
     .join("\n")
 }
 
-fn ingest_transcript_into_fndr_memory(
+async fn ingest_transcript_into_fndr_memory(
     app_state: Arc<AppState>,
     transcript: &MeetingTranscript,
     transcript_path: Option<&str>,
@@ -1464,6 +1466,7 @@ fn ingest_transcript_into_fndr_memory(
     app_state
         .store
         .add_batch(&[record.clone()])
+        .await
         .map_err(|e| format!("Store add failed: {e}"))?;
 
     if let Err(err) = app_state.graph.ingest_memory(&record) {

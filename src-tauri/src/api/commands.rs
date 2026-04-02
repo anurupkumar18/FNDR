@@ -122,6 +122,7 @@ async fn run_memory_reconstruction(
     let stats = app_state
         .store
         .get_stats()
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     if stats.total_records == 0 {
@@ -136,6 +137,7 @@ async fn run_memory_reconstruction(
     let mut reconstruction = app_state
         .graph
         .reconstruct(&app_state.store, &embedder, query, limit)
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     if reconstruction.cards.is_empty() {
@@ -396,6 +398,7 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .inner()
         .store
         .get_recent_memories(24)
+        .await
         .map_err(|e| e.to_string())?;
 
     if memories.is_empty() {
@@ -420,11 +423,11 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
 
     // Parse and add new tasks
     let new_tasks = parse_tasks_from_llm_response(&llm_response, "FNDR");
-    let mut store = get_task_store().lock();
     let mut linked_urls = state
         .inner()
         .store
         .get_recent_urls(5)
+        .await
         .map_err(|e| e.to_string())?;
     for memory in memories.iter().rev() {
         if let Some(url) = memory.url.as_ref() {
@@ -450,6 +453,7 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .collect();
     let source_memory_id = memories.last().map(|m| m.id.clone());
 
+    let mut store = get_task_store().lock();
     for mut task in new_tasks {
         task.source_memory_id = source_memory_id.clone();
         task.linked_urls = linked_urls.clone();
@@ -752,5 +756,6 @@ pub async fn search_graph(
     let embedder = Embedder::new().map_err(|e| e.to_string())?;
 
     HybridSearcher::search(&state.inner().store, &embedder, &query, limit, None, None)
+        .await
         .map_err(|e| e.to_string())
 }

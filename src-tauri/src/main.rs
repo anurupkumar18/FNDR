@@ -10,6 +10,9 @@ use tauri::Manager;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
+    // Install default TLS crypto provider (required by rustls 0.23+)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Load .env file
     dotenvy::dotenv().ok();
 
