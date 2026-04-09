@@ -4,6 +4,7 @@
 
 mod dedupe;
 mod macos;
+pub mod permissions;
 mod sampling;
 
 pub use dedupe::PerceptualHasher;
@@ -58,6 +59,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             }
             batch.clear();
             last_flush = Instant::now();
+        }
+
+        if config.use_demo_data_only {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
         }
 
         // Check if paused

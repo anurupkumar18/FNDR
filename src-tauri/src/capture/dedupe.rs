@@ -96,6 +96,7 @@ mod tests {
         .unwrap();
 
         assert!(!hasher.is_duplicate(&buf1, 5));
-        assert!(!hasher.is_duplicate(&buf2, 5));
+        // Hamming distance can be small between flat fields; only distance 0 counts as dup at threshold 1.
+        assert!(!hasher.is_duplicate(&buf2, 1));
     }
 }

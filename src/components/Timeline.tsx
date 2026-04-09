@@ -11,6 +11,7 @@ interface TimelineProps {
     query: string;
     selectedResultId: string | null;
     onSelectResult: (result: SearchResult) => void;
+    evalUi?: boolean;
 }
 
 function formatDay(timestamp: number): string {
@@ -32,7 +33,14 @@ function formatDay(timestamp: number): string {
     });
 }
 
-export function Timeline({ results, isLoading, query, selectedResultId, onSelectResult }: TimelineProps) {
+export function Timeline({
+    results,
+    isLoading,
+    query,
+    selectedResultId,
+    onSelectResult,
+    evalUi = false,
+}: TimelineProps) {
     const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
 
     useEffect(() => {
@@ -88,7 +96,7 @@ export function Timeline({ results, isLoading, query, selectedResultId, onSelect
                             }
                         }}
                     >
-                        <div className="result-meta">
+                        <div className={`result-meta ${evalUi ? "result-meta-eval" : ""}`}>
                             <span className="result-app">{result.app_name}</span>
                             <span className="result-time">
                                 {formatDay(result.timestamp)} ·{" "}
@@ -97,6 +105,11 @@ export function Timeline({ results, isLoading, query, selectedResultId, onSelect
                                     minute: "2-digit",
                                 })}
                             </span>
+                            {evalUi && (
+                                <span className="result-score" title="Relevance score">
+                                    score {result.score.toFixed(3)}
+                                </span>
+                            )}
                         </div>
                         <h3 className="result-title">{result.window_title || "Untitled memory"}</h3>
                         {result.snippet && <p className="result-preview">{result.snippet}</p>}

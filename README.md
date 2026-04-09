@@ -22,8 +22,10 @@ FNDR sits in your background, recording snapshots of your workspace. It indexes 
 - **Privacy Controls**: Built-in blocklist to exclude sensitive applications and incognito mode.
 - **High Performance**: Native Rust core with Metal acceleration for Apple Silicon.
 
+### Experimental (optional / demo)
+Meetings, knowledge graph, agent panel, MCP, and meeting recorder are powerful but can be **hidden** for grading builds — see **Evaluation UI** below.
+
 ### Planned Features (What's Next)
-- **Enhanced Vector Store**: Migration to LanceDB for scalable, persistent vector search.
 - **Advanced Idle Detection**: Smarter capture logic based on user activity.
 - **Multi-Monitor Support**: Comprehensive capture across all connected displays.
 
@@ -32,13 +34,14 @@ FNDR sits in your background, recording snapshots of your workspace. It indexes 
 | Feature | Status | Notes |
 | :--- | :--- | :--- |
 | **Search** | ✅ Working | Hybrid search (Semantic + Keyword) is functional. |
+| **Vector store** | ✅ Working | **LanceDB** (`src-tauri/src/store/lance_store.rs`). |
 | **Inference** | ✅ Working | Llama 3.2 1B runs locally with Metal acceleration. |
-| **VLM** | ✅ Working | SmolVLM integration is operational on M-series chips. |
+| **VLM** | ✅ Optional | SmolVLM; can be disabled for a stable OCR+LLM path. |
 | **OCR** | ✅ Working | Fast and accurate via Apple Vision Framework. |
 | **URL Capture** | ✅ Working | Captures URLs from Safari, Chrome, Arc, Brave, Edge. |
 | **Todo Extraction** | ✅ Working | Extraction and agent execution are functional. |
 | **Agent SDK** | ✅ Working | Claude Agent SDK integration (requires API key). |
-| **Persistence** | 🟡 Partial | Using JSON storage; migration to DB planned. |
+| **Readiness / demo** | ✅ Working | `get_readiness`, seed/reset demo data, `--demo-data-only`. |
 
 ## 🛠 How to Run
 
@@ -82,6 +85,31 @@ FNDR sits in your background, recording snapshots of your workspace. It indexes 
    ```bash
    npm run tauri dev
    ```
+   Or one command: `make demo` (installs npm deps and runs `tauri dev`).
+
+6. **Environment variables** (optional): copy [.env.example](.env.example) to `.env` at the repo root or under `src-tauri` as needed.
+
+### Evaluation UI (TA / prototype review)
+
+Build the frontend with **`VITE_EVAL_UI=true`** to hide Meetings, Graph, Agent, Todo modal, and reconstruction side panel — leaving search, timeline, readiness, and settings focused on the core pipeline.
+
+```bash
+VITE_EVAL_UI=true npm run tauri dev
+```
+
+### Demo grading mode
+
+- **Settings → Demo grading**: *Seed demo dataset*, *Reset demo data*, *Inject test memory*, *Use demo data only* (pauses live capture indexing).
+- Or launch the app with **`--demo-data-only`** (see `src-tauri/src/main.rs`) for a headless-friendly default.
+
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| [DEMO.md](DEMO.md) | Five-minute walkthrough script |
+| [TESTING.md](TESTING.md) | Commands, CI, manual QA |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, MRs, review |
+| [docs/architecture.md](docs/architecture.md) | Pipeline diagram |
 
 ## 📁 Repository Structure
 
@@ -94,6 +122,7 @@ FNDR/
 │   │   ├── inference/  # LLM (Llama) & VLM (SmolVLM) engines
 │   │   ├── ocr/        # Apple Vision OCR integration
 │   │   ├── store/      # Local storage & indexing
+│   │   ├── demo/       # Seeded demo corpus for grading
 │   │   └── tasks/      # Todo extraction logic
 │   └── tauri.conf.json # App configuration
 ├── src/                # Frontend (React + TypeScript)

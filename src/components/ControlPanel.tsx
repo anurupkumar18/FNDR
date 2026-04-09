@@ -15,17 +15,24 @@ import {
     startMcpServer,
     stopMcpServer,
     Stats,
+    seedDemoDataset,
+    resetDemoData,
+    injectTestMemory,
+    setUseDemoDataOnly,
+    getAppConfig,
 } from "../api/tauri";
 import "./ControlPanel.css";
 
 interface ControlPanelProps {
     status: CaptureStatus | null;
     compact?: boolean;
+    /** Hide MCP and emphasize core privacy when true (VITE_EVAL_UI build). */
+    evalUi?: boolean;
 }
 
 type Tab = "settings" | "stats" | "privacy";
 
-export function ControlPanel({ status, compact = false }: ControlPanelProps) {
+export function ControlPanel({ status, compact = false, evalUi = false }: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<Tab>("settings");
     const [blocklist, setBlocklistState] = useState<string[]>([]);
@@ -37,6 +44,8 @@ export function ControlPanel({ status, compact = false }: ControlPanelProps) {
     const [mcpStatus, setMcpStatus] = useState<McpServerStatus | null>(null);
     const [mcpBusy, setMcpBusy] = useState(false);
     const [copiedMcpLink, setCopiedMcpLink] = useState(false);
+    const [demoDataOnly, setDemoDataOnly] = useState(false);
+    const [demoBusy, setDemoBusy] = useState<string | null>(null);
 
     useEffect(() => {
         if (isOpen) {
@@ -57,16 +66,31 @@ export function ControlPanel({ status, compact = false }: ControlPanelProps) {
 
     const loadData = async () => {
         try {
-            const [bl, st, ret, mcp] = await Promise.all([
-                getBlocklist(),
-                getStats(),
-                getRetentionDays(),
-                getMcpServerStatus(),
-            ]);
-            setBlocklistState(bl);
-            setStats(st);
-            setRetentionDaysState(ret);
-            setMcpStatus(mcp);
+            if (evalUi) {
+                const [bl, st, ret, cfg] = await Promise.all([
+                    getBlocklist(),
+                    getStats(),
+                    getRetentionDays(),
+                    getAppConfig(),
+                ]);
+                setBlocklistState(bl);
+                setStats(st);
+                setRetentionDaysState(ret);
+                setDemoDataOnly(cfg.use_demo_data_only);
+            } else {
+                const [bl, st, ret, mcp, cfg] = await Promise.all([
+                    getBlocklist(),
+                    getStats(),
+                    getRetentionDays(),
+                    getMcpServerStatus(),
+                    getAppConfig(),
+                ]);
+                setBlocklistState(bl);
+                setStats(st);
+                setRetentionDaysState(ret);
+                setMcpStatus(mcp);
+                setDemoDataOnly(cfg.use_demo_data_only);
+            }
         } catch (e) {
             console.error("Failed to load data:", e);
         }
@@ -162,6 +186,32 @@ export function ControlPanel({ status, compact = false }: ControlPanelProps) {
             setTimeout(() => setCopiedMcpLink(false), 1500);
         } catch (e) {
             console.error("Failed to copy MCP endpoint:", e);
+        }
+    };
+
+    const runDemo = async (label: string, fn: () => Promise<unknown>) => {
+        setDemoBusy(label);
+        try {
+            await fn();
+            await loadData();
+        } catch (e) {
+            console.error(e);
+            alert(String(e));
+        } finally {
+            setDemoBusy(null);
+        }
+    };
+
+    const handleDemoDataToggle = async () => {
+        setDemoBusy("toggle");
+        try {
+            const cfg = await setUseDemoDataOnly(!demoDataOnly);
+            setDemoDataOnly(cfg.use_demo_data_only);
+        } catch (e) {
+            console.error(e);
+            alert(String(e));
+        } finally {
+            setDemoBusy(null);
         }
     };
 
@@ -263,6 +313,60 @@ export function ControlPanel({ status, compact = false }: ControlPanelProps) {
                             </section>
 
                             <section className="panel-section">
+                                <h3>Demo grading</h3>
+                                <p className="section-hint">
+                                    Reset and seed known memories for a repeatable TA demo. CLI:{" "}
+                                    <code className="inline-code">--demo-data-only</code>
+                                </p>
+                                <label className="demo-toggle">
+                                    <input
+                                        type="checkbox"
+                                        checked={demoDataOnly}
+                                        onChange={handleDemoDataToggle}
+                                        disabled={demoBusy !== null}
+                                    />
+                                    Use demo data only (pause live capture indexing)
+                                </label>
+                                <div className="demo-actions">
+                                    <button
+                                        className="ui-action-btn btn-secondary"
+                                        type="button"
+                                        disabled={demoBusy !== null}
+                                        onClick={() =>
+                                            runDemo("seed", () => seedDemoDataset().then((n) => alert(`Seeded ${n} memories`)))
+                                        }
+                                    >
+                                        {demoBusy === "seed" ? "…" : "Seed demo dataset"}
+                                    </button>
+                                    <button
+                                        className="ui-action-btn btn-secondary"
+                                        type="button"
+                                        disabled={demoBusy !== null}
+                                        onClick={() =>
+                                            runDemo("reset", () =>
+                                                resetDemoData().then((n) => alert(`Removed ${n} demo rows`))
+                                            )
+                                        }
+                                    >
+                                        {demoBusy === "reset" ? "…" : "Reset demo data"}
+                                    </button>
+                                    <button
+                                        className="ui-action-btn btn-primary"
+                                        type="button"
+                                        disabled={demoBusy !== null}
+                                        onClick={() =>
+                                            runDemo("inject", () =>
+                                                injectTestMemory().then((id) => alert(`Injected: ${id}`))
+                                            )
+                                        }
+                                    >
+                                        {demoBusy === "inject" ? "…" : "Inject test memory"}
+                                    </button>
+                                </div>
+                            </section>
+
+                            {!evalUi && (
+                            <section className="panel-section">
                                 <h3>MCP Server</h3>
                                 <div className="mcp-status-row">
                                     <span className={`mcp-pill ${mcpStatus?.running ? "running" : "stopped"}`}>
@@ -290,6 +394,7 @@ export function ControlPanel({ status, compact = false }: ControlPanelProps) {
                                     <p className="mcp-error">{mcpStatus.last_error}</p>
                                 )}
                             </section>
+                            )}
                         </>
                     )}
 

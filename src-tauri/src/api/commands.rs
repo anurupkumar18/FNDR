@@ -1,6 +1,9 @@
 //! Tauri command handlers
 
+use crate::capture::permissions;
+use crate::demo;
 use crate::embed::Embedder;
+use crate::ocr::OcrEngine;
 use crate::graph::MemoryReconstruction;
 use crate::mcp::{self, McpServerStatus};
 use crate::meeting::{
@@ -12,7 +15,7 @@ use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureStatus {
@@ -367,6 +370,211 @@ pub async fn delete_older_than(
         .delete_older_than(days)
         .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())
+}
+
+// ========== App config, readiness, demo mode ==========
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfigPayload {
+    pub experimental_ui_enabled: bool,
+    pub use_demo_data_only: bool,
+    pub use_vlm: bool,
+}
+
+#[tauri::command]
+pub async fn get_app_config(state: State<'_, Arc<AppState>>) -> Result<AppConfigPayload, String> {
+    let c = state.inner().config.read();
+    Ok(AppConfigPayload {
+        experimental_ui_enabled: c.experimental_ui_enabled,
+        use_demo_data_only: c.use_demo_data_only,
+        use_vlm: c.use_vlm,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemReadiness {
+    pub screen_capture_permission_granted: bool,
+    pub screen_capture_permission_detail: String,
+    pub ocr_available: bool,
+    pub ocr_detail: String,
+    pub inference_ready: bool,
+    pub embedder_ready: bool,
+    pub vector_store_ready: bool,
+    pub data_dir_writable: bool,
+    pub data_dir_detail: String,
+    pub capture_status: CaptureStatus,
+    pub total_records: usize,
+    pub vlm_active: bool,
+    pub use_demo_data_only: bool,
+    pub ready_for_search: bool,
+    pub fixes: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn get_readiness(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<SystemReadiness, String> {
+    let (sc_ok, sc_detail) = permissions::preflight_screen_capture_access();
+
+    let ocr_ok = OcrEngine::new().is_ok();
+    let ocr_detail = if ocr_ok {
+        "Apple Vision OCR initialized.".to_string()
+    } else {
+        "OCR failed to initialize. Screen text extraction will not run.".to_string()
+    };
+
+    let embed_ok = Embedder::new().is_ok();
+
+    let mut fixes: Vec<String> = Vec::new();
+    if !sc_ok {
+        fixes.push(sc_detail.clone());
+    }
+    if !ocr_ok {
+        fixes.push(ocr_detail.clone());
+    }
+    if !embed_ok {
+        fixes.push("Embedding engine failed to initialize.".to_string());
+    }
+
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let (data_ok, data_detail) = match std::fs::create_dir_all(&data_dir) {
+        Ok(()) => {
+            let probe = data_dir.join(".fndr_write_probe");
+            match std::fs::write(&probe, b"ok") {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&probe);
+                    (
+                        true,
+                        format!("App data directory writable: {:?}", data_dir),
+                    )
+                }
+                Err(e) => {
+                    let msg = format!("Cannot write app data directory {:?}: {}", data_dir, e);
+                    fixes.push(msg.clone());
+                    (false, msg)
+                }
+            }
+        }
+        Err(e) => {
+            let msg = format!("Cannot create app data directory {:?}: {}", data_dir, e);
+            fixes.push(msg.clone());
+            (false, msg)
+        }
+    };
+
+    let stats_res = state.inner().store.get_stats().await;
+    let store_ok = stats_res.is_ok();
+    if !store_ok {
+        fixes.push("Vector store (LanceDB) is not responding.".to_string());
+    }
+
+    let total_records = stats_res.map(|s| s.total_records).unwrap_or(0);
+
+    let cfg = state.inner().config.read();
+    let use_demo = cfg.use_demo_data_only;
+    let vlm_active = state.inner().vlm.is_some() && cfg.use_vlm;
+
+    let live_path_ok = sc_ok && ocr_ok;
+    let ready_for_search = embed_ok && store_ok && data_ok && (use_demo || live_path_ok);
+
+    if use_demo {
+        fixes.retain(|f| {
+            !f.contains("Screen Recording")
+                && !f.contains("Screen capture")
+                && !f.contains("OCR")
+                && !f.contains("Apple Vision")
+        });
+    }
+
+    let cs = CaptureStatus {
+        is_capturing: state.inner().is_capturing(),
+        is_paused: state.inner().is_paused.load(Ordering::SeqCst),
+        is_incognito: state.inner().is_incognito.load(Ordering::SeqCst),
+        frames_captured: state.inner().frames_captured.load(Ordering::Relaxed),
+        frames_dropped: state.inner().frames_dropped.load(Ordering::Relaxed),
+        last_capture_time: state.inner().last_capture_time.load(Ordering::Relaxed),
+    };
+
+    Ok(SystemReadiness {
+        screen_capture_permission_granted: sc_ok,
+        screen_capture_permission_detail: sc_detail,
+        ocr_available: ocr_ok,
+        ocr_detail,
+        inference_ready: true,
+        embedder_ready: embed_ok,
+        vector_store_ready: store_ok,
+        data_dir_writable: data_ok,
+        data_dir_detail: data_detail,
+        capture_status: cs,
+        total_records,
+        vlm_active,
+        use_demo_data_only: use_demo,
+        ready_for_search,
+        fixes,
+    })
+}
+
+#[tauri::command]
+pub async fn set_use_demo_data_only(
+    state: State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<AppConfigPayload, String> {
+    {
+        let mut c = state.inner().config.write();
+        c.use_demo_data_only = enabled;
+        c.save().map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    }
+    get_app_config(state).await
+}
+
+#[tauri::command]
+pub async fn seed_demo_dataset(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
+    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let records = demo::build_demo_records(&embedder).map_err(|e| e.to_string())?;
+    let n = records.len();
+    state
+        .inner()
+        .store
+        .delete_id_prefix(demo::DEMO_ID_PREFIX)
+        .await
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    state
+        .inner()
+        .store
+        .add_batch(&records)
+        .await
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    Ok(n)
+}
+
+#[tauri::command]
+pub async fn reset_demo_data(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
+    state
+        .inner()
+        .store
+        .delete_id_prefix(demo::DEMO_ID_PREFIX)
+        .await
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())
+}
+
+#[tauri::command]
+pub async fn inject_test_memory(state: State<'_, Arc<AppState>>) -> Result<String, String> {
+    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let record = demo::build_inject_record(&embedder).map_err(|e| e.to_string())?;
+    let id = record.id.clone();
+    let _ = state
+        .inner()
+        .store
+        .delete_id_prefix(&format!("{}inject", demo::DEMO_ID_PREFIX))
+        .await;
+    state
+        .inner()
+        .store
+        .add_batch(&[record])
+        .await
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    Ok(id)
 }
 
 // ========== Task Commands ==========

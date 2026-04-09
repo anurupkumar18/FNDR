@@ -11,6 +11,8 @@ interface SearchBarProps {
     appNames: string[];
     resultCount: number;
     searchResults: SearchResult[];
+    disabled?: boolean;
+    disabledHint?: string;
 }
 
 export function SearchBar({
@@ -23,11 +25,18 @@ export function SearchBar({
     appNames,
     resultCount,
     searchResults,
+    disabled = false,
+    disabledHint,
 }: SearchBarProps) {
     const hasQuery = value.trim().length > 0;
 
     return (
         <div className="search-panel">
+            {disabled && disabledHint && (
+                <p className="search-disabled-hint" role="status">
+                    {disabledHint}
+                </p>
+            )}
             <div className="search-bar" role="search">
                 <div className="search-input-group">
                     <svg className="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -43,6 +52,8 @@ export function SearchBar({
                         placeholder="What do you remember?"
                         className="search-input"
                         autoComplete="off"
+                        disabled={disabled}
+                        aria-disabled={disabled}
                     />
 
                     {value && (

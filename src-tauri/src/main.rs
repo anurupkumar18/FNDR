@@ -34,8 +34,13 @@ fn main() {
             Some(vec!["--hidden"]),
         ))
         .setup(|app| {
-            // Load configuration
-            let config = Config::load_or_create()?;
+            // Load configuration (CLI overrides for headless demo)
+            let mut config = Config::load_or_create()?;
+            if std::env::args().any(|a| a == "--demo-data-only") {
+                config.use_demo_data_only = true;
+                config.use_vlm = false;
+                tracing::info!("--demo-data-only: live capture ingestion disabled, VLM off");
+            }
             tracing::info!("Configuration loaded");
 
             // Initialize store
@@ -125,6 +130,12 @@ fn main() {
             api::commands::reconstruct_memory,
             api::commands::summarize_memory,
             api::commands::get_status,
+            api::commands::get_app_config,
+            api::commands::get_readiness,
+            api::commands::set_use_demo_data_only,
+            api::commands::seed_demo_dataset,
+            api::commands::reset_demo_data,
+            api::commands::inject_test_memory,
             api::commands::get_mcp_server_status,
             api::commands::start_mcp_server,
             api::commands::stop_mcp_server,

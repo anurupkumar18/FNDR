@@ -248,6 +248,18 @@ impl Store {
         Ok(before.saturating_sub(after))
     }
 
+    /// Delete rows whose id starts with `prefix` (SQL LIKE `prefix%`).
+    pub async fn delete_id_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let before = self.table.count_rows(None).await?;
+        let p = sql_escape(prefix);
+        self.table.delete(&format!("id LIKE '{p}%'")).await?;
+        let after = self.table.count_rows(None).await?;
+        Ok(before.saturating_sub(after))
+    }
+
     /// Return recent memory records (last `hours` hours).
     pub async fn get_recent_memories(
         &self,

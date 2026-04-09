@@ -377,6 +377,28 @@
     background: rgba(248, 113, 113, 0.12);
 }
 
+.inline-code {
+    font-size: 0.78rem;
+    background: rgba(255, 255, 255, 0.08);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+}
+
+.demo-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.65rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.demo-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
 @media (max-width: 480px) {
     .settings-panel {
         width: 100vw;

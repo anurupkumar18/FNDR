@@ -1,0 +1,35 @@
+# FNDR CI — frontend can run on shared Linux runners; Rust needs macOS (ScreenCaptureKit, Vision, Metal).
+stages:
+  - frontend
+  - rust
+
+variables:
+  CARGO_TERM_COLOR: always
+
+frontend:
+  stage: frontend
+  image: node:20-bookworm
+  script:
+    - npm ci
+    - npm run typecheck
+    - npm run build
+    - npm test
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-npm
+    paths:
+      - node_modules/
+
+rust_macos:
+  stage: rust
+  tags:
+    - macos
+  before_script:
+    - rustc --version
+    - cd src-tauri
+  script:
+    - cargo fmt --all -- --check
+    - cargo clippy --all-targets --all-features -- -W clippy::all
+    - cargo test
+
+# If your GitLab instance has no macOS runner yet, keep `frontend` only and run Rust checks locally
+# (see TESTING.md). Remove or disable `rust_macos` until a runner is available.

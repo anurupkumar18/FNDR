@@ -165,6 +165,54 @@ export async function getStatus(): Promise<CaptureStatus> {
     return invoke<CaptureStatus>("get_status");
 }
 
+export interface AppConfigPayload {
+    experimental_ui_enabled: boolean;
+    use_demo_data_only: boolean;
+    use_vlm: boolean;
+}
+
+export async function getAppConfig(): Promise<AppConfigPayload> {
+    return invoke<AppConfigPayload>("get_app_config");
+}
+
+export interface SystemReadiness {
+    screen_capture_permission_granted: boolean;
+    screen_capture_permission_detail: string;
+    ocr_available: boolean;
+    ocr_detail: string;
+    inference_ready: boolean;
+    embedder_ready: boolean;
+    vector_store_ready: boolean;
+    data_dir_writable: boolean;
+    data_dir_detail: string;
+    capture_status: CaptureStatus;
+    total_records: number;
+    vlm_active: boolean;
+    use_demo_data_only: boolean;
+    ready_for_search: boolean;
+    fixes: string[];
+}
+
+export async function getReadiness(): Promise<SystemReadiness> {
+    return invoke<SystemReadiness>("get_readiness");
+}
+
+export async function setUseDemoDataOnly(enabled: boolean): Promise<AppConfigPayload> {
+    return invoke<AppConfigPayload>("set_use_demo_data_only", { enabled });
+}
+
+export async function seedDemoDataset(): Promise<number> {
+    return invoke<number>("seed_demo_dataset");
+}
+
+export async function resetDemoData(): Promise<number> {
+    return invoke<number>("reset_demo_data");
+}
+
+export async function injectTestMemory(): Promise<string> {
+    return invoke<string>("inject_test_memory");
+}
+
 export async function getMcpServerStatus(): Promise<McpServerStatus> {
     return invoke<McpServerStatus>("get_mcp_server_status");
 }

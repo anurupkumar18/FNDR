@@ -5,6 +5,12 @@
   gap: 8px;
 }
 
+.search-disabled-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(255, 200, 120, 0.95);
+}
+
 .search-bar {
   position: relative;
   display: flex;
