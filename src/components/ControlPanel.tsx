@@ -20,11 +20,12 @@ import "./ControlPanel.css";
 
 interface ControlPanelProps {
     status: CaptureStatus | null;
+    compact?: boolean;
 }
 
 type Tab = "settings" | "stats" | "privacy";
 
-export function ControlPanel({ status }: ControlPanelProps) {
+export function ControlPanel({ status, compact = false }: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<Tab>("settings");
     const [blocklist, setBlocklistState] = useState<string[]>([]);
@@ -168,61 +169,64 @@ export function ControlPanel({ status }: ControlPanelProps) {
         <>
             {/* Settings Toggle Button */}
             <button
-                className="settings-toggle"
+                className={`ui-action-btn settings-toggle ${compact ? "compact" : ""}`}
                 onClick={() => setIsOpen(!isOpen)}
                 aria-label="Open settings"
             >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-                </svg>
+                {compact ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M12 2v2.2m0 15.6V22m9.8-10H19.6m-15.4 0H2m16.1 6.1l-1.6-1.6M7.5 7.5 5.9 5.9m12.2 0-1.6 1.6M7.5 16.5l-1.6 1.6" />
+                    </svg>
+                ) : (
+                    "Settings"
+                )}
             </button>
 
-            {/* Backdrop */}
             {isOpen && <div className="panel-backdrop" onClick={() => setIsOpen(false)} />}
 
-            {/* Panel */}
             <aside className={`settings-panel ${isOpen ? "open" : ""}`}>
                 <header className="panel-header">
-                    <h2>Settings</h2>
-                    <button className="panel-close" onClick={() => setIsOpen(false)} aria-label="Close">
+                    <div>
+                        <h2>FNDR Settings</h2>
+                        <p className="panel-subtitle">Private, local, always in your control.</p>
+                    </div>
+                    <button className="ui-action-btn panel-close" onClick={() => setIsOpen(false)} aria-label="Close">
                         ✕
                     </button>
                 </header>
 
-                {/* Tabs */}
                 <nav className="panel-tabs">
                     <button
-                        className={`tab ${activeTab === "settings" ? "active" : ""}`}
+                        className={`ui-action-btn tab ${activeTab === "settings" ? "active" : ""}`}
                         onClick={() => setActiveTab("settings")}
                     >
-                        ⚙️ General
+                        Core
                     </button>
                     <button
-                        className={`tab ${activeTab === "stats" ? "active" : ""}`}
+                        className={`ui-action-btn tab ${activeTab === "stats" ? "active" : ""}`}
                         onClick={() => setActiveTab("stats")}
                     >
-                        📊 Stats
+                        Stats
                     </button>
                     <button
-                        className={`tab ${activeTab === "privacy" ? "active" : ""}`}
+                        className={`ui-action-btn tab ${activeTab === "privacy" ? "active" : ""}`}
                         onClick={() => setActiveTab("privacy")}
                     >
-                        🔒 Privacy
+                        Privacy
                     </button>
                 </nav>
 
                 <div className="panel-content">
-                    {/* Settings Tab */}
                     {activeTab === "settings" && (
                         <>
                             <section className="panel-section">
-                                <h3>Capture Control</h3>
+                                <h3>Capture Status</h3>
                                 <button
-                                    className={`capture-toggle ${status?.is_paused ? "paused" : "active"}`}
+                                    className={`ui-action-btn capture-toggle ${status?.is_paused ? "paused" : "active"}`}
                                     onClick={handleToggleCapture}
                                 >
-                                    {status?.is_paused ? "▶ Resume Capture" : "⏸ Pause Capture"}
+                                    {status?.is_paused ? "Resume capture" : "Pause capture"}
                                 </button>
                                 <div className="capture-stats">
                                     <span>Frames: {status?.frames_captured ?? 0}</span>
@@ -231,9 +235,9 @@ export function ControlPanel({ status }: ControlPanelProps) {
                             </section>
 
                             <section className="panel-section">
-                                <h3>Data Retention</h3>
+                                <h3>Indexing</h3>
                                 <p className="section-hint">
-                                    Automatically remove old memories to save space.
+                                    Keep a compact rolling memory window.
                                 </p>
                                 <div className="retention-controls">
                                     <select
@@ -248,11 +252,11 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                     </select>
                                     {retentionDays > 0 && (
                                         <button
-                                            className="btn-secondary"
+                                            className="ui-action-btn btn-secondary"
                                             onClick={handleRunRetentionNow}
                                             disabled={retentionBusy}
                                         >
-                                            {retentionBusy ? "..." : "Run Now"}
+                                            {retentionBusy ? "..." : "Run now"}
                                         </button>
                                     )}
                                 </div>
@@ -260,15 +264,12 @@ export function ControlPanel({ status }: ControlPanelProps) {
 
                             <section className="panel-section">
                                 <h3>MCP Server</h3>
-                                <p className="section-hint">
-                                    Connect FNDR to external tools via Model Context Protocol.
-                                </p>
                                 <div className="mcp-status-row">
                                     <span className={`mcp-pill ${mcpStatus?.running ? "running" : "stopped"}`}>
                                         {mcpStatus?.running ? "Running" : "Stopped"}
                                     </span>
                                     <button
-                                        className="btn-secondary"
+                                        className="ui-action-btn btn-secondary"
                                         onClick={handleToggleMcpServer}
                                         disabled={mcpBusy}
                                     >
@@ -281,8 +282,8 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                         value={mcpStatus?.endpoint ?? "http://127.0.0.1:8799/mcp"}
                                         readOnly
                                     />
-                                    <button className="btn-primary" onClick={handleCopyMcpLink}>
-                                        {copiedMcpLink ? "Copied" : "Copy Link"}
+                                    <button className="ui-action-btn btn-primary" onClick={handleCopyMcpLink}>
+                                        {copiedMcpLink ? "Copied" : "Copy link"}
                                     </button>
                                 </div>
                                 {mcpStatus?.last_error && (
@@ -292,14 +293,13 @@ export function ControlPanel({ status }: ControlPanelProps) {
                         </>
                     )}
 
-                    {/* Stats Tab */}
                     {activeTab === "stats" && stats && (
                         <section className="panel-section">
                             <h3>Statistics</h3>
                             <div className="stats-grid">
                                 <div className="stat-card">
                                     <span className="stat-value">{stats.total_records.toLocaleString()}</span>
-                                    <span className="stat-label">Total Memories</span>
+                                    <span className="stat-label">Total memories</span>
                                 </div>
                                 <div className="stat-card">
                                     <span className="stat-value">{stats.today_count.toLocaleString()}</span>
@@ -307,26 +307,12 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                 </div>
                                 <div className="stat-card">
                                     <span className="stat-value">{stats.total_days}</span>
-                                    <span className="stat-label">Days Active</span>
-                                </div>
-                            </div>
-
-                            <div className="profile-section">
-                                <h3>Profile</h3>
-                                <div className="profile-card">
-                                    <div className="profile-avatar">
-                                        👤
-                                    </div>
-                                    <div className="profile-info">
-                                        <span className="profile-name">Local User</span>
-                                        <span className="profile-detail">All data stored locally on your Mac</span>
-                                    </div>
+                                    <span className="stat-label">Days active</span>
                                 </div>
                             </div>
                         </section>
                     )}
 
-                    {/* Privacy Tab */}
                     {activeTab === "privacy" && (
                         <>
                             <section className="panel-section">
@@ -355,27 +341,18 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                         onKeyDown={(e) => e.key === "Enter" && handleAddApp()}
                                         className="add-app-input"
                                     />
-                                    <button onClick={handleAddApp} className="btn-primary">Add</button>
+                                    <button onClick={handleAddApp} className="ui-action-btn btn-primary">Add</button>
                                 </div>
                             </section>
 
                             <section className="panel-section danger-section">
                                 <h3>Danger Zone</h3>
                                 <button
-                                    className={`btn-danger ${confirmDelete ? "confirm" : ""}`}
+                                    className={`ui-action-btn btn-danger ${confirmDelete ? "confirm" : ""}`}
                                     onClick={handleDeleteAll}
                                 >
-                                    {confirmDelete ? "Click again to confirm" : "🗑️ Delete All Data"}
+                                    {confirmDelete ? "Click again to confirm" : "Delete all data"}
                                 </button>
-                            </section>
-
-                            <section className="panel-section about-section">
-                                <h3>About Privacy</h3>
-                                <p className="about-text">
-                                    FNDR runs 100% on your Mac. No screenshots or data are ever
-                                    sent to the cloud. Screen content is converted to text and vectors
-                                    locally—raw pixels are discarded immediately.
-                                </p>
                             </section>
                         </>
                     )}

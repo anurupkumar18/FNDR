@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { MemoryReconstruction, reconstructMemory } from "../api/tauri";
+import { MemoryReconstruction, reconstructMemory, SearchResult } from "../api/tauri";
 import "./MemoryReconstructionPanel.css";
 
 interface MemoryReconstructionPanelProps {
     query: string;
+    selectedResult: SearchResult | null;
+    onShowContext: (value: string) => void;
 }
 
-export function MemoryReconstructionPanel({ query }: MemoryReconstructionPanelProps) {
+export function MemoryReconstructionPanel({
+    query,
+    selectedResult,
+    onShowContext,
+}: MemoryReconstructionPanelProps) {
     const [data, setData] = useState<MemoryReconstruction | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -40,6 +46,7 @@ export function MemoryReconstructionPanel({ query }: MemoryReconstructionPanelPr
     }, [activeQuery]);
 
     const hasCards = useMemo(() => (data?.cards?.length ?? 0) > 0, [data]);
+    const primaryCard = data?.cards?.[0];
 
     if (!activeQuery) {
         return null;
@@ -48,9 +55,19 @@ export function MemoryReconstructionPanel({ query }: MemoryReconstructionPanelPr
     return (
         <aside className="reconstruction-panel" aria-live="polite">
             <header className="reconstruction-header">
-                <div className="reconstruction-badge">Artifact</div>
-                <h3>Memory Reconstruction</h3>
-                <p>Graph-linked evidence from your local capture history.</p>
+                <div className="reconstruction-badge">Preview</div>
+                <h3>{selectedResult?.window_title || "Memory preview"}</h3>
+                <p>
+                    {selectedResult?.app_name ?? "Local capture"} ·{" "}
+                    {selectedResult
+                        ? new Date(selectedResult.timestamp).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                        })
+                        : "No timestamp"}
+                </p>
             </header>
 
             {isLoading && (
@@ -65,61 +82,57 @@ export function MemoryReconstructionPanel({ query }: MemoryReconstructionPanelPr
             {!isLoading && data && (
                 <div className="reconstruction-body">
                     <section className="reconstruction-answer">
-                        <h4>Synthesized Response</h4>
-                        <p>{data.answer}</p>
+                        <h4>Excerpt</h4>
+                        <p>{selectedResult?.text || data.answer}</p>
                     </section>
 
-                    {data.structural_context.length > 0 && (
-                        <section className="reconstruction-structural">
-                            <h4>Graph Context</h4>
-                            <ul>
-                                {data.structural_context.map((note, idx) => (
-                                    <li key={`${note}-${idx}`}>{note}</li>
-                                ))}
-                            </ul>
-                        </section>
-                    )}
+                    <section className="reconstruction-structural">
+                        <h4>Source</h4>
+                        <ul>
+                            <li>Match score: {selectedResult ? `${Math.round(selectedResult.score * 100)}%` : "-"}</li>
+                            <li>Cards found: {data.cards.length}</li>
+                            {data.structural_context[0] && <li>{data.structural_context[0]}</li>}
+                        </ul>
+                    </section>
 
                     <section className="reconstruction-cards">
-                        <h4>Memory Cards</h4>
-                        {!hasCards && <p className="empty-cards">No matching memory cards.</p>}
+                        <h4>Actions</h4>
+                        {!hasCards && <p className="empty-cards">No linked cards available.</p>}
 
-                        {data.cards.map((card) => {
-                            const screenshotSrc = card.screenshot_path
-                                ? convertFileSrc(card.screenshot_path)
-                                : null;
-
-                            return (
-                                <article className="reconstruction-card" key={card.id}>
-                                    {screenshotSrc && (
-                                        <img
-                                            src={screenshotSrc}
-                                            alt={card.window_title}
-                                            className="reconstruction-shot"
-                                            loading="lazy"
-                                        />
-                                    )}
-                                    <div className="reconstruction-card-meta">
-                                        <div className="meta-top">
-                                            <span className="app">{card.app_name}</span>
-                                            <span className="score">{Math.round(card.score * 100)}%</span>
-                                        </div>
-                                        <div className="window">{card.window_title}</div>
-                                        <p className="snippet">{card.snippet}</p>
-                                        {card.url && (
-                                            <a href={card.url} target="_blank" rel="noreferrer">
-                                                {card.url}
+                        {primaryCard && (
+                            <article className="reconstruction-card" key={primaryCard.id}>
+                                {primaryCard.screenshot_path && (
+                                    <img
+                                        src={convertFileSrc(primaryCard.screenshot_path)}
+                                        alt={primaryCard.window_title}
+                                        className="reconstruction-shot"
+                                        loading="lazy"
+                                    />
+                                )}
+                                <div className="reconstruction-card-meta">
+                                    <div className="meta-top">
+                                        <span className="app">{primaryCard.app_name}</span>
+                                        <span className="score">{Math.round(primaryCard.score * 100)}%</span>
+                                    </div>
+                                    <div className="window">{primaryCard.window_title}</div>
+                                    <p className="snippet">{primaryCard.snippet}</p>
+                                    <div className="reconstruction-actions">
+                                        {primaryCard.url && (
+                                            <a href={primaryCard.url} target="_blank" rel="noreferrer">
+                                                Open source
                                             </a>
                                         )}
-                                        {card.related_tasks.length > 0 && (
-                                            <p className="tasks">
-                                                Linked tasks: {card.related_tasks.join(", ")}
-                                            </p>
-                                        )}
+                                        <button
+                                            type="button"
+                                            className="context-btn"
+                                            onClick={() => onShowContext(primaryCard.snippet || query)}
+                                        >
+                                            Show context
+                                        </button>
                                     </div>
-                                </article>
-                            );
-                        })}
+                                </div>
+                            </article>
+                        )}
                     </section>
                 </div>
             )}

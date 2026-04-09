@@ -8,7 +8,7 @@ import { MemoryReconstructionPanel } from "./components/MemoryReconstructionPane
 import { GraphPanel } from "./components/GraphPanel";
 import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
 import { useSearch } from "./hooks/useSearch";
-import { getStatus, getAppNames, CaptureStatus, Task, startAgentTask } from "./api/tauri";
+import { getStatus, getAppNames, CaptureStatus, Task, startAgentTask, SearchResult } from "./api/tauri";
 import "./styles/App.css";
 
 function App() {
@@ -20,11 +20,16 @@ function App() {
     const [showAgentPanel, setShowAgentPanel] = useState(false);
     const [showGraphPanel, setShowGraphPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
+    const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
     const { results, isLoading, error } = useSearch(query, timeFilter, appFilter);
 
     // Show todo modal when no search and no results
     const showTodoModal = !query && results.length === 0 && !isLoading;
+    const showPreviewPanel = Boolean(query.trim() && selectedResult);
+    const showCenteredSearch = !query.trim();
+    const isFocusMode = !query.trim();
 
     // Load app names for filter
     useEffect(() => {
@@ -47,6 +52,19 @@ function App() {
         return () => clearInterval(interval);
     }, []);
 
+    useEffect(() => {
+        if (!results.length) {
+            setSelectedResult(null);
+            return;
+        }
+
+        setSelectedResult((prev) => {
+            if (!prev) return results[0];
+            const stillVisible = results.find((item) => item.id === prev.id);
+            return stillVisible ?? results[0];
+        });
+    }, [results]);
+
     const handleExecuteTask = async (task: Task) => {
         try {
             // Start the agent
@@ -64,80 +82,99 @@ function App() {
 
     return (
         <div className="app">
-            <header className="app-header">
-                <div className="logo">
-                    <span className="logo-icon">⌘</span>
-                    <h1>FNDR</h1>
-                </div>
-                <div className="header-actions">
+            <button
+                className="ui-action-btn sidebar-toggle"
+                onClick={() => setIsSidebarOpen((prev) => !prev)}
+                aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
+            >
+                {isSidebarOpen ? "×" : "☰"}
+            </button>
+
+            <div className="top-right-control">
+                <ControlPanel status={status} compact={true} />
+            </div>
+
+            {isSidebarOpen && (
+                <button
+                    className="sidebar-scrim"
+                    onClick={() => setIsSidebarOpen(false)}
+                    aria-label="Close sidebar overlay"
+                />
+            )}
+
+            <aside className={`left-sidebar ${isSidebarOpen ? "open" : ""}`}>
+                <div className="sidebar-group sidebar-actions">
+                    <div className="sidebar-label">Tools</div>
                     <button
-                        className={`meeting-toggle-btn ${showMeetingPanel ? "active" : ""}`}
+                        className={`ui-action-btn meeting-toggle-btn ${showMeetingPanel ? "active" : ""}`}
                         onClick={() => setShowMeetingPanel(!showMeetingPanel)}
-                        title="Toggle Meeting Recorder"
                     >
-                        🎙️ Meetings
+                        🎙 Meetings
                     </button>
                     <button
-                        className={`graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
+                        className={`ui-action-btn graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
                         onClick={() => setShowGraphPanel(!showGraphPanel)}
-                        title="Toggle Knowledge Graph"
                     >
-                        🕸️ Graph
+                        ⛓ Graph
                     </button>
-                    <div className="status-badge">
-                        {status?.is_capturing ? (
-                            <span className="status-active">● Capturing</span>
-                        ) : status?.is_paused ? (
-                            <span className="status-paused">⏸ Paused</span>
-                        ) : (
-                            <span className="status-idle">○ Idle</span>
-                        )}
-                    </div>
                 </div>
-            </header>
+            </aside>
 
-            <main className="app-main">
-                <div className={`main-layout ${query.trim() ? "with-reconstruction" : ""}`}>
-                    <section className="main-column">
-                        {error && (
-                            <div className="error-banner">
-                                {error}
-                            </div>
-                        )}
+            <main className={`app-main ${showCenteredSearch ? "search-centered" : ""}`}>
+                <section className={`search-shell ${query.trim() ? "is-active" : ""}`}>
+                    <SearchBar
+                        value={query}
+                        onChange={setQuery}
+                        timeFilter={timeFilter}
+                        onTimeFilterChange={setTimeFilter}
+                        appFilter={appFilter}
+                        onAppFilterChange={setAppFilter}
+                        appNames={appNames}
+                        resultCount={results.length}
+                        searchResults={results}
+                    />
+                </section>
 
-                        {/* Show Todo Modal on home page (no search) */}
-                        {showTodoModal && (
-                            <TodoModal
-                                isVisible={true}
-                                onExecuteTask={handleExecuteTask}
+                {!isFocusMode && (
+                    <div className={`main-layout ${showPreviewPanel ? "with-reconstruction" : ""}`}>
+                        <section className="main-column">
+                            {error && (
+                                <div className="error-banner">
+                                    {error}
+                                </div>
+                            )}
+
+                            {/* Show Todo Modal on home page (no search) */}
+                            {showTodoModal && (
+                                <TodoModal
+                                    isVisible={true}
+                                    onExecuteTask={handleExecuteTask}
+                                />
+                            )}
+
+                            {/* Show Timeline when searching or has results */}
+                            {!showTodoModal && (
+                                <Timeline
+                                    results={results}
+                                    isLoading={isLoading}
+                                    query={query}
+                                    selectedResultId={selectedResult?.id ?? null}
+                                    onSelectResult={setSelectedResult}
+                                />
+                            )}
+                        </section>
+
+                        {showPreviewPanel && (
+                            <MemoryReconstructionPanel
+                                query={query}
+                                selectedResult={selectedResult}
+                                onShowContext={(nextQuery) => setQuery(nextQuery)}
                             />
                         )}
-
-                        {/* Show Timeline when searching or has results */}
-                        {!showTodoModal && (
-                            <Timeline results={results} isLoading={isLoading} query={query} />
-                        )}
-                    </section>
-
-                    <MemoryReconstructionPanel query={query} />
-                </div>
+                    </div>
+                )}
             </main>
-
-            {/* Bottom Overlay Search Bar */}
-            <SearchBar
-                value={query}
-                onChange={setQuery}
-                timeFilter={timeFilter}
-                onTimeFilterChange={setTimeFilter}
-                appFilter={appFilter}
-                onAppFilterChange={setAppFilter}
-                appNames={appNames}
-                resultCount={results.length}
-                searchResults={results}
-            />
-
-            <ControlPanel status={status} />
-
+            
             {/* Agent Panel Overlay */}
             <AgentPanel
                 isVisible={showAgentPanel}
