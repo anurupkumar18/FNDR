@@ -951,7 +951,7 @@ pub async fn get_readiness(
         }
     };
 
-    let stats_res = state.inner().store.get_stats();
+    let stats_res = state.inner().store.get_stats().await;
     let store_ok = stats_res.is_ok();
     if !store_ok {
         fixes.push("Vector store is not responding.".to_string());
@@ -1027,11 +1027,13 @@ pub async fn seed_demo_dataset(state: State<'_, Arc<AppState>>) -> Result<usize,
         .inner()
         .store
         .delete_id_prefix(demo::DEMO_ID_PREFIX)
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
     state
         .inner()
         .store
         .add_batch(&records)
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
     Ok(n)
 }
@@ -1042,6 +1044,7 @@ pub async fn reset_demo_data(state: State<'_, Arc<AppState>>) -> Result<usize, S
         .inner()
         .store
         .delete_id_prefix(demo::DEMO_ID_PREFIX)
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }
 
@@ -1051,11 +1054,12 @@ pub async fn inject_test_memory(state: State<'_, Arc<AppState>>) -> Result<Strin
     let record = demo::build_inject_record(&embedder).map_err(|e| e.to_string())?;
     let id = record.id.clone();
     let inject_prefix = format!("{}inject", demo::DEMO_ID_PREFIX);
-    let _ = state.inner().store.delete_id_prefix(&inject_prefix);
+    let _ = state.inner().store.delete_id_prefix(&inject_prefix).await;
     state
         .inner()
         .store
         .add_batch(&[record])
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
     Ok(id)
 }
