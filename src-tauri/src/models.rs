@@ -18,8 +18,8 @@ pub struct ModelDefinition {
 }
 
 pub const MODEL_CATALOG: [ModelDefinition; 1] = [ModelDefinition {
-    id: "qwen3-vl-4b",
-    name: "Qwen3-VL · 4B",
+    id: "gemma-4-e4b",
+    name: "Gemma 4 · E4B",
     description: "Required local model for memory summaries, Q&A, and screen understanding.",
     size_bytes: 2_500_000_000,
     size_label: "2.5 GB",
@@ -27,9 +27,9 @@ pub const MODEL_CATALOG: [ModelDefinition; 1] = [ModelDefinition {
     speed_label: "Balanced",
     ram_gb: 6.0,
     recommended: true,
-    filename: "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+    filename: "gemma-4-E4B-it-Q4_K_M.gguf",
     download_url:
-        "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
 }];
 
 #[derive(Debug, Clone)]
@@ -160,12 +160,12 @@ mod tests {
         let temp_dir = make_temp_dir();
         let model_dir = models_dir(&temp_dir);
         std::fs::create_dir_all(&model_dir).unwrap();
-        let expected_path = model_dir.join("Qwen3VL-4B-Instruct-Q4_K_M.gguf");
+        let expected_path = model_dir.join("gemma-4-E4B-it-Q4_K_M.gguf");
         std::fs::write(&expected_path, b"test").unwrap();
 
-        let resolved = resolve_model(Some("qwen3-vl-4b"), Some(temp_dir.as_path())).unwrap();
+        let resolved = resolve_model(Some("gemma-4-e4b"), Some(temp_dir.as_path())).unwrap();
 
-        assert_eq!(resolved.definition.id, "qwen3-vl-4b");
+        assert_eq!(resolved.definition.id, "gemma-4-e4b");
         assert_eq!(resolved.path, expected_path);
 
         std::fs::remove_dir_all(temp_dir).unwrap();
@@ -176,10 +176,10 @@ mod tests {
         let temp_dir = make_temp_dir();
         let model_dir = models_dir(&temp_dir);
         std::fs::create_dir_all(&model_dir).unwrap();
-        let partial_path = partial_model_path(&temp_dir, "Qwen3VL-4B-Instruct-Q4_K_M.gguf");
+        let partial_path = partial_model_path(&temp_dir, "gemma-4-E4B-it-Q4_K_M.gguf");
         std::fs::write(&partial_path, b"partial").unwrap();
 
-        let resolved = resolve_model(Some("qwen3-vl-4b"), Some(temp_dir.as_path()));
+        let resolved = resolve_model(Some("gemma-4-e4b"), Some(temp_dir.as_path()));
         assert_ne!(
             resolved.as_ref().map(|model| model.path.clone()),
             Some(partial_path)

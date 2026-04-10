@@ -185,7 +185,7 @@ pub async fn load_ai_engines(
     };
 
     tracing::info!(
-        "Skipping eager VLM warm-up; Qwen core and optional accelerators load on demand."
+        "Skipping eager VLM warm-up; Gemma 4 core and optional accelerators load on demand."
     );
     let vlm = None;
 

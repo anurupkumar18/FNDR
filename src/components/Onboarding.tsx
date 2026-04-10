@@ -367,9 +367,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     return (
         <>
             <span className="ob-icon">🧠</span>
-            <h1 className="ob-title">Download FNDR&apos;s local Qwen model</h1>
+            <h1 className="ob-title">Download FNDR&apos;s local Gemma model</h1>
             <p className="ob-subtitle">
-                Qwen3-VL 4B is the required on-device model for summaries, memory Q&amp;A, and smarter indexing.
+                Gemma 4 E4B is the required on-device model for summaries, memory Q&amp;A, and smarter indexing.
                 Optional helpers like Whisper, Orpheus, and FastVLM only load later if you actually use those features.
             </p>
 
@@ -404,7 +404,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                         {
                             icon: "✅",
                             title: "Required right now",
-                            body: "Qwen3-VL powers the core FNDR experience and is the only model you need to finish setup.",
+                            body: "Gemma 4 E4B powers the core FNDR experience and is the only model you need to finish setup.",
                         },
                         {
                             icon: "🖼",
@@ -558,7 +558,7 @@ function StepIndexingStarted({ state, onSave }: { state: OnboardingState; onSave
             </div>
 
             <p className="ob-subtitle" style={{ marginTop: 16 }}>
-                Qwen will warm up automatically when FNDR needs it. Meeting transcription and extra vision helpers stay off until you use them.
+                Gemma 4 will warm up automatically when FNDR needs it. Meeting transcription and extra vision helpers stay off until you use them.
             </p>
 
             <button

@@ -195,7 +195,7 @@ async fn run_memory_reconstruction(
     let context = context_parts.join("\n");
     reconstruction.answer = match app_state.ensure_inference_engine().await {
         Ok(Some(engine)) => engine.answer(query, &context).await,
-        Ok(None) => "AI intelligence is disabled until Qwen3-VL is downloaded.".to_string(),
+        Ok(None) => "AI intelligence is disabled until Gemma 4 E4B is downloaded.".to_string(),
         Err(err) => format!("AI intelligence is temporarily unavailable: {}", err),
     };
     Ok(reconstruction)
@@ -295,7 +295,7 @@ pub async fn transcribe_voice_input(
 
     Ok(VoiceTranscriptionResult {
         text,
-        backend: "whisper-large-v3-turbo-gguf".to_string(),
+        backend: "whisper-small-gguf".to_string(),
     })
 }
 

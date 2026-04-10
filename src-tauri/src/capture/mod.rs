@@ -1,7 +1,7 @@
 //! Capture pipeline
 //!
 //! Handles screen capture, deduplication, and frame processing.
-//! Qwen handles the core local summarization path, while optional accelerators
+//! Gemma 4 handles the core local summarization path, while optional accelerators
 //! like FastVLM stay off the hot path until a dedicated feature needs them.
 
 mod dedupe;
@@ -214,7 +214,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
-        // Keep the hot capture path simple: Qwen is the required core model and
+        // Keep the hot capture path simple: Gemma 4 is the required core model and
         // loads lazily on first real use, while optional vision accelerators stay
         // off unless a dedicated feature explicitly requests them.
         let summary = match state.ensure_inference_engine().await {

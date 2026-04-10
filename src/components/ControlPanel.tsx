@@ -131,7 +131,7 @@ export function ControlPanel({ status }: ControlPanelProps) {
                 const runtime = await refreshAiModels();
                 if (!runtime.ai_model_available && !cancelled) {
                     setModelError(
-                        `Model download finished, but FNDR still cannot see Qwen at ${downloadStatus.destination_path ?? "disk"}.`,
+                        `Model download finished, but FNDR still cannot see Gemma 4 at ${downloadStatus.destination_path ?? "disk"}.`,
                     );
                 }
             } catch (refreshError) {
@@ -160,7 +160,7 @@ export function ControlPanel({ status }: ControlPanelProps) {
             try {
                 const runtime = await refreshAiModels();
                 if (!runtime.ai_model_available) {
-                    setModelError("Qwen is supposed to be on disk, but FNDR could not find the local model files.");
+                    setModelError("Gemma 4 is supposed to be on disk, but FNDR could not find the local model files.");
                 }
             } catch (e) {
                 setModelError(String(e));
@@ -392,7 +392,7 @@ export function ControlPanel({ status }: ControlPanelProps) {
                         <section className="panel-section">
                             <h3>AI Model</h3>
                             <p className="section-hint">
-                                Qwen3-VL is FNDR&apos;s required local model for summaries, Q&amp;A, and smarter indexing.
+                                Gemma 4 E4B is FNDR&apos;s required local model for summaries, Q&amp;A, and smarter indexing.
                                 {status?.ai_model_available
                                     ? status?.ai_model_loaded
                                         ? " It is currently loaded in memory."

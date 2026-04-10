@@ -57,7 +57,7 @@ export function ModelDownloadBanner() {
                 const runtime = await refreshAiModels();
                 if (!runtime.ai_model_available && !cancelled) {
                     setError(
-                        `Model download finished, but FNDR still cannot see the Qwen model at ${downloadStatus.destination_path ?? "disk"}.`,
+                        `Model download finished, but FNDR still cannot see the Gemma 4 model at ${downloadStatus.destination_path ?? "disk"}.`,
                     );
                 }
             } catch (refreshError) {
@@ -86,7 +86,7 @@ export function ModelDownloadBanner() {
             try {
                 const runtime = await refreshAiModels();
                 if (!runtime.ai_model_available) {
-                    setError("Qwen is supposed to be on disk, but FNDR could not find the local model files.");
+                    setError("Gemma 4 is supposed to be on disk, but FNDR could not find the local model files.");
                 }
             } catch (refreshError) {
                 setError(String(refreshError));
@@ -124,9 +124,9 @@ export function ModelDownloadBanner() {
     return (
         <div className="model-download-banner">
             <div className="banner-header">
-                <h3>⚠️ Qwen Model Required</h3>
+                <h3>⚠️ Gemma Model Required</h3>
                 <p>
-                    FNDR is in OCR-only mode because the required local Qwen3-VL model is missing.
+                    FNDR is in OCR-only mode because the required local Gemma 4 E4B model is missing.
                     Search still works, but memory Q&A, summaries, and smarter indexing need the core model on disk.
                 </p>
             </div>
@@ -184,8 +184,8 @@ export function ModelDownloadBanner() {
                 <div className="banner-action-area">
                     <button className="banner-download-btn" onClick={handleDownload} disabled={!selected}>
                         {alreadyDownloaded
-                            ? `Load ${selected?.name ?? "Qwen"}`
-                            : `Download ${selected?.name ?? "Qwen"} (${selected?.size_label ?? ""})`}
+                            ? `Load ${selected?.name ?? "Gemma 4"}`
+                            : `Download ${selected?.name ?? "Gemma 4"} (${selected?.size_label ?? ""})`}
                     </button>
                     <span className="banner-meta">Memory: ~{selected?.ram_gb} GB RAM</span>
                 </div>

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy)]
 pub enum SpeechModelKind {
-    WhisperLargeV3Turbo,
+    WhisperSmall,
     Orpheus3B,
 }
 
@@ -20,11 +20,11 @@ struct SpeechModelDefinition {
 }
 
 const WHISPER_MODEL: SpeechModelDefinition = SpeechModelDefinition {
-    id: "whisper-large-v3-turbo-gguf",
-    folder: "whisper-large-v3-turbo",
-    filename: "model_q4_k.gguf",
+    id: "whisper-small-gguf",
+    folder: "whisper-small",
+    filename: "ggml-small-q5_1.bin",
     download_url:
-        "https://huggingface.co/xkeyC/whisper-large-v3-turbo-gguf/resolve/main/model_q4_k.gguf",
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
 };
 
 const ORPHEUS_MODEL: SpeechModelDefinition = SpeechModelDefinition {
@@ -48,7 +48,7 @@ fn bootstrap_lock() -> &'static AsyncMutex<()> {
 
 fn definition(kind: SpeechModelKind) -> &'static SpeechModelDefinition {
     match kind {
-        SpeechModelKind::WhisperLargeV3Turbo => &WHISPER_MODEL,
+        SpeechModelKind::WhisperSmall => &WHISPER_MODEL,
         SpeechModelKind::Orpheus3B => &ORPHEUS_MODEL,
     }
 }
@@ -443,7 +443,7 @@ pub async fn transcribe_audio_file(
     audio_path: &Path,
 ) -> Result<String, String> {
     let model_path =
-        ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperLargeV3Turbo).await?;
+        ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperSmall).await?;
     ensure_whisper_backend().await?;
 
     if let Ok(custom_cmd) = std::env::var("FNDR_WHISPER_GGUF_COMMAND") {

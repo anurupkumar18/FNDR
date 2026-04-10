@@ -24,7 +24,7 @@ const SEGMENTS_INDEX: &str = "segments.json";
 const SEGMENT_SECONDS: i64 = 20;
 const STATUS_EVENT: &str = "meeting://status";
 const SEGMENT_EVENT: &str = "meeting://segment";
-const FORCED_MODEL: &str = "whisper-large-v3-turbo-gguf";
+const FORCED_MODEL: &str = "whisper-small-gguf";
 const AUTO_POLL_SECONDS: u64 = 5;
 const AUTO_START_HITS: u8 = 2;
 const AUTO_STOP_IDLE_SECONDS: u64 = 90;
@@ -1117,7 +1117,7 @@ fn detect_transcription_backend() -> String {
         return "custom-transcriber".to_string();
     }
     if speech::resolve_sidecar("whisper_gguf_runner.py").is_some() {
-        return "whisper-large-v3-turbo-gguf (on-demand)".to_string();
+        return "whisper-small-gguf (on-demand)".to_string();
     }
     "unavailable".to_string()
 }

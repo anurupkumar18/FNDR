@@ -186,7 +186,7 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                 <div className="mp-header-left">
                     <h2 className="mp-title">Meeting Notes</h2>
                     <p className="mp-subtitle">
-                        Whisper large-v3 turbo runs locally on your Mac and downloads on first use · transcripts save to Documents/FNDR Meetings
+                        Whisper small runs locally on your Mac and downloads on first use · transcripts save to Documents/FNDR Meetings
                     </p>
                 </div>
                 <div className="mp-header-actions">

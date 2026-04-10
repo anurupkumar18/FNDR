@@ -131,7 +131,7 @@ function App() {
                             </div>
                         )}
 
-                        {/* Show AI Model Download Banner only when the required Qwen model is missing from disk */}
+                        {/* Show AI Model Download Banner only when the required Gemma 4 model is missing from disk */}
                         {status && !status.ai_model_available && (
                             <ModelDownloadBanner />
                         )}

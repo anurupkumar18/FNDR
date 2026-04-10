@@ -610,7 +610,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "start_meeting",
-                "description": "Start a meeting recording session (Whisper large-v3 turbo GGUF on demand).",
+                "description": "Start a meeting recording session (Whisper small GGUF on demand).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -767,7 +767,7 @@ async fn run_ask_fndr(app_state: Arc<AppState>, args: AskFndrArgs) -> Result<Val
     let answer_future = async {
         match app_state.ensure_inference_engine().await {
             Ok(Some(engine)) => engine.answer(&args.query, &context).await,
-            Ok(None) => "AI intelligence is disabled until Qwen3-VL is downloaded.".to_string(),
+            Ok(None) => "AI intelligence is disabled until Gemma 4 E4B is downloaded.".to_string(),
             Err(err) => format!("AI intelligence is temporarily unavailable: {}", err),
         }
     };

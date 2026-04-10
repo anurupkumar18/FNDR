@@ -1,7 +1,7 @@
 //! Vision Language Model (VLM) inference engine
 //!
-//! Uses Qwen3-VL 4B GGUF for richer OCR-grounded screen understanding.
-//! Primary: Qwen3VL-4B-Instruct-Q4_K_M.gguf
+//! Uses Gemma 4 E4B GGUF for richer OCR-grounded screen understanding.
+//! Primary: gemma-4-E4B-it-Q4_K_M.gguf
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -160,7 +160,7 @@ impl VlmEngine {
         app_data_dir: Option<&Path>,
     ) -> Result<crate::models::ResolvedModel, VlmError> {
         let preferred_model_id = match preferred_size {
-            "4B" => Some("qwen3-vl-4b"),
+            "4B" => Some("gemma-4-e4b"),
             _ => None,
         };
 
