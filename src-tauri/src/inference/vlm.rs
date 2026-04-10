@@ -160,7 +160,7 @@ impl VlmEngine {
         app_data_dir: Option<&Path>,
     ) -> Result<crate::models::ResolvedModel, VlmError> {
         let preferred_model_id = match preferred_size {
-            "4B" => Some("qwen3-vl-4b"),
+            "4B" => Some("gemma-4-e4b"),
             _ => None,
         };
 

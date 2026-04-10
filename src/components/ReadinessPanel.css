@@ -1,11 +1,57 @@
+.readiness-container {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    z-index: 90;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+.dev-info-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.35rem 0.6rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+}
+
+.dev-info-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.dev-info-icon {
+    transition: transform 0.2s ease;
+}
+
+.dev-info-icon.open {
+    transform: rotate(90deg);
+}
+
 .readiness-panel {
-    margin: 0.75rem 1rem 0;
+    margin-bottom: 0.5rem;
     padding: 0.75rem 1rem;
     border-radius: 10px;
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.12);
     font-size: 0.85rem;
-    max-width: 720px;
+    max-width: 420px;
+    animation: slideUp 0.2s ease-out;
+}
+
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .readiness-loading {

@@ -20,11 +20,11 @@ struct SpeechModelDefinition {
 }
 
 const WHISPER_MODEL: SpeechModelDefinition = SpeechModelDefinition {
-    id: "whisper-large-v3-turbo-gguf",
-    folder: "whisper-large-v3-turbo",
-    filename: "model_q4_k.gguf",
+    id: "whisper-small-ggml",
+    folder: "whisper-small",
+    filename: "ggml-small.bin",
     download_url:
-        "https://huggingface.co/xkeyC/whisper-large-v3-turbo-gguf/resolve/main/model_q4_k.gguf",
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
 };
 
 const ORPHEUS_MODEL: SpeechModelDefinition = SpeechModelDefinition {
