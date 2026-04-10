@@ -27,17 +27,27 @@ pub struct Config {
     /// Enable VLM for intelligent image understanding
     #[serde(default = "default_use_vlm")]
     pub use_vlm: bool,
-    /// VLM model size: "500M" (primary) or "256M" (fallback/faster)
+    /// VLM model size: "4B" (primary)
     #[serde(default = "default_vlm_model_size")]
     pub vlm_model_size: String,
+    /// Serve demo/eval data instead of live captures
+    #[serde(default)]
+    pub use_demo_data_only: bool,
+    /// Enable experimental UI features
+    #[serde(default = "default_experimental_ui_enabled")]
+    pub experimental_ui_enabled: bool,
 }
 
 fn default_use_vlm() -> bool {
-    true
+    false
 }
 
 fn default_vlm_model_size() -> String {
-    "500M".to_string()
+    "4B".to_string()
+}
+
+fn default_experimental_ui_enabled() -> bool {
+    false
 }
 
 impl Default for Config {
@@ -57,8 +67,10 @@ impl Default for Config {
             ],
             redact_mode: false,
             min_text_length: 20,
-            use_vlm: true,
-            vlm_model_size: "500M".to_string(),
+            use_vlm: false,
+            vlm_model_size: "4B".to_string(),
+            use_demo_data_only: false,
+            experimental_ui_enabled: false,
         }
     }
 }

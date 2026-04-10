@@ -1,18 +1,22 @@
 //! Tauri command handlers
 
+use crate::capture::permissions;
+use crate::demo;
 use crate::embed::Embedder;
 use crate::graph::MemoryReconstruction;
 use crate::mcp::{self, McpServerStatus};
 use crate::meeting::{
     self, MeetingRecorderStatus, MeetingSearchResult, MeetingSession, MeetingTranscript,
 };
+use crate::ocr::OcrEngine;
 use crate::search::HybridSearcher;
+use crate::speech;
 use crate::store::{SearchResult, Stats};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureStatus {
@@ -22,6 +26,9 @@ pub struct CaptureStatus {
     pub frames_captured: u64,
     pub frames_dropped: u64,
     pub last_capture_time: u64,
+    pub ai_model_available: bool,
+    pub ai_model_loaded: bool,
+    pub loaded_model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +37,18 @@ pub struct SearchRequest {
     pub time_filter: Option<String>,
     pub app_filter: Option<String>,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceTranscriptionResult {
+    pub text: String,
+    pub backend: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeechSynthesisResult {
+    pub audio_path: String,
+    pub voice_id: String,
 }
 
 /// Search for memories
@@ -70,11 +89,18 @@ pub async fn summarize_search(
         return Ok(String::new());
     }
 
-    let summary = state
-        .inner()
-        .inference
-        .summarize_search_results(&query, &results_snippets)
-        .await;
+    let summary = match state.inner().ensure_inference_engine().await {
+        Ok(Some(engine)) => {
+            engine
+                .summarize_search_results(&query, &results_snippets)
+                .await
+        }
+        Ok(None) => String::new(),
+        Err(err) => {
+            tracing::warn!("Failed to lazy-load AI model for search summary: {}", err);
+            String::new()
+        }
+    };
 
     Ok(summary)
 }
@@ -105,11 +131,18 @@ pub async fn summarize_memory(
     window_title: String,
     text: String,
 ) -> Result<String, String> {
-    let summary = state
-        .inner()
-        .inference
-        .summarize_memory_detail(&app_name, &window_title, &text)
-        .await;
+    let summary = match state.inner().ensure_inference_engine().await {
+        Ok(Some(engine)) => {
+            engine
+                .summarize_memory_detail(&app_name, &window_title, &text)
+                .await
+        }
+        Ok(None) => String::new(),
+        Err(err) => {
+            tracing::warn!("Failed to lazy-load AI model for memory summary: {}", err);
+            String::new()
+        }
+    };
     Ok(summary)
 }
 
@@ -163,7 +196,11 @@ async fn run_memory_reconstruction(
     }
 
     let context = context_parts.join("\n");
-    reconstruction.answer = app_state.inference.answer(query, &context).await;
+    reconstruction.answer = match app_state.ensure_inference_engine().await {
+        Ok(Some(engine)) => engine.answer(query, &context).await,
+        Ok(None) => "AI intelligence is disabled until Qwen3-VL is downloaded.".to_string(),
+        Err(err) => format!("AI intelligence is temporarily unavailable: {}", err),
+    };
     Ok(reconstruction)
 }
 
@@ -177,6 +214,9 @@ pub async fn get_status(state: State<'_, Arc<AppState>>) -> Result<CaptureStatus
         frames_captured: state.inner().frames_captured.load(Ordering::Relaxed),
         frames_dropped: state.inner().frames_dropped.load(Ordering::Relaxed),
         last_capture_time: state.inner().last_capture_time.load(Ordering::Relaxed),
+        ai_model_available: state.inner().ai_model_available(),
+        ai_model_loaded: state.inner().ai_model_loaded(),
+        loaded_model_id: state.inner().loaded_model_id(),
     })
 }
 
@@ -233,7 +273,7 @@ pub async fn list_meetings() -> Result<Vec<MeetingSession>, String> {
 /// Get full transcript for a meeting
 #[tauri::command]
 pub async fn get_meeting_transcript(meeting_id: String) -> Result<MeetingTranscript, String> {
-    meeting::get_meeting_transcript(&meeting_id)
+    meeting::get_meeting_transcript(&meeting_id).await
 }
 
 /// Search across meeting transcripts
@@ -243,6 +283,40 @@ pub async fn search_meeting_transcripts(
     limit: Option<usize>,
 ) -> Result<Vec<MeetingSearchResult>, String> {
     meeting::search_meeting_transcripts(&query, limit.unwrap_or(20))
+}
+
+/// Transcribe a short voice input clip for voice search and voice control
+#[tauri::command]
+pub async fn transcribe_voice_input(
+    app: AppHandle,
+    audio_bytes: Vec<u8>,
+    mime_type: Option<String>,
+) -> Result<VoiceTranscriptionResult, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let text =
+        speech::transcribe_audio_bytes(&app_data_dir, &audio_bytes, mime_type.as_deref()).await?;
+
+    Ok(VoiceTranscriptionResult {
+        text,
+        backend: "whisper-large-v3-turbo-gguf".to_string(),
+    })
+}
+
+/// Synthesize a short spoken response for the FNDR UI
+#[tauri::command]
+pub async fn speak_text(
+    app: AppHandle,
+    text: String,
+    voice_id: Option<String>,
+) -> Result<SpeechSynthesisResult, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let voice_id = voice_id.unwrap_or_else(|| "tara".to_string());
+    let audio_path = speech::synthesize_speech(&app_data_dir, &text, Some(&voice_id)).await?;
+
+    Ok(SpeechSynthesisResult {
+        audio_path: audio_path.to_string_lossy().to_string(),
+        voice_id,
+    })
 }
 
 /// Pause capture
@@ -411,7 +485,14 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .join("\n");
 
     // Extract new todos via LLM
-    let llm_response = state.inner().inference.extract_todos(&combined_text).await;
+    let llm_response = match state.inner().ensure_inference_engine().await {
+        Ok(Some(engine)) => engine.extract_todos(&combined_text).await,
+        Ok(None) => String::new(),
+        Err(err) => {
+            tracing::warn!("Failed to lazy-load AI model for todo extraction: {}", err);
+            String::new()
+        }
+    };
 
     // Parse and add new tasks
     let new_tasks = parse_tasks_from_llm_response(&llm_response, "FNDR");
@@ -748,4 +829,201 @@ pub async fn search_graph(
 
     HybridSearcher::search(&state.inner().store, &embedder, &query, limit, None, None)
         .map_err(|e| e.to_string())
+}
+
+// ========== App Config & System Readiness Commands ==========
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfigPayload {
+    pub experimental_ui_enabled: bool,
+    pub use_demo_data_only: bool,
+    pub use_vlm: bool,
+}
+
+#[tauri::command]
+pub async fn get_app_config(state: State<'_, Arc<AppState>>) -> Result<AppConfigPayload, String> {
+    let c = state.inner().config.read();
+    Ok(AppConfigPayload {
+        experimental_ui_enabled: c.experimental_ui_enabled,
+        use_demo_data_only: c.use_demo_data_only,
+        use_vlm: c.use_vlm,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemReadiness {
+    pub screen_capture_permission_granted: bool,
+    pub screen_capture_permission_detail: String,
+    pub ocr_available: bool,
+    pub ocr_detail: String,
+    pub inference_ready: bool,
+    pub embedder_ready: bool,
+    pub vector_store_ready: bool,
+    pub data_dir_writable: bool,
+    pub data_dir_detail: String,
+    pub capture_status: CaptureStatus,
+    pub total_records: usize,
+    pub vlm_active: bool,
+    pub use_demo_data_only: bool,
+    pub ready_for_search: bool,
+    pub fixes: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn get_readiness(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<SystemReadiness, String> {
+    let (sc_ok, sc_detail) = permissions::preflight_screen_capture_access();
+
+    let ocr_ok = OcrEngine::new().is_ok();
+    let ocr_detail = if ocr_ok {
+        "Apple Vision OCR initialized.".to_string()
+    } else {
+        "OCR failed to initialize. Screen text extraction will not run.".to_string()
+    };
+
+    let embed_ok = Embedder::new().is_ok();
+
+    let mut fixes: Vec<String> = Vec::new();
+    if !sc_ok {
+        fixes.push(sc_detail.clone());
+    }
+    if !ocr_ok {
+        fixes.push(ocr_detail.clone());
+    }
+    if !embed_ok {
+        fixes.push("Embedding engine failed to initialize.".to_string());
+    }
+
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let (data_ok, data_detail) = match std::fs::create_dir_all(&data_dir) {
+        Ok(()) => {
+            let probe = data_dir.join(".fndr_write_probe");
+            match std::fs::write(&probe, b"ok") {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&probe);
+                    (true, format!("App data directory writable: {:?}", data_dir))
+                }
+                Err(e) => {
+                    let msg = format!("Cannot write app data directory {:?}: {}", data_dir, e);
+                    fixes.push(msg.clone());
+                    (false, msg)
+                }
+            }
+        }
+        Err(e) => {
+            let msg = format!("Cannot create app data directory {:?}: {}", data_dir, e);
+            fixes.push(msg.clone());
+            (false, msg)
+        }
+    };
+
+    let stats_res = state.inner().store.get_stats();
+    let store_ok = stats_res.is_ok();
+    if !store_ok {
+        fixes.push("Vector store is not responding.".to_string());
+    }
+    let total_records = stats_res.map(|s| s.total_records).unwrap_or(0);
+
+    let cfg = state.inner().config.read();
+    let use_demo = cfg.use_demo_data_only;
+    let vlm_active = state.inner().vlm.read().is_some() && cfg.use_vlm;
+
+    let live_path_ok = sc_ok && ocr_ok;
+    let ready_for_search = embed_ok && store_ok && data_ok && (use_demo || live_path_ok);
+
+    if use_demo {
+        fixes.retain(|f| {
+            !f.contains("Screen Recording")
+                && !f.contains("Screen capture")
+                && !f.contains("OCR")
+                && !f.contains("Apple Vision")
+        });
+    }
+
+    let cs = CaptureStatus {
+        is_capturing: state.inner().is_capturing(),
+        is_paused: state.inner().is_paused.load(Ordering::SeqCst),
+        is_incognito: state.inner().is_incognito.load(Ordering::SeqCst),
+        frames_captured: state.inner().frames_captured.load(Ordering::Relaxed),
+        frames_dropped: state.inner().frames_dropped.load(Ordering::Relaxed),
+        last_capture_time: state.inner().last_capture_time.load(Ordering::Relaxed),
+        ai_model_available: state.inner().ai_model_available(),
+        ai_model_loaded: state.inner().ai_model_loaded(),
+        loaded_model_id: state.inner().loaded_model_id(),
+    };
+
+    Ok(SystemReadiness {
+        screen_capture_permission_granted: sc_ok,
+        screen_capture_permission_detail: sc_detail,
+        ocr_available: ocr_ok,
+        ocr_detail,
+        inference_ready: state.inner().ai_model_loaded(),
+        embedder_ready: embed_ok,
+        vector_store_ready: store_ok,
+        data_dir_writable: data_ok,
+        data_dir_detail: data_detail,
+        capture_status: cs,
+        total_records,
+        vlm_active,
+        use_demo_data_only: use_demo,
+        ready_for_search,
+        fixes,
+    })
+}
+
+#[tauri::command]
+pub async fn set_use_demo_data_only(
+    state: State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<AppConfigPayload, String> {
+    {
+        let mut c = state.inner().config.write();
+        c.use_demo_data_only = enabled;
+        c.save().map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    }
+    get_app_config(state).await
+}
+
+#[tauri::command]
+pub async fn seed_demo_dataset(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
+    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let records = demo::build_demo_records(&embedder).map_err(|e| e.to_string())?;
+    let n = records.len();
+    state
+        .inner()
+        .store
+        .delete_id_prefix(demo::DEMO_ID_PREFIX)
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    state
+        .inner()
+        .store
+        .add_batch(&records)
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    Ok(n)
+}
+
+#[tauri::command]
+pub async fn reset_demo_data(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
+    state
+        .inner()
+        .store
+        .delete_id_prefix(demo::DEMO_ID_PREFIX)
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())
+}
+
+#[tauri::command]
+pub async fn inject_test_memory(state: State<'_, Arc<AppState>>) -> Result<String, String> {
+    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let record = demo::build_inject_record(&embedder).map_err(|e| e.to_string())?;
+    let id = record.id.clone();
+    let inject_prefix = format!("{}inject", demo::DEMO_ID_PREFIX);
+    let _ = state.inner().store.delete_id_prefix(&inject_prefix);
+    state
+        .inner()
+        .store
+        .add_batch(&[record])
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    Ok(id)
 }

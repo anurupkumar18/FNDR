@@ -197,6 +197,19 @@ impl Store {
         })
     }
 
+    /// Delete records whose id starts with the given prefix
+    pub fn delete_id_prefix(&self, prefix: &str) -> Result<usize, Box<dyn std::error::Error>> {
+        let mut records = self.records.write().unwrap();
+        let initial_len = records.len();
+        records.retain(|r| !r.id.starts_with(prefix));
+        let deleted = initial_len - records.len();
+        if deleted > 0 {
+            drop(records);
+            self.save()?;
+        }
+        Ok(deleted)
+    }
+
     /// Delete all data
     pub fn delete_all(&self) -> Result<(), Box<dyn std::error::Error>> {
         {

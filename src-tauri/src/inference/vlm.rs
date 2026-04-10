@@ -1,17 +1,17 @@
 //! Vision Language Model (VLM) inference engine
 //!
-//! Uses SmolVLM for intelligent image understanding beyond OCR.
-//! Primary: SmolVLM-500M, Fallback: SmolVLM-256M
+//! Uses Qwen3-VL 4B GGUF for richer OCR-grounded screen understanding.
+//! Primary: Qwen3VL-4B-Instruct-Q4_K_M.gguf
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use std::num::NonZeroU32;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Errors that can occur during VLM operations
@@ -67,7 +67,10 @@ pub struct VlmEngine {
     model: &'static LlamaModel,
     context: Mutex<llama_cpp_2::context::LlamaContext<'static>>,
     _backend: Arc<LlamaBackend>,
+    chat_template: LlamaChatTemplate,
     model_size: String,
+    model_id: String,
+    model_path: PathBuf,
     config: VlmConfig,
 }
 
@@ -76,16 +79,23 @@ unsafe impl Sync for VlmEngine {}
 
 impl VlmEngine {
     /// Initialize the VLM engine with specified model size and default config
-    pub async fn new(model_size: &str) -> Result<Self, VlmError> {
-        Self::with_config(model_size, VlmConfig::default()).await
+    pub async fn new(model_size: &str, app_data_dir: Option<PathBuf>) -> Result<Self, VlmError> {
+        Self::with_config(model_size, VlmConfig::default(), app_data_dir).await
     }
 
     /// Initialize the VLM engine with custom configuration
-    pub async fn with_config(model_size: &str, config: VlmConfig) -> Result<Self, VlmError> {
-        let (model_path, size_label) = Self::resolve_model_path(model_size)?;
+    pub async fn with_config(
+        model_size: &str,
+        config: VlmConfig,
+        app_data_dir: Option<PathBuf>,
+    ) -> Result<Self, VlmError> {
+        let resolved_model = Self::resolve_model_path(model_size, app_data_dir.as_deref())?;
+        let model_path = resolved_model.path.clone();
+        let model_id = resolved_model.definition.id.to_string();
+        let size_label = resolved_model.definition.name.to_string();
 
         tracing::info!(
-            "Initializing VLM engine (SmolVLM-{}) from {:?}...",
+            "Initializing VLM engine ({}) from {:?}...",
             size_label,
             model_path
         );
@@ -99,19 +109,35 @@ impl VlmEngine {
 
         // Leak the model to get a 'static reference (singleton pattern)
         let model_ref: &'static LlamaModel = Box::leak(Box::new(model));
+        let chat_template = match model_ref.chat_template(None) {
+            Ok(template) => template,
+            Err(err) => {
+                tracing::warn!(
+                    "VLM model {} has no baked chat template ({}); falling back to chatml",
+                    model_id,
+                    err
+                );
+                LlamaChatTemplate::new("chatml").map_err(|fallback_err| {
+                    VlmError::InitializationError(format!(
+                        "Fallback chat template failed: {}",
+                        fallback_err
+                    ))
+                })?
+            }
+        };
 
-        let ctx_params = LlamaContextParams::default().with_n_ctx(Some(
-            NonZeroU32::new(config.context_size).ok_or_else(|| {
-                VlmError::InitializationError("Context size must be non-zero".to_string())
-            })?,
-        ));
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(Some(NonZeroU32::new(config.context_size).ok_or_else(
+                || VlmError::InitializationError("Context size must be non-zero".to_string()),
+            )?))
+            .with_n_batch(config.context_size);
 
         let context = model_ref.new_context(&backend, ctx_params).map_err(|e| {
             VlmError::InitializationError(format!("Context creation failed: {}", e))
         })?;
 
         tracing::info!(
-            "VLM engine initialized successfully (SmolVLM-{}, ctx_size={})",
+            "VLM engine initialized successfully ({}, ctx_size={})",
             size_label,
             config.context_size
         );
@@ -120,74 +146,45 @@ impl VlmEngine {
             model: model_ref,
             context: Mutex::new(context),
             _backend: backend,
+            chat_template,
             model_size: size_label,
+            model_id,
+            model_path,
             config,
         })
     }
 
     /// Resolve model path, trying primary then fallback
-    fn resolve_model_path(preferred_size: &str) -> Result<(PathBuf, String), VlmError> {
-        // Try multiple locations for model files (dev vs release)
-        let possible_dirs = vec![
-            PathBuf::from("models"),
-            PathBuf::from("src-tauri/models"),
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("models")))
-                .unwrap_or_default(),
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("../Resources/models")))
-                .unwrap_or_default(),
-            dirs::data_dir().unwrap_or_default().join("fndr/models"),
-        ];
+    fn resolve_model_path(
+        preferred_size: &str,
+        app_data_dir: Option<&Path>,
+    ) -> Result<crate::models::ResolvedModel, VlmError> {
+        let preferred_model_id = match preferred_size {
+            "4B" => Some("qwen3-vl-4b"),
+            _ => None,
+        };
 
-        // Define model configurations
-        let model_configs = [
-            ("500M", "SmolVLM-500M-Instruct-Q4_K_M.gguf"),
-            ("256M", "SmolVLM-256M-Instruct-Q4_K_M.gguf"),
-        ];
-
-        // Try preferred model first in all directories
-        let preferred_config = model_configs
-            .iter()
-            .find(|(size, _)| *size == preferred_size)
-            .or_else(|| model_configs.first())
-            .unwrap();
-
-        for dir in &possible_dirs {
-            let path = dir.join(preferred_config.1);
-            if path.exists() {
-                return Ok((path, preferred_config.0.to_string()));
-            }
-        }
-
-        // Try fallback models in all directories
-        for (size, filename) in &model_configs {
-            if *size != preferred_size {
-                for dir in &possible_dirs {
-                    let fallback_path = dir.join(filename);
-                    if fallback_path.exists() {
-                        tracing::warn!(
-                            "Primary VLM model (SmolVLM-{}) not found, using fallback (SmolVLM-{})",
-                            preferred_size,
-                            size
-                        );
-                        return Ok((fallback_path, size.to_string()));
-                    }
-                }
-            }
-        }
-
-        Err(VlmError::ModelNotFound(
-            "No VLM model found. Please run ./download_model.sh to download SmolVLM models."
-                .to_string(),
-        ))
+        crate::models::resolve_model(preferred_model_id, app_data_dir).ok_or_else(|| {
+            let searched_dirs = crate::models::candidate_model_dirs(app_data_dir)
+                .into_iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            VlmError::ModelNotFound(format!("No VLM model found. Searched: {}", searched_dirs))
+        })
     }
 
     /// Get the active model size
     pub fn model_size(&self) -> &str {
         &self.model_size
+    }
+
+    pub fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    pub fn model_path(&self) -> &Path {
+        &self.model_path
     }
 
     /// Get the current configuration
@@ -225,7 +222,7 @@ impl VlmEngine {
             OCR: 'Video 0:45 / 12:30 The Art of Code' → 'Watching programming tutorial'\n\
             OCR: 'Pull Request #234 Fix authentication bug' → 'Reviewing code PR'",
             &format!("OCR: '{}'", ocr_text.trim()),
-        );
+        )?;
 
         self.complete(&prompt, Some(50)).await
     }
@@ -262,21 +259,23 @@ impl VlmEngine {
             App: Terminal | OCR: '$ cargo test integration_tests' → Action: testing | Context: cargo integration tests\n\
             App: Figma | OCR: 'Dashboard Mockup v3 Mobile View' → Action: designing | Context: Dashboard Mockup v3 mobile",
             &format!("App: {} | OCR: '{}'", app_name, ocr_text.trim()),
-        );
+        )?;
 
         self.complete(&prompt, Some(80)).await
     }
 
     /// Build a properly formatted prompt
-    fn build_prompt(&self, system_message: &str, user_message: &str) -> String {
-        format!(
-            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n\
-            {}\
-            <|eot_id|><|start_header_id|>user<|end_header_id|>\n\n\
-            {}\
-            <|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
-            system_message, user_message
-        )
+    fn build_prompt(&self, system_message: &str, user_message: &str) -> Result<String, VlmError> {
+        let messages = vec![
+            LlamaChatMessage::new("system".to_string(), system_message.replace('\0', " "))
+                .map_err(|err| VlmError::InitializationError(err.to_string()))?,
+            LlamaChatMessage::new("user".to_string(), user_message.replace('\0', " "))
+                .map_err(|err| VlmError::InitializationError(err.to_string()))?,
+        ];
+
+        self.model
+            .apply_chat_template(&self.chat_template, &messages, true)
+            .map_err(|err| VlmError::InitializationError(err.to_string()))
     }
 
     /// Internal completion method with improved sampling
@@ -288,11 +287,27 @@ impl VlmEngine {
         ctx.clear_kv_cache();
 
         // Tokenize input
-        let tokens_list = self
+        let mut tokens_list = self
             .model
-            // Use AddBos::Never because prompt template already includes <|begin_of_text|>
             .str_to_token(prompt, AddBos::Never)
             .map_err(|e| VlmError::TokenizationError(e.to_string()))?;
+
+        // Truncate to ensure the batch never exceeds context_size (cparams.n_batch)
+        let max_prompt_len = self
+            .config
+            .context_size
+            .saturating_sub(max_tokens as u32)
+            .saturating_sub(1) as usize;
+        if tokens_list.len() > max_prompt_len {
+            tracing::warn!(
+                "Prompt tokens ({}) > context limit ({}), truncating...",
+                tokens_list.len(),
+                max_prompt_len
+            );
+            // Drain excess tokens from the beginning and keep the BOS intact
+            let excess = tokens_list.len() - max_prompt_len;
+            tokens_list.drain(1..1 + excess);
+        }
 
         // Create batch with appropriate size
         let batch_size = (tokens_list.len() + max_tokens as usize).max(512);
@@ -321,10 +336,17 @@ impl VlmEngine {
         let mut result = String::new();
         let mut n_cur = tokens_list.len() as i32;
 
+        // The first time we sample, we want the logits from the last token of the prompt batch.
+        // For subsequent generation steps, the batch only contains 1 token, so the index is 0.
+        let mut batch_idx_to_sample = (tokens_list.len() - 1) as i32;
+
         // Generate tokens
         for _ in 0..max_tokens {
-            // Sampler needs context and batch index (usually 0 for single generation)
-            let token = sampler.sample(&ctx, 0);
+            // Sampler needs context and the batch index where logits were calculated
+            let token = sampler.sample(&ctx, batch_idx_to_sample);
+
+            // For all next iterations, the batch will be of size 1
+            batch_idx_to_sample = 0;
 
             // Check for end-of-generation
             if self.model.is_eog_token(token) {
@@ -360,7 +382,7 @@ impl VlmEngine {
         let test_prompt = self.build_prompt(
             "You are a helpful assistant.",
             "Respond with 'OK' if you are working.",
-        );
+        )?;
 
         self.complete(&test_prompt, Some(10)).await?;
         Ok(())
@@ -391,14 +413,14 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires model files
     async fn test_vlm_initialization() {
-        let engine = VlmEngine::new("500M").await;
+        let engine = VlmEngine::new("4B", None).await;
         assert!(engine.is_ok());
     }
 
     #[tokio::test]
     #[ignore] // Requires model files
     async fn test_describe_screen() {
-        let engine = VlmEngine::new("500M").await.unwrap();
+        let engine = VlmEngine::new("4B", None).await.unwrap();
         let result = engine.describe_screen("File Edit View").await;
         assert!(result.is_ok());
         assert!(!result.unwrap().is_empty());
@@ -406,7 +428,6 @@ mod tests {
 
     #[test]
     fn test_build_prompt() {
-        let config = VlmConfig::default();
         // Create a mock engine for testing prompt building
         // This would need actual model initialization in real tests
     }

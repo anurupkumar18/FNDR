@@ -10,16 +10,16 @@ use tauri::Manager;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
-    // Load .env file
-    dotenvy::dotenv().ok();
+    // Load environment variables from .env if present
+    let _ = dotenvy::dotenv();
 
     // Initialize logging
+    use tracing_subscriber::{fmt, EnvFilter};
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "fndr=info,fndr_lib=info".into()),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "fndr=info,fndr_lib=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(fmt::layer())
         .init();
 
     tracing::info!("Starting FNDR...");
@@ -54,38 +54,17 @@ fn main() {
                 }
             }
 
-            // Initialize AI Engine (blocking for start)
-            let _handle = app.handle().clone();
-            let inference = tauri::async_runtime::block_on(async move {
-                fndr_lib::inference::InferenceEngine::new().await
-            })
-            .map_err(|e| format!("Failed to init AI engine: {}", e))?;
-
-            // Initialize VLM Engine (optional, based on config)
-            let vlm = if config.use_vlm {
-                tracing::info!(
-                    "Initializing VLM engine (SmolVLM-{})...",
-                    config.vlm_model_size
-                );
-                match tauri::async_runtime::block_on(async {
-                    fndr_lib::inference::VlmEngine::new(&config.vlm_model_size).await
-                }) {
-                    Ok(engine) => {
-                        tracing::info!("VLM engine initialized successfully");
-                        Some(engine)
-                    }
-                    Err(e) => {
-                        tracing::warn!("VLM initialization failed (will use OCR only): {}", e);
-                        None
-                    }
-                }
-            } else {
-                tracing::info!("VLM disabled in config");
-                None
-            };
+            tracing::info!("AI runtime will load lazily when FNDR first needs it");
 
             // Create app state
-            let state = Arc::new(AppState::new(config, store, graph, inference, vlm));
+            let state = Arc::new(AppState::new(
+                data_dir.clone(),
+                config,
+                store,
+                graph,
+                None,
+                None,
+            ));
 
             // Start capture pipeline
             let capture_state = state.clone();
@@ -131,6 +110,8 @@ fn main() {
             api::commands::list_meetings,
             api::commands::get_meeting_transcript,
             api::commands::search_meeting_transcripts,
+            api::commands::transcribe_voice_input,
+            api::commands::speak_text,
             api::commands::pause_capture,
             api::commands::resume_capture,
             api::commands::get_blocklist,
@@ -151,6 +132,25 @@ fn main() {
             // Graph visualization commands
             api::commands::get_graph_data,
             api::commands::search_graph,
+            // Config & readiness commands
+            api::commands::get_app_config,
+            api::commands::get_readiness,
+            api::commands::set_use_demo_data_only,
+            api::commands::seed_demo_dataset,
+            api::commands::reset_demo_data,
+            api::commands::inject_test_memory,
+            // Onboarding commands
+            api::onboarding::get_onboarding_state,
+            api::onboarding::save_onboarding_state,
+            api::onboarding::request_biometric_auth,
+            api::onboarding::check_permissions,
+            api::onboarding::open_system_settings,
+            api::onboarding::list_available_models,
+            api::onboarding::download_model,
+            api::onboarding::get_model_download_status,
+            api::onboarding::refresh_ai_models,
+            api::onboarding::check_model_exists,
+            api::onboarding::delete_ai_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

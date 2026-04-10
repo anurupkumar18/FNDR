@@ -164,6 +164,36 @@
   transform: scale(1.1);
 }
 
+.voice-btn {
+  border: none;
+  border-radius: 999px;
+  background: rgba(214, 119, 54, 0.12);
+  color: #8a4720;
+  padding: 0.55rem 0.85rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.voice-btn:hover:not(:disabled) {
+  background: rgba(214, 119, 54, 0.18);
+  transform: translateY(-1px);
+}
+
+.voice-btn.recording {
+  background: rgba(220, 38, 38, 0.14);
+  color: #b91c1c;
+  box-shadow: 0 0 0 6px rgba(220, 38, 38, 0.08);
+}
+
+.voice-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
 /* ========== Filters ========== */
 .search-filters {
   display: flex;
@@ -232,6 +262,24 @@
   color: white;
 }
 
+.voice-status {
+  margin-top: 0.8rem;
+  max-width: 720px;
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(62, 39, 35, 0.08);
+  box-shadow: 0 10px 24px rgba(62, 39, 35, 0.08);
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.voice-status.recording {
+  border-color: rgba(220, 38, 38, 0.2);
+  color: #b91c1c;
+}
+
 /* ========== Responsive ========== */
 @media (max-width: 768px) {
   .search-overlay {
@@ -247,11 +295,15 @@
   .search-input-group {
     width: 100%;
     padding: 0.25rem 0 0.5rem 0.5rem;
+    flex-wrap: wrap;
   }
 
   .search-filters {
     width: 100%;
     gap: 8px;
+  }
+  .voice-btn {
+    width: auto;
   }
 
   .select-wrapper {

@@ -7,8 +7,11 @@ import { AgentPanel } from "./components/AgentPanel";
 import { MemoryReconstructionPanel } from "./components/MemoryReconstructionPanel";
 import { GraphPanel } from "./components/GraphPanel";
 import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
+import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
+import { Onboarding } from "./components/Onboarding";
 import { useSearch } from "./hooks/useSearch";
 import { getStatus, getAppNames, CaptureStatus, Task, startAgentTask } from "./api/tauri";
+import { getOnboardingState } from "./api/onboarding";
 import "./styles/App.css";
 
 function App() {
@@ -20,16 +23,25 @@ function App() {
     const [showAgentPanel, setShowAgentPanel] = useState(false);
     const [showGraphPanel, setShowGraphPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
+    const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
 
     const { results, isLoading, error } = useSearch(query, timeFilter, appFilter);
 
-    // Show todo modal when no search and no results
-    const showTodoModal = !query && results.length === 0 && !isLoading;
-
-    // Load app names for filter
+    // Check if onboarding is complete on first mount
     useEffect(() => {
-        getAppNames().then(setAppNames).catch(() => setAppNames([]));
-    }, [status?.frames_captured]);
+        getOnboardingState()
+            .then((s) => setOnboardingDone(s.step === "complete" && s.model_downloaded))
+            .catch(() => setOnboardingDone(false));
+    }, []);
+
+    // Load app names for filter — refresh every 30s to avoid spamming IPC
+    useEffect(() => {
+        getAppNames().then(setAppNames).catch(() => {});
+        const id = setInterval(() => {
+            getAppNames().then(setAppNames).catch(() => {});
+        }, 30_000);
+        return () => clearInterval(id);
+    }, []);
 
     // Poll status every 2 seconds
     useEffect(() => {
@@ -49,7 +61,6 @@ function App() {
 
     const handleExecuteTask = async (task: Task) => {
         try {
-            // Start the agent
             await startAgentTask(
                 task.title,
                 task.linked_urls,
@@ -61,6 +72,17 @@ function App() {
             alert(`Failed to start agent: ${err}`);
         }
     };
+
+    // Show todo modal when no search and no results
+    const showTodoModal = !query && results.length === 0 && !isLoading;
+
+    // Show nothing until we know the onboarding state
+    if (onboardingDone === null) return null;
+
+    // Show onboarding if not complete
+    if (!onboardingDone) {
+        return <Onboarding onComplete={() => setOnboardingDone(true)} />;
+    }
 
     return (
         <div className="app">
@@ -105,6 +127,11 @@ function App() {
                             </div>
                         )}
 
+                        {/* Show AI Model Download Banner when model is missing */}
+                        {status && !status.ai_model_available && (
+                            <ModelDownloadBanner />
+                        )}
+
                         {/* Show Todo Modal on home page (no search) */}
                         {showTodoModal && (
                             <TodoModal
@@ -131,6 +158,8 @@ function App() {
                 onTimeFilterChange={setTimeFilter}
                 appFilter={appFilter}
                 onAppFilterChange={setAppFilter}
+                onSetMeetingPanelOpen={setShowMeetingPanel}
+                onSetGraphPanelOpen={setShowGraphPanel}
                 appNames={appNames}
                 resultCount={results.length}
                 searchResults={results}
