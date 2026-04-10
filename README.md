@@ -39,9 +39,6 @@ Meetings, knowledge graph, agent panel, MCP, and meeting recorder are powerful b
 | **VLM** | ✅ Optional | SmolVLM; can be disabled for a stable OCR+LLM path. |
 | **OCR** | ✅ Working | Fast and accurate via Apple Vision Framework. |
 | **URL Capture** | ✅ Working | Captures URLs from Safari, Chrome, Arc, Brave, Edge. |
-| **Todo Extraction** | ✅ Working | Extraction and agent execution are functional. |
-| **Agent SDK** | ✅ Working | Claude Agent SDK integration (requires API key). |
-| **Readiness / demo** | ✅ Working | `get_readiness`, seed/reset demo data, `--demo-data-only`. |
 
 ## 🛠 How to Run
 
@@ -67,27 +64,16 @@ Meetings, knowledge graph, agent panel, MCP, and meeting recorder are powerful b
    ./download_model.sh
    ```
 
-3. **Set up Agent SDK** (Optional, for task execution):
-   ```bash
-   # Install Claude Agent SDK
-   pip install claude-agent-sdk
-   
-   # Set your API key (get one from https://console.anthropic.com/)
-   export ANTHROPIC_API_KEY="your-api-key-here"
-   ```
-
-4. **Install UI Dependencies**:
+3. **Install UI Dependencies**:
    ```bash
    npm install
    ```
 
-5. **Launch Developer Mode**:
+4. **Launch Developer Mode**:
    ```bash
    npm run tauri dev
    ```
-   Or one command: `make demo` (installs npm deps and runs `tauri dev`).
 
-6. **Environment variables** (optional): copy [.env.example](.env.example) to `.env` at the repo root or under `src-tauri` as needed.
 
 ### Evaluation UI (TA / prototype review)
 
