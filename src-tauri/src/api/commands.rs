@@ -1,14 +1,15 @@
 //! Tauri command handlers
 
-use crate::capture::permissions;
-use crate::demo;
+
+
 use crate::embed::Embedder;
-use crate::graph::MemoryReconstruction;
+use crate::graph::{GraphNode, GraphEdge};
+
 use crate::mcp::{self, McpServerStatus};
 use crate::meeting::{
     self, MeetingRecorderStatus, MeetingSearchResult, MeetingSession, MeetingTranscript,
 };
-use crate::ocr::OcrEngine;
+
 use crate::search::HybridSearcher;
 use crate::speech;
 use crate::store::{SearchResult, Stats};
@@ -128,106 +129,7 @@ pub async fn summarize_search(
     Ok(summary)
 }
 
-/// Ask FNDR a question about your memories (RAG)
-#[tauri::command]
-pub async fn ask_fndr(state: State<'_, Arc<AppState>>, query: String) -> Result<String, String> {
-    Ok(run_memory_reconstruction(state.inner().as_ref(), &query, 6)
-        .await?
-        .answer)
-}
 
-/// Reconstruct memory context (cards + synthesized answer) for artifact side panel.
-#[tauri::command]
-pub async fn reconstruct_memory(
-    state: State<'_, Arc<AppState>>,
-    query: String,
-    limit: Option<usize>,
-) -> Result<MemoryReconstruction, String> {
-    run_memory_reconstruction(state.inner().as_ref(), &query, limit.unwrap_or(8)).await
-}
-
-/// Summarize a memory in detail using LLM
-#[tauri::command]
-pub async fn summarize_memory(
-    state: State<'_, Arc<AppState>>,
-    app_name: String,
-    window_title: String,
-    text: String,
-) -> Result<String, String> {
-    let summary = match state.inner().ensure_inference_engine().await {
-        Ok(Some(engine)) => {
-            engine
-                .summarize_memory_detail(&app_name, &window_title, &text)
-                .await
-        }
-        Ok(None) => String::new(),
-        Err(err) => {
-            tracing::warn!("Failed to lazy-load AI model for memory summary: {}", err);
-            String::new()
-        }
-    };
-    Ok(summary)
-}
-
-async fn run_memory_reconstruction(
-    app_state: &AppState,
-    query: &str,
-    limit: usize,
-) -> Result<MemoryReconstruction, String> {
-    let stats = app_state
-        .store
-        .get_stats()
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
-
-    if stats.total_records == 0 {
-        return Ok(MemoryReconstruction {
-            answer: "I haven't captured any memories yet. Keep FNDR running for a few minutes while you work, then ask again.".to_string(),
-            cards: Vec::new(),
-            structural_context: Vec::new(),
-        });
-    }
-
-    let embedder = shared_embedder()?;
-    let mut reconstruction = app_state
-        .graph
-        .reconstruct(&app_state.store, &embedder, query, limit)
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
-
-    if reconstruction.cards.is_empty() {
-        reconstruction.answer = format!(
-            "I found {} memories in total, but none seem to match '{}'. Try broader terms.",
-            stats.total_records, query
-        );
-        return Ok(reconstruction);
-    }
-
-    let mut context_parts = Vec::new();
-    for card in reconstruction.cards.iter().take(6) {
-        let time = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(card.timestamp)
-            .unwrap_or_else(chrono::Utc::now);
-        context_parts.push(format!(
-            "[{}] App: {} | Window: {} | Snippet: {} | URL: {}",
-            time.format("%Y-%m-%d %H:%M:%S"),
-            card.app_name,
-            card.window_title,
-            card.snippet,
-            card.url.clone().unwrap_or_else(|| "n/a".to_string())
-        ));
-    }
-    for note in &reconstruction.structural_context {
-        context_parts.push(format!("[Graph] {note}"));
-    }
-
-    let context = context_parts.join("\n");
-    reconstruction.answer = match app_state.ensure_inference_engine().await {
-        Ok(Some(engine)) => engine.answer(query, &context).await,
-        Ok(None) => "AI intelligence is disabled until the model is downloaded.".to_string(),
-        Err(err) => format!("AI intelligence is temporarily unavailable: {}", err),
-    };
-    Ok(reconstruction)
-}
 
 /// Get capture status
 #[tauri::command]
@@ -632,6 +534,18 @@ pub struct AgentStatus {
     pub task_title: Option<String>,
     pub last_message: Option<String>,
     pub status: String, // "idle" | "running" | "completed" | "error"
+}
+
+#[derive(Debug, Serialize)]
+pub struct GraphDataResponse {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+#[tauri::command]
+pub async fn get_graph_data(state: State<'_, Arc<AppState>>) -> Result<GraphDataResponse, String> {
+    let (nodes, edges) = state.inner().graph.export_for_visualization();
+    Ok(GraphDataResponse { nodes, edges })
 }
 
 static AGENT_PROCESS: AgentOnceLock<AgentMutex<Option<Child>>> = AgentOnceLock::new();

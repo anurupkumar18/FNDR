@@ -13,10 +13,8 @@ import { useSearch } from "./hooks/useSearch";
 import {
     CaptureStatus,
     SearchResult,
-    SystemReadiness,
     Task,
     getAppNames,
-    getReadiness,
     getStatus,
     startAgentTask,
 } from "./api/tauri";
@@ -30,15 +28,14 @@ function App() {
     const [appFilter, setAppFilter] = useState<string | null>(null);
     const [appNames, setAppNames] = useState<string[]>([]);
     const [status, setStatus] = useState<CaptureStatus | null>(null);
-    const [readiness, setReadiness] = useState<SystemReadiness | null>(null);
     const [showAgentPanel, setShowAgentPanel] = useState(false);
-    const [showGraphPanel, setShowGraphPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
+    const [showGraphPanel, setShowGraphPanel] = useState(false);
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
     const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-    const searchAllowed = Boolean(readiness?.ready_for_search);
+    const searchAllowed = true;
     const { results, isLoading, error } = useSearch(
         searchAllowed ? query : "",
         timeFilter,
@@ -90,23 +87,7 @@ function App() {
         return () => window.clearInterval(interval);
     }, []);
 
-    useEffect(() => {
-        const loadReadiness = async () => {
-            try {
-                const nextReadiness = await getReadiness();
-                setReadiness(nextReadiness);
-            } catch (e) {
-                console.error("Failed to get readiness:", e);
-            }
-        };
 
-        void loadReadiness();
-        const interval = window.setInterval(() => {
-            void loadReadiness();
-        }, 5000);
-
-        return () => window.clearInterval(interval);
-    }, []);
 
     useEffect(() => {
         if (!results.length) {
@@ -183,7 +164,7 @@ function App() {
                             Meetings
                         </button>
                         <button
-                            className={`ui-action-btn graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
+                            className={`ui-action-btn side-panel-btn ${showGraphPanel ? "active" : ""}`}
                             onClick={() => setShowGraphPanel((open) => !open)}
                         >
                             Graph
@@ -207,11 +188,6 @@ function App() {
                         resultCount={results.length}
                         searchResults={results}
                         disabled={!searchAllowed}
-                        disabledHint={
-                            readiness && !readiness.ready_for_search
-                                ? "Waiting for search backend..."
-                                : undefined
-                        }
                     />
                 </section>
 
@@ -248,14 +224,14 @@ function App() {
                         isVisible={showAgentPanel}
                         onClose={() => setShowAgentPanel(false)}
                     />
-                    <GraphPanel
-                        isVisible={showGraphPanel}
-                        onClose={() => setShowGraphPanel(false)}
-                    />
                     <MeetingRecorderPanel
                         isVisible={showMeetingPanel}
                         onClose={() => setShowMeetingPanel(false)}
                         onOpenAgent={() => setShowAgentPanel(true)}
+                    />
+                    <GraphPanel
+                        isVisible={showGraphPanel}
+                        onClose={() => setShowGraphPanel(false)}
                     />
                 </>
             )}

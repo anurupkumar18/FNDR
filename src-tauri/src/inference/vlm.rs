@@ -7,7 +7,9 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
+#[allow(deprecated)]
+use llama_cpp_2::model::Special;
 use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use std::num::NonZeroU32;
@@ -355,6 +357,7 @@ impl VlmEngine {
             }
 
             // Convert token to text
+            #[allow(deprecated)]
             let piece = self
                 .model
                 .token_to_str(token, Special::Plaintext)

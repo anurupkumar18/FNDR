@@ -34,13 +34,8 @@ fn main() {
             Some(vec!["--hidden"]),
         ))
         .setup(|app| {
-            // Load configuration (CLI overrides for headless demo)
-            let mut config = Config::load_or_create()?;
-            if std::env::args().any(|a| a == "--demo-data-only") {
-                config.use_demo_data_only = true;
-                config.use_vlm = false;
-                tracing::info!("--demo-data-only: live capture ingestion disabled, VLM off");
-            }
+            // Load configuration
+            let config = Config::load_or_create()?;
             tracing::info!("Configuration loaded");
 
             // Initialize store
@@ -87,9 +82,12 @@ fn main() {
                 });
             });
 
-            let mcp_state = state.clone();
+            let _mcp_state = state.clone();
             app.manage(state);
 
+            // We are keeping the demo clean and stable, so we avoid auto-binding 
+            // experimental background subsystems (Meeting auto-monitor and MCP server) for now.
+            /*
             if let Err(err) =
                 fndr_lib::meeting::bind_runtime(app.handle().clone(), mcp_state.clone())
             {
@@ -102,22 +100,13 @@ fn main() {
             {
                 tracing::warn!("MCP server startup failed: {}", err);
             }
+            */
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             api::commands::search,
             api::commands::summarize_search,
-            api::commands::ask_fndr,
-            api::commands::reconstruct_memory,
-            api::commands::summarize_memory,
             api::commands::get_status,
-            // Config & readiness
-            api::commands::get_app_config,
-            api::commands::get_readiness,
-            api::commands::set_use_demo_data_only,
-            api::commands::seed_demo_dataset,
-            api::commands::reset_demo_data,
-            api::commands::inject_test_memory,
             // MCP
             api::commands::get_mcp_server_status,
             api::commands::start_mcp_server,
@@ -152,9 +141,7 @@ fn main() {
             api::commands::start_agent_task,
             api::commands::get_agent_status,
             api::commands::stop_agent,
-            // Graph visualization
             api::commands::get_graph_data,
-            api::commands::search_graph,
             // Onboarding
             api::onboarding::get_onboarding_state,
             api::onboarding::save_onboarding_state,

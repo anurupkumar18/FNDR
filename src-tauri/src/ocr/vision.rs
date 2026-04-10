@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, msg_send_id};
 use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
-use regex::Regex;
+
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -141,7 +141,7 @@ impl OcrEngine {
     pub fn with_config(config: OcrConfig) -> Result<Self, OcrError> {
         // Verify Vision framework is available
         // Verify Vision framework is available (logic simplified for objc2 safety)
-        let _cls = unsafe { class!(VNImageRequestHandler) };
+        let _cls = class!(VNImageRequestHandler);
 
         let noise_filter = NoiseFilter::new(
             config.aggressive_filtering,
@@ -540,14 +540,7 @@ impl NoiseFilter {
     }
 }
 
-/// Statistics about OCR performance
-#[derive(Debug, Clone)]
-pub struct OcrStats {
-    pub total_blocks: usize,
-    pub filtered_blocks: usize,
-    pub average_confidence: f32,
-    pub processing_time_ms: u128,
-}
+
 
 #[cfg(test)]
 mod tests {

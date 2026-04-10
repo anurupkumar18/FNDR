@@ -21,9 +21,9 @@ pub fn capture_screen() -> Result<Vec<u8>, String> {
         // Create image from display
         let image = core_graphics::display::CGDisplay::screenshot(
             core_graphics::geometry::CGRect::null(),
-            core_graphics::window::kCGWindowListOptionOnScreenOnly,
-            core_graphics::window::kCGNullWindowID,
-            core_graphics::display::kCGWindowImageDefault,
+            core_graphics::window::K_CGWINDOW_LIST_OPTION_ON_SCREEN_ONLY,
+            core_graphics::window::K_CGNULL_WINDOW_ID,
+            core_graphics::display::K_CGWINDOW_IMAGE_DEFAULT,
         );
 
         let image = image.ok_or("Failed to capture screen")?;
@@ -210,7 +210,7 @@ mod core_graphics {
         use std::ffi::c_void;
 
         pub type CGDirectDisplayID = u32;
-        pub const kCGWindowImageDefault: u32 = 0;
+        pub const K_CGWINDOW_IMAGE_DEFAULT: u32 = 0;
 
         #[link(name = "CoreGraphics", kind = "framework")]
         extern "C" {
@@ -274,8 +274,8 @@ mod core_graphics {
     }
 
     pub mod window {
-        pub const kCGWindowListOptionOnScreenOnly: u32 = 1 << 0;
-        pub const kCGNullWindowID: u32 = 0;
+        pub const K_CGWINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1 << 0;
+        pub const K_CGNULL_WINDOW_ID: u32 = 0;
     }
 
     pub mod image {

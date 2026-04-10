@@ -3,7 +3,9 @@ use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
+#[allow(deprecated)]
+use llama_cpp_2::model::Special;
 use parking_lot::Mutex;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -21,6 +23,12 @@ pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, Box<dyn std::error::Er
     if let Some(backend) = LLAMA_BACKEND.get() {
         return Ok(Arc::clone(backend));
     }
+    
+    // Suppress overly verbose metal/llama.cpp internal logs for cleaner developer output
+    std::env::set_var("GGML_METAL_LOG_INFO", "0");
+    std::env::set_var("GGML_METAL_LOG_WARN", "0");
+    std::env::set_var("GGML_LOG_LEVEL", "0");
+
     let backend = Arc::new(LlamaBackend::init()?);
     // If another thread raced us, that's fine – just return our copy
     let _ = LLAMA_BACKEND.set(Arc::clone(&backend));
@@ -298,6 +306,7 @@ impl InferenceEngine {
                 break;
             }
 
+            #[allow(deprecated)]
             let piece = match self.model.token_to_str(token, Special::Plaintext) {
                 Ok(s) => s,
                 Err(_) => String::new(),

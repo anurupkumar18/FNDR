@@ -389,10 +389,13 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     return (
         <>
             <span className="ob-icon">🧠</span>
-            <h1 className="ob-title">Download FNDR&apos;s local Qwen model</h1>
+            <h1 className="ob-title">Download AI model for FNDR</h1>
             <p className="ob-subtitle">
-                Qwen3-VL 4B is the required on-device model for summaries, memory Q&amp;A, and smarter indexing.
-                Optional helpers like Whisper, Orpheus, and FastVLM only load later if you actually use those features.
+                {selected?.id === "qwen3-vl-4b" 
+                    ? "Qwen3-VL 4B is the recommended on-device model for premium summaries, memory Q&A, and screen understanding."
+                    : `${selected?.name || "The selected model"} will power your local memory summaries and search suggestions.`}
+                <br />
+                Everything stays on your Mac. Nothing is sent to the cloud.
             </p>
 
             {!isDownloading && (
@@ -404,9 +407,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                             className={`ob-model-card ${selected?.id === m.id ? "selected" : ""} ${m.download_url === "already_downloaded" ? "already-downloaded" : ""}`}
                             onClick={() => setSelected(m)}
                         >
-                            {m.recommended && <span className="ob-model-badge">Required</span>}
+                            {m.recommended && <span className="ob-model-badge">Recommended</span>}
                             {m.download_url === "already_downloaded" && (
-                                <span className="ob-model-badge downloaded">Downloaded</span>
+                                <span className="ob-model-badge downloaded">Already on Disk</span>
                             )}
                             <div className="ob-model-name">{m.name}</div>
                             <div className="ob-model-desc">{m.description}</div>
@@ -425,8 +428,8 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                     {[
                         {
                             icon: "✅",
-                            title: "Required right now",
-                            body: "Qwen3-VL powers the core FNDR experience and is the only model you need to finish setup.",
+                            title: selected?.download_url === "already_downloaded" ? "Ready to use" : "Required right now",
+                            body: `${selected?.name || "AI"} powers the core FNDR experience and is used to synthesize your memories.`,
                         },
                         {
                             icon: "🖼",

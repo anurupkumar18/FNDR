@@ -114,23 +114,7 @@ export interface Task {
     linked_memory_ids: string[];
 }
 
-export interface MemoryCard {
-    id: string;
-    timestamp: number;
-    app_name: string;
-    window_title: string;
-    snippet: string;
-    url?: string;
-    screenshot_path?: string;
-    score: number;
-    related_tasks: string[];
-}
 
-export interface MemoryReconstruction {
-    answer: string;
-    cards: MemoryCard[];
-    structural_context: string[];
-}
 
 export interface VoiceTranscriptionResult {
     text: string;
@@ -157,73 +141,11 @@ export async function search(
     });
 }
 
-export async function askFndr(query: string): Promise<string> {
-    return invoke<string>("ask_fndr", { query });
-}
 
-export async function reconstructMemory(query: string, limit?: number): Promise<MemoryReconstruction> {
-    return invoke<MemoryReconstruction>("reconstruct_memory", { query, limit });
-}
-
-export async function summarizeMemory(
-    appName: string,
-    windowTitle: string,
-    text: string
-): Promise<string> {
-    return invoke<string>("summarize_memory", { appName, windowTitle, text });
-}
 
 // Capture control
 export async function getStatus(): Promise<CaptureStatus> {
     return invoke<CaptureStatus>("get_status");
-}
-
-export interface AppConfigPayload {
-    experimental_ui_enabled: boolean;
-    use_demo_data_only: boolean;
-    use_vlm: boolean;
-}
-
-export async function getAppConfig(): Promise<AppConfigPayload> {
-    return invoke<AppConfigPayload>("get_app_config");
-}
-
-export interface SystemReadiness {
-    screen_capture_permission_granted: boolean;
-    screen_capture_permission_detail: string;
-    ocr_available: boolean;
-    ocr_detail: string;
-    inference_ready: boolean;
-    embedder_ready: boolean;
-    vector_store_ready: boolean;
-    data_dir_writable: boolean;
-    data_dir_detail: string;
-    capture_status: CaptureStatus;
-    total_records: number;
-    vlm_active: boolean;
-    use_demo_data_only: boolean;
-    ready_for_search: boolean;
-    fixes: string[];
-}
-
-export async function getReadiness(): Promise<SystemReadiness> {
-    return invoke<SystemReadiness>("get_readiness");
-}
-
-export async function setUseDemoDataOnly(enabled: boolean): Promise<AppConfigPayload> {
-    return invoke<AppConfigPayload>("set_use_demo_data_only", { enabled });
-}
-
-export async function seedDemoDataset(): Promise<number> {
-    return invoke<number>("seed_demo_dataset");
-}
-
-export async function resetDemoData(): Promise<number> {
-    return invoke<number>("reset_demo_data");
-}
-
-export async function injectTestMemory(): Promise<string> {
-    return invoke<string>("inject_test_memory");
 }
 
 export async function getMcpServerStatus(): Promise<McpServerStatus> {
@@ -368,14 +290,12 @@ export async function summarizeSearch(query: string, snippets: string[]): Promis
     return invoke<string>("summarize_search", { query, resultsSnippets: snippets });
 }
 
-// ========== Graph Visualization Functions ==========
-
 export interface GraphNodeData {
     id: string;
-    label: string;
     node_type: string;
+    label: string;
     created_at: number;
-    metadata: Record<string, unknown>;
+    metadata: Record<string, any>;
 }
 
 export interface GraphEdgeData {
@@ -383,19 +303,12 @@ export interface GraphEdgeData {
     source: string;
     target: string;
     edge_type: string;
-    label: string;
     timestamp: number;
+    metadata: Record<string, any>;
 }
 
-export interface GraphData {
-    nodes: GraphNodeData[];
-    edges: GraphEdgeData[];
+export async function getGraphData(): Promise<{ nodes: GraphNodeData[]; edges: GraphEdgeData[] }> {
+    return invoke<{ nodes: GraphNodeData[]; edges: GraphEdgeData[] }>("get_graph_data");
 }
 
-export async function getGraphData(): Promise<GraphData> {
-    return invoke<GraphData>("get_graph_data");
-}
 
-export async function searchGraph(query: string, limit?: number): Promise<SearchResult[]> {
-    return invoke<SearchResult[]>("search_graph", { query, limit });
-}
