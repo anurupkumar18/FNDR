@@ -60,20 +60,25 @@
 }
 
 .result-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(26, 26, 26, 0.45), rgba(12, 12, 12, 0.45));
+    backdrop-filter: blur(12px) saturate(112%);
+    -webkit-backdrop-filter: blur(12px) saturate(112%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 16px;
     padding: 16px;
     cursor: pointer;
-    transition: background var(--transition-fast), border-color var(--transition-fast);
+    transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
 }
 
 .result-card:hover {
-    background: var(--surface-elevated);
+    background: linear-gradient(180deg, rgba(32, 32, 32, 0.65), rgba(16, 16, 16, 0.65));
+    border-color: rgba(255, 255, 255, 0.1);
 }
 
 .result-card.selected {
-    border-color: var(--accent);
+    background: linear-gradient(180deg, rgba(38, 38, 42, 0.75), rgba(18, 18, 20, 0.75));
+    border-color: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
 }
 
 .result-meta {
@@ -116,6 +121,7 @@
     line-height: 1.45;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
 }

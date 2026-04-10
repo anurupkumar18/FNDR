@@ -131,12 +131,6 @@
     display: block;
 }
 
-.main-layout.with-reconstruction {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
-    gap: 16px;
-    align-items: start;
-}
 
 .main-column {
     min-width: 0;

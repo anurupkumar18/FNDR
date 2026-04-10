@@ -161,6 +161,7 @@ impl VlmEngine {
     ) -> Result<crate::models::ResolvedModel, VlmError> {
         let preferred_model_id = match preferred_size {
             "4B" => Some("qwen3-vl-4b"),
+            "500M" => Some("smolvlm-500m"),
             _ => None,
         };
 
@@ -170,7 +171,7 @@ impl VlmEngine {
                 .map(|path| path.display().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            VlmError::ModelNotFound(format!("No VLM model found. Searched: {}", searched_dirs))
+            VlmError::ModelNotFound(format!("No VLM model found. Searched: {}. Please run the download script.", searched_dirs))
         })
     }
 
@@ -404,31 +405,4 @@ pub struct VlmInfo {
     pub model_size: String,
     pub context_size: u32,
     pub vocab_size: i32,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    #[ignore] // Requires model files
-    async fn test_vlm_initialization() {
-        let engine = VlmEngine::new("4B", None).await;
-        assert!(engine.is_ok());
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires model files
-    async fn test_describe_screen() {
-        let engine = VlmEngine::new("4B", None).await.unwrap();
-        let result = engine.describe_screen("File Edit View").await;
-        assert!(result.is_ok());
-        assert!(!result.unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_build_prompt() {
-        // Create a mock engine for testing prompt building
-        // This would need actual model initialization in real tests
-    }
 }

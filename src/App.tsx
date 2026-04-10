@@ -4,12 +4,11 @@ import { Timeline } from "./components/Timeline";
 import { ControlPanel } from "./components/ControlPanel";
 import { TodoModal } from "./components/TodoModal";
 import { AgentPanel } from "./components/AgentPanel";
-import { MemoryReconstructionPanel } from "./components/MemoryReconstructionPanel";
 import { GraphPanel } from "./components/GraphPanel";
 import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
 import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
-import { ReadinessPanel } from "./components/ReadinessPanel";
+
 import { useSearch } from "./hooks/useSearch";
 import {
     CaptureStatus,
@@ -51,6 +50,10 @@ function App() {
             .then((s) => setOnboardingDone(s.step === "complete" && s.model_downloaded))
             .catch(() => setOnboardingDone(false));
     }, []);
+
+    const showTodoModal = !EVAL_UI && !query.trim() && results.length === 0 && !isLoading;
+    const showCenteredSearch = !query.trim();
+    const isFocusMode = !query.trim();
 
     useEffect(() => {
         const loadAppNames = async () => {
@@ -135,10 +138,6 @@ function App() {
         }
     };
 
-    const showTodoModal = !EVAL_UI && !query.trim() && results.length === 0 && !isLoading;
-    const showPreviewPanel = !EVAL_UI && Boolean(query.trim() && selectedResult);
-    const showCenteredSearch = !query.trim();
-
     if (onboardingDone === null) {
         return null;
     }
@@ -162,8 +161,6 @@ function App() {
             <div className="top-right-control">
                 <ControlPanel status={status} compact={true} evalUi={EVAL_UI} />
             </div>
-
-            <ReadinessPanel readiness={readiness} />
 
             {status && !status.ai_model_available && <ModelDownloadBanner />}
 
@@ -218,8 +215,8 @@ function App() {
                     />
                 </section>
 
-                {(!showCenteredSearch || showTodoModal) && (
-                    <div className={`main-layout ${showPreviewPanel ? "with-reconstruction" : ""}`}>
+                {!isFocusMode && (
+                    <div className="main-layout">
                         <section className="main-column">
                             {error && <div className="error-banner">{error}</div>}
 
@@ -241,14 +238,6 @@ function App() {
                                 />
                             )}
                         </section>
-
-                        {showPreviewPanel && (
-                            <MemoryReconstructionPanel
-                                query={query}
-                                selectedResult={selectedResult}
-                                onShowContext={setQuery}
-                            />
-                        )}
                     </div>
                 )}
             </main>
