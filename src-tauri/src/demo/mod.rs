@@ -7,8 +7,7 @@ use chrono::Local;
 pub const DEMO_ID_PREFIX: &str = "fndr-demo-";
 
 /// Canonical string for scripted semantic search demos.
-pub const INJECT_TEST_TEXT: &str =
-    "OAuth redirect URI mismatch on localhost 5174";
+pub const INJECT_TEST_TEXT: &str = "OAuth redirect URI mismatch on localhost 5174";
 
 struct SeedItem {
     app: &'static str,

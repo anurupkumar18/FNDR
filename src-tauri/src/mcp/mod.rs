@@ -801,7 +801,11 @@ async fn run_ask_fndr(app_state: Arc<AppState>, args: AskFndrArgs) -> Result<Val
 }
 
 async fn run_get_stats(app_state: Arc<AppState>) -> Result<Value, JsonRpcError> {
-    let stats = app_state.store.get_stats().await.map_err(internal_tool_error)?;
+    let stats = app_state
+        .store
+        .get_stats()
+        .await
+        .map_err(internal_tool_error)?;
 
     Ok(tool_success(json!({
         "stats": stats,

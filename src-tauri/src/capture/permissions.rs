@@ -10,10 +10,7 @@ pub fn preflight_screen_capture_access() -> (bool, String) {
     const SYM: &[u8] = b"CGPreflightScreenCaptureAccess\0";
 
     unsafe {
-        let handle = libc::dlopen(
-            CG_PATH.as_ptr() as *const libc::c_char,
-            libc::RTLD_LAZY,
-        );
+        let handle = libc::dlopen(CG_PATH.as_ptr() as *const libc::c_char, libc::RTLD_LAZY);
         if handle.is_null() {
             return (
                 true,

@@ -9,6 +9,7 @@ use arrow_array::{
     RecordBatchReader, StringArray,
 };
 use arrow_schema::{ArrowError, DataType, Field, Schema};
+use chrono::{Local, TimeZone};
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Connection, Table};
@@ -68,7 +69,10 @@ impl Store {
         let batch = records_to_batch(records)?;
         let schema = Arc::new(memory_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
-        self.table.add(Box::new(iter) as Box<dyn RecordBatchReader + Send>).execute().await?;
+        self.table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .execute()
+            .await?;
         Ok(())
     }
 
@@ -110,9 +114,8 @@ impl Store {
         app_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
         let q = sql_escape(query);
-        let keyword_pred = format!(
-            "(text LIKE '%{q}%' OR app_name LIKE '%{q}%' OR window_title LIKE '%{q}%')"
-        );
+        let keyword_pred =
+            format!("(text LIKE '%{q}%' OR app_name LIKE '%{q}%' OR window_title LIKE '%{q}%')");
 
         let filter = match build_filter(time_filter, app_filter) {
             Some(f) => format!("{keyword_pred} AND {f}"),
@@ -145,32 +148,26 @@ impl Store {
 
     /// Return basic statistics about stored data.
     pub async fn get_stats(&self) -> Result<Stats, Box<dyn std::error::Error>> {
-        let batches: Vec<RecordBatch> = self
-            .table
-            .query()
-            .execute()
-            .await?
-            .try_collect()
-            .await?;
+        let batches: Vec<RecordBatch> = self.table.query().execute().await?.try_collect().await?;
 
         let total_records: usize = batches.iter().map(|b| b.num_rows()).sum();
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today = local_day_bucket_now();
         let mut days = std::collections::HashSet::new();
         let mut app_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
         let mut today_count: usize = 0;
 
         for batch in &batches {
-            let day_col = batch
-                .column_by_name("day_bucket")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+            let timestamp_col = batch
+                .column_by_name("timestamp")
+                .and_then(|c| c.as_any().downcast_ref::<Int64Array>().cloned());
             let app_col = batch
                 .column_by_name("app_name")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
 
             for i in 0..batch.num_rows() {
-                if let Some(ref dc) = day_col {
-                    let day = dc.value(i).to_string();
+                if let Some(ref tc) = timestamp_col {
+                    let day = local_day_bucket_from_timestamp(tc.value(i));
                     if day == today {
                         today_count += 1;
                     }
@@ -206,13 +203,7 @@ impl Store {
 
     /// Return sorted list of unique app names.
     pub async fn get_app_names(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let batches: Vec<RecordBatch> = self
-            .table
-            .query()
-            .execute()
-            .await?
-            .try_collect()
-            .await?;
+        let batches: Vec<RecordBatch> = self.table.query().execute().await?.try_collect().await?;
 
         let mut names = std::collections::HashSet::new();
         for batch in &batches {
@@ -231,10 +222,7 @@ impl Store {
     }
 
     /// Delete records older than `days` days; returns count of deleted rows.
-    pub async fn delete_older_than(
-        &self,
-        days: u32,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
+    pub async fn delete_older_than(&self, days: u32) -> Result<usize, Box<dyn std::error::Error>> {
         let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
         let cutoff_ms = cutoff.timestamp_millis();
 
@@ -405,12 +393,17 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
     let session_ids: Vec<&str> = records.iter().map(|r| r.session_id.as_str()).collect();
     let texts: Vec<&str> = records.iter().map(|r| r.text.as_str()).collect();
     let snippets: Vec<&str> = records.iter().map(|r| r.snippet.as_str()).collect();
-    let screenshot_paths: Vec<Option<&str>> =
-        records.iter().map(|r| r.screenshot_path.as_deref()).collect();
+    let screenshot_paths: Vec<Option<&str>> = records
+        .iter()
+        .map(|r| r.screenshot_path.as_deref())
+        .collect();
     let urls: Vec<Option<&str>> = records.iter().map(|r| r.url.as_deref()).collect();
 
     // Text embeddings — flatten all embeddings into one Float32Array.
-    let flat_text: Vec<f32> = records.iter().flat_map(|r| r.embedding.iter().copied()).collect();
+    let flat_text: Vec<f32> = records
+        .iter()
+        .flat_map(|r| r.embedding.iter().copied())
+        .collect();
     let text_values = Arc::new(Float32Array::from(flat_text)) as Arc<dyn Array>;
     let embedding_array = FixedSizeListArray::try_new(
         Arc::new(Field::new("item", DataType::Float32, true)),
@@ -518,7 +511,7 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
         .map(|i| {
             let score = dist_col
                 .as_ref()
-                .map(|c| 1.0 / (1.0 + c.value(i)))  // distance → similarity
+                .map(|c| 1.0 / (1.0 + c.value(i))) // distance → similarity
                 .unwrap_or(1.0);
             SearchResult {
                 id: get_str(&ids, i),
@@ -620,16 +613,45 @@ fn time_filter_to_sql(tf: &str) -> Option<String> {
             "timestamp >= {}",
             (now - Duration::days(7)).timestamp_millis()
         )),
-        "today" => Some(format!(
-            "day_bucket = '{}'",
-            now.format("%Y-%m-%d")
-        )),
-        "yesterday" => Some(format!(
-            "day_bucket = '{}'",
-            (now - Duration::days(1)).format("%Y-%m-%d")
-        )),
+        "today" => local_day_range_filter(0),
+        "yesterday" => local_day_range_filter(1),
         _ => None,
     }
+}
+
+fn local_day_bucket_now() -> String {
+    Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn local_day_bucket_from_timestamp(timestamp: i64) -> String {
+    Local
+        .timestamp_millis_opt(timestamp)
+        .single()
+        .unwrap_or_else(Local::now)
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn local_day_range_filter(days_ago: i64) -> Option<String> {
+    let target_day = Local::now().date_naive() - chrono::Duration::days(days_ago);
+    let start = target_day.and_hms_opt(0, 0, 0)?;
+    let end = (target_day + chrono::Duration::days(1)).and_hms_opt(0, 0, 0)?;
+
+    let start_ms = Local
+        .from_local_datetime(&start)
+        .earliest()
+        .or_else(|| Local.from_local_datetime(&start).latest())?
+        .timestamp_millis();
+    let end_ms = Local
+        .from_local_datetime(&end)
+        .earliest()
+        .or_else(|| Local.from_local_datetime(&end).latest())?
+        .timestamp_millis();
+
+    Some(format!(
+        "timestamp >= {} AND timestamp < {}",
+        start_ms, end_ms
+    ))
 }
 
 /// Escape single quotes for SQL string literals.
@@ -652,9 +674,12 @@ async fn open_or_create_table(db_path: &Path) -> Result<Table, lancedb::Error> {
             std::iter::empty::<Result<RecordBatch, ArrowError>>(),
             schema,
         );
-        conn.create_table(TABLE_NAME, Box::new(empty) as Box<dyn RecordBatchReader + Send>)
-            .execute()
-            .await
+        conn.create_table(
+            TABLE_NAME,
+            Box::new(empty) as Box<dyn RecordBatchReader + Send>,
+        )
+        .execute()
+        .await
     }
 }
 
@@ -678,7 +703,10 @@ async fn migrate_from_json(table: &Table, json_path: &Path) {
             let batch = records_to_batch(chunk)?;
             let schema = Arc::new(memory_schema());
             let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
-            table.add(Box::new(iter) as Box<dyn RecordBatchReader + Send>).execute().await?;
+            table
+                .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+                .execute()
+                .await?;
         }
 
         // Rename the JSON file so we don't migrate again on next start.

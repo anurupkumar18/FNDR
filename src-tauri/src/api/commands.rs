@@ -1013,7 +1013,8 @@ pub async fn set_use_demo_data_only(
     {
         let mut c = state.inner().config.write();
         c.use_demo_data_only = enabled;
-        c.save().map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+        c.save()
+            .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
     }
     get_app_config(state).await
 }

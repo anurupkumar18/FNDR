@@ -56,7 +56,8 @@ fn main() {
 
             // Apply retention: remove records older than config.retention_days (0 = keep forever)
             if config.retention_days > 0 {
-                match tauri::async_runtime::block_on(store.delete_older_than(config.retention_days)) {
+                match tauri::async_runtime::block_on(store.delete_older_than(config.retention_days))
+                {
                     Ok(n) if n > 0 => tracing::info!("Retention: removed {} old records", n),
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Retention cleanup failed: {}", e),

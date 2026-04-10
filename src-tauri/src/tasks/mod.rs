@@ -197,5 +197,9 @@ pub fn parse_tasks_from_llm_response(response: &str, source_app: &str) -> Vec<Ta
 }
 
 fn normalize_task_title(title: &str) -> String {
-    title.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }

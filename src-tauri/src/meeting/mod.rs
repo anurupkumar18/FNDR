@@ -816,7 +816,8 @@ async fn repair_failed_transcripts_once(app_state: Arc<AppState>) {
         if let Some(path) = transcript_path.clone() {
             let _ = store.set_transcript_path(&meeting.id, Some(path.clone()));
             if let Err(err) =
-                ingest_transcript_into_fndr_memory(app_state.clone(), &transcript, Some(&path)).await
+                ingest_transcript_into_fndr_memory(app_state.clone(), &transcript, Some(&path))
+                    .await
             {
                 tracing::warn!(
                     "Failed to ingest repaired transcript {} into memory: {}",

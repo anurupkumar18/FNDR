@@ -24,11 +24,14 @@ impl HybridSearcher {
         let query_embedding = embedder.embed_batch(&[query.to_string()])?;
         let query_embedding = query_embedding.into_iter().next().unwrap_or_default();
 
-        let semantic_results =
-            store.vector_search(&query_embedding, limit * 2, time_filter, app_filter).await?;
+        let semantic_results = store
+            .vector_search(&query_embedding, limit * 2, time_filter, app_filter)
+            .await?;
 
         // Get keyword results (with same filters for consistency)
-        let keyword_results = store.keyword_search(query, limit * 2, time_filter, app_filter).await?;
+        let keyword_results = store
+            .keyword_search(query, limit * 2, time_filter, app_filter)
+            .await?;
 
         // RRF Fusion
         let fused = Self::rrf_fusion(&semantic_results, &keyword_results, limit);
