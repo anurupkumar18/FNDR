@@ -8,6 +8,7 @@ mod dedupe;
 mod macos;
 pub mod permissions;
 mod sampling;
+mod text_cleanup;
 
 pub use dedupe::PerceptualHasher;
 pub use sampling::AdaptiveSampler;
@@ -209,6 +210,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 continue;
             }
         };
+        let text = text_cleanup::reduce_chrome_noise(&text);
         let ocr_latency = ocr_start.elapsed();
         tracing::info!("OCR result: {} chars in {:?}", text.len(), ocr_latency);
 
