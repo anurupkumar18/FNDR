@@ -92,10 +92,8 @@ VITE_EVAL_UI=true npm run tauri dev
 
 | Doc | Purpose |
 |-----|---------|
-| [DEMO.md](DEMO.md) | Five-minute walkthrough script |
-| [TESTING.md](TESTING.md) | Commands, CI, manual QA |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, MRs, review |
-| [docs/architecture.md](docs/architecture.md) | Pipeline diagram |
+| [docs/DESIGN_DIRECTION.md](docs/DESIGN_DIRECTION.md) | Design direction and UX philosophy |
+| [docs/fndr_intelligence_engine.md](docs/fndr_intelligence_engine.md) | Intelligence engine architecture |
 
 ## 📁 Repository Structure
 
@@ -105,14 +103,22 @@ FNDR/
 │   ├── src/
 │   │   ├── api/        # Tauri command handlers
 │   │   ├── capture/    # Screen recording & sampling
-│   │   ├── inference/  # LLM (Llama) & VLM (SmolVLM) engines
+│   │   ├── embed/      # Embedding and chunking
+│   │   ├── graph/      # Knowledge graph store
+│   │   ├── inference/  # LLM (Llama) & VLM engines
+│   │   ├── mcp/        # Model Context Protocol server
+│   │   ├── meeting/    # Meeting recorder logic
 │   │   ├── ocr/        # Apple Vision OCR integration
-│   │   ├── store/      # Local storage & indexing
-│   │   ├── demo/       # Seeded demo corpus for grading
-│   │   └── tasks/      # Todo extraction logic
+│   │   ├── privacy/    # Blocklist and incognito mode
+│   │   ├── search/     # Hybrid search (semantic + keyword)
+│   │   ├── store/      # LanceDB storage & indexing
+│   │   ├── tasks/      # Todo extraction logic
+│   │   └── telemetry/  # Logging infrastructure
+│   ├── sidecar/        # Python sidecar scripts (whisper, VLM, etc.)
 │   └── tauri.conf.json # App configuration
 ├── src/                # Frontend (React + TypeScript)
-│   ├── components/     # UI components (MemoryCard, ControlPanel, etc.)
+│   ├── api/            # Tauri invoke wrappers
+│   ├── components/     # UI components (SearchBar, Timeline, etc.)
 │   ├── hooks/          # Custom React hooks (useSearch, etc.)
 │   └── main.tsx        # Application entry point
 ├── download_model.sh   # Utility script for model management
