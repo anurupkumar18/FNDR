@@ -4,20 +4,17 @@ import { Timeline } from "./components/Timeline";
 import { ControlPanel } from "./components/ControlPanel";
 import { TodoModal } from "./components/TodoModal";
 import { AgentPanel } from "./components/AgentPanel";
-import { MemoryReconstructionPanel } from "./components/MemoryReconstructionPanel";
 import { GraphPanel } from "./components/GraphPanel";
 import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
 import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
-import { ReadinessPanel } from "./components/ReadinessPanel";
+
 import { useSearch } from "./hooks/useSearch";
 import {
     CaptureStatus,
     SearchResult,
-    SystemReadiness,
     Task,
     getAppNames,
-    getReadiness,
     getStatus,
     startAgentTask,
 } from "./api/tauri";
@@ -31,15 +28,14 @@ function App() {
     const [appFilter, setAppFilter] = useState<string | null>(null);
     const [appNames, setAppNames] = useState<string[]>([]);
     const [status, setStatus] = useState<CaptureStatus | null>(null);
-    const [readiness, setReadiness] = useState<SystemReadiness | null>(null);
     const [showAgentPanel, setShowAgentPanel] = useState(false);
-    const [showGraphPanel, setShowGraphPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
+    const [showGraphPanel, setShowGraphPanel] = useState(false);
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
     const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-    const searchAllowed = Boolean(readiness?.ready_for_search);
+    const searchAllowed = true;
     const { results, isLoading, error } = useSearch(
         searchAllowed ? query : "",
         timeFilter,
@@ -51,6 +47,10 @@ function App() {
             .then((s) => setOnboardingDone(s.step === "complete" && s.model_downloaded))
             .catch(() => setOnboardingDone(false));
     }, []);
+
+    const showTodoModal = !EVAL_UI && !query.trim() && results.length === 0 && !isLoading;
+    const showCenteredSearch = !query.trim();
+    const isFocusMode = !query.trim();
 
     useEffect(() => {
         const loadAppNames = async () => {
@@ -87,23 +87,7 @@ function App() {
         return () => window.clearInterval(interval);
     }, []);
 
-    useEffect(() => {
-        const loadReadiness = async () => {
-            try {
-                const nextReadiness = await getReadiness();
-                setReadiness(nextReadiness);
-            } catch (e) {
-                console.error("Failed to get readiness:", e);
-            }
-        };
 
-        void loadReadiness();
-        const interval = window.setInterval(() => {
-            void loadReadiness();
-        }, 5000);
-
-        return () => window.clearInterval(interval);
-    }, []);
 
     useEffect(() => {
         if (!results.length) {
@@ -135,10 +119,6 @@ function App() {
         }
     };
 
-    const showTodoModal = !EVAL_UI && !query.trim() && results.length === 0 && !isLoading;
-    const showPreviewPanel = !EVAL_UI && Boolean(query.trim() && selectedResult);
-    const showCenteredSearch = !query.trim();
-
     if (onboardingDone === null) {
         return null;
     }
@@ -163,8 +143,6 @@ function App() {
                 <ControlPanel status={status} compact={true} evalUi={EVAL_UI} />
             </div>
 
-            <ReadinessPanel readiness={readiness} />
-
             {status && !status.ai_model_available && <ModelDownloadBanner />}
 
             {!EVAL_UI && isSidebarOpen && (
@@ -186,7 +164,7 @@ function App() {
                             Meetings
                         </button>
                         <button
-                            className={`ui-action-btn graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
+                            className={`ui-action-btn side-panel-btn ${showGraphPanel ? "active" : ""}`}
                             onClick={() => setShowGraphPanel((open) => !open)}
                         >
                             Graph
@@ -210,16 +188,11 @@ function App() {
                         resultCount={results.length}
                         searchResults={results}
                         disabled={!searchAllowed}
-                        disabledHint={
-                            readiness && !readiness.ready_for_search
-                                ? "Waiting for search backend..."
-                                : undefined
-                        }
                     />
                 </section>
 
-                {(!showCenteredSearch || showTodoModal) && (
-                    <div className={`main-layout ${showPreviewPanel ? "with-reconstruction" : ""}`}>
+                {!isFocusMode && (
+                    <div className="main-layout">
                         <section className="main-column">
                             {error && <div className="error-banner">{error}</div>}
 
@@ -241,14 +214,6 @@ function App() {
                                 />
                             )}
                         </section>
-
-                        {showPreviewPanel && (
-                            <MemoryReconstructionPanel
-                                query={query}
-                                selectedResult={selectedResult}
-                                onShowContext={setQuery}
-                            />
-                        )}
                     </div>
                 )}
             </main>
@@ -259,14 +224,14 @@ function App() {
                         isVisible={showAgentPanel}
                         onClose={() => setShowAgentPanel(false)}
                     />
-                    <GraphPanel
-                        isVisible={showGraphPanel}
-                        onClose={() => setShowGraphPanel(false)}
-                    />
                     <MeetingRecorderPanel
                         isVisible={showMeetingPanel}
                         onClose={() => setShowMeetingPanel(false)}
                         onOpenAgent={() => setShowAgentPanel(true)}
+                    />
+                    <GraphPanel
+                        isVisible={showGraphPanel}
+                        onClose={() => setShowGraphPanel(false)}
                     />
                 </>
             )}

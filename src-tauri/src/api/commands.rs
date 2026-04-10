@@ -1,14 +1,15 @@
 //! Tauri command handlers
 
-use crate::capture::permissions;
-use crate::demo;
+
+
 use crate::embed::Embedder;
-use crate::graph::MemoryReconstruction;
+use crate::graph::{GraphNode, GraphEdge};
+
 use crate::mcp::{self, McpServerStatus};
 use crate::meeting::{
     self, MeetingRecorderStatus, MeetingSearchResult, MeetingSession, MeetingTranscript,
 };
-use crate::ocr::OcrEngine;
+
 use crate::search::HybridSearcher;
 use crate::speech;
 use crate::store::{SearchResult, Stats};
@@ -71,6 +72,20 @@ pub async fn search(
     limit: Option<usize>,
 ) -> Result<Vec<SearchResult>, String> {
     let limit = limit.unwrap_or(20).clamp(1, 50);
+    
+    // Guard: LanceDB vector_search panics/errors on an empty table.
+    // Return empty results immediately so the UI shows "No memories found"
+    // instead of a "Search failed" error banner.
+    let stats = state
+        .store
+        .get_stats()
+        .await
+        .map_err(|e| e.to_string())?;
+        
+    if stats.total_records == 0 {
+        return Ok(Vec::new());
+    }
+
     let embedder = shared_embedder()?;
 
     let results = HybridSearcher::search(
@@ -114,106 +129,7 @@ pub async fn summarize_search(
     Ok(summary)
 }
 
-/// Ask FNDR a question about your memories (RAG)
-#[tauri::command]
-pub async fn ask_fndr(state: State<'_, Arc<AppState>>, query: String) -> Result<String, String> {
-    Ok(run_memory_reconstruction(state.inner().as_ref(), &query, 6)
-        .await?
-        .answer)
-}
 
-/// Reconstruct memory context (cards + synthesized answer) for artifact side panel.
-#[tauri::command]
-pub async fn reconstruct_memory(
-    state: State<'_, Arc<AppState>>,
-    query: String,
-    limit: Option<usize>,
-) -> Result<MemoryReconstruction, String> {
-    run_memory_reconstruction(state.inner().as_ref(), &query, limit.unwrap_or(8)).await
-}
-
-/// Summarize a memory in detail using LLM
-#[tauri::command]
-pub async fn summarize_memory(
-    state: State<'_, Arc<AppState>>,
-    app_name: String,
-    window_title: String,
-    text: String,
-) -> Result<String, String> {
-    let summary = match state.inner().ensure_inference_engine().await {
-        Ok(Some(engine)) => {
-            engine
-                .summarize_memory_detail(&app_name, &window_title, &text)
-                .await
-        }
-        Ok(None) => String::new(),
-        Err(err) => {
-            tracing::warn!("Failed to lazy-load AI model for memory summary: {}", err);
-            String::new()
-        }
-    };
-    Ok(summary)
-}
-
-async fn run_memory_reconstruction(
-    app_state: &AppState,
-    query: &str,
-    limit: usize,
-) -> Result<MemoryReconstruction, String> {
-    let stats = app_state
-        .store
-        .get_stats()
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
-
-    if stats.total_records == 0 {
-        return Ok(MemoryReconstruction {
-            answer: "I haven't captured any memories yet. Keep FNDR running for a few minutes while you work, then ask again.".to_string(),
-            cards: Vec::new(),
-            structural_context: Vec::new(),
-        });
-    }
-
-    let embedder = shared_embedder()?;
-    let mut reconstruction = app_state
-        .graph
-        .reconstruct(&app_state.store, &embedder, query, limit)
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
-
-    if reconstruction.cards.is_empty() {
-        reconstruction.answer = format!(
-            "I found {} memories in total, but none seem to match '{}'. Try broader terms.",
-            stats.total_records, query
-        );
-        return Ok(reconstruction);
-    }
-
-    let mut context_parts = Vec::new();
-    for card in reconstruction.cards.iter().take(6) {
-        let time = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(card.timestamp)
-            .unwrap_or_else(chrono::Utc::now);
-        context_parts.push(format!(
-            "[{}] App: {} | Window: {} | Snippet: {} | URL: {}",
-            time.format("%Y-%m-%d %H:%M:%S"),
-            card.app_name,
-            card.window_title,
-            card.snippet,
-            card.url.clone().unwrap_or_else(|| "n/a".to_string())
-        ));
-    }
-    for note in &reconstruction.structural_context {
-        context_parts.push(format!("[Graph] {note}"));
-    }
-
-    let context = context_parts.join("\n");
-    reconstruction.answer = match app_state.ensure_inference_engine().await {
-        Ok(Some(engine)) => engine.answer(query, &context).await,
-        Ok(None) => "AI intelligence is disabled until Qwen3-VL is downloaded.".to_string(),
-        Err(err) => format!("AI intelligence is temporarily unavailable: {}", err),
-    };
-    Ok(reconstruction)
-}
 
 /// Get capture status
 #[tauri::command]
@@ -620,6 +536,18 @@ pub struct AgentStatus {
     pub status: String, // "idle" | "running" | "completed" | "error"
 }
 
+#[derive(Debug, Serialize)]
+pub struct GraphDataResponse {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+#[tauri::command]
+pub async fn get_graph_data(state: State<'_, Arc<AppState>>) -> Result<GraphDataResponse, String> {
+    let (nodes, edges) = state.inner().graph.export_for_visualization();
+    Ok(GraphDataResponse { nodes, edges })
+}
+
 static AGENT_PROCESS: AgentOnceLock<AgentMutex<Option<Child>>> = AgentOnceLock::new();
 static AGENT_STATUS: AgentOnceLock<AgentMutex<AgentStatus>> = AgentOnceLock::new();
 
@@ -781,286 +709,4 @@ pub async fn stop_agent() -> Result<AgentStatus, String> {
     };
 
     Ok(status.clone())
-}
-
-// ========== Graph Visualization Commands ==========
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphData {
-    pub nodes: Vec<GraphNodeData>,
-    pub edges: Vec<GraphEdgeData>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphNodeData {
-    pub id: String,
-    pub label: String,
-    pub node_type: String,
-    pub created_at: i64,
-    pub metadata: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphEdgeData {
-    pub id: String,
-    pub source: String,
-    pub target: String,
-    pub edge_type: String,
-    pub label: String,
-    pub timestamp: i64,
-}
-
-/// Get full graph data for visualization
-#[tauri::command]
-pub async fn get_graph_data(state: State<'_, Arc<AppState>>) -> Result<GraphData, String> {
-    let (nodes, edges) = state.inner().graph.export_for_visualization();
-
-    let node_data: Vec<GraphNodeData> = nodes
-        .iter()
-        .map(|n| GraphNodeData {
-            id: n.id.clone(),
-            label: if n.label.len() > 60 {
-                format!("{}...", n.label.chars().take(57).collect::<String>())
-            } else {
-                n.label.clone()
-            },
-            node_type: format!("{:?}", n.node_type),
-            created_at: n.created_at,
-            metadata: n.metadata.clone(),
-        })
-        .collect();
-
-    let edge_data: Vec<GraphEdgeData> = edges
-        .iter()
-        .map(|e| GraphEdgeData {
-            id: e.id.clone(),
-            source: e.source.clone(),
-            target: e.target.clone(),
-            edge_type: format!("{:?}", e.edge_type),
-            label: format!("{:?}", e.edge_type),
-            timestamp: e.timestamp,
-        })
-        .collect();
-
-    Ok(GraphData {
-        nodes: node_data,
-        edges: edge_data,
-    })
-}
-
-/// Search the knowledge graph
-#[tauri::command]
-pub async fn search_graph(
-    state: State<'_, Arc<AppState>>,
-    query: String,
-    limit: Option<usize>,
-) -> Result<Vec<SearchResult>, String> {
-    let limit = limit.unwrap_or(20).clamp(1, 50);
-    let embedder = shared_embedder()?;
-
-    HybridSearcher::search(&state.inner().store, &embedder, &query, limit, None, None)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-// ========== App Config & System Readiness Commands ==========
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppConfigPayload {
-    pub experimental_ui_enabled: bool,
-    pub use_demo_data_only: bool,
-    pub use_vlm: bool,
-}
-
-#[tauri::command]
-pub async fn get_app_config(state: State<'_, Arc<AppState>>) -> Result<AppConfigPayload, String> {
-    let c = state.inner().config.read();
-    Ok(AppConfigPayload {
-        experimental_ui_enabled: c.experimental_ui_enabled,
-        use_demo_data_only: c.use_demo_data_only,
-        use_vlm: c.use_vlm,
-    })
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SystemReadiness {
-    pub screen_capture_permission_granted: bool,
-    pub screen_capture_permission_detail: String,
-    pub ocr_available: bool,
-    pub ocr_detail: String,
-    pub inference_ready: bool,
-    pub embedder_ready: bool,
-    pub vector_store_ready: bool,
-    pub data_dir_writable: bool,
-    pub data_dir_detail: String,
-    pub capture_status: CaptureStatus,
-    pub total_records: usize,
-    pub vlm_active: bool,
-    pub use_demo_data_only: bool,
-    pub ready_for_search: bool,
-    pub fixes: Vec<String>,
-}
-
-#[tauri::command]
-pub async fn get_readiness(
-    app: AppHandle,
-    state: State<'_, Arc<AppState>>,
-) -> Result<SystemReadiness, String> {
-    let (sc_ok, sc_detail) = permissions::preflight_screen_capture_access();
-
-    let ocr_ok = OcrEngine::new().is_ok();
-    let ocr_detail = if ocr_ok {
-        "Apple Vision OCR initialized.".to_string()
-    } else {
-        "OCR failed to initialize. Screen text extraction will not run.".to_string()
-    };
-
-    let embed_ok = shared_embedder().is_ok();
-
-    let mut fixes: Vec<String> = Vec::new();
-    if !sc_ok {
-        fixes.push(sc_detail.clone());
-    }
-    if !ocr_ok {
-        fixes.push(ocr_detail.clone());
-    }
-    if !embed_ok {
-        fixes.push("Embedding engine failed to initialize.".to_string());
-    }
-
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let (data_ok, data_detail) = match std::fs::create_dir_all(&data_dir) {
-        Ok(()) => {
-            let probe = data_dir.join(".fndr_write_probe");
-            match std::fs::write(&probe, b"ok") {
-                Ok(()) => {
-                    let _ = std::fs::remove_file(&probe);
-                    (true, format!("App data directory writable: {:?}", data_dir))
-                }
-                Err(e) => {
-                    let msg = format!("Cannot write app data directory {:?}: {}", data_dir, e);
-                    fixes.push(msg.clone());
-                    (false, msg)
-                }
-            }
-        }
-        Err(e) => {
-            let msg = format!("Cannot create app data directory {:?}: {}", data_dir, e);
-            fixes.push(msg.clone());
-            (false, msg)
-        }
-    };
-
-    let stats_res = state.inner().store.get_stats().await;
-    let store_ok = stats_res.is_ok();
-    if !store_ok {
-        fixes.push("Vector store is not responding.".to_string());
-    }
-    let total_records = stats_res.map(|s| s.total_records).unwrap_or(0);
-
-    let cfg = state.inner().config.read();
-    let use_demo = cfg.use_demo_data_only;
-    let vlm_active = state.inner().vlm.read().is_some() && cfg.use_vlm;
-
-    let live_path_ok = sc_ok && ocr_ok;
-    let ready_for_search = embed_ok && store_ok && data_ok && (use_demo || live_path_ok);
-
-    if use_demo {
-        fixes.retain(|f| {
-            !f.contains("Screen Recording")
-                && !f.contains("Screen capture")
-                && !f.contains("OCR")
-                && !f.contains("Apple Vision")
-        });
-    }
-
-    let cs = CaptureStatus {
-        is_capturing: state.inner().is_capturing(),
-        is_paused: state.inner().is_paused.load(Ordering::SeqCst),
-        is_incognito: state.inner().is_incognito.load(Ordering::SeqCst),
-        frames_captured: state.inner().frames_captured.load(Ordering::Relaxed),
-        frames_dropped: state.inner().frames_dropped.load(Ordering::Relaxed),
-        last_capture_time: state.inner().last_capture_time.load(Ordering::Relaxed),
-        ai_model_available: state.inner().ai_model_available(),
-        ai_model_loaded: state.inner().ai_model_loaded(),
-        loaded_model_id: state.inner().loaded_model_id(),
-    };
-
-    Ok(SystemReadiness {
-        screen_capture_permission_granted: sc_ok,
-        screen_capture_permission_detail: sc_detail,
-        ocr_available: ocr_ok,
-        ocr_detail,
-        inference_ready: state.inner().ai_model_loaded(),
-        embedder_ready: embed_ok,
-        vector_store_ready: store_ok,
-        data_dir_writable: data_ok,
-        data_dir_detail: data_detail,
-        capture_status: cs,
-        total_records,
-        vlm_active,
-        use_demo_data_only: use_demo,
-        ready_for_search,
-        fixes,
-    })
-}
-
-#[tauri::command]
-pub async fn set_use_demo_data_only(
-    state: State<'_, Arc<AppState>>,
-    enabled: bool,
-) -> Result<AppConfigPayload, String> {
-    {
-        let mut c = state.inner().config.write();
-        c.use_demo_data_only = enabled;
-        c.save()
-            .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
-    }
-    get_app_config(state).await
-}
-
-#[tauri::command]
-pub async fn seed_demo_dataset(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
-    let embedder = shared_embedder()?;
-    let records = demo::build_demo_records(&embedder).map_err(|e| e.to_string())?;
-    let n = records.len();
-    state
-        .inner()
-        .store
-        .delete_id_prefix(demo::DEMO_ID_PREFIX)
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
-    state
-        .inner()
-        .store
-        .add_batch(&records)
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
-    Ok(n)
-}
-
-#[tauri::command]
-pub async fn reset_demo_data(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
-    state
-        .inner()
-        .store
-        .delete_id_prefix(demo::DEMO_ID_PREFIX)
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())
-}
-
-#[tauri::command]
-pub async fn inject_test_memory(state: State<'_, Arc<AppState>>) -> Result<String, String> {
-    let embedder = shared_embedder()?;
-    let record = demo::build_inject_record(&embedder).map_err(|e| e.to_string())?;
-    let id = record.id.clone();
-    let inject_prefix = format!("{}inject", demo::DEMO_ID_PREFIX);
-    let _ = state.inner().store.delete_id_prefix(&inject_prefix).await;
-    state
-        .inner()
-        .store
-        .add_batch(&[record])
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
-    Ok(id)
 }

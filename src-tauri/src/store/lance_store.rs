@@ -688,9 +688,19 @@ async fn open_or_create_table(db_path: &Path) -> Result<Table, lancedb::Error> {
 async fn migrate_from_json(table: &Table, json_path: &Path) {
     let result: Result<(), Box<dyn std::error::Error>> = (async {
         let data = std::fs::read(json_path)?;
-        let records: Vec<MemoryRecord> = serde_json::from_slice(&data)?;
+        let mut records: Vec<MemoryRecord> = serde_json::from_slice(&data)?;
         if records.is_empty() {
             return Ok(());
+        }
+
+        // Backfill day_bucket for legacy records that predate the field.
+        for r in &mut records {
+            if r.day_bucket.is_empty() {
+                r.day_bucket = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(r.timestamp)
+                    .unwrap_or_else(chrono::Utc::now)
+                    .format("%Y-%m-%d")
+                    .to_string();
+            }
         }
 
         tracing::info!(

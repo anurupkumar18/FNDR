@@ -33,9 +33,22 @@ def main() -> int:
         return 2
 
     try:
-        whisper = Whisper(model_path=model_path)
-        with open(audio_path, "rb") as audio_file:
-            result = whisper.transcribe(audio_file, response_format="verbose_json")
+        import subprocess
+        import tempfile
+        wav_path = tempfile.mktemp(suffix=".wav")
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav_path],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            whisper = Whisper(model_path=model_path)
+            with open(wav_path, "rb") as audio_file:
+                result = whisper.transcribe(audio_file, response_format="verbose_json")
+        finally:
+            if os.path.exists(wav_path):
+                os.remove(wav_path)
     except Exception as exc:
         print(f"Whisper transcription failed: {exc}", file=sys.stderr)
         return 3

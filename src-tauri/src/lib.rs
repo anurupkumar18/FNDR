@@ -5,7 +5,6 @@
 pub mod api;
 pub mod capture;
 pub mod config;
-pub mod demo;
 pub mod embed;
 pub mod graph;
 pub mod inference;

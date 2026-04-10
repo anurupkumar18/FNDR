@@ -18,6 +18,7 @@ pub struct MemoryRecord {
     /// Unix timestamp in milliseconds
     pub timestamp: i64,
     /// Day bucket for grouping (YYYY-MM-DD)
+    #[serde(default)]
     pub day_bucket: String,
     /// Application name
     pub app_name: String,

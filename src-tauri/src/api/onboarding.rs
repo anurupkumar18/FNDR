@@ -18,18 +18,18 @@ use tauri::{AppHandle, Emitter, Manager, State};
 // macOS framework bindings for permission checks
 // ---------------------------------------------------------------------------
 
-/// CGPreflightScreenCaptureAccess — returns true if the calling process has
-/// Screen Recording (screen capture) permission. Available since macOS 10.15.
-/// Using the proper CoreGraphics API instead of osascript, which was incorrectly
-/// testing Accessibility permission rather than Screen Recording.
+// CGPreflightScreenCaptureAccess — returns true if the calling process has
+// Screen Recording (screen capture) permission. Available since macOS 10.15.
+// Using the proper CoreGraphics API instead of osascript, which was incorrectly
+// testing Accessibility permission rather than Screen Recording.
 #[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGPreflightScreenCaptureAccess() -> bool;
 }
 
-/// Force-link AVFoundation so that the AVCaptureDevice ObjC class is available
-/// at runtime when we call it through the objc2 message-send machinery.
+// Force-link AVFoundation so that the AVCaptureDevice ObjC class is available
+// at runtime when we call it through the objc2 message-send machinery.
 #[cfg(target_os = "macos")]
 #[link(name = "AVFoundation", kind = "framework")]
 extern "C" {}

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy)]
 pub enum SpeechModelKind {
-    WhisperLargeV3Turbo,
+    WhisperBaseEn,
     Orpheus3B,
 }
 
@@ -48,7 +48,7 @@ fn bootstrap_lock() -> &'static AsyncMutex<()> {
 
 fn definition(kind: SpeechModelKind) -> &'static SpeechModelDefinition {
     match kind {
-        SpeechModelKind::WhisperLargeV3Turbo => &WHISPER_MODEL,
+        SpeechModelKind::WhisperBaseEn => &WHISPER_MODEL,
         SpeechModelKind::Orpheus3B => &ORPHEUS_MODEL,
     }
 }
@@ -323,6 +323,7 @@ fn ensure_whisper_backend_blocking() -> Result<(), String> {
     let pip = pip_for_venv(&venv_dir);
 
     let whisper = Command::new(&pip)
+        .env("CMAKE_ARGS", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWHISPER_METAL=1")
         .args(["install", "whisper-cpp-python"])
         .status()
         .map_err(|e| format!("Failed installing whisper-cpp-python: {}", e))?;
@@ -330,9 +331,23 @@ fn ensure_whisper_backend_blocking() -> Result<(), String> {
         return Err("Failed installing whisper-cpp-python".to_string());
     }
 
+    // Workaround: whisper-cpp-python on MacOS expects .so but often builds .dylib
     let Some(python) = python_for_sidecar() else {
         return Err("Speech venv was created, but python was not found".to_string());
     };
+    
+    let patch_script = "
+import sys, os
+site_packages = [p for p in sys.path if 'site-packages' in p]
+if site_packages:
+    dylib = os.path.join(site_packages[0], 'whisper_cpp_python', 'libwhisper.dylib')
+    so = os.path.join(site_packages[0], 'whisper_cpp_python', 'libwhisper.so')
+    if os.path.exists(dylib) and not os.path.exists(so):
+        import shutil
+        shutil.copy(dylib, so)
+";
+    let _ = Command::new(&python).args(["-c", patch_script]).status();
+
     if !whisper_imports_ok(&python) {
         return Err("Whisper backend is still unavailable after install".to_string());
     }
@@ -443,7 +458,7 @@ pub async fn transcribe_audio_file(
     audio_path: &Path,
 ) -> Result<String, String> {
     let model_path =
-        ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperLargeV3Turbo).await?;
+        ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperBaseEn).await?;
     ensure_whisper_backend().await?;
 
     if let Ok(custom_cmd) = std::env::var("FNDR_WHISPER_GGUF_COMMAND") {

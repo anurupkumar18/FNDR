@@ -148,10 +148,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             last_flush = Instant::now();
         }
 
-        if config.use_demo_data_only {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            continue;
-        }
+
 
         // Check if paused
         if !state.is_capturing() {
@@ -222,17 +219,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         }
 
         // Keep the hot capture path simple: Qwen is the required core model and
-        // loads lazily on first real use, while optional vision accelerators stay
-        // off unless a dedicated feature explicitly requests them.
-        let summary = match state.ensure_inference_engine().await {
-            Ok(Some(engine)) => engine.summarize(&text).await,
-            Ok(None) => String::new(),
-            Err(err) => {
-                tracing::warn!("Lazy AI model init failed during capture: {}", err);
-                String::new()
-            }
-        };
-        tracing::info!("LLM Summary: {}", summary);
+        // loads lazily on first real use. We disable continuous frame summarization
+        // in dev/demo mode to prevent terminal chaos and keep the capture loop lightweight.
+        let summary = String::new();
         let final_snippet = if summary.is_empty() {
             text.clone()
         } else {

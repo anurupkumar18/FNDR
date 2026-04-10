@@ -167,17 +167,19 @@ export function SearchBar({
             return;
         }
 
-        if (normalized.includes("open graph")) {
+        if (normalized.includes("open graph") || normalized.includes("show graph")) {
             onSetGraphPanelOpen(true);
-            setVoiceStatus("Opened Graph.");
+            setVoiceStatus("Opened Knowledge Graph.");
             return;
         }
 
-        if (normalized.includes("close graph")) {
+        if (normalized.includes("close graph") || normalized.includes("hide graph")) {
             onSetGraphPanelOpen(false);
-            setVoiceStatus("Closed Graph.");
+            setVoiceStatus("Closed Knowledge Graph.");
             return;
         }
+
+
 
         if (normalized.includes("pause capture") || normalized.includes("pause recording")) {
             await pauseCapture();
@@ -193,6 +195,7 @@ export function SearchBar({
 
         onChange(cleaned);
         setVoiceStatus(`Searching for: ${cleaned}`);
+        setTimeout(() => setVoiceStatus(null), 2000);
     }
 
     async function handleVoiceToggle() {
@@ -269,22 +272,6 @@ export function SearchBar({
 
     return (
         <div className="search-panel">
-            {hasQuery && resultCount > 0 && (
-                <div className="summary-bubble">
-                    {isSummarizing ? (
-                        <div className="summary-loading">
-                            <span className="summary-spinner" />
-                            <span>Synthesizing memories...</span>
-                        </div>
-                    ) : (
-                        <p className="summary-text">
-                            <span className="summary-icon">💡</span>
-                            {summary}
-                        </p>
-                    )}
-                </div>
-            )}
-
             {disabled && disabledHint && (
                 <p className="search-disabled-hint" role="status">
                     {disabledHint}
@@ -333,12 +320,6 @@ export function SearchBar({
                 </div>
             </div>
 
-            {voiceStatus && (
-                <div className={`voice-status ${isRecording ? "recording" : ""}`}>
-                    {voiceStatus}
-                </div>
-            )}
-
             {hasQuery && (
                 <div className="search-meta-row">
                     <div className="search-filters">
@@ -380,6 +361,28 @@ export function SearchBar({
                     <div className="result-count">
                         {`${resultCount} results`}
                     </div>
+                </div>
+            )}
+
+            {voiceStatus && (
+                <div className={`voice-status ${isRecording ? "recording" : ""}`}>
+                    {voiceStatus}
+                </div>
+            )}
+
+            {hasQuery && resultCount > 0 && (
+                <div className="summary-bubble">
+                    {isSummarizing ? (
+                        <div className="summary-loading">
+                            <span className="summary-spinner" />
+                            <span>Synthesizing memories...</span>
+                        </div>
+                    ) : (
+                        <p className="summary-text">
+                            <span className="summary-icon">💡</span>
+                            {summary}
+                        </p>
+                    )}
                 </div>
             )}
         </div>

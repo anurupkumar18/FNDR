@@ -404,9 +404,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                             className={`ob-model-card ${selected?.id === m.id ? "selected" : ""} ${m.download_url === "already_downloaded" ? "already-downloaded" : ""}`}
                             onClick={() => setSelected(m)}
                         >
-                            {m.recommended && <span className="ob-model-badge">Required</span>}
+                            {m.recommended && <span className="ob-model-badge">Recommended</span>}
                             {m.download_url === "already_downloaded" && (
-                                <span className="ob-model-badge downloaded">Downloaded</span>
+                                <span className="ob-model-badge downloaded">Already on Disk</span>
                             )}
                             <div className="ob-model-name">{m.name}</div>
                             <div className="ob-model-desc">{m.description}</div>

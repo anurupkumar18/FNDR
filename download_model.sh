@@ -1,74 +1,43 @@
 #!/bin/bash
-# Helper to download AI models for FNDR
-# Downloads: Meta Llama 3.2 1B, SmolVLM 500M, SmolVLM 256M
+# Helper to download necessary AI models for FNDR
+# Minimal version: Downloads 1B Text LLM and 500M Vision model only.
 
 MODEL_DIR="src-tauri/models"
 mkdir -p "$MODEL_DIR"
 
 # ============================================
-# Text LLM: Meta Llama 3.2 1B Instruct
+# Text LLM: Meta Llama 3.2 1B Instruct (770MB)
 # ============================================
 LLM_URL="https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 LLM_PATH="$MODEL_DIR/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 
-if [ -f "$LLM_PATH" ]; then
-    echo "✅ Llama 3.2 1B already exists at $LLM_PATH"
+if [ -f "$LLM_PATH" ] && [ "$(wc -c < "$LLM_PATH")" -gt 1000000 ]; then
+    echo "✅ Llama 3.2 1B exists."
 else
-    echo "📥 Downloading Meta Llama 3.2 1B GGUF (~700MB)..."
+    echo "📥 Downloading Llama 3.2 1B (~700MB)..."
     curl -L "$LLM_URL" -o "$LLM_PATH"
-    echo "✅ Llama 3.2 1B download complete."
 fi
 
 # ============================================
-# Vision LLM (Primary): SmolVLM 500M
+# Vision LLM: SmolVLM 500M (437MB model + 199MB projector)
 # ============================================
-VLM_500M_URL="https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/SmolVLM-500M-Instruct-Q4_K_M.gguf"
-VLM_500M_MMPROJ_URL="https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-500M-Instruct-f16.gguf"
-VLM_500M_PATH="$MODEL_DIR/SmolVLM-500M-Instruct-Q4_K_M.gguf"
-VLM_500M_MMPROJ_PATH="$MODEL_DIR/mmproj-SmolVLM-500M-Instruct-f16.gguf"
+VLM_URL="https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/SmolVLM-500M-Instruct-Q8_0.gguf"
+MMPROJ_URL="https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-500M-Instruct-f16.gguf"
+VLM_PATH="$MODEL_DIR/SmolVLM-500M-Instruct-Q8_0.gguf"
+MMPROJ_PATH="$MODEL_DIR/mmproj-SmolVLM-500M-Instruct-f16.gguf"
 
-if [ -f "$VLM_500M_PATH" ]; then
-    echo "✅ SmolVLM 500M already exists at $VLM_500M_PATH"
+if [ -f "$VLM_PATH" ] && [ "$(wc -c < "$VLM_PATH")" -gt 1000000 ]; then
+    echo "✅ SmolVLM 500M exists."
 else
-    echo "📥 Downloading SmolVLM 500M GGUF (~400MB)..."
-    curl -L "$VLM_500M_URL" -o "$VLM_500M_PATH"
-    echo "✅ SmolVLM 500M download complete."
+    echo "📥 Downloading SmolVLM 500M (~437MB)..."
+    curl -L "$VLM_URL" -o "$VLM_PATH"
 fi
 
-if [ -f "$VLM_500M_MMPROJ_PATH" ]; then
-    echo "✅ SmolVLM 500M mmproj already exists"
+if [ -f "$MMPROJ_PATH" ] && [ "$(wc -c < "$MMPROJ_PATH")" -gt 1000000 ]; then
+    echo "✅ Vision Projector exists."
 else
-    echo "📥 Downloading SmolVLM 500M mmproj (~200MB)..."
-    curl -L "$VLM_500M_MMPROJ_URL" -o "$VLM_500M_MMPROJ_PATH"
-    echo "✅ SmolVLM 500M mmproj download complete."
+    echo "📥 Downloading Vision Projector (~199MB)..."
+    curl -L "$MMPROJ_URL" -o "$MMPROJ_PATH"
 fi
 
-# ============================================
-# Vision LLM (Fallback): SmolVLM 256M
-# ============================================
-VLM_256M_URL="https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q4_K_M.gguf"
-VLM_256M_MMPROJ_URL="https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-f16.gguf"
-VLM_256M_PATH="$MODEL_DIR/SmolVLM-256M-Instruct-Q4_K_M.gguf"
-VLM_256M_MMPROJ_PATH="$MODEL_DIR/mmproj-SmolVLM-256M-Instruct-f16.gguf"
-
-if [ -f "$VLM_256M_PATH" ]; then
-    echo "✅ SmolVLM 256M (fallback) already exists"
-else
-    echo "📥 Downloading SmolVLM 256M GGUF (~200MB)..."
-    curl -L "$VLM_256M_URL" -o "$VLM_256M_PATH"
-    echo "✅ SmolVLM 256M download complete."
-fi
-
-if [ -f "$VLM_256M_MMPROJ_PATH" ]; then
-    echo "✅ SmolVLM 256M mmproj already exists"
-else
-    echo "📥 Downloading SmolVLM 256M mmproj (~100MB)..."
-    curl -L "$VLM_256M_MMPROJ_URL" -o "$VLM_256M_MMPROJ_PATH"
-    echo "✅ SmolVLM 256M mmproj download complete."
-fi
-
-echo ""
-echo "🎉 All models downloaded successfully!"
-echo "   Text LLM:     $LLM_PATH "
-echo "   VLM Primary:  $VLM_500M_PATH"
-echo "   VLM Fallback: $VLM_256M_PATH"
+echo "🎉 Minimal model set ready."
