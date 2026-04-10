@@ -247,15 +247,23 @@ fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn python_imports_ok(python: &Path) -> bool {
+fn python_imports_ok(python: &Path, imports: &str) -> bool {
     Command::new(python)
-        .args([
-            "-c",
-            "import whisper_cpp_python, llama_cpp, numpy, huggingface_hub, onnxruntime",
-        ])
+        .args(["-c", imports])
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+fn whisper_imports_ok(python: &Path) -> bool {
+    python_imports_ok(python, "import whisper_cpp_python")
+}
+
+fn orpheus_imports_ok(python: &Path) -> bool {
+    python_imports_ok(
+        python,
+        "import llama_cpp, numpy, huggingface_hub, onnxruntime",
+    )
 }
 
 fn llama_cpp_extra_index() -> &'static str {
@@ -266,16 +274,10 @@ fn llama_cpp_extra_index() -> &'static str {
     }
 }
 
-fn ensure_python_backend_blocking() -> Result<(), String> {
+fn ensure_venv_ready() -> Result<PathBuf, String> {
     let Some(venv_dir) = speech_venv_dir() else {
         return Err("Could not determine Documents directory for FNDR Speech".to_string());
     };
-
-    if let Some(python) = python_for_sidecar() {
-        if python_imports_ok(&python) {
-            return Ok(());
-        }
-    }
 
     if !command_exists("python3") {
         return Err("python3 is required for speech features".to_string());
@@ -307,6 +309,47 @@ fn ensure_python_backend_blocking() -> Result<(), String> {
         return Err("Failed upgrading speech pip toolchain".to_string());
     }
 
+    Ok(venv_dir)
+}
+
+fn ensure_whisper_backend_blocking() -> Result<(), String> {
+    if let Some(python) = python_for_sidecar() {
+        if whisper_imports_ok(&python) {
+            return Ok(());
+        }
+    }
+
+    let venv_dir = ensure_venv_ready()?;
+    let pip = pip_for_venv(&venv_dir);
+
+    let whisper = Command::new(&pip)
+        .args(["install", "whisper-cpp-python"])
+        .status()
+        .map_err(|e| format!("Failed installing whisper-cpp-python: {}", e))?;
+    if !whisper.success() {
+        return Err("Failed installing whisper-cpp-python".to_string());
+    }
+
+    let Some(python) = python_for_sidecar() else {
+        return Err("Speech venv was created, but python was not found".to_string());
+    };
+    if !whisper_imports_ok(&python) {
+        return Err("Whisper backend is still unavailable after install".to_string());
+    }
+
+    Ok(())
+}
+
+fn ensure_orpheus_backend_blocking() -> Result<(), String> {
+    if let Some(python) = python_for_sidecar() {
+        if orpheus_imports_ok(&python) {
+            return Ok(());
+        }
+    }
+
+    let venv_dir = ensure_venv_ready()?;
+    let pip = pip_for_venv(&venv_dir);
+
     let llama = Command::new(&pip)
         .args([
             "install",
@@ -321,32 +364,33 @@ fn ensure_python_backend_blocking() -> Result<(), String> {
     }
 
     let deps = Command::new(&pip)
-        .args([
-            "install",
-            "whisper-cpp-python",
-            "huggingface_hub",
-            "numpy",
-            "onnxruntime",
-        ])
+        .args(["install", "huggingface_hub", "numpy", "onnxruntime"])
         .status()
-        .map_err(|e| format!("Failed installing speech dependencies: {}", e))?;
+        .map_err(|e| format!("Failed installing Orpheus dependencies: {}", e))?;
     if !deps.success() {
-        return Err("Failed installing speech dependencies".to_string());
+        return Err("Failed installing Orpheus dependencies".to_string());
     }
 
     let Some(python) = python_for_sidecar() else {
         return Err("Speech venv was created, but python was not found".to_string());
     };
-    if !python_imports_ok(&python) {
-        return Err("Speech backend dependencies are still unavailable after install".to_string());
+    if !orpheus_imports_ok(&python) {
+        return Err("Orpheus backend dependencies are still unavailable after install".to_string());
     }
 
     Ok(())
 }
 
-pub async fn ensure_python_backend() -> Result<(), String> {
+pub async fn ensure_whisper_backend() -> Result<(), String> {
     let _guard = bootstrap_lock().lock().await;
-    tokio::task::spawn_blocking(ensure_python_backend_blocking)
+    tokio::task::spawn_blocking(ensure_whisper_backend_blocking)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub async fn ensure_orpheus_backend() -> Result<(), String> {
+    let _guard = bootstrap_lock().lock().await;
+    tokio::task::spawn_blocking(ensure_orpheus_backend_blocking)
         .await
         .map_err(|e| e.to_string())?
 }
@@ -400,7 +444,7 @@ pub async fn transcribe_audio_file(
 ) -> Result<String, String> {
     let model_path =
         ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperLargeV3Turbo).await?;
-    ensure_python_backend().await?;
+    ensure_whisper_backend().await?;
 
     if let Ok(custom_cmd) = std::env::var("FNDR_WHISPER_GGUF_COMMAND") {
         let audio = audio_path.to_path_buf();
@@ -466,7 +510,7 @@ pub async fn synthesize_speech(
     }
 
     let model_path = ensure_model_downloaded(app_data_dir, SpeechModelKind::Orpheus3B).await?;
-    ensure_python_backend().await?;
+    ensure_orpheus_backend().await?;
 
     let output_path = make_tts_output_path(app_data_dir);
     if let Some(parent) = output_path.parent() {

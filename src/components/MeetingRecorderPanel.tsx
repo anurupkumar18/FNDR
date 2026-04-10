@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     MeetingRecorderStatus,
     MeetingSession,
@@ -39,7 +39,23 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
 
     const selectedMeeting = meetings.find((m) => m.id === selectedId) ?? null;
 
+    // ── Load transcript ───────────────────────────────────────────────────────
+    const loadTranscript = useCallback(async (id: string) => {
+        setTranscriptLoading(true);
+        try {
+            const data = await getMeetingTranscript(id);
+            setTranscript(data);
+        } catch (err) {
+            setError(String(err));
+        } finally {
+            setTranscriptLoading(false);
+        }
+    }, []);
+
     // ── Refresh ──────────────────────────────────────────────────────────────
+    const selectedIdRef = useRef(selectedId);
+    useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
+
     const refresh = useCallback(async (autoSelectCurrent = true) => {
         try {
             const [s, list] = await Promise.all([getMeetingStatus(), listMeetings()]);
@@ -47,14 +63,16 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
             setMeetings(list);
             setError(null);
 
-            // Auto-select: prefer current recording, then keep existing selection, then first
+            // Auto-select: prefer current recording, then keep existing selection, then first.
+            // Use a ref for selectedId so this callback never goes stale.
             if (autoSelectCurrent) {
+                const current = selectedIdRef.current;
                 const next =
                     s.current_meeting_id ??
-                    (list.find((m) => m.id === selectedId)?.id) ??
+                    (list.find((m) => m.id === current)?.id) ??
                     list[0]?.id ??
                     null;
-                if (next && next !== selectedId) {
+                if (next && next !== current) {
                     setSelectedId(next);
                     loadTranscript(next);
                 }
@@ -62,7 +80,7 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
         } catch (err) {
             setError(String(err));
         }
-    }, [selectedId]);
+    }, [loadTranscript]);
 
     // ── Polling ───────────────────────────────────────────────────────────────
     useEffect(() => {
@@ -70,7 +88,7 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
         refresh(true);
         const id = window.setInterval(() => refresh(true), 4000);
         return () => window.clearInterval(id);
-    }, [isVisible]);
+    }, [isVisible, refresh]);
 
     // ── Elapsed timer while recording ─────────────────────────────────────────
     useEffect(() => {
@@ -83,19 +101,6 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
         const id = window.setInterval(tick, 1000);
         return () => window.clearInterval(id);
     }, [status?.is_recording, status?.started_at]);
-
-    // ── Load transcript ───────────────────────────────────────────────────────
-    const loadTranscript = async (id: string) => {
-        setTranscriptLoading(true);
-        try {
-            const data = await getMeetingTranscript(id);
-            setTranscript(data);
-        } catch (err) {
-            setError(String(err));
-        } finally {
-            setTranscriptLoading(false);
-        }
-    };
 
     const handleSelectMeeting = (id: string) => {
         setSelectedId(id);

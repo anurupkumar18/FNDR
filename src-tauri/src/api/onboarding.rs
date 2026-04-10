@@ -494,7 +494,11 @@ pub async fn download_model(
         return Err("A download is already in progress".into());
     }
 
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| {
+        // Reset the flag so future downloads are not permanently blocked
+        DOWNLOAD_IN_PROGRESS.store(false, Ordering::SeqCst);
+        e.to_string()
+    })?;
     let dest_path = models::models_dir(app_data_dir.as_path()).join(&filename);
     let temp_path = models::partial_model_path(app_data_dir.as_path(), &filename);
 

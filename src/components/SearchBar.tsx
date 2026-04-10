@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import {
     SearchResult,
     pauseCapture,
     resumeCapture,
-    speakText,
     summarizeSearch,
     transcribeVoiceInput,
 } from "../api/tauri";
@@ -42,16 +40,17 @@ export function SearchBar({
     const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
     const [isRecording, setIsRecording] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
-    const [isSpeaking, setIsSpeaking] = useState(false);
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
     const mimeTypeRef = useRef<string>("audio/webm");
-    const audioRef = useRef<HTMLAudioElement | null>(null);
+    // Ref so the 600ms timer always reads the latest results without restarting the debounce
+    const searchResultsRef = useRef(searchResults);
+    useEffect(() => { searchResultsRef.current = searchResults; }, [searchResults]);
 
     useEffect(() => {
-        if (!value.trim() || resultCount === 0 || searchResults.length === 0) {
+        if (!value.trim() || resultCount === 0) {
             setSummary(null);
             setIsSummarizing(false);
             return;
@@ -61,8 +60,13 @@ export function SearchBar({
         setSummary(null);
 
         const timer = setTimeout(async () => {
+            const latestResults = searchResultsRef.current;
+            if (latestResults.length === 0) {
+                setIsSummarizing(false);
+                return;
+            }
             try {
-                const snippets = searchResults
+                const snippets = latestResults
                     .slice(0, 5)
                     .map((result) => `[${result.app_name}] ${result.snippet}`);
 
@@ -83,52 +87,8 @@ export function SearchBar({
         return () => {
             stopMediaStream(mediaStreamRef.current);
             mediaStreamRef.current = null;
-            if (audioRef.current) {
-                audioRef.current.pause();
-                audioRef.current = null;
-            }
         };
     }, []);
-
-    async function playSpeech(text: string) {
-        const trimmed = text.trim();
-        if (!trimmed) return;
-
-        setIsSpeaking(true);
-        setVoiceStatus(`Speaking: ${trimmed}`);
-
-        try {
-            const result = await speakText(trimmed, "tara");
-            if (audioRef.current) {
-                audioRef.current.pause();
-                audioRef.current = null;
-            }
-
-            const audio = new Audio(convertFileSrc(result.audio_path));
-            audioRef.current = audio;
-
-            await new Promise<void>((resolve, reject) => {
-                audio.onended = () => {
-                    audioRef.current = null;
-                    resolve();
-                };
-                audio.onerror = () => {
-                    audioRef.current = null;
-                    reject(new Error("Audio playback failed"));
-                };
-                void audio.play().catch(reject);
-            });
-        } finally {
-            setIsSpeaking(false);
-        }
-    }
-
-    async function speakCurrentSummary() {
-        const text =
-            summary?.trim() ||
-            (value.trim() ? `Searching FNDR for ${value.trim()}.` : "FNDR voice is ready.");
-        await playSpeech(text);
-    }
 
     async function handleVoiceTranscript(transcript: string) {
         const cleaned = transcript.trim();
@@ -142,74 +102,69 @@ export function SearchBar({
 
         if (normalized === "clear" || normalized === "clear search" || normalized === "reset search") {
             onChange("");
-            await playSpeech("Search cleared.");
+            setVoiceStatus("Search cleared.");
             return;
         }
 
         if (normalized.startsWith("search for ")) {
             const searchQuery = cleaned.slice("search for ".length).trim();
             onChange(searchQuery);
-            await playSpeech(`Searching FNDR for ${searchQuery}.`);
+            setVoiceStatus(`Searching for: ${searchQuery}`);
             return;
         }
 
         if (normalized.startsWith("find ")) {
             const searchQuery = cleaned.slice("find ".length).trim();
             onChange(searchQuery);
-            await playSpeech(`Searching FNDR for ${searchQuery}.`);
+            setVoiceStatus(`Searching for: ${searchQuery}`);
             return;
         }
 
         if (normalized.startsWith("look for ")) {
             const searchQuery = cleaned.slice("look for ".length).trim();
             onChange(searchQuery);
-            await playSpeech(`Searching FNDR for ${searchQuery}.`);
+            setVoiceStatus(`Searching for: ${searchQuery}`);
             return;
         }
 
         if (normalized.includes("open meetings") || normalized.includes("open meeting recorder") || normalized.includes("open meeting notes")) {
             onSetMeetingPanelOpen(true);
-            await playSpeech("Opening meeting notes.");
+            setVoiceStatus("Opened Meetings.");
             return;
         }
 
         if (normalized.includes("close meetings") || normalized.includes("close meeting recorder") || normalized.includes("close meeting notes")) {
             onSetMeetingPanelOpen(false);
-            await playSpeech("Closing meeting notes.");
+            setVoiceStatus("Closed Meetings.");
             return;
         }
 
         if (normalized.includes("open graph")) {
             onSetGraphPanelOpen(true);
-            await playSpeech("Opening graph.");
+            setVoiceStatus("Opened Graph.");
             return;
         }
 
         if (normalized.includes("close graph")) {
             onSetGraphPanelOpen(false);
-            await playSpeech("Closing graph.");
+            setVoiceStatus("Closed Graph.");
             return;
         }
 
         if (normalized.includes("pause capture") || normalized.includes("pause recording")) {
             await pauseCapture();
-            await playSpeech("Capture paused.");
+            setVoiceStatus("Capture paused.");
             return;
         }
 
         if (normalized.includes("resume capture") || normalized.includes("resume recording") || normalized.includes("start capture")) {
             await resumeCapture();
-            await playSpeech("Capture resumed.");
-            return;
-        }
-
-        if (normalized.includes("read summary") || normalized.includes("speak summary")) {
-            await speakCurrentSummary();
+            setVoiceStatus("Capture resumed.");
             return;
         }
 
         onChange(cleaned);
-        await playSpeech(`Searching FNDR for ${cleaned}.`);
+        setVoiceStatus(`Searching for: ${cleaned}`);
     }
 
     async function handleVoiceToggle() {
@@ -288,17 +243,6 @@ export function SearchBar({
         <div className="search-overlay">
             {value.trim() && resultCount > 0 && (
                 <div className="summary-bubble">
-                    <div className="summary-topline">
-                        <span className="summary-pill">AI Memory Summary</span>
-                        <button
-                            className="summary-speak-btn"
-                            onClick={() => void speakCurrentSummary()}
-                            disabled={isSpeaking || isRecording || isTranscribing}
-                            title="Read this summary aloud"
-                        >
-                            {isSpeaking ? "Speaking..." : "Read aloud"}
-                        </button>
-                    </div>
                     {isSummarizing ? (
                         <div className="summary-loading">
                             <span className="summary-spinner" />
@@ -324,7 +268,7 @@ export function SearchBar({
                         type="text"
                         value={value}
                         onChange={(e) => onChange(e.target.value)}
-                        placeholder="Search your memories or use voice..."
+                        placeholder="Search your memories..."
                         className="search-input"
                         autoComplete="off"
                     />
@@ -334,19 +278,9 @@ export function SearchBar({
                         onClick={() => void handleVoiceToggle()}
                         aria-label={isRecording ? "Stop voice recording" : "Start voice recording"}
                         title={isRecording ? "Stop voice recording" : "Start voice recording"}
-                        disabled={isTranscribing || isSpeaking}
+                        disabled={isTranscribing}
                     >
                         {isRecording ? "Stop" : isTranscribing ? "..." : "Mic"}
-                    </button>
-
-                    <button
-                        className="voice-btn secondary"
-                        onClick={() => void speakCurrentSummary()}
-                        aria-label="Speak the current summary"
-                        title="Speak the current summary"
-                        disabled={isRecording || isTranscribing || isSpeaking}
-                    >
-                        {isSpeaking ? "..." : "Say"}
                     </button>
 
                     {value && (
