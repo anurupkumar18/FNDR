@@ -195,6 +195,7 @@ export function SearchBar({
 
         onChange(cleaned);
         setVoiceStatus(`Searching for: ${cleaned}`);
+        setTimeout(() => setVoiceStatus(null), 2000);
     }
 
     async function handleVoiceToggle() {
@@ -319,28 +320,6 @@ export function SearchBar({
                 </div>
             </div>
 
-            {hasQuery && resultCount > 0 && (
-                <div className="summary-bubble">
-                    {isSummarizing ? (
-                        <div className="summary-loading">
-                            <span className="summary-spinner" />
-                            <span>Synthesizing memories...</span>
-                        </div>
-                    ) : (
-                        <p className="summary-text">
-                            <span className="summary-icon">💡</span>
-                            {summary}
-                        </p>
-                    )}
-                </div>
-            )}
-
-            {voiceStatus && (
-                <div className={`voice-status ${isRecording ? "recording" : ""}`}>
-                    {voiceStatus}
-                </div>
-            )}
-
             {hasQuery && (
                 <div className="search-meta-row">
                     <div className="search-filters">
@@ -382,6 +361,28 @@ export function SearchBar({
                     <div className="result-count">
                         {`${resultCount} results`}
                     </div>
+                </div>
+            )}
+
+            {voiceStatus && (
+                <div className={`voice-status ${isRecording ? "recording" : ""}`}>
+                    {voiceStatus}
+                </div>
+            )}
+
+            {hasQuery && resultCount > 0 && (
+                <div className="summary-bubble">
+                    {isSummarizing ? (
+                        <div className="summary-loading">
+                            <span className="summary-spinner" />
+                            <span>Synthesizing memories...</span>
+                        </div>
+                    ) : (
+                        <p className="summary-text">
+                            <span className="summary-icon">💡</span>
+                            {summary}
+                        </p>
+                    )}
                 </div>
             )}
         </div>
