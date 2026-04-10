@@ -40,8 +40,6 @@ fn default_vlm_model_size() -> String {
     "4B".to_string()
 }
 
-
-
 impl Default for Config {
     fn default() -> Self {
         Self {

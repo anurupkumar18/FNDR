@@ -22,6 +22,10 @@
     <!-- Accessibility Permission -->
     <key>NSAccessibilityUsageDescription</key>
     <string>FNDR needs accessibility access to detect active applications and window titles.</string>
+
+    <!-- Microphone Permission -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>FNDR needs microphone access for voice search and meeting transcription.</string>
     
     <!-- Run as background agent (menu bar app) -->
     <key>LSUIElement</key>

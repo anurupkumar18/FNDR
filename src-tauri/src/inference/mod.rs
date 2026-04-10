@@ -3,9 +3,9 @@ use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
 #[allow(deprecated)]
 use llama_cpp_2::model::Special;
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
 use parking_lot::Mutex;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, Box<dyn std::error::Er
     if let Some(backend) = LLAMA_BACKEND.get() {
         return Ok(Arc::clone(backend));
     }
-    
+
     // Suppress overly verbose metal/llama.cpp internal logs for cleaner developer output
     std::env::set_var("GGML_METAL_LOG_INFO", "0");
     std::env::set_var("GGML_METAL_LOG_WARN", "0");
@@ -35,6 +35,148 @@ pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, Box<dyn std::error::Er
     Ok(backend)
 }
 pub use vlm::VlmEngine;
+
+const MAX_OCR_SUMMARY_CHARS: usize = 1100;
+const MAX_SUMMARY_CHARS: usize = 120;
+
+fn normalize_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let keep = max_chars.saturating_sub(3);
+    let mut out: String = value.chars().take(keep).collect();
+    out.push_str("...");
+    out
+}
+
+fn is_separator_line(line: &str) -> bool {
+    !line.is_empty()
+        && line
+            .chars()
+            .all(|ch| ch == '-' || ch == '_' || ch == '=' || ch == '.' || ch == ' ')
+}
+
+fn symbol_ratio(line: &str) -> f32 {
+    let chars: Vec<char> = line.chars().collect();
+    if chars.is_empty() {
+        return 1.0;
+    }
+    let symbols = chars
+        .iter()
+        .filter(|ch| !ch.is_alphanumeric() && !ch.is_whitespace())
+        .count();
+    symbols as f32 / chars.len() as f32
+}
+
+fn looks_like_file_inventory(line: &str) -> bool {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if tokens.len() < 5 {
+        return false;
+    }
+
+    let pathish = tokens
+        .iter()
+        .filter(|token| {
+            let token = token.trim_matches(|ch: char| ",;:()[]{}".contains(ch));
+            token.contains('/')
+                || token.contains('\\')
+                || (token.contains('.')
+                    && (token.contains('_') || token.contains('-') || token.ends_with(".rs")))
+        })
+        .count();
+
+    pathish >= 4
+}
+
+fn strip_known_prefixes(value: &str) -> String {
+    let trimmed = value.trim();
+    let lower = trimmed.to_lowercase();
+
+    for prefix in [
+        "summary:",
+        "summary -",
+        "summary",
+        "activity:",
+        "action:",
+        "output:",
+    ] {
+        if lower.starts_with(prefix) {
+            return trimmed[prefix.len()..].trim().to_string();
+        }
+    }
+
+    if lower.starts_with("the screen shows ") {
+        return trimmed["the screen shows ".len()..].trim().to_string();
+    }
+    if lower.starts_with("screen shows ") {
+        return trimmed["screen shows ".len()..].trim().to_string();
+    }
+    if lower.starts_with("i see ") {
+        return trimmed["i see ".len()..].trim().to_string();
+    }
+
+    trimmed.to_string()
+}
+
+fn clean_summary_output(raw: &str) -> String {
+    let mut candidate = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !is_separator_line(line))
+        .unwrap_or(raw.trim())
+        .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`')
+        .to_string();
+
+    // Handle "Action: X | Context: Y" style output.
+    if let Some((left, right)) = candidate.split_once("| Context:") {
+        let action = strip_known_prefixes(left);
+        let context = right.trim();
+        candidate = format!("{} {}", action, context);
+    }
+
+    for _ in 0..3 {
+        let stripped = strip_known_prefixes(&candidate);
+        if stripped == candidate {
+            break;
+        }
+        candidate = stripped;
+    }
+    candidate = normalize_whitespace(&candidate);
+    truncate_chars(candidate.trim(), MAX_SUMMARY_CHARS)
+}
+
+fn is_usable_summary(summary: &str) -> bool {
+    let trimmed = summary.trim();
+    if trimmed.len() < 8 {
+        return false;
+    }
+    if trimmed.split_whitespace().count() < 2 {
+        return false;
+    }
+    if is_separator_line(trimmed) {
+        return false;
+    }
+    if symbol_ratio(trimmed) > 0.34 {
+        return false;
+    }
+    if looks_like_file_inventory(trimmed) {
+        return false;
+    }
+
+    let lower = trimmed.to_lowercase();
+    if lower == "n/a" || lower == "none" || lower == "unknown" {
+        return false;
+    }
+    if lower.contains("ocr text") || lower.contains("raw text") {
+        return false;
+    }
+
+    true
+}
 
 /// AI Inference Engine for FNDR using llama-cpp-2
 /// Persists the LlamaContext to prevent Metal resource exhaustion crashes.
@@ -86,7 +228,8 @@ impl InferenceEngine {
 
         let model_ref = tokio::task::spawn_blocking(move || {
             let model_params = LlamaModelParams::default();
-            let model = LlamaModel::load_from_file(&backend_clone, &model_path_clone, &model_params)?;
+            let model =
+                LlamaModel::load_from_file(&backend_clone, &model_path_clone, &model_params)?;
 
             // Leak the model to get a 'static reference, allowing the context to be 'static.
             // This is safe since InferenceEngine is a singleton for the application lifetime.
@@ -139,15 +282,33 @@ impl InferenceEngine {
 
     /// Summarize noisy OCR text into a clean sentence
     pub async fn summarize(&self, ocr_text: &str) -> String {
+        self.summarize_memory_node("", "", ocr_text).await
+    }
+
+    /// Summarize OCR text into a concise memory snippet for storage and graph nodes.
+    pub async fn summarize_memory_node(
+        &self,
+        app_name: &str,
+        window_title: &str,
+        ocr_text: &str,
+    ) -> String {
         if ocr_text.trim().is_empty() {
             return String::new();
         }
 
         let prompt = match self.build_prompt(
-            "You are a concise assistant that summarizes screen content. Respond ONLY with the summary.",
+            "You generate memory snippets from OCR text.\n\
+            RULES:\n\
+            - Output exactly one concise sentence, maximum 14 words.\n\
+            - Keep only the primary user activity and key object/topic.\n\
+            - Ignore UI chrome, menu labels, status bars, repeated file/path lists, and separators.\n\
+            - No preambles like 'I see' or 'The screen shows'.\n\
+            - No markdown, no bullet points, no extra labels.",
             &format!(
-                "OCR TEXT:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Summarize this screen in one short sentence starting with an action verb. Do not include 'I see' or 'The screen shows'.",
-                ocr_text.chars().take(800).collect::<String>()
+                "APP: {}\nWINDOW: {}\n\nOCR TEXT:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Return only the best memory snippet.",
+                app_name,
+                window_title,
+                ocr_text.chars().take(MAX_OCR_SUMMARY_CHARS).collect::<String>()
             ),
         ) {
             Ok(prompt) => prompt,
@@ -157,8 +318,18 @@ impl InferenceEngine {
             }
         };
 
-        tracing::info!("Summarizing OCR text ({} chars)...", ocr_text.len());
-        let summary = self.complete(&prompt, 40).await;
+        tracing::info!(
+            "Summarizing OCR text for memory node ({} chars)...",
+            ocr_text.len()
+        );
+        let raw_summary = self.complete(&prompt, 48).await;
+        let summary = clean_summary_output(&raw_summary);
+
+        if !is_usable_summary(&summary) {
+            tracing::warn!("Discarded low-signal OCR summary: {}", raw_summary);
+            return String::new();
+        }
+
         tracing::info!("OCR summary result: {}", summary);
         summary
     }
@@ -235,7 +406,11 @@ impl InferenceEngine {
             }
         };
 
-        tracing::info!("Summarizing search results for query: '{}' with {} snippets", query, results.len());
+        tracing::info!(
+            "Summarizing search results for query: '{}' with {} snippets",
+            query,
+            results.len()
+        );
         let summary = self.complete(&prompt, 100).await;
         tracing::info!("Search summary result: {}", summary);
         summary
@@ -338,7 +513,35 @@ impl InferenceEngine {
             n_cur += 1;
         }
 
-        tracing::debug!("Completion result ({} tokens): {}", n_cur - tokens_list.len() as i32, result.trim());
+        tracing::debug!(
+            "Completion result ({} tokens): {}",
+            n_cur - tokens_list.len() as i32,
+            result.trim()
+        );
         result.trim().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleans_common_summary_preambles() {
+        let cleaned = clean_summary_output("Summary: The screen shows reviewing PR comments");
+        assert_eq!(cleaned, "reviewing PR comments");
+    }
+
+    #[test]
+    fn rejects_file_inventory_noise() {
+        let noisy = "src/app.tsx src/lib.rs src/main.rs src-tauri/src/store/schema.rs src-tauri/src/graph/mod.rs";
+        assert!(!is_usable_summary(noisy));
+    }
+
+    #[test]
+    fn accepts_concise_activity_summary() {
+        assert!(is_usable_summary(
+            "Reviewing download_model.sh changes in FNDR"
+        ));
     }
 }

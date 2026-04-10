@@ -149,8 +149,6 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             last_flush = Instant::now();
         }
 
-
-
         // Check if paused
         if !state.is_capturing() {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -220,22 +218,37 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
-        // We re-enable frame summarization but with a throttle to keep the capture loop lightweight.
-        // Summarizing every frame is expensive, so we only do it if the model is already loaded.
-        let mut summary = String::new();
-        if state.ai_model_loaded() {
-            if let Some(engine) = state.inference_engine() {
-                // Throttle: only summarize if it's a "forced" capture or enough time has passed
-                // to avoid choking the GPU/CPU during active work.
-                if force_capture || last_forced_capture.elapsed().as_secs() >= 5 {
-                    summary = engine.summarize(&text).await;
+        // Summarize each persisted memory with the local AI model when available.
+        let engine = if let Some(engine) = state.inference_engine() {
+            Some(engine)
+        } else {
+            match state.ensure_inference_engine().await {
+                Ok(engine) => engine,
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to initialize inference engine in capture loop: {}",
+                        err
+                    );
+                    None
                 }
             }
-        }
+        };
+
+        let summary = if let Some(engine) = engine {
+            engine
+                .summarize_memory_node(&app_name, &window_title, &text)
+                .await
+        } else {
+            String::new()
+        };
 
         let final_snippet = if summary.is_empty() {
-            // Fallback to a truncated version of the raw text if no summary is available
-            text.chars().take(200).collect::<String>()
+            let fallback = text_cleanup::concise_fallback_snippet(&app_name, &window_title, &text);
+            if fallback.is_empty() {
+                text.chars().take(140).collect::<String>()
+            } else {
+                fallback
+            }
         } else {
             summary
         };

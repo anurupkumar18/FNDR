@@ -1,9 +1,7 @@
 //! Tauri command handlers
 
-
-
 use crate::embed::Embedder;
-use crate::graph::{GraphNode, GraphEdge};
+use crate::graph::{GraphEdge, GraphNode};
 
 use crate::mcp::{self, McpServerStatus};
 use crate::meeting::{
@@ -72,16 +70,12 @@ pub async fn search(
     limit: Option<usize>,
 ) -> Result<Vec<SearchResult>, String> {
     let limit = limit.unwrap_or(20).clamp(1, 50);
-    
+
     // Guard: LanceDB vector_search panics/errors on an empty table.
     // Return empty results immediately so the UI shows "No memories found"
     // instead of a "Search failed" error banner.
-    let stats = state
-        .store
-        .get_stats()
-        .await
-        .map_err(|e| e.to_string())?;
-        
+    let stats = state.store.get_stats().await.map_err(|e| e.to_string())?;
+
     if stats.total_records == 0 {
         return Ok(Vec::new());
     }
@@ -128,8 +122,6 @@ pub async fn summarize_search(
 
     Ok(summary)
 }
-
-
 
 /// Get capture status
 #[tauri::command]

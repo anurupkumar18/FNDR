@@ -23,8 +23,7 @@ const WHISPER_MODEL: SpeechModelDefinition = SpeechModelDefinition {
     id: "whisper-small-ggml",
     folder: "whisper-small",
     filename: "ggml-small.bin",
-    download_url:
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+    download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
 };
 
 const ORPHEUS_MODEL: SpeechModelDefinition = SpeechModelDefinition {
@@ -323,7 +322,10 @@ fn ensure_whisper_backend_blocking() -> Result<(), String> {
     let pip = pip_for_venv(&venv_dir);
 
     let whisper = Command::new(&pip)
-        .env("CMAKE_ARGS", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWHISPER_METAL=1")
+        .env(
+            "CMAKE_ARGS",
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWHISPER_METAL=1",
+        )
         .args(["install", "whisper-cpp-python"])
         .status()
         .map_err(|e| format!("Failed installing whisper-cpp-python: {}", e))?;
@@ -335,7 +337,7 @@ fn ensure_whisper_backend_blocking() -> Result<(), String> {
     let Some(python) = python_for_sidecar() else {
         return Err("Speech venv was created, but python was not found".to_string());
     };
-    
+
     let patch_script = "
 import sys, os
 site_packages = [p for p in sys.path if 'site-packages' in p]
@@ -457,8 +459,7 @@ pub async fn transcribe_audio_file(
     app_data_dir: &Path,
     audio_path: &Path,
 ) -> Result<String, String> {
-    let model_path =
-        ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperBaseEn).await?;
+    let model_path = ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperBaseEn).await?;
     ensure_whisper_backend().await?;
 
     if let Ok(custom_cmd) = std::env::var("FNDR_WHISPER_GGUF_COMMAND") {

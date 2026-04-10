@@ -85,7 +85,7 @@ fn main() {
             let _mcp_state = state.clone();
             app.manage(state);
 
-            // We are keeping the demo clean and stable, so we avoid auto-binding 
+            // We are keeping the demo clean and stable, so we avoid auto-binding
             // experimental background subsystems (Meeting auto-monitor and MCP server) for now.
             /*
             if let Err(err) =

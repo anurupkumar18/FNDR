@@ -6,6 +6,7 @@
 
 /// Match the default OCR `min_line_length` so we do not resurrect junk lines.
 const MIN_LINE_LEN: usize = 7;
+const MAX_FALLBACK_SNIPPET_CHARS: usize = 140;
 
 /// Lines with several middots and short segments are almost always Safari/Chrome tab rows.
 fn looks_like_tab_strip_line(line: &str) -> bool {
@@ -49,6 +50,126 @@ fn is_compact_chrome_caption(line: &str) -> bool {
         && lower.contains("forward")
         && lower.len() < 36
         && (lower.contains("reload") || lower.contains("refresh"))
+}
+
+fn is_separator_line(line: &str) -> bool {
+    !line.is_empty()
+        && line
+            .chars()
+            .all(|ch| ch == '-' || ch == '_' || ch == '=' || ch == '.' || ch == ' ')
+}
+
+fn symbol_ratio(line: &str) -> f32 {
+    let chars: Vec<char> = line.chars().collect();
+    if chars.is_empty() {
+        return 1.0;
+    }
+    let symbol_count = chars
+        .iter()
+        .filter(|ch| !ch.is_alphanumeric() && !ch.is_whitespace())
+        .count();
+    symbol_count as f32 / chars.len() as f32
+}
+
+fn looks_like_file_inventory(line: &str) -> bool {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if tokens.len() < 4 {
+        return false;
+    }
+
+    let pathish = tokens
+        .iter()
+        .filter(|token| {
+            let token = token.trim_matches(|ch: char| ",;:()[]{}".contains(ch));
+            token.contains('/')
+                || token.contains('\\')
+                || (token.contains('.')
+                    && (token.contains('_') || token.contains('-') || token.ends_with(".rs")))
+        })
+        .count();
+
+    pathish >= 3
+}
+
+fn normalize_inline(line: &str) -> String {
+    line.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_snippet(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let keep = max_chars.saturating_sub(3);
+    let mut out: String = text.chars().take(keep).collect();
+    out.push_str("...");
+    out
+}
+
+fn title_is_generic_for_app(app_name: &str, title: &str) -> bool {
+    let title_lower = title.to_lowercase();
+    let app_lower = app_name.to_lowercase();
+
+    if !app_lower.is_empty() && title_lower == app_lower {
+        return true;
+    }
+
+    matches!(
+        title_lower.as_str(),
+        "new tab" | "untitled" | "home" | "settings" | "preferences" | "dashboard" | "start page"
+    )
+}
+
+fn is_useful_snippet_line(app_name: &str, line: &str) -> bool {
+    let normalized = normalize_inline(line);
+    if normalized.len() < MIN_LINE_LEN {
+        return false;
+    }
+    if normalized.len() > 220 {
+        return false;
+    }
+    if is_separator_line(&normalized) {
+        return false;
+    }
+    if looks_like_tab_strip_line(&normalized)
+        || looks_like_pipe_tab_row(&normalized)
+        || is_compact_chrome_caption(&normalized)
+    {
+        return false;
+    }
+    if looks_like_file_inventory(&normalized) {
+        return false;
+    }
+    if symbol_ratio(&normalized) > 0.34 {
+        return false;
+    }
+    if title_is_generic_for_app(app_name, &normalized) {
+        return false;
+    }
+    true
+}
+
+/// Build a compact fallback snippet when model summarization is unavailable.
+pub fn concise_fallback_snippet(app_name: &str, window_title: &str, text: &str) -> String {
+    let normalized_title = normalize_inline(window_title.trim());
+    if !normalized_title.is_empty() && is_useful_snippet_line(app_name, &normalized_title) {
+        return truncate_snippet(&normalized_title, MAX_FALLBACK_SNIPPET_CHARS);
+    }
+
+    for line in text.lines() {
+        if is_useful_snippet_line(app_name, line) {
+            return truncate_snippet(&normalize_inline(line), MAX_FALLBACK_SNIPPET_CHARS);
+        }
+    }
+
+    if !normalized_title.is_empty() {
+        return truncate_snippet(&normalized_title, MAX_FALLBACK_SNIPPET_CHARS);
+    }
+
+    if !app_name.trim().is_empty() {
+        return format!("Using {}", app_name.trim());
+    }
+
+    String::new()
 }
 
 /// Remove noisy lines; keep structure and duplicates handled upstream in OCR when possible.
@@ -124,5 +245,31 @@ mod tests {
         let raw = "You can go back forward through the tutorial steps easily";
         let cleaned = reduce_chrome_noise(raw);
         assert!(cleaned.contains("tutorial"));
+    }
+
+    #[test]
+    fn fallback_prefers_window_title() {
+        let snippet = concise_fallback_snippet(
+            "VSCode",
+            "fndr - download_model.sh",
+            "src app.rs src/lib.rs src/main.rs src-tauri/src/graph/mod.rs",
+        );
+        assert_eq!(snippet, "fndr - download_model.sh");
+    }
+
+    #[test]
+    fn fallback_skips_file_inventory_lines() {
+        let snippet = concise_fallback_snippet(
+            "Terminal",
+            "Terminal",
+            "src/app.tsx src/lib.rs src/main.rs src-tauri/src/store/schema.rs\nFix memory summarization for OCR snippets",
+        );
+        assert_eq!(snippet, "Fix memory summarization for OCR snippets");
+    }
+
+    #[test]
+    fn fallback_uses_app_name_as_last_resort() {
+        let snippet = concise_fallback_snippet("Chrome", "", "---- --- ---");
+        assert_eq!(snippet, "Using Chrome");
     }
 }

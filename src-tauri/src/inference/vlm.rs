@@ -7,9 +7,9 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
 #[allow(deprecated)]
 use llama_cpp_2::model::Special;
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use std::num::NonZeroU32;
@@ -174,7 +174,10 @@ impl VlmEngine {
                 .map(|path| path.display().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            VlmError::ModelNotFound(format!("No VLM model found. Searched: {}. Please run the download script.", searched_dirs))
+            VlmError::ModelNotFound(format!(
+                "No VLM model found. Searched: {}. Please run the download script.",
+                searched_dirs
+            ))
         })
     }
 

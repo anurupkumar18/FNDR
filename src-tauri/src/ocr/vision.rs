@@ -540,8 +540,6 @@ impl NoiseFilter {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
