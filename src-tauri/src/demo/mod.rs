@@ -2,7 +2,7 @@
 
 use crate::embed::{Embedder, EMBEDDING_DIM};
 use crate::store::MemoryRecord;
-use chrono::Utc;
+use chrono::Local;
 
 pub const DEMO_ID_PREFIX: &str = "fndr-demo-";
 
@@ -203,7 +203,7 @@ fn seed_table() -> Vec<SeedItem> {
 
 /// Build the fixed demo corpus with embeddings for search.
 pub fn build_demo_records(embedder: &Embedder) -> Result<Vec<MemoryRecord>, String> {
-    let now = Utc::now();
+    let now = Local::now();
     let day_bucket = now.format("%Y-%m-%d").to_string();
     let session = format!("{}-demo", now.format("%Y%m%d"));
 
@@ -239,7 +239,7 @@ pub fn build_demo_records(embedder: &Embedder) -> Result<Vec<MemoryRecord>, Stri
 
 /// Single injected test row for scripted queries.
 pub fn build_inject_record(embedder: &Embedder) -> Result<MemoryRecord, String> {
-    let now = Utc::now();
+    let now = Local::now();
     let day_bucket = now.format("%Y-%m-%d").to_string();
     let text = INJECT_TEST_TEXT.to_string();
     let embedding = embedder

@@ -13,13 +13,22 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
     useEffect(() => {
         if (!isVisible) return;
 
+        let cancelled = false;
+        let intervalId: number | null = null;
+
         const pollStatus = async () => {
             try {
                 const s = await getAgentStatus();
+                if (cancelled) {
+                    return;
+                }
                 setStatus(s);
 
                 // Stop polling if completed or error
                 if (s.status === "completed" || s.status === "error") {
+                    if (intervalId !== null) {
+                        window.clearInterval(intervalId);
+                    }
                     return;
                 }
             } catch (err) {
@@ -27,9 +36,17 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
             }
         };
 
-        pollStatus();
-        const interval = setInterval(pollStatus, 1000);
-        return () => clearInterval(interval);
+        void pollStatus();
+        intervalId = window.setInterval(() => {
+            void pollStatus();
+        }, 1000);
+
+        return () => {
+            cancelled = true;
+            if (intervalId !== null) {
+                window.clearInterval(intervalId);
+            }
+        };
     }, [isVisible]);
 
     const handleStop = async () => {

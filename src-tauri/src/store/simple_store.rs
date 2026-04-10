@@ -4,6 +4,7 @@
 //! Implements naive vector search (cosine similarity) and keyword search.
 
 use super::schema::{AppCount, MemoryRecord, SearchResult, Stats};
+use chrono::{Local, TimeZone};
 // use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -171,12 +172,13 @@ impl Store {
         let total_records = records.len();
         let mut days = std::collections::HashSet::new();
         let mut app_counts: HashMap<String, usize> = HashMap::new();
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today = local_day_bucket_now();
         let mut today_count = 0;
 
         for r in records.iter() {
-            days.insert(&r.day_bucket);
-            if r.day_bucket == today {
+            let day_bucket = local_day_bucket_from_timestamp(r.timestamp);
+            days.insert(day_bucket.clone());
+            if day_bucket == today {
                 today_count += 1;
             }
             *app_counts.entry(r.app_name.clone()).or_insert(0) += 1;
@@ -322,16 +324,13 @@ fn matches_filters(
                 }
             }
             "today" => {
-                let today = now.format("%Y-%m-%d").to_string();
-                if record.day_bucket != today {
+                if local_day_bucket_from_timestamp(record.timestamp) != local_day_bucket_now() {
                     return false;
                 }
             }
             "yesterday" => {
-                let yesterday = (now - chrono::Duration::days(1))
-                    .format("%Y-%m-%d")
-                    .to_string();
-                if record.day_bucket != yesterday {
+                let yesterday = local_day_bucket_days_ago(1);
+                if local_day_bucket_from_timestamp(record.timestamp) != yesterday {
                     return false;
                 }
             }
@@ -351,6 +350,25 @@ fn matches_filters(
     }
 
     true
+}
+
+fn local_day_bucket_now() -> String {
+    Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn local_day_bucket_days_ago(days: i64) -> String {
+    (Local::now() - chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn local_day_bucket_from_timestamp(timestamp: i64) -> String {
+    Local
+        .timestamp_millis_opt(timestamp)
+        .single()
+        .unwrap_or_else(Local::now)
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {

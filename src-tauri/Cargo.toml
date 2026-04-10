@@ -59,10 +59,11 @@ directories = "5"
 toml = "0.8"
 dotenvy = "0.15"
 
-# LanceDB (vector database) - Disabled for prototype due to dep conflicts
-# lancedb = "0.13"
-# arrow-array = "53"
-# arrow-schema = "53"
+# LanceDB (vector database)
+lancedb = "0.27"
+arrow-array = "57"
+arrow-schema = "57"
+futures = "0.3"
 
 # ONNX Runtime for embeddings (disabled for prototype, using hash-based embeddings)
 # ort = { version = "2.0.0-rc.11", default-features = false }
@@ -94,6 +95,9 @@ objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSString", "NSData", "NSDictionary", "NSArray"] }
 objc2-app-kit = { version = "0.2", features = ["NSWorkspace", "NSRunningApplication", "NSImage"] }
 block2 = "0.5"
+
+[dev-dependencies]
+tempfile = "3"
 
 [features]
 default = ["custom-protocol"]

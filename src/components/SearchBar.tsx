@@ -20,6 +20,8 @@ interface SearchBarProps {
     appNames: string[];
     resultCount: number;
     searchResults: SearchResult[];
+    disabled?: boolean;
+    disabledHint?: string;
 }
 
 export function SearchBar({
@@ -34,6 +36,8 @@ export function SearchBar({
     appNames,
     resultCount,
     searchResults,
+    disabled = false,
+    disabledHint,
 }: SearchBarProps) {
     const [summary, setSummary] = useState<string | null>(null);
     const [isSummarizing, setIsSummarizing] = useState(false);
@@ -45,42 +49,66 @@ export function SearchBar({
     const mediaStreamRef = useRef<MediaStream | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
     const mimeTypeRef = useRef<string>("audio/webm");
-    // Ref so the 600ms timer always reads the latest results without restarting the debounce
+    const summaryRequestRef = useRef(0);
     const searchResultsRef = useRef(searchResults);
-    useEffect(() => { searchResultsRef.current = searchResults; }, [searchResults]);
+    const hasQuery = value.trim().length > 0;
 
     useEffect(() => {
-        if (!value.trim() || resultCount === 0) {
+        searchResultsRef.current = searchResults;
+    }, [searchResults]);
+
+    useEffect(() => {
+        const activeValue = value.trim();
+        const requestId = ++summaryRequestRef.current;
+
+        if (!activeValue || resultCount === 0) {
             setSummary(null);
             setIsSummarizing(false);
             return;
         }
 
+        let cancelled = false;
         setIsSummarizing(true);
         setSummary(null);
 
-        const timer = setTimeout(async () => {
+        const timer = window.setTimeout(async () => {
             const latestResults = searchResultsRef.current;
+            if (cancelled || requestId !== summaryRequestRef.current) {
+                return;
+            }
+
             if (latestResults.length === 0) {
                 setIsSummarizing(false);
                 return;
             }
+
             try {
                 const snippets = latestResults
                     .slice(0, 5)
                     .map((result) => `[${result.app_name}] ${result.snippet}`);
 
-                const aiSummary = await summarizeSearch(value, snippets);
+                const aiSummary = await summarizeSearch(activeValue, snippets);
+                if (cancelled || requestId !== summaryRequestRef.current) {
+                    return;
+                }
                 setSummary(aiSummary || "Found relevant memories.");
             } catch (err) {
+                if (cancelled || requestId !== summaryRequestRef.current) {
+                    return;
+                }
                 console.error("Summary generation failed:", err);
-                setSummary(`Found ${resultCount} relevant memories.`);
+                setSummary(`Found ${latestResults.length} relevant memories.`);
             } finally {
-                setIsSummarizing(false);
+                if (!cancelled && requestId === summaryRequestRef.current) {
+                    setIsSummarizing(false);
+                }
             }
         }, 600);
 
-        return () => clearTimeout(timer);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
     }, [value, resultCount]);
 
     useEffect(() => {
@@ -107,20 +135,23 @@ export function SearchBar({
         }
 
         if (normalized.startsWith("search for ")) {
-            onChange(cleaned.slice("search for ".length).trim());
-            setVoiceStatus(`Searching for: ${cleaned.slice("search for ".length).trim()}`);
+            const nextQuery = cleaned.slice("search for ".length).trim();
+            onChange(nextQuery);
+            setVoiceStatus(`Searching for: ${nextQuery}`);
             return;
         }
 
         if (normalized.startsWith("find ")) {
-            onChange(cleaned.slice("find ".length).trim());
-            setVoiceStatus(`Searching for: ${cleaned.slice("find ".length).trim()}`);
+            const nextQuery = cleaned.slice("find ".length).trim();
+            onChange(nextQuery);
+            setVoiceStatus(`Searching for: ${nextQuery}`);
             return;
         }
 
         if (normalized.startsWith("look for ")) {
-            onChange(cleaned.slice("look for ".length).trim());
-            setVoiceStatus(`Searching for: ${cleaned.slice("look for ".length).trim()}`);
+            const nextQuery = cleaned.slice("look for ".length).trim();
+            onChange(nextQuery);
+            setVoiceStatus(`Searching for: ${nextQuery}`);
             return;
         }
 
@@ -237,8 +268,8 @@ export function SearchBar({
     }
 
     return (
-        <div className="search-overlay">
-            {value.trim() && resultCount > 0 && (
+        <div className="search-panel">
+            {hasQuery && resultCount > 0 && (
                 <div className="summary-bubble">
                     {isSummarizing ? (
                         <div className="summary-loading">
@@ -254,7 +285,13 @@ export function SearchBar({
                 </div>
             )}
 
-            <div className="search-bar">
+            {disabled && disabledHint && (
+                <p className="search-disabled-hint" role="status">
+                    {disabledHint}
+                </p>
+            )}
+
+            <div className="search-bar" role="search">
                 <div className="search-input-group">
                     <svg className="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <circle cx="11" cy="11" r="8" />
@@ -262,12 +299,15 @@ export function SearchBar({
                     </svg>
 
                     <input
+                        id="fndr-search-input"
                         type="text"
                         value={value}
                         onChange={(e) => onChange(e.target.value)}
-                        placeholder="Search your memories..."
+                        placeholder="What do you remember?"
                         className="search-input"
                         autoComplete="off"
+                        disabled={disabled}
+                        aria-disabled={disabled}
                     />
 
                     <button
@@ -275,7 +315,7 @@ export function SearchBar({
                         onClick={() => void handleVoiceToggle()}
                         aria-label={isRecording ? "Stop voice recording" : "Start voice recording"}
                         title={isRecording ? "Stop voice recording" : "Start voice recording"}
-                        disabled={isTranscribing}
+                        disabled={disabled || isTranscribing}
                     >
                         {isRecording ? "Stop" : isTranscribing ? "..." : "Mic"}
                     </button>
@@ -285,50 +325,61 @@ export function SearchBar({
                             className="search-clear"
                             onClick={() => onChange("")}
                             aria-label="Clear search"
+                            disabled={disabled}
                         >
                             ✕
                         </button>
                     )}
-                </div>
-
-                <div className="search-filters">
-                    <div className="select-wrapper">
-                        <select
-                            value={timeFilter || ""}
-                            onChange={(e) => onTimeFilterChange(e.target.value || null)}
-                            className={`filter-select ${timeFilter ? "active" : ""}`}
-                        >
-                            <option value="">⏱ Any Time</option>
-                            <option value="1h">Last Hour</option>
-                            <option value="24h">Last 24 Hours</option>
-                            <option value="7d">Last 7 Days</option>
-                        </select>
-                        <svg className="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                            <path d="M6 9l6 6 6-6" />
-                        </svg>
-                    </div>
-
-                    <div className="select-wrapper">
-                        <select
-                            value={appFilter || ""}
-                            onChange={(e) => onAppFilterChange(e.target.value || null)}
-                            className={`filter-select ${appFilter ? "active" : ""}`}
-                        >
-                            <option value="">📱 All Apps</option>
-                            {appNames.map((name) => (
-                                <option key={name} value={name}>{name}</option>
-                            ))}
-                        </select>
-                        <svg className="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                            <path d="M6 9l6 6 6-6" />
-                        </svg>
-                    </div>
                 </div>
             </div>
 
             {voiceStatus && (
                 <div className={`voice-status ${isRecording ? "recording" : ""}`}>
                     {voiceStatus}
+                </div>
+            )}
+
+            {hasQuery && (
+                <div className="search-meta-row">
+                    <div className="search-filters">
+                        <div className="select-wrapper">
+                            <select
+                                value={timeFilter || ""}
+                                onChange={(e) => onTimeFilterChange(e.target.value || null)}
+                                className={`filter-select ${timeFilter ? "active" : ""}`}
+                                disabled={disabled}
+                            >
+                                <option value="">Any time</option>
+                                <option value="1h">Last hour</option>
+                                <option value="24h">Last 24 hours</option>
+                                <option value="7d">Last 7 days</option>
+                            </select>
+                            <svg className="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                <path d="M6 9l6 6 6-6" />
+                            </svg>
+                        </div>
+
+                        <div className="select-wrapper">
+                            <select
+                                value={appFilter || ""}
+                                onChange={(e) => onAppFilterChange(e.target.value || null)}
+                                className={`filter-select ${appFilter ? "active" : ""}`}
+                                disabled={disabled}
+                            >
+                                <option value="">All apps</option>
+                                {appNames.map((name) => (
+                                    <option key={name} value={name}>{name}</option>
+                                ))}
+                            </select>
+                            <svg className="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                <path d="M6 9l6 6 6-6" />
+                            </svg>
+                        </div>
+                    </div>
+
+                    <div className="result-count">
+                        {`${resultCount} results`}
+                    </div>
                 </div>
             )}
         </div>

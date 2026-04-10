@@ -30,16 +30,16 @@ pub struct Config {
     /// VLM model size: "4B" (primary)
     #[serde(default = "default_vlm_model_size")]
     pub vlm_model_size: String,
-    /// Serve demo/eval data instead of live captures
+    /// When true, do not ingest live captures (demo / grading mode using seeded data only).
     #[serde(default)]
     pub use_demo_data_only: bool,
-    /// Enable experimental UI features
+    /// Show Meetings, Graph, Agent, etc. in the UI (off for evaluation builds via config).
     #[serde(default = "default_experimental_ui_enabled")]
     pub experimental_ui_enabled: bool,
 }
 
 fn default_use_vlm() -> bool {
-    false
+    true
 }
 
 fn default_vlm_model_size() -> String {
@@ -47,7 +47,7 @@ fn default_vlm_model_size() -> String {
 }
 
 fn default_experimental_ui_enabled() -> bool {
-    false
+    true
 }
 
 impl Default for Config {
@@ -67,10 +67,10 @@ impl Default for Config {
             ],
             redact_mode: false,
             min_text_length: 20,
-            use_vlm: false,
+            use_vlm: true,
             vlm_model_size: "4B".to_string(),
             use_demo_data_only: false,
-            experimental_ui_enabled: false,
+            experimental_ui_enabled: true,
         }
     }
 }

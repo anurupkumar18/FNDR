@@ -12,7 +12,7 @@ import {
     downloadModel,
     refreshAiModels,
 } from "../api/onboarding";
-import { getStatus } from "../api/tauri";
+import { getAppNames, getStatus } from "../api/tauri";
 import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
 import "./Onboarding.css";
 
@@ -25,6 +25,15 @@ const STEPS: OnboardingStep[] = [
     "model_download",
     "indexing_started",
 ];
+
+const DEFAULT_ONBOARDING_STATE: OnboardingState = {
+    step: "welcome",
+    biometric_enabled: false,
+    screen_permission: false,
+    accessibility_permission: false,
+    model_downloaded: false,
+    model_id: null,
+};
 
 function stepIndex(s: OnboardingStep) {
     return STEPS.indexOf(s);
@@ -264,6 +273,14 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     const [isActivatingModel, setIsActivatingModel] = useState(false);
     const downloadStatus = useModelDownloadStatus();
 
+    async function activateModel(modelId: string) {
+        const runtime = await refreshAiModels();
+        if (!runtime.ai_model_available) {
+            throw new Error(`FNDR could not find the local model files for ${modelId}.`);
+        }
+        return runtime;
+    }
+
     useEffect(() => {
         listAvailableModels()
             .then((ms) => {
@@ -293,21 +310,26 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
         const completedModelId = downloadStatus.model_id ?? pendingModelId;
         setPendingModelId(null);
         setIsActivatingModel(true);
+        setError(null);
 
         void (async () => {
             try {
-                await refreshAiModels();
-            } catch (refreshError) {
-                console.error("Failed to refresh AI models after onboarding download:", refreshError);
-            } finally {
+                await activateModel(completedModelId);
                 if (!cancelled) {
-                    setIsActivatingModel(false);
                     onSave({
                         ...state,
                         step: "indexing_started",
                         model_downloaded: true,
                         model_id: completedModelId,
                     });
+                }
+            } catch (refreshError) {
+                if (!cancelled) {
+                    setError(`Model download finished, but FNDR could not activate it: ${String(refreshError)}`);
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsActivatingModel(false);
                 }
             }
         })();
@@ -334,19 +356,19 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
 
     async function handleDownload() {
         if (!selected) return;
+        setError(null);
         if (selected.download_url === "already_downloaded") {
             setIsActivatingModel(true);
             try {
-                await refreshAiModels();
+                await activateModel(selected.id);
+                onSave({ ...state, step: "indexing_started", model_downloaded: true, model_id: selected.id });
             } catch (refreshError) {
-                console.error("Failed to activate existing AI model during onboarding:", refreshError);
+                setError(`FNDR found the model on disk, but could not activate it: ${String(refreshError)}`);
             } finally {
                 setIsActivatingModel(false);
             }
-            onSave({ ...state, step: "indexing_started", model_downloaded: true, model_id: selected.id });
             return;
         }
-        setError(null);
         setPendingModelId(selected.id);
         try {
             await downloadModel(selected.id, selected.download_url, selected.filename);
@@ -510,18 +532,54 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
 // ── Step 6: Indexing Started ──────────────────────────────────────────────
 function StepIndexingStarted({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
     const [memories, setMemories] = useState(0);
-    const [apps] = useState(0);
+    const [apps, setApps] = useState(0);
     const [elapsed, setElapsed] = useState(0);
 
     useEffect(() => {
-        const id = setInterval(async () => {
-            setElapsed((e) => e + 1);
+        let cancelled = false;
+
+        const refreshMemories = async () => {
             try {
                 const s = await getStatus();
-                setMemories(s.frames_captured);
+                if (!cancelled) {
+                    setMemories(s.frames_captured);
+                }
             } catch {/* ignore */}
+        };
+
+        void refreshMemories();
+        const id = setInterval(() => {
+            setElapsed((e) => e + 1);
+            void refreshMemories();
         }, 1000);
-        return () => clearInterval(id);
+
+        return () => {
+            cancelled = true;
+            clearInterval(id);
+        };
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const refreshApps = async () => {
+            try {
+                const names = await getAppNames();
+                if (!cancelled) {
+                    setApps(names.length);
+                }
+            } catch {/* ignore */}
+        };
+
+        void refreshApps();
+        const id = setInterval(() => {
+            void refreshApps();
+        }, 5000);
+
+        return () => {
+            cancelled = true;
+            clearInterval(id);
+        };
     }, []);
 
     function formatElapsed(secs: number) {
@@ -581,7 +639,9 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     const [state, setState] = useState<OnboardingState | null>(null);
 
     useEffect(() => {
-        getOnboardingState().then(setState);
+        getOnboardingState()
+            .then(setState)
+            .catch(() => setState(DEFAULT_ONBOARDING_STATE));
     }, []);
 
     const save = useCallback(

@@ -1,134 +1,130 @@
 .app {
     display: flex;
-    flex-direction: column;
     min-height: 100vh;
     background: var(--bg-primary);
+    position: relative;
 }
 
-/* ========== Header ========== */
-.app-header {
-    position: sticky;
+.left-sidebar {
+    position: fixed;
     top: 0;
-    z-index: 100;
+    left: 0;
+    bottom: 0;
+    width: 240px;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(12, 12, 12, 0.82);
+    backdrop-filter: blur(16px) saturate(112%);
+    -webkit-backdrop-filter: blur(16px) saturate(112%);
+    padding: 56px 10px 12px;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem 2rem;
-    background: rgba(250, 249, 246, 0.85);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border-bottom: 1px solid rgba(62, 39, 35, 0.06);
+    flex-direction: column;
+    gap: 10px;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform var(--transition-normal);
 }
 
-.logo {
+.left-sidebar.open {
+    transform: translateX(0);
+}
+
+.sidebar-scrim {
+    position: fixed;
+    inset: 0;
+    border: 0;
+    background: rgba(0, 0, 0, 0.28);
+    z-index: 50;
+}
+
+.sidebar-toggle {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 80;
+    width: 34px;
+    height: 34px;
+    font-size: 0.95rem;
+    padding: 0;
+}
+
+.top-right-control {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 80;
+}
+
+.sidebar-group {
     display: flex;
-    align-items: center;
-    gap: 0.6rem;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    width: 100%;
+    padding: 2px 0;
 }
 
-.logo-icon {
-    font-size: 1.4rem;
-    color: var(--accent);
-}
-
-.logo h1 {
-    font-size: 1.5rem;
-    font-weight: 800;
-    letter-spacing: -0.03em;
-    color: var(--text-primary);
-}
-
-/* ========== Header Actions ========== */
-.header-actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.graph-toggle-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.82rem;
-    font-weight: 600;
-    padding: 0.35rem 0.9rem;
-    border-radius: var(--radius-full);
-    border: 1px solid rgba(62, 39, 35, 0.1);
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-
-.meeting-toggle-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.82rem;
-    font-weight: 600;
-    padding: 0.35rem 0.9rem;
-    border-radius: var(--radius-full);
-    border: 1px solid rgba(62, 39, 35, 0.1);
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-
-.meeting-toggle-btn:hover {
-    background: rgba(65, 105, 225, 0.1);
-    border-color: rgba(65, 105, 225, 0.28);
-    color: #27408B;
-}
-
-.meeting-toggle-btn.active {
-    background: rgba(65, 105, 225, 0.15);
-    border-color: rgba(65, 105, 225, 0.4);
-    color: #27408B;
-}
-
-.graph-toggle-btn:hover {
-    background: rgba(167, 139, 250, 0.08);
-    border-color: rgba(167, 139, 250, 0.25);
-    color: #7c3aed;
-}
-
-.graph-toggle-btn.active {
-    background: rgba(167, 139, 250, 0.12);
-    border-color: rgba(167, 139, 250, 0.35);
-    color: #7c3aed;
-}
-
-/* ========== Status Badge ========== */
-.status-badge {
-    font-size: 0.85rem;
-    font-weight: 600;
-    padding: 0.4rem 1rem;
-    border-radius: var(--radius-full);
-    background: var(--bg-secondary);
-}
-
-.status-active {
-    color: var(--success);
-}
-
-.status-paused {
-    color: #F59E0B;
-}
-
-.status-idle {
+.sidebar-label {
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: var(--text-muted);
 }
 
-/* ========== Main Content ========== */
+.sidebar-actions {
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.graph-toggle-btn,
+.meeting-toggle-btn {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    gap: 8px;
+}
+
+.meeting-toggle-btn.active {
+    border-color: rgba(217, 119, 87, 0.45);
+    color: #f3d2c8;
+    background: rgba(217, 119, 87, 0.08);
+}
+
+.graph-toggle-btn.active {
+    border-color: rgba(96, 165, 250, 0.4);
+    color: #cfe3ff;
+    background: rgba(96, 165, 250, 0.08);
+}
+
 .app-main {
     flex: 1;
-    padding: 2rem;
-    padding-bottom: 180px;
-    /* Space for overlay search */
+    padding: 24px;
     width: 100%;
-    max-width: 1600px;
-    margin: 0 auto;
+    max-width: none;
+}
+
+.app-main.search-centered {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+}
+
+.search-shell {
+    display: flex;
+    justify-content: center;
+    margin: 20px 0 24px;
+    transition: margin var(--transition-normal);
+}
+
+.search-shell.is-active {
+    margin: 4px 0 16px;
+}
+
+.app-main.search-centered .search-shell {
+    margin: 0;
+    width: min(820px, 100%);
 }
 
 .main-layout {
@@ -137,8 +133,8 @@
 
 .main-layout.with-reconstruction {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
-    gap: 1.2rem;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+    gap: 16px;
     align-items: start;
 }
 
@@ -146,34 +142,41 @@
     min-width: 0;
 }
 
-/* ========== Error Banner ========== */
 .error-banner {
-    background: var(--danger-light);
-    border: 1px solid rgba(198, 40, 40, 0.2);
-    border-radius: var(--radius-md);
-    padding: 1rem 1.25rem;
-    margin-bottom: 1.5rem;
-    color: var(--danger);
-    font-size: 0.9rem;
-    font-weight: 500;
+    background: var(--surface);
+    border: 1px solid #3a3a3f;
+    border-radius: 16px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    color: var(--text-secondary);
+    font-size: 0.88rem;
 }
 
-/* ========== Responsive ========== */
 @media (max-width: 768px) {
-    .app-header {
-        padding: 1rem;
+    .app {
+        flex-direction: column;
+    }
+
+    .left-sidebar {
+        width: 220px;
+        border-right: 1px solid var(--border);
+        border-bottom: 0;
+        padding: 52px 10px 10px;
+    }
+
+    .sidebar-group {
+        padding: 8px;
     }
 
     .app-main {
-        padding: 1rem;
-        padding-bottom: 200px;
+        padding: 12px;
     }
 
     .main-layout.with-reconstruction {
         grid-template-columns: 1fr;
     }
 
-    .logo h1 {
-        font-size: 1.25rem;
+    .search-shell {
+        margin: 8px 0 16px;
     }
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { search, SearchResult } from "../api/tauri";
 
 export function useSearch(
@@ -9,30 +9,53 @@ export function useSearch(
     const [results, setResults] = useState<SearchResult[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const requestIdRef = useRef(0);
 
     useEffect(() => {
+        const trimmedQuery = query.trim();
+        const requestId = ++requestIdRef.current;
+
+        if (!trimmedQuery) {
+            setResults([]);
+            setError(null);
+            setIsLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+        setIsLoading(true);
+        setError(null);
+
         // Debounce search
         const timer = setTimeout(async () => {
-            if (!query.trim()) {
-                setResults([]);
-                return;
-            }
-
-            setIsLoading(true);
-            setError(null);
-
             try {
-                const res = await search(query, timeFilter ?? undefined, appFilter ?? undefined, 10);
+                const res = await search(
+                    trimmedQuery,
+                    timeFilter ?? undefined,
+                    appFilter ?? undefined,
+                    10
+                );
+                if (cancelled || requestId !== requestIdRef.current) {
+                    return;
+                }
                 setResults(res.slice(0, 10)); // Top-k results
             } catch (e) {
+                if (cancelled || requestId !== requestIdRef.current) {
+                    return;
+                }
                 setError(e instanceof Error ? e.message : "Search failed");
                 setResults([]);
             } finally {
-                setIsLoading(false);
+                if (!cancelled && requestId === requestIdRef.current) {
+                    setIsLoading(false);
+                }
             }
         }, 300);
 
-        return () => clearTimeout(timer);
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
     }, [query, timeFilter, appFilter]);
 
     return { results, isLoading, error };

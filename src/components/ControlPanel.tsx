@@ -15,6 +15,11 @@ import {
     startMcpServer,
     stopMcpServer,
     Stats,
+    seedDemoDataset,
+    resetDemoData,
+    injectTestMemory,
+    setUseDemoDataOnly,
+    getAppConfig,
 } from "../api/tauri";
 import {
     ModelInfo,
@@ -28,11 +33,14 @@ import "./ControlPanel.css";
 
 interface ControlPanelProps {
     status: CaptureStatus | null;
+    compact?: boolean;
+    /** Hide MCP and emphasize core privacy when true (VITE_EVAL_UI build). */
+    evalUi?: boolean;
 }
 
 type Tab = "settings" | "model" | "stats" | "privacy";
 
-export function ControlPanel({ status }: ControlPanelProps) {
+export function ControlPanel({ status, compact = false, evalUi = false }: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<Tab>("settings");
     const [blocklist, setBlocklistState] = useState<string[]>([]);
@@ -44,6 +52,8 @@ export function ControlPanel({ status }: ControlPanelProps) {
     const [mcpStatus, setMcpStatus] = useState<McpServerStatus | null>(null);
     const [mcpBusy, setMcpBusy] = useState(false);
     const [copiedMcpLink, setCopiedMcpLink] = useState(false);
+    const [demoDataOnly, setDemoDataOnly] = useState(false);
+    const [demoBusy, setDemoBusy] = useState<string | null>(null);
 
     // Model tab state
     const [models, setModels] = useState<ModelInfo[]>([]);
@@ -79,16 +89,31 @@ export function ControlPanel({ status }: ControlPanelProps) {
 
     const loadData = async () => {
         try {
-            const [bl, st, ret, mcp] = await Promise.all([
-                getBlocklist(),
-                getStats(),
-                getRetentionDays(),
-                getMcpServerStatus(),
-            ]);
-            setBlocklistState(bl);
-            setStats(st);
-            setRetentionDaysState(ret);
-            setMcpStatus(mcp);
+            if (evalUi) {
+                const [bl, st, ret, cfg] = await Promise.all([
+                    getBlocklist(),
+                    getStats(),
+                    getRetentionDays(),
+                    getAppConfig(),
+                ]);
+                setBlocklistState(bl);
+                setStats(st);
+                setRetentionDaysState(ret);
+                setDemoDataOnly(cfg.use_demo_data_only);
+            } else {
+                const [bl, st, ret, mcp, cfg] = await Promise.all([
+                    getBlocklist(),
+                    getStats(),
+                    getRetentionDays(),
+                    getMcpServerStatus(),
+                    getAppConfig(),
+                ]);
+                setBlocklistState(bl);
+                setStats(st);
+                setRetentionDaysState(ret);
+                setMcpStatus(mcp);
+                setDemoDataOnly(cfg.use_demo_data_only);
+            }
         } catch (e) {
             console.error("Failed to load data:", e);
         }
@@ -292,50 +317,99 @@ export function ControlPanel({ status }: ControlPanelProps) {
         return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
     }
 
+    const runDemo = async (label: string, fn: () => Promise<unknown>) => {
+        setDemoBusy(label);
+        try {
+            await fn();
+            await loadData();
+        } catch (e) {
+            console.error(e);
+            alert(String(e));
+        } finally {
+            setDemoBusy(null);
+        }
+    };
+
+    const handleDemoDataToggle = async () => {
+        setDemoBusy("toggle");
+        try {
+            const cfg = await setUseDemoDataOnly(!demoDataOnly);
+            setDemoDataOnly(cfg.use_demo_data_only);
+        } catch (e) {
+            console.error(e);
+            alert(String(e));
+        } finally {
+            setDemoBusy(null);
+        }
+    };
+
     return (
         <>
             <button
-                className="settings-toggle"
+                className={`ui-action-btn settings-toggle ${compact ? "compact" : ""}`}
                 onClick={() => setIsOpen(!isOpen)}
                 aria-label="Open settings"
             >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-                </svg>
+                {compact ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M12 2v2.2m0 15.6V22m9.8-10H19.6m-15.4 0H2m16.1 6.1l-1.6-1.6M7.5 7.5 5.9 5.9m12.2 0-1.6 1.6M7.5 16.5l-1.6 1.6" />
+                    </svg>
+                ) : (
+                    "Settings"
+                )}
             </button>
 
             {isOpen && <div className="panel-backdrop" onClick={() => setIsOpen(false)} />}
 
             <aside className={`settings-panel ${isOpen ? "open" : ""}`}>
                 <header className="panel-header">
-                    <h2>Settings</h2>
-                    <button className="panel-close" onClick={() => setIsOpen(false)} aria-label="Close">✕</button>
+                    <div>
+                        <h2>FNDR Settings</h2>
+                        <p className="panel-subtitle">Private, local, always in your control.</p>
+                    </div>
+                    <button className="ui-action-btn panel-close" onClick={() => setIsOpen(false)} aria-label="Close">
+                        ✕
+                    </button>
                 </header>
 
                 <nav className="panel-tabs">
-                    {(["settings", "model", "stats", "privacy"] as Tab[]).map((t) => (
-                        <button
-                            key={t}
-                            className={`tab ${activeTab === t ? "active" : ""}`}
-                            onClick={() => setActiveTab(t)}
-                        >
-                            {t === "settings" ? "⚙️ General" : t === "model" ? "🧠 Model" : t === "stats" ? "📊 Stats" : "🔒 Privacy"}
-                        </button>
-                    ))}
+                    <button
+                        className={`ui-action-btn tab ${activeTab === "settings" ? "active" : ""}`}
+                        onClick={() => setActiveTab("settings")}
+                    >
+                        Core
+                    </button>
+                    <button
+                        className={`ui-action-btn tab ${activeTab === "model" ? "active" : ""}`}
+                        onClick={() => setActiveTab("model")}
+                    >
+                        Model
+                    </button>
+                    <button
+                        className={`ui-action-btn tab ${activeTab === "stats" ? "active" : ""}`}
+                        onClick={() => setActiveTab("stats")}
+                    >
+                        Stats
+                    </button>
+                    <button
+                        className={`ui-action-btn tab ${activeTab === "privacy" ? "active" : ""}`}
+                        onClick={() => setActiveTab("privacy")}
+                    >
+                        Privacy
+                    </button>
                 </nav>
 
                 <div className="panel-content">
-                    {/* General Tab */}
                     {activeTab === "settings" && (
                         <>
                             <section className="panel-section">
-                                <h3>Capture Control</h3>
+                                <h3>Capture Status</h3>
                                 <button
-                                    className={`capture-toggle ${status?.is_paused ? "paused" : "active"}`}
+                                    className={`ui-action-btn capture-toggle ${status?.is_paused ? "paused" : "active"}`}
                                     onClick={handleToggleCapture}
                                 >
-                                    {status?.is_paused ? "▶ Resume Capture" : "⏸ Pause Capture"}
+                                    {status?.is_paused ? "Resume capture" : "Pause capture"}
                                 </button>
                                 <div className="capture-stats">
                                     <span>Frames: {status?.frames_captured ?? 0}</span>
@@ -344,8 +418,10 @@ export function ControlPanel({ status }: ControlPanelProps) {
                             </section>
 
                             <section className="panel-section">
-                                <h3>Data Retention</h3>
-                                <p className="section-hint">Automatically remove old memories to save space.</p>
+                                <h3>Indexing</h3>
+                                <p className="section-hint">
+                                    Keep a compact rolling memory window.
+                                </p>
                                 <div className="retention-controls">
                                     <select
                                         value={retentionDays}
@@ -358,36 +434,104 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                         <option value={0}>Forever</option>
                                     </select>
                                     {retentionDays > 0 && (
-                                        <button className="btn-secondary" onClick={handleRunRetentionNow} disabled={retentionBusy}>
-                                            {retentionBusy ? "..." : "Run Now"}
+                                        <button
+                                            className="ui-action-btn btn-secondary"
+                                            onClick={handleRunRetentionNow}
+                                            disabled={retentionBusy}
+                                        >
+                                            {retentionBusy ? "..." : "Run now"}
                                         </button>
                                     )}
                                 </div>
                             </section>
 
                             <section className="panel-section">
-                                <h3>MCP Server</h3>
-                                <p className="section-hint">Connect FNDR to external tools via Model Context Protocol.</p>
+                                <h3>Demo grading</h3>
+                                <p className="section-hint">
+                                    Reset and seed known memories for a repeatable TA demo. CLI:{" "}
+                                    <code className="inline-code">--demo-data-only</code>
+                                </p>
+                                <label className="demo-toggle">
+                                    <input
+                                        type="checkbox"
+                                        checked={demoDataOnly}
+                                        onChange={handleDemoDataToggle}
+                                        disabled={demoBusy !== null}
+                                    />
+                                    Use demo data only (pause live capture indexing)
+                                </label>
+                                <div className="demo-actions">
+                                    <button
+                                        className="ui-action-btn btn-secondary"
+                                        type="button"
+                                        disabled={demoBusy !== null}
+                                        onClick={() =>
+                                            runDemo("seed", () => seedDemoDataset().then((n) => alert(`Seeded ${n} memories`)))
+                                        }
+                                    >
+                                        {demoBusy === "seed" ? "…" : "Seed demo dataset"}
+                                    </button>
+                                    <button
+                                        className="ui-action-btn btn-secondary"
+                                        type="button"
+                                        disabled={demoBusy !== null}
+                                        onClick={() =>
+                                            runDemo("reset", () =>
+                                                resetDemoData().then((n) => alert(`Removed ${n} demo rows`))
+                                            )
+                                        }
+                                    >
+                                        {demoBusy === "reset" ? "…" : "Reset demo data"}
+                                    </button>
+                                    <button
+                                        className="ui-action-btn btn-primary"
+                                        type="button"
+                                        disabled={demoBusy !== null}
+                                        onClick={() =>
+                                            runDemo("inject", () =>
+                                                injectTestMemory().then((id) => alert(`Injected: ${id}`))
+                                            )
+                                        }
+                                    >
+                                        {demoBusy === "inject" ? "…" : "Inject test memory"}
+                                    </button>
+                                </div>
+                            </section>
+
+                            {!evalUi && (
+                                <section className="panel-section">
+                                    <h3>MCP Server</h3>
+                                    <p className="section-hint">
+                                        Connect FNDR to external tools via Model Context Protocol.
+                                    </p>
                                 <div className="mcp-status-row">
                                     <span className={`mcp-pill ${mcpStatus?.running ? "running" : "stopped"}`}>
                                         {mcpStatus?.running ? "Running" : "Stopped"}
                                     </span>
-                                    <button className="btn-secondary" onClick={handleToggleMcpServer} disabled={mcpBusy}>
+                                    <button
+                                        className="ui-action-btn btn-secondary"
+                                        onClick={handleToggleMcpServer}
+                                        disabled={mcpBusy}
+                                    >
                                         {mcpBusy ? "..." : mcpStatus?.running ? "Stop" : "Start"}
                                     </button>
                                 </div>
                                 <div className="mcp-link-row">
-                                    <input className="mcp-link-input" value={mcpStatus?.endpoint ?? "http://127.0.0.1:8799/mcp"} readOnly />
-                                    <button className="btn-primary" onClick={handleCopyMcpLink}>
-                                        {copiedMcpLink ? "Copied" : "Copy Link"}
+                                    <input
+                                        className="mcp-link-input"
+                                        value={mcpStatus?.endpoint ?? "http://127.0.0.1:8799/mcp"}
+                                        readOnly
+                                    />
+                                    <button className="ui-action-btn btn-primary" onClick={handleCopyMcpLink}>
+                                        {copiedMcpLink ? "Copied" : "Copy link"}
                                     </button>
                                 </div>
                                 {mcpStatus?.last_error && <p className="mcp-error">{mcpStatus.last_error}</p>}
-                            </section>
+                                </section>
+                            )}
                         </>
                     )}
 
-                    {/* Model Tab */}
                     {activeTab === "model" && (
                         <section className="panel-section">
                             <h3>AI Model</h3>
@@ -496,15 +640,13 @@ export function ControlPanel({ status }: ControlPanelProps) {
                             )}
                         </section>
                     )}
-
-                    {/* Stats Tab */}
                     {activeTab === "stats" && stats && (
                         <section className="panel-section">
                             <h3>Statistics</h3>
                             <div className="stats-grid">
                                 <div className="stat-card">
                                     <span className="stat-value">{stats.total_records.toLocaleString()}</span>
-                                    <span className="stat-label">Total Memories</span>
+                                    <span className="stat-label">Total memories</span>
                                 </div>
                                 <div className="stat-card">
                                     <span className="stat-value">{stats.today_count.toLocaleString()}</span>
@@ -512,23 +654,12 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                 </div>
                                 <div className="stat-card">
                                     <span className="stat-value">{stats.total_days}</span>
-                                    <span className="stat-label">Days Active</span>
-                                </div>
-                            </div>
-                            <div className="profile-section">
-                                <h3>Profile</h3>
-                                <div className="profile-card">
-                                    <div className="profile-avatar">👤</div>
-                                    <div className="profile-info">
-                                        <span className="profile-name">Local User</span>
-                                        <span className="profile-detail">All data stored locally on your Mac</span>
-                                    </div>
+                                    <span className="stat-label">Days active</span>
                                 </div>
                             </div>
                         </section>
                     )}
 
-                    {/* Privacy Tab */}
                     {activeTab === "privacy" && (
                         <>
                             <section className="panel-section">
@@ -555,27 +686,18 @@ export function ControlPanel({ status }: ControlPanelProps) {
                                         onKeyDown={(e) => e.key === "Enter" && handleAddApp()}
                                         className="add-app-input"
                                     />
-                                    <button onClick={handleAddApp} className="btn-primary">Add</button>
+                                    <button onClick={handleAddApp} className="ui-action-btn btn-primary">Add</button>
                                 </div>
                             </section>
 
                             <section className="panel-section danger-section">
                                 <h3>Danger Zone</h3>
                                 <button
-                                    className={`btn-danger ${confirmDelete ? "confirm" : ""}`}
+                                    className={`ui-action-btn btn-danger ${confirmDelete ? "confirm" : ""}`}
                                     onClick={handleDeleteAll}
                                 >
-                                    {confirmDelete ? "Click again to confirm" : "🗑️ Delete All Data"}
+                                    {confirmDelete ? "Click again to confirm" : "Delete all data"}
                                 </button>
-                            </section>
-
-                            <section className="panel-section about-section">
-                                <h3>About Privacy</h3>
-                                <p className="about-text">
-                                    FNDR runs 100% on your Mac. No screenshots or data are ever
-                                    sent to the cloud. Screen content is converted to text and vectors
-                                    locally—raw pixels are discarded immediately.
-                                </p>
                             </section>
                         </>
                     )}

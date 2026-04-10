@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { SearchBar } from "./components/SearchBar";
 import { Timeline } from "./components/Timeline";
 import { ControlPanel } from "./components/ControlPanel";
@@ -9,9 +9,20 @@ import { GraphPanel } from "./components/GraphPanel";
 import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
 import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
+import { ReadinessPanel } from "./components/ReadinessPanel";
 import { useSearch } from "./hooks/useSearch";
-import { getStatus, getAppNames, CaptureStatus, Task, startAgentTask } from "./api/tauri";
+import {
+    CaptureStatus,
+    SearchResult,
+    SystemReadiness,
+    Task,
+    getAppNames,
+    getReadiness,
+    getStatus,
+    startAgentTask,
+} from "./api/tauri";
 import { getOnboardingState } from "./api/onboarding";
+import { EVAL_UI } from "./evalUi";
 import "./styles/App.css";
 
 function App() {
@@ -20,44 +31,95 @@ function App() {
     const [appFilter, setAppFilter] = useState<string | null>(null);
     const [appNames, setAppNames] = useState<string[]>([]);
     const [status, setStatus] = useState<CaptureStatus | null>(null);
+    const [readiness, setReadiness] = useState<SystemReadiness | null>(null);
     const [showAgentPanel, setShowAgentPanel] = useState(false);
     const [showGraphPanel, setShowGraphPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
+    const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-    const { results, isLoading, error } = useSearch(query, timeFilter, appFilter);
+    const searchAllowed = Boolean(readiness?.ready_for_search);
+    const { results, isLoading, error } = useSearch(
+        searchAllowed ? query : "",
+        timeFilter,
+        appFilter
+    );
 
-    // Check if onboarding is complete on first mount
     useEffect(() => {
         getOnboardingState()
             .then((s) => setOnboardingDone(s.step === "complete" && s.model_downloaded))
             .catch(() => setOnboardingDone(false));
     }, []);
 
-    // Load app names for filter — refresh every 30s to avoid spamming IPC
     useEffect(() => {
-        getAppNames().then(setAppNames).catch(() => {});
-        const id = setInterval(() => {
-            getAppNames().then(setAppNames).catch(() => {});
+        const loadAppNames = async () => {
+            try {
+                setAppNames(await getAppNames());
+            } catch {
+                setAppNames([]);
+            }
+        };
+
+        void loadAppNames();
+        const id = window.setInterval(() => {
+            void loadAppNames();
         }, 30_000);
-        return () => clearInterval(id);
+
+        return () => window.clearInterval(id);
     }, []);
 
-    // Poll status every 2 seconds
     useEffect(() => {
         const fetchStatus = async () => {
             try {
-                const s = await getStatus();
-                setStatus(s);
+                const nextStatus = await getStatus();
+                setStatus(nextStatus);
             } catch (e) {
                 console.error("Failed to get status:", e);
             }
         };
 
-        fetchStatus();
-        const interval = setInterval(fetchStatus, 2000);
-        return () => clearInterval(interval);
+        void fetchStatus();
+        const interval = window.setInterval(() => {
+            void fetchStatus();
+        }, 2000);
+
+        return () => window.clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        const loadReadiness = async () => {
+            try {
+                const nextReadiness = await getReadiness();
+                setReadiness(nextReadiness);
+            } catch (e) {
+                console.error("Failed to get readiness:", e);
+            }
+        };
+
+        void loadReadiness();
+        const interval = window.setInterval(() => {
+            void loadReadiness();
+        }, 5000);
+
+        return () => window.clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+        if (!results.length) {
+            setSelectedResult(null);
+            return;
+        }
+
+        setSelectedResult((previous) => {
+            if (!previous) {
+                return results[0];
+            }
+
+            const stillVisible = results.find((item) => item.id === previous.id);
+            return stillVisible ?? results[0];
+        });
+    }, [results]);
 
     const handleExecuteTask = async (task: Task) => {
         try {
@@ -73,117 +135,141 @@ function App() {
         }
     };
 
-    // Show todo modal when no search and no results
-    const showTodoModal = !query && results.length === 0 && !isLoading;
+    const showTodoModal = !EVAL_UI && !query.trim() && results.length === 0 && !isLoading;
+    const showPreviewPanel = !EVAL_UI && Boolean(query.trim() && selectedResult);
+    const showCenteredSearch = !query.trim();
 
-    // Show nothing until we know the onboarding state
-    if (onboardingDone === null) return null;
+    if (onboardingDone === null) {
+        return null;
+    }
 
-    // Show onboarding if not complete
     if (!onboardingDone) {
         return <Onboarding onComplete={() => setOnboardingDone(true)} />;
     }
 
     return (
         <div className="app">
-            <header className="app-header">
-                <div className="logo">
-                    <span className="logo-icon">⌘</span>
-                    <h1>FNDR</h1>
-                </div>
-                <div className="header-actions">
-                    <button
-                        className={`meeting-toggle-btn ${showMeetingPanel ? "active" : ""}`}
-                        onClick={() => setShowMeetingPanel(!showMeetingPanel)}
-                        title="Toggle Meeting Recorder"
-                    >
-                        🎙️ Meetings
-                    </button>
-                    <button
-                        className={`graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
-                        onClick={() => setShowGraphPanel(!showGraphPanel)}
-                        title="Toggle Knowledge Graph"
-                    >
-                        🕸️ Graph
-                    </button>
-                    <div className="status-badge">
-                        {status?.is_capturing ? (
-                            <span className="status-active">● Capturing</span>
-                        ) : status?.is_paused ? (
-                            <span className="status-paused">⏸ Paused</span>
-                        ) : (
-                            <span className="status-idle">○ Idle</span>
-                        )}
+            {!EVAL_UI && (
+                <button
+                    className="ui-action-btn sidebar-toggle"
+                    onClick={() => setIsSidebarOpen((prev) => !prev)}
+                    aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
+                >
+                    {isSidebarOpen ? "×" : "☰"}
+                </button>
+            )}
+
+            <div className="top-right-control">
+                <ControlPanel status={status} compact={true} evalUi={EVAL_UI} />
+            </div>
+
+            <ReadinessPanel readiness={readiness} />
+
+            {status && !status.ai_model_available && <ModelDownloadBanner />}
+
+            {!EVAL_UI && isSidebarOpen && (
+                <button
+                    className="sidebar-scrim"
+                    onClick={() => setIsSidebarOpen(false)}
+                    aria-label="Close sidebar overlay"
+                />
+            )}
+
+            {!EVAL_UI && (
+                <aside className={`left-sidebar ${isSidebarOpen ? "open" : ""}`}>
+                    <div className="sidebar-group sidebar-actions">
+                        <div className="sidebar-label">Experimental</div>
+                        <button
+                            className={`ui-action-btn meeting-toggle-btn ${showMeetingPanel ? "active" : ""}`}
+                            onClick={() => setShowMeetingPanel((open) => !open)}
+                        >
+                            Meetings
+                        </button>
+                        <button
+                            className={`ui-action-btn graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
+                            onClick={() => setShowGraphPanel((open) => !open)}
+                        >
+                            Graph
+                        </button>
                     </div>
-                </div>
-            </header>
+                </aside>
+            )}
 
-            <main className="app-main">
-                <div className={`main-layout ${query.trim() ? "with-reconstruction" : ""}`}>
-                    <section className="main-column">
-                        {error && (
-                            <div className="error-banner">
-                                {error}
-                            </div>
-                        )}
+            <main className={`app-main ${showCenteredSearch ? "search-centered" : ""}`}>
+                <section className={`search-shell ${query.trim() ? "is-active" : ""}`}>
+                    <SearchBar
+                        value={query}
+                        onChange={setQuery}
+                        timeFilter={timeFilter}
+                        onTimeFilterChange={setTimeFilter}
+                        appFilter={appFilter}
+                        onAppFilterChange={setAppFilter}
+                        onSetMeetingPanelOpen={setShowMeetingPanel}
+                        onSetGraphPanelOpen={setShowGraphPanel}
+                        appNames={appNames}
+                        resultCount={results.length}
+                        searchResults={results}
+                        disabled={!searchAllowed}
+                        disabledHint={
+                            readiness && !readiness.ready_for_search
+                                ? "Waiting for search backend..."
+                                : undefined
+                        }
+                    />
+                </section>
 
-                        {/* Show AI Model Download Banner when model is missing */}
-                        {status && !status.ai_model_available && (
-                            <ModelDownloadBanner />
-                        )}
+                {(!showCenteredSearch || showTodoModal) && (
+                    <div className={`main-layout ${showPreviewPanel ? "with-reconstruction" : ""}`}>
+                        <section className="main-column">
+                            {error && <div className="error-banner">{error}</div>}
 
-                        {/* Show Todo Modal on home page (no search) */}
-                        {showTodoModal && (
-                            <TodoModal
-                                isVisible={true}
-                                onExecuteTask={handleExecuteTask}
+                            {showTodoModal && (
+                                <TodoModal
+                                    isVisible={true}
+                                    onExecuteTask={handleExecuteTask}
+                                />
+                            )}
+
+                            {!showTodoModal && (
+                                <Timeline
+                                    results={results}
+                                    isLoading={isLoading}
+                                    query={query}
+                                    selectedResultId={selectedResult?.id ?? null}
+                                    onSelectResult={setSelectedResult}
+                                    evalUi={EVAL_UI}
+                                />
+                            )}
+                        </section>
+
+                        {showPreviewPanel && (
+                            <MemoryReconstructionPanel
+                                query={query}
+                                selectedResult={selectedResult}
+                                onShowContext={setQuery}
                             />
                         )}
-
-                        {/* Show Timeline when searching or has results */}
-                        {!showTodoModal && (
-                            <Timeline results={results} isLoading={isLoading} query={query} />
-                        )}
-                    </section>
-
-                    <MemoryReconstructionPanel query={query} />
-                </div>
+                    </div>
+                )}
             </main>
 
-            {/* Bottom Overlay Search Bar */}
-            <SearchBar
-                value={query}
-                onChange={setQuery}
-                timeFilter={timeFilter}
-                onTimeFilterChange={setTimeFilter}
-                appFilter={appFilter}
-                onAppFilterChange={setAppFilter}
-                onSetMeetingPanelOpen={setShowMeetingPanel}
-                onSetGraphPanelOpen={setShowGraphPanel}
-                appNames={appNames}
-                resultCount={results.length}
-                searchResults={results}
-            />
-
-            <ControlPanel status={status} />
-
-            {/* Agent Panel Overlay */}
-            <AgentPanel
-                isVisible={showAgentPanel}
-                onClose={() => setShowAgentPanel(false)}
-            />
-
-            {/* Knowledge Graph Panel */}
-            <GraphPanel
-                isVisible={showGraphPanel}
-                onClose={() => setShowGraphPanel(false)}
-            />
-
-            <MeetingRecorderPanel
-                isVisible={showMeetingPanel}
-                onClose={() => setShowMeetingPanel(false)}
-                onOpenAgent={() => setShowAgentPanel(true)}
-            />
+            {!EVAL_UI && (
+                <>
+                    <AgentPanel
+                        isVisible={showAgentPanel}
+                        onClose={() => setShowAgentPanel(false)}
+                    />
+                    <GraphPanel
+                        isVisible={showGraphPanel}
+                        onClose={() => setShowGraphPanel(false)}
+                    />
+                    <MeetingRecorderPanel
+                        isVisible={showMeetingPanel}
+                        onClose={() => setShowMeetingPanel(false)}
+                        onOpenAgent={() => setShowAgentPanel(true)}
+                    />
+                </>
+            )}
         </div>
     );
 }

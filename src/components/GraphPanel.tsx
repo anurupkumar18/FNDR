@@ -30,10 +30,10 @@ const NODE_COLORS: Record<string, string> = {
 };
 
 const NODE_SIZES: Record<string, number> = {
-    MemoryChunk: 6,
-    Entity: 10,
-    Task: 9,
-    Url: 7,
+    MemoryChunk: 5,
+    Entity: 8,
+    Task: 7,
+    Url: 6,
 };
 
 export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
@@ -100,8 +100,8 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
             if (!running) return;
 
             const alpha = 0.3;
-            const repulsion = 800;
-            const attraction = 0.005;
+            const repulsion = 720;
+            const attraction = 0.004;
             const damping = 0.85;
             const centerX = window.innerWidth / 2;
             const centerY = window.innerHeight / 2;
@@ -210,7 +210,7 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
         ctx.scale(zoom, zoom);
 
         // Draw edges
-        ctx.globalAlpha = 0.15;
+        ctx.globalAlpha = 0.1;
         for (const edge of edges) {
             const source = nodeMap.get(edge.source);
             const target = nodeMap.get(edge.target);
@@ -224,8 +224,8 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
             ctx.beginPath();
             ctx.moveTo(source.x, source.y);
             ctx.lineTo(target.x, target.y);
-            ctx.strokeStyle = "#a78bfa";
-            ctx.lineWidth = 0.8;
+            ctx.strokeStyle = "rgba(140, 140, 148, 0.5)";
+            ctx.lineWidth = 0.7;
             ctx.stroke();
         }
 
@@ -249,9 +249,9 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
             ctx.fillStyle = color;
             ctx.fill();
 
-            // Label for larger nodes
-            if (size >= 8 && zoom > 0.6) {
-                ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+            // Labels only when intentionally zoomed in
+            if (size >= 8 && zoom > 1.35) {
+                ctx.fillStyle = "rgba(220, 220, 224, 0.75)";
                 ctx.font = "10px -apple-system, system-ui, sans-serif";
                 ctx.textAlign = "center";
                 ctx.fillText(
@@ -378,14 +378,13 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
         <div className="graph-panel">
             <div className="graph-header">
                 <div className="graph-header-left">
-                    <span className="graph-icon">🕸️</span>
                     <h2>Knowledge Graph</h2>
                     <div className="graph-stats">
                         <span>◉ {filteredNodes.length} nodes</span>
                         <span>─ {edges.length} edges</span>
                     </div>
                 </div>
-                <button className="graph-close-btn" onClick={onClose}>
+                <button className="ui-action-btn graph-close-btn" onClick={onClose}>
                     ✕ Close
                 </button>
             </div>
@@ -396,12 +395,12 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
                         ["MemoryChunk", "memory", "Memories"],
                         ["Entity", "entity", "Entities"],
                         ["Task", "task", "Tasks"],
-                        ["Url", "url", "URLs"],
+                        ["Url", "url", "Links"],
                     ] as const
                 ).map(([type, dotClass, label]) => (
                     <button
                         key={type}
-                        className={`graph-filter-btn ${activeFilters.has(type) ? "active" : ""}`}
+                        className={`ui-action-btn graph-filter-btn ${activeFilters.has(type) ? "active" : ""}`}
                         onClick={() => toggleFilter(type)}
                     >
                         <span className={`graph-filter-dot dot-${dotClass}`} />
@@ -418,7 +417,6 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
                     </div>
                 ) : nodes.length === 0 ? (
                     <div className="graph-empty">
-                        <span className="empty-icon">🕸️</span>
                         <p>
                             No graph data yet. Keep FNDR running to build your
                             knowledge graph from screen captures.
@@ -437,7 +435,7 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
                         />
                         <div className="graph-controls">
                             <button
-                                className="graph-control-btn"
+                                className="ui-action-btn graph-control-btn"
                                 onClick={() =>
                                     setZoom((z) => Math.min(z * 1.3, 5))
                                 }
@@ -445,7 +443,7 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
                                 +
                             </button>
                             <button
-                                className="graph-control-btn"
+                                className="ui-action-btn graph-control-btn"
                                 onClick={() =>
                                     setZoom((z) => Math.max(z * 0.7, 0.1))
                                 }
@@ -453,7 +451,7 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
                                 −
                             </button>
                             <button
-                                className="graph-control-btn"
+                                className="ui-action-btn graph-control-btn"
                                 onClick={() => {
                                     setZoom(1);
                                     setPan({ x: 0, y: 0 });

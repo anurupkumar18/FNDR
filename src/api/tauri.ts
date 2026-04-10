@@ -178,8 +178,6 @@ export async function getStatus(): Promise<CaptureStatus> {
     return invoke<CaptureStatus>("get_status");
 }
 
-// ========== App Config & System Readiness ==========
-
 export interface AppConfigPayload {
     experimental_ui_enabled: boolean;
     use_demo_data_only: boolean;

@@ -17,6 +17,7 @@ use crate::ocr::OcrEngine;
 use crate::privacy::Blocklist;
 use crate::store::MemoryRecord;
 use crate::AppState;
+use chrono::Local;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -134,7 +135,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let should_flush = batch.len() >= max_batch_size || last_flush.elapsed() >= flush_interval;
         if should_flush && !batch.is_empty() {
             let flush_start = Instant::now();
-            if let Err(e) = state.store.add_batch(&batch) {
+            if let Err(e) = state.store.add_batch(&batch).await {
                 tracing::error!("Failed to flush batch: {}", e);
             } else {
                 tracing::info!(
@@ -145,6 +146,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             }
             batch.clear();
             last_flush = Instant::now();
+        }
+
+        if config.use_demo_data_only {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
         }
 
         // Check if paused
@@ -234,7 +240,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         };
 
         // Persist screenshot first (needed for FastVLM)
-        let now = chrono::Utc::now();
+        let now = Local::now();
         let url = macos::get_browser_url(&app_name);
         if let Some(ref u) = url {
             tracing::info!("Captured URL: {}", u);

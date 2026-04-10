@@ -511,7 +511,9 @@ pub async fn get_meeting_transcript(meeting_id: &str) -> Result<MeetingTranscrip
             if let Some(path) = transcript_path.clone() {
                 let _ = store.set_transcript_path(meeting_id, Some(path.clone()));
                 if let Some(state) = runtime().lock().app_state.clone() {
-                    let _ = ingest_transcript_into_fndr_memory(state, &repaired, Some(&path));
+                    let _ = tokio::runtime::Handle::current().block_on(
+                        ingest_transcript_into_fndr_memory(state, &repaired, Some(&path)),
+                    );
                 }
             }
         }
@@ -697,7 +699,7 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
 
     if let Some(state) = app_state {
         if let Err(err) =
-            ingest_transcript_into_fndr_memory(state, &transcript, transcript_path.as_deref())
+            ingest_transcript_into_fndr_memory(state, &transcript, transcript_path.as_deref()).await
         {
             tracing::warn!(
                 "Failed to ingest meeting transcript into FNDR memory: {}",
@@ -718,7 +720,7 @@ async fn auto_monitor_loop(app_handle: AppHandle, app_state: Arc<AppState>) {
     let mut idle_seconds: u64 = 0;
 
     loop {
-        let signal = detect_meeting_signal(&app_state);
+        let signal = detect_meeting_signal(&app_state).await;
         let status = recorder_status().unwrap_or(MeetingRecorderStatus {
             is_recording: false,
             current_meeting_id: None,
@@ -814,7 +816,7 @@ async fn repair_failed_transcripts_once(app_state: Arc<AppState>) {
         if let Some(path) = transcript_path.clone() {
             let _ = store.set_transcript_path(&meeting.id, Some(path.clone()));
             if let Err(err) =
-                ingest_transcript_into_fndr_memory(app_state.clone(), &transcript, Some(&path))
+                ingest_transcript_into_fndr_memory(app_state.clone(), &transcript, Some(&path)).await
             {
                 tracing::warn!(
                     "Failed to ingest repaired transcript {} into memory: {}",
@@ -831,9 +833,9 @@ struct MeetingSignal {
     title: String,
 }
 
-fn detect_meeting_signal(app_state: &AppState) -> Option<MeetingSignal> {
+async fn detect_meeting_signal(app_state: &AppState) -> Option<MeetingSignal> {
     let now = now_ms();
-    let memories = app_state.store.get_recent_memories(1).ok()?;
+    let memories = app_state.store.get_recent_memories(1).await.ok()?;
 
     for memory in memories.iter().rev().take(80) {
         if now - memory.timestamp > 60_000 {
@@ -1203,7 +1205,7 @@ fn build_meeting_markdown(transcript: &MeetingTranscript) -> String {
     .join("\n")
 }
 
-fn ingest_transcript_into_fndr_memory(
+async fn ingest_transcript_into_fndr_memory(
     app_state: Arc<AppState>,
     transcript: &MeetingTranscript,
     transcript_path: Option<&str>,
@@ -1215,7 +1217,7 @@ fn ingest_transcript_into_fndr_memory(
     let record = MemoryRecord {
         id: Uuid::new_v4().to_string(),
         timestamp: now,
-        day_bucket: chrono::Utc::now().format("%Y-%m-%d").to_string(),
+        day_bucket: chrono::Local::now().format("%Y-%m-%d").to_string(),
         app_name: "FNDR Meetings".to_string(),
         bundle_id: Some("com.fndr.meetings".to_string()),
         window_title: transcript.meeting.title.clone(),
@@ -1235,6 +1237,7 @@ fn ingest_transcript_into_fndr_memory(
     app_state
         .store
         .add_batch(&[record.clone()])
+        .await
         .map_err(|e| format!("Store add failed: {e}"))?;
 
     if let Err(err) = app_state.graph.ingest_memory(&record) {

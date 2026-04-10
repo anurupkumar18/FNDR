@@ -10,6 +10,9 @@ use tauri::Manager;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
+    // Install default TLS crypto provider (required by rustls 0.23+)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Load environment variables from .env if present
     let _ = dotenvy::dotenv();
 
@@ -31,13 +34,19 @@ fn main() {
             Some(vec!["--hidden"]),
         ))
         .setup(|app| {
-            // Load configuration
-            let config = Config::load_or_create()?;
+            // Load configuration (CLI overrides for headless demo)
+            let mut config = Config::load_or_create()?;
+            if std::env::args().any(|a| a == "--demo-data-only") {
+                config.use_demo_data_only = true;
+                config.use_vlm = false;
+                tracing::info!("--demo-data-only: live capture ingestion disabled, VLM off");
+            }
             tracing::info!("Configuration loaded");
 
             // Initialize store
             let data_dir = app.path().app_data_dir()?;
             let store = Store::new(&data_dir)?;
+            api::commands::init_task_store(&data_dir);
             tracing::info!("Store initialized at {:?}", data_dir);
             let graph = GraphStore::new(&data_dir)?;
             tracing::info!("Graph store initialized at {:?}", data_dir);
@@ -47,7 +56,7 @@ fn main() {
 
             // Apply retention: remove records older than config.retention_days (0 = keep forever)
             if config.retention_days > 0 {
-                match store.delete_older_than(config.retention_days) {
+                match tauri::async_runtime::block_on(store.delete_older_than(config.retention_days)) {
                     Ok(n) if n > 0 => tracing::info!("Retention: removed {} old records", n),
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Retention cleanup failed: {}", e),
@@ -101,19 +110,31 @@ fn main() {
             api::commands::reconstruct_memory,
             api::commands::summarize_memory,
             api::commands::get_status,
+            // Config & readiness
+            api::commands::get_app_config,
+            api::commands::get_readiness,
+            api::commands::set_use_demo_data_only,
+            api::commands::seed_demo_dataset,
+            api::commands::reset_demo_data,
+            api::commands::inject_test_memory,
+            // MCP
             api::commands::get_mcp_server_status,
             api::commands::start_mcp_server,
             api::commands::stop_mcp_server,
+            // Meetings
             api::commands::get_meeting_status,
             api::commands::start_meeting_recording,
             api::commands::stop_meeting_recording,
             api::commands::list_meetings,
             api::commands::get_meeting_transcript,
             api::commands::search_meeting_transcripts,
+            // Voice / Speech
             api::commands::transcribe_voice_input,
             api::commands::speak_text,
+            // Capture control
             api::commands::pause_capture,
             api::commands::resume_capture,
+            // Privacy & data
             api::commands::get_blocklist,
             api::commands::set_blocklist,
             api::commands::delete_all_data,
@@ -122,24 +143,18 @@ fn main() {
             api::commands::set_retention_days,
             api::commands::delete_older_than,
             api::commands::get_app_names,
+            // Tasks / Todos
             api::commands::get_todos,
             api::commands::dismiss_todo,
             api::commands::execute_todo,
-            // Agent SDK commands
+            // Agent SDK
             api::commands::start_agent_task,
             api::commands::get_agent_status,
             api::commands::stop_agent,
-            // Graph visualization commands
+            // Graph visualization
             api::commands::get_graph_data,
             api::commands::search_graph,
-            // Config & readiness commands
-            api::commands::get_app_config,
-            api::commands::get_readiness,
-            api::commands::set_use_demo_data_only,
-            api::commands::seed_demo_dataset,
-            api::commands::reset_demo_data,
-            api::commands::inject_test_memory,
-            // Onboarding commands
+            // Onboarding
             api::onboarding::get_onboarding_state,
             api::onboarding::save_onboarding_state,
             api::onboarding::request_biometric_auth,

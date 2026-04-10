@@ -149,14 +149,13 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
             <header className="meeting-panel-header">
                 <div className="meeting-headline">
                     <h2>Meeting Notes</h2>
-                    <p>FNDR auto-detects calls and records with Parakeet V3 Small.</p>
-                    <p>Transcription runs right after a meeting ends, then is saved to Documents/FNDR Meetings.</p>
+                    <p>Auto-captured transcripts, ready when a meeting ends.</p>
                 </div>
                 <div className="meeting-header-actions">
-                    <button className="meeting-ghost-btn" onClick={() => refresh(true)} disabled={loading}>
+                    <button className="ui-action-btn meeting-ghost-btn" onClick={() => refresh(true)} disabled={loading}>
                         {loading ? "Refreshing..." : "Refresh"}
                     </button>
-                    <button className="meeting-close-btn" onClick={onClose}>Close</button>
+                    <button className="ui-action-btn meeting-close-btn" onClick={onClose}>Close</button>
                 </div>
             </header>
 
@@ -169,16 +168,16 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                                 <strong>{status?.is_recording ? "Meeting in progress" : "Auto monitor active"}</strong>
                             </div>
                             {status?.is_recording && (
-                                <button className="meeting-ghost-btn" onClick={handleStopNow}>Stop Now</button>
+                                <button className="ui-action-btn meeting-ghost-btn" onClick={handleStopNow}>Stop Now</button>
                             )}
                         </div>
                         <p className="meeting-subtle">
                             {status?.is_recording
                                 ? `Recording: ${status.current_title ?? "Detected meeting"}`
-                                : "FNDR will auto-start when it detects Zoom/Meet/Teams/Webex sessions."}
+                                : "Starts automatically when a supported meeting app is active."}
                         </p>
                         <p className="meeting-subtle">
-                            Segments: {status?.segment_count ?? 0} • Audio: {status?.ffmpeg_available ? "ready" : "missing"} • Model: Parakeet V3 Small
+                            Segments: {status?.segment_count ?? 0} • Audio: {status?.ffmpeg_available ? "ready" : "missing"}
                         </p>
                     </section>
 
@@ -208,20 +207,22 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                             <h3>{selectedMeeting?.title ?? "Transcript"}</h3>
                             <p>{selectedMeeting ? `${selectedMeeting.segment_count} segments` : "Select a meeting"}</p>
                         </div>
-                        <div className="meeting-export-row">
-                            <button className="meeting-ghost-btn" onClick={handleCopyTranscript} disabled={!transcript?.full_text}>
-                                Copy
-                            </button>
-                            <button className="meeting-ghost-btn" onClick={handleExportMarkdown} disabled={!transcript}>
-                                Markdown
-                            </button>
-                            <button className="meeting-ghost-btn" onClick={handleExportJson} disabled={!transcript}>
-                                JSON
-                            </button>
-                            <button className="meeting-primary-btn" onClick={handleAttachToAgent} disabled={!transcript?.full_text}>
-                                Attach to Run
-                            </button>
-                        </div>
+                        {transcript && (
+                            <div className="meeting-export-row">
+                                <button className="ui-action-btn meeting-ghost-btn" onClick={handleCopyTranscript} disabled={!transcript?.full_text}>
+                                    Copy
+                                </button>
+                                <button className="ui-action-btn meeting-ghost-btn" onClick={handleExportMarkdown} disabled={!transcript}>
+                                    Markdown
+                                </button>
+                                <button className="ui-action-btn meeting-ghost-btn" onClick={handleExportJson} disabled={!transcript}>
+                                    JSON
+                                </button>
+                                <button className="ui-action-btn meeting-primary-btn" onClick={handleAttachToAgent} disabled={!transcript?.full_text}>
+                                    Attach to Run
+                                </button>
+                            </div>
+                        )}
                     </div>
 
                     <div className="meeting-transcript">

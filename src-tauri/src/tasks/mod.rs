@@ -76,11 +76,16 @@ impl TaskStore {
 
     /// Add a new task
     pub fn add_task(&mut self, task: Task) -> Result<(), Box<dyn std::error::Error>> {
-        // Avoid duplicates by title
-        if !self
-            .tasks
-            .iter()
-            .any(|t| t.title == task.title && !t.is_dismissed)
+        let normalized_title = normalize_task_title(&task.title);
+
+        // Avoid duplicates among still-active tasks, but allow completed or dismissed
+        // tasks to reappear if the same work resurfaces later.
+        if !normalized_title.is_empty()
+            && !self.tasks.iter().any(|t| {
+                normalize_task_title(&t.title) == normalized_title
+                    && !t.is_completed
+                    && !t.is_dismissed
+            })
         {
             self.tasks.push(task);
             self.save()?;
@@ -189,4 +194,8 @@ pub fn parse_tasks_from_llm_response(response: &str, source_app: &str) -> Vec<Ta
     }
 
     tasks
+}
+
+fn normalize_task_title(title: &str) -> String {
+    title.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }

@@ -14,8 +14,9 @@ use crate::speech;
 use crate::store::{SearchResult, Stats};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Manager, State};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +52,15 @@ pub struct SpeechSynthesisResult {
     pub voice_id: String,
 }
 
+static SHARED_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
+
+fn shared_embedder() -> Result<&'static Embedder, String> {
+    match SHARED_EMBEDDER.get_or_init(Embedder::new) {
+        Ok(embedder) => Ok(embedder),
+        Err(err) => Err(err.clone()),
+    }
+}
+
 /// Search for memories
 #[tauri::command]
 pub async fn search(
@@ -60,10 +70,8 @@ pub async fn search(
     app_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<SearchResult>, String> {
-    let limit = limit.unwrap_or(20);
-
-    // Create embedder for this search
-    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let limit = limit.unwrap_or(20).clamp(1, 50);
+    let embedder = shared_embedder()?;
 
     let results = HybridSearcher::search(
         &state.inner().store,
@@ -73,6 +81,7 @@ pub async fn search(
         time_filter.as_deref(),
         app_filter.as_deref(),
     )
+    .await
     .map_err(|e| e.to_string())?;
 
     Ok(results)
@@ -154,6 +163,7 @@ async fn run_memory_reconstruction(
     let stats = app_state
         .store
         .get_stats()
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     if stats.total_records == 0 {
@@ -164,10 +174,11 @@ async fn run_memory_reconstruction(
         });
     }
 
-    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let embedder = shared_embedder()?;
     let mut reconstruction = app_state
         .graph
         .reconstruct(&app_state.store, &embedder, query, limit)
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     if reconstruction.cards.is_empty() {
@@ -362,6 +373,7 @@ pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), Stri
         .inner()
         .store
         .delete_all()
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     // 2. Clear knowledge graph
@@ -369,18 +381,18 @@ pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), Stri
         tracing::warn!("Failed to clear graph store during delete_all: {}", e);
     }
 
-    // 3. Delete screenshots directory
-    let screenshots_dir = state.inner().store.data_dir().join("screenshots");
-    if screenshots_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&screenshots_dir) {
-            tracing::warn!("Failed to remove screenshots dir: {}", e);
+    // 3. Delete persisted capture artifacts
+    for artifact_dir in ["frames", "screenshots", "meetings"] {
+        let path = state.inner().store.data_dir().join(artifact_dir);
+        if path.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                tracing::warn!("Failed to remove {} dir: {}", artifact_dir, e);
+            }
         }
     }
 
     // 4. Clear task store
-    if let Ok(mut store) = std::panic::catch_unwind(|| get_task_store().lock()) {
-        let _ = store.clear_all();
-    }
+    let _ = get_task_store().lock().clear_all();
 
     tracing::info!("All FNDR data deleted");
     Ok(())
@@ -393,6 +405,7 @@ pub async fn get_stats(state: State<'_, Arc<AppState>>) -> Result<Stats, String>
         .inner()
         .store
         .get_stats()
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }
 
@@ -420,6 +433,7 @@ pub async fn get_app_names(state: State<'_, Arc<AppState>>) -> Result<Vec<String
         .inner()
         .store
         .get_app_names()
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }
 
@@ -433,6 +447,7 @@ pub async fn delete_older_than(
         .inner()
         .store
         .delete_older_than(days)
+        .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }
 
@@ -440,21 +455,30 @@ pub async fn delete_older_than(
 
 use crate::tasks::{parse_tasks_from_llm_response, Task, TaskStore};
 use parking_lot::Mutex;
-use std::sync::OnceLock;
 
 // Global task store (singleton pattern for now)
 static TASK_STORE: OnceLock<Mutex<TaskStore>> = OnceLock::new();
 
+fn default_task_store_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("fndr")
+}
+
+fn build_task_store(data_dir: &Path) -> Mutex<TaskStore> {
+    let store = TaskStore::new(data_dir)
+        .or_else(|_| TaskStore::new(&default_task_store_dir()))
+        .or_else(|_| TaskStore::new(Path::new(".")))
+        .unwrap_or_else(|err| panic!("Failed to initialize task store: {err}"));
+    Mutex::new(store)
+}
+
+pub fn init_task_store(data_dir: &Path) {
+    let _ = TASK_STORE.get_or_init(|| build_task_store(data_dir));
+}
+
 fn get_task_store() -> &'static Mutex<TaskStore> {
-    TASK_STORE.get_or_init(|| {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("fndr");
-        Mutex::new(
-            TaskStore::new(&data_dir)
-                .unwrap_or_else(|_| TaskStore::new(&std::path::PathBuf::from(".")).unwrap()),
-        )
-    })
+    TASK_STORE.get_or_init(|| build_task_store(&default_task_store_dir()))
 }
 
 /// Get extracted todos/reminders from recent memories
@@ -465,7 +489,13 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .inner()
         .store
         .get_recent_memories(24)
+        .await
         .map_err(|e| e.to_string())?;
+
+    {
+        let mut task_store = get_task_store().lock();
+        let _ = task_store.cleanup_old_tasks();
+    }
 
     if memories.is_empty() {
         return Ok(get_task_store()
@@ -496,11 +526,11 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
 
     // Parse and add new tasks
     let new_tasks = parse_tasks_from_llm_response(&llm_response, "FNDR");
-    let mut store = get_task_store().lock();
     let mut linked_urls = state
         .inner()
         .store
         .get_recent_urls(5)
+        .await
         .map_err(|e| e.to_string())?;
     for memory in memories.iter().rev() {
         if let Some(url) = memory.url.as_ref() {
@@ -526,6 +556,7 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .collect();
     let source_memory_id = memories.last().map(|m| m.id.clone());
 
+    let mut store = get_task_store().lock();
     for mut task in new_tasks {
         task.source_memory_id = source_memory_id.clone();
         task.linked_urls = linked_urls.clone();
@@ -824,10 +855,11 @@ pub async fn search_graph(
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<SearchResult>, String> {
-    let limit = limit.unwrap_or(20);
-    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let limit = limit.unwrap_or(20).clamp(1, 50);
+    let embedder = shared_embedder()?;
 
     HybridSearcher::search(&state.inner().store, &embedder, &query, limit, None, None)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -883,7 +915,7 @@ pub async fn get_readiness(
         "OCR failed to initialize. Screen text extraction will not run.".to_string()
     };
 
-    let embed_ok = Embedder::new().is_ok();
+    let embed_ok = shared_embedder().is_ok();
 
     let mut fixes: Vec<String> = Vec::new();
     if !sc_ok {
@@ -988,7 +1020,7 @@ pub async fn set_use_demo_data_only(
 
 #[tauri::command]
 pub async fn seed_demo_dataset(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
-    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let embedder = shared_embedder()?;
     let records = demo::build_demo_records(&embedder).map_err(|e| e.to_string())?;
     let n = records.len();
     state
@@ -1015,7 +1047,7 @@ pub async fn reset_demo_data(state: State<'_, Arc<AppState>>) -> Result<usize, S
 
 #[tauri::command]
 pub async fn inject_test_memory(state: State<'_, Arc<AppState>>) -> Result<String, String> {
-    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let embedder = shared_embedder()?;
     let record = demo::build_inject_record(&embedder).map_err(|e| e.to_string())?;
     let id = record.id.clone();
     let inject_prefix = format!("{}inject", demo::DEMO_ID_PREFIX);
