@@ -414,29 +414,29 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                     <p className="section-hint">
                                         Connect FNDR to external tools via Model Context Protocol.
                                     </p>
-                                <div className="mcp-status-row">
-                                    <span className={`mcp-pill ${mcpStatus?.running ? "running" : "stopped"}`}>
-                                        {mcpStatus?.running ? "Running" : "Stopped"}
-                                    </span>
-                                    <button
-                                        className="ui-action-btn btn-secondary"
-                                        onClick={handleToggleMcpServer}
-                                        disabled={mcpBusy}
-                                    >
-                                        {mcpBusy ? "..." : mcpStatus?.running ? "Stop" : "Start"}
-                                    </button>
-                                </div>
-                                <div className="mcp-link-row">
-                                    <input
-                                        className="mcp-link-input"
-                                        value={mcpStatus?.endpoint ?? "http://127.0.0.1:8799/mcp"}
-                                        readOnly
-                                    />
-                                    <button className="ui-action-btn btn-primary" onClick={handleCopyMcpLink}>
-                                        {copiedMcpLink ? "Copied" : "Copy link"}
-                                    </button>
-                                </div>
-                                {mcpStatus?.last_error && <p className="mcp-error">{mcpStatus.last_error}</p>}
+                                    <div className="mcp-status-row">
+                                        <span className={`mcp-pill ${mcpStatus?.running ? "running" : "stopped"}`}>
+                                            {mcpStatus?.running ? "Running" : "Stopped"}
+                                        </span>
+                                        <button
+                                            className="ui-action-btn btn-secondary"
+                                            onClick={handleToggleMcpServer}
+                                            disabled={mcpBusy}
+                                        >
+                                            {mcpBusy ? "..." : mcpStatus?.running ? "Stop" : "Start"}
+                                        </button>
+                                    </div>
+                                    <div className="mcp-link-row">
+                                        <input
+                                            className="mcp-link-input"
+                                            value={mcpStatus?.endpoint ?? "http://127.0.0.1:8799/mcp"}
+                                            readOnly
+                                        />
+                                        <button className="ui-action-btn btn-primary" onClick={handleCopyMcpLink}>
+                                            {copiedMcpLink ? "Copied" : "Copy link"}
+                                        </button>
+                                    </div>
+                                    {mcpStatus?.last_error && <p className="mcp-error">{mcpStatus.last_error}</p>}
                                 </section>
                             )}
                         </>
@@ -499,10 +499,11 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                             </div>
                                         ) : shouldShowActivate ? (
                                             <button
-                                                className="btn-primary-sm"
+                                                className="btn-liquid-glass"
                                                 onClick={() => handleDownloadModel(model)}
+                                                disabled={isActivatingModel}
                                             >
-                                                Load Now
+                                                {isActivatingModel ? "..." : "Load Now"}
                                             </button>
                                         ) : isDownloaded ? (
                                             <button

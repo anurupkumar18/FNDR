@@ -81,12 +81,28 @@ impl InferenceEngine {
 
         tracing::info!("Loading model {} from {:?}", model_id, model_path);
 
-        let model_params = LlamaModelParams::default();
-        let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)?;
+        let backend_clone = Arc::clone(&backend);
+        let model_path_clone = model_path.clone();
 
-        // Leak the model to get a 'static reference, allowing the context to be 'static.
-        // This is safe since InferenceEngine is a singleton for the application lifetime.
-        let model_ref: &'static LlamaModel = Box::leak(Box::new(model));
+        let model_ref = tokio::task::spawn_blocking(move || {
+            let model_params = LlamaModelParams::default();
+            let model = LlamaModel::load_from_file(&backend_clone, &model_path_clone, &model_params)?;
+
+            // Leak the model to get a 'static reference, allowing the context to be 'static.
+            // This is safe since InferenceEngine is a singleton for the application lifetime.
+            let model_ref: &'static LlamaModel = Box::leak(Box::new(model));
+            Ok::<&'static LlamaModel, Box<dyn std::error::Error + Send + Sync>>(model_ref)
+        })
+        .await
+        .map_err(|e| format!("Join error during model load: {}", e))?
+        .map_err(|e| format!("Model load failed: {}", e))?;
+
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(2048))
+            .with_n_batch(8192);
+
+        let context = model_ref.new_context(&backend, ctx_params)?;
+
         let chat_template = match model_ref.chat_template(None) {
             Ok(template) => template,
             Err(err) => {
@@ -102,12 +118,6 @@ impl InferenceEngine {
                 )?
             }
         };
-
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(2048))
-            .with_n_batch(8192);
-
-        let context = model_ref.new_context(&backend, ctx_params)?;
 
         Ok(Self {
             model: model_ref,
@@ -134,9 +144,9 @@ impl InferenceEngine {
         }
 
         let prompt = match self.build_prompt(
-            "You rewrite noisy OCR into one short action-first summary for a private memory app.",
+            "You are a concise assistant that summarizes screen content. Respond ONLY with the summary.",
             &format!(
-                "Summarize this screen in one sentence. Start with an action verb.\n\n{}",
+                "OCR TEXT:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Summarize this screen in one short sentence starting with an action verb. Do not include 'I see' or 'The screen shows'.",
                 ocr_text.chars().take(800).collect::<String>()
             ),
         ) {
@@ -147,7 +157,10 @@ impl InferenceEngine {
             }
         };
 
-        self.complete(&prompt, 40).await
+        tracing::info!("Summarizing OCR text ({} chars)...", ocr_text.len());
+        let summary = self.complete(&prompt, 40).await;
+        tracing::info!("OCR summary result: {}", summary);
+        summary
     }
 
     /// Answer contextual questions using retrieved memories (RAG)
@@ -155,7 +168,7 @@ impl InferenceEngine {
         let prompt = match self.build_prompt(
             "You answer questions using local memory snippets. Be direct, grounded, and concise.",
             &format!(
-                "Context:\n{}\n\nQuestion: {}",
+                "Context Snippets:\n{}\n\nQuestion: {}",
                 context_str.chars().take(1000).collect::<String>(),
                 question
             ),
@@ -184,7 +197,7 @@ impl InferenceEngine {
         let prompt = match self.build_prompt(
             "You extract key facts from local screen memories.",
             &format!(
-                "Return:\nACTIVITY: what the user was doing\nDETAILS: key names, dates, numbers, and entities\n\nApp: {}\nWindow: {}\nContent:\n{}",
+                "MEMORY CONTENT:\nApp: {}\nWindow: {}\nContent: {}\n\nREQUEST: Return ACTIVITY and DETAILS. Be concise.",
                 app_name,
                 window_title,
                 text.chars().take(1000).collect::<String>()
@@ -208,9 +221,9 @@ impl InferenceEngine {
 
         let combined_text = results.join("\n---\n");
         let prompt = match self.build_prompt(
-            "You compress multiple local search snippets into one grounded summary.",
+            "You help users find what they remember by summarizing search results. Respond ONLY with the summary.",
             &format!(
-                "Query: {}\nSnippets:\n{}\n\nCombine these into one paragraph under 40 words.",
+                "SEARCH QUERY: \"{}\"\n\nSNIPPETS:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Combine these snippets into one paragraph that answers the query. Keep it under 40 words. Ground your answer in the facts provided.",
                 query,
                 combined_text.chars().take(800).collect::<String>()
             ),
@@ -222,7 +235,10 @@ impl InferenceEngine {
             }
         };
 
-        self.complete(&prompt, 100).await
+        tracing::info!("Summarizing search results for query: '{}' with {} snippets", query, results.len());
+        let summary = self.complete(&prompt, 100).await;
+        tracing::info!("Search summary result: {}", summary);
+        summary
     }
 
     /// Extract actionable todos/reminders from memory text
@@ -322,6 +338,7 @@ impl InferenceEngine {
             n_cur += 1;
         }
 
+        tracing::debug!("Completion result ({} tokens): {}", n_cur - tokens_list.len() as i32, result.trim());
         result.trim().to_string()
     }
 }

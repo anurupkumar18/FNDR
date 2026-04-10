@@ -520,6 +520,44 @@
 .btn-primary-sm:hover { background: var(--accent-hover); }
 .btn-primary-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.btn-liquid-glass {
+    background: linear-gradient(180deg, rgba(45, 45, 45, 0.6), rgba(0, 0, 0, 0.8));
+    backdrop-filter: blur(16px) saturate(180%);
+    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 1rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.btn-liquid-glass:hover {
+    background: linear-gradient(180deg, rgba(55, 55, 55, 0.7), rgba(10, 10, 10, 0.9));
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.btn-liquid-glass:active {
+    transform: translateY(0);
+    background: linear-gradient(180deg, rgba(35, 35, 35, 0.8), rgba(0, 0, 0, 0.95));
+}
+
+.btn-liquid-glass:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    filter: grayscale(1);
+}
+
 .btn-danger-sm {
     background: var(--danger-light);
     color: var(--danger);

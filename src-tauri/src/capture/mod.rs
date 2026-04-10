@@ -220,12 +220,22 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
-        // Keep the hot capture path simple: Qwen is the required core model and
-        // loads lazily on first real use. We disable continuous frame summarization
-        // in dev/demo mode to prevent terminal chaos and keep the capture loop lightweight.
-        let summary = String::new();
+        // We re-enable frame summarization but with a throttle to keep the capture loop lightweight.
+        // Summarizing every frame is expensive, so we only do it if the model is already loaded.
+        let mut summary = String::new();
+        if state.ai_model_loaded() {
+            if let Some(engine) = state.inference_engine() {
+                // Throttle: only summarize if it's a "forced" capture or enough time has passed
+                // to avoid choking the GPU/CPU during active work.
+                if force_capture || last_forced_capture.elapsed().as_secs() >= 5 {
+                    summary = engine.summarize(&text).await;
+                }
+            }
+        }
+
         let final_snippet = if summary.is_empty() {
-            text.clone()
+            // Fallback to a truncated version of the raw text if no summary is available
+            text.chars().take(200).collect::<String>()
         } else {
             summary
         };
