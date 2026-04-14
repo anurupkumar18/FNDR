@@ -12,7 +12,7 @@ import { Onboarding } from "./components/Onboarding";
 import { useSearch } from "./hooks/useSearch";
 import {
     CaptureStatus,
-    SearchResult,
+    MemoryCard,
     Task,
     getAppNames,
     getStatus,
@@ -32,7 +32,7 @@ function App() {
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
     const [showGraphPanel, setShowGraphPanel] = useState(false);
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
-    const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
+    const [selectedResult, setSelectedResult] = useState<MemoryCard | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
     const searchAllowed = true;

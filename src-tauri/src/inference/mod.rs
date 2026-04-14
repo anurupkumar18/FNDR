@@ -7,6 +7,7 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::Special;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -176,6 +177,75 @@ fn is_usable_summary(summary: &str) -> bool {
     }
 
     true
+}
+
+fn validate_memory_card_draft(mut draft: MemoryCardDraft) -> Option<MemoryCardDraft> {
+    draft.title = normalize_whitespace(draft.title.trim());
+    draft.summary = normalize_whitespace(draft.summary.trim());
+    draft.action = normalize_whitespace(draft.action.trim());
+    draft.context = draft
+        .context
+        .into_iter()
+        .map(|value| normalize_whitespace(value.trim()))
+        .filter(|value| !value.is_empty())
+        .collect();
+
+    if draft.title.is_empty() || draft.summary.is_empty() || draft.action.is_empty() {
+        return None;
+    }
+
+    if draft.summary.contains('\n')
+        || draft.summary.contains('*')
+        || draft.summary.contains('#')
+        || draft.summary.contains('`')
+    {
+        return None;
+    }
+
+    let summary_lower = draft.summary.to_lowercase();
+    if summary_lower.starts_with("the screen shows")
+        || summary_lower.starts_with("i see")
+        || summary_lower.contains("new tab")
+        || summary_lower.contains("toolbar")
+        || summary_lower.contains("tab strip")
+    {
+        return None;
+    }
+
+    let words = draft.summary.split_whitespace().count();
+    if !(8..=22).contains(&words) {
+        return None;
+    }
+
+    if !draft.summary.ends_with('.') {
+        draft.summary.push('.');
+    }
+
+    draft.context.dedup();
+    draft.context.truncate(4);
+    if draft.context.is_empty() {
+        draft.context.push("recent activity".to_string());
+    }
+
+    Some(draft)
+}
+
+fn extract_json_object(raw: &str) -> Option<String> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    Some(raw[start..=end].to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryCardDraft {
+    pub title: String,
+    pub summary: String,
+    pub action: String,
+    #[serde(default)]
+    pub context: Vec<String>,
 }
 
 /// AI Inference Engine for FNDR using llama-cpp-2
@@ -414,6 +484,48 @@ impl InferenceEngine {
         let summary = self.complete(&prompt, 100).await;
         tracing::info!("Search summary result: {}", summary);
         summary
+    }
+
+    /// Generate a structured memory card draft from grouped snippets.
+    pub async fn synthesize_memory_card(
+        &self,
+        query: &str,
+        app_name: &str,
+        window_title: &str,
+        snippets: &[String],
+    ) -> Option<MemoryCardDraft> {
+        if snippets.is_empty() {
+            return None;
+        }
+
+        let snippet_block = snippets
+            .iter()
+            .take(6)
+            .enumerate()
+            .map(|(idx, snippet)| format!("{}. {}", idx + 1, snippet))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = self
+            .build_prompt(
+                "You synthesize one memory card from grouped search snippets.\n\
+                RULES:\n\
+                - Return ONLY strict JSON with keys: title, summary, action, context.\n\
+                - summary must be exactly one sentence, 8-22 words.\n\
+                - No markdown, no OCR labels, no browser chrome, no preambles.\n\
+                - Focus on one dominant activity with 1-3 high-signal details.\n\
+                - context must be an array of 1-4 short strings.",
+                &format!(
+                    "QUERY: {}\nAPP: {}\nWINDOW: {}\nSNIPPETS:\n{}\n\nReturn JSON only.",
+                    query, app_name, window_title, snippet_block
+                ),
+            )
+            .ok()?;
+
+        let raw = self.complete(&prompt, 180).await;
+        let candidate = extract_json_object(&raw)?;
+        let draft: MemoryCardDraft = serde_json::from_str(&candidate).ok()?;
+        validate_memory_card_draft(draft)
     }
 
     /// Extract actionable todos/reminders from memory text

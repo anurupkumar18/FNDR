@@ -1224,11 +1224,17 @@ async fn ingest_transcript_into_fndr_memory(
         window_title: transcript.meeting.title.clone(),
         session_id: format!("meeting-{}", transcript.meeting.id),
         text: build_meeting_markdown(transcript),
+        clean_text: transcript.full_text.clone(),
+        ocr_confidence: 1.0,
+        ocr_block_count: transcript.segments.len() as u32,
         snippet: if snippet.is_empty() {
             "Meeting transcript captured".to_string()
         } else {
             snippet
         },
+        summary_source: "fallback".to_string(),
+        noise_score: 0.0,
+        session_key: format!("meeting:{}", transcript.meeting.id),
         embedding: vec![0.0; 384],
         image_embedding: vec![0.0; 512],
         screenshot_path: None,

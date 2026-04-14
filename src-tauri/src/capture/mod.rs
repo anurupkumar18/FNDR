@@ -8,7 +8,7 @@ mod dedupe;
 mod macos;
 pub mod permissions;
 mod sampling;
-mod text_cleanup;
+pub mod text_cleanup;
 
 pub use dedupe::PerceptualHasher;
 pub use sampling::AdaptiveSampler;
@@ -200,17 +200,23 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         // OCR
         let ocr_start = Instant::now();
-        let text = match ocr.recognize(&image_data) {
-            Ok(t) => t,
+        let ocr_result = match ocr.recognize_with_metadata(&image_data) {
+            Ok(result) => result,
             Err(e) => {
                 tracing::warn!("OCR failed: {}", e);
                 tokio::time::sleep(sleep_duration).await;
                 continue;
             }
         };
-        let text = text_cleanup::reduce_chrome_noise(&text);
+        let text = text_cleanup::reduce_chrome_noise_for_app(&app_name, &ocr_result.text);
         let ocr_latency = ocr_start.elapsed();
-        tracing::info!("OCR result: {} chars in {:?}", text.len(), ocr_latency);
+        tracing::info!(
+            "OCR result: {} chars in {:?} (confidence {:.2}, blocks {})",
+            text.len(),
+            ocr_latency,
+            ocr_result.confidence,
+            ocr_result.block_count
+        );
 
         // Skip if text too short
         if text.len() < config.min_text_length {
@@ -242,15 +248,18 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             String::new()
         };
 
-        let final_snippet = if summary.is_empty() {
+        let (final_snippet, summary_source) = if summary.is_empty() {
             let fallback = text_cleanup::concise_fallback_snippet(&app_name, &window_title, &text);
             if fallback.is_empty() {
-                text.chars().take(140).collect::<String>()
+                (
+                    text.chars().take(140).collect::<String>(),
+                    "fallback".to_string(),
+                )
             } else {
-                fallback
+                (fallback, "fallback".to_string())
             }
         } else {
-            summary
+            (summary, "llm".to_string())
         };
 
         // Persist screenshot first (needed for FastVLM)
@@ -259,6 +268,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         if let Some(ref u) = url {
             tracing::info!("Captured URL: {}", u);
         }
+        let session_key = build_session_key(&app_name, &window_title, url.as_deref());
+        let noise_score = text_cleanup::estimate_noise_score(&app_name, &ocr_result.text);
 
         let screenshot_path = persist_screenshot(
             &state.store.data_dir(),
@@ -282,7 +293,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     .unwrap_or_else(|| app_name.to_lowercase().replace(' ', "_"))
             ),
             text: text.clone(),
+            clean_text: text.clone(),
+            ocr_confidence: ocr_result.confidence,
+            ocr_block_count: ocr_result.block_count as u32,
             snippet: final_snippet,
+            summary_source,
+            noise_score,
+            session_key,
             embedding: text_embedder
                 .embed_batch(&[text.clone()])
                 .ok()
@@ -326,5 +343,39 @@ fn persist_screenshot(
         Some(path.to_string_lossy().to_string())
     } else {
         None
+    }
+}
+
+fn build_session_key(app_name: &str, window_title: &str, url: Option<&str>) -> String {
+    let app = app_name.trim().to_lowercase().replace(' ', "_");
+    let title = window_title
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || *ch == ' ')
+        .collect::<String>()
+        .split_whitespace()
+        .take(5)
+        .collect::<Vec<_>>()
+        .join("_");
+    let domain = url
+        .and_then(extract_domain)
+        .unwrap_or_default()
+        .replace('.', "_");
+
+    if !domain.is_empty() {
+        format!("{}:{}:{}", app, domain, title)
+    } else {
+        format!("{}:{}", app, title)
+    }
+}
+
+fn extract_domain(url: &str) -> Option<String> {
+    let without_scheme = url.split("://").nth(1).unwrap_or(url);
+    let host = without_scheme.split('/').next()?.trim();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
     }
 }

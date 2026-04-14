@@ -105,6 +105,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             api::commands::search,
+            api::commands::search_raw_results,
+            api::commands::search_memory_cards,
             api::commands::summarize_search,
             api::commands::get_status,
             // MCP

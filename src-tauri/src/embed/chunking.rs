@@ -1,4 +1,6 @@
-//! Text chunking for embedding
+//! OCR-aware text chunking for embedding.
+
+use crate::capture::text_cleanup;
 
 /// Maximum tokens per chunk (MiniLM limit is 512, use 450 for safety)
 const MAX_CHUNK_TOKENS: usize = 450;
@@ -7,10 +9,23 @@ const CHUNK_OVERLAP: usize = 50;
 /// Approximate chars per token for English
 const CHARS_PER_TOKEN: usize = 4;
 
-/// Text chunker for splitting long texts
+const OCR_TARGET_MIN: usize = 300;
+const OCR_TARGET_MAX: usize = 900;
+
+/// Text chunker for splitting long texts.
 pub struct TextChunker {
     max_chars: usize,
     overlap_chars: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineKind {
+    Title,
+    Url,
+    Search,
+    Email,
+    Code,
+    Plain,
 }
 
 impl TextChunker {
@@ -21,8 +36,152 @@ impl TextChunker {
         }
     }
 
-    /// Split text into chunks suitable for embedding
+    /// Split plain text into embedding chunks.
     pub fn chunk(&self, text: &str) -> Vec<String> {
+        self.chunk_ocr_text("", "", text)
+    }
+
+    /// OCR-aware chunking that preserves semantic boundaries and drops low-signal lines.
+    pub fn chunk_ocr_text(&self, app_name: &str, window_title: &str, text: &str) -> Vec<String> {
+        let cleaned_text = text_cleanup::reduce_chrome_noise_for_app(app_name, text);
+        let mut lines = Vec::new();
+        let title = normalize_line(window_title);
+        if !title.is_empty() && !self.is_low_signal_line(&title) {
+            lines.push((title, LineKind::Title));
+        }
+
+        for raw_line in cleaned_text.lines() {
+            let line = normalize_line(raw_line);
+            if line.is_empty() || self.is_low_signal_line(&line) {
+                continue;
+            }
+            lines.push((line.clone(), classify_line(&line)));
+        }
+
+        if lines.is_empty() {
+            return self.chunk_by_chars(text);
+        }
+
+        let mut chunks = Vec::new();
+        let mut current = String::new();
+        let mut current_kind = LineKind::Plain;
+
+        for (line, kind) in lines {
+            if line.len() > OCR_TARGET_MAX {
+                if !current.trim().is_empty() {
+                    chunks.push(current.trim().to_string());
+                    current.clear();
+                }
+                chunks.extend(self.chunk_by_chars(&line));
+                current_kind = LineKind::Plain;
+                continue;
+            }
+
+            let should_boundary_break =
+                matches!(kind, LineKind::Code | LineKind::Email | LineKind::Search)
+                    || matches!(
+                        current_kind,
+                        LineKind::Code | LineKind::Email | LineKind::Search
+                    )
+                    || (kind != current_kind && !current.is_empty());
+
+            if should_boundary_break && !current.is_empty() && current.len() >= OCR_TARGET_MIN {
+                chunks.push(current.trim().to_string());
+                let prev_tail = overlap_tail(&current, 1);
+                current.clear();
+                if !prev_tail.is_empty() && kind == current_kind {
+                    current.push_str(&prev_tail);
+                    current.push('\n');
+                }
+            }
+
+            if !current.is_empty() {
+                current.push('\n');
+            }
+            current.push_str(&line);
+            current_kind = kind;
+
+            if current.len() >= OCR_TARGET_MAX {
+                chunks.push(current.trim().to_string());
+                let prev_tail = overlap_tail(&current, 1);
+                current.clear();
+                if !prev_tail.is_empty() {
+                    current.push_str(&prev_tail);
+                }
+            }
+        }
+
+        if !current.trim().is_empty() {
+            chunks.push(current.trim().to_string());
+        }
+
+        if chunks.is_empty() {
+            self.chunk_by_chars(text)
+        } else {
+            chunks
+        }
+    }
+
+    pub fn is_low_signal_line(&self, line: &str) -> bool {
+        let normalized = normalize_line(line);
+        if normalized.len() < 6 {
+            return true;
+        }
+        if text_cleanup::symbol_ratio(&normalized) > 0.62 {
+            return true;
+        }
+        if text_cleanup::looks_like_file_inventory(&normalized)
+            && !self.is_code_like_line(&normalized)
+        {
+            return true;
+        }
+
+        let lower = normalized.to_lowercase();
+        if matches!(lower.as_str(), "new tab" | "home" | "trending" | "untitled") {
+            return true;
+        }
+
+        false
+    }
+
+    pub fn is_code_like_line(&self, line: &str) -> bool {
+        let trimmed = line.trim();
+        if trimmed.starts_with('$') || trimmed.starts_with('>') {
+            return true;
+        }
+        let lower = trimmed.to_lowercase();
+        lower.starts_with("cargo ")
+            || lower.starts_with("npm ")
+            || lower.starts_with("pnpm ")
+            || lower.starts_with("git ")
+            || lower.starts_with("fn ")
+            || lower.starts_with("let ")
+            || lower.contains(" => ")
+            || lower.contains("::")
+            || (trimmed.contains('{') && trimmed.contains('}'))
+            || (trimmed.contains('(') && trimmed.contains(')') && trimmed.contains(';'))
+    }
+
+    pub fn is_search_like_line(&self, line: &str) -> bool {
+        let lower = line.trim().to_lowercase();
+        lower.starts_with("search ")
+            || lower.starts_with("search:")
+            || lower.starts_with("query:")
+            || lower.starts_with("find ")
+            || lower.contains(" results for ")
+            || lower.ends_with(" near me")
+    }
+
+    pub fn is_email_like_line(&self, line: &str) -> bool {
+        let lower = line.trim().to_lowercase();
+        lower.starts_with("from:")
+            || lower.starts_with("to:")
+            || lower.starts_with("subject:")
+            || lower.starts_with("cc:")
+            || lower.starts_with("bcc:")
+    }
+
+    fn chunk_by_chars(&self, text: &str) -> Vec<String> {
         if text.len() <= self.max_chars {
             return vec![text.to_string()];
         }
@@ -65,6 +224,39 @@ impl TextChunker {
     }
 }
 
+fn classify_line(line: &str) -> LineKind {
+    let lower = line.to_lowercase();
+    if line.starts_with("http://") || line.starts_with("https://") || lower.contains("www.") {
+        return LineKind::Url;
+    }
+    if lower.contains(" - ") && line.len() < 120 {
+        return LineKind::Title;
+    }
+
+    let helper = TextChunker::new();
+    if helper.is_email_like_line(line) {
+        return LineKind::Email;
+    }
+    if helper.is_search_like_line(line) {
+        return LineKind::Search;
+    }
+    if helper.is_code_like_line(line) {
+        return LineKind::Code;
+    }
+
+    LineKind::Plain
+}
+
+fn normalize_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn overlap_tail(text: &str, max_lines: usize) -> String {
+    let mut lines: Vec<&str> = text.lines().rev().take(max_lines).collect();
+    lines.reverse();
+    lines.join("\n")
+}
+
 impl Default for TextChunker {
     fn default() -> Self {
         Self::new()
@@ -94,5 +286,25 @@ mod tests {
         for chunk in &chunks {
             assert!(chunk.len() <= chunker.max_chars + 50); // Allow some flexibility
         }
+    }
+
+    #[test]
+    fn test_ocr_chunking_drops_chrome_lines() {
+        let chunker = TextChunker::new();
+        let text = "New Tab\nHome\nTrending\nPlanning launch checklist for FNDR search pipeline";
+        let chunks = chunker.chunk_ocr_text("Chrome", "New Tab", text);
+        let merged = chunks.join("\n").to_lowercase();
+        assert!(merged.contains("planning launch checklist"));
+        assert!(!merged.contains("new tab"));
+        assert!(!merged.contains("trending"));
+    }
+
+    #[test]
+    fn test_line_helpers() {
+        let chunker = TextChunker::new();
+        assert!(chunker.is_code_like_line("let x = foo(bar);"));
+        assert!(chunker.is_email_like_line("Subject: Weekly update"));
+        assert!(chunker.is_search_like_line("Search: best tennis racket"));
+        assert!(chunker.is_low_signal_line("new tab"));
     }
 }

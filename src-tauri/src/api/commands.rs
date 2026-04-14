@@ -8,7 +8,7 @@ use crate::meeting::{
     self, MeetingRecorderStatus, MeetingSearchResult, MeetingSession, MeetingTranscript,
 };
 
-use crate::search::HybridSearcher;
+use crate::search::{HybridSearcher, MemoryCard, MemoryCardSynthesizer};
 use crate::speech;
 use crate::store::{SearchResult, Stats};
 use crate::AppState;
@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Manager, State};
+use tokio::time::{timeout, Duration, Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureStatus {
@@ -52,6 +53,16 @@ pub struct SpeechSynthesisResult {
 }
 
 static SHARED_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
+const BRANCH_LIMIT: usize = 12;
+const RERANK_LIMIT: usize = 10;
+const GROUP_LIMIT: usize = 6;
+const LLM_GROUP_LIMIT: usize = 0;
+
+const EMBED_TIMEOUT: Duration = Duration::from_millis(1200);
+const VECTOR_TIMEOUT: Duration = Duration::from_millis(1200);
+const KEYWORD_TIMEOUT: Duration = Duration::from_millis(1200);
+const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
+const LLM_SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(1500);
 
 fn shared_embedder() -> Result<&'static Embedder, String> {
     match SHARED_EMBEDDER.get_or_init(Embedder::new) {
@@ -96,6 +107,207 @@ pub async fn search(
     Ok(results)
 }
 
+/// Search and return synthesized memory cards for UI rendering
+#[tauri::command]
+pub async fn search_memory_cards(
+    state: State<'_, Arc<AppState>>,
+    query: String,
+    time_filter: Option<String>,
+    app_filter: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<MemoryCard>, String> {
+    let limit = limit.unwrap_or(20).clamp(1, 50);
+    let started = Instant::now();
+    tracing::info!(
+        query = %query,
+        time_filter = ?time_filter,
+        app_filter = ?app_filter,
+        limit,
+        "search_memory_cards:start"
+    );
+
+    let stats = state.store.get_stats().await.map_err(|e| e.to_string())?;
+    if stats.total_records == 0 {
+        tracing::info!("search_memory_cards:complete total_ms=0 cards=0");
+        return Ok(Vec::new());
+    }
+
+    let fallback_cards = |raw_results: &[SearchResult]| {
+        MemoryCardSynthesizer::deterministic_from_results(
+            &query,
+            raw_results,
+            limit.min(GROUP_LIMIT),
+        )
+    };
+
+    tracing::info!("search_memory_cards:embed:start");
+    let maybe_query_embedding = match shared_embedder() {
+        Ok(embedder) => {
+            let query_text = query.clone();
+            match timeout(
+                EMBED_TIMEOUT,
+                tokio::task::spawn_blocking(move || embedder.embed_batch(&[query_text])),
+            )
+            .await
+            {
+                Ok(Ok(Ok(vectors))) => vectors.into_iter().next(),
+                Ok(Ok(Err(err))) => {
+                    tracing::warn!("search_memory_cards:embed:failed err={}", err);
+                    None
+                }
+                Ok(Err(err)) => {
+                    tracing::warn!("search_memory_cards:embed:join_failed err={}", err);
+                    None
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        timeout_ms = EMBED_TIMEOUT.as_millis(),
+                        "search_memory_cards:embed:timeout"
+                    );
+                    None
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!("search_memory_cards:embed:init_failed err={}", err);
+            None
+        }
+    };
+    tracing::info!(
+        has_embedding = maybe_query_embedding.is_some(),
+        "search_memory_cards:embed:done"
+    );
+
+    let semantic_results: Vec<SearchResult> = if let Some(query_embedding) = maybe_query_embedding {
+        match timeout(
+            VECTOR_TIMEOUT,
+            state.store.vector_search(
+                &query_embedding,
+                BRANCH_LIMIT,
+                time_filter.as_deref(),
+                app_filter.as_deref(),
+            ),
+        )
+        .await
+        {
+            Ok(Ok(results)) => {
+                tracing::info!(
+                    count = results.len(),
+                    "search_memory_cards:semantic_search:done"
+                );
+                results
+            }
+            Ok(Err(err)) => {
+                tracing::warn!("search_memory_cards:semantic_search:failed err={}", err);
+                Vec::new()
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_ms = VECTOR_TIMEOUT.as_millis(),
+                    "search_memory_cards:semantic_search:timeout"
+                );
+                Vec::new()
+            }
+        }
+    } else {
+        tracing::info!("search_memory_cards:semantic_search:skipped");
+        Vec::new()
+    };
+
+    let keyword_results = match timeout(
+        KEYWORD_TIMEOUT,
+        state.store.keyword_search(
+            &query,
+            BRANCH_LIMIT,
+            time_filter.as_deref(),
+            app_filter.as_deref(),
+        ),
+    )
+    .await
+    {
+        Ok(Ok(results)) => {
+            tracing::info!(
+                count = results.len(),
+                "search_memory_cards:keyword_search:done"
+            );
+            results
+        }
+        Ok(Err(err)) => {
+            tracing::warn!("search_memory_cards:keyword_search:failed err={}", err);
+            Vec::new()
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_ms = KEYWORD_TIMEOUT.as_millis(),
+                "search_memory_cards:keyword_search:timeout"
+            );
+            Vec::new()
+        }
+    };
+
+    let mut raw_results = if semantic_results.is_empty() {
+        keyword_results.clone()
+    } else {
+        HybridSearcher::fuse_and_rerank(&query, &semantic_results, &keyword_results, RERANK_LIMIT)
+    };
+    raw_results.truncate(RERANK_LIMIT);
+    tracing::info!(count = raw_results.len(), "search_memory_cards:rerank:done");
+    if raw_results.is_empty() {
+        tracing::info!("search_memory_cards:complete total_ms={} cards=0", started.elapsed().as_millis());
+        return Ok(Vec::new());
+    }
+
+    // Never block live search on model loading. If inference isn't already warm,
+    // synthesis falls back to deterministic card generation immediately.
+    let inference = state.inner().inference_engine();
+
+    tracing::info!("search_memory_cards:synthesis:start");
+    let synthesis_future = MemoryCardSynthesizer::from_results_with_policy(
+        inference.as_deref(),
+        &query,
+        &raw_results,
+        GROUP_LIMIT,
+        LLM_GROUP_LIMIT,
+        LLM_SYNTHESIS_TIMEOUT,
+    );
+    let mut cards = match timeout(SYNTHESIS_TIMEOUT, synthesis_future).await {
+        Ok(generated) => {
+            tracing::info!(count = generated.len(), "search_memory_cards:synthesis:done");
+            generated
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_ms = SYNTHESIS_TIMEOUT.as_millis(),
+                "search_memory_cards:synthesis:timeout"
+            );
+            fallback_cards(&raw_results)
+        }
+    };
+
+    if cards.is_empty() {
+        cards = fallback_cards(&raw_results);
+    }
+    cards.truncate(limit);
+    tracing::info!(
+        total_ms = started.elapsed().as_millis(),
+        cards = cards.len(),
+        "search_memory_cards:complete"
+    );
+    Ok(cards)
+}
+
+/// Debug-only raw search path without MemoryCard synthesis.
+#[tauri::command]
+pub async fn search_raw_results(
+    state: State<'_, Arc<AppState>>,
+    query: String,
+    time_filter: Option<String>,
+    app_filter: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>, String> {
+    search(state, query, time_filter, app_filter, limit).await
+}
+
 /// Summarize search results using AI
 #[tauri::command]
 pub async fn summarize_search(
@@ -107,7 +319,7 @@ pub async fn summarize_search(
         return Ok(String::new());
     }
 
-    let summary = match state.inner().ensure_inference_engine().await {
+    let mut summary = match state.inner().ensure_inference_engine().await {
         Ok(Some(engine)) => {
             engine
                 .summarize_search_results(&query, &results_snippets)
@@ -120,7 +332,59 @@ pub async fn summarize_search(
         }
     };
 
+    if summary_is_low_signal(&summary) {
+        summary = deterministic_search_summary(&results_snippets);
+    }
+
     Ok(summary)
+}
+
+fn summary_is_low_signal(summary: &str) -> bool {
+    let lower = summary.trim().to_lowercase();
+    lower.is_empty()
+        || lower.contains("no relevant information")
+        || lower.contains("no direct information")
+        || lower.contains("not provided")
+        || lower.contains("worked in google chrome")
+}
+
+fn deterministic_search_summary(snippets: &[String]) -> String {
+    let mut facts = Vec::new();
+    for snippet in snippets.iter().take(4) {
+        let cleaned = snippet
+            .split(']')
+            .nth(1)
+            .unwrap_or(snippet)
+            .trim()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if cleaned.is_empty() {
+            continue;
+        }
+        let lower = cleaned.to_lowercase();
+        if lower.contains("worked in google chrome") || lower.contains("no relevant information") {
+            continue;
+        }
+        facts.push(cleaned);
+        if facts.len() >= 2 {
+            break;
+        }
+    }
+
+    if facts.is_empty() {
+        return "Found recent activity in your captured memories.".to_string();
+    }
+
+    if facts.len() == 1 {
+        return format!("{}.", facts[0].trim_end_matches('.'));
+    }
+
+    format!(
+        "{}. Then {}.",
+        facts[0].trim_end_matches('.'),
+        facts[1].trim_end_matches('.')
+    )
 }
 
 /// Get capture status

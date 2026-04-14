@@ -12,6 +12,7 @@ use arrow_schema::{ArrowError, DataType, Field, Schema};
 use chrono::{Local, TimeZone};
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::table::NewColumnTransform;
 use lancedb::{Connection, Table};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -356,7 +357,13 @@ fn memory_schema() -> Schema {
         Field::new("window_title", DataType::Utf8, false),
         Field::new("session_id", DataType::Utf8, false),
         Field::new("text", DataType::Utf8, false),
+        Field::new("clean_text", DataType::Utf8, false),
+        Field::new("ocr_confidence", DataType::Float32, false),
+        Field::new("ocr_block_count", DataType::Int64, false),
         Field::new("snippet", DataType::Utf8, false),
+        Field::new("summary_source", DataType::Utf8, false),
+        Field::new("noise_score", DataType::Float32, false),
+        Field::new("session_key", DataType::Utf8, false),
         Field::new(
             "embedding",
             DataType::FixedSizeList(
@@ -392,7 +399,13 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
     let window_titles: Vec<&str> = records.iter().map(|r| r.window_title.as_str()).collect();
     let session_ids: Vec<&str> = records.iter().map(|r| r.session_id.as_str()).collect();
     let texts: Vec<&str> = records.iter().map(|r| r.text.as_str()).collect();
+    let clean_texts: Vec<&str> = records.iter().map(|r| r.clean_text.as_str()).collect();
+    let ocr_confidences: Vec<f32> = records.iter().map(|r| r.ocr_confidence).collect();
+    let ocr_block_counts: Vec<i64> = records.iter().map(|r| r.ocr_block_count as i64).collect();
     let snippets: Vec<&str> = records.iter().map(|r| r.snippet.as_str()).collect();
+    let summary_sources: Vec<&str> = records.iter().map(|r| r.summary_source.as_str()).collect();
+    let noise_scores: Vec<f32> = records.iter().map(|r| r.noise_score).collect();
+    let session_keys: Vec<&str> = records.iter().map(|r| r.session_key.as_str()).collect();
     let screenshot_paths: Vec<Option<&str>> = records
         .iter()
         .map(|r| r.screenshot_path.as_deref())
@@ -436,7 +449,13 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
             Arc::new(StringArray::from(window_titles)),
             Arc::new(StringArray::from(session_ids)),
             Arc::new(StringArray::from(texts)),
+            Arc::new(StringArray::from(clean_texts)),
+            Arc::new(Float32Array::from(ocr_confidences)),
+            Arc::new(Int64Array::from(ocr_block_counts)),
             Arc::new(StringArray::from(snippets)),
+            Arc::new(StringArray::from(summary_sources)),
+            Arc::new(Float32Array::from(noise_scores)),
+            Arc::new(StringArray::from(session_keys)),
             Arc::new(embedding_array),
             Arc::new(image_embedding_array),
             Arc::new(StringArray::from(screenshot_paths)),
@@ -455,7 +474,13 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
     let window_titles = str_col(batch, "window_title");
     let session_ids = str_col(batch, "session_id");
     let texts = str_col(batch, "text");
+    let clean_texts = str_col(batch, "clean_text");
+    let ocr_confidences = f32_col(batch, "ocr_confidence");
+    let ocr_block_counts = i64_col(batch, "ocr_block_count");
     let snippets = str_col(batch, "snippet");
+    let summary_sources = str_col(batch, "summary_source");
+    let noise_scores = f32_col(batch, "noise_score");
+    let session_keys = str_col(batch, "session_key");
     let screenshot_paths = str_col(batch, "screenshot_path");
     let urls = str_col(batch, "url");
 
@@ -479,7 +504,13 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
                 window_title: get_str(&window_titles, i),
                 session_id: get_str(&session_ids, i),
                 text: get_str(&texts, i),
+                clean_text: get_str(&clean_texts, i),
+                ocr_confidence: get_f32(&ocr_confidences, i),
+                ocr_block_count: get_i64(&ocr_block_counts, i).max(0) as u32,
                 snippet: get_str(&snippets, i),
+                summary_source: get_str(&summary_sources, i),
+                noise_score: get_f32(&noise_scores, i),
+                session_key: get_str(&session_keys, i),
                 embedding,
                 image_embedding,
                 screenshot_path: get_opt_str(&screenshot_paths, i),
@@ -498,7 +529,13 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
     let window_titles = str_col(batch, "window_title");
     let session_ids = str_col(batch, "session_id");
     let texts = str_col(batch, "text");
+    let clean_texts = str_col(batch, "clean_text");
+    let ocr_confidences = f32_col(batch, "ocr_confidence");
+    let ocr_block_counts = i64_col(batch, "ocr_block_count");
     let snippets = str_col(batch, "snippet");
+    let summary_sources = str_col(batch, "summary_source");
+    let noise_scores = f32_col(batch, "noise_score");
+    let session_keys = str_col(batch, "session_key");
     let screenshot_paths = str_col(batch, "screenshot_path");
     let urls = str_col(batch, "url");
 
@@ -521,7 +558,13 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
                 window_title: get_str(&window_titles, i),
                 session_id: get_str(&session_ids, i),
                 text: get_str(&texts, i),
+                clean_text: get_str(&clean_texts, i),
+                ocr_confidence: get_f32(&ocr_confidences, i),
+                ocr_block_count: get_i64(&ocr_block_counts, i).max(0) as u32,
                 snippet: get_str(&snippets, i),
+                summary_source: get_str(&summary_sources, i),
+                noise_score: get_f32(&noise_scores, i),
+                session_key: get_str(&session_keys, i),
                 score,
                 screenshot_path: get_opt_str(&screenshot_paths, i),
                 url: get_opt_str(&urls, i),
@@ -548,6 +591,14 @@ fn i64_col(batch: &RecordBatch, name: &str) -> Option<Int64Array> {
         .cloned()
 }
 
+fn f32_col(batch: &RecordBatch, name: &str) -> Option<Float32Array> {
+    batch
+        .column_by_name(name)?
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .cloned()
+}
+
 fn get_str(col: &Option<StringArray>, i: usize) -> String {
     col.as_ref()
         .map(|c| c.value(i).to_string())
@@ -562,6 +613,14 @@ fn get_opt_str(col: &Option<StringArray>, i: usize) -> Option<String> {
             Some(c.value(i).to_string())
         }
     })
+}
+
+fn get_i64(col: &Option<Int64Array>, i: usize) -> i64 {
+    col.as_ref().map(|c| c.value(i)).unwrap_or(0)
+}
+
+fn get_f32(col: &Option<Float32Array>, i: usize) -> f32 {
+    col.as_ref().map(|c| c.value(i)).unwrap_or(0.0)
 }
 
 fn extract_f32_list(col: &Option<FixedSizeListArray>, i: usize, dim: usize) -> Vec<f32> {
@@ -667,7 +726,9 @@ async fn open_or_create_table(db_path: &Path) -> Result<Table, lancedb::Error> {
 
     let names = conn.table_names().execute().await?;
     if names.contains(&TABLE_NAME.to_string()) {
-        conn.open_table(TABLE_NAME).execute().await
+        let table = conn.open_table(TABLE_NAME).execute().await?;
+        ensure_memory_schema_columns(&table).await?;
+        Ok(table)
     } else {
         let schema = Arc::new(memory_schema());
         let empty = RecordBatchIterator::new(
@@ -681,6 +742,53 @@ async fn open_or_create_table(db_path: &Path) -> Result<Table, lancedb::Error> {
         .execute()
         .await
     }
+}
+
+async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Error> {
+    let schema = table.schema().await?;
+    let existing: std::collections::HashSet<String> = schema
+        .fields()
+        .iter()
+        .map(|field| field.name().to_string())
+        .collect();
+
+    let mut transforms: Vec<(String, String)> = Vec::new();
+    if !existing.contains("clean_text") {
+        transforms.push(("clean_text".to_string(), "text".to_string()));
+    }
+    if !existing.contains("ocr_confidence") {
+        transforms.push((
+            "ocr_confidence".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("ocr_block_count") {
+        transforms.push((
+            "ocr_block_count".to_string(),
+            "CAST(0 AS BIGINT)".to_string(),
+        ));
+    }
+    if !existing.contains("summary_source") {
+        transforms.push(("summary_source".to_string(), "'fallback'".to_string()));
+    }
+    if !existing.contains("noise_score") {
+        transforms.push(("noise_score".to_string(), "CAST(0.0 AS FLOAT)".to_string()));
+    }
+    if !existing.contains("session_key") {
+        transforms.push(("session_key".to_string(), "''".to_string()));
+    }
+
+    if !transforms.is_empty() {
+        tracing::info!(
+            "Migrating LanceDB memories table schema with {} new columns",
+            transforms.len()
+        );
+        table
+            .add_columns(NewColumnTransform::SqlExpressions(transforms), None)
+            .await?;
+    }
+
+    Ok(())
 }
 
 // ── Migration from legacy JSON store ─────────────────────────────────────────

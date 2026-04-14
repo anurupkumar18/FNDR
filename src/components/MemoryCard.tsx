@@ -1,8 +1,8 @@
-import { SearchResult } from "../api/tauri";
+import { MemoryCard as MemoryCardData } from "../api/tauri";
 import "./MemoryCard.css";
 
 interface MemoryCardProps {
-    result: SearchResult;
+    result: MemoryCardData;
     query: string;
     onClick: () => void;
     isLarge?: boolean;
@@ -67,13 +67,13 @@ export function MemoryCard({ result, query, onClick, isLarge }: MemoryCardProps)
 
             <div className="card-body">
                 <p className="card-text">
-                    {highlightText(result.snippet, query)}
+                    {highlightText(result.summary, query)}
                 </p>
             </div>
 
             <footer className="card-footer">
-                <div className="card-window-title" title={result.window_title}>
-                    {result.window_title}
+                <div className="card-window-title" title={result.title}>
+                    {result.title}
                 </div>
                 {result.url && (
                     <a

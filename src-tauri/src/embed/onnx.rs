@@ -1,112 +1,412 @@
-//! ONNX Runtime embedder using MiniLM
-//!
-//! Uses the all-MiniLM-L6-v2 model for generating embeddings.
-//! For prototype, we use a simplified tokenization approach.
+//! Local text embedding backend for all-MiniLM-L6-v2.
 
 use super::TextChunker;
-// use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
-/// Embedding dimension for MiniLM
+/// Embedding dimension for all-MiniLM-L6-v2.
 pub const EMBEDDING_DIM: usize = 384;
+const SIDECAR_HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
+const SIDECAR_EMBED_TIMEOUT: Duration = Duration::from_secs(6);
 
-/// Embedder using ONNX Runtime
-/// For the prototype, we use a placeholder that generates deterministic embeddings
-/// based on text hash. This allows the search infrastructure to work while
-/// we integrate the full ONNX model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingBackend {
+    Real,
+    Mock,
+}
+
+/// Embedder with pluggable backend.
 pub struct Embedder {
     chunker: TextChunker,
+    backend: Backend,
+}
+
+enum Backend {
+    Real(RealEmbedder),
+    Mock(MockEmbedder),
 }
 
 impl Embedder {
     pub fn new() -> Result<Self, String> {
-        Ok(Self {
-            chunker: TextChunker::new(),
-        })
+        let chunker = TextChunker::new();
+
+        match RealEmbedder::new() {
+            Ok(real) => Ok(Self {
+                chunker,
+                backend: Backend::Real(real),
+            }),
+            Err(err) => {
+                if allow_mock_embedder() {
+                    tracing::warn!(
+                        "MiniLM embedder fallback active: using MOCK embeddings in this build. Reason: {}",
+                        err
+                    );
+                    Ok(Self {
+                        chunker,
+                        backend: Backend::Mock(MockEmbedder::default()),
+                    })
+                } else {
+                    Err(format!(
+                        "Failed to initialize real all-MiniLM-L6-v2 embedder and mock fallback is disabled: {err}"
+                    ))
+                }
+            }
+        }
     }
 
-    /// Chunk text for embedding
+    pub fn backend(&self) -> EmbeddingBackend {
+        match self.backend {
+            Backend::Real(_) => EmbeddingBackend::Real,
+            Backend::Mock(_) => EmbeddingBackend::Mock,
+        }
+    }
+
+    /// Chunk text for embedding (char fallback path).
     pub fn chunk_text(&self, text: &str) -> Vec<String> {
         self.chunker.chunk(text)
     }
 
-    /// Generate embeddings for a batch of texts
-    /// For prototype: generates deterministic embeddings based on text content
+    /// Generate embeddings for a batch of texts.
     pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
-        let embeddings: Vec<Vec<f32>> = texts.iter().map(|text| self.embed_single(text)).collect();
+        let mut flattened_chunks = Vec::new();
+        let mut ranges = Vec::with_capacity(texts.len());
 
-        Ok(embeddings)
+        for text in texts {
+            let chunks = self.chunk_text(text);
+            let start = flattened_chunks.len();
+            if chunks.is_empty() {
+                flattened_chunks.push(text.clone());
+            } else {
+                flattened_chunks.extend(chunks);
+            }
+            let end = flattened_chunks.len();
+            ranges.push((start, end));
+        }
+
+        let chunk_embeddings = self.backend_embed_batch(&flattened_chunks)?;
+        if chunk_embeddings.len() != flattened_chunks.len() {
+            return Err(format!(
+                "Embedding backend returned {} vectors for {} chunks",
+                chunk_embeddings.len(),
+                flattened_chunks.len()
+            ));
+        }
+
+        let mut merged = Vec::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            let vectors = &chunk_embeddings[start..end];
+            merged.push(mean_pool(vectors));
+        }
+
+        Ok(merged)
     }
 
-    /// Generate embedding for a single text
-    /// Uses a deterministic hash-based approach for the prototype
-    fn embed_single(&self, text: &str) -> Vec<f32> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut embedding = vec![0.0f32; EMBEDDING_DIM];
-
-        // Generate embedding based on text characteristics
-        // This creates a pseudo-embedding that clusters similar texts together
-
-        // 1. Hash-based components
-        let mut hasher = DefaultHasher::new();
-        text.hash(&mut hasher);
-        let hash = hasher.finish();
-
-        // 2. Character frequency components
-        let char_freqs: Vec<f32> = (b'a'..=b'z')
-            .map(|c| {
-                let count = text
-                    .to_lowercase()
-                    .chars()
-                    .filter(|&ch| ch == c as char)
-                    .count();
-                count as f32 / (text.len().max(1) as f32)
-            })
-            .collect();
-
-        // 3. Word-based components
-        let words: Vec<&str> = text.split_whitespace().collect();
-        let word_count = words.len() as f32;
-        let avg_word_len = if words.is_empty() {
-            0.0
-        } else {
-            words.iter().map(|w| w.len()).sum::<usize>() as f32 / word_count
-        };
-
-        // 4. Combine components into embedding
-        for i in 0..EMBEDDING_DIM {
-            let hash_component = ((hash >> (i % 64)) & 0xFF) as f32 / 255.0;
-            let char_component = char_freqs.get(i % 26).copied().unwrap_or(0.0);
-            let word_component = if i < 10 {
-                (word_count / 100.0).min(1.0)
-            } else if i < 20 {
-                (avg_word_len / 10.0).min(1.0)
-            } else {
-                0.0
-            };
-
-            embedding[i] = hash_component * 0.5 + char_component * 0.3 + word_component * 0.2;
+    fn backend_embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        match &self.backend {
+            Backend::Real(real) => real.embed_batch(texts),
+            Backend::Mock(mock) => Ok(mock.embed_batch(texts)),
         }
-
-        // L2 normalize
-        let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for val in &mut embedding {
-                *val /= norm;
-            }
-        }
-
-        embedding
     }
 }
 
 impl Default for Embedder {
     fn default() -> Self {
         Self::new().expect("Failed to create embedder")
+    }
+}
+
+#[derive(Debug)]
+struct RealEmbedder {
+    python_cmd: PathBuf,
+    script_path: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+struct EmbedRequest<'a> {
+    texts: &'a [String],
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbedResponse {
+    embeddings: Vec<Vec<f32>>,
+}
+
+impl RealEmbedder {
+    fn new() -> Result<Self, String> {
+        let python_cmd = python_cmd_for_sidecar();
+        let script_path = resolve_embedder_sidecar()
+            .ok_or_else(|| "Could not locate minilm_embedder.py sidecar".to_string())?;
+
+        let embedder = Self {
+            python_cmd,
+            script_path,
+        };
+        embedder.healthcheck()?;
+        Ok(embedder)
+    }
+
+    fn healthcheck(&self) -> Result<(), String> {
+        let output = self.run_sidecar(&["--ping"], None, SIDECAR_HEALTHCHECK_TIMEOUT)?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(format!(
+                "Embedding sidecar healthcheck failed (status={}): {}",
+                output.status, stderr
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        let payload = serde_json::to_vec(&EmbedRequest { texts })
+            .map_err(|e| format!("Failed to serialize embedding request: {e}"))?;
+
+        let output =
+            self.run_sidecar(&["--embed-daemon"], Some(&payload), SIDECAR_EMBED_TIMEOUT)?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(format!(
+                "Embedding sidecar failed (status={}): {}",
+                output.status, stderr
+            ));
+        }
+
+        let response: EmbedResponse = serde_json::from_slice(&output.stdout)
+            .map_err(|e| format!("Failed to parse embedding output: {e}"))?;
+
+        for (idx, vec) in response.embeddings.iter().enumerate() {
+            if vec.len() != EMBEDDING_DIM {
+                return Err(format!(
+                    "Embedding {} had dim {}, expected {}",
+                    idx,
+                    vec.len(),
+                    EMBEDDING_DIM
+                ));
+            }
+        }
+
+        Ok(response.embeddings)
+    }
+
+    fn run_sidecar(
+        &self,
+        args: &[&str],
+        stdin_payload: Option<&[u8]>,
+        timeout: Duration,
+    ) -> Result<std::process::Output, String> {
+        let mut command = Command::new(&self.python_cmd);
+        command
+            .arg(&self.script_path)
+            .args(args)
+            .env("TOKENIZERS_PARALLELISM", "false")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = command
+            .spawn()
+            .map_err(|e| format!("Failed to start embedding sidecar: {e}"))?;
+
+        if let Some(payload) = stdin_payload {
+            if let Some(stdin) = child.stdin.as_mut() {
+                stdin
+                    .write_all(payload)
+                    .map_err(|e| format!("Failed to write embedding input: {e}"))?;
+            }
+        }
+
+        let start = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    return child
+                        .wait_with_output()
+                        .map_err(|e| format!("Embedding sidecar execution failed: {e}"));
+                }
+                Ok(None) => {
+                    if start.elapsed() > timeout {
+                        let _ = child.kill();
+                        let output = child.wait_with_output().map_err(|e| {
+                            format!("Embedding sidecar timed out and kill wait failed: {e}")
+                        })?;
+                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                        tracing::warn!(
+                            timeout_ms = timeout.as_millis(),
+                            stderr = %stderr,
+                            "Embedding sidecar timed out"
+                        );
+                        return Err(format!(
+                            "Embedding sidecar timed out after {}ms",
+                            timeout.as_millis()
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => {
+                    return Err(format!("Embedding sidecar process status check failed: {err}"));
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct MockEmbedder;
+
+impl MockEmbedder {
+    fn embed_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
+        texts.iter().map(|text| self.embed_single(text)).collect()
+    }
+
+    fn embed_single(&self, text: &str) -> Vec<f32> {
+        // Feature-hashing bag-of-words fallback for dev/test only.
+        let mut vector = vec![0.0f32; EMBEDDING_DIM];
+        let lower = text.to_lowercase();
+
+        for token in lower
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|tok| tok.len() > 2)
+        {
+            let idx = stable_hash(token) % EMBEDDING_DIM;
+            vector[idx] += 1.0;
+
+            if token.len() > 4 {
+                let prefix = &token[..3];
+                let suffix = &token[token.len() - 3..];
+                vector[stable_hash(prefix) % EMBEDDING_DIM] += 0.4;
+                vector[stable_hash(suffix) % EMBEDDING_DIM] += 0.4;
+            }
+        }
+
+        for window in lower.as_bytes().windows(3) {
+            let idx = stable_hash_bytes(window) % EMBEDDING_DIM;
+            vector[idx] += 0.05;
+        }
+
+        normalize(&mut vector);
+        vector
+    }
+}
+
+fn allow_mock_embedder() -> bool {
+    cfg!(test)
+        || cfg!(debug_assertions)
+        || std::env::var("FNDR_ALLOW_MOCK_EMBEDDER")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+}
+
+fn python_cmd_for_sidecar() -> PathBuf {
+    if let Some(docs) = dirs::document_dir() {
+        let venv_py = docs.join("FNDR Meetings/venv/bin/python3");
+        if venv_py.exists() {
+            return venv_py;
+        }
+    }
+    PathBuf::from("python3")
+}
+
+fn resolve_embedder_sidecar() -> Option<PathBuf> {
+    // Packaged: <exe>/../Resources/sidecar/minilm_embedder.py
+    let packaged = std::env::current_exe().ok().and_then(|p| {
+        p.parent()
+            .map(|d| d.join("../Resources/sidecar/minilm_embedder.py"))
+    });
+    if let Some(ref p) = packaged {
+        if p.exists() {
+            return Some(p.clone());
+        }
+    }
+
+    // Dev path.
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sidecar/minilm_embedder.py");
+    if dev.exists() {
+        return Some(dev);
+    }
+
+    None
+}
+
+fn stable_hash(input: &str) -> usize {
+    stable_hash_bytes(input.as_bytes())
+}
+
+fn stable_hash_bytes(input: &[u8]) -> usize {
+    let mut hash: u64 = 1469598103934665603; // FNV offset
+    for b in input {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    hash as usize
+}
+
+fn mean_pool(vectors: &[Vec<f32>]) -> Vec<f32> {
+    if vectors.is_empty() {
+        return vec![0.0; EMBEDDING_DIM];
+    }
+
+    let mut pooled = vec![0.0f32; EMBEDDING_DIM];
+    for vec in vectors {
+        for (idx, value) in vec.iter().enumerate().take(EMBEDDING_DIM) {
+            pooled[idx] += *value;
+        }
+    }
+
+    let scale = 1.0 / vectors.len() as f32;
+    for value in &mut pooled {
+        *value *= scale;
+    }
+
+    normalize(&mut pooled);
+    pooled
+}
+
+fn normalize(vec: &mut [f32]) {
+    let norm = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for val in vec {
+            *val /= norm;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cosine(a: &[f32], b: &[f32]) -> f32 {
+        a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    }
+
+    #[test]
+    fn similar_phrases_score_higher_than_unrelated() {
+        let embedder = Embedder::new().expect("embedder should initialize in tests");
+        let phrases = vec![
+            "schedule project kickoff meeting with alice".to_string(),
+            "plan kickoff meeting with alice for the project".to_string(),
+            "buy groceries and cook dinner tonight".to_string(),
+        ];
+        let embeddings = embedder
+            .embed_batch(&phrases)
+            .expect("embedding should work");
+
+        let similar = cosine(&embeddings[0], &embeddings[1]);
+        let unrelated = cosine(&embeddings[0], &embeddings[2]);
+
+        assert!(
+            similar > unrelated,
+            "expected similar phrases ({similar}) to outrank unrelated ({unrelated})"
+        );
     }
 }

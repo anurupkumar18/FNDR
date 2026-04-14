@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
-    SearchResult,
+    MemoryCard,
     pauseCapture,
     resumeCapture,
     summarizeSearch,
@@ -19,7 +19,7 @@ interface SearchBarProps {
     onSetGraphPanelOpen: (open: boolean) => void;
     appNames: string[];
     resultCount: number;
-    searchResults: SearchResult[];
+    searchResults: MemoryCard[];
     disabled?: boolean;
     disabledHint?: string;
 }
@@ -85,7 +85,7 @@ export function SearchBar({
             try {
                 const snippets = latestResults
                     .slice(0, 5)
-                    .map((result) => `[${result.app_name}] ${result.snippet}`);
+                    .map((result) => `[${result.app_name}] ${result.summary}`);
 
                 const aiSummary = await summarizeSearch(activeValue, snippets);
                 if (cancelled || requestId !== summaryRequestRef.current) {

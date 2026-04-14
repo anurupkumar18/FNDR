@@ -1,16 +1,16 @@
 import { useState, useEffect } from "react";
-import { SearchResult } from "../api/tauri";
+import { MemoryCard } from "../api/tauri";
 import "./Timeline.css";
 
 const INITIAL_VISIBLE = 30;
 const LOAD_MORE_STEP = 30;
 
 interface TimelineProps {
-    results: SearchResult[];
+    results: MemoryCard[];
     isLoading: boolean;
     query: string;
     selectedResultId: string | null;
-    onSelectResult: (result: SearchResult) => void;
+    onSelectResult: (result: MemoryCard) => void;
     evalUi?: boolean;
 }
 
@@ -111,8 +111,19 @@ export function Timeline({
                                 </span>
                             )}
                         </div>
-                        <h3 className="result-title">{result.window_title || "Untitled memory"}</h3>
-                        {result.snippet && <p className="result-preview">{result.snippet}</p>}
+                        <h3 className="result-title">{result.title || "Untitled memory"}</h3>
+                        <p className="result-preview">{result.summary}</p>
+
+                        {result.context.length > 0 && (
+                            <div className="result-context-chips">
+                                {result.context.slice(0, 4).map((item, idx) => (
+                                    <span key={`${result.id}-ctx-${idx}`} className="result-chip">
+                                        {item}
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+
                     </article>
                 ))}
             </div>
@@ -131,16 +142,20 @@ export function Timeline({
     );
 }
 
-function filterConsecutiveSimilar(results: SearchResult[]): SearchResult[] {
+function filterConsecutiveSimilar(results: MemoryCard[]): MemoryCard[] {
     if (results.length <= 1) return results;
 
-    const filtered: SearchResult[] = [results[0]];
+    const filtered: MemoryCard[] = [results[0]];
     for (let i = 1; i < results.length; i++) {
         const prev = filtered[filtered.length - 1];
         const curr = results[i];
 
-        // Skip if same app and < 30s diff
-        if (curr.app_name === prev.app_name && Math.abs(curr.timestamp - prev.timestamp) < 30000) {
+        // Skip if same app and < 30s diff and highly similar title.
+        if (
+            curr.app_name === prev.app_name &&
+            Math.abs(curr.timestamp - prev.timestamp) < 30_000 &&
+            curr.title.toLowerCase() === prev.title.toLowerCase()
+        ) {
             continue;
         }
         filtered.push(curr);

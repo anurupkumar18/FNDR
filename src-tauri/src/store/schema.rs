@@ -10,6 +10,10 @@ fn default_image_embedding() -> Vec<f32> {
     vec![0.0; 512]
 }
 
+fn default_summary_source() -> String {
+    "fallback".to_string()
+}
+
 /// A single memory record stored in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRecord {
@@ -32,8 +36,26 @@ pub struct MemoryRecord {
     pub session_id: String,
     /// Extracted text content
     pub text: String,
+    /// OCR-cleaned text used for embedding/search quality decisions
+    #[serde(default)]
+    pub clean_text: String,
+    /// OCR average confidence (0-1)
+    #[serde(default)]
+    pub ocr_confidence: f32,
+    /// OCR block count retained after filtering
+    #[serde(default)]
+    pub ocr_block_count: u32,
     /// Concise summary
     pub snippet: String,
+    /// Summary provenance: llm, vlm, fallback
+    #[serde(default = "default_summary_source")]
+    pub summary_source: String,
+    /// Higher values indicate noisier OCR payloads
+    #[serde(default)]
+    pub noise_score: f32,
+    /// Session-level grouping key for downstream synthesis
+    #[serde(default)]
+    pub session_key: String,
     /// Text embedding vector
     #[serde(default = "default_text_embedding")]
     pub embedding: Vec<f32>,
@@ -60,7 +82,19 @@ pub struct SearchResult {
     #[serde(default)]
     pub session_id: String,
     pub text: String,
+    #[serde(default)]
+    pub clean_text: String,
+    #[serde(default)]
+    pub ocr_confidence: f32,
+    #[serde(default)]
+    pub ocr_block_count: u32,
     pub snippet: String,
+    #[serde(default = "default_summary_source")]
+    pub summary_source: String,
+    #[serde(default)]
+    pub noise_score: f32,
+    #[serde(default)]
+    pub session_key: String,
     pub score: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_path: Option<String>,

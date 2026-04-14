@@ -1,16 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { Timeline } from "./Timeline";
-import type { SearchResult } from "../api/tauri";
+import type { MemoryCard } from "../api/tauri";
 
-const sample: SearchResult = {
+const sample: MemoryCard = {
     id: "1",
     timestamp: Date.now(),
+    title: "Test window",
+    summary: "Reviewed test content in Safari while validating timeline rendering behavior.",
+    action: "Reviewed test content",
+    context: ["Safari", "Test context"],
     app_name: "Safari",
     window_title: "Test window",
-    session_id: "s",
-    text: "full text",
-    snippet: "snippet preview",
+    source_count: 1,
+    raw_snippets: ["snippet preview"],
     score: 0.87,
 };
 
@@ -41,7 +44,7 @@ describe("Timeline", () => {
             />
         );
 
-        expect(screen.getByText("Safari")).toBeInTheDocument();
+        expect(screen.getAllByText("Safari").length).toBeGreaterThan(0);
         expect(screen.getByText("Test window")).toBeInTheDocument();
         expect(screen.getByText(/score 0\.870/i)).toBeInTheDocument();
     });

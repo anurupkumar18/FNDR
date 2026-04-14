@@ -14,6 +14,21 @@ export interface SearchResult {
     url?: string;
 }
 
+export interface MemoryCard {
+    id: string;
+    title: string;
+    summary: string;
+    action: string;
+    context: string[];
+    timestamp: number;
+    app_name: string;
+    window_title: string;
+    url?: string;
+    score: number;
+    source_count: number;
+    raw_snippets: string[];
+}
+
 export interface CaptureStatus {
     is_capturing: boolean;
     is_paused: boolean;
@@ -134,6 +149,35 @@ export async function search(
     limit?: number
 ): Promise<SearchResult[]> {
     return invoke<SearchResult[]>("search", {
+        query,
+        timeFilter,
+        appFilter,
+        limit,
+    });
+}
+
+// Debug-only raw retrieval path (no grouping/synthesis).
+export async function searchRawResults(
+    query: string,
+    timeFilter?: string,
+    appFilter?: string,
+    limit?: number
+): Promise<SearchResult[]> {
+    return invoke<SearchResult[]>("search_raw_results", {
+        query,
+        timeFilter,
+        appFilter,
+        limit,
+    });
+}
+
+export async function searchMemoryCards(
+    query: string,
+    timeFilter?: string,
+    appFilter?: string,
+    limit?: number
+): Promise<MemoryCard[]> {
+    return invoke<MemoryCard[]>("search_memory_cards", {
         query,
         timeFilter,
         appFilter,
@@ -310,5 +354,3 @@ export interface GraphEdgeData {
 export async function getGraphData(): Promise<{ nodes: GraphNodeData[]; edges: GraphEdgeData[] }> {
     return invoke<{ nodes: GraphNodeData[]; edges: GraphEdgeData[] }>("get_graph_data");
 }
-
-

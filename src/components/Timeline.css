@@ -99,6 +99,42 @@
   text-overflow: ellipsis;
 }
 
+.result-context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.result-chip {
+  font-size: 0.74rem;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.source-details {
+  margin-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+
+.source-details summary {
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.78rem;
+}
+
+.source-details ul {
+  margin: 8px 0 0 0;
+  padding-left: 18px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
 /* Timeline States (Loading, Empty) */
 .timeline-state {
   display: flex;

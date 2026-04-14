@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { search, SearchResult } from "../api/tauri";
+import { MemoryCard, searchMemoryCards } from "../api/tauri";
 
 export function useSearch(
     query: string,
     timeFilter: string | null,
     appFilter: string | null
 ) {
-    const [results, setResults] = useState<SearchResult[]>([]);
+    const [results, setResults] = useState<MemoryCard[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const requestIdRef = useRef(0);
+    const SEARCH_TIMEOUT_MS = 8000;
 
     useEffect(() => {
         const trimmedQuery = query.trim();
@@ -29,12 +30,18 @@ export function useSearch(
         // Debounce search
         const timer = setTimeout(async () => {
             try {
-                const res = await search(
-                    trimmedQuery,
-                    timeFilter ?? undefined,
-                    appFilter ?? undefined,
-                    10
-                );
+                const timeoutPromise = new Promise<never>((_, reject) => {
+                    setTimeout(() => reject(new Error("Search timed out")), SEARCH_TIMEOUT_MS);
+                });
+                const res = await Promise.race([
+                    searchMemoryCards(
+                        trimmedQuery,
+                        timeFilter ?? undefined,
+                        appFilter ?? undefined,
+                        10
+                    ),
+                    timeoutPromise,
+                ]);
                 if (cancelled || requestId !== requestIdRef.current) {
                     return;
                 }
