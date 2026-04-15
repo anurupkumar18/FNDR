@@ -185,6 +185,16 @@ export async function searchMemoryCards(
     });
 }
 
+export async function listMemoryCards(
+    limit?: number,
+    appFilter?: string
+): Promise<MemoryCard[]> {
+    return invoke<MemoryCard[]>("list_memory_cards", {
+        limit,
+        appFilter,
+    });
+}
+
 
 
 // Capture control

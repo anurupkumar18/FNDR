@@ -164,6 +164,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let app_name = app_context.app_name.clone();
         let window_title = app_context.window_title.clone();
 
+        if Blocklist::is_internal_app(&app_name, app_context.bundle_id.as_deref()) {
+            tokio::time::sleep(sleep_duration).await;
+            continue;
+        }
+
         // Check blocklist
         if Blocklist::is_blocked(&app_name, &config.blocklist) {
             tokio::time::sleep(sleep_duration).await;

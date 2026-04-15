@@ -208,11 +208,22 @@ impl Store {
 
         let mut names = std::collections::HashSet::new();
         for batch in &batches {
-            if let Some(col) = batch
+            let app_col = batch
                 .column_by_name("app_name")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned())
-            {
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+            let summary_col = batch
+                .column_by_name("summary_source")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+
+            if let Some(col) = app_col {
                 for i in 0..batch.num_rows() {
+                    let summary_source = summary_col
+                        .as_ref()
+                        .map(|s| s.value(i))
+                        .unwrap_or("fallback");
+                    if summary_source.eq_ignore_ascii_case("fallback") {
+                        continue;
+                    }
                     names.insert(col.value(i).to_string());
                 }
             }
@@ -342,6 +353,30 @@ impl Store {
             }
         }
         Ok(unique)
+    }
+
+    /// List newest memories as raw search-style rows (optionally filtered by app).
+    pub async fn list_recent_results(
+        &self,
+        limit: usize,
+        app_filter: Option<&str>,
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        let mut query = self.table.query().limit(limit);
+        if let Some(filter) = build_filter(None, app_filter) {
+            query = query.only_if(filter);
+        }
+
+        let batches: Vec<RecordBatch> = query.execute().await?.try_collect().await?;
+        let mut results = Vec::new();
+        for batch in &batches {
+            let mut batch_results = batch_to_search_results(batch);
+            for result in &mut batch_results {
+                result.score = 1.0;
+            }
+            results.extend(batch_results);
+        }
+        results.sort_by_key(|result| std::cmp::Reverse(result.timestamp));
+        Ok(results)
     }
 }
 

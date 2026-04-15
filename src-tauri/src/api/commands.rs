@@ -2,6 +2,7 @@
 
 use crate::embed::Embedder;
 use crate::graph::{GraphEdge, GraphNode};
+use crate::privacy::Blocklist;
 
 use crate::mcp::{self, McpServerStatus};
 use crate::meeting::{
@@ -71,6 +72,107 @@ fn shared_embedder() -> Result<&'static Embedder, String> {
     }
 }
 
+fn is_internal_fndr_result(result: &SearchResult) -> bool {
+    Blocklist::is_internal_app(&result.app_name, result.bundle_id.as_deref())
+}
+
+fn strip_internal_fndr_results(mut results: Vec<SearchResult>) -> Vec<SearchResult> {
+    results.retain(|result| !is_internal_fndr_result(result));
+    results
+}
+
+fn is_fallback_summary_source(summary_source: &str) -> bool {
+    summary_source.trim().eq_ignore_ascii_case("fallback")
+}
+
+fn strip_fallback_results(mut results: Vec<SearchResult>) -> Vec<SearchResult> {
+    results.retain(|result| !is_fallback_summary_source(&result.summary_source));
+    results
+}
+
+fn truncate_chars(input: &str, max_chars: usize) -> String {
+    let mut chars = input.chars();
+    let head: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{head}...")
+    } else {
+        head
+    }
+}
+
+fn card_domain(url: &str) -> Option<String> {
+    let no_scheme = url.split("://").nth(1).unwrap_or(url);
+    let host = no_scheme.split('/').next()?.trim();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
+}
+
+fn card_summary(result: &SearchResult) -> String {
+    let base = if !result.snippet.trim().is_empty() {
+        result.snippet.trim()
+    } else if !result.clean_text.trim().is_empty() {
+        result.clean_text.trim()
+    } else {
+        result.text.trim()
+    };
+
+    if base.is_empty() {
+        format!("Captured activity in {}", result.app_name)
+    } else {
+        truncate_chars(base, 240)
+    }
+}
+
+fn card_title(result: &SearchResult, summary: &str) -> String {
+    let title = result.window_title.trim();
+    if !title.is_empty() {
+        return truncate_chars(title, 88);
+    }
+
+    if !summary.trim().is_empty() {
+        return truncate_chars(summary, 88);
+    }
+
+    format!("Memory in {}", result.app_name)
+}
+
+fn memory_card_from_result(result: SearchResult) -> MemoryCard {
+    let app_name = result.app_name.clone();
+    let window_title = result.window_title.clone();
+    let url = result.url.clone();
+    let summary = card_summary(&result);
+    let title = card_title(&result, &summary);
+    let mut context = Vec::new();
+    if let Some(domain) = url.as_deref().and_then(card_domain) {
+        context.push(format!("Site: {}", domain));
+    }
+
+    let fallback_snippet = summary.clone();
+    let action = if result.url.is_some() {
+        "Open source".to_string()
+    } else {
+        "Revisit context".to_string()
+    };
+
+    MemoryCard {
+        id: result.id,
+        title,
+        summary,
+        action,
+        context,
+        timestamp: result.timestamp,
+        app_name,
+        window_title,
+        url,
+        score: result.score,
+        source_count: 1,
+        raw_snippets: vec![fallback_snippet],
+    }
+}
+
 /// Search for memories
 #[tauri::command]
 pub async fn search(
@@ -104,7 +206,7 @@ pub async fn search(
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok(results)
+    Ok(strip_internal_fndr_results(results))
 }
 
 /// Search and return synthesized memory cards for UI rendering
@@ -250,6 +352,8 @@ pub async fn search_memory_cards(
     } else {
         HybridSearcher::fuse_and_rerank(&query, &semantic_results, &keyword_results, RERANK_LIMIT)
     };
+    raw_results = strip_internal_fndr_results(raw_results);
+    raw_results = strip_fallback_results(raw_results);
     raw_results.truncate(RERANK_LIMIT);
     tracing::info!(count = raw_results.len(), "search_memory_cards:rerank:done");
     if raw_results.is_empty() {
@@ -287,12 +391,35 @@ pub async fn search_memory_cards(
     if cards.is_empty() {
         cards = fallback_cards(&raw_results);
     }
+    cards.retain(|card| !Blocklist::is_internal_app(&card.app_name, None));
     cards.truncate(limit);
     tracing::info!(
         total_ms = started.elapsed().as_millis(),
         cards = cards.len(),
         "search_memory_cards:complete"
     );
+    Ok(cards)
+}
+
+/// List memory cards in newest→oldest order for browsing.
+#[tauri::command]
+pub async fn list_memory_cards(
+    state: State<'_, Arc<AppState>>,
+    app_filter: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<MemoryCard>, String> {
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let results = state
+        .inner()
+        .store
+        .list_recent_results(limit, app_filter.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let cards = strip_fallback_results(strip_internal_fndr_results(results))
+        .into_iter()
+        .map(memory_card_from_result)
+        .collect();
     Ok(cards)
 }
 
@@ -601,12 +728,14 @@ pub async fn set_retention_days(state: State<'_, Arc<AppState>>, days: u32) -> R
 /// Get unique app names for filter dropdown
 #[tauri::command]
 pub async fn get_app_names(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
-    state
+    let mut apps = state
         .inner()
         .store
         .get_app_names()
         .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    apps.retain(|name| !Blocklist::is_internal_app(name, None));
+    Ok(apps)
 }
 
 /// Delete records older than the given number of days; returns count deleted

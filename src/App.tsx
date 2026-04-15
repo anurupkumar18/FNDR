@@ -6,6 +6,7 @@ import { TodoModal } from "./components/TodoModal";
 import { AgentPanel } from "./components/AgentPanel";
 import { GraphPanel } from "./components/GraphPanel";
 import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
+import { MemoryCardsPanel } from "./components/MemoryCardsPanel";
 import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
 
@@ -31,6 +32,7 @@ function App() {
     const [showAgentPanel, setShowAgentPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
     const [showGraphPanel, setShowGraphPanel] = useState(false);
+    const [showMemoryCardsPanel, setShowMemoryCardsPanel] = useState(false);
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
     const [selectedResult, setSelectedResult] = useState<MemoryCard | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -156,7 +158,7 @@ function App() {
             {!EVAL_UI && (
                 <aside className={`left-sidebar ${isSidebarOpen ? "open" : ""}`}>
                     <div className="sidebar-group sidebar-actions">
-                        <div className="sidebar-label">Experimental</div>
+                        <div className="sidebar-label">Features</div>
                         <button
                             className={`ui-action-btn meeting-toggle-btn ${showMeetingPanel ? "active" : ""}`}
                             onClick={() => setShowMeetingPanel((open) => !open)}
@@ -164,10 +166,16 @@ function App() {
                             Meetings
                         </button>
                         <button
-                            className={`ui-action-btn side-panel-btn ${showGraphPanel ? "active" : ""}`}
+                            className={`ui-action-btn graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
                             onClick={() => setShowGraphPanel((open) => !open)}
                         >
                             Graph
+                        </button>
+                        <button
+                            className={`ui-action-btn memory-cards-toggle-btn ${showMemoryCardsPanel ? "active" : ""}`}
+                            onClick={() => setShowMemoryCardsPanel((open) => !open)}
+                        >
+                            All Cards
                         </button>
                     </div>
                 </aside>
@@ -232,6 +240,11 @@ function App() {
                     <GraphPanel
                         isVisible={showGraphPanel}
                         onClose={() => setShowGraphPanel(false)}
+                    />
+                    <MemoryCardsPanel
+                        isVisible={showMemoryCardsPanel}
+                        onClose={() => setShowMemoryCardsPanel(false)}
+                        appNames={appNames}
                     />
                 </>
             )}

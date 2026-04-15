@@ -118,6 +118,13 @@ impl GraphStore {
                     "window_title": record.window_title,
                     "day_bucket": record.day_bucket,
                     "session_id": record.session_id,
+                    "session_key": record.session_key,
+                    "summary_source": record.summary_source,
+                    "memory_type": classify_memory_type(
+                        &record.app_name,
+                        record.url.as_deref(),
+                        &record.summary_source,
+                    ),
                     "url": record.url,
                 }),
             },
@@ -410,6 +417,58 @@ fn host_from_url(url: &str) -> String {
         .trim_start_matches("https://")
         .trim_start_matches("http://");
     trimmed.split('/').next().unwrap_or(trimmed).to_string()
+}
+
+fn classify_memory_type(app_name: &str, url: Option<&str>, summary_source: &str) -> &'static str {
+    let app = app_name.to_lowercase();
+    if url.is_some() || is_browser_app(&app) {
+        return "web";
+    }
+
+    if app.contains("meeting") || app.contains("zoom") || app.contains("teams") {
+        return "meeting";
+    }
+
+    if app.contains("code")
+        || app.contains("terminal")
+        || app.contains("xcode")
+        || app.contains("iterm")
+    {
+        return "development";
+    }
+
+    if app.contains("mail")
+        || app.contains("slack")
+        || app.contains("messages")
+        || app.contains("discord")
+    {
+        return "communication";
+    }
+
+    if app.contains("docs")
+        || app.contains("notion")
+        || app.contains("word")
+        || app.contains("pages")
+        || app.contains("preview")
+        || app.contains("pdf")
+    {
+        return "documents";
+    }
+
+    if summary_source.eq_ignore_ascii_case("vlm") {
+        return "visual";
+    }
+
+    "general"
+}
+
+fn is_browser_app(app_name: &str) -> bool {
+    app_name.contains("safari")
+        || app_name.contains("chrome")
+        || app_name.contains("arc")
+        || app_name.contains("brave")
+        || app_name.contains("edge")
+        || app_name.contains("firefox")
 }
 
 fn task_edges_by_memory(nodes: &[GraphNode], edges: &[GraphEdge]) -> HashMap<String, Vec<String>> {
