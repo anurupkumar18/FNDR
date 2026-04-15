@@ -27,27 +27,27 @@ interface ClusterMapViewProps {
 
 function roleColor(role: ClusterInsight["role"]): string {
     if (role === "dominant") {
-        return "rgba(104, 181, 255, 0.66)";
+        return "#60a5fa";
     }
     if (role === "bridge") {
-        return "rgba(178, 139, 255, 0.6)";
+        return "#a78bfa";
     }
     if (role === "secondary") {
-        return "rgba(148, 163, 184, 0.62)";
+        return "#fb923c";
     }
-    return "rgba(148, 163, 184, 0.4)";
+    return "rgba(160, 160, 160, 0.4)";
 }
 
 function connectionStroke(reason: string): string {
     switch (reason) {
         case "shared task":
-            return "rgba(255, 154, 95, 0.55)";
+            return "#fb923c";
         case "shared session":
-            return "rgba(104, 181, 255, 0.56)";
+            return "#60a5fa";
         case "shared memory type":
-            return "rgba(178, 139, 255, 0.5)";
+            return "#4ade80";
         default:
-            return "rgba(148, 163, 184, 0.38)";
+            return "rgba(160, 160, 160, 0.38)";
     }
 }
 

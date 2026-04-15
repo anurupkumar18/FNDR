@@ -217,7 +217,9 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                     <button className="ui-action-btn meeting-ghost-btn" onClick={() => refresh(true)} disabled={loading}>
                         {loading ? "Refreshing..." : "Refresh"}
                     </button>
-                    <button className="ui-action-btn meeting-close-btn" onClick={onClose}>Close</button>
+                    <button className="ui-action-btn meeting-close-btn" onClick={onClose}>
+                        ✕ Close
+                    </button>
                 </div>
             </header>
 

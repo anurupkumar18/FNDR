@@ -1,8 +1,9 @@
 .stats-page {
     position: fixed;
     inset: 0;
-    background: rgba(10, 10, 10, 0.98);
-    backdrop-filter: blur(10px);
+    background: var(--panel-bg);
+    backdrop-filter: var(--panel-backdrop);
+    -webkit-backdrop-filter: var(--panel-backdrop);
     z-index: 1000;
     display: flex;
     flex-direction: column;
@@ -14,8 +15,7 @@
     justify-content: space-between;
     gap: 16px;
     padding: 14px 16px;
-    border-bottom: 1px solid var(--border);
-    background: #0d0d0d;
+    border-bottom: var(--header-border);
 }
 
 .stats-page-header h2 {
@@ -172,7 +172,7 @@
     display: block;
     height: 100%;
     border-radius: 999px;
-    background: linear-gradient(90deg, rgba(120, 164, 255, 0.9), rgba(95, 130, 255, 0.65));
+    background: linear-gradient(90deg, rgba(200, 200, 200, 0.8), rgba(140, 140, 140, 0.6));
 }
 
 .stats-page-empty {
@@ -190,7 +190,7 @@
 .stats-hour-cell {
     height: 18px;
     border-radius: 5px;
-    background: linear-gradient(180deg, rgba(140, 170, 255, 0.92), rgba(76, 108, 210, 0.78));
+    background: linear-gradient(180deg, rgba(180, 180, 180, 0.85), rgba(120, 120, 120, 0.7));
     border: 1px solid rgba(255, 255, 255, 0.06);
 }
 

@@ -62,13 +62,13 @@
     z-index: 95;
     min-width: min(780px, calc(100vw - 24px));
     max-width: min(780px, calc(100vw - 24px));
-    border: 1px solid rgba(248, 113, 113, 0.46);
+    border: 1px solid rgba(100, 100, 100, 0.46);
     background: rgba(38, 12, 12, 0.94);
     border-radius: 12px;
     padding: 10px 14px;
     display: grid;
     gap: 4px;
-    box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.25), 0 10px 30px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 0 0 1px rgba(100, 100, 100, 0.25), 0 10px 30px rgba(0, 0, 0, 0.4);
     animation: consentPulse 1.6s ease-in-out infinite;
 }
 
@@ -76,7 +76,7 @@
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #fecaca;
+    color: #cccccc;
 }
 
 .recording-consent-banner span {
@@ -86,9 +86,9 @@
 }
 
 .recording-consent-banner.detected {
-    border-color: rgba(74, 222, 128, 0.5);
+    border-color: rgba(160, 160, 160, 0.5);
     background: rgba(10, 38, 24, 0.94);
-    box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.2), 0 10px 30px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 0 0 1px rgba(160, 160, 160, 0.2), 0 10px 30px rgba(0, 0, 0, 0.4);
 }
 
 .recording-consent-banner.detected strong {
@@ -100,7 +100,7 @@
 }
 
 .recording-consent-banner.denied {
-    border-color: rgba(248, 113, 113, 0.55);
+    border-color: rgba(100, 100, 100, 0.55);
     background: rgba(60, 12, 12, 0.95);
 }
 
@@ -147,34 +147,15 @@
     gap: 8px;
 }
 
-.todo-toggle-btn.active {
-    border-color: rgba(96, 165, 250, 0.42);
-    color: #dbeafe;
-    background: rgba(96, 165, 250, 0.12);
-}
-
-.meeting-toggle-btn.active {
-    border-color: rgba(217, 119, 87, 0.45);
-    color: #f3d2c8;
-    background: rgba(217, 119, 87, 0.08);
-}
-
-.graph-toggle-btn.active {
-    border-color: rgba(96, 165, 250, 0.4);
-    color: #cfe3ff;
-    background: rgba(96, 165, 250, 0.08);
-}
-
-.memory-cards-toggle-btn.active {
-    border-color: rgba(74, 222, 128, 0.4);
-    color: #d4f9df;
-    background: rgba(74, 222, 128, 0.1);
-}
-
+.todo-toggle-btn.active,
+.meeting-toggle-btn.active,
+.graph-toggle-btn.active,
+.memory-cards-toggle-btn.active,
 .stats-toggle-btn.active {
-    border-color: rgba(250, 204, 21, 0.42);
-    color: #fef3b8;
-    background: rgba(250, 204, 21, 0.12);
+    border-color: rgba(255, 255, 255, 0.35);
+    background: linear-gradient(180deg, rgba(50, 50, 50, 0.85), rgba(25, 25, 25, 0.9));
+    color: #ffffff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
 .app-main {

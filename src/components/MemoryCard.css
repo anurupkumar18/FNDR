@@ -109,14 +109,14 @@ mark.highlight {
 
 .card-url {
   font-size: 0.7rem;
-  color: #007aff;
+  color: #e0e0e0;
   text-decoration: none;
-  background: rgba(0, 122, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
   padding: 2px 8px;
   border-radius: 10px;
   transition: all 0.2s;
 }
 
 .card-url:hover {
-  background: rgba(0, 122, 255, 0.2);
+  background: rgba(255, 255, 255, 0.12);
 }

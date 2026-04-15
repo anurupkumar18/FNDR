@@ -37,8 +37,8 @@
     text-transform: uppercase;
     font-weight: 600;
     color: var(--accent);
-    background: rgba(200, 169, 107, 0.12);
-    border: 1px solid rgba(200, 169, 107, 0.3);
+    background: rgba(150, 150, 150, 0.12);
+    border: 1px solid rgba(150, 150, 150, 0.3);
     padding: 3px 8px;
     margin-bottom: 8px;
 }
@@ -64,7 +64,7 @@
 }
 
 .reconstruction-error {
-    color: #fca5a5;
+    color: #bbbbbb;
     font-size: 0.85rem;
 }
 

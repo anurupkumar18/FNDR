@@ -137,7 +137,7 @@ export function FocusGraphView({
                                         y1={source.y}
                                         x2={target.x}
                                         y2={target.y}
-                                        stroke={isCenterEdge ? "rgba(104, 181, 255, 0.62)" : "rgba(148, 163, 184, 0.3)"}
+                                        stroke={isCenterEdge ? "rgba(160, 160, 160, 0.62)" : "rgba(120, 120, 120, 0.3)"}
                                         strokeWidth={isCenterEdge ? 1.2 : 0.9}
                                         opacity={isCenterEdge ? 0.82 : 0.5}
                                     />

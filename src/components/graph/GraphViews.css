@@ -312,7 +312,7 @@
     height: 30px;
     border: 1px solid #313844;
     border-radius: 8px;
-    background: #10141b;
+    background: #101010;
     color: #f4f6fb;
     font-size: 12px;
     padding: 0 9px;
@@ -354,13 +354,13 @@
 }
 
 .journey-route-node.main circle {
-    fill: #172331;
+    fill: #171717;
     stroke: #9cc7ff;
     stroke-width: 1.3;
 }
 
 .journey-route-node.branch circle {
-    fill: #1c222c;
+    fill: #1c1c1c;
     stroke: #98a5b7;
     stroke-width: 1;
 }
@@ -457,7 +457,7 @@
     width: 100%;
     border: 0;
     border-bottom: 1px solid #232b35;
-    background: #121821;
+    background: #121212;
     color: inherit;
     cursor: pointer;
     text-align: left;

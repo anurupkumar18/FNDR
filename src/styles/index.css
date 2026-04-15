@@ -8,13 +8,13 @@
     --text-primary: #f3f3f1;
     --text-secondary: #a1a1aa;
     --text-muted: #6b7280;
-    --accent: #d97757;
-    --accent-hover: #e18a6f;
-    --accent-light: rgba(217, 119, 87, 0.2);
-    --danger: #f87171;
-    --danger-light: rgba(248, 113, 113, 0.12);
-    --success: #4ade80;
-    --success-light: rgba(74, 222, 128, 0.12);
+    --accent: #f3f3f1;
+    --accent-hover: #ffffff;
+    --accent-light: rgba(255, 255, 255, 0.1);
+    --danger: #444444;
+    --danger-light: rgba(100, 100, 100, 0.1);
+    --success: #cccccc;
+    --success-light: rgba(200, 200, 200, 0.1);
     --radius-sm: 12px;
     --radius-md: 16px;
     --radius-lg: 18px;
@@ -25,6 +25,11 @@
     --transition-fast: 0.15s ease;
     --transition-normal: 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
     --transition-slow: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+
+    /* Panel Design System - Syncing with Search Bar & Todo Page */
+    --panel-bg: rgba(10, 10, 10, 0.97);
+    --panel-backdrop: blur(20px) saturate(160%);
+    --header-border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 * {
@@ -90,20 +95,58 @@ body {
 }
 
 .ui-action-btn {
-    height: 32px;
-    padding: 0 10px;
-    border-radius: 10px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
+    border-radius: 14px;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(18, 18, 18, 0.9);
+    background: linear-gradient(180deg, rgba(26, 26, 26, 0.72), rgba(12, 12, 12, 0.72));
+    backdrop-filter: blur(12px) saturate(115%);
+    -webkit-backdrop-filter: blur(12px) saturate(115%);
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
     line-height: 1;
     cursor: pointer;
-    transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+    overflow: hidden;
+    transition: all var(--transition-fast);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
-.ui-action-btn:hover {
+.ui-action-btn::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(120% 90% at 50% -20%, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0) 55%);
+}
+
+.ui-action-btn:hover:not(:disabled) {
     color: var(--text-primary);
-    background: rgba(24, 24, 24, 0.95);
+    background: linear-gradient(180deg, rgba(35, 35, 35, 0.8), rgba(18, 18, 18, 0.82));
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 8px 16px rgba(0, 0, 0, 0.4);
+}
+
+.ui-action-btn:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.ui-action-btn.active {
+    background: linear-gradient(180deg, rgba(60, 60, 60, 0.8), rgba(30, 30, 30, 0.82));
+    border-color: rgba(255, 255, 255, 0.25);
+    color: var(--text-primary);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.ui-action-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: rgba(20, 20, 20, 0.5);
+    border-color: rgba(255, 255, 255, 0.04);
 }

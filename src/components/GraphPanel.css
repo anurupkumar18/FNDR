@@ -4,9 +4,11 @@
     z-index: 1000;
     display: flex;
     flex-direction: column;
-    background: #050506;
-    color: #f5f5f6;
-    font-family: "Avenir Next", "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: var(--panel-bg);
+    backdrop-filter: var(--panel-backdrop);
+    -webkit-backdrop-filter: var(--panel-backdrop);
+    color: var(--text-primary);
+    font-family: var(--font-primary);
 }
 
 .graph-header {
@@ -15,8 +17,8 @@
     justify-content: space-between;
     gap: 14px;
     padding: 12px 14px;
-    border-bottom: 1px solid #1d1f23;
-    background: #090a0c;
+    border-bottom: var(--header-border);
+    background: transparent;
 }
 
 .graph-title-wrap {
@@ -54,12 +56,12 @@
 }
 
 .graph-stats-row span {
-    border: 1px solid #2b2f35;
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 999px;
     padding: 2px 10px;
     font-size: 11px;
-    color: #c4cad4;
-    background: #121418;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.04);
 }
 
 .graph-nav-controls {
@@ -68,30 +70,9 @@
     gap: 8px;
 }
 
-.graph-panel .ui-action-btn {
-    border: 1px solid #2d3138;
-    border-radius: 9px;
-    background: #13161a;
-    color: #c5ccd7;
-    height: 30px;
-    padding: 0 10px;
-    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.graph-panel .ui-action-btn:hover:not(:disabled) {
-    background: #191c22;
-    border-color: #3b414c;
-    color: #f7f9fb;
-}
-
-.graph-panel .ui-action-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-}
-
 .graph-return-btn {
-    border-color: #4a515d;
-    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.2) !important;
+    color: #ffffff !important;
 }
 
 .graph-top-controls {
@@ -100,8 +81,8 @@
     justify-content: space-between;
     gap: 12px;
     padding: 10px 14px;
-    border-bottom: 1px solid #1d1f23;
-    background: #0b0d10;
+    border-bottom: var(--header-border);
+    background: transparent;
 }
 
 .graph-control-block {
@@ -120,40 +101,39 @@
 
 .graph-mode-tabs {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
 }
 
 .graph-mode-tab {
-    min-width: 92px;
-}
-
-.graph-mode-tab.active {
-    border-color: #7f8793;
-    background: #1f232b;
-    color: #ffffff;
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
 }
 
 .graph-type-filters {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    width: fit-content;
 }
 
 .graph-type-filter {
-    border: 1px solid #2a2f38;
-    border-radius: 999px;
-    height: 28px;
-    padding: 0 8px;
-    background: #111419;
-    color: #adb4c0;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    height: 32px;
+    padding: 0 10px;
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-secondary);
     font-size: 11px;
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    justify-content: space-between;
+    gap: 8px;
     cursor: pointer;
-    transition: opacity 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    min-width: 140px;
 }
 
 .graph-type-filter.inactive {
@@ -161,8 +141,8 @@
 }
 
 .graph-type-filter.active {
-    border-color: #5a6472;
-    background: #1b2028;
+    border-color: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.08);
     color: #f3f5f8;
 }
 
@@ -196,9 +176,9 @@
 }
 
 .graph-view {
-    border: 1px solid #1f2329;
+    border: var(--header-border);
     border-radius: 14px;
-    background: #0c0e12;
+    background: rgba(255, 255, 255, 0.02);
     padding: 12px;
 }
 

@@ -1,6 +1,6 @@
 .model-download-banner {
-    background: rgba(255, 165, 0, 0.05);
-    border: 1px solid rgba(255, 165, 0, 0.2);
+    background: rgba(180, 180, 180, 0.05);
+    border: 1px solid rgba(180, 180, 180, 0.2);
     border-radius: 8px;
     padding: 16px;
     margin-bottom: 24px;
@@ -10,7 +10,7 @@
 .banner-header h3 {
     margin: 0 0 8px 0;
     font-size: 14px;
-    color: #ffa500;
+    color: #888888;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -26,10 +26,10 @@
 .banner-error {
     margin-top: 12px;
     padding: 8px 12px;
-    background: rgba(255, 50, 50, 0.1);
-    border: 1px solid rgba(255, 50, 50, 0.3);
+    background: rgba(100, 100, 100, 0.1);
+    border: 1px solid rgba(100, 100, 100, 0.3);
     border-radius: 6px;
-    color: #ff5555;
+    color: #666666;
     font-size: 13px;
 }
 
@@ -41,9 +41,9 @@
 }
 
 .banner-download-btn {
-    background: rgba(255, 165, 0, 0.15);
-    border: 1px solid rgba(255, 165, 0, 0.3);
-    color: #ffa500;
+    background: rgba(180, 180, 180, 0.15);
+    border: 1px solid rgba(180, 180, 180, 0.3);
+    color: #888888;
     padding: 8px 16px;
     border-radius: 6px;
     font-size: 13px;
@@ -53,8 +53,8 @@
 }
 
 .banner-download-btn:hover:not(:disabled) {
-    background: rgba(255, 165, 0, 0.25);
-    border-color: rgba(255, 165, 0, 0.5);
+    background: rgba(180, 180, 180, 0.25);
+    border-color: rgba(180, 180, 180, 0.5);
 }
 
 .banner-download-btn:disabled {
@@ -89,7 +89,7 @@
 
 .banner-progress-fill {
     height: 100%;
-    background: #ffa500;
+    background: #888888;
     border-radius: 3px;
     transition: width 0.3s ease;
 }

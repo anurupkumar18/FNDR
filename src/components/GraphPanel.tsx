@@ -611,8 +611,8 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
                     <button className="ui-action-btn" onClick={goForward} disabled={!canGoForward}>
                         Forward →
                     </button>
-                    <button className="ui-action-btn graph-return-btn" onClick={onClose}>
-                        Return
+                    <button className="ui-action-btn graph-close-btn" onClick={onClose}>
+                        ✕ Close
                     </button>
                 </div>
             </div>
@@ -631,11 +631,7 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
                                 {mode.label}
                             </button>
                         ))}
-                        {selectedNodeId && viewMode !== "focus" && (
-                            <button className="ui-action-btn graph-mode-tab" onClick={() => setViewMode("focus")}>
-                                Focus Selected
-                            </button>
-                        )}
+
                     </div>
                 </div>
 

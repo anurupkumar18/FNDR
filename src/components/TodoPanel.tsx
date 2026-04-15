@@ -243,7 +243,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                                         className="ui-action-btn todo-done-btn"
                                         onClick={() => void handleDismiss(task.id)}
                                     >
-                                        Done · Next
+                                        Done
                                     </button>
                                 </div>
                             </article>

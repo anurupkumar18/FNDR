@@ -95,14 +95,14 @@
 .timeline-delete-btn {
   padding: 4px 9px;
   font-size: 0.68rem;
-  color: #fecaca;
-  border-color: rgba(248, 113, 113, 0.45);
-  background: rgba(248, 113, 113, 0.12);
+  color: #cccccc;
+  border-color: rgba(100, 100, 100, 0.45);
+  background: rgba(100, 100, 100, 0.12);
 }
 
 .timeline-delete-btn:hover {
-  border-color: rgba(248, 113, 113, 0.65);
-  background: rgba(248, 113, 113, 0.18);
+  border-color: rgba(100, 100, 100, 0.65);
+  background: rgba(100, 100, 100, 0.18);
 }
 
 .result-title {

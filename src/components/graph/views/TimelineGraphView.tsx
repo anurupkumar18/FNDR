@@ -110,8 +110,8 @@ export function TimelineGraphView({
                     onMouseLeave={viewport.onMouseLeave}
                 >
                     <g transform={viewport.transform}>
-                        <path d={waveform.areaPath} fill="rgba(104, 181, 255, 0.06)" />
-                        <path d={waveform.linePath} fill="none" stroke="rgba(104, 181, 255, 0.68)" strokeWidth={1.4} />
+                        <path d={waveform.areaPath} fill="rgba(160, 160, 160, 0.06)" />
+                        <path d={waveform.linePath} fill="none" stroke="rgba(160, 160, 160, 0.68)" strokeWidth={1.4} />
 
                         {waveform.points.map((point, index) => {
                             const segment = timelineInsight.segments[index];
@@ -126,7 +126,7 @@ export function TimelineGraphView({
                                         <path
                                             d={edgePath}
                                             fill="none"
-                                            stroke="rgba(148, 163, 184, 0.2)"
+                                            stroke="rgba(120, 120, 120, 0.2)"
                                             strokeWidth={0.75}
                                         />
                                     )}

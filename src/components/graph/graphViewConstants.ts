@@ -26,7 +26,7 @@ export const ACTIVITY_FACETS: Array<{ key: ActivityFacet; label: string }> = [
 ];
 
 export const ACTIVITY_FACET_COLORS: Record<ActivityFacet, string> = {
-    all: "#9ca3af",
+    all: "#9da4af",
     productive: "#4ade80",
     learning: "#60a5fa",
     research: "#22d3ee",

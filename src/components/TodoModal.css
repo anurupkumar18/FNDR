@@ -118,36 +118,33 @@
 
 .btn-done,
 .btn-run {
-    width: 28px;
-    height: 28px;
-    border: none;
-    border-radius: var(--radius-sm);
+    width: 30px;
+    height: 30px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    background: linear-gradient(180deg, rgba(30, 30, 30, 0.72), rgba(12, 12, 12, 0.72));
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: var(--text-secondary);
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: 0.8rem;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.15s ease;
+    transition: all var(--transition-fast);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
-.btn-done {
-    background: var(--background);
-    color: var(--text-muted);
-}
-
-.btn-done:hover {
-    background: #22c55e;
-    color: white;
+.btn-done:hover,
+.btn-run:hover {
+    background: linear-gradient(180deg, rgba(40, 40, 40, 0.82), rgba(18, 18, 18, 0.82));
+    border-color: rgba(255, 255, 255, 0.2);
+    color: var(--text-primary);
+    transform: translateY(-1px);
 }
 
 .btn-run {
-    background: var(--accent);
-    color: white;
-}
-
-.btn-run:hover {
-    background: var(--accent-dark);
-    transform: scale(1.05);
+    color: #ffffff;
 }
 
 /* Responsive */

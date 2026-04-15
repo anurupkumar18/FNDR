@@ -1,6 +1,6 @@
 .ask-fndr {
-    background: rgba(99, 102, 241, 0.05);
-    border: 1px solid rgba(99, 102, 241, 0.2);
+    background: rgba(130, 130, 130, 0.05);
+    border: 1px solid rgba(130, 130, 130, 0.2);
     border-radius: 16px;
     padding: 1.5rem;
     margin-bottom: 2rem;
@@ -62,7 +62,7 @@
 }
 
 .ask-button:hover:not(:disabled) {
-    background: #4f46e5;
+    background: #444444;
     transform: translateY(-1px);
 }
 

@@ -20,27 +20,27 @@ export const NODE_TYPE_ORDER: GraphNodeType[] = ["MemoryChunk", "Entity", "Task"
 export const NODE_TYPE_META: Record<GraphNodeType, NodeTypeMeta> = {
     MemoryChunk: {
         label: "Memories",
-        color: "#68b5ff",
+        color: "#60a5fa",
         short: "M",
-        softColor: "rgba(104, 181, 255, 0.18)",
+        softColor: "rgba(96, 165, 250, 0.18)",
     },
     Entity: {
         label: "Entities",
-        color: "#b28bff",
+        color: "#a78bfa",
         short: "E",
-        softColor: "rgba(178, 139, 255, 0.18)",
+        softColor: "rgba(167, 139, 250, 0.18)",
     },
     Task: {
         label: "Tasks",
-        color: "#ff9a5f",
+        color: "#fb923c",
         short: "T",
-        softColor: "rgba(255, 154, 95, 0.18)",
+        softColor: "rgba(251, 146, 60, 0.18)",
     },
     Url: {
         label: "Links",
-        color: "#3edba8",
+        color: "#4ade80",
         short: "L",
-        softColor: "rgba(62, 219, 168, 0.18)",
+        softColor: "rgba(74, 222, 128, 0.18)",
     },
 };
 

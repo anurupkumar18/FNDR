@@ -1,8 +1,9 @@
 .memory-cards-panel {
     position: fixed;
     inset: 0;
-    background: rgba(10, 10, 10, 0.97);
-    backdrop-filter: blur(10px);
+    background: var(--panel-bg);
+    backdrop-filter: var(--panel-backdrop);
+    -webkit-backdrop-filter: var(--panel-backdrop);
     z-index: 1000;
     display: flex;
     flex-direction: column;
@@ -12,8 +13,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 1px solid var(--border);
-    background: #0d0d0d;
+    border-bottom: var(--header-border);
     padding: 14px 16px;
 }
 
@@ -34,8 +34,7 @@
     justify-content: space-between;
     align-items: flex-end;
     gap: 12px;
-    border-bottom: 1px solid var(--border);
-    background: #0d0d0d;
+    border-bottom: var(--header-border);
     padding: 10px 16px 12px;
 }
 
@@ -70,7 +69,7 @@
 }
 
 .memory-cards-filter select:focus {
-    border-color: rgba(96, 165, 250, 0.45);
+    border-color: rgba(160, 160, 160, 0.45);
 }
 
 .memory-cards-filter-arrow {
@@ -168,9 +167,9 @@
 .memory-browse-site {
     margin-top: 8px;
     font-size: 0.78rem;
-    color: #93c5fd;
-    background: rgba(96, 165, 250, 0.12);
-    border: 1px solid rgba(96, 165, 250, 0.34);
+    color: #aaaaaa;
+    background: rgba(160, 160, 160, 0.12);
+    border: 1px solid rgba(160, 160, 160, 0.34);
     border-radius: 999px;
     display: inline-flex;
     align-items: center;
@@ -184,15 +183,15 @@
 .memory-delete-btn {
     padding: 4px 9px;
     font-size: 11px;
-    color: #fecaca;
-    border-color: rgba(248, 113, 113, 0.45);
-    background: rgba(248, 113, 113, 0.12);
+    color: #cccccc;
+    border-color: rgba(100, 100, 100, 0.45);
+    background: rgba(100, 100, 100, 0.12);
     flex-shrink: 0;
 }
 
 .memory-delete-btn:hover:not(:disabled) {
-    border-color: rgba(248, 113, 113, 0.62);
-    background: rgba(248, 113, 113, 0.18);
+    border-color: rgba(100, 100, 100, 0.62);
+    background: rgba(100, 100, 100, 0.18);
 }
 
 .memory-delete-btn:disabled {

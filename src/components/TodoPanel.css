@@ -4,7 +4,9 @@
     z-index: 1040;
     display: flex;
     flex-direction: column;
-    background: rgba(10, 10, 10, 0.97);
+    background: var(--panel-bg);
+    backdrop-filter: var(--panel-backdrop);
+    -webkit-backdrop-filter: var(--panel-backdrop);
     color: var(--text-primary);
 }
 
@@ -63,9 +65,10 @@
 }
 
 .todo-type-btn.active {
-    border-color: rgba(96, 165, 250, 0.45);
-    background: rgba(96, 165, 250, 0.12);
-    color: #dbeafe;
+    border-color: rgba(255, 255, 255, 0.35);
+    background: linear-gradient(180deg, rgba(50, 50, 50, 0.85), rgba(25, 25, 25, 0.9));
+    color: #ffffff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
 .todo-page-body {
@@ -97,13 +100,14 @@
 }
 
 .todo-stage-btn.active {
-    border-color: rgba(96, 165, 250, 0.45);
-    background: rgba(96, 165, 250, 0.12);
-    color: #dbeafe;
+    border-color: rgba(255, 255, 255, 0.35);
+    background: linear-gradient(180deg, rgba(50, 50, 50, 0.85), rgba(25, 25, 25, 0.9));
+    color: #ffffff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
 .todo-stage-btn.active strong {
-    color: #dbeafe;
+    color: #ffffff;
 }
 
 .todo-page-state {
@@ -161,18 +165,18 @@
 }
 
 .todo-pill.todo {
-    border-color: rgba(74, 222, 128, 0.4);
-    color: #c8f3d6;
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #e0e0e0;
 }
 
 .todo-pill.reminder {
-    border-color: rgba(250, 204, 21, 0.42);
-    color: #fef3b8;
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #e0e0e0;
 }
 
 .todo-pill.followup {
-    border-color: rgba(96, 165, 250, 0.42);
-    color: #dbeafe;
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #e0e0e0;
 }
 
 @media (max-width: 860px) {

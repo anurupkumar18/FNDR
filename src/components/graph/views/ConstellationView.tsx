@@ -22,10 +22,10 @@ interface ConstellationViewProps {
 
 function edgeColor(edgeType: string): string {
     if (edgeType === "REFERENCE_FOR_TASK") {
-        return "#ff9a5f";
+        return "#fb923c";
     }
     if (edgeType === "PART_OF_SESSION") {
-        return "#68b5ff";
+        return "#60a5fa";
     }
     if (edgeType === "OCCURRED_AT") {
         return "#5dd9b4";
