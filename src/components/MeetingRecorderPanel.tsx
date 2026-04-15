@@ -3,11 +3,12 @@ import {
     MeetingRecorderStatus,
     MeetingSession,
     MeetingTranscript,
+    addTodo,
     getMeetingStatus,
-    listMeetings,
     getMeetingTranscript,
-    stopMeetingRecording,
+    listMeetings,
     startAgentTask,
+    stopMeetingRecording,
 } from "../api/tauri";
 import "./MeetingRecorderPanel.css";
 
@@ -17,18 +18,38 @@ interface MeetingRecorderPanelProps {
     onOpenAgent: () => void;
 }
 
+interface MeetingInsights {
+    actionItems: string[];
+    decisions: string[];
+    reminders: string[];
+}
+
 export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: MeetingRecorderPanelProps) {
     const [status, setStatus] = useState<MeetingRecorderStatus | null>(null);
     const [meetings, setMeetings] = useState<MeetingSession[]>([]);
     const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<MeetingTranscript | null>(null);
     const [loading, setLoading] = useState(false);
+    const [creatingFollowups, setCreatingFollowups] = useState(false);
+    const [transcriptQuery, setTranscriptQuery] = useState("");
     const [error, setError] = useState<string | null>(null);
 
     const selectedMeeting = useMemo(
         () => meetings.find((m) => m.id === selectedMeetingId) ?? null,
         [meetings, selectedMeetingId]
     );
+
+    const insights = useMemo(() => summarizeMeeting(transcript), [transcript]);
+    const filteredSegments = useMemo(() => {
+        if (!transcript) {
+            return [];
+        }
+        const normalizedQuery = transcriptQuery.trim().toLowerCase();
+        if (!normalizedQuery) {
+            return transcript.segments;
+        }
+        return transcript.segments.filter((segment) => segment.text.toLowerCase().includes(normalizedQuery));
+    }, [transcript, transcriptQuery]);
 
     const refresh = async (preferCurrent = true) => {
         if (!isVisible) return;
@@ -94,6 +115,47 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
         await navigator.clipboard.writeText(transcript.full_text);
     };
 
+    const handleCopyHighlights = async () => {
+        if (!transcript) return;
+        const lines = [
+            `# ${transcript.meeting.title}`,
+            "",
+            "## Action Items",
+            ...insights.actionItems.map((item) => `- ${item}`),
+            "",
+            "## Decisions",
+            ...insights.decisions.map((item) => `- ${item}`),
+            "",
+            "## Reminders",
+            ...insights.reminders.map((item) => `- ${item}`),
+        ];
+        await navigator.clipboard.writeText(lines.join("\n"));
+    };
+
+    const handleCreateFollowups = async () => {
+        if (creatingFollowups || !transcript) return;
+        setCreatingFollowups(true);
+        setError(null);
+        try {
+            const candidates = [...insights.actionItems, ...insights.reminders]
+                .filter((item) => item.length > 3)
+                .slice(0, 6);
+
+            if (candidates.length === 0) {
+                setError("No clear follow-up actions found yet in this meeting.");
+                return;
+            }
+
+            for (const item of candidates) {
+                await addTodo(item, `From meeting: ${transcript.meeting.title}`, "Followup");
+            }
+        } catch (err) {
+            setError(String(err));
+        } finally {
+            setCreatingFollowups(false);
+        }
+    };
+
     const handleExportMarkdown = () => {
         if (!transcript) return;
         const content = transcript.full_text
@@ -126,7 +188,7 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
         if (!transcript?.full_text) return;
         const clipped = transcript.full_text.slice(0, 9000);
         await startAgentTask(
-            `Summarize meeting and generate action items: ${transcript.meeting.title}`,
+            `Generate a structured post-meeting brief with decisions, blockers, and next steps: ${transcript.meeting.title}`,
             [],
             [`Meeting transcript:\n${clipped}`]
         );
@@ -209,7 +271,14 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                     <div className="meeting-main-header">
                         <div>
                             <h3>{selectedMeeting?.title ?? "Transcript"}</h3>
-                            <p>{selectedMeeting ? `${selectedMeeting.segment_count} segments` : "Select a meeting"}</p>
+                            <p>
+                                {selectedMeeting
+                                    ? `${selectedMeeting.segment_count} segments • ${Math.max(
+                                        1,
+                                        Math.round(selectedMeeting.duration_seconds / 60)
+                                    )} min`
+                                    : "Select a meeting"}
+                            </p>
                         </div>
                         {transcript && (
                             <div className="meeting-export-row">
@@ -222,6 +291,16 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                                 <button className="ui-action-btn meeting-ghost-btn" onClick={handleExportJson} disabled={!transcript}>
                                     JSON
                                 </button>
+                                <button className="ui-action-btn meeting-ghost-btn" onClick={handleCopyHighlights}>
+                                    Copy Highlights
+                                </button>
+                                <button
+                                    className="ui-action-btn meeting-ghost-btn"
+                                    onClick={handleCreateFollowups}
+                                    disabled={creatingFollowups}
+                                >
+                                    {creatingFollowups ? "Creating..." : "Create Follow-ups"}
+                                </button>
                                 <button className="ui-action-btn meeting-primary-btn" onClick={handleAttachToAgent} disabled={!transcript?.full_text}>
                                     Attach to Run
                                 </button>
@@ -229,14 +308,59 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                         )}
                     </div>
 
+                    {transcript && (
+                        <section className="meeting-insights">
+                            <article className="meeting-insight-card">
+                                <h4>Action Items</h4>
+                                <ul>
+                                    {insights.actionItems.map((item) => (
+                                        <li key={item}>{item}</li>
+                                    ))}
+                                </ul>
+                            </article>
+                            <article className="meeting-insight-card">
+                                <h4>Decisions</h4>
+                                <ul>
+                                    {insights.decisions.map((item) => (
+                                        <li key={item}>{item}</li>
+                                    ))}
+                                </ul>
+                            </article>
+                            <article className="meeting-insight-card">
+                                <h4>Reminders</h4>
+                                <ul>
+                                    {insights.reminders.map((item) => (
+                                        <li key={item}>{item}</li>
+                                    ))}
+                                </ul>
+                            </article>
+                        </section>
+                    )}
+
                     <div className="meeting-transcript">
+                        <div className="meeting-transcript-toolbar">
+                            <input
+                                type="text"
+                                value={transcriptQuery}
+                                onChange={(event) => setTranscriptQuery(event.target.value)}
+                                placeholder="Search transcript text..."
+                            />
+                            <span>
+                                {transcript ? `${filteredSegments.length}/${transcript.segments.length} segments` : ""}
+                            </span>
+                        </div>
                         {!transcript && <p className="meeting-empty">No transcript selected.</p>}
-                        {transcript?.segments.map((segment) => (
+                        {transcript && filteredSegments.length === 0 && (
+                            <p className="meeting-empty">No segments match your search.</p>
+                        )}
+                        {filteredSegments.map((segment) => (
                             <article key={segment.id} className="segment-row">
                                 <div className="segment-time">
                                     {formatTime(segment.start_timestamp)} - {formatTime(segment.end_timestamp)}
                                 </div>
-                                <div className="segment-text">{segment.text || "(empty segment)"}</div>
+                                <div className="segment-text">
+                                    {highlightSegment(segment.text || "(empty segment)", transcriptQuery)}
+                                </div>
                             </article>
                         ))}
                     </div>
@@ -281,4 +405,79 @@ function formatConsentState(state?: "unknown" | "pending" | "detected" | "denied
         default:
             return "unknown";
     }
+}
+
+function summarizeMeeting(transcript: MeetingTranscript | null): MeetingInsights {
+    const fallback: MeetingInsights = {
+        actionItems: ["No clear action items yet."],
+        decisions: ["No explicit decisions detected yet."],
+        reminders: ["No time-sensitive reminders detected yet."],
+    };
+
+    if (!transcript?.full_text?.trim()) {
+        return fallback;
+    }
+
+    const sentences = transcript.full_text
+        .replace(/\n+/g, " ")
+        .split(/(?<=[.!?])\s+/)
+        .map((sentence) => sentence.trim())
+        .filter((sentence) => sentence.length > 8);
+
+    const actions = uniqTop(
+        sentences.filter((sentence) =>
+            /(action item|next step|todo|follow up|follow-up|send|share|review|implement|fix|ship|assign|owner)/i.test(
+                sentence
+            )
+        )
+    );
+    const decisions = uniqTop(
+        sentences.filter((sentence) =>
+            /(decision|decided|agreed|approved|resolved|we will|we'll|finalize|chose)/i.test(sentence)
+        )
+    );
+    const reminders = uniqTop(
+        sentences.filter((sentence) =>
+            /(by|before|deadline|due|tomorrow|next week|next month|monday|tuesday|wednesday|thursday|friday)/i.test(
+                sentence
+            )
+        )
+    );
+
+    return {
+        actionItems: actions.length > 0 ? actions : fallback.actionItems,
+        decisions: decisions.length > 0 ? decisions : fallback.decisions,
+        reminders: reminders.length > 0 ? reminders : fallback.reminders,
+    };
+}
+
+function uniqTop(items: string[], limit = 5): string[] {
+    const seen = new Set<string>();
+    const output: string[] = [];
+    for (const item of items) {
+        const normalized = item.toLowerCase().replace(/\s+/g, " ").trim();
+        if (!normalized || seen.has(normalized)) {
+            continue;
+        }
+        seen.add(normalized);
+        output.push(item);
+        if (output.length >= limit) {
+            break;
+        }
+    }
+    return output;
+}
+
+function highlightSegment(text: string, query: string): (string | JSX.Element)[] | string {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) {
+        return text;
+    }
+
+    const escaped = normalizedQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`(${escaped})`, "ig");
+    const parts = text.split(pattern);
+    return parts.map((part, index) =>
+        index % 2 === 1 ? <mark key={`${part}-${index}`}>{part}</mark> : part
+    );
 }

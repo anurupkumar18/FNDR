@@ -21,6 +21,10 @@ pub struct MemoryCard {
     pub score: f32,
     pub source_count: usize,
     pub raw_snippets: Vec<String>,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub confidence: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -36,7 +40,8 @@ impl MemoryCardSynthesizer {
         query: &str,
         results: &[SearchResult],
     ) -> Vec<MemoryCard> {
-        Self::from_results_with_policy(inference, query, results, 6, 3, Duration::from_millis(1500)).await
+        Self::from_results_with_policy(inference, query, results, 6, 3, Duration::from_millis(1500))
+            .await
     }
 
     pub async fn from_results_with_policy(
@@ -89,22 +94,21 @@ impl MemoryCardSynthesizer {
 
         for (index, group) in groups.into_iter().enumerate() {
             let snippets = collect_group_snippets(&group.members);
+            let grounded_snippets = collect_grounded_snippets(&group.members);
             let anchor = select_anchor(&group.members);
+            let evidence_ids = collect_evidence_ids(&group.members, 4);
 
             let mut draft = None;
             if index < max_llm_groups {
                 if let Some(engine) = inference {
-                    tracing::info!(
-                        group_idx = index,
-                        "search_memory_cards:synthesis_llm:start"
-                    );
+                    tracing::info!(group_idx = index, "search_memory_cards:synthesis_llm:start");
                     draft = match timeout(
                         llm_timeout,
                         engine.synthesize_memory_card(
                             query,
                             &anchor.app_name,
                             &anchor.window_title,
-                            &snippets,
+                            &grounded_snippets,
                         ),
                     )
                     .await
@@ -127,16 +131,20 @@ impl MemoryCardSynthesizer {
                 }
             }
 
-            let (title, summary, action, context) = match draft
-                .as_ref()
-                .and_then(|d| validate_draft(d, query, &anchor.app_name, &anchor.window_title))
-            {
+            let (title, mut summary, action, mut context) = match draft.as_ref().and_then(|d| {
+                validate_draft(d, query, &snippets, &anchor.app_name, &anchor.window_title)
+            }) {
                 Some(valid) => valid,
                 None => deterministic_fallback(query, &anchor, &snippets),
             };
 
             let score = aggregate_score(&group.members);
             let source_count = group.members.len();
+            let confidence = grounding_confidence(query, &summary, score, &snippets);
+            if confidence < 0.42 && !summary.to_lowercase().starts_with("low confidence:") {
+                summary = format!("Low confidence: {}", summary);
+            }
+            append_source_context(&mut context, &evidence_ids);
 
             cards.push(MemoryCard {
                 id: anchor.id.clone(),
@@ -151,6 +159,8 @@ impl MemoryCardSynthesizer {
                 score,
                 source_count,
                 raw_snippets: snippets,
+                evidence_ids,
+                confidence,
             });
         }
 
@@ -282,6 +292,29 @@ fn collect_group_snippets(results: &[SearchResult]) -> Vec<String> {
     snippets
 }
 
+fn collect_grounded_snippets(results: &[SearchResult]) -> Vec<String> {
+    let mut snippets = Vec::new();
+    for result in results.iter().take(MAX_GROUP_SNIPPETS) {
+        let snippet = if !result.snippet.trim().is_empty() {
+            result.snippet.trim().to_string()
+        } else {
+            merged_text(result)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
+
+        if snippet.is_empty() {
+            continue;
+        }
+
+        snippets.push(format!("[{}] {}", short_id(&result.id), snippet));
+    }
+    snippets
+}
+
 fn select_anchor(results: &[SearchResult]) -> SearchResult {
     results
         .iter()
@@ -312,14 +345,107 @@ fn aggregate_score(results: &[SearchResult]) -> f32 {
     (avg + (results.len() as f32 * 0.04)).min(1.0)
 }
 
+fn collect_evidence_ids(results: &[SearchResult], max_ids: usize) -> Vec<String> {
+    let mut ranked = results.to_vec();
+    ranked.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.timestamp.cmp(&a.timestamp))
+    });
+
+    ranked
+        .iter()
+        .take(max_ids.max(1))
+        .map(|result| result.id.clone())
+        .collect()
+}
+
+fn short_id(value: &str) -> String {
+    value.chars().take(8).collect::<String>()
+}
+
+fn append_source_context(context: &mut Vec<String>, evidence_ids: &[String]) {
+    if evidence_ids.is_empty() {
+        return;
+    }
+
+    let source_line = format!(
+        "Sources: {}",
+        evidence_ids
+            .iter()
+            .map(|id| short_id(id))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    if !context.iter().any(|entry| entry.starts_with("Sources:")) {
+        context.push(source_line);
+    }
+
+    context.truncate(5);
+}
+
+fn grounding_confidence(query: &str, summary: &str, base_score: f32, snippets: &[String]) -> f32 {
+    if snippets.is_empty() {
+        return 0.0;
+    }
+
+    let summary_terms = tokenize(summary)
+        .into_iter()
+        .filter(|term| !grounding_stop_words().contains(term.as_str()))
+        .collect::<HashSet<_>>();
+    if summary_terms.is_empty() {
+        return 0.0;
+    }
+
+    let snippet_blob = normalize_for_dedup(&snippets.join(" "));
+    let supported = summary_terms
+        .iter()
+        .filter(|term| snippet_blob.contains(term.as_str()))
+        .count();
+    let support_ratio = supported as f32 / summary_terms.len().max(1) as f32;
+
+    let query_terms = tokenize(query)
+        .into_iter()
+        .filter(|term| !grounding_stop_words().contains(term.as_str()))
+        .collect::<HashSet<_>>();
+    let query_coverage = if query_terms.is_empty() {
+        0.5
+    } else {
+        query_terms
+            .iter()
+            .filter(|term| snippet_blob.contains(term.as_str()))
+            .count() as f32
+            / query_terms.len() as f32
+    };
+
+    (base_score.clamp(0.0, 1.0) * 0.45 + support_ratio * 0.35 + query_coverage * 0.20)
+        .clamp(0.0, 1.0)
+}
+
+fn grounding_stop_words() -> HashSet<&'static str> {
+    [
+        "the", "and", "for", "with", "that", "from", "this", "have", "into", "while", "open",
+        "page", "about", "using", "user", "you", "your", "their", "then", "was", "what", "is",
+        "are",
+    ]
+    .into_iter()
+    .collect()
+}
+
 fn validate_draft(
     draft: &MemoryCardDraft,
-    _query: &str,
+    query: &str,
+    snippets: &[String],
     app_name: &str,
     window_title: &str,
 ) -> Option<(String, String, String, Vec<String>)> {
     let title = sanitize_title(&draft.title, app_name, window_title);
     let summary = sanitize_summary(&draft.summary)?;
+    if grounding_confidence(query, &summary, 0.6, snippets) < 0.38 {
+        return None;
+    }
     let action = sanitize_action(&draft.action);
 
     let mut context = draft
@@ -365,7 +491,14 @@ fn deterministic_fallback(
 
 fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     let snippets = collect_group_snippets(std::slice::from_ref(result));
-    let (title, summary, action, context) = deterministic_fallback(query, result, &snippets);
+    let (title, mut summary, action, mut context) =
+        deterministic_fallback(query, result, &snippets);
+    let evidence_ids = vec![result.id.clone()];
+    append_source_context(&mut context, &evidence_ids);
+    let confidence = grounding_confidence(query, &summary, result.score, &snippets);
+    if confidence < 0.42 && !summary.to_lowercase().starts_with("low confidence:") {
+        summary = format!("Low confidence: {}", summary);
+    }
     MemoryCard {
         id: result.id.clone(),
         title,
@@ -379,6 +512,8 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         score: result.score,
         source_count: 1,
         raw_snippets: snippets,
+        evidence_ids,
+        confidence,
     }
 }
 
@@ -798,6 +933,8 @@ mod tests {
         assert!(summary.matches('.').count() <= 2);
         assert!(!summary.to_lowercase().contains("new tab"));
         assert!(!summary.to_lowercase().contains("worked in google chrome"));
-        assert!(summary.to_lowercase().contains("ipl") || summary.to_lowercase().contains("cricket"));
+        assert!(
+            summary.to_lowercase().contains("ipl") || summary.to_lowercase().contains("cricket")
+        );
     }
 }

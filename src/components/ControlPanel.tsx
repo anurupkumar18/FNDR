@@ -1,14 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
     CaptureStatus,
     McpServerStatus,
-    MemoryCard,
     deleteAllData,
     deleteOlderThan,
     getBlocklist,
     getMcpServerStatus,
     getRetentionDays,
-    listMemoryCards,
     pauseCapture,
     resumeCapture,
     setBlocklist,
@@ -35,27 +33,6 @@ interface ControlPanelProps {
 
 type Tab = "settings" | "model" | "privacy";
 
-function normalizeCardText(value: string | undefined | null): string {
-    if (!value) return "";
-    return value.replace(/\s+/g, " ").trim();
-}
-
-function pickCardTitle(card: MemoryCard): string {
-    return (
-        normalizeCardText(card.title)
-        || normalizeCardText(card.window_title)
-        || `Memory in ${card.app_name}`
-    );
-}
-
-function pickCardSummary(card: MemoryCard): string {
-    return (
-        normalizeCardText(card.summary)
-        || normalizeCardText(card.raw_snippets[0])
-        || `Captured from ${card.app_name}`
-    );
-}
-
 export function ControlPanel({ status, compact = false, evalUi = false }: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<Tab>("settings");
@@ -68,10 +45,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [mcpBusy, setMcpBusy] = useState(false);
     const [copiedMcpLink, setCopiedMcpLink] = useState(false);
 
-    const [currentCards, setCurrentCards] = useState<MemoryCard[]>([]);
-    const [cardsLoading, setCardsLoading] = useState(false);
-    const [cardsError, setCardsError] = useState<string | null>(null);
-
     // Model tab state
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [modelsLoading, setModelsLoading] = useState(false);
@@ -80,20 +53,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [confirmDeleteModel, setConfirmDeleteModel] = useState<string | null>(null);
     const [isActivatingModel, setIsActivatingModel] = useState(false);
     const downloadStatus = useModelDownloadStatus();
-
-    const loadCurrentCards = useCallback(async () => {
-        setCardsLoading(true);
-        setCardsError(null);
-        try {
-            const cards = await listMemoryCards(24);
-            setCurrentCards(cards);
-        } catch (err) {
-            setCardsError(err instanceof Error ? err.message : "Unable to load memory cards.");
-            setCurrentCards([]);
-        } finally {
-            setCardsLoading(false);
-        }
-    }, []);
 
     const loadData = useCallback(async () => {
         try {
@@ -114,11 +73,10 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 setRetentionDaysState(ret);
                 setMcpStatus(mcp);
             }
-            await loadCurrentCards();
         } catch (err) {
             console.error("Failed to load settings data:", err);
         }
-    }, [evalUi, loadCurrentCards]);
+    }, [evalUi]);
 
     useEffect(() => {
         if (isOpen) {
@@ -257,8 +215,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         if (retentionDays === 0) return;
         setRetentionBusy(true);
         try {
-            const deleted = await deleteOlderThan(retentionDays);
-            if (deleted > 0) await loadCurrentCards();
+            await deleteOlderThan(retentionDays);
         } catch (e) {
             console.error("Failed to run retention:", e);
         } finally {
@@ -308,7 +265,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         try {
             await deleteAllData();
             setConfirmDelete(false);
-            await loadCurrentCards();
         } catch (e) {
             console.error("Failed to delete data:", e);
         }
@@ -340,8 +296,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     function fmtBytes(b: number) {
         return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
     }
-
-    const previewCards = useMemo(() => currentCards.slice(0, 12), [currentCards]);
 
     return (
         <>
@@ -409,40 +363,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                     <span>Frames: {status?.frames_captured ?? 0}</span>
                                     <span>Dropped: {status?.frames_dropped ?? 0}</span>
                                 </div>
-                            </section>
-
-                            <section className="panel-section">
-                                <h3>Current Memory Cards (LanceDB)</h3>
-                                <p className="section-hint">
-                                    Live preview of your latest cards from the local LanceDB store.
-                                </p>
-                                <div className="memory-preview-header">
-                                    <span>{currentCards.length} cards loaded</span>
-                                    <button
-                                        className="ui-action-btn btn-secondary"
-                                        onClick={() => void loadCurrentCards()}
-                                        disabled={cardsLoading}
-                                    >
-                                        {cardsLoading ? "Refreshing..." : "Refresh"}
-                                    </button>
-                                </div>
-                                {cardsError && <p className="mcp-error">{cardsError}</p>}
-                                {!cardsError && previewCards.length === 0 && !cardsLoading && (
-                                    <p className="section-hint">No memory cards found yet.</p>
-                                )}
-                                {!cardsError && previewCards.length > 0 && (
-                                    <div className="memory-preview-list">
-                                        {previewCards.map((card) => (
-                                            <article key={card.id} className="memory-preview-item">
-                                                <div className="memory-preview-title">{pickCardTitle(card)}</div>
-                                                <div className="memory-preview-sub">{pickCardSummary(card)}</div>
-                                                <div className="memory-preview-meta">
-                                                    {card.app_name} · {new Date(card.timestamp).toLocaleString()}
-                                                </div>
-                                            </article>
-                                        ))}
-                                    </div>
-                                )}
                             </section>
 
                             <section className="panel-section">

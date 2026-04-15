@@ -50,6 +50,10 @@ Edge types:
 
 ### Hybrid Search
 - Semantic + keyword hybrid retrieval via `src-tauri/src/search/hybrid.rs`.
+- Query understanding normalizes sentence queries into intent + core terms (including numeric entities).
+- Weighted lexical+semantic fusion uses BM25-style lexical scoring and embedding similarity.
+- Top-N sentence-aware reranking + relevance gating prevents random fallback cards on out-of-scope queries.
+- Grounded memory cards now carry evidence IDs + confidence and mark low-confidence summaries explicitly.
 - Structural traversal via graph relationships (e.g., task -> memory -> URL).
 
 ## 3. Agentic Task Management
@@ -92,3 +96,12 @@ Edge types:
 - Capture backend currently uses local macOS capture path; if strict `ScreenCaptureKit` API usage is required, the capture adapter can be swapped behind `capture/macos.rs` without changing graph/search/task APIs.
 - Image embeddings currently use a local CLIP-compatible interface with deterministic vectors for offline reliability; replace internals with full CLIP runtime for production accuracy.
 - `Entity` extraction (person/project nodes) is schema-ready but currently session-first; NER/entity linking can be layered during ingestion.
+
+## 6. Search Quality Evaluation
+
+- Fixture: `src-tauri/tests/fixtures/search_eval_cases.json` (30+ query cases).
+- Eval test: `src-tauri/tests/search_relevance_eval.rs`.
+- Reported metrics:
+  - Precision@6
+  - MRR
+  - Negative-query empty-hit checks (random-card suppression).

@@ -96,17 +96,6 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
         ];
     }, [stats]);
 
-    const summaryMix = useMemo(() => {
-        if (!stats) return [];
-        const total = Math.max(stats.llm_count + stats.vlm_count + stats.fallback_count + stats.other_summary_count, 1);
-        return [
-            { label: "LLM", count: stats.llm_count, share: (stats.llm_count / total) * 100 },
-            { label: "VLM", count: stats.vlm_count, share: (stats.vlm_count / total) * 100 },
-            { label: "Fallback", count: stats.fallback_count, share: (stats.fallback_count / total) * 100 },
-            { label: "Other", count: stats.other_summary_count, share: (stats.other_summary_count / total) * 100 },
-        ];
-    }, [stats]);
-
     const insights = useMemo(() => {
         if (!stats) return [];
         const topApp = stats.apps[0];
@@ -237,22 +226,6 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                             </div>
                         </section>
 
-                        <section className="stats-page-section">
-                            <h3>Summary Source Mix</h3>
-                            <div className="stats-page-rank-list">
-                                {summaryMix.map((entry) => (
-                                    <div key={entry.label} className="stats-page-rank-row">
-                                        <div className="stats-page-rank-meta">
-                                            <span>{entry.label}</span>
-                                            <span>{entry.count.toLocaleString()} · {formatPercent(entry.share)}</span>
-                                        </div>
-                                        <div className="stats-page-rank-bar">
-                                            <span style={{ width: `${entry.share}%` }} />
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </section>
 
                         <section className="stats-page-section">
                             <h3>Hourly Distribution</h3>

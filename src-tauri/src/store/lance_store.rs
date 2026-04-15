@@ -117,9 +117,22 @@ impl Store {
         time_filter: Option<&str>,
         app_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
-        let q = sql_escape(query);
-        let keyword_pred =
-            format!("(text LIKE '%{q}%' OR app_name LIKE '%{q}%' OR window_title LIKE '%{q}%')");
+        let terms = keyword_terms(query);
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut clauses = Vec::new();
+        for term in &terms {
+            let escaped = sql_escape(term);
+            clauses.push(format!("text LIKE '%{escaped}%'"));
+            clauses.push(format!("clean_text LIKE '%{escaped}%'"));
+            clauses.push(format!("snippet LIKE '%{escaped}%'"));
+            clauses.push(format!("window_title LIKE '%{escaped}%'"));
+            clauses.push(format!("app_name LIKE '%{escaped}%'"));
+            clauses.push(format!("url LIKE '%{escaped}%'"));
+        }
+        let keyword_pred = format!("({})", clauses.join(" OR "));
 
         let filter = match build_filter(time_filter, app_filter) {
             Some(f) => format!("{keyword_pred} AND {f}"),
@@ -139,14 +152,18 @@ impl Store {
         let mut results = Vec::new();
         for batch in &batches {
             let mut batch_results = batch_to_search_results(batch);
-            // Keyword results get a fixed relevance score of 1.0.
+            // Keyword branch gets a lexical relevance score before hybrid fusion.
             for r in &mut batch_results {
-                r.score = 1.0;
+                r.score = lexical_keyword_score(&terms, r);
             }
             results.extend(batch_results);
         }
-        // Sort newest-first.
-        results.sort_by_key(|r| std::cmp::Reverse(r.timestamp));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.timestamp.cmp(&a.timestamp))
+        });
         Ok(results)
     }
 
@@ -270,7 +287,8 @@ impl Store {
                     daypart_counts[daypart_idx] += 1;
                 }
 
-                let app_name = get_non_empty_str(&app_col, i).unwrap_or_else(|| "Unknown".to_string());
+                let app_name =
+                    get_non_empty_str(&app_col, i).unwrap_or_else(|| "Unknown".to_string());
                 *app_counts.entry(app_name.clone()).or_insert(0) += 1;
                 unique_apps.insert(app_name.clone());
                 timeline_points.push((timestamp, app_name));
@@ -1061,7 +1079,9 @@ fn extract_domain(url: &str) -> Option<String> {
     }
 }
 
-fn compute_activity_streaks(day_counts: &std::collections::HashMap<String, usize>) -> (usize, usize) {
+fn compute_activity_streaks(
+    day_counts: &std::collections::HashMap<String, usize>,
+) -> (usize, usize) {
     let mut days: Vec<NaiveDate> = day_counts
         .keys()
         .filter_map(|day| NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
@@ -1185,6 +1205,142 @@ fn local_day_range_filter(days_ago: i64) -> Option<String> {
         "timestamp >= {} AND timestamp < {}",
         start_ms, end_ms
     ))
+}
+
+fn normalize_keyword_text(input: &str) -> String {
+    input
+        .to_lowercase()
+        .chars()
+        .map(|ch| {
+            if ch.is_alphanumeric() || ch.is_whitespace() {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_keyword_stop_word(token: &str) -> bool {
+    matches!(
+        token,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "as"
+            | "at"
+            | "be"
+            | "for"
+            | "from"
+            | "in"
+            | "is"
+            | "it"
+            | "of"
+            | "on"
+            | "or"
+            | "that"
+            | "the"
+            | "this"
+            | "to"
+            | "was"
+            | "what"
+            | "when"
+            | "where"
+            | "who"
+            | "why"
+            | "with"
+    )
+}
+
+fn keyword_terms(query: &str) -> Vec<String> {
+    let normalized = normalize_keyword_text(query);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut terms = Vec::new();
+    // Keep the normalized query as a phrase candidate first.
+    terms.push(normalized.clone());
+
+    for token in normalized.split_whitespace() {
+        if token.len() <= 1 {
+            continue;
+        }
+        if is_keyword_stop_word(token) && !token.chars().any(|ch| ch.is_ascii_digit()) {
+            continue;
+        }
+        if !terms.iter().any(|existing| existing == token) {
+            terms.push(token.to_string());
+        }
+    }
+
+    terms.truncate(10);
+    terms
+}
+
+fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
+    if terms.is_empty() {
+        return 0.0;
+    }
+
+    let title = normalize_keyword_text(&result.window_title);
+    let snippet = normalize_keyword_text(&result.snippet);
+    let clean = normalize_keyword_text(if !result.clean_text.trim().is_empty() {
+        &result.clean_text
+    } else {
+        &result.text
+    });
+    let app = normalize_keyword_text(&result.app_name);
+    let url = result
+        .url
+        .as_ref()
+        .map(|value| normalize_keyword_text(value))
+        .unwrap_or_default();
+    let merged = format!("{} {} {} {}", title, snippet, clean, url);
+
+    let mut matched_terms = 0usize;
+    let mut weighted = 0.0f32;
+
+    for (idx, term) in terms.iter().enumerate() {
+        let mut matched = false;
+        if title.contains(term) {
+            weighted += 1.8;
+            matched = true;
+        }
+        if snippet.contains(term) {
+            weighted += 1.35;
+            matched = true;
+        }
+        if clean.contains(term) {
+            weighted += 1.1;
+            matched = true;
+        }
+        if app.contains(term) {
+            weighted += 0.75;
+            matched = true;
+        }
+        if !url.is_empty() && url.contains(term) {
+            weighted += 0.95;
+            matched = true;
+        }
+
+        // Reward full sentence/phrase hits for sentence queries.
+        if idx == 0 && term.split_whitespace().count() >= 2 && merged.contains(term) {
+            weighted += 1.1;
+            matched = true;
+        }
+
+        if matched {
+            matched_terms += 1;
+        }
+    }
+
+    let coverage = matched_terms as f32 / terms.len() as f32;
+    let normalized = (weighted / (terms.len() as f32 * 2.8)).min(1.0);
+    (normalized * 0.7 + coverage * 0.3).clamp(0.0, 1.0)
 }
 
 /// Escape single quotes for SQL string literals.

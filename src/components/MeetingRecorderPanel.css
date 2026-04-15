@@ -184,7 +184,7 @@
 .meeting-main-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     padding-bottom: 8px;
     border-bottom: 1px solid var(--border);
@@ -216,6 +216,67 @@
     padding-top: 10px;
 }
 
+.meeting-insights {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.meeting-insight-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.02);
+    padding: 8px;
+}
+
+.meeting-insight-card h4 {
+    margin: 0 0 6px;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.meeting-insight-card ul {
+    margin: 0;
+    padding-left: 16px;
+    display: grid;
+    gap: 5px;
+}
+
+.meeting-insight-card li {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.meeting-transcript-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.meeting-transcript-toolbar input {
+    flex: 1;
+    min-width: 0;
+    height: 34px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #0d0d0d;
+    color: var(--text-primary);
+    padding: 0 10px;
+    font-size: 0.82rem;
+}
+
+.meeting-transcript-toolbar span {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
 .segment-row {
     border: 1px solid var(--border);
     border-radius: 9px;
@@ -237,6 +298,13 @@
     white-space: pre-wrap;
 }
 
+.segment-text mark {
+    background: rgba(96, 165, 250, 0.25);
+    color: #dbeafe;
+    padding: 0 2px;
+    border-radius: 4px;
+}
+
 .meeting-empty {
     font-size: 0.82rem;
     color: var(--text-muted);
@@ -254,6 +322,10 @@
 
 @media (max-width: 960px) {
     .meeting-panel-body {
+        grid-template-columns: 1fr;
+    }
+
+    .meeting-insights {
         grid-template-columns: 1fr;
     }
 

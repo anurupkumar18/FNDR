@@ -8,6 +8,9 @@ interface TodoPanelProps {
 }
 
 type TodoType = "Todo" | "Reminder" | "Followup";
+type StageFilter = TodoType | "All";
+
+const STAGE_ORDER: TodoType[] = ["Todo", "Reminder", "Followup"];
 
 export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
     const [tasks, setTasks] = useState<Task[]>([]);
@@ -17,6 +20,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
     const [creating, setCreating] = useState(false);
     const [newTitle, setNewTitle] = useState("");
     const [newType, setNewType] = useState<TodoType>("Todo");
+    const [activeStage, setActiveStage] = useState<StageFilter>("Todo");
 
     const loadTasks = async (showLoading = false) => {
         if (showLoading) {
@@ -52,6 +56,35 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
         [tasks]
     );
 
+    const countsByType = useMemo(() => {
+        return sortedTasks.reduce(
+            (acc, task) => {
+                acc[task.task_type] += 1;
+                return acc;
+            },
+            { Todo: 0, Reminder: 0, Followup: 0 }
+        );
+    }, [sortedTasks]);
+
+    const visibleTasks = useMemo(() => {
+        if (activeStage === "All") {
+            return sortedTasks;
+        }
+        return sortedTasks.filter((task) => task.task_type === activeStage);
+    }, [sortedTasks, activeStage]);
+
+    useEffect(() => {
+        if (activeStage === "All" || visibleTasks.length > 0 || sortedTasks.length === 0) {
+            return;
+        }
+        const nextStage = STAGE_ORDER.find((stage) => countsByType[stage] > 0);
+        if (nextStage) {
+            setActiveStage(nextStage);
+        } else {
+            setActiveStage("All");
+        }
+    }, [activeStage, visibleTasks.length, sortedTasks.length, countsByType]);
+
     const handleAddTask = async () => {
         const title = newTitle.trim();
         if (!title || creating) {
@@ -64,7 +97,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             const created = await addTodo(title, "", newType);
             setTasks((prev) => [created, ...prev]);
             setNewTitle("");
-            setNewType("Todo");
+            setActiveStage(created.task_type);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Unable to add task.");
         } finally {
@@ -76,7 +109,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
         try {
             const dismissed = await dismissTodo(taskId);
             if (dismissed) {
-                setTasks((prev) => prev.filter((task) => task.id !== taskId));
+                await loadTasks(false);
             }
         } catch (err) {
             setError(err instanceof Error ? err.message : "Unable to dismiss task.");
@@ -92,7 +125,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             <header className="todo-page-header">
                 <div>
                     <h2>To‑Do List</h2>
-                    <p>Manual tasks plus smart extractions from recent memories.</p>
+                    <p>Stage through Todos, Reminders, and Follow-ups pulled from distinct memories.</p>
                 </div>
                 <div className="todo-page-actions">
                     <button
@@ -142,6 +175,24 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 </button>
             </section>
 
+            <section className="todo-stage-toggle" aria-label="Task stages">
+                {(["Todo", "Reminder", "Followup", "All"] as StageFilter[]).map((stage) => (
+                    <button
+                        key={stage}
+                        type="button"
+                        className={`ui-action-btn todo-stage-btn ${activeStage === stage ? "active" : ""}`}
+                        onClick={() => setActiveStage(stage)}
+                    >
+                        {stage === "Followup" ? "Follow-up" : stage}
+                        <strong>
+                            {stage === "All"
+                                ? sortedTasks.length
+                                : countsByType[stage]}
+                        </strong>
+                    </button>
+                ))}
+            </section>
+
             <div className="todo-page-body">
                 {loading && (
                     <div className="todo-page-state">
@@ -162,9 +213,15 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                     </div>
                 )}
 
-                {!loading && !error && sortedTasks.length > 0 && (
+                {!loading && !error && sortedTasks.length > 0 && visibleTasks.length === 0 && (
+                    <div className="todo-page-state">
+                        <p>No tasks in this stage right now.</p>
+                    </div>
+                )}
+
+                {!loading && !error && visibleTasks.length > 0 && (
                     <div className="todo-page-list">
-                        {sortedTasks.map((task) => (
+                        {visibleTasks.map((task) => (
                             <article key={task.id} className="todo-page-item">
                                 <div className="todo-page-item-main">
                                     <span className={`todo-pill ${task.task_type.toLowerCase()}`}>
@@ -172,7 +229,13 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                                     </span>
                                     <h3>{task.title}</h3>
                                     <p>
-                                        {new Date(task.created_at).toLocaleString()} · {task.source_app}
+                                        {new Date(task.created_at).toLocaleString()}
+                                        {task.linked_memory_ids.length > 0
+                                            ? ` · ${task.linked_memory_ids.length} linked memories`
+                                            : ""}
+                                        {task.linked_urls.length > 0
+                                            ? ` · ${task.linked_urls.length} context links`
+                                            : ""}
                                     </p>
                                 </div>
                                 <div className="todo-page-item-actions">
@@ -180,7 +243,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                                         className="ui-action-btn todo-done-btn"
                                         onClick={() => void handleDismiss(task.id)}
                                     >
-                                        Done
+                                        Done · Next
                                     </button>
                                 </div>
                             </article>

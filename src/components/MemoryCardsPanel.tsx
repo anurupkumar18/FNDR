@@ -252,17 +252,22 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
             <div className="memory-cards-toolbar">
                 <label className="memory-cards-filter">
                     App
-                    <select
-                        value={appFilter}
-                        onChange={(event) => setAppFilter(event.target.value)}
-                    >
-                        <option value={APP_FILTER_ALL}>All apps</option>
-                        {selectableApps.map((name) => (
-                            <option key={name} value={name}>
-                                {name}
-                            </option>
-                        ))}
-                    </select>
+                    <div className="memory-cards-filter-control">
+                        <select
+                            value={appFilter}
+                            onChange={(event) => setAppFilter(event.target.value)}
+                        >
+                            <option value={APP_FILTER_ALL}>All apps</option>
+                            {selectableApps.map((name) => (
+                                <option key={name} value={name}>
+                                    {name}
+                                </option>
+                            ))}
+                        </select>
+                        <svg className="memory-cards-filter-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <path d="M6 9l6 6 6-6" />
+                        </svg>
+                    </div>
                 </label>
                 <div className="memory-cards-count">{cards.length} cards</div>
             </div>

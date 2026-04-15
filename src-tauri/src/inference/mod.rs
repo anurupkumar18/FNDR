@@ -462,9 +462,14 @@ impl InferenceEngine {
 
         let combined_text = results.join("\n---\n");
         let prompt = match self.build_prompt(
-            "You help users find what they remember by summarizing search results. Respond ONLY with the summary.",
+            "You help users find what they remember by summarizing search results.\n\
+            RULES:\n\
+            - Use ONLY facts explicitly present in SNIPPETS.\n\
+            - If evidence is weak, start with 'Low confidence:'.\n\
+            - End with 'Sources: <id1>, <id2>' using snippet IDs.\n\
+            - Respond ONLY with one paragraph summary.",
             &format!(
-                "SEARCH QUERY: \"{}\"\n\nSNIPPETS:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Combine these snippets into one paragraph that answers the query. Keep it under 40 words. Ground your answer in the facts provided.",
+                "SEARCH QUERY: \"{}\"\n\nSNIPPETS:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Combine these snippets into one paragraph that answers the query. Keep it under 50 words.",
                 query,
                 combined_text.chars().take(800).collect::<String>()
             ),
@@ -512,9 +517,12 @@ impl InferenceEngine {
                 RULES:\n\
                 - Return ONLY strict JSON with keys: title, summary, action, context.\n\
                 - summary must be exactly one sentence, 8-22 words.\n\
+                - Use ONLY facts explicitly present in SNIPPETS. Do not infer unseen details.\n\
+                - If evidence is weak, start summary with 'Low confidence:'.\n\
                 - No markdown, no OCR labels, no browser chrome, no preambles.\n\
                 - Focus on one dominant activity with 1-3 high-signal details.\n\
-                - context must be an array of 1-4 short strings.",
+                - context must be an array of 1-4 short strings.\n\
+                - Prefer context items that mention source IDs like src:<id> when present.",
                 &format!(
                     "QUERY: {}\nAPP: {}\nWINDOW: {}\nSNIPPETS:\n{}\n\nReturn JSON only.",
                     query, app_name, window_title, snippet_block
@@ -537,7 +545,16 @@ impl InferenceEngine {
         let prompt = match self.build_prompt(
             "You identify clear follow-up actions from recent screen activity.",
             &format!(
-                "Extract actionable items from these screen captures.\nFormat:\n- TODO: [task]\n- REMINDER: [time-based item]\nMaximum 5 items. Only include clear actions.\n\n{}",
+                "Extract actionable items from these screen captures.\n\
+Format each line exactly as one of:\n\
+- TODO: [clear action]\n\
+- REMINDER: [time/date-sensitive reminder]\n\
+- FOLLOWUP: [person/team to follow up with + why]\n\
+Rules:\n\
+- Return 3 to 8 total items.\n\
+- Include at least one REMINDER and one FOLLOWUP when evidence exists.\n\
+- Keep each item specific, concise, and non-duplicate.\n\
+- Skip vague or generic tasks.\n\n{}",
                 memories_text.chars().take(2000).collect::<String>()
             ),
         ) {

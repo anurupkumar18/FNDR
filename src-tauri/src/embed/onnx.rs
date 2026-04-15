@@ -254,7 +254,9 @@ impl RealEmbedder {
                     thread::sleep(Duration::from_millis(10));
                 }
                 Err(err) => {
-                    return Err(format!("Embedding sidecar process status check failed: {err}"));
+                    return Err(format!(
+                        "Embedding sidecar process status check failed: {err}"
+                    ));
                 }
             }
         }

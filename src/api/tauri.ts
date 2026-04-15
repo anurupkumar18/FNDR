@@ -27,6 +27,8 @@ export interface MemoryCard {
     score: number;
     source_count: number;
     raw_snippets: string[];
+    evidence_ids?: string[];
+    confidence?: number;
 }
 
 export interface CaptureStatus {

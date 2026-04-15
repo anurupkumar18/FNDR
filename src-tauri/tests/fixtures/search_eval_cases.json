@@ -1,0 +1,51 @@
+[
+  {"query":"what is 4000","relevant_ids":["mem_4000_overview","mem_4000_stats"],"expect_empty":false},
+  {"query":"explain 4000","relevant_ids":["mem_4000_overview","mem_4000_stats"],"expect_empty":false},
+  {"query":"4000 stats memory coverage","relevant_ids":["mem_4000_stats"],"expect_empty":false},
+  {"query":"chatgpt 4000 intelligence layer","relevant_ids":["mem_4000_overview"],"expect_empty":false},
+
+  {"query":"canvas","relevant_ids":["mem_canva_present","mem_canva_resize"],"expect_empty":false},
+  {"query":"canva","relevant_ids":["mem_canva_present","mem_canva_resize"],"expect_empty":false},
+  {"query":"canva presentation deck","relevant_ids":["mem_canva_present"],"expect_empty":false},
+  {"query":"resize design for instagram","relevant_ids":["mem_canva_resize"],"expect_empty":false},
+  {"query":"social media canva sizes","relevant_ids":["mem_canva_resize"],"expect_empty":false},
+
+  {"query":"cricket","relevant_ids":["mem_cricket_highlights","mem_cricket_schedule"],"expect_empty":false},
+  {"query":"ipl highlights","relevant_ids":["mem_cricket_highlights"],"expect_empty":false},
+  {"query":"match schedule cricket","relevant_ids":["mem_cricket_schedule"],"expect_empty":false},
+
+  {"query":"knowledge graph","relevant_ids":["mem_knowledge_graph"],"expect_empty":false},
+  {"query":"fndr knowledge graph ui","relevant_ids":["mem_knowledge_graph"],"expect_empty":false},
+
+  {"query":"finder recent content","relevant_ids":["mem_finder_recent"],"expect_empty":false},
+  {"query":"recent finder window","relevant_ids":["mem_finder_recent"],"expect_empty":false},
+
+  {"query":"herriman weather freeze watch","relevant_ids":["mem_weather_herriman"],"expect_empty":false},
+
+  {"query":"app energy impact","relevant_ids":["mem_activity_monitor"],"expect_empty":false},
+  {"query":"activity monitor cpu usage","relevant_ids":["mem_activity_monitor"],"expect_empty":false},
+
+  {"query":"display settings macbook","relevant_ids":["mem_display_settings"],"expect_empty":false},
+  {"query":"system settings display resolution","relevant_ids":["mem_display_settings"],"expect_empty":false},
+
+  {"query":"abs in 60 days","relevant_ids":["mem_video_abs"],"expect_empty":false},
+  {"query":"fitness youtube abs","relevant_ids":["mem_video_abs"],"expect_empty":false},
+
+  {"query":"196 capital cities challenge","relevant_ids":["mem_global_capitals"],"expect_empty":false},
+  {"query":"global capitals youtube","relevant_ids":["mem_global_capitals"],"expect_empty":false},
+
+  {"query":"fndr stats ui ux analysis","relevant_ids":["mem_fndr_uiux"],"expect_empty":false},
+  {"query":"video generation ui ux file analysis","relevant_ids":["mem_fndr_uiux"],"expect_empty":false},
+
+  {"query":"cargo test rust errors","relevant_ids":["mem_terminal_rust"],"expect_empty":false},
+  {"query":"terminal rust error logs","relevant_ids":["mem_terminal_rust"],"expect_empty":false},
+
+  {"query":"fndr stats and knowledge graph","relevant_ids":["mem_fndr_uiux","mem_knowledge_graph"],"expect_empty":false},
+  {"query":"canvas and cricket","relevant_ids":["mem_canva_resize","mem_cricket_highlights"],"expect_empty":false},
+
+  {"query":"quantum mechanics lecture notes","relevant_ids":[],"expect_empty":true},
+  {"query":"estate probate trust documents","relevant_ids":[],"expect_empty":true},
+  {"query":"grocery shopping list","relevant_ids":[],"expect_empty":true},
+  {"query":"mountain biking trails","relevant_ids":[],"expect_empty":true},
+  {"query":"wedding invitation template word","relevant_ids":[],"expect_empty":true}
+]

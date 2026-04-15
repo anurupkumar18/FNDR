@@ -3,6 +3,7 @@
 //! Extracts actionable todos/reminders from captured memories using LLM.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
@@ -78,18 +79,32 @@ impl TaskStore {
     pub fn add_task(&mut self, task: Task) -> Result<(), Box<dyn std::error::Error>> {
         let normalized_title = normalize_task_title(&task.title);
 
-        // Avoid duplicates among still-active tasks, but allow completed or dismissed
-        // tasks to reappear if the same work resurfaces later.
-        if !normalized_title.is_empty()
-            && !self.tasks.iter().any(|t| {
-                normalize_task_title(&t.title) == normalized_title
-                    && !t.is_completed
-                    && !t.is_dismissed
-            })
-        {
-            self.tasks.push(task);
-            self.save()?;
+        if normalized_title.is_empty() {
+            return Ok(());
         }
+
+        // Never duplicate still-active tasks with the same normalized title.
+        let duplicate_active_title = self.tasks.iter().any(|existing| {
+            normalize_task_title(&existing.title) == normalized_title
+                && !existing.is_completed
+                && !existing.is_dismissed
+        });
+        if duplicate_active_title {
+            return Ok(());
+        }
+
+        // Also avoid re-creating the same title from the same memory context,
+        // even if the prior task was dismissed/completed.
+        let duplicate_origin = self.tasks.iter().any(|existing| {
+            normalize_task_title(&existing.title) == normalized_title
+                && share_memory_origin(existing, &task)
+        });
+        if duplicate_origin {
+            return Ok(());
+        }
+
+        self.tasks.push(task);
+        self.save()?;
         Ok(())
     }
 
@@ -134,6 +149,25 @@ impl TaskStore {
         self.save()?;
         Ok(())
     }
+
+    /// Snapshot all tasks (active + dismissed + completed).
+    pub fn tasks_snapshot(&self) -> Vec<Task> {
+        self.tasks.clone()
+    }
+
+    /// Memory ids that have already produced tasks recently.
+    pub fn seen_memory_ids(&self) -> HashSet<String> {
+        let mut ids = HashSet::new();
+        for task in &self.tasks {
+            if let Some(id) = task.source_memory_id.as_ref() {
+                ids.insert(id.clone());
+            }
+            for id in &task.linked_memory_ids {
+                ids.insert(id.clone());
+            }
+        }
+        ids
+    }
 }
 
 /// Parse LLM response into tasks
@@ -147,32 +181,31 @@ pub fn parse_tasks_from_llm_response(response: &str, source_app: &str) -> Vec<Ta
             continue;
         }
 
-        // Parse lines like "- TODO: Send email to John" or "- REMINDER: Call dentist tomorrow"
-        let (task_type, title) = if line.starts_with("- TODO:") || line.starts_with("TODO:") {
-            (
-                TaskType::Todo,
-                line.trim_start_matches("- TODO:")
-                    .trim_start_matches("TODO:")
-                    .trim(),
-            )
-        } else if line.starts_with("- REMINDER:") || line.starts_with("REMINDER:") {
-            (
-                TaskType::Reminder,
-                line.trim_start_matches("- REMINDER:")
-                    .trim_start_matches("REMINDER:")
-                    .trim(),
-            )
-        } else if line.starts_with("- FOLLOWUP:") || line.starts_with("FOLLOWUP:") {
-            (
-                TaskType::Followup,
-                line.trim_start_matches("- FOLLOWUP:")
-                    .trim_start_matches("FOLLOWUP:")
-                    .trim(),
-            )
+        // Parse lines like "TODO: Send email", "REMINDER: ...", "FOLLOW-UP: ..."
+        let stripped = line.strip_prefix("- ").unwrap_or(line).trim();
+        let (task_type, title) = if let Some((prefix, rest)) = stripped.split_once(':') {
+            let normalized_prefix = prefix
+                .trim()
+                .replace('-', "")
+                .replace('_', "")
+                .to_ascii_uppercase();
+            let parsed_type = match normalized_prefix.as_str() {
+                "TODO" => Some(TaskType::Todo),
+                "REMINDER" => Some(TaskType::Reminder),
+                "FOLLOWUP" => Some(TaskType::Followup),
+                _ => None,
+            };
+            if let Some(parsed_type) = parsed_type {
+                (parsed_type, rest.trim())
+            } else if line.starts_with("- ") {
+                (TaskType::Todo, stripped)
+            } else {
+                continue;
+            }
         } else if line.starts_with("- ") {
-            (TaskType::Todo, line.trim_start_matches("- ").trim())
+            (TaskType::Todo, stripped)
         } else {
-            continue; // Skip non-task lines
+            continue;
         };
 
         if title.len() > 5 {
@@ -202,4 +235,29 @@ fn normalize_task_title(title: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
+}
+
+fn share_memory_origin(left: &Task, right: &Task) -> bool {
+    let mut left_ids: HashSet<&str> = HashSet::new();
+    let mut right_ids: HashSet<&str> = HashSet::new();
+
+    if let Some(id) = left.source_memory_id.as_deref() {
+        left_ids.insert(id);
+    }
+    if let Some(id) = right.source_memory_id.as_deref() {
+        right_ids.insert(id);
+    }
+
+    for id in &left.linked_memory_ids {
+        left_ids.insert(id.as_str());
+    }
+    for id in &right.linked_memory_ids {
+        right_ids.insert(id.as_str());
+    }
+
+    if left_ids.is_empty() || right_ids.is_empty() {
+        return false;
+    }
+
+    left_ids.into_iter().any(|id| right_ids.contains(id))
 }

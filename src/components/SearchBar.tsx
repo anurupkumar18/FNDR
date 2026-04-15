@@ -49,6 +49,7 @@ export function SearchBar({
     const mediaStreamRef = useRef<MediaStream | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
     const mimeTypeRef = useRef<string>("audio/webm");
+    const recordingStartedAtRef = useRef<number>(0);
     const summaryRequestRef = useRef(0);
     const searchResultsRef = useRef(searchResults);
     const hasQuery = value.trim().length > 0;
@@ -85,7 +86,10 @@ export function SearchBar({
             try {
                 const snippets = latestResults
                     .slice(0, 5)
-                    .map((result) => `[${result.app_name}] ${result.summary}`);
+                    .map(
+                        (result) =>
+                            `[id:${result.id}][score:${result.score.toFixed(3)}][app:${result.app_name}] ${result.summary}`
+                    );
 
                 const aiSummary = await summarizeSearch(activeValue, snippets);
                 if (cancelled || requestId !== summaryRequestRef.current) {
@@ -210,7 +214,15 @@ export function SearchBar({
         }
 
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    channelCount: 1,
+                    sampleRate: 48000,
+                },
+            });
             const options = chooseRecorderOptions();
             const recorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
 
@@ -218,6 +230,7 @@ export function SearchBar({
             mediaRecorderRef.current = recorder;
             audioChunksRef.current = [];
             mimeTypeRef.current = recorder.mimeType || options?.mimeType || "audio/webm";
+            recordingStartedAtRef.current = Date.now();
 
             recorder.ondataavailable = (event) => {
                 if (event.data.size > 0) {
@@ -228,14 +241,19 @@ export function SearchBar({
             recorder.onstop = () => {
                 const chunks = [...audioChunksRef.current];
                 audioChunksRef.current = [];
+                const durationMs = Date.now() - recordingStartedAtRef.current;
                 stopMediaStream(mediaStreamRef.current);
                 mediaStreamRef.current = null;
                 mediaRecorderRef.current = null;
                 setIsRecording(false);
+                if (durationMs < 350) {
+                    setVoiceStatus("Hold the mic a bit longer and try again.");
+                    return;
+                }
                 void transcribeRecordedVoice(chunks, mimeTypeRef.current);
             };
 
-            recorder.start();
+            recorder.start(250);
             setIsRecording(true);
             setVoiceStatus("Listening... tap again to stop.");
         } catch (err) {
@@ -399,7 +417,10 @@ function chooseRecorderOptions(): MediaRecorderOptions | undefined {
 
     for (const mimeType of candidates) {
         if (MediaRecorder.isTypeSupported(mimeType)) {
-            return { mimeType };
+            return {
+                mimeType,
+                audioBitsPerSecond: 128_000,
+            };
         }
     }
 

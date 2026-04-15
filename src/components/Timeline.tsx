@@ -34,6 +34,25 @@ function formatDay(timestamp: number): string {
     });
 }
 
+function normalizePreview(value: string): string {
+    return value
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+}
+
+function isLowSignalPreview(summary: string, appName: string): boolean {
+    const normalized = normalizePreview(summary);
+    if (!normalized) {
+        return true;
+    }
+    const app = normalizePreview(appName);
+    if (normalized === app || normalized === "fndr" || normalized === "codex") {
+        return true;
+    }
+    return normalized.split(" ").length <= 2;
+}
+
 export function Timeline({
     results,
     isLoading,
@@ -131,7 +150,9 @@ export function Timeline({
                             </div>
                         </div>
                         <h3 className="result-title">{result.title || "Untitled memory"}</h3>
-                        <p className="result-preview">{result.summary}</p>
+                        {!isLowSignalPreview(result.summary, result.app_name) && (
+                            <p className="result-preview">{result.summary}</p>
+                        )}
 
                         {result.context.length > 0 && (
                             <div className="result-context-chips">

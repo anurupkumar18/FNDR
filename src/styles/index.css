@@ -41,7 +41,7 @@ body,
 }
 
 body {
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+    font-family: "Avenir Next", "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     background: var(--bg-primary);
     color: var(--text-primary);
     -webkit-font-smoothing: antialiased;
@@ -94,9 +94,7 @@ body {
     padding: 0 10px;
     border-radius: 10px;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    background: linear-gradient(180deg, rgba(26, 26, 26, 0.72), rgba(12, 12, 12, 0.72));
-    backdrop-filter: blur(12px) saturate(112%);
-    -webkit-backdrop-filter: blur(12px) saturate(112%);
+    background: rgba(18, 18, 18, 0.9);
     color: var(--text-secondary);
     font-size: 12px;
     font-weight: 500;
@@ -107,5 +105,5 @@ body {
 
 .ui-action-btn:hover {
     color: var(--text-primary);
-    background: linear-gradient(180deg, rgba(30, 30, 30, 0.82), rgba(14, 14, 14, 0.82));
+    background: rgba(24, 24, 24, 0.95);
 }

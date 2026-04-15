@@ -1,7 +1,7 @@
 //! Tauri command handlers
 
 use crate::embed::Embedder;
-use crate::graph::{EdgeType, GraphEdge, GraphNode, NodeType};
+use crate::graph::{GraphEdge, GraphNode, NodeType};
 use crate::privacy::Blocklist;
 
 use crate::mcp::{self, McpServerStatus};
@@ -11,11 +11,10 @@ use crate::meeting::{
 
 use crate::search::{HybridSearcher, MemoryCard, MemoryCardSynthesizer};
 use crate::speech;
-use crate::store::{SearchResult, Stats};
+use crate::store::{MemoryRecord, SearchResult, Stats};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
@@ -56,8 +55,8 @@ pub struct SpeechSynthesisResult {
 }
 
 static SHARED_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
-const BRANCH_LIMIT: usize = 12;
-const RERANK_LIMIT: usize = 10;
+const BRANCH_LIMIT: usize = 28;
+const RERANK_LIMIT: usize = 18;
 const GROUP_LIMIT: usize = 6;
 const LLM_GROUP_LIMIT: usize = 0;
 
@@ -67,6 +66,10 @@ const KEYWORD_TIMEOUT: Duration = Duration::from_millis(1200);
 const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
 const LLM_SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(1500);
 const MEMORY_GRAPH_LIMIT: usize = 1_500;
+const TASK_LOOKBACK_HOURS: u32 = 120;
+const TASK_EXTRACTION_WINDOW: usize = 12;
+const TASK_TARGET_ACTIVE: usize = 9;
+const TASK_MAX_NEW_PER_REFRESH: usize = 8;
 
 fn shared_embedder() -> Result<&'static Embedder, String> {
     match SHARED_EMBEDDER.get_or_init(Embedder::new) {
@@ -235,6 +238,8 @@ fn card_title(result: &SearchResult, summary: &str) -> String {
 }
 
 fn memory_card_from_result(result: SearchResult) -> MemoryCard {
+    let memory_id = result.id.clone();
+    let score = result.score;
     let app_name = result.app_name.clone();
     let window_title = result.window_title.clone();
     let url = result.url.clone();
@@ -253,7 +258,7 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
     };
 
     MemoryCard {
-        id: result.id,
+        id: memory_id.clone(),
         title,
         summary,
         action,
@@ -262,9 +267,11 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         app_name,
         window_title,
         url,
-        score: result.score,
+        score,
         source_count: 1,
         raw_snippets: vec![fallback_snippet],
+        evidence_ids: vec![memory_id],
+        confidence: score.clamp(0.0, 1.0),
     }
 }
 
@@ -296,60 +303,6 @@ fn refine_memory_card_titles(cards: &mut [MemoryCard]) {
     for card in cards {
         refine_memory_card_title(card);
     }
-}
-
-fn classify_memory_type_for_graph(result: &SearchResult) -> &'static str {
-    let app = result.app_name.to_lowercase();
-    if result.url.is_some()
-        || app.contains("safari")
-        || app.contains("chrome")
-        || app.contains("arc")
-        || app.contains("brave")
-        || app.contains("edge")
-        || app.contains("firefox")
-    {
-        return "web";
-    }
-
-    if app.contains("meeting") || app.contains("zoom") || app.contains("teams") {
-        return "meeting";
-    }
-
-    if app.contains("code")
-        || app.contains("terminal")
-        || app.contains("xcode")
-        || app.contains("iterm")
-    {
-        return "development";
-    }
-
-    if app.contains("mail")
-        || app.contains("slack")
-        || app.contains("messages")
-        || app.contains("discord")
-    {
-        return "communication";
-    }
-
-    if app.contains("docs")
-        || app.contains("notion")
-        || app.contains("word")
-        || app.contains("pages")
-        || app.contains("preview")
-        || app.contains("pdf")
-    {
-        return "documents";
-    }
-
-    if result.summary_source.eq_ignore_ascii_case("vlm") {
-        return "visual";
-    }
-
-    "general"
-}
-
-fn memory_graph_node_id(memory_id: &str) -> String {
-    format!("memory:{memory_id}")
 }
 
 /// Search for memories
@@ -526,17 +479,17 @@ pub async fn search_memory_cards(
         }
     };
 
-    let mut raw_results = if semantic_results.is_empty() {
-        keyword_results.clone()
-    } else {
-        HybridSearcher::fuse_and_rerank(&query, &semantic_results, &keyword_results, RERANK_LIMIT)
-    };
+    let mut raw_results =
+        HybridSearcher::fuse_and_rerank(&query, &semantic_results, &keyword_results, RERANK_LIMIT);
     raw_results = strip_internal_fndr_results(raw_results);
     raw_results = strip_fallback_results(raw_results);
     raw_results.truncate(RERANK_LIMIT);
     tracing::info!(count = raw_results.len(), "search_memory_cards:rerank:done");
     if raw_results.is_empty() {
-        tracing::info!("search_memory_cards:complete total_ms={} cards=0", started.elapsed().as_millis());
+        tracing::info!(
+            "search_memory_cards:complete total_ms={} cards=0",
+            started.elapsed().as_millis()
+        );
         return Ok(Vec::new());
     }
 
@@ -555,7 +508,10 @@ pub async fn search_memory_cards(
     );
     let mut cards = match timeout(SYNTHESIS_TIMEOUT, synthesis_future).await {
         Ok(generated) => {
-            tracing::info!(count = generated.len(), "search_memory_cards:synthesis:done");
+            tracing::info!(
+                count = generated.len(),
+                "search_memory_cards:synthesis:done"
+            );
             generated
         }
         Err(_) => {
@@ -654,7 +610,7 @@ pub async fn search_raw_results(
 /// Summarize search results using AI
 #[tauri::command]
 pub async fn summarize_search(
-    state: State<'_, Arc<AppState>>,
+    _state: State<'_, Arc<AppState>>,
     query: String,
     results_snippets: Vec<String>,
 ) -> Result<String, String> {
@@ -662,72 +618,228 @@ pub async fn summarize_search(
         return Ok(String::new());
     }
 
-    let mut summary = match state.inner().ensure_inference_engine().await {
-        Ok(Some(engine)) => {
-            engine
-                .summarize_search_results(&query, &results_snippets)
-                .await
-        }
-        Ok(None) => String::new(),
-        Err(err) => {
-            tracing::warn!("Failed to lazy-load AI model for search summary: {}", err);
-            String::new()
-        }
-    };
-
-    if summary_is_low_signal(&summary) {
-        summary = deterministic_search_summary(&results_snippets);
-    }
-
+    let evidence = parse_summary_evidence(&results_snippets);
+    let summary = build_grounded_search_summary(&query, &evidence);
     Ok(summary)
 }
 
-fn summary_is_low_signal(summary: &str) -> bool {
-    let lower = summary.trim().to_lowercase();
-    lower.is_empty()
-        || lower.contains("no relevant information")
-        || lower.contains("no direct information")
-        || lower.contains("not provided")
-        || lower.contains("worked in google chrome")
+#[derive(Debug, Clone)]
+struct SummaryEvidence {
+    id: String,
+    score: f32,
+    text: String,
 }
 
-fn deterministic_search_summary(snippets: &[String]) -> String {
-    let mut facts = Vec::new();
-    for snippet in snippets.iter().take(4) {
-        let cleaned = snippet
-            .split(']')
-            .nth(1)
-            .unwrap_or(snippet)
-            .trim()
+fn parse_summary_evidence(snippets: &[String]) -> Vec<SummaryEvidence> {
+    let mut evidence = Vec::new();
+    for (index, raw) in snippets.iter().enumerate() {
+        let id = extract_bracket_value(raw, "id")
+            .or_else(|| extract_bracket_value(raw, "memory"))
+            .unwrap_or_else(|| format!("result-{}", index + 1));
+        let score = extract_bracket_value(raw, "score")
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(0.5);
+        let text = strip_bracket_prefixes(raw);
+        if text.is_empty() {
+            continue;
+        }
+        evidence.push(SummaryEvidence { id, score, text });
+    }
+    evidence
+}
+
+fn extract_bracket_value(raw: &str, key: &str) -> Option<String> {
+    let prefix = format!("[{}:", key);
+    let start = raw.find(&prefix)?;
+    let rest = &raw[start + prefix.len()..];
+    let end = rest.find(']')?;
+    let value = rest[..end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn strip_bracket_prefixes(raw: &str) -> String {
+    let mut remaining = raw.trim();
+    while remaining.starts_with('[') {
+        let Some(end) = remaining.find(']') else {
+            break;
+        };
+        remaining = remaining[end + 1..].trim_start();
+    }
+    remaining.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn summary_terms(query: &str) -> Vec<String> {
+    query
+        .to_lowercase()
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|term| term.len() > 1)
+        .filter(|term| !summary_stop_word(term))
+        .map(|term| term.to_string())
+        .collect()
+}
+
+fn summary_stop_word(term: &str) -> bool {
+    matches!(
+        term,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "as"
+            | "at"
+            | "be"
+            | "for"
+            | "from"
+            | "how"
+            | "in"
+            | "is"
+            | "it"
+            | "of"
+            | "on"
+            | "or"
+            | "that"
+            | "the"
+            | "this"
+            | "to"
+            | "was"
+            | "what"
+            | "when"
+            | "where"
+            | "who"
+            | "why"
+            | "with"
+    )
+}
+
+fn evidence_relevance(
+    query_terms: &[String],
+    query_numbers: &HashSet<String>,
+    text: &str,
+    score: f32,
+) -> f32 {
+    let normalized = text.to_lowercase();
+
+    let coverage = if query_terms.is_empty() {
+        0.5
+    } else {
+        query_terms
+            .iter()
+            .filter(|term| normalized.contains(term.as_str()))
+            .count() as f32
+            / query_terms.len() as f32
+    };
+
+    let number_overlap = if query_numbers.is_empty() {
+        0.0
+    } else if query_numbers
+        .iter()
+        .any(|number| normalized.contains(number.as_str()))
+    {
+        1.0
+    } else {
+        0.0
+    };
+
+    (coverage * 0.58 + score.clamp(0.0, 1.0) * 0.30 + number_overlap * 0.12).clamp(0.0, 1.0)
+}
+
+fn short_source_id(value: &str) -> String {
+    value.chars().take(8).collect()
+}
+
+fn clean_summary_fragment(text: &str) -> String {
+    truncate_chars(
+        &text
+            .replace('\n', " ")
             .split_whitespace()
             .collect::<Vec<_>>()
-            .join(" ");
-        if cleaned.is_empty() {
-            continue;
-        }
-        let lower = cleaned.to_lowercase();
-        if lower.contains("worked in google chrome") || lower.contains("no relevant information") {
-            continue;
-        }
-        facts.push(cleaned);
-        if facts.len() >= 2 {
-            break;
-        }
-    }
-
-    if facts.is_empty() {
-        return "Found recent activity in your captured memories.".to_string();
-    }
-
-    if facts.len() == 1 {
-        return format!("{}.", facts[0].trim_end_matches('.'));
-    }
-
-    format!(
-        "{}. Then {}.",
-        facts[0].trim_end_matches('.'),
-        facts[1].trim_end_matches('.')
+            .join(" ")
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_string(),
+        180,
     )
+}
+
+fn ensure_period(sentence: &str) -> String {
+    let mut out = sentence.trim().trim_end_matches('.').to_string();
+    if !out.ends_with('.') {
+        out.push('.');
+    }
+    out
+}
+
+fn build_grounded_search_summary(query: &str, evidence: &[SummaryEvidence]) -> String {
+    if evidence.is_empty() {
+        return "Low confidence: No directly relevant memories found in captured snippets."
+            .to_string();
+    }
+
+    let query_terms = summary_terms(query);
+    let query_numbers = query_terms
+        .iter()
+        .filter(|term| term.chars().any(|ch| ch.is_ascii_digit()))
+        .cloned()
+        .collect::<HashSet<_>>();
+
+    let mut scored = evidence
+        .iter()
+        .map(|item| {
+            let relevance =
+                evidence_relevance(&query_terms, &query_numbers, &item.text, item.score);
+            (item, relevance)
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let selected = scored
+        .iter()
+        .filter(|(_, relevance)| *relevance >= 0.16)
+        .take(2)
+        .collect::<Vec<_>>();
+
+    if selected.is_empty() {
+        return format!(
+            "Low confidence: No directly relevant memories found for \"{}\".",
+            query.trim()
+        );
+    }
+
+    let mut fragments = Vec::new();
+    let mut source_ids = Vec::new();
+    let mut confidence = 0.0f32;
+    for (item, relevance) in &selected {
+        fragments.push(clean_summary_fragment(&item.text));
+        source_ids.push(short_source_id(&item.id));
+        confidence += *relevance;
+    }
+    confidence /= selected.len() as f32;
+
+    let mut summary = ensure_period(
+        fragments
+            .first()
+            .map(|text| text.as_str())
+            .unwrap_or("Found related activity"),
+    );
+    if let Some(second) = fragments.get(1) {
+        summary.push_str(" Then ");
+        summary.push_str(&ensure_period(second));
+    }
+
+    if confidence < 0.45 {
+        summary = format!("Low confidence: {}", summary.trim());
+    }
+
+    if !source_ids.is_empty() {
+        summary.push(' ');
+        summary.push_str(&format!("Sources: {}.", source_ids.join(", ")));
+    }
+
+    summary
 }
 
 /// Get capture status
@@ -824,7 +936,7 @@ pub async fn transcribe_voice_input(
 
     Ok(VoiceTranscriptionResult {
         text,
-        backend: "whisper-large-v3-turbo-gguf".to_string(),
+        backend: "whisper-small-ggml (enhanced mic mode)".to_string(),
     })
 }
 
@@ -998,36 +1110,198 @@ fn get_task_store() -> &'static Mutex<TaskStore> {
     TASK_STORE.get_or_init(|| build_task_store(&default_task_store_dir()))
 }
 
+fn task_type_priority(task_type: &TaskType) -> u8 {
+    match task_type {
+        TaskType::Reminder => 0,
+        TaskType::Followup => 1,
+        TaskType::Todo => 2,
+    }
+}
+
+fn sort_active_tasks(tasks: &mut [Task]) {
+    tasks.sort_by(|left, right| {
+        let left_priority = task_type_priority(&left.task_type);
+        let right_priority = task_type_priority(&right.task_type);
+        left_priority
+            .cmp(&right_priority)
+            .then(right.created_at.cmp(&left.created_at))
+    });
+}
+
+fn normalize_task_title_for_dedupe(title: &str) -> String {
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn looks_like_reminder_title(title: &str) -> bool {
+    let normalized = title.to_lowercase();
+    [
+        "tomorrow",
+        "today",
+        "tonight",
+        "next week",
+        "next month",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "am",
+        "pm",
+        "deadline",
+        "due",
+        "before",
+        "by ",
+        "calendar",
+        "remind",
+        "schedule",
+    ]
+    .iter()
+    .any(|keyword| normalized.contains(keyword))
+}
+
+fn looks_like_followup_title(title: &str) -> bool {
+    let normalized = title.to_lowercase();
+    [
+        "follow up",
+        "follow-up",
+        "reply",
+        "respond",
+        "email",
+        "message",
+        "ping",
+        "ask",
+        "check in",
+        "send to",
+        "share with",
+        "confirm with",
+    ]
+    .iter()
+    .any(|keyword| normalized.contains(keyword))
+}
+
+fn rebalance_task_types(mut tasks: Vec<Task>) -> Vec<Task> {
+    for task in &mut tasks {
+        if task.task_type != TaskType::Todo {
+            continue;
+        }
+        if looks_like_reminder_title(&task.title) {
+            task.task_type = TaskType::Reminder;
+        } else if looks_like_followup_title(&task.title) {
+            task.task_type = TaskType::Followup;
+        }
+    }
+
+    let reminder_count = tasks
+        .iter()
+        .filter(|task| task.task_type == TaskType::Reminder)
+        .count();
+    let followup_count = tasks
+        .iter()
+        .filter(|task| task.task_type == TaskType::Followup)
+        .count();
+
+    if reminder_count == 0 {
+        if let Some(task) = tasks
+            .iter_mut()
+            .find(|task| task.task_type == TaskType::Todo)
+        {
+            task.task_type = TaskType::Reminder;
+        }
+    }
+
+    if followup_count == 0 {
+        if let Some(task) = tasks
+            .iter_mut()
+            .find(|task| task.task_type == TaskType::Todo)
+        {
+            task.task_type = TaskType::Followup;
+        }
+    }
+    tasks
+}
+
+fn memory_to_task_line(memory: &MemoryRecord) -> String {
+    let window_title = memory.window_title.trim();
+    let snippet = memory.snippet.trim();
+    format!(
+        "[{}] {} | {} | {}",
+        memory.id, memory.app_name, window_title, snippet
+    )
+}
+
+fn graph_node_app_name(node: &GraphNode) -> Option<&str> {
+    node.metadata
+        .get("app_name")
+        .and_then(|value| value.as_str())
+}
+
+fn graph_node_bundle_id(node: &GraphNode) -> Option<&str> {
+    node.metadata
+        .get("bundle_id")
+        .and_then(|value| value.as_str())
+}
+
 /// Get extracted todos/reminders from recent memories
 #[tauri::command]
 pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, String> {
-    // Get recent memories (last 24 hours)
     let memories = state
         .inner()
         .store
-        .get_recent_memories(24)
+        .get_recent_memories(TASK_LOOKBACK_HOURS)
         .await
         .map_err(|e| e.to_string())?;
 
-    {
+    let (mut active_tasks, seen_memory_ids) = {
         let mut task_store = get_task_store().lock();
         let _ = task_store.cleanup_old_tasks();
-    }
-
-    if memories.is_empty() {
-        return Ok(get_task_store()
-            .lock()
+        let active_tasks: Vec<Task> = task_store
             .get_active_tasks()
             .iter()
-            .map(|t| (*t).clone())
-            .collect());
+            .map(|task| (*task).clone())
+            .collect();
+        (active_tasks, task_store.seen_memory_ids())
+    };
+
+    sort_active_tasks(&mut active_tasks);
+    if active_tasks.len() >= TASK_TARGET_ACTIVE || memories.is_empty() {
+        return Ok(active_tasks);
     }
 
-    // Combine memory text for LLM
-    let combined_text: String = memories
+    let mut sorted_memories = memories
         .iter()
-        .take(10) // Limit to 10 most recent
-        .map(|m| format!("[{}] {}: {}", m.app_name, m.window_title, m.snippet))
+        .filter(|memory| !Blocklist::is_internal_app(&memory.app_name, memory.bundle_id.as_deref()))
+        .collect::<Vec<_>>();
+    sorted_memories.sort_by_key(|memory| std::cmp::Reverse(memory.timestamp));
+
+    let unseen_memories: Vec<&MemoryRecord> = sorted_memories
+        .iter()
+        .copied()
+        .filter(|memory| !seen_memory_ids.contains(&memory.id))
+        .collect();
+
+    let extraction_memories: Vec<&MemoryRecord> = if unseen_memories.len() >= 3 {
+        unseen_memories
+    } else {
+        sorted_memories
+    };
+    let extraction_memories = extraction_memories
+        .into_iter()
+        .take(TASK_EXTRACTION_WINDOW)
+        .collect::<Vec<_>>();
+
+    if extraction_memories.is_empty() {
+        return Ok(active_tasks);
+    }
+
+    let combined_text = extraction_memories
+        .iter()
+        .map(|memory| memory_to_task_line(memory))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -1041,15 +1315,28 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         }
     };
 
-    // Parse and add new tasks
-    let new_tasks = parse_tasks_from_llm_response(&llm_response, "FNDR");
+    // Parse + rebalance task types so reminders/follow-ups are consistently represented.
+    let mut new_tasks = parse_tasks_from_llm_response(&llm_response, "FNDR");
+    let mut seen_titles = HashSet::new();
+    new_tasks.retain(|task| {
+        let normalized = normalize_task_title_for_dedupe(&task.title);
+        !normalized.is_empty() && seen_titles.insert(normalized)
+    });
+    new_tasks = rebalance_task_types(new_tasks);
+    new_tasks.truncate(TASK_MAX_NEW_PER_REFRESH);
+
+    if new_tasks.is_empty() {
+        return Ok(active_tasks);
+    }
+
     let mut linked_urls = state
         .inner()
         .store
         .get_recent_urls(5)
         .await
         .map_err(|e| e.to_string())?;
-    for memory in memories.iter().rev() {
+
+    for memory in extraction_memories.iter().rev() {
         if let Some(url) = memory.url.as_ref() {
             linked_urls.push(url.clone());
         }
@@ -1058,39 +1345,43 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         }
     }
     linked_urls = {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         linked_urls
             .into_iter()
             .filter(|url| seen.insert(url.clone()))
             .take(5)
             .collect()
     };
-    let linked_memory_ids: Vec<String> = memories
-        .iter()
-        .rev()
-        .take(3)
-        .map(|m| m.id.clone())
-        .collect();
-    let source_memory_id = memories.last().map(|m| m.id.clone());
 
-    let mut store = get_task_store().lock();
-    for mut task in new_tasks {
-        task.source_memory_id = source_memory_id.clone();
-        task.linked_urls = linked_urls.clone();
-        task.linked_memory_ids = linked_memory_ids.clone();
+    {
+        let mut store = get_task_store().lock();
+        for (index, mut task) in new_tasks.into_iter().enumerate() {
+            let anchor = extraction_memories[index % extraction_memories.len()];
+            task.source_app = anchor.app_name.clone();
+            task.source_memory_id = Some(anchor.id.clone());
+            task.linked_memory_ids = extraction_memories
+                .iter()
+                .skip(index % extraction_memories.len())
+                .take(3)
+                .map(|memory| memory.id.clone())
+                .collect();
+            task.linked_urls = linked_urls.iter().take(3).cloned().collect();
 
-        if let Err(err) = state.inner().graph.link_task(&task) {
-            tracing::warn!("Failed linking task in graph: {}", err);
+            if let Err(err) = state.inner().graph.link_task(&task) {
+                tracing::warn!("Failed linking task in graph: {}", err);
+            }
+            let _ = store.add_task(task);
         }
-        let _ = store.add_task(task);
     }
 
-    // Return all active tasks
-    Ok(store
+    let mut refreshed = get_task_store()
+        .lock()
         .get_active_tasks()
         .iter()
-        .map(|t| (*t).clone())
-        .collect())
+        .map(|task| (*task).clone())
+        .collect::<Vec<_>>();
+    sort_active_tasks(&mut refreshed);
+    Ok(refreshed)
 }
 
 /// Create a manual todo/reminder/follow-up task
@@ -1199,71 +1490,59 @@ pub struct GraphDataResponse {
 
 #[tauri::command]
 pub async fn get_graph_data(state: State<'_, Arc<AppState>>) -> Result<GraphDataResponse, String> {
-    let results = state
-        .inner()
-        .store
-        .list_recent_results(MEMORY_GRAPH_LIMIT, None)
-        .await
-        .map_err(|e| e.to_string())?;
+    let (all_nodes, all_edges) = state.inner().graph.export_for_visualization();
 
-    let mut results = strip_fallback_results(strip_internal_fndr_results(results));
-    results.sort_by_key(|result| result.timestamp);
+    let blocked_memory_node_ids: HashSet<String> = all_nodes
+        .iter()
+        .filter(|node| {
+            node.node_type == NodeType::MemoryChunk
+                && graph_node_app_name(node)
+                    .map(|app_name| {
+                        Blocklist::is_internal_app(app_name, graph_node_bundle_id(node))
+                    })
+                    .unwrap_or(false)
+        })
+        .map(|node| node.id.clone())
+        .collect();
 
-    let mut nodes = Vec::with_capacity(results.len());
-    let mut edges = Vec::new();
-    let mut last_memory_by_session: HashMap<String, String> = HashMap::new();
+    let mut nodes = all_nodes
+        .into_iter()
+        .filter(|node| !blocked_memory_node_ids.contains(&node.id))
+        .collect::<Vec<_>>();
+    let mut edges = all_edges
+        .into_iter()
+        .filter(|edge| {
+            !blocked_memory_node_ids.contains(&edge.source)
+                && !blocked_memory_node_ids.contains(&edge.target)
+        })
+        .collect::<Vec<_>>();
 
-    for result in &results {
-        let node_id = memory_graph_node_id(&result.id);
-        let snippet = if result.snippet.trim().is_empty() {
-            truncate_chars(&result.window_title, 140)
-        } else {
-            truncate_chars(&result.snippet, 140)
-        };
+    if nodes.len() > MEMORY_GRAPH_LIMIT {
+        nodes.sort_by_key(|node| std::cmp::Reverse(node.created_at));
+        let seed_ids: HashSet<String> = nodes
+            .iter()
+            .take(MEMORY_GRAPH_LIMIT)
+            .map(|node| node.id.clone())
+            .collect();
 
-        nodes.push(GraphNode {
-            id: node_id.clone(),
-            node_type: NodeType::MemoryChunk,
-            label: snippet,
-            created_at: result.timestamp,
-            metadata: json!({
-                "app_name": result.app_name.clone(),
-                "bundle_id": result.bundle_id.clone(),
-                "window_title": result.window_title.clone(),
-                "session_id": result.session_id.clone(),
-                "session_key": result.session_key.clone(),
-                "summary_source": result.summary_source.clone(),
-                "memory_type": classify_memory_type_for_graph(result),
-                "url": result.url.clone(),
-            }),
-        });
-
-        let session_anchor = if result.session_id.trim().is_empty() {
-            format!("app:{}", result.app_name.to_lowercase())
-        } else {
-            result.session_id.clone()
-        };
-
-        if let Some(previous_node_id) = last_memory_by_session.get(&session_anchor) {
-            edges.push(GraphEdge {
-                id: uuid::Uuid::new_v4().to_string(),
-                source: previous_node_id.clone(),
-                target: node_id.clone(),
-                edge_type: EdgeType::PartOfSession,
-                timestamp: result.timestamp,
-                metadata: json!({
-                    "session_id": result.session_id.clone(),
-                    "session_key": result.session_key.clone(),
-                }),
-            });
+        let mut keep_ids = seed_ids.clone();
+        let expansion_limit = MEMORY_GRAPH_LIMIT + (MEMORY_GRAPH_LIMIT / 3);
+        for edge in &edges {
+            if keep_ids.len() >= expansion_limit {
+                break;
+            }
+            if seed_ids.contains(&edge.source) || seed_ids.contains(&edge.target) {
+                keep_ids.insert(edge.source.clone());
+                keep_ids.insert(edge.target.clone());
+            }
         }
 
-        last_memory_by_session.insert(session_anchor, node_id);
+        nodes.retain(|node| keep_ids.contains(&node.id));
+        edges.retain(|edge| keep_ids.contains(&edge.source) && keep_ids.contains(&edge.target));
     }
 
     nodes.sort_by_key(|node| std::cmp::Reverse(node.created_at));
     edges.sort_by_key(|edge| std::cmp::Reverse(edge.timestamp));
-
     Ok(GraphDataResponse { nodes, edges })
 }
 

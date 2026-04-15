@@ -1015,14 +1015,7 @@ fn is_supported_meeting_app(app_name: &str, bundle_id: Option<&str>) -> bool {
     let bundle = bundle_id.unwrap_or("").to_lowercase();
     let haystack = format!("{app}\n{bundle}");
     [
-        "zoom",
-        "teams",
-        "webex",
-        "slack",
-        "whereby",
-        "around",
-        "huddle",
-        "discord",
+        "zoom", "teams", "webex", "slack", "whereby", "around", "huddle", "discord",
     ]
     .into_iter()
     .any(|needle| haystack.contains(needle))

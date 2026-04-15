@@ -5,6 +5,28 @@ use std::sync::OnceLock;
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptionHint {
+    Default,
+    VoiceCommand,
+}
+
+impl TranscriptionHint {
+    fn env_value(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::VoiceCommand => "voice-command",
+        }
+    }
+
+    fn sidecar_flag(self) -> Option<&'static str> {
+        match self {
+            Self::Default => None,
+            Self::VoiceCommand => Some("--voice-command"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum SpeechModelKind {
     WhisperBaseEn,
@@ -429,6 +451,45 @@ fn extension_from_mime(mime_type: Option<&str>) -> &'static str {
     }
 }
 
+fn normalize_transcript_text(raw: &str) -> String {
+    let mut cleaned_tokens = Vec::new();
+
+    for token in raw.split_whitespace() {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let marker = trimmed
+            .trim_matches(|ch: char| {
+                matches!(
+                    ch,
+                    '[' | ']' | '(' | ')' | '{' | '}' | '<' | '>' | '"' | '\''
+                )
+            })
+            .to_ascii_lowercase();
+
+        if matches!(
+            marker.as_str(),
+            "music"
+                | "applause"
+                | "laughing"
+                | "laughter"
+                | "noise"
+                | "silence"
+                | "inaudible"
+                | "background"
+                | "ambient"
+        ) {
+            continue;
+        }
+
+        cleaned_tokens.push(trimmed.to_string());
+    }
+
+    cleaned_tokens.join(" ").trim().to_string()
+}
+
 pub async fn transcribe_audio_bytes(
     app_data_dir: &Path,
     audio_bytes: &[u8],
@@ -450,7 +511,9 @@ pub async fn transcribe_audio_bytes(
         .await
         .map_err(|e| format!("Failed to persist voice input: {}", e))?;
 
-    let result = transcribe_audio_file(app_data_dir, &input_path).await;
+    let result =
+        transcribe_audio_file_with_hint(app_data_dir, &input_path, TranscriptionHint::VoiceCommand)
+            .await;
     let _ = tokio::fs::remove_file(&input_path).await;
     result
 }
@@ -459,12 +522,21 @@ pub async fn transcribe_audio_file(
     app_data_dir: &Path,
     audio_path: &Path,
 ) -> Result<String, String> {
+    transcribe_audio_file_with_hint(app_data_dir, audio_path, TranscriptionHint::Default).await
+}
+
+async fn transcribe_audio_file_with_hint(
+    app_data_dir: &Path,
+    audio_path: &Path,
+    hint: TranscriptionHint,
+) -> Result<String, String> {
     let model_path = ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperBaseEn).await?;
     ensure_whisper_backend().await?;
 
     if let Ok(custom_cmd) = std::env::var("FNDR_WHISPER_GGUF_COMMAND") {
         let audio = audio_path.to_path_buf();
         let model = model_path.clone();
+        let hint_value = hint.env_value().to_string();
         let output = tokio::task::spawn_blocking(move || {
             Command::new("sh")
                 .arg("-c")
@@ -474,6 +546,7 @@ pub async fn transcribe_audio_file(
                     "FNDR_WHISPER_MODEL_PATH",
                     model.to_string_lossy().to_string(),
                 )
+                .env("FNDR_TRANSCRIBE_HINT", hint_value)
                 .output()
         })
         .await
@@ -481,7 +554,7 @@ pub async fn transcribe_audio_file(
         .map_err(|e| format!("FNDR_WHISPER_GGUF_COMMAND failed to start: {}", e))?;
 
         if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let text = normalize_transcript_text(&String::from_utf8_lossy(&output.stdout));
             if !text.is_empty() {
                 return Ok(text);
             }
@@ -494,12 +567,16 @@ pub async fn transcribe_audio_file(
     let python = python_for_sidecar().unwrap_or_else(|| PathBuf::from("python3"));
     let audio = audio_path.to_path_buf();
     let model = model_path.clone();
+    let sidecar_flag = hint.sidecar_flag().map(str::to_string);
     let output = tokio::task::spawn_blocking(move || {
-        Command::new(python)
-            .arg(sidecar)
+        let mut cmd = Command::new(python);
+        cmd.arg(sidecar)
             .arg(model.to_string_lossy().to_string())
-            .arg(audio.to_string_lossy().to_string())
-            .output()
+            .arg(audio.to_string_lossy().to_string());
+        if let Some(flag) = sidecar_flag {
+            cmd.arg(flag);
+        }
+        cmd.output()
     })
     .await
     .map_err(|e| e.to_string())?
@@ -509,7 +586,7 @@ pub async fn transcribe_audio_file(
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let text = normalize_transcript_text(&String::from_utf8_lossy(&output.stdout));
     if text.is_empty() {
         return Err("Whisper GGUF runner returned empty transcript".to_string());
     }
