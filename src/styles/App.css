@@ -54,6 +54,66 @@
     z-index: 80;
 }
 
+.recording-consent-banner {
+    position: fixed;
+    left: 50%;
+    bottom: 14px;
+    transform: translateX(-50%);
+    z-index: 95;
+    min-width: min(780px, calc(100vw - 24px));
+    max-width: min(780px, calc(100vw - 24px));
+    border: 1px solid rgba(248, 113, 113, 0.46);
+    background: rgba(38, 12, 12, 0.94);
+    border-radius: 12px;
+    padding: 10px 14px;
+    display: grid;
+    gap: 4px;
+    box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.25), 0 10px 30px rgba(0, 0, 0, 0.4);
+    animation: consentPulse 1.6s ease-in-out infinite;
+}
+
+.recording-consent-banner strong {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #fecaca;
+}
+
+.recording-consent-banner span {
+    font-size: 0.79rem;
+    color: #fee2e2;
+    line-height: 1.35;
+}
+
+.recording-consent-banner.detected {
+    border-color: rgba(74, 222, 128, 0.5);
+    background: rgba(10, 38, 24, 0.94);
+    box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.2), 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+.recording-consent-banner.detected strong {
+    color: #bbf7d0;
+}
+
+.recording-consent-banner.detected span {
+    color: #dcfce7;
+}
+
+.recording-consent-banner.denied {
+    border-color: rgba(248, 113, 113, 0.55);
+    background: rgba(60, 12, 12, 0.95);
+}
+
+@keyframes consentPulse {
+    0%,
+    100% {
+        opacity: 0.96;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
 .sidebar-group {
     display: flex;
     flex-direction: column;
@@ -76,13 +136,21 @@
 }
 
 .graph-toggle-btn,
+.todo-toggle-btn,
 .meeting-toggle-btn,
-.memory-cards-toggle-btn {
+.memory-cards-toggle-btn,
+.stats-toggle-btn {
     display: flex;
     align-items: center;
     justify-content: flex-start;
     width: 100%;
     gap: 8px;
+}
+
+.todo-toggle-btn.active {
+    border-color: rgba(96, 165, 250, 0.42);
+    color: #dbeafe;
+    background: rgba(96, 165, 250, 0.12);
 }
 
 .meeting-toggle-btn.active {
@@ -101,6 +169,12 @@
     border-color: rgba(74, 222, 128, 0.4);
     color: #d4f9df;
     background: rgba(74, 222, 128, 0.1);
+}
+
+.stats-toggle-btn.active {
+    border-color: rgba(250, 204, 21, 0.42);
+    color: #fef3b8;
+    background: rgba(250, 204, 21, 0.12);
 }
 
 .app-main {
@@ -179,5 +253,15 @@
 
     .search-shell {
         margin: 8px 0 16px;
+    }
+
+    .recording-consent-banner {
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        transform: none;
+        min-width: 0;
+        max-width: none;
+        width: auto;
     }
 }

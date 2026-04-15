@@ -1,13 +1,12 @@
 import { useState, useEffect } from "react";
-import { Task, getTodos, dismissTodo, executeTodo } from "../api/tauri";
+import { Task, getTodos, dismissTodo } from "../api/tauri";
 import "./TodoModal.css";
 
 interface TodoModalProps {
     isVisible: boolean;
-    onExecuteTask: (task: Task) => void;
 }
 
-export function TodoModal({ isVisible, onExecuteTask }: TodoModalProps) {
+export function TodoModal({ isVisible }: TodoModalProps) {
     const [tasks, setTasks] = useState<Task[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
@@ -32,11 +31,6 @@ export function TodoModal({ isVisible, onExecuteTask }: TodoModalProps) {
     const handleDismiss = async (taskId: string) => {
         await dismissTodo(taskId);
         setTasks(tasks.filter(t => t.id !== taskId));
-    };
-
-    const handleExecute = async (task: Task) => {
-        const t = await executeTodo(task.id);
-        onExecuteTask(t);
     };
 
     if (!isVisible) return null;
@@ -72,13 +66,6 @@ export function TodoModal({ isVisible, onExecuteTask }: TodoModalProps) {
                                     title="Mark done"
                                 >
                                     ✓
-                                </button>
-                                <button
-                                    className="btn-run"
-                                    onClick={() => handleExecute(task)}
-                                    title="Run with AI"
-                                >
-                                    ▶
                                 </button>
                             </div>
                         </li>

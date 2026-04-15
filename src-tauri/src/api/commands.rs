@@ -1,7 +1,7 @@
 //! Tauri command handlers
 
 use crate::embed::Embedder;
-use crate::graph::{GraphEdge, GraphNode};
+use crate::graph::{EdgeType, GraphEdge, GraphNode, NodeType};
 use crate::privacy::Blocklist;
 
 use crate::mcp::{self, McpServerStatus};
@@ -14,6 +14,8 @@ use crate::speech;
 use crate::store::{SearchResult, Stats};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
@@ -64,6 +66,7 @@ const VECTOR_TIMEOUT: Duration = Duration::from_millis(1200);
 const KEYWORD_TIMEOUT: Duration = Duration::from_millis(1200);
 const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
 const LLM_SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(1500);
+const MEMORY_GRAPH_LIMIT: usize = 1_500;
 
 fn shared_embedder() -> Result<&'static Embedder, String> {
     match SHARED_EMBEDDER.get_or_init(Embedder::new) {
@@ -110,13 +113,98 @@ fn card_domain(url: &str) -> Option<String> {
     }
 }
 
-fn card_summary(result: &SearchResult) -> String {
-    let base = if !result.snippet.trim().is_empty() {
-        result.snippet.trim()
-    } else if !result.clean_text.trim().is_empty() {
-        result.clean_text.trim()
+fn is_low_signal_title(title: &str, app_name: &str) -> bool {
+    let normalized = title.trim().to_lowercase();
+    if normalized.is_empty() {
+        return true;
+    }
+
+    let app = app_name.trim().to_lowercase();
+    if normalized == app || normalized == format!("{app} activity") {
+        return true;
+    }
+
+    let tokens = normalized.split_whitespace().count();
+    if tokens <= 1 {
+        return true;
+    }
+
+    matches!(
+        normalized.as_str(),
+        "codex"
+            | "cursor"
+            | "new chat"
+            | "chat"
+            | "activity"
+            | "home"
+            | "dashboard"
+            | "new tab"
+            | "google chrome"
+            | "chrome"
+            | "safari"
+            | "firefox"
+            | "terminal"
+            | "finder"
+            | "settings"
+    )
+}
+
+fn is_low_signal_summary(summary: &str, app_name: &str) -> bool {
+    let normalized = summary.trim().to_lowercase();
+    if normalized.is_empty() {
+        return true;
+    }
+
+    let app = app_name.trim().to_lowercase();
+    if normalized == app {
+        return true;
+    }
+
+    let words = normalized.split_whitespace().count();
+    words <= 2
+}
+
+fn title_from_summary(summary: &str, app_name: &str) -> Option<String> {
+    let trimmed = summary.trim().trim_end_matches('.');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let cleaned = if let Some(rest) = trimmed.strip_prefix("Reviewed ") {
+        rest.trim()
+    } else if let Some(rest) = trimmed.strip_prefix("reviewed ") {
+        rest.trim()
     } else {
-        result.text.trim()
+        trimmed
+    };
+
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let candidate = truncate_chars(cleaned, 88);
+    if is_low_signal_title(&candidate, app_name) {
+        None
+    } else {
+        Some(candidate)
+    }
+}
+
+fn card_summary(result: &SearchResult) -> String {
+    let snippet = result.snippet.trim();
+    let clean = result.clean_text.trim();
+    let text = result.text.trim();
+
+    let base = if !snippet.is_empty() && !is_low_signal_summary(snippet, &result.app_name) {
+        snippet
+    } else if !clean.is_empty() && !is_low_signal_summary(clean, &result.app_name) {
+        clean
+    } else if !text.is_empty() {
+        text
+    } else if !snippet.is_empty() {
+        snippet
+    } else {
+        clean
     };
 
     if base.is_empty() {
@@ -129,14 +217,21 @@ fn card_summary(result: &SearchResult) -> String {
 fn card_title(result: &SearchResult, summary: &str) -> String {
     let title = result.window_title.trim();
     if !title.is_empty() {
-        return truncate_chars(title, 88);
+        let candidate = truncate_chars(title, 88);
+        if !is_low_signal_title(&candidate, &result.app_name) {
+            return candidate;
+        }
     }
 
-    if !summary.trim().is_empty() {
-        return truncate_chars(summary, 88);
+    if let Some(from_summary) = title_from_summary(summary, &result.app_name) {
+        return from_summary;
     }
 
-    format!("Memory in {}", result.app_name)
+    if let Some(domain) = result.url.as_deref().and_then(card_domain) {
+        return truncate_chars(&format!("{} · {}", result.app_name, domain), 88);
+    }
+
+    format!("{} memory", result.app_name)
 }
 
 fn memory_card_from_result(result: SearchResult) -> MemoryCard {
@@ -171,6 +266,90 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         source_count: 1,
         raw_snippets: vec![fallback_snippet],
     }
+}
+
+fn refine_memory_card_title(card: &mut MemoryCard) {
+    if !is_low_signal_title(&card.title, &card.app_name) {
+        return;
+    }
+
+    let window_title = card.window_title.trim();
+    if !window_title.is_empty() && !is_low_signal_title(window_title, &card.app_name) {
+        card.title = truncate_chars(window_title, 88);
+        return;
+    }
+
+    if let Some(from_summary) = title_from_summary(&card.summary, &card.app_name) {
+        card.title = from_summary;
+        return;
+    }
+
+    if let Some(domain) = card.url.as_deref().and_then(card_domain) {
+        card.title = truncate_chars(&format!("{} · {}", card.app_name, domain), 88);
+        return;
+    }
+
+    card.title = format!("{} memory", card.app_name);
+}
+
+fn refine_memory_card_titles(cards: &mut [MemoryCard]) {
+    for card in cards {
+        refine_memory_card_title(card);
+    }
+}
+
+fn classify_memory_type_for_graph(result: &SearchResult) -> &'static str {
+    let app = result.app_name.to_lowercase();
+    if result.url.is_some()
+        || app.contains("safari")
+        || app.contains("chrome")
+        || app.contains("arc")
+        || app.contains("brave")
+        || app.contains("edge")
+        || app.contains("firefox")
+    {
+        return "web";
+    }
+
+    if app.contains("meeting") || app.contains("zoom") || app.contains("teams") {
+        return "meeting";
+    }
+
+    if app.contains("code")
+        || app.contains("terminal")
+        || app.contains("xcode")
+        || app.contains("iterm")
+    {
+        return "development";
+    }
+
+    if app.contains("mail")
+        || app.contains("slack")
+        || app.contains("messages")
+        || app.contains("discord")
+    {
+        return "communication";
+    }
+
+    if app.contains("docs")
+        || app.contains("notion")
+        || app.contains("word")
+        || app.contains("pages")
+        || app.contains("preview")
+        || app.contains("pdf")
+    {
+        return "documents";
+    }
+
+    if result.summary_source.eq_ignore_ascii_case("vlm") {
+        return "visual";
+    }
+
+    "general"
+}
+
+fn memory_graph_node_id(memory_id: &str) -> String {
+    format!("memory:{memory_id}")
 }
 
 /// Search for memories
@@ -391,6 +570,7 @@ pub async fn search_memory_cards(
     if cards.is_empty() {
         cards = fallback_cards(&raw_results);
     }
+    refine_memory_card_titles(&mut cards);
     cards.retain(|card| !Blocklist::is_internal_app(&card.app_name, None));
     cards.truncate(limit);
     tracing::info!(
@@ -408,7 +588,7 @@ pub async fn list_memory_cards(
     app_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<MemoryCard>, String> {
-    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let limit = limit.unwrap_or(MEMORY_GRAPH_LIMIT).clamp(1, 2_000);
     let results = state
         .inner()
         .store
@@ -416,11 +596,47 @@ pub async fn list_memory_cards(
         .await
         .map_err(|e| e.to_string())?;
 
-    let cards = strip_fallback_results(strip_internal_fndr_results(results))
+    let mut cards: Vec<MemoryCard> = strip_fallback_results(strip_internal_fndr_results(results))
         .into_iter()
         .map(memory_card_from_result)
         .collect();
+    refine_memory_card_titles(&mut cards);
     Ok(cards)
+}
+
+#[tauri::command]
+pub async fn delete_memory(
+    state: State<'_, Arc<AppState>>,
+    memory_id: String,
+) -> Result<bool, String> {
+    let existing = state
+        .inner()
+        .store
+        .get_memory_by_id(&memory_id)
+        .await
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+
+    let deleted = state
+        .inner()
+        .store
+        .delete_memory_by_id(&memory_id)
+        .await
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+
+    if deleted == 0 {
+        return Ok(false);
+    }
+
+    if let Some(record) = existing {
+        if let Some(path) = record.screenshot_path {
+            if let Err(err) = std::fs::remove_file(&path) {
+                tracing::warn!("Failed to delete screenshot artifact {}: {}", path, err);
+            }
+        }
+    }
+
+    tracing::info!("Deleted memory record {}", memory_id);
+    Ok(true)
 }
 
 /// Debug-only raw search path without MemoryCard synthesis.
@@ -754,7 +970,7 @@ pub async fn delete_older_than(
 
 // ========== Task Commands ==========
 
-use crate::tasks::{parse_tasks_from_llm_response, Task, TaskStore};
+use crate::tasks::{parse_tasks_from_llm_response, Task, TaskStore, TaskType};
 use parking_lot::Mutex;
 
 // Global task store (singleton pattern for now)
@@ -877,6 +1093,60 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .collect())
 }
 
+/// Create a manual todo/reminder/follow-up task
+#[tauri::command]
+pub async fn add_todo(
+    state: State<'_, Arc<AppState>>,
+    title: String,
+    description: Option<String>,
+    task_type: Option<String>,
+) -> Result<Task, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("Task title cannot be empty".to_string());
+    }
+
+    let parsed_task_type = match task_type
+        .unwrap_or_else(|| "Todo".to_string())
+        .trim()
+        .to_lowercase()
+        .as_str()
+    {
+        "todo" => TaskType::Todo,
+        "reminder" => TaskType::Reminder,
+        "followup" | "follow-up" => TaskType::Followup,
+        other => return Err(format!("Unsupported task type: {other}")),
+    };
+
+    let task = Task {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: title.to_string(),
+        description: description.unwrap_or_default().trim().to_string(),
+        source_app: "Manual".to_string(),
+        source_memory_id: None,
+        created_at: chrono::Utc::now().timestamp_millis(),
+        due_date: None,
+        is_completed: false,
+        is_dismissed: false,
+        task_type: parsed_task_type,
+        linked_urls: Vec::new(),
+        linked_memory_ids: Vec::new(),
+    };
+
+    {
+        let mut store = get_task_store().lock();
+        store
+            .add_task(task.clone())
+            .map_err(|e| format!("Failed to save task: {e}"))?;
+    }
+
+    if let Err(err) = state.inner().graph.link_task(&task) {
+        tracing::warn!("Failed linking manual task in graph: {}", err);
+    }
+
+    Ok(task)
+}
+
 /// Dismiss a task
 #[tauri::command]
 pub async fn dismiss_todo(task_id: String) -> Result<bool, String> {
@@ -929,7 +1199,71 @@ pub struct GraphDataResponse {
 
 #[tauri::command]
 pub async fn get_graph_data(state: State<'_, Arc<AppState>>) -> Result<GraphDataResponse, String> {
-    let (nodes, edges) = state.inner().graph.export_for_visualization();
+    let results = state
+        .inner()
+        .store
+        .list_recent_results(MEMORY_GRAPH_LIMIT, None)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut results = strip_fallback_results(strip_internal_fndr_results(results));
+    results.sort_by_key(|result| result.timestamp);
+
+    let mut nodes = Vec::with_capacity(results.len());
+    let mut edges = Vec::new();
+    let mut last_memory_by_session: HashMap<String, String> = HashMap::new();
+
+    for result in &results {
+        let node_id = memory_graph_node_id(&result.id);
+        let snippet = if result.snippet.trim().is_empty() {
+            truncate_chars(&result.window_title, 140)
+        } else {
+            truncate_chars(&result.snippet, 140)
+        };
+
+        nodes.push(GraphNode {
+            id: node_id.clone(),
+            node_type: NodeType::MemoryChunk,
+            label: snippet,
+            created_at: result.timestamp,
+            metadata: json!({
+                "app_name": result.app_name.clone(),
+                "bundle_id": result.bundle_id.clone(),
+                "window_title": result.window_title.clone(),
+                "session_id": result.session_id.clone(),
+                "session_key": result.session_key.clone(),
+                "summary_source": result.summary_source.clone(),
+                "memory_type": classify_memory_type_for_graph(result),
+                "url": result.url.clone(),
+            }),
+        });
+
+        let session_anchor = if result.session_id.trim().is_empty() {
+            format!("app:{}", result.app_name.to_lowercase())
+        } else {
+            result.session_id.clone()
+        };
+
+        if let Some(previous_node_id) = last_memory_by_session.get(&session_anchor) {
+            edges.push(GraphEdge {
+                id: uuid::Uuid::new_v4().to_string(),
+                source: previous_node_id.clone(),
+                target: node_id.clone(),
+                edge_type: EdgeType::PartOfSession,
+                timestamp: result.timestamp,
+                metadata: json!({
+                    "session_id": result.session_id.clone(),
+                    "session_key": result.session_key.clone(),
+                }),
+            });
+        }
+
+        last_memory_by_session.insert(session_anchor, node_id);
+    }
+
+    nodes.sort_by_key(|node| std::cmp::Reverse(node.created_at));
+    edges.sort_by_key(|edge| std::cmp::Reverse(edge.timestamp));
+
     Ok(GraphDataResponse { nodes, edges })
 }
 

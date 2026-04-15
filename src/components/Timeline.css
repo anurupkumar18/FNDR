@@ -51,8 +51,23 @@
 .result-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 10px;
   margin-bottom: 12px;
+}
+
+.result-meta-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.result-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .result-app {
@@ -75,7 +90,19 @@
   font-size: 0.7rem;
   font-family: monospace;
   color: rgba(255, 255, 255, 0.3);
-  margin-left: auto;
+}
+
+.timeline-delete-btn {
+  padding: 4px 9px;
+  font-size: 0.68rem;
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.timeline-delete-btn:hover {
+  border-color: rgba(248, 113, 113, 0.65);
+  background: rgba(248, 113, 113, 0.18);
 }
 
 .result-title {

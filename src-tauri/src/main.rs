@@ -82,25 +82,15 @@ fn main() {
                 });
             });
 
-            let _mcp_state = state.clone();
+            let runtime_state = state.clone();
             app.manage(state);
 
-            // We are keeping the demo clean and stable, so we avoid auto-binding
-            // experimental background subsystems (Meeting auto-monitor and MCP server) for now.
-            /*
             if let Err(err) =
-                fndr_lib::meeting::bind_runtime(app.handle().clone(), mcp_state.clone())
+                fndr_lib::meeting::bind_runtime(app.handle().clone(), runtime_state.clone())
             {
                 tracing::warn!("Meeting auto-monitor initialization failed: {}", err);
             }
 
-            // Start MCP server so FNDR is discoverable by external MCP clients.
-            if let Err(err) =
-                tauri::async_runtime::block_on(fndr_lib::mcp::start(mcp_state, None, None))
-            {
-                tracing::warn!("MCP server startup failed: {}", err);
-            }
-            */
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -131,12 +121,14 @@ fn main() {
             api::commands::get_blocklist,
             api::commands::set_blocklist,
             api::commands::delete_all_data,
+            api::commands::delete_memory,
             api::commands::get_stats,
             api::commands::get_retention_days,
             api::commands::set_retention_days,
             api::commands::delete_older_than,
             api::commands::get_app_names,
             // Tasks / Todos
+            api::commands::add_todo,
             api::commands::get_todos,
             api::commands::dismiss_todo,
             api::commands::execute_todo,

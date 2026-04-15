@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { MemoryCard, listMemoryCards } from "../api/tauri";
+import { MemoryCard, deleteMemory, listMemoryCards } from "../api/tauri";
 import "./MemoryCardsPanel.css";
 
 interface MemoryCardsPanelProps {
     isVisible: boolean;
     onClose: () => void;
     appNames: string[];
+    onMemoryDeleted?: (memoryId: string) => void;
 }
 
 const APP_FILTER_ALL = "__all__";
@@ -44,6 +45,106 @@ function fallbackSummary(card: MemoryCard): string {
         || `Captured context in ${card.app_name}.`;
 }
 
+function parseHost(rawUrl: string): string {
+    try {
+        const normalized = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
+        return new URL(normalized).host;
+    } catch {
+        return rawUrl.replace(/^https?:\/\//i, "").split("/")[0].trim();
+    }
+}
+
+function extractSite(card: MemoryCard): string {
+    if (card.url) {
+        const host = parseHost(card.url);
+        if (host) {
+            return host;
+        }
+    }
+
+    const siteContext = card.context.find((item) => /^site\s*:/i.test(normalizeText(item)));
+    if (!siteContext) {
+        return "";
+    }
+    return normalizeText(siteContext).replace(/^site\s*:/i, "").trim();
+}
+
+function normalizeForCompare(value: string): string {
+    return normalizeText(value)
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function looksTooSimilar(a: string, b: string): boolean {
+    const left = normalizeForCompare(a);
+    const right = normalizeForCompare(b);
+    if (!left || !right) {
+        return false;
+    }
+
+    if (left === right || left.includes(right) || right.includes(left)) {
+        return true;
+    }
+
+    const leftTokens = new Set(left.split(" "));
+    const rightTokens = new Set(right.split(" "));
+    let overlap = 0;
+    leftTokens.forEach((token) => {
+        if (rightTokens.has(token)) {
+            overlap += 1;
+        }
+    });
+    const denominator = Math.max(leftTokens.size, rightTokens.size, 1);
+    return overlap / denominator >= 0.72;
+}
+
+function cardCopy(card: MemoryCard): { title: string; summary: string; site: string } {
+    const site = extractSite(card);
+    const title = fallbackTitle(card);
+
+    const contextCandidates = card.context
+        .map((item) => normalizeText(item))
+        .filter((item) => {
+            const lower = item.toLowerCase();
+            return (
+                item.length > 0 &&
+                !lower.startsWith("app:") &&
+                !lower.startsWith("type:") &&
+                !lower.startsWith("site:")
+            );
+        });
+
+    const summaryCandidates = [
+        card.summary,
+        card.raw_snippets[0],
+        card.raw_snippets[1],
+        ...contextCandidates,
+        card.window_title,
+    ];
+
+    let summary = "";
+    for (const candidate of summaryCandidates) {
+        const cleaned = normalizeText(candidate);
+        if (!cleaned) {
+            continue;
+        }
+        if (!looksTooSimilar(cleaned, title)) {
+            summary = cleaned;
+            break;
+        }
+    }
+
+    if (!summary) {
+        summary = site
+            ? `Captured context in ${card.app_name} on ${site}.`
+            : fallbackSummary(card);
+    }
+
+    return { title, summary, site };
+}
+
 function formatDay(timestamp: number): string {
     const date = new Date(timestamp);
     const today = new Date();
@@ -63,11 +164,12 @@ function formatDay(timestamp: number): string {
     });
 }
 
-export function MemoryCardsPanel({ isVisible, onClose, appNames }: MemoryCardsPanelProps) {
+export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted }: MemoryCardsPanelProps) {
     const [cards, setCards] = useState<MemoryCard[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [appFilter, setAppFilter] = useState<string>(APP_FILTER_ALL);
+    const [deletingId, setDeletingId] = useState<string | null>(null);
 
     const selectableApps = useMemo(() => {
         return appNames
@@ -115,6 +217,25 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames }: MemoryCardsPa
     if (!isVisible) {
         return null;
     }
+
+    const handleDeleteCard = async (memoryId: string) => {
+        if (deletingId) {
+            return;
+        }
+
+        setDeletingId(memoryId);
+        try {
+            const deleted = await deleteMemory(memoryId);
+            if (deleted) {
+                setCards((previous) => previous.filter((card) => card.id !== memoryId));
+                onMemoryDeleted?.(memoryId);
+            }
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Unable to delete memory.");
+        } finally {
+            setDeletingId(null);
+        }
+    };
 
     return (
         <div className="memory-cards-panel">
@@ -169,8 +290,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames }: MemoryCardsPa
                 {!loading && !error && cards.length > 0 && (
                     <div className="memory-cards-stream">
                         {cards.map((card) => {
-                            const title = fallbackTitle(card);
-                            const summary = fallbackSummary(card);
+                            const { title, summary, site } = cardCopy(card);
                             const chips = card.context
                                 .map((item) => normalizeText(item))
                                 .filter((item) => {
@@ -179,25 +299,38 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames }: MemoryCardsPa
                                         item.length > 0
                                         && !lower.startsWith("app:")
                                         && !lower.startsWith("type:")
+                                        && !lower.startsWith("site:")
                                     );
                                 })
                                 .slice(0, 4);
 
                             return (
                                 <article key={card.id} className="result-card memory-browse-card">
-                                    <div className="result-meta">
-                                        <span className="result-app">{card.app_name}</span>
-                                        <span className="result-time">
-                                            {formatDay(card.timestamp)} ·{" "}
-                                            {new Date(card.timestamp).toLocaleTimeString(undefined, {
-                                                hour: "2-digit",
-                                                minute: "2-digit",
-                                            })}
-                                        </span>
+                                    <div className="result-meta memory-browse-meta">
+                                        <div className="memory-browse-meta-main">
+                                            <span className="result-app">{card.app_name}</span>
+                                            <span className="result-time">
+                                                {formatDay(card.timestamp)} ·{" "}
+                                                {new Date(card.timestamp).toLocaleTimeString(undefined, {
+                                                    hour: "2-digit",
+                                                    minute: "2-digit",
+                                                })}
+                                            </span>
+                                        </div>
+                                        <button
+                                            className="ui-action-btn memory-delete-btn"
+                                            onClick={() => void handleDeleteCard(card.id)}
+                                            disabled={deletingId === card.id}
+                                            aria-label="Delete memory card"
+                                            title="Delete this memory"
+                                        >
+                                            {deletingId === card.id ? "Deleting..." : "Delete"}
+                                        </button>
                                     </div>
                                     <div className="memory-browse-content">
                                         <div className="memory-browse-title">{title}</div>
                                         <div className="memory-browse-summary">{summary}</div>
+                                        {site && <div className="memory-browse-site">Site: {site}</div>}
                                     </div>
                                     {chips.length > 0 && (
                                         <div className="result-context-chips">

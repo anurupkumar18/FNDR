@@ -25,9 +25,10 @@ const SEGMENT_SECONDS: i64 = 20;
 const STATUS_EVENT: &str = "meeting://status";
 const SEGMENT_EVENT: &str = "meeting://segment";
 const FORCED_MODEL: &str = "whisper-large-v3-turbo-gguf";
-const AUTO_POLL_SECONDS: u64 = 5;
-const AUTO_START_HITS: u8 = 2;
+const AUTO_POLL_SECONDS: u64 = 2;
+const AUTO_START_HITS: u8 = 1;
 const AUTO_STOP_IDLE_SECONDS: u64 = 90;
+const CONSENT_LOOKBACK_SEGMENTS: usize = 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeetingSession {
@@ -68,6 +69,9 @@ pub struct MeetingRecorderStatus {
     pub model: Option<String>,
     pub started_at: Option<i64>,
     pub segment_count: usize,
+    pub consent_state: String,
+    pub consent_evidence: Option<String>,
+    pub consent_checked_segments: usize,
     pub ffmpeg_available: bool,
     pub transcription_backend: String,
     pub last_error: Option<String>,
@@ -535,6 +539,11 @@ pub fn recorder_status() -> Result<MeetingRecorderStatus, String> {
     let backend = detect_transcription_backend();
 
     if let Some(active) = rt.active.as_ref() {
+        let consent = rt
+            .store
+            .as_ref()
+            .map(|store| consent_snapshot(store.as_ref(), &active.meeting_id))
+            .unwrap_or_default();
         let count = rt
             .store
             .as_ref()
@@ -549,6 +558,9 @@ pub fn recorder_status() -> Result<MeetingRecorderStatus, String> {
             model: Some(active.model.clone()),
             started_at: Some(active.started_at),
             segment_count: count,
+            consent_state: consent.state,
+            consent_evidence: consent.evidence,
+            consent_checked_segments: consent.checked_segments,
             ffmpeg_available,
             transcription_backend: backend,
             last_error: rt.last_error.clone(),
@@ -562,6 +574,9 @@ pub fn recorder_status() -> Result<MeetingRecorderStatus, String> {
         model: None,
         started_at: None,
         segment_count: 0,
+        consent_state: "unknown".to_string(),
+        consent_evidence: None,
+        consent_checked_segments: 0,
         ffmpeg_available,
         transcription_backend: backend,
         last_error: rt.last_error.clone(),
@@ -728,6 +743,9 @@ async fn auto_monitor_loop(app_handle: AppHandle, app_state: Arc<AppState>) {
             model: None,
             started_at: None,
             segment_count: 0,
+            consent_state: "unknown".to_string(),
+            consent_evidence: None,
+            consent_checked_segments: 0,
             ffmpeg_available: resolve_ffmpeg_binary().is_some(),
             transcription_backend: detect_transcription_backend(),
             last_error: None,
@@ -834,12 +852,34 @@ struct MeetingSignal {
     title: String,
 }
 
-async fn detect_meeting_signal(app_state: &AppState) -> Option<MeetingSignal> {
-    let now = now_ms();
-    let memories = app_state.store.get_recent_memories(1).await.ok()?;
+#[derive(Debug, Clone)]
+struct ConsentSnapshot {
+    state: String,
+    evidence: Option<String>,
+    checked_segments: usize,
+}
 
-    for memory in memories.iter().rev().take(80) {
-        if now - memory.timestamp > 60_000 {
+impl Default for ConsentSnapshot {
+    fn default() -> Self {
+        Self {
+            state: "pending".to_string(),
+            evidence: None,
+            checked_segments: 0,
+        }
+    }
+}
+
+async fn detect_meeting_signal(app_state: &AppState) -> Option<MeetingSignal> {
+    if let Some(signal) = detect_frontmost_meeting_signal() {
+        return Some(signal);
+    }
+
+    let now = now_ms();
+    let mut memories = app_state.store.get_recent_memories(1).await.ok()?;
+    memories.sort_by_key(|memory| std::cmp::Reverse(memory.timestamp));
+
+    for memory in memories.into_iter().take(140) {
+        if now - memory.timestamp > 90_000 {
             break;
         }
 
@@ -854,7 +894,8 @@ async fn detect_meeting_signal(app_state: &AppState) -> Option<MeetingSignal> {
             haystack.push_str(&url.to_lowercase());
         }
 
-        if contains_meeting_signal(&haystack) {
+        let app_hint = is_supported_meeting_app(&memory.app_name, memory.bundle_id.as_deref());
+        if contains_meeting_signal(&haystack, app_hint) {
             let title = derive_meeting_title(&memory.window_title);
             return Some(MeetingSignal { title });
         }
@@ -863,26 +904,102 @@ async fn detect_meeting_signal(app_state: &AppState) -> Option<MeetingSignal> {
     None
 }
 
-fn contains_meeting_signal(haystack: &str) -> bool {
+#[cfg(target_os = "macos")]
+fn detect_frontmost_meeting_signal() -> Option<MeetingSignal> {
+    let script = r#"tell application "System Events"
+        set frontProc to first process whose frontmost is true
+        set appName to name of frontProc
+        set winName to ""
+        tell frontProc
+            if (count of windows) > 0 then
+                set winName to name of front window
+            end if
+        end tell
+        return appName & "||" & winName
+    end tell"#;
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let mut parts = raw.splitn(2, "||");
+    let app_name = parts.next().unwrap_or("").trim();
+    let window_title = parts.next().unwrap_or("").trim();
+    if app_name.is_empty() {
+        return None;
+    }
+
+    let haystack = format!("{app_name}\n{window_title}").to_lowercase();
+    let app_hint = is_supported_meeting_app(app_name, None);
+    if !contains_meeting_signal(&haystack, app_hint) {
+        return None;
+    }
+
+    let title_source = if window_title.is_empty() {
+        app_name
+    } else {
+        window_title
+    };
+    Some(MeetingSignal {
+        title: derive_meeting_title(title_source),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn detect_frontmost_meeting_signal() -> Option<MeetingSignal> {
+    None
+}
+
+fn contains_meeting_signal(haystack: &str, app_hint: bool) -> bool {
+    if contains_meeting_url(haystack) {
+        return true;
+    }
+
     let keyword_hits = [
         "meeting",
-        "zoom",
-        "google meet",
-        "meet.google.com",
-        "teams",
-        "webex",
-        "huddle",
-        "standup",
-        "all-hands",
+        "in call",
         "call in progress",
-        "recording",
+        "join audio",
+        "join with computer audio",
+        "participants",
+        "breakout",
+        "waiting room",
+        "muted",
+        "unmute",
+        "screen sharing",
+        "this meeting is being recorded",
+        "this call is being recorded",
+        "recording in progress",
+        "webinar",
+        "huddle",
     ]
     .into_iter()
     .filter(|k| haystack.contains(k))
     .count();
 
-    let url_hits = [
+    if app_hint {
+        keyword_hits >= 1
+    } else {
+        keyword_hits >= 3
+    }
+}
+
+fn contains_meeting_url(haystack: &str) -> bool {
+    [
         "zoom.us/j/",
+        "zoom.us/wc/",
+        "zoom.us/my/",
         "meet.google.com/",
         "teams.microsoft.com/",
         "webex.com/",
@@ -890,16 +1007,36 @@ fn contains_meeting_signal(haystack: &str) -> bool {
         "around.co/",
     ]
     .into_iter()
-    .any(|k| haystack.contains(k));
+    .any(|k| haystack.contains(k))
+}
 
-    url_hits || keyword_hits >= 2
+fn is_supported_meeting_app(app_name: &str, bundle_id: Option<&str>) -> bool {
+    let app = app_name.to_lowercase();
+    let bundle = bundle_id.unwrap_or("").to_lowercase();
+    let haystack = format!("{app}\n{bundle}");
+    [
+        "zoom",
+        "teams",
+        "webex",
+        "slack",
+        "whereby",
+        "around",
+        "huddle",
+        "discord",
+    ]
+    .into_iter()
+    .any(|needle| haystack.contains(needle))
 }
 
 fn derive_meeting_title(window_title: &str) -> String {
     let cleaned = window_title
         .replace(" - Zoom", "")
+        .replace(" | Zoom Workplace", "")
+        .replace(" — Zoom Workplace", "")
+        .replace("Zoom Workplace", "")
         .replace(" | Microsoft Teams", "")
         .replace(" - Google Meet", "")
+        .replace(" - Webex", "")
         .trim()
         .to_string();
 
@@ -908,6 +1045,96 @@ fn derive_meeting_title(window_title: &str) -> String {
     } else {
         cleaned
     }
+}
+
+fn consent_snapshot(store: &MeetingStore, meeting_id: &str) -> ConsentSnapshot {
+    let segments = store.get_segments_for_meeting(meeting_id);
+    consent_snapshot_from_segments(&segments)
+}
+
+fn consent_snapshot_from_segments(segments: &[MeetingSegment]) -> ConsentSnapshot {
+    if segments.is_empty() {
+        return ConsentSnapshot::default();
+    }
+
+    let mut checked_segments = 0usize;
+    let mut latest_positive: Option<String> = None;
+
+    let positive_phrases = [
+        "i consent",
+        "we consent",
+        "consent to record",
+        "consent to be recorded",
+        "agree to recording",
+        "permission to record",
+        "you can record",
+        "okay to record",
+        "ok to record",
+        "record this meeting",
+        "record this call",
+        "this meeting is being recorded",
+        "this call is being recorded",
+    ];
+    let negative_phrases = [
+        "do not consent",
+        "don't consent",
+        "dont consent",
+        "no consent",
+        "not consenting",
+        "not okay to record",
+        "do not record",
+        "don't record",
+        "dont record",
+        "stop recording",
+        "without my consent",
+    ];
+
+    for segment in segments.iter().rev().take(CONSENT_LOOKBACK_SEGMENTS) {
+        let text = segment.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        checked_segments += 1;
+
+        let lowered = text.to_lowercase();
+        if negative_phrases
+            .iter()
+            .any(|phrase| lowered.contains(phrase))
+        {
+            return ConsentSnapshot {
+                state: "denied".to_string(),
+                evidence: Some(trim_for_evidence(text)),
+                checked_segments,
+            };
+        }
+
+        if positive_phrases
+            .iter()
+            .any(|phrase| lowered.contains(phrase))
+        {
+            latest_positive = Some(trim_for_evidence(text));
+            break;
+        }
+    }
+
+    if let Some(evidence) = latest_positive {
+        ConsentSnapshot {
+            state: "detected".to_string(),
+            evidence: Some(evidence),
+            checked_segments,
+        }
+    } else {
+        ConsentSnapshot {
+            state: "pending".to_string(),
+            evidence: None,
+            checked_segments,
+        }
+    }
+}
+
+fn trim_for_evidence(text: &str) -> String {
+    let single_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    single_line.chars().take(160).collect::<String>()
 }
 
 async fn segment_worker(
@@ -1030,7 +1257,9 @@ fn spawn_ffmpeg_recorder(segment_pattern: &Path) -> Result<Child, String> {
 
     #[cfg(target_os = "macos")]
     {
-        cmd.args(["-f", "avfoundation", "-i", ":0"]);
+        let av_input = resolve_macos_audio_input_spec();
+        tracing::info!("Meeting recorder using avfoundation input {}", av_input);
+        cmd.args(["-f", "avfoundation", "-i", av_input.as_str()]);
     }
     #[cfg(target_os = "linux")]
     {
@@ -1063,6 +1292,90 @@ fn spawn_ffmpeg_recorder(segment_pattern: &Path) -> Result<Child, String> {
         .map_err(|e| format!("Failed to start ffmpeg meeting recorder: {e}"))
 }
 
+#[cfg(target_os = "macos")]
+fn resolve_macos_audio_input_spec() -> String {
+    if let Ok(explicit) = std::env::var("FNDR_MEETING_AUDIO_DEVICE") {
+        let trimmed = explicit.trim().trim_start_matches(':');
+        if !trimmed.is_empty() {
+            return format!(":{trimmed}");
+        }
+    }
+
+    if let Some(loopback_index) = detect_macos_loopback_audio_device_index() {
+        return format!(":{loopback_index}");
+    }
+
+    ":0".to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn detect_macos_loopback_audio_device_index() -> Option<String> {
+    let ffmpeg_path = resolve_ffmpeg_binary()?;
+    let output = Command::new(ffmpeg_path)
+        .arg("-f")
+        .arg("avfoundation")
+        .arg("-list_devices")
+        .arg("true")
+        .arg("-i")
+        .arg("")
+        .output()
+        .ok()?;
+
+    let listing = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut in_audio = false;
+    for line in listing.lines() {
+        let lowered = line.to_lowercase();
+        if lowered.contains("avfoundation audio devices") {
+            in_audio = true;
+            continue;
+        }
+        if lowered.contains("avfoundation video devices") {
+            in_audio = false;
+            continue;
+        }
+        if !in_audio {
+            continue;
+        }
+
+        let Some(index) = extract_avfoundation_index(line) else {
+            continue;
+        };
+
+        let has_loopback_hint = [
+            "blackhole",
+            "loopback",
+            "soundflower",
+            "vb-cable",
+            "background music",
+            "virtual audio",
+        ]
+        .into_iter()
+        .any(|needle| lowered.contains(needle));
+
+        if has_loopback_hint {
+            return Some(index);
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn extract_avfoundation_index(line: &str) -> Option<String> {
+    for section in line.split('[').skip(1) {
+        let candidate = section.split(']').next().unwrap_or("").trim();
+        if !candidate.is_empty() && candidate.chars().all(|c| c.is_ascii_digit()) {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
 async fn transcribe_segment(
     segment_path: &Path,
     model: &str,
@@ -1091,7 +1404,7 @@ async fn transcribe_segment(
         .map_err(|e| format!("Custom meeting transcription command failed to start: {e}"))?;
 
         if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stdout = normalize_transcribed_text(&String::from_utf8_lossy(&output.stdout));
             if !stdout.is_empty() {
                 return Ok(stdout);
             }
@@ -1105,12 +1418,27 @@ async fn transcribe_segment(
     }
 
     let text = speech::transcribe_audio_file(app_data_dir, segment_path).await?;
-    let text = text.trim().to_string();
+    let text = normalize_transcribed_text(&text);
     if text.is_empty() {
         Err("Whisper GGUF runner returned empty transcript".to_string())
     } else {
         Ok(text)
     }
+}
+
+fn normalize_transcribed_text(raw: &str) -> String {
+    let sanitized = raw
+        .replace("[BLANK_AUDIO]", " ")
+        .replace("[ Silence ]", " ")
+        .replace("[SILENCE]", " ")
+        .replace("[MUSIC]", " ")
+        .replace("[NOISE]", " ");
+    sanitized
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
 }
 
 fn detect_transcription_backend() -> String {
@@ -1178,6 +1506,7 @@ fn build_meeting_markdown(transcript: &MeetingTranscript) -> String {
     } else {
         transcript.meeting.participants.join(", ")
     };
+    let consent = consent_snapshot_from_segments(&transcript.segments);
 
     [
         format!("# {}", transcript.meeting.title),
@@ -1193,6 +1522,12 @@ fn build_meeting_markdown(transcript: &MeetingTranscript) -> String {
             .to_rfc3339()
         ),
         format!("- Participants: {}", participants),
+        format!("- Consent: {}", consent.state),
+        if let Some(evidence) = consent.evidence {
+            format!("- Consent evidence: {}", evidence)
+        } else {
+            "- Consent evidence: n/a".to_string()
+        },
         "".to_string(),
         "## Transcript".to_string(),
         "".to_string(),

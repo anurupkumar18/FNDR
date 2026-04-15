@@ -1,26 +1,26 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     CaptureStatus,
     McpServerStatus,
+    MemoryCard,
+    deleteAllData,
+    deleteOlderThan,
+    getBlocklist,
+    getMcpServerStatus,
+    getRetentionDays,
+    listMemoryCards,
     pauseCapture,
     resumeCapture,
-    getBlocklist,
     setBlocklist,
-    deleteAllData,
-    getStats,
-    getRetentionDays,
     setRetentionDays,
-    deleteOlderThan,
-    getMcpServerStatus,
     startMcpServer,
     stopMcpServer,
-    Stats,
 } from "../api/tauri";
 import {
     ModelInfo,
-    listAvailableModels,
-    downloadModel,
     deleteAiModel,
+    downloadModel,
+    listAvailableModels,
     refreshAiModels,
 } from "../api/onboarding";
 import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
@@ -33,20 +33,44 @@ interface ControlPanelProps {
     evalUi?: boolean;
 }
 
-type Tab = "settings" | "model" | "stats" | "privacy";
+type Tab = "settings" | "model" | "privacy";
+
+function normalizeCardText(value: string | undefined | null): string {
+    if (!value) return "";
+    return value.replace(/\s+/g, " ").trim();
+}
+
+function pickCardTitle(card: MemoryCard): string {
+    return (
+        normalizeCardText(card.title)
+        || normalizeCardText(card.window_title)
+        || `Memory in ${card.app_name}`
+    );
+}
+
+function pickCardSummary(card: MemoryCard): string {
+    return (
+        normalizeCardText(card.summary)
+        || normalizeCardText(card.raw_snippets[0])
+        || `Captured from ${card.app_name}`
+    );
+}
 
 export function ControlPanel({ status, compact = false, evalUi = false }: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<Tab>("settings");
     const [blocklist, setBlocklistState] = useState<string[]>([]);
     const [newApp, setNewApp] = useState("");
-    const [stats, setStats] = useState<Stats | null>(null);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [retentionDays, setRetentionDaysState] = useState<number>(7);
     const [retentionBusy, setRetentionBusy] = useState(false);
     const [mcpStatus, setMcpStatus] = useState<McpServerStatus | null>(null);
     const [mcpBusy, setMcpBusy] = useState(false);
     const [copiedMcpLink, setCopiedMcpLink] = useState(false);
+
+    const [currentCards, setCurrentCards] = useState<MemoryCard[]>([]);
+    const [cardsLoading, setCardsLoading] = useState(false);
+    const [cardsError, setCardsError] = useState<string | null>(null);
 
     // Model tab state
     const [models, setModels] = useState<ModelInfo[]>([]);
@@ -57,56 +81,50 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [isActivatingModel, setIsActivatingModel] = useState(false);
     const downloadStatus = useModelDownloadStatus();
 
-    useEffect(() => {
-        if (isOpen) {
-            loadData();
+    const loadCurrentCards = useCallback(async () => {
+        setCardsLoading(true);
+        setCardsError(null);
+        try {
+            const cards = await listMemoryCards(24);
+            setCurrentCards(cards);
+        } catch (err) {
+            setCardsError(err instanceof Error ? err.message : "Unable to load memory cards.");
+            setCurrentCards([]);
+        } finally {
+            setCardsLoading(false);
         }
-    }, [isOpen]);
+    }, []);
 
-    useEffect(() => {
-        if (isOpen && activeTab === "model") {
-            loadModels();
-        }
-    }, [isOpen, activeTab]);
-
-    // Close on escape
-    useEffect(() => {
-        const handleEscape = (e: KeyboardEvent) => {
-            if (e.key === "Escape") setIsOpen(false);
-        };
-        if (isOpen) {
-            window.addEventListener("keydown", handleEscape);
-            return () => window.removeEventListener("keydown", handleEscape);
-        }
-    }, [isOpen]);
-
-    const loadData = async () => {
+    const loadData = useCallback(async () => {
         try {
             if (evalUi) {
-                const [bl, st, ret] = await Promise.all([
+                const [bl, ret] = await Promise.all([
                     getBlocklist(),
-                    getStats(),
                     getRetentionDays(),
                 ]);
                 setBlocklistState(bl);
-                setStats(st);
                 setRetentionDaysState(ret);
             } else {
-                const [bl, st, ret, mcp] = await Promise.all([
+                const [bl, ret, mcp] = await Promise.all([
                     getBlocklist(),
-                    getStats(),
                     getRetentionDays(),
                     getMcpServerStatus(),
                 ]);
                 setBlocklistState(bl);
-                setStats(st);
                 setRetentionDaysState(ret);
                 setMcpStatus(mcp);
             }
-        } catch (e) {
-            console.error("Failed to load data:", e);
+            await loadCurrentCards();
+        } catch (err) {
+            console.error("Failed to load settings data:", err);
         }
-    };
+    }, [evalUi, loadCurrentCards]);
+
+    useEffect(() => {
+        if (isOpen) {
+            void loadData();
+        }
+    }, [isOpen, loadData]);
 
     const loadModels = useCallback(async () => {
         setModelsLoading(true);
@@ -119,6 +137,23 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
             setModelsLoading(false);
         }
     }, []);
+
+    useEffect(() => {
+        if (isOpen && activeTab === "model") {
+            void loadModels();
+        }
+    }, [isOpen, activeTab, loadModels]);
+
+    // Close on escape
+    useEffect(() => {
+        const handleEscape = (e: KeyboardEvent) => {
+            if (e.key === "Escape") setIsOpen(false);
+        };
+        if (isOpen) {
+            window.addEventListener("keydown", handleEscape);
+            return () => window.removeEventListener("keydown", handleEscape);
+        }
+    }, [isOpen]);
 
     useEffect(() => {
         if (!downloadingId || downloadStatus.model_id !== downloadingId) {
@@ -223,7 +258,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         setRetentionBusy(true);
         try {
             const deleted = await deleteOlderThan(retentionDays);
-            if (deleted > 0) await loadData();
+            if (deleted > 0) await loadCurrentCards();
         } catch (e) {
             console.error("Failed to run retention:", e);
         } finally {
@@ -273,7 +308,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         try {
             await deleteAllData();
             setConfirmDelete(false);
-            loadData();
+            await loadCurrentCards();
         } catch (e) {
             console.error("Failed to delete data:", e);
         }
@@ -305,6 +340,8 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     function fmtBytes(b: number) {
         return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
     }
+
+    const previewCards = useMemo(() => currentCards.slice(0, 12), [currentCards]);
 
     return (
         <>
@@ -350,12 +387,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                         Model
                     </button>
                     <button
-                        className={`ui-action-btn tab ${activeTab === "stats" ? "active" : ""}`}
-                        onClick={() => setActiveTab("stats")}
-                    >
-                        Stats
-                    </button>
-                    <button
                         className={`ui-action-btn tab ${activeTab === "privacy" ? "active" : ""}`}
                         onClick={() => setActiveTab("privacy")}
                     >
@@ -381,6 +412,40 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                             </section>
 
                             <section className="panel-section">
+                                <h3>Current Memory Cards (LanceDB)</h3>
+                                <p className="section-hint">
+                                    Live preview of your latest cards from the local LanceDB store.
+                                </p>
+                                <div className="memory-preview-header">
+                                    <span>{currentCards.length} cards loaded</span>
+                                    <button
+                                        className="ui-action-btn btn-secondary"
+                                        onClick={() => void loadCurrentCards()}
+                                        disabled={cardsLoading}
+                                    >
+                                        {cardsLoading ? "Refreshing..." : "Refresh"}
+                                    </button>
+                                </div>
+                                {cardsError && <p className="mcp-error">{cardsError}</p>}
+                                {!cardsError && previewCards.length === 0 && !cardsLoading && (
+                                    <p className="section-hint">No memory cards found yet.</p>
+                                )}
+                                {!cardsError && previewCards.length > 0 && (
+                                    <div className="memory-preview-list">
+                                        {previewCards.map((card) => (
+                                            <article key={card.id} className="memory-preview-item">
+                                                <div className="memory-preview-title">{pickCardTitle(card)}</div>
+                                                <div className="memory-preview-sub">{pickCardSummary(card)}</div>
+                                                <div className="memory-preview-meta">
+                                                    {card.app_name} · {new Date(card.timestamp).toLocaleString()}
+                                                </div>
+                                            </article>
+                                        ))}
+                                    </div>
+                                )}
+                            </section>
+
+                            <section className="panel-section">
                                 <h3>Indexing</h3>
                                 <p className="section-hint">
                                     Keep a compact rolling memory window.
@@ -388,7 +453,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                 <div className="retention-controls">
                                     <select
                                         value={retentionDays}
-                                        onChange={(e) => handleRetentionChange(Number(e.target.value))}
+                                        onChange={(e) => void handleRetentionChange(Number(e.target.value))}
                                         className="retention-select"
                                     >
                                         <option value={7}>7 days</option>
@@ -399,7 +464,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                     {retentionDays > 0 && (
                                         <button
                                             className="ui-action-btn btn-secondary"
-                                            onClick={handleRunRetentionNow}
+                                            onClick={() => void handleRunRetentionNow()}
                                             disabled={retentionBusy}
                                         >
                                             {retentionBusy ? "..." : "Run now"}
@@ -420,7 +485,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         </span>
                                         <button
                                             className="ui-action-btn btn-secondary"
-                                            onClick={handleToggleMcpServer}
+                                            onClick={() => void handleToggleMcpServer()}
                                             disabled={mcpBusy}
                                         >
                                             {mcpBusy ? "..." : mcpStatus?.running ? "Stop" : "Start"}
@@ -432,7 +497,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                             value={mcpStatus?.endpoint ?? "http://127.0.0.1:8799/mcp"}
                                             readOnly
                                         />
-                                        <button className="ui-action-btn btn-primary" onClick={handleCopyMcpLink}>
+                                        <button className="ui-action-btn btn-primary" onClick={() => void handleCopyMcpLink()}>
                                             {copiedMcpLink ? "Copied" : "Copy link"}
                                         </button>
                                     </div>
@@ -500,7 +565,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         ) : shouldShowActivate ? (
                                             <button
                                                 className="btn-liquid-glass"
-                                                onClick={() => handleDownloadModel(model)}
+                                                onClick={() => void handleDownloadModel(model)}
                                                 disabled={isActivatingModel}
                                             >
                                                 {isActivatingModel ? "..." : "Load Now"}
@@ -508,14 +573,14 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         ) : isDownloaded ? (
                                             <button
                                                 className={`btn-danger-sm ${confirmingDelete ? "confirm" : ""}`}
-                                                onClick={() => handleDeleteModel(model)}
+                                                onClick={() => void handleDeleteModel(model)}
                                             >
                                                 {confirmingDelete ? "Confirm delete" : "Delete"}
                                             </button>
                                         ) : (
                                             <button
                                                 className="btn-primary-sm"
-                                                onClick={() => handleDownloadModel(model)}
+                                                onClick={() => void handleDownloadModel(model)}
                                                 disabled={!!downloadingId}
                                             >
                                                 Download
@@ -551,25 +616,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                             )}
                         </section>
                     )}
-                    {activeTab === "stats" && stats && (
-                        <section className="panel-section">
-                            <h3>Statistics</h3>
-                            <div className="stats-grid">
-                                <div className="stat-card">
-                                    <span className="stat-value">{stats.total_records.toLocaleString()}</span>
-                                    <span className="stat-label">Total memories</span>
-                                </div>
-                                <div className="stat-card">
-                                    <span className="stat-value">{stats.today_count.toLocaleString()}</span>
-                                    <span className="stat-label">Today</span>
-                                </div>
-                                <div className="stat-card">
-                                    <span className="stat-value">{stats.total_days}</span>
-                                    <span className="stat-label">Days active</span>
-                                </div>
-                            </div>
-                        </section>
-                    )}
 
                     {activeTab === "privacy" && (
                         <>
@@ -583,7 +629,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         blocklist.map((app) => (
                                             <div key={app} className="blocklist-item">
                                                 <span>{app}</span>
-                                                <button onClick={() => handleRemoveApp(app)}>✕</button>
+                                                <button onClick={() => void handleRemoveApp(app)}>✕</button>
                                             </div>
                                         ))
                                     )}
@@ -594,10 +640,10 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         placeholder="Add app name..."
                                         value={newApp}
                                         onChange={(e) => setNewApp(e.target.value)}
-                                        onKeyDown={(e) => e.key === "Enter" && handleAddApp()}
+                                        onKeyDown={(e) => e.key === "Enter" && void handleAddApp()}
                                         className="add-app-input"
                                     />
-                                    <button onClick={handleAddApp} className="ui-action-btn btn-primary">Add</button>
+                                    <button onClick={() => void handleAddApp()} className="ui-action-btn btn-primary">Add</button>
                                 </div>
                             </section>
 
@@ -605,7 +651,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                 <h3>Danger Zone</h3>
                                 <button
                                     className={`ui-action-btn btn-danger ${confirmDelete ? "confirm" : ""}`}
-                                    onClick={handleDeleteAll}
+                                    onClick={() => void handleDeleteAll()}
                                 >
                                     {confirmDelete ? "Click again to confirm" : "Delete all data"}
                                 </button>

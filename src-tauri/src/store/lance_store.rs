@@ -3,13 +3,16 @@
 //! Replaces the JSON-based simple_store with a proper vector database.
 //! All methods that touch LanceDB are async.
 
-use super::schema::{AppCount, MemoryRecord, SearchResult, Stats};
+use super::schema::{
+    AppCount, DayCount, DaypartCount, DomainCount, HourCount, MemoryRecord, SearchResult, Stats,
+    WeekdayCount,
+};
 use arrow_array::{
     Array, FixedSizeListArray, Float32Array, Int64Array, RecordBatch, RecordBatchIterator,
     RecordBatchReader, StringArray,
 };
 use arrow_schema::{ArrowError, DataType, Field, Schema};
-use chrono::{Local, TimeZone};
+use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::NewColumnTransform;
@@ -147,15 +150,49 @@ impl Store {
         Ok(results)
     }
 
-    /// Return basic statistics about stored data.
+    /// Return comprehensive statistics and usage insights about stored data.
     pub async fn get_stats(&self) -> Result<Stats, Box<dyn std::error::Error>> {
         let batches: Vec<RecordBatch> = self.table.query().execute().await?.try_collect().await?;
 
         let total_records: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let one_hour_ago = now_ms - chrono::Duration::hours(1).num_milliseconds();
+        let one_day_ago = now_ms - chrono::Duration::hours(24).num_milliseconds();
+        let seven_days_ago = now_ms - chrono::Duration::days(7).num_milliseconds();
         let today = local_day_bucket_now();
         let mut days = std::collections::HashSet::new();
         let mut app_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
+        let mut day_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut domain_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut unique_apps = std::collections::HashSet::new();
+        let mut unique_sessions = std::collections::HashSet::new();
+        let mut unique_window_titles = std::collections::HashSet::new();
+        let mut unique_urls = std::collections::HashSet::new();
+        let mut unique_domains = std::collections::HashSet::new();
+        let mut hourly_counts = [0usize; 24];
+        let mut weekday_counts = [0usize; 7];
+        let mut daypart_counts = [0usize; 4]; // Night, Morning, Afternoon, Evening
+        let mut first_capture_ts: Option<i64> = None;
+        let mut last_capture_ts: Option<i64> = None;
+        let mut records_with_url: usize = 0;
+        let mut records_with_screenshot: usize = 0;
+        let mut records_with_clean_text: usize = 0;
+        let mut records_last_hour: usize = 0;
+        let mut records_last_24h: usize = 0;
+        let mut records_last_7d: usize = 0;
+        let mut llm_count: usize = 0;
+        let mut vlm_count: usize = 0;
+        let mut fallback_count: usize = 0;
+        let mut other_summary_count: usize = 0;
+        let mut ocr_confidence_sum = 0.0_f64;
+        let mut noise_score_sum = 0.0_f64;
+        let mut ocr_block_sum = 0.0_f64;
+        let mut low_confidence_records: usize = 0;
+        let mut high_noise_records: usize = 0;
+        let mut timeline_points: Vec<(i64, String)> = Vec::with_capacity(total_records);
         let mut today_count: usize = 0;
 
         for batch in &batches {
@@ -165,19 +202,138 @@ impl Store {
             let app_col = batch
                 .column_by_name("app_name")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+            let session_key_col = batch
+                .column_by_name("session_key")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+            let session_id_col = batch
+                .column_by_name("session_id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+            let title_col = batch
+                .column_by_name("window_title")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+            let url_col = batch
+                .column_by_name("url")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+            let screenshot_col = batch
+                .column_by_name("screenshot_path")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+            let clean_text_col = batch
+                .column_by_name("clean_text")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+            let summary_source_col = batch
+                .column_by_name("summary_source")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+            let ocr_confidence_col = batch
+                .column_by_name("ocr_confidence")
+                .and_then(|c| c.as_any().downcast_ref::<Float32Array>().cloned());
+            let noise_score_col = batch
+                .column_by_name("noise_score")
+                .and_then(|c| c.as_any().downcast_ref::<Float32Array>().cloned());
+            let ocr_block_col = batch
+                .column_by_name("ocr_block_count")
+                .and_then(|c| c.as_any().downcast_ref::<Int64Array>().cloned());
 
             for i in 0..batch.num_rows() {
-                if let Some(ref tc) = timestamp_col {
-                    let day = local_day_bucket_from_timestamp(tc.value(i));
-                    if day == today {
-                        today_count += 1;
+                let timestamp = timestamp_col.as_ref().map(|c| c.value(i)).unwrap_or(0);
+
+                if timestamp >= one_hour_ago {
+                    records_last_hour += 1;
+                }
+                if timestamp >= one_day_ago {
+                    records_last_24h += 1;
+                }
+                if timestamp >= seven_days_ago {
+                    records_last_7d += 1;
+                }
+
+                first_capture_ts = Some(first_capture_ts.map_or(timestamp, |v| v.min(timestamp)));
+                last_capture_ts = Some(last_capture_ts.map_or(timestamp, |v| v.max(timestamp)));
+
+                let day = local_day_bucket_from_timestamp(timestamp);
+                if day == today {
+                    today_count += 1;
+                }
+                days.insert(day.clone());
+                *day_counts.entry(day).or_insert(0) += 1;
+
+                if let Some(dt) = Local.timestamp_millis_opt(timestamp).single() {
+                    let hour_idx = dt.hour() as usize;
+                    hourly_counts[hour_idx] += 1;
+                    weekday_counts[dt.weekday().num_days_from_monday() as usize] += 1;
+
+                    let daypart_idx = match dt.hour() {
+                        0..=5 => 0,
+                        6..=11 => 1,
+                        12..=17 => 2,
+                        _ => 3,
+                    };
+                    daypart_counts[daypart_idx] += 1;
+                }
+
+                let app_name = get_non_empty_str(&app_col, i).unwrap_or_else(|| "Unknown".to_string());
+                *app_counts.entry(app_name.clone()).or_insert(0) += 1;
+                unique_apps.insert(app_name.clone());
+                timeline_points.push((timestamp, app_name));
+
+                if let Some(title) = get_non_empty_str(&title_col, i) {
+                    unique_window_titles.insert(title);
+                }
+
+                let session = get_non_empty_str(&session_key_col, i)
+                    .or_else(|| get_non_empty_str(&session_id_col, i));
+                if let Some(session_id) = session {
+                    unique_sessions.insert(session_id);
+                }
+
+                if let Some(url) = get_non_empty_str(&url_col, i) {
+                    records_with_url += 1;
+                    unique_urls.insert(url.clone());
+                    if let Some(domain) = extract_domain(&url) {
+                        unique_domains.insert(domain.clone());
+                        *domain_counts.entry(domain).or_insert(0) += 1;
                     }
-                    days.insert(day);
                 }
-                if let Some(ref ac) = app_col {
-                    let app = ac.value(i).to_string();
-                    *app_counts.entry(app).or_insert(0) += 1;
+
+                if get_non_empty_str(&screenshot_col, i).is_some() {
+                    records_with_screenshot += 1;
                 }
+                if get_non_empty_str(&clean_text_col, i).is_some() {
+                    records_with_clean_text += 1;
+                }
+
+                let source = get_non_empty_str(&summary_source_col, i)
+                    .unwrap_or_else(|| "fallback".to_string())
+                    .to_ascii_lowercase();
+                match source.as_str() {
+                    "llm" => llm_count += 1,
+                    "vlm" => vlm_count += 1,
+                    "fallback" => fallback_count += 1,
+                    _ => other_summary_count += 1,
+                }
+
+                let confidence = ocr_confidence_col
+                    .as_ref()
+                    .map(|c| c.value(i) as f64)
+                    .unwrap_or(0.0);
+                ocr_confidence_sum += confidence;
+                if confidence > 0.0 && confidence < 0.55 {
+                    low_confidence_records += 1;
+                }
+
+                let noise = noise_score_col
+                    .as_ref()
+                    .map(|c| c.value(i) as f64)
+                    .unwrap_or(0.0);
+                noise_score_sum += noise;
+                if noise >= 0.40 {
+                    high_noise_records += 1;
+                }
+
+                let ocr_blocks = ocr_block_col
+                    .as_ref()
+                    .map(|c| c.value(i).max(0) as f64)
+                    .unwrap_or(0.0);
+                ocr_block_sum += ocr_blocks;
             }
         }
 
@@ -186,13 +342,206 @@ impl Store {
             .map(|(name, count)| AppCount { name, count })
             .collect();
         apps.sort_by(|a, b| b.count.cmp(&a.count));
+        let focus_app_share_pct = if total_records > 0 {
+            apps.first()
+                .map(|a| (a.count as f64 / total_records as f64) * 100.0)
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
         apps.truncate(10);
+
+        let mut top_domains: Vec<DomainCount> = domain_counts
+            .into_iter()
+            .map(|(domain, count)| DomainCount { domain, count })
+            .collect();
+        top_domains.sort_by(|a, b| b.count.cmp(&a.count));
+        top_domains.truncate(10);
+
+        let busiest_day = day_counts
+            .iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(day, count)| DayCount {
+                day: day.clone(),
+                count: *count,
+            });
+
+        let quietest_day = day_counts
+            .iter()
+            .min_by_key(|(_, count)| *count)
+            .map(|(day, count)| DayCount {
+                day: day.clone(),
+                count: *count,
+            });
+
+        let hourly_distribution: Vec<HourCount> = hourly_counts
+            .iter()
+            .enumerate()
+            .map(|(hour, count)| HourCount {
+                hour: hour as u8,
+                count: *count,
+            })
+            .collect();
+
+        let busiest_hour = hourly_counts
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, count)| *count)
+            .and_then(|(hour, count)| {
+                if *count == 0 {
+                    None
+                } else {
+                    Some(HourCount {
+                        hour: hour as u8,
+                        count: *count,
+                    })
+                }
+            });
+
+        let weekday_labels = [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+        ];
+        let weekday_distribution: Vec<WeekdayCount> = weekday_counts
+            .iter()
+            .enumerate()
+            .map(|(idx, count)| WeekdayCount {
+                weekday: weekday_labels[idx].to_string(),
+                count: *count,
+            })
+            .collect();
+
+        let daypart_labels = ["Night", "Morning", "Afternoon", "Evening"];
+        let daypart_distribution: Vec<DaypartCount> = daypart_counts
+            .iter()
+            .enumerate()
+            .map(|(idx, count)| DaypartCount {
+                daypart: daypart_labels[idx].to_string(),
+                count: *count,
+            })
+            .collect();
+
+        timeline_points.sort_by_key(|(timestamp, _)| *timestamp);
+
+        let mut app_switches = 0usize;
+        let mut total_gap_ms = 0_i64;
+        let mut gap_count = 0usize;
+        let mut longest_gap_ms = 0_i64;
+
+        for pair in timeline_points.windows(2) {
+            let (prev_ts, prev_app) = (&pair[0].0, &pair[0].1);
+            let (next_ts, next_app) = (&pair[1].0, &pair[1].1);
+
+            if prev_app != next_app {
+                app_switches += 1;
+            }
+
+            let gap = (*next_ts - *prev_ts).max(0);
+            if gap > 0 {
+                total_gap_ms += gap;
+                gap_count += 1;
+                longest_gap_ms = longest_gap_ms.max(gap);
+            }
+        }
+
+        let capture_span_hours = match (first_capture_ts, last_capture_ts) {
+            (Some(first), Some(last)) if last >= first => (last - first) as f64 / 3_600_000.0,
+            _ => 0.0,
+        };
+
+        let avg_gap_minutes = if gap_count > 0 {
+            total_gap_ms as f64 / gap_count as f64 / 60_000.0
+        } else {
+            0.0
+        };
+
+        let app_switch_rate_per_hour = if capture_span_hours > 0.0 {
+            app_switches as f64 / capture_span_hours
+        } else {
+            0.0
+        };
+
+        let avg_records_per_active_day = if !days.is_empty() {
+            total_records as f64 / days.len() as f64
+        } else {
+            0.0
+        };
+
+        let avg_records_per_hour = if capture_span_hours > 0.0 {
+            total_records as f64 / capture_span_hours
+        } else {
+            0.0
+        };
+
+        let avg_ocr_confidence = if total_records > 0 {
+            ocr_confidence_sum / total_records as f64
+        } else {
+            0.0
+        };
+
+        let avg_noise_score = if total_records > 0 {
+            noise_score_sum / total_records as f64
+        } else {
+            0.0
+        };
+
+        let avg_ocr_blocks = if total_records > 0 {
+            ocr_block_sum / total_records as f64
+        } else {
+            0.0
+        };
+
+        let (current_streak_days, longest_streak_days) = compute_activity_streaks(&day_counts);
 
         Ok(Stats {
             total_records,
             total_days: days.len(),
             apps,
             today_count,
+            unique_apps: unique_apps.len(),
+            unique_sessions: unique_sessions.len(),
+            unique_window_titles: unique_window_titles.len(),
+            unique_urls: unique_urls.len(),
+            unique_domains: unique_domains.len(),
+            records_with_url,
+            records_with_screenshot,
+            records_with_clean_text,
+            records_last_hour,
+            records_last_24h,
+            records_last_7d,
+            avg_records_per_active_day,
+            avg_records_per_hour,
+            focus_app_share_pct,
+            app_switches,
+            app_switch_rate_per_hour,
+            avg_gap_minutes,
+            longest_gap_minutes: (longest_gap_ms / 60_000).max(0) as u64,
+            first_capture_ts,
+            last_capture_ts,
+            capture_span_hours,
+            current_streak_days,
+            longest_streak_days,
+            avg_ocr_confidence,
+            low_confidence_records,
+            avg_noise_score,
+            high_noise_records,
+            avg_ocr_blocks,
+            llm_count,
+            vlm_count,
+            fallback_count,
+            other_summary_count,
+            top_domains,
+            busiest_day,
+            quietest_day,
+            busiest_hour,
+            hourly_distribution,
+            weekday_distribution,
+            daypart_distribution,
         })
     }
 
@@ -256,6 +605,18 @@ impl Store {
         let before = self.table.count_rows(None).await?;
         let p = sql_escape(prefix);
         self.table.delete(&format!("id LIKE '{p}%'")).await?;
+        let after = self.table.count_rows(None).await?;
+        Ok(before.saturating_sub(after))
+    }
+
+    /// Delete a specific memory row by exact id.
+    pub async fn delete_memory_by_id(
+        &self,
+        memory_id: &str,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let before = self.table.count_rows(None).await?;
+        let id = sql_escape(memory_id);
+        self.table.delete(&format!("id = '{id}'")).await?;
         let after = self.table.count_rows(None).await?;
         Ok(before.saturating_sub(after))
     }
@@ -650,12 +1011,90 @@ fn get_opt_str(col: &Option<StringArray>, i: usize) -> Option<String> {
     })
 }
 
+fn get_non_empty_str(col: &Option<StringArray>, i: usize) -> Option<String> {
+    get_opt_str(col, i).and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 fn get_i64(col: &Option<Int64Array>, i: usize) -> i64 {
     col.as_ref().map(|c| c.value(i)).unwrap_or(0)
 }
 
 fn get_f32(col: &Option<Float32Array>, i: usize) -> f32 {
     col.as_ref().map(|c| c.value(i)).unwrap_or(0.0)
+}
+
+fn extract_domain(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let without_scheme = trimmed
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(trimmed);
+
+    let host_and_path = without_scheme.split('/').next().unwrap_or("");
+    let without_credentials = host_and_path.rsplit('@').next().unwrap_or(host_and_path);
+    let host = without_credentials.split(':').next().unwrap_or("").trim();
+    if host.is_empty() {
+        return None;
+    }
+
+    let host = host.to_ascii_lowercase();
+    let normalized = host
+        .strip_prefix("www.")
+        .map(|h| h.to_string())
+        .unwrap_or(host);
+
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn compute_activity_streaks(day_counts: &std::collections::HashMap<String, usize>) -> (usize, usize) {
+    let mut days: Vec<NaiveDate> = day_counts
+        .keys()
+        .filter_map(|day| NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
+        .collect();
+
+    if days.is_empty() {
+        return (0, 0);
+    }
+
+    days.sort_unstable();
+    days.dedup();
+
+    let mut longest_streak = 1usize;
+    let mut run = 1usize;
+    for i in 1..days.len() {
+        if days[i] == days[i - 1] + chrono::Duration::days(1) {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        longest_streak = longest_streak.max(run);
+    }
+
+    let mut current_streak = 1usize;
+    for i in (1..days.len()).rev() {
+        if days[i] == days[i - 1] + chrono::Duration::days(1) {
+            current_streak += 1;
+        } else {
+            break;
+        }
+    }
+
+    (current_streak, longest_streak)
 }
 
 fn extract_f32_list(col: &Option<FixedSizeListArray>, i: usize, dim: usize) -> Vec<f32> {

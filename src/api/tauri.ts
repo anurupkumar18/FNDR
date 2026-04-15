@@ -85,6 +85,9 @@ export interface MeetingRecorderStatus {
     model?: string | null;
     started_at?: number | null;
     segment_count: number;
+    consent_state: "unknown" | "pending" | "detected" | "denied";
+    consent_evidence?: string | null;
+    consent_checked_segments: number;
     ffmpeg_available: boolean;
     transcription_backend: string;
     last_error?: string | null;
@@ -112,7 +115,92 @@ export interface Stats {
     total_days: number;
     apps: { name: string; count: number }[];
     today_count: number;
+    unique_apps: number;
+    unique_sessions: number;
+    unique_window_titles: number;
+    unique_urls: number;
+    unique_domains: number;
+    records_with_url: number;
+    records_with_screenshot: number;
+    records_with_clean_text: number;
+    records_last_hour: number;
+    records_last_24h: number;
+    records_last_7d: number;
+    avg_records_per_active_day: number;
+    avg_records_per_hour: number;
+    focus_app_share_pct: number;
+    app_switches: number;
+    app_switch_rate_per_hour: number;
+    avg_gap_minutes: number;
+    longest_gap_minutes: number;
+    first_capture_ts: number | null;
+    last_capture_ts: number | null;
+    capture_span_hours: number;
+    current_streak_days: number;
+    longest_streak_days: number;
+    avg_ocr_confidence: number;
+    low_confidence_records: number;
+    avg_noise_score: number;
+    high_noise_records: number;
+    avg_ocr_blocks: number;
+    llm_count: number;
+    vlm_count: number;
+    fallback_count: number;
+    other_summary_count: number;
+    top_domains: { domain: string; count: number }[];
+    busiest_day: { day: string; count: number } | null;
+    quietest_day: { day: string; count: number } | null;
+    busiest_hour: { hour: number; count: number } | null;
+    hourly_distribution: { hour: number; count: number }[];
+    weekday_distribution: { weekday: string; count: number }[];
+    daypart_distribution: { daypart: string; count: number }[];
 }
+
+const DEFAULT_STATS: Stats = {
+    total_records: 0,
+    total_days: 0,
+    apps: [],
+    today_count: 0,
+    unique_apps: 0,
+    unique_sessions: 0,
+    unique_window_titles: 0,
+    unique_urls: 0,
+    unique_domains: 0,
+    records_with_url: 0,
+    records_with_screenshot: 0,
+    records_with_clean_text: 0,
+    records_last_hour: 0,
+    records_last_24h: 0,
+    records_last_7d: 0,
+    avg_records_per_active_day: 0,
+    avg_records_per_hour: 0,
+    focus_app_share_pct: 0,
+    app_switches: 0,
+    app_switch_rate_per_hour: 0,
+    avg_gap_minutes: 0,
+    longest_gap_minutes: 0,
+    first_capture_ts: null,
+    last_capture_ts: null,
+    capture_span_hours: 0,
+    current_streak_days: 0,
+    longest_streak_days: 0,
+    avg_ocr_confidence: 0,
+    low_confidence_records: 0,
+    avg_noise_score: 0,
+    high_noise_records: 0,
+    avg_ocr_blocks: 0,
+    llm_count: 0,
+    vlm_count: 0,
+    fallback_count: 0,
+    other_summary_count: 0,
+    top_domains: [],
+    busiest_day: null,
+    quietest_day: null,
+    busiest_hour: null,
+    hourly_distribution: [],
+    weekday_distribution: [],
+    daypart_distribution: [],
+};
 
 export interface Task {
     id: string;
@@ -193,6 +281,10 @@ export async function listMemoryCards(
         limit,
         appFilter,
     });
+}
+
+export async function deleteMemory(memoryId: string): Promise<boolean> {
+    return invoke<boolean>("delete_memory", { memoryId });
 }
 
 
@@ -283,7 +375,19 @@ export async function deleteAllData(): Promise<void> {
 
 // Stats
 export async function getStats(): Promise<Stats> {
-    return invoke<Stats>("get_stats");
+    const raw = await invoke<Partial<Stats>>("get_stats");
+    return {
+        ...DEFAULT_STATS,
+        ...raw,
+        apps: raw.apps ?? [],
+        top_domains: raw.top_domains ?? [],
+        busiest_day: raw.busiest_day ?? null,
+        quietest_day: raw.quietest_day ?? null,
+        busiest_hour: raw.busiest_hour ?? null,
+        hourly_distribution: raw.hourly_distribution ?? [],
+        weekday_distribution: raw.weekday_distribution ?? [],
+        daypart_distribution: raw.daypart_distribution ?? [],
+    };
 }
 
 export async function getRetentionDays(): Promise<number> {
@@ -305,6 +409,14 @@ export async function getAppNames(): Promise<string[]> {
 // Task functions
 export async function getTodos(): Promise<Task[]> {
     return invoke<Task[]>("get_todos");
+}
+
+export async function addTodo(
+    title: string,
+    description?: string,
+    taskType?: "Todo" | "Reminder" | "Followup"
+): Promise<Task> {
+    return invoke<Task>("add_todo", { title, description, taskType });
 }
 
 export async function dismissTodo(taskId: string): Promise<boolean> {

@@ -11,6 +11,7 @@ interface TimelineProps {
     query: string;
     selectedResultId: string | null;
     onSelectResult: (result: MemoryCard) => void;
+    onDeleteMemory?: (memoryId: string) => void;
     evalUi?: boolean;
 }
 
@@ -39,6 +40,7 @@ export function Timeline({
     query,
     selectedResultId,
     onSelectResult,
+    onDeleteMemory,
     evalUi = false,
 }: TimelineProps) {
     const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
@@ -97,19 +99,36 @@ export function Timeline({
                         }}
                     >
                         <div className={`result-meta ${evalUi ? "result-meta-eval" : ""}`}>
-                            <span className="result-app">{result.app_name}</span>
-                            <span className="result-time">
-                                {formatDay(result.timestamp)} ·{" "}
-                                {new Date(result.timestamp).toLocaleTimeString(undefined, {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                })}
-                            </span>
-                            {evalUi && (
-                                <span className="result-score" title="Relevance score">
-                                    score {result.score.toFixed(3)}
+                            <div className="result-meta-main">
+                                <span className="result-app">{result.app_name}</span>
+                                <span className="result-time">
+                                    {formatDay(result.timestamp)} ·{" "}
+                                    {new Date(result.timestamp).toLocaleTimeString(undefined, {
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                    })}
                                 </span>
-                            )}
+                            </div>
+                            <div className="result-meta-actions">
+                                {evalUi && (
+                                    <span className="result-score" title="Relevance score">
+                                        score {result.score.toFixed(3)}
+                                    </span>
+                                )}
+                                {onDeleteMemory && (
+                                    <button
+                                        className="ui-action-btn timeline-delete-btn"
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            onDeleteMemory(result.id);
+                                        }}
+                                        aria-label="Delete this memory"
+                                        title="Delete this memory"
+                                    >
+                                        Delete
+                                    </button>
+                                )}
+                            </div>
                         </div>
                         <h3 className="result-title">{result.title || "Untitled memory"}</h3>
                         <p className="result-preview">{result.summary}</p>

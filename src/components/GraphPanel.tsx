@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { getGraphData, GraphNodeData, GraphEdgeData } from "../api/tauri";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { getGraphData, GraphEdgeData, GraphNodeData } from "../api/tauri";
 import "./GraphPanel.css";
 
 interface GraphPanelProps {
@@ -7,54 +7,141 @@ interface GraphPanelProps {
     onClose: () => void;
 }
 
-type ClusterMode = "session" | "app" | "memoryType";
+type GraphNodeType = "MemoryChunk" | "Entity" | "Task" | "Url";
+type ViewMode = "timeline" | "cluster" | "focus" | "journey";
+type ClusterLens = "app" | "memoryType" | "domain" | "session";
+type ActivityFacet =
+    | "all"
+    | "productive"
+    | "unproductive"
+    | "learning"
+    | "communication"
+    | "research"
+    | "neutral";
 
-interface SimNode extends GraphNodeData {
-    x: number;
-    y: number;
-    vx: number;
-    vy: number;
-    fx?: number | null;
-    fy?: number | null;
+interface TypedGraphNode extends GraphNodeData {
+    node_type: GraphNodeType;
 }
 
-interface TooltipState {
-    node: SimNode;
-    x: number;
-    y: number;
+interface SessionGroup {
+    id: string;
+    label: string;
+    memoryIds: string[];
+    firstTs: number;
+    lastTs: number;
 }
 
-const NODE_COLORS: Record<string, string> = {
-    MemoryChunk: "#60a5fa",
-    Entity: "#a78bfa",
-    Task: "#fb923c",
-    Url: "#34d399",
-};
+interface ClusterGroup {
+    key: string;
+    label: string;
+    nodeIds: string[];
+    typeCounts: Record<GraphNodeType, number>;
+    edgeTouches: number;
+}
 
-const NODE_SIZES: Record<string, number> = {
-    MemoryChunk: 5,
-    Entity: 8,
-    Task: 7,
-    Url: 6,
-};
+interface FocusLayout {
+    positions: Map<string, { x: number; y: number; ring: 0 | 1 | 2 }>;
+    displayNodeIds: Set<string>;
+    centerId: string | null;
+}
 
-const CLUSTER_MODES: Array<{ key: ClusterMode; label: string }> = [
-    { key: "session", label: "Session" },
-    { key: "app", label: "App" },
-    { key: "memoryType", label: "Memory Type" },
+const VIEW_MODES: Array<{ key: ViewMode; label: string; description: string }> = [
+    { key: "timeline", label: "Timeline", description: "What happened?" },
+    { key: "cluster", label: "Cluster", description: "What areas exist?" },
+    { key: "focus", label: "Focus", description: "What is connected?" },
+    { key: "journey", label: "Journey", description: "How did I move?" },
 ];
 
-function hashCode(input: string): number {
-    let hash = 0;
-    for (let i = 0; i < input.length; i++) {
-        hash = (hash << 5) - hash + input.charCodeAt(i);
-        hash |= 0;
-    }
-    return Math.abs(hash);
-}
+const CLUSTER_LENSES: Array<{ key: ClusterLens; label: string }> = [
+    { key: "app", label: "App" },
+    { key: "memoryType", label: "Memory Type" },
+    { key: "domain", label: "Domain" },
+    { key: "session", label: "Session" },
+];
+
+const NODE_TYPE_META: Record<
+    GraphNodeType,
+    { label: string; color: string; short: string }
+> = {
+    MemoryChunk: { label: "Memories", color: "#60a5fa", short: "M" },
+    Entity: { label: "Entities", color: "#a78bfa", short: "E" },
+    Task: { label: "Tasks", color: "#fb923c", short: "T" },
+    Url: { label: "Links", color: "#34d399", short: "L" },
+};
+
+const NODE_TYPE_ORDER: GraphNodeType[] = ["MemoryChunk", "Entity", "Task", "Url"];
+
+const EDGE_TYPE_LABELS: Record<string, string> = {
+    PART_OF_SESSION: "Session link",
+    REFERENCE_FOR_TASK: "Task reference",
+    OCCURRED_AT: "Occurred at",
+};
+
+const ACTIVITY_FACETS: Array<{ key: ActivityFacet; label: string }> = [
+    { key: "all", label: "All Activity" },
+    { key: "productive", label: "Productive" },
+    { key: "learning", label: "Learning" },
+    { key: "research", label: "Research" },
+    { key: "communication", label: "Communication" },
+    { key: "unproductive", label: "Unproductive" },
+    { key: "neutral", label: "Neutral" },
+];
+
+const ACTIVITY_FACET_COLORS: Record<ActivityFacet, string> = {
+    all: "#9ca3af",
+    productive: "#4ade80",
+    learning: "#60a5fa",
+    research: "#22d3ee",
+    communication: "#a78bfa",
+    unproductive: "#fb7185",
+    neutral: "#f59e0b",
+};
 
 function safeString(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
+}
+
+function isGraphNodeType(value: string): value is GraphNodeType {
+    return NODE_TYPE_ORDER.includes(value as GraphNodeType);
+}
+
+function parseHost(rawUrl: string): string {
+    if (!rawUrl) {
+        return "";
+    }
+
+    try {
+        const normalized = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
+        return new URL(normalized).host;
+    } catch {
+        return rawUrl
+            .replace(/^https?:\/\//i, "")
+            .split("/")[0]
+            .trim();
+    }
+}
+
+function formatDateTime(ts: number): string {
+    return new Date(ts).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+    });
+}
+
+function formatTime(ts: number): string {
+    return new Date(ts).toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+    });
+}
+
+function shorten(value: string, limit = 90): string {
+    if (value.length <= limit) {
+        return value;
+    }
+    return `${value.slice(0, Math.max(0, limit - 1))}…`;
 }
 
 function classifyMemoryTypeFromApp(appName: string): string {
@@ -105,143 +192,415 @@ function classifyMemoryTypeFromApp(appName: string): string {
     return "general";
 }
 
-function clusterKeyForNode(node: GraphNodeData, mode: ClusterMode): string {
+function memoryTypeForNode(node: GraphNodeData): string {
     const metadata = node.metadata ?? {};
-
-    if (mode === "session") {
-        if (node.node_type === "MemoryChunk") {
-            const sessionId = safeString(metadata.session_id);
-            if (sessionId) {
-                return `session:${sessionId}`;
-            }
-        }
-        if (node.node_type === "Entity" && safeString(metadata.entity_type) === "session") {
-            const sessionId = safeString(metadata.session_id);
-            if (sessionId) {
-                return `session:${sessionId}`;
-            }
-        }
-        return node.node_type.toLowerCase();
+    const declared = safeString(metadata.memory_type);
+    if (declared) {
+        return declared;
     }
 
-    if (mode === "app") {
-        if (node.node_type === "MemoryChunk") {
-            const appName = safeString(metadata.app_name);
-            if (appName) {
-                return `app:${appName}`;
+    const app = safeString(metadata.app_name);
+    return classifyMemoryTypeFromApp(app);
+}
+
+function includesAny(text: string, keywords: string[]): boolean {
+    return keywords.some((keyword) => text.includes(keyword));
+}
+
+function nodeActivityText(node: GraphNodeData): string {
+    const metadata = node.metadata ?? {};
+    const parts = [
+        node.label,
+        safeString(metadata.app_name),
+        safeString(metadata.window_title),
+        safeString(metadata.source_app),
+        safeString(metadata.url),
+        safeString(metadata.host),
+        safeString(metadata.memory_type),
+    ];
+
+    return parts.join(" ").toLowerCase();
+}
+
+function nodeDomain(node: GraphNodeData): string {
+    const metadata = node.metadata ?? {};
+
+    if (node.node_type === "Url") {
+        return safeString(metadata.host) || parseHost(node.label);
+    }
+
+    const url = safeString(metadata.url);
+    if (url) {
+        return parseHost(url);
+    }
+
+    return "";
+}
+
+function activityFacetForNode(node: GraphNodeData): Exclude<ActivityFacet, "all"> {
+    if (node.node_type === "Entity") {
+        return "neutral";
+    }
+    if (node.node_type === "Task") {
+        return "productive";
+    }
+
+    const text = nodeActivityText(node);
+
+    if (
+        includesAny(text, [
+            "youtube",
+            "netflix",
+            "tiktok",
+            "instagram",
+            "facebook",
+            "x.com",
+            "twitter",
+            "reddit",
+            "twitch",
+            "hulu",
+            "steam",
+            "game",
+            "gaming",
+        ])
+    ) {
+        return "unproductive";
+    }
+
+    if (
+        includesAny(text, [
+            "course",
+            "tutorial",
+            "udemy",
+            "coursera",
+            "khan",
+            "lecture",
+            "lesson",
+            "learn",
+            "readme",
+            "docs",
+            "documentation",
+            "stack overflow",
+            "leetcode",
+            "arxiv",
+        ])
+    ) {
+        return "learning";
+    }
+
+    if (
+        includesAny(text, [
+            "slack",
+            "gmail",
+            "outlook",
+            "mail",
+            "zoom",
+            "teams",
+            "discord",
+            "messages",
+            "whatsapp",
+            "meet",
+            "calendar invite",
+        ])
+    ) {
+        return "communication";
+    }
+
+    if (
+        includesAny(text, [
+            "google search",
+            "search",
+            "perplexity",
+            "wikipedia",
+            "scholar",
+            "pubmed",
+            "investigate",
+            "analysis",
+            "research",
+        ])
+    ) {
+        return "research";
+    }
+
+    if (
+        includesAny(text, [
+            "vscode",
+            "code",
+            "terminal",
+            "xcode",
+            "iterm",
+            "github",
+            "gitlab",
+            "notion",
+            "linear",
+            "jira",
+            "figma",
+            "spreadsheet",
+            "excel",
+            "powerpoint",
+            "doc",
+        ])
+    ) {
+        return "productive";
+    }
+
+    const memoryType = memoryTypeForNode(node);
+    if (memoryType === "development" || memoryType === "documents") {
+        return "productive";
+    }
+    if (memoryType === "communication" || memoryType === "meeting") {
+        return "communication";
+    }
+    if (memoryType === "web") {
+        return "research";
+    }
+
+    return "neutral";
+}
+
+function nodeMatchesActivityFacet(node: GraphNodeData, facet: ActivityFacet): boolean {
+    if (facet === "all") {
+        return true;
+    }
+    return activityFacetForNode(node) === facet;
+}
+
+function sessionIdForMemory(node: GraphNodeData): string {
+    const metadata = node.metadata ?? {};
+    const sessionId = safeString(metadata.session_id);
+    if (sessionId) {
+        return sessionId;
+    }
+
+    const bucket = new Date(node.created_at).toISOString().slice(0, 13);
+    return `unknown-${bucket}`;
+}
+
+function buildAdjacency(
+    edges: GraphEdgeData[],
+    nodeMap: Map<string, TypedGraphNode>
+): Map<string, Set<string>> {
+    const adjacency = new Map<string, Set<string>>();
+
+    for (const edge of edges) {
+        if (!nodeMap.has(edge.source) || !nodeMap.has(edge.target)) {
+            continue;
+        }
+
+        if (!adjacency.has(edge.source)) {
+            adjacency.set(edge.source, new Set());
+        }
+        if (!adjacency.has(edge.target)) {
+            adjacency.set(edge.target, new Set());
+        }
+
+        adjacency.get(edge.source)?.add(edge.target);
+        adjacency.get(edge.target)?.add(edge.source);
+    }
+
+    return adjacency;
+}
+
+function shortestPath(startId: string, endId: string, adjacency: Map<string, Set<string>>): string[] {
+    if (!startId || !endId) {
+        return [];
+    }
+    if (startId === endId) {
+        return [startId];
+    }
+
+    const visited = new Set<string>([startId]);
+    const queue: string[] = [startId];
+    const previous = new Map<string, string>();
+
+    while (queue.length > 0) {
+        const current = queue.shift();
+        if (!current) {
+            break;
+        }
+
+        const neighbors = adjacency.get(current);
+        if (!neighbors) {
+            continue;
+        }
+
+        for (const next of neighbors) {
+            if (visited.has(next)) {
+                continue;
             }
+            visited.add(next);
+            previous.set(next, current);
+
+            if (next === endId) {
+                const path = [endId];
+                let cursor = endId;
+                while (previous.has(cursor)) {
+                    const prev = previous.get(cursor);
+                    if (!prev) {
+                        break;
+                    }
+                    path.push(prev);
+                    cursor = prev;
+                }
+                return path.reverse();
+            }
+
+            queue.push(next);
+        }
+    }
+
+    return [];
+}
+
+function relationSignals(a: GraphNodeData, b: GraphNodeData): string[] {
+    const out: string[] = [];
+
+    const aApp = safeString(a.metadata?.app_name);
+    const bApp = safeString(b.metadata?.app_name);
+    if (aApp && bApp && aApp === bApp) {
+        out.push(`same app: ${aApp}`);
+    }
+
+    const aType = memoryTypeForNode(a);
+    const bType = memoryTypeForNode(b);
+    if (aType && bType && aType === bType) {
+        out.push(`same type: ${aType}`);
+    }
+
+    const aDomain = nodeDomain(a);
+    const bDomain = nodeDomain(b);
+    if (aDomain && bDomain && aDomain === bDomain) {
+        out.push(`revisited domain: ${aDomain}`);
+    }
+
+    const aSession = sessionIdForMemory(a);
+    const bSession = sessionIdForMemory(b);
+    if (aSession && bSession && aSession === bSession) {
+        out.push("same session");
+    }
+
+    return out;
+}
+
+function describeNode(node: GraphNodeData): string {
+    const metadata = node.metadata ?? {};
+
+    if (node.node_type === "MemoryChunk") {
+        const app = safeString(metadata.app_name) || "Unknown app";
+        const domain = nodeDomain(node);
+        const memoryType = memoryTypeForNode(node);
+        if (domain) {
+            return `${app} • ${memoryType} • ${domain}`;
+        }
+        return `${app} • ${memoryType}`;
+    }
+
+    if (node.node_type === "Task") {
+        const sourceApp = safeString(metadata.source_app);
+        const taskType = safeString(metadata.task_type) || "Task";
+        return sourceApp ? `${taskType} • ${sourceApp}` : taskType;
+    }
+
+    if (node.node_type === "Entity") {
+        const entityType = safeString(metadata.entity_type) || "Entity";
+        return entityType;
+    }
+
+    return nodeDomain(node) || "Link";
+}
+
+function clusterKeyForNode(node: GraphNodeData, lens: ClusterLens): string {
+    const metadata = node.metadata ?? {};
+
+    if (lens === "app") {
+        if (node.node_type === "MemoryChunk") {
+            return safeString(metadata.app_name) || "Unknown app";
         }
         if (node.node_type === "Task") {
-            const sourceApp = safeString(metadata.source_app);
-            if (sourceApp) {
-                return `app:${sourceApp}`;
-            }
+            return safeString(metadata.source_app) || "Unknown app";
         }
         if (node.node_type === "Url") {
-            const host = safeString(metadata.host);
-            if (host) {
-                return `site:${host}`;
-            }
+            return nodeDomain(node) || "Web";
+        }
+        return safeString(metadata.entity_type) || "Entity";
+    }
+
+    if (lens === "memoryType") {
+        if (node.node_type === "MemoryChunk") {
+            return memoryTypeForNode(node);
+        }
+        if (node.node_type === "Task") {
+            return "task";
+        }
+        if (node.node_type === "Url") {
+            return "web";
+        }
+        return safeString(metadata.entity_type) || "entity";
+    }
+
+    if (lens === "domain") {
+        const domain = nodeDomain(node);
+        if (domain) {
+            return domain;
+        }
+        if (node.node_type === "MemoryChunk") {
+            return safeString(metadata.app_name) || "no-domain";
         }
         return node.node_type.toLowerCase();
     }
 
     if (node.node_type === "MemoryChunk") {
-        const appName = safeString(metadata.app_name);
-        const memoryType = safeString(metadata.memory_type);
-        if (memoryType) {
-            return `type:${memoryType}`;
-        }
-        return `type:${classifyMemoryTypeFromApp(appName)}`;
-    }
-    if (node.node_type === "Task") {
-        return "type:task";
-    }
-    if (node.node_type === "Url") {
-        return "type:web";
+        return sessionIdForMemory(node);
     }
     if (node.node_type === "Entity") {
-        const entityType = safeString(metadata.entity_type);
-        return entityType ? `type:${entityType}` : "type:entity";
+        return safeString(metadata.session_id) || "session-entity";
     }
-    return "type:other";
+    return node.node_type.toLowerCase();
 }
 
-function buildClusterCenters(keys: string[], width: number, height: number): Map<string, { x: number; y: number }> {
+function radialPositions(keys: string[], width: number, height: number): Map<string, { x: number; y: number }> {
     const unique = [...new Set(keys)];
-    const centers = new Map<string, { x: number; y: number }>();
-    const cx = width / 2;
-    const cy = height / 2;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const radius = Math.min(width, height) * 0.36;
+    const map = new Map<string, { x: number; y: number }>();
 
-    if (unique.length <= 1) {
-        if (unique.length === 1) {
-            centers.set(unique[0], { x: cx, y: cy });
-        }
-        return centers;
+    if (unique.length === 0) {
+        return map;
     }
 
-    const radius = Math.min(width, height) * 0.28;
+    if (unique.length === 1) {
+        map.set(unique[0], { x: centerX, y: centerY });
+        return map;
+    }
+
     unique.forEach((key, index) => {
-        const angle = (index / unique.length) * Math.PI * 2;
-        centers.set(key, {
-            x: cx + Math.cos(angle) * radius,
-            y: cy + Math.sin(angle) * radius,
+        const angle = (index / unique.length) * Math.PI * 2 - Math.PI / 2;
+        map.set(key, {
+            x: centerX + Math.cos(angle) * radius,
+            y: centerY + Math.sin(angle) * radius,
         });
     });
 
-    return centers;
+    return map;
 }
 
-function layoutNodes(nodes: GraphNodeData[], clusterMode: ClusterMode): SimNode[] {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-    const keys = nodes.map((node) => clusterKeyForNode(node, clusterMode));
-    const centers = buildClusterCenters(keys, width, height);
-    const perClusterCount = new Map<string, number>();
-
-    return nodes.map((node) => {
-        const key = clusterKeyForNode(node, clusterMode);
-        const center = centers.get(key) ?? { x: width / 2, y: height / 2 };
-        const ordinal = perClusterCount.get(key) ?? 0;
-        perClusterCount.set(key, ordinal + 1);
-
-        const seed = hashCode(`${node.id}:${key}:${ordinal}`);
-        const angle = ((seed % 360) * Math.PI) / 180;
-        const spread = 20 + (seed % 90);
-
-        return {
-            ...node,
-            x: center.x + Math.cos(angle) * spread,
-            y: center.y + Math.sin(angle) * spread,
-            vx: 0,
-            vy: 0,
-            fx: null,
-            fy: null,
-        };
-    });
+function typeCountBadge(counts: Record<GraphNodeType, number>): string {
+    return NODE_TYPE_ORDER.map((type) => `${NODE_TYPE_META[type].short}:${counts[type] ?? 0}`).join(" • ");
 }
 
 export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const animFrameRef = useRef<number>(0);
     const [rawNodes, setRawNodes] = useState<GraphNodeData[]>([]);
-    const [nodes, setNodes] = useState<SimNode[]>([]);
-    const [edges, setEdges] = useState<GraphEdgeData[]>([]);
+    const [rawEdges, setRawEdges] = useState<GraphEdgeData[]>([]);
     const [loading, setLoading] = useState(true);
-    const [tooltip, setTooltip] = useState<TooltipState | null>(null);
-    const [activeFilters, setActiveFilters] = useState<Set<string>>(
-        new Set(["MemoryChunk", "Entity", "Task", "Url"])
-    );
-    const [clusterMode, setClusterMode] = useState<ClusterMode>("session");
-    const [zoom, setZoom] = useState(1);
-    const [pan, setPan] = useState({ x: 0, y: 0 });
-    const dragRef = useRef<{
-        isDragging: boolean;
-        node: SimNode | null;
-        startX: number;
-        startY: number;
-        isPanning: boolean;
-    }>({ isDragging: false, node: null, startX: 0, startY: 0, isPanning: false });
+
+    const [viewMode, setViewMode] = useState<ViewMode>("timeline");
+    const [clusterLens, setClusterLens] = useState<ClusterLens>("app");
+    const [activityFacet, setActivityFacet] = useState<ActivityFacet>("all");
+    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+    const [selectedClusterKey, setSelectedClusterKey] = useState<string | null>(null);
+    const [journeyStartId, setJourneyStartId] = useState<string>("");
+    const [journeyEndId, setJourneyEndId] = useState<string>("");
 
     useEffect(() => {
         if (!isVisible) {
@@ -252,342 +611,488 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
         getGraphData()
             .then((data) => {
                 setRawNodes(data.nodes);
-                setNodes(layoutNodes(data.nodes, clusterMode));
-                setEdges(data.edges);
-                setLoading(false);
+                setRawEdges(data.edges);
             })
             .catch((err) => {
                 console.error("Failed to load graph data:", err);
+            })
+            .finally(() => {
                 setLoading(false);
             });
     }, [isVisible]);
 
-    useEffect(() => {
-        if (!isVisible || rawNodes.length === 0) {
-            return;
-        }
-        setNodes(layoutNodes(rawNodes, clusterMode));
-        setPan({ x: 0, y: 0 });
-        setZoom(1);
-    }, [clusterMode, isVisible, rawNodes]);
-
-    useEffect(() => {
-        if (!isVisible || nodes.length === 0) {
-            return;
-        }
-
-        let running = true;
-        const nodeMap = new Map<string, SimNode>();
-        nodes.forEach((node) => nodeMap.set(node.id, node));
-
-        const centerX = window.innerWidth / 2;
-        const centerY = window.innerHeight / 2;
-        const clusterCenters = buildClusterCenters(
-            nodes.map((node) => clusterKeyForNode(node, clusterMode)),
-            window.innerWidth,
-            window.innerHeight
-        );
-
-        const simulate = () => {
-            if (!running) {
-                return;
-            }
-
-            const alpha = 0.3;
-            const repulsion = 720;
-            const attraction = 0.004;
-            const damping = 0.85;
-
-            for (let i = 0; i < nodes.length; i++) {
-                for (let j = i + 1; j < nodes.length; j++) {
-                    const a = nodes[i];
-                    const b = nodes[j];
-                    if (!activeFilters.has(a.node_type) || !activeFilters.has(b.node_type)) {
-                        continue;
-                    }
-
-                    const dx = a.x - b.x;
-                    const dy = a.y - b.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                    const force = (repulsion / (dist * dist)) * alpha;
-
-                    if (a.fx == null) {
-                        a.vx += (dx / dist) * force;
-                        a.vy += (dy / dist) * force;
-                    }
-                    if (b.fx == null) {
-                        b.vx -= (dx / dist) * force;
-                        b.vy -= (dy / dist) * force;
-                    }
-                }
-            }
-
-            for (const edge of edges) {
-                const source = nodeMap.get(edge.source);
-                const target = nodeMap.get(edge.target);
-                if (!source || !target) {
-                    continue;
-                }
-                if (
-                    !activeFilters.has(source.node_type) ||
-                    !activeFilters.has(target.node_type)
-                ) {
-                    continue;
-                }
-
-                const dx = target.x - source.x;
-                const dy = target.y - source.y;
-                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                const force = dist * attraction * alpha;
-
-                if (source.fx == null) {
-                    source.vx += (dx / dist) * force;
-                    source.vy += (dy / dist) * force;
-                }
-                if (target.fx == null) {
-                    target.vx -= (dx / dist) * force;
-                    target.vy -= (dy / dist) * force;
-                }
-            }
-
-            for (const node of nodes) {
-                if (!activeFilters.has(node.node_type) || node.fx != null) {
-                    continue;
-                }
-
-                const key = clusterKeyForNode(node, clusterMode);
-                const anchor = clusterCenters.get(key) ?? { x: centerX, y: centerY };
-                node.vx += (anchor.x - node.x) * 0.0018;
-                node.vy += (anchor.y - node.y) * 0.0018;
-            }
-
-            for (const node of nodes) {
-                if (node.fx != null) {
-                    node.x = node.fx;
-                    node.y = node.fy ?? node.y;
-                    node.vx = 0;
-                    node.vy = 0;
-                } else {
-                    node.vx *= damping;
-                    node.vy *= damping;
-                    node.x += node.vx;
-                    node.y += node.vy;
-                }
-            }
-
-            setNodes([...nodes]);
-            animFrameRef.current = requestAnimationFrame(simulate);
+    const activityFacetCounts = useMemo(() => {
+        const counts: Record<ActivityFacet, number> = {
+            all: 0,
+            productive: 0,
+            unproductive: 0,
+            learning: 0,
+            communication: 0,
+            research: 0,
+            neutral: 0,
         };
+        for (const node of rawNodes) {
+            if (!isGraphNodeType(node.node_type)) {
+                continue;
+            }
+            counts.all += 1;
+            counts[activityFacetForNode(node)] += 1;
+        }
+        return counts;
+    }, [rawNodes]);
 
-        animFrameRef.current = requestAnimationFrame(simulate);
-        return () => {
-            running = false;
-            cancelAnimationFrame(animFrameRef.current);
-        };
-    }, [isVisible, nodes.length, edges.length, activeFilters, clusterMode]);
+    const filteredNodes = useMemo<TypedGraphNode[]>(
+        () =>
+            rawNodes.filter(
+                (node) => isGraphNodeType(node.node_type) && nodeMatchesActivityFacet(node, activityFacet)
+            ) as TypedGraphNode[],
+        [rawNodes, activityFacet]
+    );
+
+    const filteredNodeMap = useMemo(() => {
+        const map = new Map<string, TypedGraphNode>();
+        filteredNodes.forEach((node) => map.set(node.id, node));
+        return map;
+    }, [filteredNodes]);
+
+    const filteredEdges = useMemo(
+        () => rawEdges.filter((edge) => filteredNodeMap.has(edge.source) && filteredNodeMap.has(edge.target)),
+        [rawEdges, filteredNodeMap]
+    );
+
+    const edgeByPair = useMemo(() => {
+        const map = new Map<string, GraphEdgeData>();
+        for (const edge of filteredEdges) {
+            const keyA = `${edge.source}|${edge.target}`;
+            const keyB = `${edge.target}|${edge.source}`;
+            map.set(keyA, edge);
+            map.set(keyB, edge);
+        }
+        return map;
+    }, [filteredEdges]);
+
+    const adjacency = useMemo(() => buildAdjacency(filteredEdges, filteredNodeMap), [filteredEdges, filteredNodeMap]);
+
+    const neighborCounts = useMemo(() => {
+        const map = new Map<string, number>();
+        adjacency.forEach((neighbors, key) => map.set(key, neighbors.size));
+        return map;
+    }, [adjacency]);
+
+    const sortedNodesByTime = useMemo(
+        () => [...filteredNodes].sort((a, b) => b.created_at - a.created_at),
+        [filteredNodes]
+    );
 
     useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas || !isVisible) {
+        if (!isVisible || sortedNodesByTime.length === 0) {
             return;
         }
 
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-            return;
+        if (!selectedNodeId || !filteredNodeMap.has(selectedNodeId)) {
+            setSelectedNodeId(sortedNodesByTime[0].id);
         }
 
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+        if (!journeyStartId || !filteredNodeMap.has(journeyStartId)) {
+            setJourneyStartId(sortedNodesByTime[Math.min(5, sortedNodesByTime.length - 1)].id);
+        }
 
-        const nodeMap = new Map<string, SimNode>();
-        nodes.forEach((node) => nodeMap.set(node.id, node));
+        if (!journeyEndId || !filteredNodeMap.has(journeyEndId)) {
+            setJourneyEndId(sortedNodesByTime[0].id);
+        }
+    }, [
+        isVisible,
+        sortedNodesByTime,
+        selectedNodeId,
+        journeyStartId,
+        journeyEndId,
+        filteredNodeMap,
+    ]);
 
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.save();
-        ctx.translate(pan.x, pan.y);
-        ctx.scale(zoom, zoom);
+    const memoryNodes = useMemo(
+        () => sortedNodesByTime.filter((node) => node.node_type === "MemoryChunk"),
+        [sortedNodesByTime]
+    );
 
-        ctx.globalAlpha = 0.1;
-        for (const edge of edges) {
-            const source = nodeMap.get(edge.source);
-            const target = nodeMap.get(edge.target);
+    const sessionLabels = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const node of rawNodes) {
+            if (node.node_type !== "Entity") {
+                continue;
+            }
+            const sessionId = safeString(node.metadata?.session_id);
+            if (sessionId) {
+                map.set(sessionId, node.label || `Session ${sessionId.slice(0, 6)}`);
+            }
+        }
+        return map;
+    }, [rawNodes]);
+
+    const relationSignalsByMemory = useMemo(() => {
+        const map = new Map<string, string[]>();
+
+        for (let i = 0; i < memoryNodes.length - 1; i++) {
+            const current = memoryNodes[i];
+            const previous = memoryNodes[i + 1];
+            const signals = relationSignals(current, previous);
+            if (signals.length > 0) {
+                map.set(current.id, signals.slice(0, 2));
+            }
+        }
+
+        return map;
+    }, [memoryNodes]);
+
+    const sessions = useMemo(() => {
+        const grouping = new Map<string, SessionGroup>();
+
+        for (const memory of memoryNodes) {
+            const sessionId = sessionIdForMemory(memory);
+            if (!grouping.has(sessionId)) {
+                const sessionLabel = sessionLabels.get(sessionId) || `Session ${sessionId.slice(0, 8)}`;
+                grouping.set(sessionId, {
+                    id: sessionId,
+                    label: sessionLabel,
+                    memoryIds: [],
+                    firstTs: memory.created_at,
+                    lastTs: memory.created_at,
+                });
+            }
+
+            const bucket = grouping.get(sessionId);
+            if (!bucket) {
+                continue;
+            }
+
+            bucket.memoryIds.push(memory.id);
+            bucket.firstTs = Math.min(bucket.firstTs, memory.created_at);
+            bucket.lastTs = Math.max(bucket.lastTs, memory.created_at);
+        }
+
+        return [...grouping.values()]
+            .sort((a, b) => b.lastTs - a.lastTs)
+            .map((session) => ({
+                ...session,
+                memoryIds: [...session.memoryIds].sort((a, b) => {
+                    const left = filteredNodeMap.get(a)?.created_at ?? 0;
+                    const right = filteredNodeMap.get(b)?.created_at ?? 0;
+                    return right - left;
+                }),
+            }));
+    }, [memoryNodes, sessionLabels, filteredNodeMap]);
+
+    const clusters = useMemo(() => {
+        const map = new Map<string, ClusterGroup>();
+
+        for (const node of filteredNodes) {
+            const key = clusterKeyForNode(node, clusterLens) || "unassigned";
+            if (!map.has(key)) {
+                map.set(key, {
+                    key,
+                    label: key,
+                    nodeIds: [],
+                    typeCounts: {
+                        MemoryChunk: 0,
+                        Entity: 0,
+                        Task: 0,
+                        Url: 0,
+                    },
+                    edgeTouches: 0,
+                });
+            }
+
+            const cluster = map.get(key);
+            if (!cluster) {
+                continue;
+            }
+
+            cluster.nodeIds.push(node.id);
+            cluster.typeCounts[node.node_type] += 1;
+        }
+
+        for (const edge of filteredEdges) {
+            const source = filteredNodeMap.get(edge.source);
+            const target = filteredNodeMap.get(edge.target);
             if (!source || !target) {
                 continue;
             }
-            if (
-                !activeFilters.has(source.node_type) ||
-                !activeFilters.has(target.node_type)
-            ) {
+
+            const sourceKey = clusterKeyForNode(source, clusterLens) || "unassigned";
+            const targetKey = clusterKeyForNode(target, clusterLens) || "unassigned";
+
+            if (sourceKey === targetKey) {
+                const cluster = map.get(sourceKey);
+                if (cluster) {
+                    cluster.edgeTouches += 1;
+                }
                 continue;
             }
 
-            ctx.beginPath();
-            ctx.moveTo(source.x, source.y);
-            ctx.lineTo(target.x, target.y);
-            ctx.strokeStyle = "rgba(140, 140, 148, 0.5)";
-            ctx.lineWidth = 0.7;
-            ctx.stroke();
+            const left = map.get(sourceKey);
+            const right = map.get(targetKey);
+            if (left) {
+                left.edgeTouches += 1;
+            }
+            if (right) {
+                right.edgeTouches += 1;
+            }
         }
 
-        ctx.globalAlpha = 1;
-        for (const node of nodes) {
-            if (!activeFilters.has(node.node_type)) {
+        return [...map.values()].sort((a, b) => b.nodeIds.length - a.nodeIds.length);
+    }, [filteredNodes, filteredEdges, filteredNodeMap, clusterLens]);
+
+    const clusterConnections = useMemo(() => {
+        const counts = new Map<string, number>();
+
+        for (const edge of filteredEdges) {
+            const source = filteredNodeMap.get(edge.source);
+            const target = filteredNodeMap.get(edge.target);
+            if (!source || !target) {
                 continue;
             }
 
-            const color = NODE_COLORS[node.node_type] || "#888";
-            const size = NODE_SIZES[node.node_type] || 6;
-
-            ctx.beginPath();
-            ctx.arc(node.x, node.y, size + 4, 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
-            ctx.fill();
-
-            ctx.beginPath();
-            ctx.arc(node.x, node.y, size, 0, Math.PI * 2);
-            ctx.fillStyle = color;
-            ctx.fill();
-
-            if (size >= 8 && zoom > 1.35) {
-                ctx.fillStyle = "rgba(220, 220, 224, 0.75)";
-                ctx.font = "10px -apple-system, system-ui, sans-serif";
-                ctx.textAlign = "center";
-                ctx.fillText(
-                    node.label.length > 25
-                        ? `${node.label.slice(0, 22)}...`
-                        : node.label,
-                    node.x,
-                    node.y + size + 14
-                );
+            const sourceKey = clusterKeyForNode(source, clusterLens) || "unassigned";
+            const targetKey = clusterKeyForNode(target, clusterLens) || "unassigned";
+            if (sourceKey === targetKey) {
+                continue;
             }
+
+            const pair = [sourceKey, targetKey].sort().join("|");
+            counts.set(pair, (counts.get(pair) ?? 0) + 1);
         }
 
-        ctx.restore();
-    }, [nodes, edges, zoom, pan, activeFilters, isVisible]);
+        return counts;
+    }, [filteredEdges, filteredNodeMap, clusterLens]);
 
-    const getNodeAt = useCallback(
-        (mx: number, my: number): SimNode | null => {
-            const worldX = (mx - pan.x) / zoom;
-            const worldY = (my - pan.y) / zoom;
+    const topClusters = useMemo(() => clusters.slice(0, 10), [clusters]);
 
-            for (const node of nodes) {
-                if (!activeFilters.has(node.node_type)) {
+    const clusterPositions = useMemo(() => {
+        const keys = topClusters.map((cluster) => cluster.key);
+        return radialPositions(keys, 980, 430);
+    }, [topClusters]);
+
+    useEffect(() => {
+        if (topClusters.length === 0) {
+            setSelectedClusterKey(null);
+            return;
+        }
+
+        if (!selectedClusterKey || !topClusters.some((cluster) => cluster.key === selectedClusterKey)) {
+            setSelectedClusterKey(topClusters[0].key);
+        }
+    }, [topClusters, selectedClusterKey]);
+
+    const selectedCluster = useMemo(
+        () => topClusters.find((cluster) => cluster.key === selectedClusterKey) ?? null,
+        [topClusters, selectedClusterKey]
+    );
+
+    const focusLayout = useMemo<FocusLayout>(() => {
+        if (filteredNodes.length === 0) {
+            return {
+                positions: new Map(),
+                displayNodeIds: new Set(),
+                centerId: null,
+            };
+        }
+
+        const centerId =
+            selectedNodeId && filteredNodeMap.has(selectedNodeId)
+                ? selectedNodeId
+                : filteredNodes[0].id;
+
+        const firstDegree = [...(adjacency.get(centerId) ?? new Set())].slice(0, 10);
+        const secondDegreeSet = new Set<string>();
+
+        for (const first of firstDegree) {
+            const neighbors = adjacency.get(first);
+            if (!neighbors) {
+                continue;
+            }
+            for (const candidate of neighbors) {
+                if (candidate === centerId || firstDegree.includes(candidate)) {
                     continue;
                 }
-                const size = NODE_SIZES[node.node_type] || 6;
-                const dx = worldX - node.x;
-                const dy = worldY - node.y;
-                if (dx * dx + dy * dy < (size + 5) * (size + 5)) {
-                    return node;
+                secondDegreeSet.add(candidate);
+                if (secondDegreeSet.size >= 14) {
+                    break;
                 }
             }
-            return null;
-        },
-        [nodes, zoom, pan, activeFilters]
-    );
-
-    const handleMouseDown = useCallback(
-        (event: React.MouseEvent) => {
-            const node = getNodeAt(event.clientX, event.clientY);
-            if (node) {
-                dragRef.current = {
-                    isDragging: true,
-                    node,
-                    startX: event.clientX,
-                    startY: event.clientY,
-                    isPanning: false,
-                };
-                node.fx = node.x;
-                node.fy = node.y;
-            } else {
-                dragRef.current = {
-                    isDragging: false,
-                    node: null,
-                    startX: event.clientX,
-                    startY: event.clientY,
-                    isPanning: true,
-                };
+            if (secondDegreeSet.size >= 14) {
+                break;
             }
-        },
-        [getNodeAt]
-    );
-
-    const handleMouseMove = useCallback(
-        (event: React.MouseEvent) => {
-            if (dragRef.current.isDragging && dragRef.current.node) {
-                const node = dragRef.current.node;
-                node.fx = (event.clientX - pan.x) / zoom;
-                node.fy = (event.clientY - pan.y) / zoom;
-                setTooltip(null);
-            } else if (dragRef.current.isPanning) {
-                const dx = event.clientX - dragRef.current.startX;
-                const dy = event.clientY - dragRef.current.startY;
-                setPan((current) => ({ x: current.x + dx, y: current.y + dy }));
-                dragRef.current.startX = event.clientX;
-                dragRef.current.startY = event.clientY;
-            } else {
-                const node = getNodeAt(event.clientX, event.clientY);
-                if (node) {
-                    setTooltip({ node, x: event.clientX + 15, y: event.clientY + 15 });
-                } else {
-                    setTooltip(null);
-                }
-            }
-        },
-        [getNodeAt, zoom, pan]
-    );
-
-    const handleMouseUp = useCallback(() => {
-        if (dragRef.current.node) {
-            dragRef.current.node.fx = null;
-            dragRef.current.node.fy = null;
         }
-        dragRef.current = {
-            isDragging: false,
-            node: null,
-            startX: 0,
-            startY: 0,
-            isPanning: false,
-        };
-    }, []);
 
-    const handleWheel = useCallback((event: React.WheelEvent) => {
-        event.preventDefault();
-        const delta = event.deltaY > 0 ? 0.9 : 1.1;
-        setZoom((current) => Math.min(Math.max(current * delta, 0.1), 5));
-    }, []);
+        const secondDegree = [...secondDegreeSet];
+        const displayNodeIds = new Set<string>([centerId, ...firstDegree, ...secondDegree]);
+        const positions = new Map<string, { x: number; y: number; ring: 0 | 1 | 2 }>();
 
-    const toggleFilter = (type: string) => {
-        setActiveFilters((previous) => {
-            const next = new Set(previous);
-            if (next.has(type)) {
-                next.delete(type);
-            } else {
-                next.add(type);
-            }
-            return next;
+        const centerX = 490;
+        const centerY = 220;
+        positions.set(centerId, { x: centerX, y: centerY, ring: 0 });
+
+        const firstRadius = 132;
+        firstDegree.forEach((nodeId, index) => {
+            const angle = (index / Math.max(firstDegree.length, 1)) * Math.PI * 2 - Math.PI / 2;
+            positions.set(nodeId, {
+                x: centerX + Math.cos(angle) * firstRadius,
+                y: centerY + Math.sin(angle) * firstRadius,
+                ring: 1,
+            });
         });
-    };
+
+        const secondRadius = 212;
+        secondDegree.forEach((nodeId, index) => {
+            const angle = (index / Math.max(secondDegree.length, 1)) * Math.PI * 2 - Math.PI / 2;
+            positions.set(nodeId, {
+                x: centerX + Math.cos(angle) * secondRadius,
+                y: centerY + Math.sin(angle) * secondRadius,
+                ring: 2,
+            });
+        });
+
+        return {
+            positions,
+            displayNodeIds,
+            centerId,
+        };
+    }, [filteredNodes, selectedNodeId, filteredNodeMap, adjacency]);
+
+    const focusEdges = useMemo(
+        () =>
+            filteredEdges.filter(
+                (edge) =>
+                    focusLayout.displayNodeIds.has(edge.source) &&
+                    focusLayout.displayNodeIds.has(edge.target)
+            ),
+        [filteredEdges, focusLayout.displayNodeIds]
+    );
+
+    const focusNeighborNodes = useMemo(() => {
+        if (!focusLayout.centerId) {
+            return [];
+        }
+
+        const neighbors = [...(adjacency.get(focusLayout.centerId) ?? new Set())];
+        return neighbors
+            .map((id) => filteredNodeMap.get(id))
+            .filter((node): node is TypedGraphNode => Boolean(node))
+            .sort((a, b) => b.created_at - a.created_at)
+            .slice(0, 12);
+    }, [focusLayout.centerId, adjacency, filteredNodeMap]);
+
+    const journeyOptions = useMemo(() => sortedNodesByTime.slice(0, 120), [sortedNodesByTime]);
+
+    const journeyPath = useMemo(
+        () => shortestPath(journeyStartId, journeyEndId, adjacency),
+        [journeyStartId, journeyEndId, adjacency]
+    );
+
+    const timelineBridge = useMemo(() => {
+        if (journeyPath.length > 0 || !journeyStartId || !journeyEndId) {
+            return [] as GraphNodeData[];
+        }
+
+        const start = filteredNodeMap.get(journeyStartId);
+        const end = filteredNodeMap.get(journeyEndId);
+        if (!start || !end) {
+            return [];
+        }
+
+        const minTs = Math.min(start.created_at, end.created_at);
+        const maxTs = Math.max(start.created_at, end.created_at);
+
+        return memoryNodes
+            .filter((node) => node.created_at >= minTs && node.created_at <= maxTs)
+            .slice(0, 8);
+    }, [journeyPath.length, journeyStartId, journeyEndId, filteredNodeMap, memoryNodes]);
+
+    const journeyWeb = useMemo(() => {
+        const pathIds = journeyPath.slice(0, 12);
+        if (pathIds.length === 0) {
+            return {
+                points: [] as Array<{ id: string; x: number; y: number; branch: boolean }>,
+                edges: [] as Array<{ source: string; target: string; branch: boolean }>,
+            };
+        }
+
+        const spacing = pathIds.length > 1 ? 860 / (pathIds.length - 1) : 0;
+        const points: Array<{ id: string; x: number; y: number; branch: boolean }> = pathIds.map((id, index) => ({
+            id,
+            x: 60 + index * spacing,
+            y: 120 + Math.sin(index * 0.9) * 30,
+            branch: false,
+        }));
+
+        const pathSet = new Set(pathIds);
+        const edges: Array<{ source: string; target: string; branch: boolean }> = [];
+
+        for (let i = 0; i < pathIds.length - 1; i++) {
+            edges.push({ source: pathIds[i], target: pathIds[i + 1], branch: false });
+        }
+
+        pathIds.forEach((id, index) => {
+            const neighbors = [...(adjacency.get(id) ?? new Set())].filter((candidate) => !pathSet.has(candidate));
+            const branchId = neighbors[0];
+            if (!branchId) {
+                return;
+            }
+
+            const source = points.find((point) => point.id === id);
+            if (!source) {
+                return;
+            }
+
+            const offsetY = index % 2 === 0 ? -60 : 62;
+            points.push({
+                id: branchId,
+                x: source.x + (index % 2 === 0 ? -18 : 18),
+                y: source.y + offsetY,
+                branch: true,
+            });
+            edges.push({ source: id, target: branchId, branch: true });
+        });
+
+        return { points, edges };
+    }, [journeyPath, adjacency]);
+
+    const openFocus = useCallback((nodeId: string) => {
+        setSelectedNodeId(nodeId);
+        setViewMode("focus");
+    }, []);
+
+    const productivityScore = useMemo(() => {
+        const positive =
+            activityFacetCounts.productive +
+            activityFacetCounts.learning +
+            activityFacetCounts.research;
+        const negative = activityFacetCounts.unproductive;
+        const total = Math.max(activityFacetCounts.all, 1);
+
+        return {
+            positive,
+            negative,
+            positivePct: ((positive / total) * 100).toFixed(0),
+            negativePct: ((negative / total) * 100).toFixed(0),
+        };
+    }, [activityFacetCounts]);
 
     if (!isVisible) {
         return null;
     }
 
-    const filteredNodes = nodes.filter((node) => activeFilters.has(node.node_type));
-    const filteredNodeIds = new Set(filteredNodes.map((node) => node.id));
-    const filteredEdgesCount = edges.filter(
-        (edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target)
-    ).length;
-
     return (
         <div className="graph-panel">
             <div className="graph-header">
-                <div className="graph-header-left">
+                <div className="graph-title-wrap">
                     <h2>Knowledge Graph</h2>
-                    <div className="graph-stats">
-                        <span>◉ {filteredNodes.length} nodes</span>
-                        <span>─ {filteredEdgesCount} edges</span>
+                    <p>Multi-view memory graph: timeline, clusters, focused ego graph, and journeys.</p>
+                    <div className="graph-stats-row">
+                        <span>◉ {filteredNodes.length}/{rawNodes.length} nodes</span>
+                        <span>─ {filteredEdges.length}/{rawEdges.length} edges</span>
+                        <span>◷ {sessions.length} sessions</span>
+                        <span>▲ {productivityScore.positivePct}% productive-like</span>
+                        <span>▼ {productivityScore.negativePct}% unproductive</span>
                     </div>
                 </div>
                 <button className="ui-action-btn graph-close-btn" onClick={onClose}>
@@ -595,101 +1100,622 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
                 </button>
             </div>
 
-            <div className="graph-cluster-modes">
-                <span className="graph-cluster-label">Cluster by</span>
-                {CLUSTER_MODES.map((mode) => (
-                    <button
-                        key={mode.key}
-                        className={`ui-action-btn graph-mode-btn ${clusterMode === mode.key ? "active" : ""}`}
-                        onClick={() => setClusterMode(mode.key)}
-                    >
-                        {mode.label}
-                    </button>
-                ))}
+            <div className="graph-top-controls">
+                <div className="graph-mode-tabs" role="tablist" aria-label="Graph Views">
+                    {VIEW_MODES.map((mode) => (
+                        <button
+                            key={mode.key}
+                            className={`ui-action-btn graph-mode-tab ${viewMode === mode.key ? "active" : ""}`}
+                            onClick={() => setViewMode(mode.key)}
+                            title={mode.description}
+                        >
+                            {mode.label}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="graph-type-filters">
+                    {ACTIVITY_FACETS.map((facet) => (
+                        <button
+                            key={facet.key}
+                            className={`graph-type-filter ${activityFacet === facet.key ? "active" : "inactive"}`}
+                            onClick={() => setActivityFacet(facet.key)}
+                        >
+                            <span
+                                className="graph-type-dot"
+                                style={{ background: ACTIVITY_FACET_COLORS[facet.key] }}
+                            />
+                            {facet.label}
+                            <strong>{activityFacetCounts[facet.key]}</strong>
+                        </button>
+                    ))}
+                </div>
             </div>
 
-            <div className="graph-filters">
-                {(
-                    [
-                        ["MemoryChunk", "memory", "Memories"],
-                        ["Entity", "entity", "Entities"],
-                        ["Task", "task", "Tasks"],
-                        ["Url", "url", "Links"],
-                    ] as const
-                ).map(([type, dotClass, label]) => (
-                    <button
-                        key={type}
-                        className={`ui-action-btn graph-filter-btn ${activeFilters.has(type) ? "active" : ""}`}
-                        onClick={() => toggleFilter(type)}
-                    >
-                        <span className={`graph-filter-dot dot-${dotClass}`} />
-                        {label}
-                    </button>
-                ))}
-            </div>
-
-            <div className="graph-canvas-container">
+            <div className="graph-view-shell">
                 {loading ? (
                     <div className="graph-loading">
                         <div className="spinner" />
                         Loading graph data...
                     </div>
-                ) : nodes.length === 0 ? (
+                ) : filteredNodes.length === 0 ? (
                     <div className="graph-empty">
-                        <p>
-                            No graph data yet. Keep FNDR running to build your
-                            knowledge graph from screen captures.
-                        </p>
+                        <p>No visible graph data for the selected activity filter.</p>
                     </div>
                 ) : (
                     <>
-                        <canvas
-                            ref={canvasRef}
-                            className="graph-canvas"
-                            onMouseDown={handleMouseDown}
-                            onMouseMove={handleMouseMove}
-                            onMouseUp={handleMouseUp}
-                            onMouseLeave={handleMouseUp}
-                            onWheel={handleWheel}
-                        />
-                        <div className="graph-controls">
-                            <button
-                                className="ui-action-btn graph-control-btn"
-                                onClick={() => setZoom((current) => Math.min(current * 1.3, 5))}
-                            >
-                                +
-                            </button>
-                            <button
-                                className="ui-action-btn graph-control-btn"
-                                onClick={() => setZoom((current) => Math.max(current * 0.7, 0.1))}
-                            >
-                                −
-                            </button>
-                            <button
-                                className="ui-action-btn graph-control-btn"
-                                onClick={() => {
-                                    setZoom(1);
-                                    setPan({ x: 0, y: 0 });
-                                }}
-                            >
-                                ⟲
-                            </button>
-                        </div>
+                        {viewMode === "timeline" && (
+                            <div className="graph-view timeline-view">
+                                <div className="view-header">
+                                    <h3>Session Timeline</h3>
+                                    <p>Chronological sessions with lightweight relationship signals.</p>
+                                </div>
+                                <div className="timeline-list">
+                                    {sessions.map((session) => {
+                                        const miniIds = session.memoryIds.slice(0, 12);
+                                        const miniPoints = miniIds.map((id, index) => {
+                                            const step = miniIds.length > 1 ? 840 / (miniIds.length - 1) : 0;
+                                            return {
+                                                id,
+                                                x: 44 + index * step,
+                                                y: 48 + Math.sin(index * 0.8) * 18 + ((index % 3) - 1) * 8,
+                                            };
+                                        });
+                                        const miniPointMap = new Map(miniPoints.map((point) => [point.id, point]));
+                                        const miniEdges: Array<{ source: string; target: string; relation: boolean }> = [];
+
+                                        for (let i = 0; i < miniIds.length - 1; i++) {
+                                            miniEdges.push({ source: miniIds[i], target: miniIds[i + 1], relation: false });
+                                        }
+
+                                        for (let i = 0; i < miniIds.length; i++) {
+                                            for (let j = i + 2; j < Math.min(miniIds.length, i + 6); j++) {
+                                                const source = miniIds[i];
+                                                const target = miniIds[j];
+                                                if (adjacency.get(source)?.has(target)) {
+                                                    miniEdges.push({ source, target, relation: true });
+                                                }
+                                            }
+                                        }
+
+                                        return (
+                                            <article key={session.id} className="timeline-session">
+                                            <header className="timeline-session-header">
+                                                <div>
+                                                    <h4>{session.label}</h4>
+                                                    <p>
+                                                        {formatDateTime(session.firstTs)} to {formatDateTime(session.lastTs)}
+                                                    </p>
+                                                </div>
+                                                <span>{session.memoryIds.length} memories</span>
+                                            </header>
+
+                                            {miniPoints.length > 1 && (
+                                                <div className="timeline-session-graph">
+                                                    <svg viewBox="0 0 930 108" className="timeline-session-graph-svg">
+                                                        {miniEdges.map((edge, index) => {
+                                                            const source = miniPointMap.get(edge.source);
+                                                            const target = miniPointMap.get(edge.target);
+                                                            if (!source || !target) {
+                                                                return null;
+                                                            }
+                                                            return (
+                                                                <line
+                                                                    key={`${session.id}-edge-${index}`}
+                                                                    x1={source.x}
+                                                                    y1={source.y}
+                                                                    x2={target.x}
+                                                                    y2={target.y}
+                                                                    className={edge.relation ? "edge-relation" : "edge-chain"}
+                                                                />
+                                                            );
+                                                        })}
+
+                                                        {miniPoints.map((point, index) => {
+                                                            const node = filteredNodeMap.get(point.id);
+                                                            if (!node) {
+                                                                return null;
+                                                            }
+                                                            return (
+                                                                <g
+                                                                    key={`${session.id}-node-${point.id}`}
+                                                                    className="timeline-graph-node"
+                                                                    onClick={() => openFocus(point.id)}
+                                                                >
+                                                                    <circle
+                                                                        cx={point.x}
+                                                                        cy={point.y}
+                                                                        r={index === 0 ? 7.6 : 6}
+                                                                    />
+                                                                    <text x={point.x} y={point.y - 11} textAnchor="middle">
+                                                                        {index + 1}
+                                                                    </text>
+                                                                    <title>{node.label}</title>
+                                                                </g>
+                                                            );
+                                                        })}
+                                                    </svg>
+                                                </div>
+                                            )}
+
+                                            <div className="timeline-items">
+                                                {session.memoryIds.map((memoryId) => {
+                                                    const memory = filteredNodeMap.get(memoryId);
+                                                    if (!memory) {
+                                                        return null;
+                                                    }
+
+                                                    const neighbors = [...(adjacency.get(memory.id) ?? new Set())]
+                                                        .map((id) => filteredNodeMap.get(id))
+                                                        .filter((node): node is TypedGraphNode => Boolean(node));
+
+                                                    const byType = {
+                                                        tasks: neighbors.filter((node) => node.node_type === "Task").length,
+                                                        entities: neighbors.filter((node) => node.node_type === "Entity").length,
+                                                        links: neighbors.filter((node) => node.node_type === "Url").length,
+                                                    };
+
+                                                    const relationSignals = relationSignalsByMemory.get(memory.id) ?? [];
+                                                    const domain = nodeDomain(memory);
+                                                    const activity = activityFacetForNode(memory);
+
+                                                    return (
+                                                        <div key={memory.id} className="timeline-item">
+                                                            <button
+                                                                className="timeline-item-main"
+                                                                onClick={() => openFocus(memory.id)}
+                                                            >
+                                                                <div className="timeline-item-top">
+                                                                    <span>{formatTime(memory.created_at)}</span>
+                                                                    <span>{describeNode(memory)}</span>
+                                                                </div>
+                                                                <p>{shorten(memory.label || "Untitled memory", 150)}</p>
+                                                            </button>
+
+                                                            <div className="timeline-chip-row">
+                                                                <span
+                                                                    className="timeline-chip"
+                                                                    style={{
+                                                                        borderColor: `${ACTIVITY_FACET_COLORS[activity]}66`,
+                                                                        color: ACTIVITY_FACET_COLORS[activity],
+                                                                        background: `${ACTIVITY_FACET_COLORS[activity]}1A`,
+                                                                    }}
+                                                                >
+                                                                    {ACTIVITY_FACETS.find((entry) => entry.key === activity)?.label}
+                                                                </span>
+                                                                <span className="timeline-chip">{memoryTypeForNode(memory)}</span>
+                                                                {domain && <span className="timeline-chip">{domain}</span>}
+                                                                {byType.tasks > 0 && (
+                                                                    <span className="timeline-chip">{byType.tasks} task links</span>
+                                                                )}
+                                                                {byType.entities > 0 && (
+                                                                    <span className="timeline-chip">{byType.entities} entities</span>
+                                                                )}
+                                                                {byType.links > 0 && (
+                                                                    <span className="timeline-chip">{byType.links} URLs</span>
+                                                                )}
+                                                                {relationSignals.map((signal) => (
+                                                                    <span key={signal} className="timeline-chip relation">
+                                                                        {signal}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                            </article>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {viewMode === "cluster" && (
+                            <div className="graph-view cluster-view">
+                                <div className="view-header row">
+                                    <div>
+                                        <h3>Cluster Map</h3>
+                                        <p>Island view for exploration before drilling into details.</p>
+                                    </div>
+                                    <div className="cluster-lens-tabs">
+                                        {CLUSTER_LENSES.map((lens) => (
+                                            <button
+                                                key={lens.key}
+                                                className={`ui-action-btn ${clusterLens === lens.key ? "active" : ""}`}
+                                                onClick={() => setClusterLens(lens.key)}
+                                            >
+                                                {lens.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="cluster-layout">
+                                    <div className="cluster-map-card">
+                                        <svg viewBox="0 0 980 430" className="cluster-map">
+                                            {[...clusterConnections.entries()].map(([pair, count]) => {
+                                                const [leftKey, rightKey] = pair.split("|");
+                                                const left = clusterPositions.get(leftKey);
+                                                const right = clusterPositions.get(rightKey);
+                                                if (!left || !right) {
+                                                    return null;
+                                                }
+                                                return (
+                                                    <line
+                                                        key={pair}
+                                                        x1={left.x}
+                                                        y1={left.y}
+                                                        x2={right.x}
+                                                        y2={right.y}
+                                                        stroke="rgba(148, 163, 184, 0.35)"
+                                                        strokeWidth={Math.min(1 + count * 0.8, 5)}
+                                                    />
+                                                );
+                                            })}
+
+                                            {topClusters.map((cluster) => {
+                                                const pos = clusterPositions.get(cluster.key);
+                                                if (!pos) {
+                                                    return null;
+                                                }
+
+                                                const radius = 18 + Math.min(cluster.nodeIds.length, 24);
+                                                const isActive = cluster.key === selectedClusterKey;
+
+                                                return (
+                                                    <g
+                                                        key={cluster.key}
+                                                        className="cluster-node"
+                                                        onClick={() => setSelectedClusterKey(cluster.key)}
+                                                    >
+                                                        <circle
+                                                            cx={pos.x}
+                                                            cy={pos.y}
+                                                            r={radius}
+                                                            fill={isActive ? "rgba(96, 165, 250, 0.35)" : "rgba(17, 24, 39, 0.84)"}
+                                                            stroke={isActive ? "#60a5fa" : "rgba(148, 163, 184, 0.45)"}
+                                                            strokeWidth={isActive ? 2 : 1}
+                                                        />
+                                                        <text x={pos.x} y={pos.y + 4} textAnchor="middle">
+                                                            {cluster.nodeIds.length}
+                                                        </text>
+                                                        <text x={pos.x} y={pos.y + radius + 16} textAnchor="middle" className="cluster-label">
+                                                            {shorten(cluster.label, 18)}
+                                                        </text>
+                                                    </g>
+                                                );
+                                            })}
+                                        </svg>
+                                    </div>
+
+                                    <div className="cluster-side-panel">
+                                        <div className="cluster-list">
+                                            {topClusters.map((cluster) => (
+                                                <button
+                                                    key={cluster.key}
+                                                    className={`cluster-list-item ${cluster.key === selectedClusterKey ? "active" : ""}`}
+                                                    onClick={() => setSelectedClusterKey(cluster.key)}
+                                                >
+                                                    <div>
+                                                        <strong>{cluster.label}</strong>
+                                                        <p>{typeCountBadge(cluster.typeCounts)}</p>
+                                                    </div>
+                                                    <span>{cluster.nodeIds.length}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        {selectedCluster && (
+                                            <div className="cluster-drilldown">
+                                                <h4>{selectedCluster.label}</h4>
+                                                <p>{selectedCluster.nodeIds.length} nodes in this cluster</p>
+                                                <div className="cluster-members">
+                                                    {selectedCluster.nodeIds.slice(0, 8).map((nodeId) => {
+                                                        const node = filteredNodeMap.get(nodeId);
+                                                        if (!node) {
+                                                            return null;
+                                                        }
+                                                        return (
+                                                            <button
+                                                                key={node.id}
+                                                                className="cluster-member"
+                                                                onClick={() => openFocus(node.id)}
+                                                            >
+                                                                <span
+                                                                    className="pill"
+                                                                    style={{ background: `${NODE_TYPE_META[node.node_type].color}33` }}
+                                                                >
+                                                                    {NODE_TYPE_META[node.node_type].label}
+                                                                </span>
+                                                                <span>{shorten(node.label, 74)}</span>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {viewMode === "focus" && (
+                            <div className="graph-view focus-view">
+                                <div className="view-header row">
+                                    <div>
+                                        <h3>Focus Graph</h3>
+                                        <p>Ego graph for one memory/entity/task with first and second degree context.</p>
+                                    </div>
+                                    <select
+                                        className="focus-node-select"
+                                        value={focusLayout.centerId ?? ""}
+                                        onChange={(event) => setSelectedNodeId(event.target.value)}
+                                    >
+                                        {sortedNodesByTime.slice(0, 150).map((node) => (
+                                            <option key={node.id} value={node.id}>
+                                                {NODE_TYPE_META[node.node_type].label} • {shorten(node.label, 70)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {focusLayout.centerId && filteredNodeMap.get(focusLayout.centerId) && (
+                                    <>
+                                        <div className="focus-summary">
+                                            <span
+                                                className="pill"
+                                                style={{
+                                                    background: `${NODE_TYPE_META[filteredNodeMap.get(focusLayout.centerId)?.node_type ?? "MemoryChunk"].color}33`,
+                                                }}
+                                            >
+                                                {NODE_TYPE_META[filteredNodeMap.get(focusLayout.centerId)?.node_type ?? "MemoryChunk"].label}
+                                            </span>
+                                            <strong>{filteredNodeMap.get(focusLayout.centerId)?.label}</strong>
+                                            <span>{neighborCounts.get(focusLayout.centerId) ?? 0} direct connections</span>
+                                        </div>
+
+                                        <div className="focus-layout">
+                                            <div className="focus-map-card">
+                                                <svg viewBox="0 0 980 430" className="focus-map">
+                                                    {focusEdges.map((edge) => {
+                                                        const source = focusLayout.positions.get(edge.source);
+                                                        const target = focusLayout.positions.get(edge.target);
+                                                        if (!source || !target) {
+                                                            return null;
+                                                        }
+                                                        return (
+                                                            <line
+                                                                key={edge.id}
+                                                                x1={source.x}
+                                                                y1={source.y}
+                                                                x2={target.x}
+                                                                y2={target.y}
+                                                                stroke="rgba(148, 163, 184, 0.45)"
+                                                                strokeWidth={1.2}
+                                                            />
+                                                        );
+                                                    })}
+
+                                                    {[...focusLayout.displayNodeIds].map((nodeId) => {
+                                                        const node = filteredNodeMap.get(nodeId);
+                                                        const pos = focusLayout.positions.get(nodeId);
+                                                        if (!node || !pos) {
+                                                            return null;
+                                                        }
+
+                                                        const meta = NODE_TYPE_META[node.node_type];
+                                                        const radius = pos.ring === 0 ? 18 : pos.ring === 1 ? 12 : 9;
+
+                                                        return (
+                                                            <g key={node.id} className="focus-node" onClick={() => setSelectedNodeId(node.id)}>
+                                                                <circle
+                                                                    cx={pos.x}
+                                                                    cy={pos.y}
+                                                                    r={radius}
+                                                                    fill={node.id === focusLayout.centerId ? `${meta.color}66` : `${meta.color}2a`}
+                                                                    stroke={meta.color}
+                                                                    strokeWidth={node.id === focusLayout.centerId ? 2 : 1}
+                                                                />
+                                                                <text x={pos.x} y={pos.y + 4} textAnchor="middle" className="focus-short">
+                                                                    {meta.short}
+                                                                </text>
+                                                                <text
+                                                                    x={pos.x}
+                                                                    y={pos.y + radius + 14}
+                                                                    textAnchor="middle"
+                                                                    className="focus-label"
+                                                                >
+                                                                    {shorten(node.label, 22)}
+                                                                </text>
+                                                            </g>
+                                                        );
+                                                    })}
+                                                </svg>
+                                            </div>
+
+                                            <aside className="focus-side-panel">
+                                                <h4>Direct Neighbors</h4>
+                                                <div className="focus-neighbor-list">
+                                                    {focusNeighborNodes.map((node) => (
+                                                        <button
+                                                            key={node.id}
+                                                            className="focus-neighbor-item"
+                                                            onClick={() => setSelectedNodeId(node.id)}
+                                                        >
+                                                            <span
+                                                                className="pill"
+                                                                style={{ background: `${NODE_TYPE_META[node.node_type].color}33` }}
+                                                            >
+                                                                {NODE_TYPE_META[node.node_type].label}
+                                                            </span>
+                                                            <span>{shorten(node.label, 80)}</span>
+                                                        </button>
+                                                    ))}
+                                                    {focusNeighborNodes.length === 0 && (
+                                                        <p className="inline-empty">No direct neighbors in current filters.</p>
+                                                    )}
+                                                </div>
+                                            </aside>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        )}
+
+                        {viewMode === "journey" && (
+                            <div className="graph-view journey-view">
+                                <div className="view-header row">
+                                    <div>
+                                        <h3>Journey Path</h3>
+                                        <p>Route between two memories or graph nodes.</p>
+                                    </div>
+                                </div>
+
+                                {journeyWeb.points.length > 0 && (
+                                    <div className="journey-web-card">
+                                        <svg viewBox="0 0 980 240" className="journey-web-svg">
+                                            {journeyWeb.edges.map((edge, index) => {
+                                                const source = journeyWeb.points.find((point) => point.id === edge.source);
+                                                const target = journeyWeb.points.find((point) => point.id === edge.target);
+                                                if (!source || !target) {
+                                                    return null;
+                                                }
+                                                return (
+                                                    <line
+                                                        key={`journey-edge-${index}`}
+                                                        x1={source.x}
+                                                        y1={source.y}
+                                                        x2={target.x}
+                                                        y2={target.y}
+                                                        className={edge.branch ? "branch-edge" : "path-edge"}
+                                                    />
+                                                );
+                                            })}
+
+                                            {journeyWeb.points.map((point) => {
+                                                const node = filteredNodeMap.get(point.id);
+                                                if (!node) {
+                                                    return null;
+                                                }
+                                                return (
+                                                    <g
+                                                        key={`journey-point-${point.id}-${point.branch ? "branch" : "path"}`}
+                                                        className={point.branch ? "journey-branch-node" : "journey-path-node"}
+                                                        onClick={() => openFocus(point.id)}
+                                                    >
+                                                        <circle cx={point.x} cy={point.y} r={point.branch ? 5 : 7} />
+                                                        <title>{node.label}</title>
+                                                    </g>
+                                                );
+                                            })}
+                                        </svg>
+                                    </div>
+                                )}
+
+                                <div className="journey-controls">
+                                    <label>
+                                        Start
+                                        <select
+                                            value={journeyStartId}
+                                            onChange={(event) => setJourneyStartId(event.target.value)}
+                                        >
+                                            {journeyOptions.map((node) => (
+                                                <option key={node.id} value={node.id}>
+                                                    {formatDateTime(node.created_at)} • {shorten(node.label, 72)}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+
+                                    <button
+                                        className="ui-action-btn"
+                                        onClick={() => {
+                                            setJourneyStartId(journeyEndId);
+                                            setJourneyEndId(journeyStartId);
+                                        }}
+                                    >
+                                        Swap
+                                    </button>
+
+                                    <label>
+                                        End
+                                        <select
+                                            value={journeyEndId}
+                                            onChange={(event) => setJourneyEndId(event.target.value)}
+                                        >
+                                            {journeyOptions.map((node) => (
+                                                <option key={node.id} value={node.id}>
+                                                    {formatDateTime(node.created_at)} • {shorten(node.label, 72)}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                </div>
+
+                                {journeyPath.length > 0 ? (
+                                    <div className="journey-chain">
+                                        {journeyPath.map((nodeId, index) => {
+                                            const node = filteredNodeMap.get(nodeId);
+                                            if (!node) {
+                                                return null;
+                                            }
+
+                                            const next = journeyPath[index + 1];
+                                            const edge = next ? edgeByPair.get(`${nodeId}|${next}`) : null;
+
+                                            return (
+                                                <div key={node.id} className="journey-step-wrap">
+                                                    <button
+                                                        className="journey-step"
+                                                        onClick={() => openFocus(node.id)}
+                                                    >
+                                                        <span
+                                                            className="pill"
+                                                            style={{ background: `${NODE_TYPE_META[node.node_type].color}33` }}
+                                                        >
+                                                            {NODE_TYPE_META[node.node_type].label}
+                                                        </span>
+                                                        <strong>{shorten(node.label, 82)}</strong>
+                                                        <small>{describeNode(node)}</small>
+                                                    </button>
+                                                    {edge && (
+                                                        <div className="journey-arrow">
+                                                            <span>→</span>
+                                                            <small>{EDGE_TYPE_LABELS[edge.edge_type] ?? edge.edge_type}</small>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="journey-fallback">
+                                        <p>
+                                            No direct graph path found between those two nodes in current filters.
+                                        </p>
+                                        {timelineBridge.length > 0 && (
+                                            <div className="journey-bridge">
+                                                <h4>Temporal bridge</h4>
+                                                {timelineBridge.map((node) => (
+                                                    <button
+                                                        key={node.id}
+                                                        className="journey-bridge-item"
+                                                        onClick={() => openFocus(node.id)}
+                                                    >
+                                                        <span>{formatDateTime(node.created_at)}</span>
+                                                        <span>{shorten(node.label, 110)}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </>
                 )}
             </div>
-
-            {tooltip && (
-                <div className="graph-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
-                    <span className={`tooltip-type tooltip-type-${tooltip.node.node_type}`}>
-                        {tooltip.node.node_type}
-                    </span>
-                    <h4>{tooltip.node.label}</h4>
-                    <div className="tooltip-meta">
-                        {new Date(tooltip.node.created_at).toLocaleString()}
-                    </div>
-                </div>
-            )}
         </div>
     );
 }

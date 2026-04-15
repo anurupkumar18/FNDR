@@ -179,6 +179,10 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                         <p className="meeting-subtle">
                             Segments: {status?.segment_count ?? 0} • Audio: {status?.ffmpeg_available ? "ready" : "missing"}
                         </p>
+                        <p className={`meeting-subtle meeting-consent ${status?.consent_state ?? "unknown"}`}>
+                            Consent: {formatConsentState(status?.consent_state)}
+                            {status?.consent_evidence ? ` • "${status.consent_evidence}"` : ""}
+                        </p>
                     </section>
 
                     <section className="meeting-card">
@@ -264,4 +268,17 @@ function formatTime(ts: number): string {
         minute: "2-digit",
         second: "2-digit",
     });
+}
+
+function formatConsentState(state?: "unknown" | "pending" | "detected" | "denied"): string {
+    switch (state) {
+        case "detected":
+            return "detected";
+        case "denied":
+            return "denied";
+        case "pending":
+            return "pending";
+        default:
+            return "unknown";
+    }
 }

@@ -102,6 +102,19 @@
     transform: none;
 }
 
+.memory-browse-meta {
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.memory-browse-meta-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
 .memory-browse-content {
     display: block;
     min-height: 52px;
@@ -128,6 +141,41 @@
     word-break: break-word;
     overflow: visible;
     text-overflow: clip;
+}
+
+.memory-browse-site {
+    margin-top: 8px;
+    font-size: 0.78rem;
+    color: #93c5fd;
+    background: rgba(96, 165, 250, 0.12);
+    border: 1px solid rgba(96, 165, 250, 0.34);
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 9px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.memory-delete-btn {
+    padding: 4px 9px;
+    font-size: 11px;
+    color: #fecaca;
+    border-color: rgba(248, 113, 113, 0.45);
+    background: rgba(248, 113, 113, 0.12);
+    flex-shrink: 0;
+}
+
+.memory-delete-btn:hover:not(:disabled) {
+    border-color: rgba(248, 113, 113, 0.62);
+    background: rgba(248, 113, 113, 0.18);
+}
+
+.memory-delete-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 @media (max-width: 768px) {

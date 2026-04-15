@@ -110,10 +110,79 @@ pub struct Stats {
     pub total_days: usize,
     pub apps: Vec<AppCount>,
     pub today_count: usize,
+    pub unique_apps: usize,
+    pub unique_sessions: usize,
+    pub unique_window_titles: usize,
+    pub unique_urls: usize,
+    pub unique_domains: usize,
+    pub records_with_url: usize,
+    pub records_with_screenshot: usize,
+    pub records_with_clean_text: usize,
+    pub records_last_hour: usize,
+    pub records_last_24h: usize,
+    pub records_last_7d: usize,
+    pub avg_records_per_active_day: f64,
+    pub avg_records_per_hour: f64,
+    pub focus_app_share_pct: f64,
+    pub app_switches: usize,
+    pub app_switch_rate_per_hour: f64,
+    pub avg_gap_minutes: f64,
+    pub longest_gap_minutes: u64,
+    pub first_capture_ts: Option<i64>,
+    pub last_capture_ts: Option<i64>,
+    pub capture_span_hours: f64,
+    pub current_streak_days: usize,
+    pub longest_streak_days: usize,
+    pub avg_ocr_confidence: f64,
+    pub low_confidence_records: usize,
+    pub avg_noise_score: f64,
+    pub high_noise_records: usize,
+    pub avg_ocr_blocks: f64,
+    pub llm_count: usize,
+    pub vlm_count: usize,
+    pub fallback_count: usize,
+    pub other_summary_count: usize,
+    pub top_domains: Vec<DomainCount>,
+    pub busiest_day: Option<DayCount>,
+    pub quietest_day: Option<DayCount>,
+    pub busiest_hour: Option<HourCount>,
+    pub hourly_distribution: Vec<HourCount>,
+    pub weekday_distribution: Vec<WeekdayCount>,
+    pub daypart_distribution: Vec<DaypartCount>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppCount {
     pub name: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainCount {
+    pub domain: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DayCount {
+    pub day: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HourCount {
+    pub hour: u8,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeekdayCount {
+    pub weekday: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaypartCount {
+    pub daypart: String,
     pub count: usize,
 }

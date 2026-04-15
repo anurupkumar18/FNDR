@@ -121,6 +121,18 @@
     line-height: 1.45;
 }
 
+.meeting-consent.pending {
+    color: #f9d27d;
+}
+
+.meeting-consent.detected {
+    color: #8be3b0;
+}
+
+.meeting-consent.denied {
+    color: #f4a9a9;
+}
+
 .meeting-list {
     display: flex;
     flex-direction: column;
