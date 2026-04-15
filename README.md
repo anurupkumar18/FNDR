@@ -1,158 +1,128 @@
-# FNDR - Privacy-First Local Memory Assistant
+# FNDR
 
-FNDR is a local-only screen history search and AI assistant for macOS. It periodically captures your screen, runs OCR and VLM analysis, and uses a local Large Language Model (LLM) to summarize your activity and answer questions—all without your data ever leaving your machine.
+FNDR is a privacy-first local memory assistant for macOS. It captures on-screen activity, indexes it locally, and helps you search and reconstruct recent context.
 
-## 🚀 App Functionality
+## What FNDR Does Today
 
-FNDR sits in your background, recording snapshots of your workspace. It indexes these snapshots using semantic and keyword search, allowing you to instantly find "that thing I saw 3 hours ago." Beyond search, it acts as a proactive assistant that can summarize your day or extract todos from your screen captures.
+- Background capture loop with:
+  - screenshot capture,
+  - OCR extraction,
+  - adaptive sampling,
+  - perceptual deduplication.
+- Local memory storage in LanceDB (text/image embeddings + metadata).
+- Hybrid search pipeline (vector + keyword + sentence-aware reranking).
+- Memory card retrieval/synthesis for timeline and card views.
+- Local model-backed memory summarization when a model is available.
+- Task extraction (Todo / Reminder / Follow-up) from recent memories.
+- Local graph store + graph visualization panel.
+- Meeting recorder with:
+  - automatic meeting detection heuristics,
+  - ffmpeg-based segmented audio capture,
+  - local Whisper GGUF transcription,
+  - transcript search + markdown/json export.
+- Voice input transcription and local TTS.
+- Built-in MCP server (HTTPS + token + SSE transport).
+- Privacy controls (pause/resume, blocklist, retention, delete memory, delete all data).
 
-## ✨ Features
+## Optional / External Pieces
 
-### Current Features (What Works)
-- **Local Screen Capture**: Periodically snapshots active windows with deduplication.
-- **Apple Vision OCR**: High-speed, local text recognition.
-- **Multimodal Understanding**: Uses **SmolVLM** (500M/256M) for intelligent screen understanding beyond raw text.
-- **"Ask FNDR" (RAG)**: Retrieval-Augmented Generation using a local LLM to answer questions about your history.
-- **AI Summaries**: Turns messy OCR fragments into clean, human-readable event descriptions.
-- **Todo Extraction**: Automatically identifies potential tasks and reminders from your screen history.
-- **URL Capture**: Automatically saves website URLs from browser windows for quick navigation back to sources.
-- **Agent Task Execution**: Execute todos using Claude Agent SDK (requires API key).
-- **MCP Server**: Built-in local Model Context Protocol server for connecting FNDR to external MCP clients.
-- **Offline Meeting Recorder**: Local meeting session recording, segmented audio capture, transcript timeline, export, and agent handoff.
-- **Privacy Controls**: Built-in blocklist to exclude sensitive applications and incognito mode.
-- **High Performance**: Native Rust core with Metal acceleration for Apple Silicon.
+- Agent panel is optional and requires `ANTHROPIC_API_KEY`.
+- `ffmpeg` is only required for meeting recording.
+- `python3` is required for sidecar-powered features (embeddings/speech/transcription).
+- `VITE_EVAL_UI=true` hides advanced panels for evaluation/demo-style builds.
 
-### Experimental (optional / demo)
-Meetings, knowledge graph, agent panel, MCP, and meeting recorder are powerful but can be **hidden** for grading builds — see **Evaluation UI** below.
+## Local Models (Current Catalog)
 
-### Planned Features (What's Next)
-- **Advanced Idle Detection**: Smarter capture logic based on user activity.
-- **Multi-Monitor Support**: Comprehensive capture across all connected displays.
+From `src-tauri/src/models.rs`:
 
-## 🚦 Current Status
+- `qwen3-vl-4b` (recommended)
+- `llama-3.2-1b`
+- `smolvlm-500m`
 
-| Feature | Status | Notes |
-| :--- | :--- | :--- |
-| **Search** | ✅ Working | Hybrid search (Semantic + Keyword) is functional. |
-| **Vector store** | ✅ Working | **LanceDB** (`src-tauri/src/store/lance_store.rs`). |
-| **Inference** | ✅ Working | Llama 3.2 1B runs locally with Metal acceleration. |
-| **VLM** | ✅ Optional | SmolVLM; can be disabled for a stable OCR+LLM path. |
-| **OCR** | ✅ Working | Fast and accurate via Apple Vision Framework. |
-| **URL Capture** | ✅ Working | Captures URLs from Safari, Chrome, Arc, Brave, Edge. |
+Models are selected/downloaded in onboarding/settings.
 
-## 🛠 How to Run
+## Run FNDR (Dev)
 
 ### Prerequisites
-- **macOS 13.0+**
-- **Apple Silicon (M1/M2/M3)** recommended for best AI performance.
-- **Rust Toolchain**: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- **Node.js & npm**: [LTS version recommended](https://nodejs.org/).
-- **CMake**: Required for building AI inference libraries (`brew install cmake`).
-- **ffmpeg**: Required for local meeting audio recording (`brew install ffmpeg`).
 
-### Execution Steps
-1. **Clone the repository**:
-   ```bash
-   git clone <your-repo-url>
-   cd FNDR
-   ```
+- macOS 13+
+- Xcode Command Line Tools
+- Node.js + npm
+- Rust toolchain
+- Python 3
+- Optional: `ffmpeg` (`brew install ffmpeg`)
 
-2. **Download AI Models**:
-   Run the helper script to fetch the Llama and SmolVLM models:
-   ```bash
-   chmod +x download_model.sh
-   ./download_model.sh
-   ```
-
-3. **Install UI Dependencies**:
-   ```bash
-   npm install
-   ```
-
-4. **Launch Developer Mode**:
-   ```bash
-   npm run tauri dev
-   ```
-
-
-### Evaluation UI (TA / prototype review)
-
-Build the frontend with **`VITE_EVAL_UI=true`** to hide Meetings, Graph, Agent, Todo modal, and reconstruction side panel — leaving search, timeline, readiness, and settings focused on the core pipeline.
+### Setup
 
 ```bash
-VITE_EVAL_UI=true npm run tauri dev
+git clone <repo-url>
+cd fndr
+npm install
+npm run tauri dev
 ```
 
-### Demo grading mode
+Then complete onboarding in-app (permissions + model download).
 
-- **Settings → Demo grading**: *Seed demo dataset*, *Reset demo data*, *Inject test memory*, *Use demo data only* (pauses live capture indexing).
-- Or launch the app with **`--demo-data-only`** (see `src-tauri/src/main.rs`) for a headless-friendly default.
+## Environment Variables
+
+Use `.env` (see `.env.example`).
+
+- `ANTHROPIC_API_KEY` - enable optional agent tasks.
+- `FNDR_WHISPER_GGUF_COMMAND` - override voice transcription command.
+- `FNDR_MEETING_TRANSCRIBE_COMMAND` - override meeting transcription command.
+- `FNDR_PARAKEET_COMMAND` - legacy alias for meeting transcription override.
+- `FNDR_ORPHEUS_COMMAND` - override TTS command.
+- `VITE_EVAL_UI=true` - hide advanced UI panels.
+
+## MCP Server
+
+FNDR can start/stop an MCP server from settings.
+
+Current behavior:
+
+- HTTPS endpoint with self-signed TLS.
+- Bearer-token auth.
+- Dynamic host/port (not a fixed hardcoded localhost URL).
+- Discovery file written to `~/.fndr/mcp.json`.
+
+Exposed MCP tools:
+
+- `search_memories`
+- `ask_fndr`
+- `get_fndr_stats`
+- `start_meeting`
+- `stop_meeting`
+- `get_meeting_transcript`
+- `search_meeting_transcripts`
+
+## Data Locations (High Level)
+
+- Core app data (memories/frames/graph/meetings/tasks): Tauri app data directory.
+- MCP discovery: `~/.fndr/mcp.json`
+- Meeting transcript exports: `~/Documents/FNDR Meetings/`
+- Speech venv (on-demand): `~/Documents/FNDR Speech/venv`
+
+## Repository Layout
+
+```text
+fndr/
+├── src/                 # React + TypeScript frontend
+├── src-tauri/           # Rust backend (capture, search, store, meetings, mcp, etc.)
+│   ├── src/
+│   └── sidecar/         # Python sidecars (whisper, embedder, agent, tts)
+├── docs/
+└── README.md
+```
+
+## Notes on Privacy
+
+Core capture/search/indexing runs locally on-device. If you enable the optional agent panel, that flow uses Anthropic APIs via your API key.
 
 ## Documentation
 
-| Doc | Purpose |
-|-----|---------|
-| [docs/DESIGN_DIRECTION.md](docs/DESIGN_DIRECTION.md) | Design direction and UX philosophy |
-| [docs/fndr_intelligence_engine.md](docs/fndr_intelligence_engine.md) | Intelligence engine architecture |
+- `docs/DESIGN_DIRECTION.md`
+- `docs/fndr_intelligence_engine.md`
 
-## 📁 Repository Structure
+## License
 
-```text
-FNDR/
-├── src-tauri/          # Backend (Rust)
-│   ├── src/
-│   │   ├── api/        # Tauri command handlers
-│   │   ├── capture/    # Screen recording & sampling
-│   │   ├── embed/      # Embedding and chunking
-│   │   ├── graph/      # Knowledge graph store
-│   │   ├── inference/  # LLM (Llama) & VLM engines
-│   │   ├── mcp/        # Model Context Protocol server
-│   │   ├── meeting/    # Meeting recorder logic
-│   │   ├── ocr/        # Apple Vision OCR integration
-│   │   ├── privacy/    # Blocklist and incognito mode
-│   │   ├── search/     # Hybrid search (semantic + keyword)
-│   │   ├── store/      # LanceDB storage & indexing
-│   │   ├── tasks/      # Todo extraction logic
-│   │   └── telemetry/  # Logging infrastructure
-│   ├── sidecar/        # Python sidecar scripts (whisper, VLM, etc.)
-│   └── tauri.conf.json # App configuration
-├── src/                # Frontend (React + TypeScript)
-│   ├── api/            # Tauri invoke wrappers
-│   ├── components/     # UI components (SearchBar, Timeline, etc.)
-│   ├── hooks/          # Custom React hooks (useSearch, etc.)
-│   └── main.tsx        # Application entry point
-├── download_model.sh   # Utility script for model management
-└── README.md           # You are here
-```
-
-## 🛡 Privacy Note
-All processing happens **100% locally** on your machine. No text, images, or queries are ever sent to any cloud provider or external server.
-
-## 🔌 MCP Connection
-- FNDR starts a local MCP server at `http://127.0.0.1:8799/mcp` by default.
-- In FNDR Settings, use the **MCP Server** section to start/stop the server and copy the link.
-- Exposed tools:
-  - `search_memories`
-  - `ask_fndr`
-  - `get_fndr_stats`
-  - `start_meeting`
-  - `stop_meeting`
-  - `get_meeting_transcript`
-  - `search_meeting_transcripts`
-
-## 🎙️ Meeting Recorder Notes
-- Open **Meetings** in the header to view live auto-captured meeting notes.
-- FNDR auto-detects meeting sessions (Zoom / Meet / Teams / Webex signals) and starts/stops recording automatically.
-- Audio chunks are stored under FNDR app data in `meetings/<meeting_id>/audio/`.
-- Transcripts are persisted in local indexes and exported to `meetings/<meeting_id>/transcript.md` when a session stops.
-- A Finder-visible copy is written to `~/Documents/FNDR Meetings/*.md`.
-- On session end, FNDR also ingests the markdown transcript into unified FNDR memory (`app_name = FNDR Meetings`).
-- Transcription backend priority:
-  1. `FNDR_PARAKEET_COMMAND` (custom Parakeet runner command)
-  2. bundled sidecar `src-tauri/sidecar/parakeet_runner.py` (requires `python3` + `faster-whisper`)
-  3. `python3 -m whisper` fallback
-- Install sidecar transcription dependencies with:
-  - `pip install -r src-tauri/sidecar/requirements.txt`
-
-## 📄 License
 MIT
