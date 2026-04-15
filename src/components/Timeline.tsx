@@ -53,6 +53,10 @@ function isLowSignalPreview(summary: string, appName: string): boolean {
     return normalized.split(" ").length <= 2;
 }
 
+function stripLegacySources(summary: string): string {
+    return summary.replace(/\s*Sources:\s*[A-Za-z0-9,\-\s]+\.?$/i, "").trim();
+}
+
 export function Timeline({
     results,
     isLoading,
@@ -71,7 +75,7 @@ export function Timeline({
     if (isLoading) {
         return (
             <div className="timeline-state">
-                <div className="spinner" />
+                <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
                 <p>Searching memories...</p>
             </div>
         );
@@ -103,69 +107,74 @@ export function Timeline({
     return (
         <div className="timeline-container">
             <div className="timeline-stream">
-                {filteredResults.map((result) => (
-                    <article
-                        key={result.id}
-                        className={`result-card ${selectedResultId === result.id ? "selected" : ""}`}
-                        onClick={() => onSelectResult(result)}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
-                                onSelectResult(result);
-                            }
-                        }}
-                    >
-                        <div className={`result-meta ${evalUi ? "result-meta-eval" : ""}`}>
-                            <div className="result-meta-main">
-                                <span className="result-app">{result.app_name}</span>
-                                <span className="result-time">
-                                    {formatDay(result.timestamp)} ·{" "}
-                                    {new Date(result.timestamp).toLocaleTimeString(undefined, {
-                                        hour: "2-digit",
-                                        minute: "2-digit",
-                                    })}
-                                </span>
-                            </div>
-                            <div className="result-meta-actions">
-                                {evalUi && (
-                                    <span className="result-score" title="Relevance score">
-                                        score {result.score.toFixed(3)}
+                {filteredResults.map((result) => {
+                    const cleanSummary = stripLegacySources(result.summary);
+                    return (
+                        <article
+                            key={result.id}
+                            className={`result-card ${selectedResultId === result.id ? "selected" : ""}`}
+                            onClick={() => onSelectResult(result)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    onSelectResult(result);
+                                }
+                            }}
+                        >
+                            <div className={`result-meta ${evalUi ? "result-meta-eval" : ""}`}>
+                                <div className="result-meta-main">
+                                    <span className="result-app">{result.app_name}</span>
+                                    <span className="result-time">
+                                        {formatDay(result.timestamp)} ·{" "}
+                                        {new Date(result.timestamp).toLocaleTimeString(undefined, {
+                                            hour: "2-digit",
+                                            minute: "2-digit",
+                                        })}
                                     </span>
-                                )}
-                                {onDeleteMemory && (
-                                    <button
-                                        className="ui-action-btn timeline-delete-btn"
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            onDeleteMemory(result.id);
-                                        }}
-                                        aria-label="Delete this memory"
-                                        title="Delete this memory"
-                                    >
-                                        Delete
-                                    </button>
-                                )}
+                                </div>
+                                <div className="result-meta-actions">
+                                    {evalUi && (
+                                        <span className="result-score" title="Relevance score">
+                                            score {result.score.toFixed(3)}
+                                        </span>
+                                    )}
+                                    {onDeleteMemory && (
+                                        <button
+                                            className="ui-action-btn timeline-delete-btn"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                onDeleteMemory(result.id);
+                                            }}
+                                            aria-label="Delete this memory"
+                                            title="Delete this memory"
+                                        >
+                                            Delete
+                                        </button>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                        <h3 className="result-title">{result.title || "Untitled memory"}</h3>
-                        {!isLowSignalPreview(result.summary, result.app_name) && (
-                            <p className="result-preview">{result.summary}</p>
-                        )}
+                            <h3 className="result-title">{result.title || "Untitled memory"}</h3>
+                            {!isLowSignalPreview(cleanSummary, result.app_name) && (
+                                <p className="result-preview">{cleanSummary}</p>
+                            )}
 
-                        {result.context.length > 0 && (
-                            <div className="result-context-chips">
-                                {result.context.slice(0, 4).map((item, idx) => (
-                                    <span key={`${result.id}-ctx-${idx}`} className="result-chip">
-                                        {item}
-                                    </span>
-                                ))}
-                            </div>
-                        )}
-
-                    </article>
-                ))}
+                            {result.context.some((item) => !/^sources\s*:/i.test(item)) && (
+                                <div className="result-context-chips">
+                                    {result.context
+                                        .filter((item) => !/^sources\s*:/i.test(item))
+                                        .slice(0, 4)
+                                        .map((item, idx) => (
+                                            <span key={`${result.id}-ctx-${idx}`} className="result-chip">
+                                                {item}
+                                            </span>
+                                        ))}
+                                </div>
+                            )}
+                        </article>
+                    );
+                })}
             </div>
 
             {hasMore && (

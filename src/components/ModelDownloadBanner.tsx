@@ -167,7 +167,7 @@ export function ModelDownloadBanner() {
                     background: "rgba(0,0,0,0.3)",
                     padding: "8px 12px",
                     borderRadius: 6,
-                    fontFamily: "monospace",
+                    fontFamily: "inherit",
                     fontSize: 10,
                     color: "rgba(255,255,255,0.6)",
                     height: 80,

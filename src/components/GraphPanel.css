@@ -232,21 +232,6 @@
     font-size: 12px;
 }
 
-.graph-loading .spinner {
-    width: 20px;
-    height: 20px;
-    border: 2px solid rgba(158, 172, 190, 0.2);
-    border-top: 2px solid #d0d5dd;
-    border-radius: 50%;
-    animation: graphSpin 0.9s linear infinite;
-}
-
-@keyframes graphSpin {
-    to {
-        transform: rotate(360deg);
-    }
-}
-
 @media (max-width: 1200px) {
     .graph-top-controls {
         flex-direction: column;

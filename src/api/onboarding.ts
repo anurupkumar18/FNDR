@@ -19,6 +19,7 @@ export interface OnboardingState {
     accessibility_permission: boolean;
     model_downloaded: boolean;
     model_id: string | null;
+    display_name: string | null;
 }
 
 export async function getOnboardingState(): Promise<OnboardingState> {

@@ -6,6 +6,7 @@ import {
     summarizeSearch,
     transcribeVoiceInput,
 } from "../api/tauri";
+import { PLACEHOLDERS } from "./placeholders";
 import "./SearchBar.css";
 
 interface SearchBarProps {
@@ -23,6 +24,10 @@ interface SearchBarProps {
     disabled?: boolean;
     disabledHint?: string;
 }
+
+const PLACEHOLDER_DISPLAY_DURATION = 3000;
+const PLACEHOLDER_FADE_DURATION = 400;
+const DEFAULT_PLACEHOLDER = "Recall a specific meeting, note, or idea...";
 
 export function SearchBar({
     value,
@@ -44,6 +49,8 @@ export function SearchBar({
     const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
     const [isRecording, setIsRecording] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
+    const [placeholderIndex, setPlaceholderIndex] = useState(0);
+    const [placeholderVisible, setPlaceholderVisible] = useState(true);
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -53,10 +60,37 @@ export function SearchBar({
     const summaryRequestRef = useRef(0);
     const searchResultsRef = useRef(searchResults);
     const hasQuery = value.trim().length > 0;
+    const showMetaRow = hasQuery;
+    const hasInput = value.length > 0;
+    const activePlaceholder =
+        PLACEHOLDERS[placeholderIndex % Math.max(PLACEHOLDERS.length, 1)] ?? DEFAULT_PLACEHOLDER;
+    const showAnimatedPlaceholder = !hasInput;
 
     useEffect(() => {
         searchResultsRef.current = searchResults;
     }, [searchResults]);
+
+    useEffect(() => {
+        if (PLACEHOLDERS.length <= 1) {
+            return;
+        }
+
+        let swapTimer: number | undefined;
+        const displayTimer = window.setTimeout(() => {
+            setPlaceholderVisible(false);
+            swapTimer = window.setTimeout(() => {
+                setPlaceholderIndex((index) => (index + 1) % PLACEHOLDERS.length);
+                setPlaceholderVisible(true);
+            }, PLACEHOLDER_FADE_DURATION);
+        }, PLACEHOLDER_DISPLAY_DURATION);
+
+        return () => {
+            window.clearTimeout(displayTimer);
+            if (swapTimer !== undefined) {
+                window.clearTimeout(swapTimer);
+            }
+        };
+    }, [placeholderIndex]);
 
     useEffect(() => {
         const activeValue = value.trim();
@@ -121,6 +155,25 @@ export function SearchBar({
             mediaStreamRef.current = null;
         };
     }, []);
+
+    useEffect(() => {
+        const handleKeydown = (event: KeyboardEvent) => {
+            const key = event.key.toLowerCase();
+            if ((event.metaKey || event.ctrlKey) && key === "k") {
+                event.preventDefault();
+                const input = document.getElementById("fndr-search-input") as HTMLInputElement | null;
+                input?.focus();
+                return;
+            }
+
+            if (key === "escape" && !disabled) {
+                onChange("");
+            }
+        };
+
+        window.addEventListener("keydown", handleKeydown);
+        return () => window.removeEventListener("keydown", handleKeydown);
+    }, [disabled, onChange]);
 
     async function handleVoiceTranscript(transcript: string) {
         const cleaned = transcript.trim();
@@ -303,17 +356,35 @@ export function SearchBar({
                         <path d="M21 21l-4.35-4.35" />
                     </svg>
 
-                    <input
-                        id="fndr-search-input"
-                        type="text"
-                        value={value}
-                        onChange={(e) => onChange(e.target.value)}
-                        placeholder="What do you remember?"
-                        className="search-input"
-                        autoComplete="off"
-                        disabled={disabled}
-                        aria-disabled={disabled}
-                    />
+                    <div className="search-input-wrap">
+                        <input
+                            id="fndr-search-input"
+                            type="text"
+                            value={value}
+                            onChange={(e) => onChange(e.target.value)}
+                            placeholder={activePlaceholder}
+                            className="search-input search-input-cycling"
+                            autoComplete="off"
+                            disabled={disabled}
+                            aria-disabled={disabled}
+                            aria-label="Search memories"
+                        />
+                        <span
+                            className="search-placeholder-overlay"
+                            aria-hidden="true"
+                            style={{
+                                opacity: showAnimatedPlaceholder ? (placeholderVisible ? 1 : 0) : 0,
+                                transform: showAnimatedPlaceholder
+                                    ? placeholderVisible
+                                        ? "translateY(-50%)"
+                                        : "translateY(calc(-50% + 6px))"
+                                    : "translateY(-50%)",
+                                transition: `opacity ${PLACEHOLDER_FADE_DURATION}ms ease, transform ${PLACEHOLDER_FADE_DURATION}ms ease`,
+                            }}
+                        >
+                            {activePlaceholder}
+                        </span>
+                    </div>
 
                     <button
                         className={`voice-btn ${isRecording ? "recording" : ""}`}
@@ -338,17 +409,21 @@ export function SearchBar({
                 </div>
             </div>
 
-            {hasQuery && (
+            {showMetaRow && (
                 <div className="search-meta-row">
                     <div className="search-filters">
                         <div className="select-wrapper">
+                            <svg className="filter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <circle cx="12" cy="12" r="8" />
+                                <path d="M12 8v4l2.5 2.5" />
+                            </svg>
                             <select
                                 value={timeFilter || ""}
                                 onChange={(e) => onTimeFilterChange(e.target.value || null)}
                                 className={`filter-select ${timeFilter ? "active" : ""}`}
                                 disabled={disabled}
                             >
-                                <option value="">Any time</option>
+                                <option value="">All time</option>
                                 <option value="1h">Last hour</option>
                                 <option value="24h">Last 24 hours</option>
                                 <option value="7d">Last 7 days</option>
@@ -359,6 +434,9 @@ export function SearchBar({
                         </div>
 
                         <div className="select-wrapper">
+                            <svg className="filter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M4 6h7v5H4zM13 6h7v5h-7zM4 13h7v5H4zM13 13h7v5h-7z" />
+                            </svg>
                             <select
                                 value={appFilter || ""}
                                 onChange={(e) => onAppFilterChange(e.target.value || null)}
@@ -377,7 +455,7 @@ export function SearchBar({
                     </div>
 
                     <div className="result-count">
-                        {`${resultCount} results`}
+                        {hasQuery ? `${resultCount} results` : "Ready"}
                     </div>
                 </div>
             )}
@@ -392,7 +470,7 @@ export function SearchBar({
                 <div className="summary-bubble">
                     {isSummarizing ? (
                         <div className="summary-loading">
-                            <span className="summary-spinner" />
+                            <span className="thinking-loader thinking-loader-sm summary-loader" aria-hidden="true" />
                             <span>Synthesizing memories...</span>
                         </div>
                     ) : (

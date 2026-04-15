@@ -656,7 +656,7 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
             <div className="graph-view-shell">
                 {loading ? (
                     <div className="graph-loading">
-                        <div className="spinner" />
+                        <div className="thinking-loader thinking-loader-md" aria-hidden="true" />
                         Loading graph data...
                     </div>
                 ) : filteredNodes.length === 0 ? (

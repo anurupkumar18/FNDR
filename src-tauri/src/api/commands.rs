@@ -746,10 +746,6 @@ fn evidence_relevance(
     (coverage * 0.58 + score.clamp(0.0, 1.0) * 0.30 + number_overlap * 0.12).clamp(0.0, 1.0)
 }
 
-fn short_source_id(value: &str) -> String {
-    value.chars().take(8).collect()
-}
-
 fn clean_summary_fragment(text: &str) -> String {
     truncate_chars(
         &text
@@ -810,11 +806,9 @@ fn build_grounded_search_summary(query: &str, evidence: &[SummaryEvidence]) -> S
     }
 
     let mut fragments = Vec::new();
-    let mut source_ids = Vec::new();
     let mut confidence = 0.0f32;
     for (item, relevance) in &selected {
         fragments.push(clean_summary_fragment(&item.text));
-        source_ids.push(short_source_id(&item.id));
         confidence += *relevance;
     }
     confidence /= selected.len() as f32;
@@ -832,11 +826,6 @@ fn build_grounded_search_summary(query: &str, evidence: &[SummaryEvidence]) -> S
 
     if confidence < 0.45 {
         summary = format!("Low confidence: {}", summary.trim());
-    }
-
-    if !source_ids.is_empty() {
-        summary.push(' ');
-        summary.push_str(&format!("Sources: {}.", source_ids.join(", ")));
     }
 
     summary
@@ -906,6 +895,12 @@ pub async fn stop_meeting_recording() -> Result<MeetingRecorderStatus, String> {
 #[tauri::command]
 pub async fn list_meetings() -> Result<Vec<MeetingSession>, String> {
     meeting::list_meetings()
+}
+
+/// Delete a local meeting session and its persisted artifacts
+#[tauri::command]
+pub async fn delete_meeting(meeting_id: String) -> Result<bool, String> {
+    meeting::delete_meeting(&meeting_id).await
 }
 
 /// Get full transcript for a meeting

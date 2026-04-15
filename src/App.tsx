@@ -19,11 +19,33 @@ import {
     deleteMemory,
     getAppNames,
     getMeetingStatus,
+    onMeetingStatus,
     getStatus,
 } from "./api/tauri";
 import { getOnboardingState } from "./api/onboarding";
 import { EVAL_UI } from "./evalUi";
 import "./styles/App.css";
+
+function formatHomeDate(now: Date): string {
+    const weekday = now.toLocaleDateString(undefined, { weekday: "long" }).toUpperCase();
+    const month = now.toLocaleDateString(undefined, { month: "long" }).toUpperCase();
+    const day = now.toLocaleDateString(undefined, { day: "numeric" });
+    return `${weekday} · ${month} ${day}`;
+}
+
+function formatGreeting(now: Date, displayName: string | null): string {
+    const hour = now.getHours();
+    const prefix =
+        hour >= 4 && hour < 12
+            ? "Good Morning"
+            : hour >= 12 && hour < 16
+                ? "Good Afternoon"
+                : hour >= 16 && hour < 20
+                    ? "Good Evening"
+                    : "Good Night";
+    const normalizedName = displayName?.trim();
+    return normalizedName ? `${prefix}, ${normalizedName}` : prefix;
+}
 
 function App() {
     const [query, setQuery] = useState("");
@@ -32,7 +54,6 @@ function App() {
     const [appNames, setAppNames] = useState<string[]>([]);
     const [status, setStatus] = useState<CaptureStatus | null>(null);
     const [meetingStatus, setMeetingStatus] = useState<MeetingRecorderStatus | null>(null);
-    const [consentPulseTick, setConsentPulseTick] = useState(0);
     const [showAgentPanel, setShowAgentPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
     const [showGraphPanel, setShowGraphPanel] = useState(false);
@@ -43,6 +64,8 @@ function App() {
     const [selectedResult, setSelectedResult] = useState<MemoryCard | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [deletedMemoryIds, setDeletedMemoryIds] = useState<Set<string>>(new Set());
+    const [displayName, setDisplayName] = useState<string | null>(null);
+    const [now, setNow] = useState(() => new Date());
 
     const searchAllowed = true;
     const { results, isLoading, error } = useSearch(
@@ -57,24 +80,19 @@ function App() {
 
     useEffect(() => {
         getOnboardingState()
-            .then((s) => setOnboardingDone(s.step === "complete" && s.model_downloaded))
-            .catch(() => setOnboardingDone(false));
+            .then((s) => {
+                setOnboardingDone(s.step === "complete" && s.model_downloaded);
+                setDisplayName(s.display_name ?? null);
+            })
+            .catch(() => {
+                setOnboardingDone(false);
+                setDisplayName(null);
+            });
     }, []);
 
-    const showCenteredSearch = !query.trim();
     const isFocusMode = !query.trim();
-    const consentReminders = [
-        "Recording is active. Let everyone know this conversation is being transcribed.",
-        "Reminder: confirm participant consent while recording is active.",
-    ];
-    const consentHint =
-        meetingStatus?.consent_state === "detected"
-            ? meetingStatus.consent_evidence
-                ? `Consent evidence: "${meetingStatus.consent_evidence}"`
-                : "Consent language detected in transcript."
-            : meetingStatus?.consent_state === "denied"
-                ? "Potential objection detected. Pause recording until everyone agrees."
-                : "Consent is pending. Ask for explicit permission to record.";
+    const homeDateLabel = useMemo(() => formatHomeDate(now), [now]);
+    const homeGreeting = useMemo(() => formatGreeting(now, displayName), [displayName, now]);
 
     useEffect(() => {
         const loadAppNames = async () => {
@@ -112,33 +130,65 @@ function App() {
     }, []);
 
     useEffect(() => {
+        let mounted = true;
+        let unlisten: (() => void) | null = null;
+
         const fetchMeeting = async () => {
             try {
-                setMeetingStatus(await getMeetingStatus());
+                const nextStatus = await getMeetingStatus();
+                if (!mounted) return;
+                setMeetingStatus(nextStatus);
             } catch {
-                // Ignore transient polling failures while runtime starts.
+                // Ignore transient meeting status failures while runtime starts.
+            }
+        };
+
+        const subscribe = async () => {
+            try {
+                unlisten = await onMeetingStatus((nextStatus) => {
+                    if (!mounted) return;
+                    setMeetingStatus(nextStatus);
+                });
+            } catch {
+                // Ignore listener registration errors; manual refresh paths remain available.
             }
         };
 
         void fetchMeeting();
-        const interval = window.setInterval(() => {
-            void fetchMeeting();
-        }, 2000);
+        void subscribe();
 
-        return () => window.clearInterval(interval);
+        return () => {
+            mounted = false;
+            if (unlisten) {
+                unlisten();
+            }
+        };
     }, []);
 
     useEffect(() => {
-        if (!meetingStatus?.is_recording) {
-            setConsentPulseTick(0);
+        const timer = window.setInterval(() => {
+            setNow(new Date());
+        }, 60_000);
+        return () => window.clearInterval(timer);
+    }, []);
+
+    useEffect(() => {
+        const handleProfileUpdated = (event: Event) => {
+            const customEvent = event as CustomEvent<{ displayName: string | null }>;
+            setDisplayName(customEvent.detail?.displayName ?? null);
+        };
+        window.addEventListener("fndr-profile-updated", handleProfileUpdated as EventListener);
+        return () =>
+            window.removeEventListener("fndr-profile-updated", handleProfileUpdated as EventListener);
+    }, []);
+
+    useEffect(() => {
+        if (query.trim().length > 0) {
             return;
         }
-
-        const pulse = window.setInterval(() => {
-            setConsentPulseTick((current) => current + 1);
-        }, 6000);
-        return () => window.clearInterval(pulse);
-    }, [meetingStatus?.is_recording]);
+        setTimeFilter(null);
+        setAppFilter(null);
+    }, [query]);
 
 
 
@@ -183,7 +233,14 @@ function App() {
     }
 
     if (!onboardingDone) {
-        return <Onboarding onComplete={() => setOnboardingDone(true)} />;
+        return (
+            <Onboarding
+                onComplete={(next) => {
+                    setOnboardingDone(true);
+                    setDisplayName(next.display_name ?? null);
+                }}
+            />
+        );
     }
 
     return (
@@ -203,11 +260,9 @@ function App() {
             </div>
 
             {!EVAL_UI && meetingStatus?.is_recording && (
-                <div className={`recording-consent-banner ${meetingStatus.consent_state}`}>
+                <div className="recording-consent-banner pending">
                     <strong>Recording Active</strong>
-                    <span>{meetingStatus.current_title ?? "Detected Meeting"}</span>
-                    <span>{consentReminders[consentPulseTick % consentReminders.length]}</span>
-                    <span>{consentHint}</span>
+                    <span>{meetingStatus.current_title ?? "Meeting"}</span>
                 </div>
             )}
 
@@ -259,7 +314,14 @@ function App() {
                 </aside>
             )}
 
-            <main className={`app-main ${showCenteredSearch ? "search-centered" : ""}`}>
+            <main className={`app-main ${isFocusMode ? "search-centered" : ""}`}>
+                {isFocusMode && (
+                    <div className="home-focus-header">
+                        <div className="home-greeting">{homeGreeting}</div>
+                        <div className="home-date-context">{homeDateLabel}</div>
+                    </div>
+                )}
+
                 <section className={`search-shell ${query.trim() ? "is-active" : ""}`}>
                     <SearchBar
                         value={query}
@@ -305,7 +367,6 @@ function App() {
                     <MeetingRecorderPanel
                         isVisible={showMeetingPanel}
                         onClose={() => setShowMeetingPanel(false)}
-                        onOpenAgent={() => setShowAgentPanel(true)}
                     />
                     <GraphPanel
                         isVisible={showGraphPanel}

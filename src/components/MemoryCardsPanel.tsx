@@ -17,6 +17,7 @@ function normalizeText(value: string | undefined | null): string {
     }
     return value
         .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+        .replace(/\s*Sources:\s*[A-Za-z0-9,\-\s]+\.?$/i, "")
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -112,7 +113,8 @@ function cardCopy(card: MemoryCard): { title: string; summary: string; site: str
                 item.length > 0 &&
                 !lower.startsWith("app:") &&
                 !lower.startsWith("type:") &&
-                !lower.startsWith("site:")
+                !lower.startsWith("site:") &&
+                !lower.startsWith("sources:")
             );
         });
 
@@ -275,7 +277,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
             <div className="memory-cards-body">
                 {loading && (
                     <div className="memory-cards-state">
-                        <div className="spinner" />
+                        <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
                         <p>Loading memory cards...</p>
                     </div>
                 )}
@@ -305,6 +307,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                         && !lower.startsWith("app:")
                                         && !lower.startsWith("type:")
                                         && !lower.startsWith("site:")
+                                        && !lower.startsWith("sources:")
                                     );
                                 })
                                 .slice(0, 4);

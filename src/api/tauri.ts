@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export interface SearchResult {
     id: string;
@@ -313,6 +314,12 @@ export async function getMeetingStatus(): Promise<MeetingRecorderStatus> {
     return invoke<MeetingRecorderStatus>("get_meeting_status");
 }
 
+export function onMeetingStatus(handler: (status: MeetingRecorderStatus) => void): Promise<() => void> {
+    return listen<MeetingRecorderStatus>("meeting://status", (event) => {
+        handler(event.payload);
+    });
+}
+
 export async function startMeetingRecording(
     title: string,
     participants: string[],
@@ -327,6 +334,10 @@ export async function stopMeetingRecording(): Promise<MeetingRecorderStatus> {
 
 export async function listMeetings(): Promise<MeetingSession[]> {
     return invoke<MeetingSession[]>("list_meetings");
+}
+
+export async function deleteMeeting(meetingId: string): Promise<boolean> {
+    return invoke<boolean>("delete_meeting", { meetingId });
 }
 
 export async function getMeetingTranscript(meetingId: string): Promise<MeetingTranscript> {

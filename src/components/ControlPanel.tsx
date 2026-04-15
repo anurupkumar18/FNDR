@@ -16,10 +16,13 @@ import {
 } from "../api/tauri";
 import {
     ModelInfo,
+    OnboardingState,
+    getOnboardingState,
     deleteAiModel,
     downloadModel,
     listAvailableModels,
     refreshAiModels,
+    saveOnboardingState,
 } from "../api/onboarding";
 import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
 import "./ControlPanel.css";
@@ -44,6 +47,10 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [mcpStatus, setMcpStatus] = useState<McpServerStatus | null>(null);
     const [mcpBusy, setMcpBusy] = useState(false);
     const [copiedMcpLink, setCopiedMcpLink] = useState(false);
+    const [profileName, setProfileName] = useState("");
+    const [profileDraft, setProfileDraft] = useState("");
+    const [profileBusy, setProfileBusy] = useState(false);
+    const [profileMsg, setProfileMsg] = useState<string | null>(null);
 
     // Model tab state
     const [models, setModels] = useState<ModelInfo[]>([]);
@@ -57,21 +64,29 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const loadData = useCallback(async () => {
         try {
             if (evalUi) {
-                const [bl, ret] = await Promise.all([
+                const [bl, ret, onboarding] = await Promise.all([
                     getBlocklist(),
                     getRetentionDays(),
+                    getOnboardingState(),
                 ]);
                 setBlocklistState(bl);
                 setRetentionDaysState(ret);
+                const name = onboarding.display_name ?? "";
+                setProfileName(name);
+                setProfileDraft(name);
             } else {
-                const [bl, ret, mcp] = await Promise.all([
+                const [bl, ret, mcp, onboarding] = await Promise.all([
                     getBlocklist(),
                     getRetentionDays(),
                     getMcpServerStatus(),
+                    getOnboardingState(),
                 ]);
                 setBlocklistState(bl);
                 setRetentionDaysState(ret);
                 setMcpStatus(mcp);
+                const name = onboarding.display_name ?? "";
+                setProfileName(name);
+                setProfileDraft(name);
             }
         } catch (err) {
             console.error("Failed to load settings data:", err);
@@ -293,6 +308,32 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         }
     };
 
+    const handleSaveProfile = async () => {
+        setProfileBusy(true);
+        setProfileMsg(null);
+        try {
+            const onboarding: OnboardingState = await getOnboardingState();
+            const normalized = profileDraft.trim();
+            await saveOnboardingState({
+                ...onboarding,
+                display_name: normalized || null,
+            });
+            setProfileName(normalized);
+            setProfileDraft(normalized);
+            window.dispatchEvent(
+                new CustomEvent("fndr-profile-updated", {
+                    detail: { displayName: normalized || null },
+                })
+            );
+            setProfileMsg("Saved");
+        } catch (err) {
+            setProfileMsg(`Failed to save: ${String(err)}`);
+        } finally {
+            setProfileBusy(false);
+            window.setTimeout(() => setProfileMsg(null), 1400);
+        }
+    };
+
     function fmtBytes(b: number) {
         return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
     }
@@ -351,6 +392,35 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 <div className="panel-content">
                     {activeTab === "settings" && (
                         <>
+                            <section className="panel-section">
+                                <h3>Profile</h3>
+                                <p className="section-hint">
+                                    FNDR uses this name in your greeting.
+                                </p>
+                                <div className="profile-row">
+                                    <input
+                                        type="text"
+                                        value={profileDraft}
+                                        onChange={(event) => setProfileDraft(event.target.value)}
+                                        placeholder="Your name"
+                                        className="profile-input"
+                                        onKeyDown={(event) => {
+                                            if (event.key === "Enter") {
+                                                void handleSaveProfile();
+                                            }
+                                        }}
+                                    />
+                                    <button
+                                        className="ui-action-btn btn-secondary"
+                                        onClick={() => void handleSaveProfile()}
+                                        disabled={profileBusy || profileDraft.trim() === profileName.trim()}
+                                    >
+                                        {profileBusy ? "..." : "Save"}
+                                    </button>
+                                </div>
+                                {profileMsg && <p className="profile-msg">{profileMsg}</p>}
+                            </section>
+
                             <section className="panel-section">
                                 <h3>Capture Status</h3>
                                 <button
@@ -517,7 +587,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                     border: "1px solid rgba(255,255,255,0.08)",
                                     borderRadius: 10,
                                     padding: 12,
-                                    fontFamily: "monospace",
+                                    fontFamily: "inherit",
                                     fontSize: 11,
                                     color: "rgba(255,255,255,0.75)",
                                     maxHeight: 140,

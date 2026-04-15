@@ -1,4 +1,6 @@
 :root {
+    --font-ui: "Iowan Old Style", "Baskerville", "Palatino Linotype", "Times New Roman", serif;
+    --font-primary: var(--font-ui);
     --bg-primary: #0a0a0a;
     --surface: #111111;
     --surface-elevated: #151515;
@@ -46,12 +48,20 @@ body,
 }
 
 body {
-    font-family: "Avenir Next", "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-family: var(--font-ui);
     background: var(--bg-primary);
     color: var(--text-primary);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     line-height: 1.5;
+}
+
+input,
+button,
+select,
+textarea,
+kbd {
+    font-family: inherit;
 }
 
 ::selection {
@@ -149,4 +159,106 @@ body {
     cursor: not-allowed;
     background: rgba(20, 20, 20, 0.5);
     border-color: rgba(255, 255, 255, 0.04);
+}
+
+.thinking-loader {
+    --loader-box-size: 32px;
+    --loader-icon-size: 12px;
+    --loader-stroke: 2px;
+    --loader-travel: calc(var(--loader-box-size) - var(--loader-icon-size) - var(--loader-stroke));
+    position: relative;
+    width: var(--loader-box-size);
+    height: var(--loader-box-size);
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.thinking-loader::before,
+.thinking-loader::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    box-sizing: border-box;
+}
+
+.thinking-loader::before {
+    width: var(--loader-icon-size);
+    height: var(--loader-icon-size);
+    border: var(--loader-stroke) solid rgba(232, 236, 245, 0.9);
+    border-radius: 999px;
+    filter: drop-shadow(0 0 6px rgba(184, 192, 210, 0.2));
+    animation: loaderSearchLens 3.2s linear infinite;
+}
+
+.thinking-loader::after {
+    width: calc(var(--loader-icon-size) * 0.55);
+    height: 2px;
+    background: rgba(232, 236, 245, 0.9);
+    border-radius: 999px;
+    transform-origin: left center;
+    animation: loaderSearchHandle 3.2s linear infinite;
+}
+
+.thinking-loader-sm {
+    --loader-box-size: 20px;
+    --loader-icon-size: 8px;
+    --loader-stroke: 1.6px;
+}
+
+.thinking-loader-md {
+    --loader-box-size: 30px;
+    --loader-icon-size: 11px;
+    --loader-stroke: 2px;
+}
+
+.thinking-loader-lg {
+    --loader-box-size: 40px;
+    --loader-icon-size: 14px;
+    --loader-stroke: 2.2px;
+}
+
+@keyframes loaderSearchLens {
+    0% {
+        transform: translate(0, 0);
+    }
+    25% {
+        transform: translate(var(--loader-travel), 0);
+    }
+    50% {
+        transform: translate(var(--loader-travel), var(--loader-travel));
+    }
+    75% {
+        transform: translate(0, var(--loader-travel));
+    }
+    100% {
+        transform: translate(0, 0);
+    }
+}
+
+@keyframes loaderSearchHandle {
+    0% {
+        transform: translate(calc(var(--loader-icon-size) - 1px), calc(var(--loader-icon-size) - 1px)) rotate(39deg);
+    }
+    25% {
+        transform: translate(
+            calc(var(--loader-travel) + var(--loader-icon-size) - 1px),
+            calc(var(--loader-icon-size) - 1px)
+        ) rotate(39deg);
+    }
+    50% {
+        transform: translate(
+            calc(var(--loader-travel) + var(--loader-icon-size) - 1px),
+            calc(var(--loader-travel) + var(--loader-icon-size) - 1px)
+        ) rotate(39deg);
+    }
+    75% {
+        transform: translate(
+            calc(var(--loader-icon-size) - 1px),
+            calc(var(--loader-travel) + var(--loader-icon-size) - 1px)
+        ) rotate(39deg);
+    }
+    100% {
+        transform: translate(calc(var(--loader-icon-size) - 1px), calc(var(--loader-icon-size) - 1px)) rotate(39deg);
+    }
 }

@@ -196,7 +196,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             <div className="todo-page-body">
                 {loading && (
                     <div className="todo-page-state">
-                        <div className="spinner" />
+                        <div className="thinking-loader thinking-loader-md" aria-hidden="true" />
                         <p>Loading tasks...</p>
                     </div>
                 )}

@@ -47,7 +47,7 @@ export function TodoModal({ isVisible }: TodoModalProps) {
 
             {isLoading ? (
                 <div className="todo-loading">
-                    <div className="spinner" />
+                    <div className="thinking-loader thinking-loader-md" aria-hidden="true" />
                 </div>
             ) : tasks.length === 0 ? (
                 <p className="todo-empty">No pending tasks</p>

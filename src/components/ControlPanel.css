@@ -230,6 +230,32 @@
     gap: 8px;
 }
 
+.profile-row {
+    display: flex;
+    gap: 8px;
+}
+
+.profile-input {
+    flex: 1;
+    background: #0d0d0d;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px;
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    outline: none;
+}
+
+.profile-input:focus {
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.profile-msg {
+    margin: 8px 0 0;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
 .mcp-status-row {
     display: flex;
     align-items: center;

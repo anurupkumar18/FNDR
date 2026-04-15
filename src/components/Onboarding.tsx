@@ -12,7 +12,6 @@ import {
     downloadModel,
     refreshAiModels,
 } from "../api/onboarding";
-import { getAppNames, getStatus } from "../api/tauri";
 import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
 import "./Onboarding.css";
 
@@ -21,9 +20,8 @@ const STEPS: OnboardingStep[] = [
     "welcome",
     "biometrics",
     "privacy_promise",
-    "permissions",
     "model_download",
-    "indexing_started",
+    "permissions",
 ];
 
 const DEFAULT_ONBOARDING_STATE: OnboardingState = {
@@ -33,6 +31,7 @@ const DEFAULT_ONBOARDING_STATE: OnboardingState = {
     accessibility_permission: false,
     model_downloaded: false,
     model_id: null,
+    display_name: null,
 };
 
 function stepIndex(s: OnboardingStep) {
@@ -55,7 +54,23 @@ function StepDots({ current }: { current: OnboardingStep }) {
 }
 
 // ── Step 1: Welcome ───────────────────────────────────────────────────────
-function StepWelcome({ onNext }: { onNext: () => void }) {
+function StepWelcome({
+    state,
+    onSave,
+}: {
+    state: OnboardingState;
+    onSave: (s: OnboardingState) => void;
+}) {
+    const [displayName, setDisplayName] = useState(state.display_name ?? "");
+
+    function handleNext() {
+        onSave({
+            ...state,
+            display_name: displayName.trim() || null,
+            step: "biometrics",
+        });
+    }
+
     return (
         <>
             <span className="ob-icon">⌘</span>
@@ -66,7 +81,23 @@ function StepWelcome({ onNext }: { onNext: () => void }) {
                 <br /><br />
                 Everything runs on your computer. Nothing leaves it. Ever.
             </p>
-            <button id="ob-get-started" className="ob-btn-primary" onClick={onNext}>
+            <label className="ob-name-label" htmlFor="ob-display-name">
+                What should FNDR call you?
+            </label>
+            <input
+                id="ob-display-name"
+                className="ob-name-input"
+                type="text"
+                value={displayName}
+                placeholder="Your name (optional)"
+                onChange={(event) => setDisplayName(event.target.value)}
+                onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                        handleNext();
+                    }
+                }}
+            />
+            <button id="ob-get-started" className="ob-btn-primary" onClick={handleNext}>
                 Get Started
             </button>
         </>
@@ -159,7 +190,7 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
             <button
                 id="ob-accept-privacy"
                 className="ob-btn-primary"
-                onClick={() => onSave({ ...state, step: "permissions" })}
+                onClick={() => onSave({ ...state, step: "model_download" })}
             >
                 I'm in — Continue
             </button>
@@ -191,7 +222,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
     function handleContinue() {
         onSave({
             ...state,
-            step: "model_download",
+            step: "complete",
             screen_permission: perms.screen_recording,
             accessibility_permission: perms.accessibility,
         });
@@ -258,7 +289,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
                 disabled={!canContinue}
                 title={canContinue ? undefined : "Screen Recording is required to continue"}
             >
-                {canContinue ? "Continue" : "Grant Screen Recording to continue"}
+                {canContinue ? "Open FNDR →" : "Grant Screen Recording to continue"}
             </button>
         </>
     );
@@ -318,7 +349,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                 if (!cancelled) {
                     onSave({
                         ...state,
-                        step: "indexing_started",
+                        step: "permissions",
                         model_downloaded: true,
                         model_id: completedModelId,
                     });
@@ -361,7 +392,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
             setIsActivatingModel(true);
             try {
                 await activateModel(selected.id);
-                onSave({ ...state, step: "indexing_started", model_downloaded: true, model_id: selected.id });
+                onSave({ ...state, step: "permissions", model_downloaded: true, model_id: selected.id });
             } catch (refreshError) {
                 setError(`FNDR found the model on disk, but could not activate it: ${String(refreshError)}`);
             } finally {
@@ -492,7 +523,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                     borderRadius: 8,
                     padding: 12,
                     fontSize: 11,
-                    fontFamily: "monospace",
+                    fontFamily: "inherit",
                     color: "rgba(255,255,255,0.7)",
                     height: 120,
                     overflowY: "auto",
@@ -529,110 +560,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     );
 }
 
-// ── Step 6: Indexing Started ──────────────────────────────────────────────
-function StepIndexingStarted({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
-    const [memories, setMemories] = useState(0);
-    const [apps, setApps] = useState(0);
-    const [elapsed, setElapsed] = useState(0);
-
-    useEffect(() => {
-        let cancelled = false;
-
-        const refreshMemories = async () => {
-            try {
-                const s = await getStatus();
-                if (!cancelled) {
-                    setMemories(s.frames_captured);
-                }
-            } catch {/* ignore */}
-        };
-
-        void refreshMemories();
-        const id = setInterval(() => {
-            setElapsed((e) => e + 1);
-            void refreshMemories();
-        }, 1000);
-
-        return () => {
-            cancelled = true;
-            clearInterval(id);
-        };
-    }, []);
-
-    useEffect(() => {
-        let cancelled = false;
-
-        const refreshApps = async () => {
-            try {
-                const names = await getAppNames();
-                if (!cancelled) {
-                    setApps(names.length);
-                }
-            } catch {/* ignore */}
-        };
-
-        void refreshApps();
-        const id = setInterval(() => {
-            void refreshApps();
-        }, 5000);
-
-        return () => {
-            cancelled = true;
-            clearInterval(id);
-        };
-    }, []);
-
-    function formatElapsed(secs: number) {
-        if (secs < 60) return `${secs}s`;
-        return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-    }
-
-    return (
-        <>
-            <span className="ob-icon">✨</span>
-            <h1 className="ob-title">FNDR is learning your screen</h1>
-            <p className="ob-subtitle">
-                <span className="ob-pulse-dot" />
-                Keep using your Mac like normal. FNDR works quietly in the background.
-            </p>
-
-            <div className="ob-live-stats">
-                <div className="ob-live-stat">
-                    <span className="ob-live-stat-num">{memories}</span>
-                    <span className="ob-live-stat-label">Memories</span>
-                </div>
-                <div className="ob-live-stat">
-                    <span className="ob-live-stat-num">{apps}</span>
-                    <span className="ob-live-stat-label">Apps seen</span>
-                </div>
-                <div className="ob-live-stat">
-                    <span className="ob-live-stat-num">{formatElapsed(elapsed)}</span>
-                    <span className="ob-live-stat-label">Tracking</span>
-                </div>
-            </div>
-
-            <div className="ob-search-teaser">
-                Try searching: "the article I was reading earlier" or "that Figma file"
-            </div>
-
-            <p className="ob-subtitle" style={{ marginTop: 16 }}>
-                Gemma will warm up automatically when FNDR needs it. Meeting transcription and extra vision helpers stay off until you use them.
-            </p>
-
-            <button
-                id="ob-open-fndr"
-                className="ob-btn-primary"
-                onClick={() => onSave({ ...state, step: "complete" })}
-            >
-                Open FNDR →
-            </button>
-        </>
-    );
-}
-
 // ── Root Onboarding Component ─────────────────────────────────────────────
 interface OnboardingProps {
-    onComplete: () => void;
+    onComplete: (state: OnboardingState) => void;
 }
 
 export function Onboarding({ onComplete }: OnboardingProps) {
@@ -649,7 +579,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
             setState(next);
             await saveOnboardingState(next);
             if (next.step === "complete") {
-                onComplete();
+                onComplete(next);
             }
         },
         [onComplete]
@@ -661,15 +591,16 @@ export function Onboarding({ onComplete }: OnboardingProps) {
         <div className="onboarding-overlay">
             <div className="ob-card">
                 {state.step !== "welcome" && state.step !== "complete" && (
-                    <StepDots current={state.step} />
+                    <StepDots current={state.step === "indexing_started" ? "permissions" : state.step} />
                 )}
 
-                {state.step === "welcome" && <StepWelcome onNext={() => save({ ...state, step: "biometrics" })} />}
+                {state.step === "welcome" && <StepWelcome state={state} onSave={save} />}
                 {state.step === "biometrics" && <StepBiometrics state={state} onSave={save} />}
                 {state.step === "privacy_promise" && <StepPrivacyPromise state={state} onSave={save} />}
-                {state.step === "permissions" && <StepPermissions state={state} onSave={save} />}
                 {state.step === "model_download" && <StepModelDownload state={state} onSave={save} />}
-                {state.step === "indexing_started" && <StepIndexingStarted state={state} onSave={save} />}
+                {(state.step === "permissions" || state.step === "indexing_started") && (
+                    <StepPermissions state={state} onSave={save} />
+                )}
             </div>
         </div>
     );

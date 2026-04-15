@@ -168,9 +168,11 @@
 .app-main.search-centered {
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
     align-items: center;
     min-height: 100vh;
+    padding-top: 86px;
+    padding-bottom: 28px;
 }
 
 .search-shell {
@@ -185,8 +187,30 @@
 }
 
 .app-main.search-centered .search-shell {
-    margin: 0;
+    margin: 0 0 14px;
     width: min(820px, 100%);
+}
+
+.home-focus-header {
+    display: grid;
+    gap: 8px;
+    justify-items: center;
+    margin-bottom: 10px;
+}
+
+.home-greeting {
+    font-size: 1.5rem;
+    letter-spacing: 0.01em;
+    color: rgba(241, 244, 250, 0.95);
+    text-align: center;
+}
+
+.home-date-context {
+    font-size: 0.88rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(141, 146, 157, 0.76);
+    margin-bottom: 12px;
 }
 
 .main-layout {
@@ -228,6 +252,10 @@
         padding: 12px;
     }
 
+    .app-main.search-centered {
+        padding-top: 70px;
+    }
+
     .main-layout.with-reconstruction {
         grid-template-columns: 1fr;
     }
@@ -244,5 +272,14 @@
         min-width: 0;
         max-width: none;
         width: auto;
+    }
+
+    .home-date-context {
+        margin-bottom: 10px;
+        font-size: 0.78rem;
+    }
+
+    .home-greeting {
+        font-size: 1.24rem;
     }
 }

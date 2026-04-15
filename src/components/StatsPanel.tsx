@@ -147,7 +147,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
             <div className="stats-page-body">
                 {loading && (
                     <div className="stats-page-state">
-                        <div className="spinner" />
+                        <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
                         <p>Loading stats...</p>
                     </div>
                 )}

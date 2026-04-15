@@ -466,7 +466,6 @@ impl InferenceEngine {
             RULES:\n\
             - Use ONLY facts explicitly present in SNIPPETS.\n\
             - If evidence is weak, start with 'Low confidence:'.\n\
-            - End with 'Sources: <id1>, <id2>' using snippet IDs.\n\
             - Respond ONLY with one paragraph summary.",
             &format!(
                 "SEARCH QUERY: \"{}\"\n\nSNIPPETS:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Combine these snippets into one paragraph that answers the query. Keep it under 50 words.",

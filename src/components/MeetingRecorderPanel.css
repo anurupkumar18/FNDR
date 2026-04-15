@@ -123,6 +123,24 @@
     line-height: 1.45;
 }
 
+.meeting-start-row {
+    margin-top: 8px;
+    display: flex;
+    gap: 6px;
+}
+
+.meeting-title-input {
+    flex: 1;
+    min-width: 0;
+    height: 34px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #0d0d0d;
+    color: var(--text-primary);
+    padding: 0 10px;
+    font-size: 0.82rem;
+}
+
 .meeting-consent.pending {
     color: #aaaaaa;
 }
@@ -141,7 +159,13 @@
     gap: 0.5rem;
 }
 
+.meeting-list-row {
+    display: flex;
+    gap: 6px;
+}
+
 .meeting-list-item {
+    flex: 1;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: #0d0d0d;
@@ -158,6 +182,17 @@
 .meeting-list-item.active {
     border-color: rgba(130, 130, 130, 0.45);
     background: var(--surface-elevated);
+}
+
+.meeting-delete-btn {
+    width: 82px;
+    border-color: rgba(170, 170, 170, 0.3);
+    color: var(--text-secondary);
+}
+
+.meeting-delete-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .meeting-title {

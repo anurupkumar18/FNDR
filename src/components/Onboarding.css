@@ -93,6 +93,30 @@
     margin-bottom: 32px;
 }
 
+.ob-name-label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.ob-name-input {
+    width: 100%;
+    margin-bottom: 16px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: #0d0d0d;
+    color: var(--text-primary);
+    padding: 12px 14px;
+    font-size: 16px;
+    outline: none;
+}
+
+.ob-name-input:focus {
+    border-color: rgba(255, 255, 255, 0.32);
+}
+
 /* ── Buttons ──────────────────────────────────────────────── */
 .ob-btn-primary {
     display: flex;

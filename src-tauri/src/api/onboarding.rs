@@ -73,6 +73,8 @@ pub struct OnboardingState {
     pub accessibility_permission: bool,
     pub model_downloaded: bool,
     pub model_id: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 impl Default for OnboardingState {
@@ -84,6 +86,7 @@ impl Default for OnboardingState {
             accessibility_permission: false,
             model_downloaded: false,
             model_id: None,
+            display_name: None,
         }
     }
 }
@@ -97,6 +100,11 @@ fn normalize_onboarding_state(mut state: OnboardingState) -> OnboardingState {
     {
         state.step = OnboardingStep::ModelDownload;
     }
+
+    state.display_name = state
+        .display_name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
 
     state
 }

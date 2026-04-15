@@ -131,7 +131,7 @@ impl MemoryCardSynthesizer {
                 }
             }
 
-            let (title, mut summary, action, mut context) = match draft.as_ref().and_then(|d| {
+            let (title, mut summary, action, context) = match draft.as_ref().and_then(|d| {
                 validate_draft(d, query, &snippets, &anchor.app_name, &anchor.window_title)
             }) {
                 Some(valid) => valid,
@@ -144,7 +144,6 @@ impl MemoryCardSynthesizer {
             if confidence < 0.42 && !summary.to_lowercase().starts_with("low confidence:") {
                 summary = format!("Low confidence: {}", summary);
             }
-            append_source_context(&mut context, &evidence_ids);
 
             cards.push(MemoryCard {
                 id: anchor.id.clone(),
@@ -365,27 +364,6 @@ fn short_id(value: &str) -> String {
     value.chars().take(8).collect::<String>()
 }
 
-fn append_source_context(context: &mut Vec<String>, evidence_ids: &[String]) {
-    if evidence_ids.is_empty() {
-        return;
-    }
-
-    let source_line = format!(
-        "Sources: {}",
-        evidence_ids
-            .iter()
-            .map(|id| short_id(id))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-
-    if !context.iter().any(|entry| entry.starts_with("Sources:")) {
-        context.push(source_line);
-    }
-
-    context.truncate(5);
-}
-
 fn grounding_confidence(query: &str, summary: &str, base_score: f32, snippets: &[String]) -> f32 {
     if snippets.is_empty() {
         return 0.0;
@@ -491,10 +469,9 @@ fn deterministic_fallback(
 
 fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     let snippets = collect_group_snippets(std::slice::from_ref(result));
-    let (title, mut summary, action, mut context) =
+    let (title, mut summary, action, context) =
         deterministic_fallback(query, result, &snippets);
     let evidence_ids = vec![result.id.clone()];
-    append_source_context(&mut context, &evidence_ids);
     let confidence = grounding_confidence(query, &summary, result.score, &snippets);
     if confidence < 0.42 && !summary.to_lowercase().starts_with("low confidence:") {
         summary = format!("Low confidence: {}", summary);

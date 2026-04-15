@@ -1,7 +1,7 @@
 //! Meeting recorder runtime and persistence.
 //!
-//! This module provides local-only meeting recording with automatic session
-//! detection, segmented audio capture, and local transcription.
+//! This module provides local-only meeting recording with segmented audio
+//! capture and local transcription.
 
 use crate::{speech, store::MemoryRecord, AppState};
 use parking_lot::{Mutex, RwLock};
@@ -25,9 +25,6 @@ const SEGMENT_SECONDS: i64 = 20;
 const STATUS_EVENT: &str = "meeting://status";
 const SEGMENT_EVENT: &str = "meeting://segment";
 const FORCED_MODEL: &str = "whisper-large-v3-turbo-gguf";
-const AUTO_POLL_SECONDS: u64 = 2;
-const AUTO_START_HITS: u8 = 1;
-const AUTO_STOP_IDLE_SECONDS: u64 = 90;
 const CONSENT_LOOKBACK_SEGMENTS: usize = 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,6 +253,44 @@ impl MeetingStore {
             .cloned()
     }
 
+    fn delete_meeting(&self, meeting_id: &str) -> Result<bool, String> {
+        let removed = {
+            let mut meetings = self.meetings.write();
+            if let Some(index) = meetings.iter().position(|m| m.id == meeting_id) {
+                Some(meetings.remove(index))
+            } else {
+                None
+            }
+        };
+
+        let Some(meeting) = removed else {
+            return Ok(false);
+        };
+
+        self.persist_meetings()?;
+
+        {
+            let mut segments = self.segments.write();
+            segments.retain(|segment| segment.meeting_id != meeting_id);
+        }
+        self.persist_segments()?;
+
+        if let Some(transcript_path) = meeting.transcript_path.as_ref() {
+            let transcript_file = PathBuf::from(transcript_path);
+            if transcript_file.exists() {
+                let _ = fs::remove_file(transcript_file);
+            }
+        }
+
+        let meeting_dir = PathBuf::from(&meeting.meeting_dir);
+        if meeting_dir.exists() {
+            fs::remove_dir_all(&meeting_dir)
+                .map_err(|e| format!("Failed to remove meeting directory: {e}"))?;
+        }
+
+        Ok(true)
+    }
+
     fn get_segments_for_meeting(&self, meeting_id: &str) -> Vec<MeetingSegment> {
         let mut segments: Vec<MeetingSegment> = self
             .segments
@@ -432,7 +467,6 @@ struct MeetingRuntime {
     active: Option<ActiveMeeting>,
     app_handle: Option<AppHandle>,
     app_state: Option<Arc<AppState>>,
-    auto_task: Option<tauri::async_runtime::JoinHandle<()>>,
     repair_task: Option<tauri::async_runtime::JoinHandle<()>>,
     last_error: Option<String>,
 }
@@ -444,7 +478,6 @@ impl Default for MeetingRuntime {
             active: None,
             app_handle: None,
             app_state: None,
-            auto_task: None,
             repair_task: None,
             last_error: None,
         }
@@ -468,23 +501,21 @@ pub fn init(app_data_dir: PathBuf) -> Result<(), String> {
 }
 
 pub fn bind_runtime(app_handle: AppHandle, app_state: Arc<AppState>) -> Result<(), String> {
-    let should_start_tasks = {
+    let should_start_repair = {
         let mut rt = runtime().lock();
         rt.app_handle = Some(app_handle.clone());
         rt.app_state = Some(app_state.clone());
-        rt.auto_task.is_none()
+        rt.repair_task.is_none()
     };
 
-    if !should_start_tasks {
+    if !should_start_repair {
         return Ok(());
     }
 
-    let auto_task = tauri::async_runtime::spawn(auto_monitor_loop(app_handle, app_state.clone()));
     let repair_task = tauri::async_runtime::spawn(repair_failed_transcripts_once(app_state));
 
     {
         let mut rt = runtime().lock();
-        rt.auto_task = Some(auto_task);
         rt.repair_task = Some(repair_task);
     }
     Ok(())
@@ -493,6 +524,23 @@ pub fn bind_runtime(app_handle: AppHandle, app_state: Arc<AppState>) -> Result<(
 pub fn list_meetings() -> Result<Vec<MeetingSession>, String> {
     let store = get_store()?;
     Ok(store.list_meetings())
+}
+
+pub async fn delete_meeting(meeting_id: &str) -> Result<bool, String> {
+    let should_stop_active = {
+        let rt = runtime().lock();
+        rt.active
+            .as_ref()
+            .map(|active| active.meeting_id == meeting_id)
+            .unwrap_or(false)
+    };
+
+    if should_stop_active {
+        stop_recording().await?;
+    }
+
+    let store = get_store()?;
+    store.delete_meeting(meeting_id)
 }
 
 pub async fn get_meeting_transcript(meeting_id: &str) -> Result<MeetingTranscript, String> {
@@ -730,58 +778,6 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
     Ok(status)
 }
 
-async fn auto_monitor_loop(app_handle: AppHandle, app_state: Arc<AppState>) {
-    let mut hits: u8 = 0;
-    let mut idle_seconds: u64 = 0;
-
-    loop {
-        let signal = detect_meeting_signal(&app_state).await;
-        let status = recorder_status().unwrap_or(MeetingRecorderStatus {
-            is_recording: false,
-            current_meeting_id: None,
-            current_title: None,
-            model: None,
-            started_at: None,
-            segment_count: 0,
-            consent_state: "unknown".to_string(),
-            consent_evidence: None,
-            consent_checked_segments: 0,
-            ffmpeg_available: resolve_ffmpeg_binary().is_some(),
-            transcription_backend: detect_transcription_backend(),
-            last_error: None,
-        });
-
-        if let Some(signal) = signal {
-            hits = hits.saturating_add(1);
-            idle_seconds = 0;
-
-            if !status.is_recording && hits >= AUTO_START_HITS {
-                if let Err(err) =
-                    start_recording(Some(app_handle.clone()), signal.title, vec![], None).await
-                {
-                    runtime().lock().last_error = Some(err);
-                }
-                hits = 0;
-            }
-        } else {
-            hits = 0;
-            if status.is_recording {
-                idle_seconds = idle_seconds.saturating_add(AUTO_POLL_SECONDS);
-                if idle_seconds >= AUTO_STOP_IDLE_SECONDS {
-                    if let Err(err) = stop_recording().await {
-                        runtime().lock().last_error = Some(err);
-                    }
-                    idle_seconds = 0;
-                }
-            } else {
-                idle_seconds = 0;
-            }
-        }
-
-        tokio::time::sleep(Duration::from_secs(AUTO_POLL_SECONDS)).await;
-    }
-}
-
 async fn repair_failed_transcripts_once(app_state: Arc<AppState>) {
     let store = match get_store() {
         Ok(store) => store,
@@ -848,11 +844,6 @@ async fn repair_failed_transcripts_once(app_state: Arc<AppState>) {
 }
 
 #[derive(Debug, Clone)]
-struct MeetingSignal {
-    title: String,
-}
-
-#[derive(Debug, Clone)]
 struct ConsentSnapshot {
     state: String,
     evidence: Option<String>,
@@ -866,177 +857,6 @@ impl Default for ConsentSnapshot {
             evidence: None,
             checked_segments: 0,
         }
-    }
-}
-
-async fn detect_meeting_signal(app_state: &AppState) -> Option<MeetingSignal> {
-    if let Some(signal) = detect_frontmost_meeting_signal() {
-        return Some(signal);
-    }
-
-    let now = now_ms();
-    let mut memories = app_state.store.get_recent_memories(1).await.ok()?;
-    memories.sort_by_key(|memory| std::cmp::Reverse(memory.timestamp));
-
-    for memory in memories.into_iter().take(140) {
-        if now - memory.timestamp > 90_000 {
-            break;
-        }
-
-        let mut haystack = format!(
-            "{}\n{}\n{}",
-            memory.window_title, memory.text, memory.snippet
-        )
-        .to_lowercase();
-
-        if let Some(url) = memory.url.as_ref() {
-            haystack.push('\n');
-            haystack.push_str(&url.to_lowercase());
-        }
-
-        let app_hint = is_supported_meeting_app(&memory.app_name, memory.bundle_id.as_deref());
-        if contains_meeting_signal(&haystack, app_hint) {
-            let title = derive_meeting_title(&memory.window_title);
-            return Some(MeetingSignal { title });
-        }
-    }
-
-    None
-}
-
-#[cfg(target_os = "macos")]
-fn detect_frontmost_meeting_signal() -> Option<MeetingSignal> {
-    let script = r#"tell application "System Events"
-        set frontProc to first process whose frontmost is true
-        set appName to name of frontProc
-        set winName to ""
-        tell frontProc
-            if (count of windows) > 0 then
-                set winName to name of front window
-            end if
-        end tell
-        return appName & "||" & winName
-    end tell"#;
-
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if raw.is_empty() {
-        return None;
-    }
-
-    let mut parts = raw.splitn(2, "||");
-    let app_name = parts.next().unwrap_or("").trim();
-    let window_title = parts.next().unwrap_or("").trim();
-    if app_name.is_empty() {
-        return None;
-    }
-
-    let haystack = format!("{app_name}\n{window_title}").to_lowercase();
-    let app_hint = is_supported_meeting_app(app_name, None);
-    if !contains_meeting_signal(&haystack, app_hint) {
-        return None;
-    }
-
-    let title_source = if window_title.is_empty() {
-        app_name
-    } else {
-        window_title
-    };
-    Some(MeetingSignal {
-        title: derive_meeting_title(title_source),
-    })
-}
-
-#[cfg(not(target_os = "macos"))]
-fn detect_frontmost_meeting_signal() -> Option<MeetingSignal> {
-    None
-}
-
-fn contains_meeting_signal(haystack: &str, app_hint: bool) -> bool {
-    if contains_meeting_url(haystack) {
-        return true;
-    }
-
-    let keyword_hits = [
-        "meeting",
-        "in call",
-        "call in progress",
-        "join audio",
-        "join with computer audio",
-        "participants",
-        "breakout",
-        "waiting room",
-        "muted",
-        "unmute",
-        "screen sharing",
-        "this meeting is being recorded",
-        "this call is being recorded",
-        "recording in progress",
-        "webinar",
-        "huddle",
-    ]
-    .into_iter()
-    .filter(|k| haystack.contains(k))
-    .count();
-
-    if app_hint {
-        keyword_hits >= 1
-    } else {
-        keyword_hits >= 3
-    }
-}
-
-fn contains_meeting_url(haystack: &str) -> bool {
-    [
-        "zoom.us/j/",
-        "zoom.us/wc/",
-        "zoom.us/my/",
-        "meet.google.com/",
-        "teams.microsoft.com/",
-        "webex.com/",
-        "whereby.com/",
-        "around.co/",
-    ]
-    .into_iter()
-    .any(|k| haystack.contains(k))
-}
-
-fn is_supported_meeting_app(app_name: &str, bundle_id: Option<&str>) -> bool {
-    let app = app_name.to_lowercase();
-    let bundle = bundle_id.unwrap_or("").to_lowercase();
-    let haystack = format!("{app}\n{bundle}");
-    [
-        "zoom", "teams", "webex", "slack", "whereby", "around", "huddle", "discord",
-    ]
-    .into_iter()
-    .any(|needle| haystack.contains(needle))
-}
-
-fn derive_meeting_title(window_title: &str) -> String {
-    let cleaned = window_title
-        .replace(" - Zoom", "")
-        .replace(" | Zoom Workplace", "")
-        .replace(" — Zoom Workplace", "")
-        .replace("Zoom Workplace", "")
-        .replace(" | Microsoft Teams", "")
-        .replace(" - Google Meet", "")
-        .replace(" - Webex", "")
-        .trim()
-        .to_string();
-
-    if cleaned.is_empty() {
-        "Detected Meeting".to_string()
-    } else {
-        cleaned
     }
 }
 

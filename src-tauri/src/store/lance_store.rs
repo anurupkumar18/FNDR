@@ -279,10 +279,10 @@ impl Store {
                     weekday_counts[dt.weekday().num_days_from_monday() as usize] += 1;
 
                     let daypart_idx = match dt.hour() {
-                        0..=5 => 0,
-                        6..=11 => 1,
-                        12..=17 => 2,
-                        _ => 3,
+                        4..=11 => 1,
+                        12..=15 => 2,
+                        16..=19 => 3,
+                        _ => 0,
                     };
                     daypart_counts[daypart_idx] += 1;
                 }

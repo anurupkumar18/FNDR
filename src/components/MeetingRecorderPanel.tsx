@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     MeetingRecorderStatus,
     MeetingSession,
     MeetingTranscript,
-    addTodo,
+    deleteMeeting,
     getMeetingStatus,
     getMeetingTranscript,
     listMeetings,
-    startAgentTask,
+    onMeetingStatus,
+    startMeetingRecording,
     stopMeetingRecording,
 } from "../api/tauri";
 import "./MeetingRecorderPanel.css";
@@ -15,41 +16,29 @@ import "./MeetingRecorderPanel.css";
 interface MeetingRecorderPanelProps {
     isVisible: boolean;
     onClose: () => void;
-    onOpenAgent: () => void;
 }
 
-interface MeetingInsights {
-    actionItems: string[];
-    decisions: string[];
-    reminders: string[];
-}
-
-export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: MeetingRecorderPanelProps) {
+export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPanelProps) {
     const [status, setStatus] = useState<MeetingRecorderStatus | null>(null);
     const [meetings, setMeetings] = useState<MeetingSession[]>([]);
     const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<MeetingTranscript | null>(null);
+    const [titleInput, setTitleInput] = useState("");
     const [loading, setLoading] = useState(false);
-    const [creatingFollowups, setCreatingFollowups] = useState(false);
-    const [transcriptQuery, setTranscriptQuery] = useState("");
+    const [starting, setStarting] = useState(false);
+    const [stopping, setStopping] = useState(false);
+    const [deletingId, setDeletingId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const selectedMeetingIdRef = useRef<string | null>(null);
+
+    useEffect(() => {
+        selectedMeetingIdRef.current = selectedMeetingId;
+    }, [selectedMeetingId]);
 
     const selectedMeeting = useMemo(
-        () => meetings.find((m) => m.id === selectedMeetingId) ?? null,
+        () => meetings.find((meeting) => meeting.id === selectedMeetingId) ?? null,
         [meetings, selectedMeetingId]
     );
-
-    const insights = useMemo(() => summarizeMeeting(transcript), [transcript]);
-    const filteredSegments = useMemo(() => {
-        if (!transcript) {
-            return [];
-        }
-        const normalizedQuery = transcriptQuery.trim().toLowerCase();
-        if (!normalizedQuery) {
-            return transcript.segments;
-        }
-        return transcript.segments.filter((segment) => segment.text.toLowerCase().includes(normalizedQuery));
-    }, [transcript, transcriptQuery]);
 
     const refresh = async (preferCurrent = true) => {
         if (!isVisible) return;
@@ -63,10 +52,17 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
             setStatus(meetingStatus);
             setMeetings(meetingList);
 
-            const nextId = preferCurrent
-                ? meetingStatus.current_meeting_id ?? selectedMeetingId ?? meetingList[0]?.id ?? null
-                : selectedMeetingId ?? meetingList[0]?.id ?? null;
+            const currentSelection = selectedMeetingIdRef.current;
+            const selectionStillExists = currentSelection
+                ? meetingList.some((meeting) => meeting.id === currentSelection)
+                : false;
+            const nextId = selectionStillExists
+                ? currentSelection
+                : preferCurrent
+                    ? meetingStatus.current_meeting_id ?? meetingList[0]?.id ?? null
+                    : meetingList[0]?.id ?? null;
 
+            selectedMeetingIdRef.current = nextId;
             setSelectedMeetingId(nextId);
             if (nextId) {
                 const data = await getMeetingTranscript(nextId);
@@ -86,21 +82,67 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
         if (!isVisible) return;
 
         let mounted = true;
+        let unlisten: (() => void) | null = null;
+
         const run = async () => {
             if (!mounted) return;
             await refresh(true);
         };
 
-        run();
-        const interval = window.setInterval(run, 4000);
+        const subscribe = async () => {
+            try {
+                unlisten = await onMeetingStatus((nextStatus) => {
+                    if (!mounted) return;
+                    setStatus(nextStatus);
+                });
+            } catch {
+                // Ignore listener errors; manual refresh and actions still work.
+            }
+        };
+
+        void run();
+        void subscribe();
 
         return () => {
             mounted = false;
-            window.clearInterval(interval);
+            if (unlisten) {
+                unlisten();
+            }
         };
     }, [isVisible]);
 
+    const handleStart = async () => {
+        if (starting || status?.is_recording) return;
+        setStarting(true);
+        setError(null);
+        try {
+            const title = titleInput.trim() || `Meeting ${new Date().toLocaleString()}`;
+            await startMeetingRecording(title, []);
+            setTitleInput("");
+            await refresh(true);
+        } catch (err) {
+            setError(String(err));
+        } finally {
+            setStarting(false);
+        }
+    };
+
+    const handleStop = async () => {
+        if (stopping || !status?.is_recording) return;
+        setStopping(true);
+        setError(null);
+        try {
+            await stopMeetingRecording();
+            await refresh(true);
+        } catch (err) {
+            setError(String(err));
+        } finally {
+            setStopping(false);
+        }
+    };
+
     const handleSelectMeeting = async (meetingId: string) => {
+        selectedMeetingIdRef.current = meetingId;
         setSelectedMeetingId(meetingId);
         try {
             const data = await getMeetingTranscript(meetingId);
@@ -110,97 +152,17 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
         }
     };
 
-    const handleCopyTranscript = async () => {
-        if (!transcript?.full_text) return;
-        await navigator.clipboard.writeText(transcript.full_text);
-    };
-
-    const handleCopyHighlights = async () => {
-        if (!transcript) return;
-        const lines = [
-            `# ${transcript.meeting.title}`,
-            "",
-            "## Action Items",
-            ...insights.actionItems.map((item) => `- ${item}`),
-            "",
-            "## Decisions",
-            ...insights.decisions.map((item) => `- ${item}`),
-            "",
-            "## Reminders",
-            ...insights.reminders.map((item) => `- ${item}`),
-        ];
-        await navigator.clipboard.writeText(lines.join("\n"));
-    };
-
-    const handleCreateFollowups = async () => {
-        if (creatingFollowups || !transcript) return;
-        setCreatingFollowups(true);
+    const handleDeleteMeeting = async (meetingId: string) => {
+        if (deletingId) return;
+        setDeletingId(meetingId);
         setError(null);
         try {
-            const candidates = [...insights.actionItems, ...insights.reminders]
-                .filter((item) => item.length > 3)
-                .slice(0, 6);
-
-            if (candidates.length === 0) {
-                setError("No clear follow-up actions found yet in this meeting.");
-                return;
-            }
-
-            for (const item of candidates) {
-                await addTodo(item, `From meeting: ${transcript.meeting.title}`, "Followup");
-            }
+            await deleteMeeting(meetingId);
+            await refresh(false);
         } catch (err) {
             setError(String(err));
         } finally {
-            setCreatingFollowups(false);
-        }
-    };
-
-    const handleExportMarkdown = () => {
-        if (!transcript) return;
-        const content = transcript.full_text
-            ? transcript.full_text
-            : "(No transcript yet)";
-        const lines = [
-            `# ${transcript.meeting.title}`,
-            "",
-            `- Model: ${transcript.meeting.model}`,
-            `- Started: ${new Date(transcript.meeting.start_timestamp).toLocaleString()}`,
-            "",
-            "## Transcript",
-            "",
-            content,
-            "",
-        ];
-        downloadText(`${safeName(transcript.meeting.title)}.md`, lines.join("\n"), "text/markdown");
-    };
-
-    const handleExportJson = () => {
-        if (!transcript) return;
-        downloadText(
-            `${safeName(transcript.meeting.title)}.json`,
-            JSON.stringify(transcript, null, 2),
-            "application/json"
-        );
-    };
-
-    const handleAttachToAgent = async () => {
-        if (!transcript?.full_text) return;
-        const clipped = transcript.full_text.slice(0, 9000);
-        await startAgentTask(
-            `Generate a structured post-meeting brief with decisions, blockers, and next steps: ${transcript.meeting.title}`,
-            [],
-            [`Meeting transcript:\n${clipped}`]
-        );
-        onOpenAgent();
-    };
-
-    const handleStopNow = async () => {
-        try {
-            await stopMeetingRecording();
-            await refresh(true);
-        } catch (err) {
-            setError(String(err));
+            setDeletingId(null);
         }
     };
 
@@ -210,11 +172,11 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
         <div className="meeting-panel">
             <header className="meeting-panel-header">
                 <div className="meeting-headline">
-                    <h2>Meeting Notes</h2>
-                    <p>Auto-captured transcripts, ready when a meeting ends.</p>
+                    <h2>Meetings</h2>
+                    <p>Manual recording only. Start, stop, and review transcripts.</p>
                 </div>
                 <div className="meeting-header-actions">
-                    <button className="ui-action-btn meeting-ghost-btn" onClick={() => refresh(true)} disabled={loading}>
+                    <button className="ui-action-btn meeting-ghost-btn" onClick={() => void refresh(true)} disabled={loading}>
                         {loading ? "Refreshing..." : "Refresh"}
                     </button>
                     <button className="ui-action-btn meeting-close-btn" onClick={onClose}>
@@ -229,23 +191,37 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                         <div className="meeting-live-row">
                             <div>
                                 <span className={`meeting-dot ${status?.is_recording ? "live" : "idle"}`} />
-                                <strong>{status?.is_recording ? "Meeting in progress" : "Auto monitor active"}</strong>
+                                <strong>{status?.is_recording ? "Recording in progress" : "Ready to record"}</strong>
                             </div>
                             {status?.is_recording && (
-                                <button className="ui-action-btn meeting-ghost-btn" onClick={handleStopNow}>Stop Now</button>
+                                <button className="ui-action-btn meeting-ghost-btn" onClick={() => void handleStop()} disabled={stopping}>
+                                    {stopping ? "Stopping..." : "Stop"}
+                                </button>
                             )}
                         </div>
                         <p className="meeting-subtle">
                             {status?.is_recording
-                                ? `Recording: ${status.current_title ?? "Detected meeting"}`
-                                : "Starts automatically when a supported meeting app is active."}
+                                ? `Recording: ${status.current_title ?? "Meeting"}`
+                                : "Click Start to begin recording your current meeting audio."}
                         </p>
+                        <div className="meeting-start-row">
+                            <input
+                                className="meeting-title-input"
+                                value={titleInput}
+                                onChange={(event) => setTitleInput(event.target.value)}
+                                placeholder="Meeting title (optional)"
+                                disabled={Boolean(status?.is_recording)}
+                            />
+                            <button
+                                className="ui-action-btn meeting-primary-btn"
+                                onClick={() => void handleStart()}
+                                disabled={Boolean(status?.is_recording) || starting || !status?.ffmpeg_available}
+                            >
+                                {starting ? "Starting..." : "Start"}
+                            </button>
+                        </div>
                         <p className="meeting-subtle">
                             Segments: {status?.segment_count ?? 0} • Audio: {status?.ffmpeg_available ? "ready" : "missing"}
-                        </p>
-                        <p className={`meeting-subtle meeting-consent ${status?.consent_state ?? "unknown"}`}>
-                            Consent: {formatConsentState(status?.consent_state)}
-                            {status?.consent_evidence ? ` • "${status.consent_evidence}"` : ""}
                         </p>
                     </section>
 
@@ -254,16 +230,26 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                         <div className="meeting-list">
                             {meetings.length === 0 && <p className="meeting-empty">No meetings captured yet.</p>}
                             {meetings.map((meeting) => (
-                                <button
-                                    key={meeting.id}
-                                    className={`meeting-list-item ${selectedMeetingId === meeting.id ? "active" : ""}`}
-                                    onClick={() => handleSelectMeeting(meeting.id)}
-                                >
-                                    <span className="meeting-title">{meeting.title}</span>
-                                    <span className="meeting-sub">
-                                        {new Date(meeting.start_timestamp).toLocaleString()} • {meeting.segment_count} segments
-                                    </span>
-                                </button>
+                                <div key={meeting.id} className="meeting-list-row">
+                                    <button
+                                        className={`meeting-list-item ${selectedMeetingId === meeting.id ? "active" : ""}`}
+                                        onClick={() => void handleSelectMeeting(meeting.id)}
+                                    >
+                                        <span className="meeting-title">{meeting.title}</span>
+                                        <span className="meeting-sub">
+                                            {new Date(meeting.start_timestamp).toLocaleString()} • {meeting.segment_count} segments
+                                        </span>
+                                    </button>
+                                    <button
+                                        className="ui-action-btn meeting-delete-btn"
+                                        onClick={() => void handleDeleteMeeting(meeting.id)}
+                                        disabled={deletingId === meeting.id}
+                                        title="Delete this meeting"
+                                        aria-label="Delete meeting"
+                                    >
+                                        {deletingId === meeting.id ? "Deleting..." : "Delete"}
+                                    </button>
+                                </div>
                             ))}
                         </div>
                     </section>
@@ -275,94 +261,23 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
                             <h3>{selectedMeeting?.title ?? "Transcript"}</h3>
                             <p>
                                 {selectedMeeting
-                                    ? `${selectedMeeting.segment_count} segments • ${Math.max(
-                                        1,
-                                        Math.round(selectedMeeting.duration_seconds / 60)
-                                    )} min`
+                                    ? `${selectedMeeting.segment_count} segments • ${formatDuration(selectedMeeting.duration_seconds)}`
                                     : "Select a meeting"}
                             </p>
                         </div>
-                        {transcript && (
-                            <div className="meeting-export-row">
-                                <button className="ui-action-btn meeting-ghost-btn" onClick={handleCopyTranscript} disabled={!transcript?.full_text}>
-                                    Copy
-                                </button>
-                                <button className="ui-action-btn meeting-ghost-btn" onClick={handleExportMarkdown} disabled={!transcript}>
-                                    Markdown
-                                </button>
-                                <button className="ui-action-btn meeting-ghost-btn" onClick={handleExportJson} disabled={!transcript}>
-                                    JSON
-                                </button>
-                                <button className="ui-action-btn meeting-ghost-btn" onClick={handleCopyHighlights}>
-                                    Copy Highlights
-                                </button>
-                                <button
-                                    className="ui-action-btn meeting-ghost-btn"
-                                    onClick={handleCreateFollowups}
-                                    disabled={creatingFollowups}
-                                >
-                                    {creatingFollowups ? "Creating..." : "Create Follow-ups"}
-                                </button>
-                                <button className="ui-action-btn meeting-primary-btn" onClick={handleAttachToAgent} disabled={!transcript?.full_text}>
-                                    Attach to Run
-                                </button>
-                            </div>
-                        )}
                     </div>
 
-                    {transcript && (
-                        <section className="meeting-insights">
-                            <article className="meeting-insight-card">
-                                <h4>Action Items</h4>
-                                <ul>
-                                    {insights.actionItems.map((item) => (
-                                        <li key={item}>{item}</li>
-                                    ))}
-                                </ul>
-                            </article>
-                            <article className="meeting-insight-card">
-                                <h4>Decisions</h4>
-                                <ul>
-                                    {insights.decisions.map((item) => (
-                                        <li key={item}>{item}</li>
-                                    ))}
-                                </ul>
-                            </article>
-                            <article className="meeting-insight-card">
-                                <h4>Reminders</h4>
-                                <ul>
-                                    {insights.reminders.map((item) => (
-                                        <li key={item}>{item}</li>
-                                    ))}
-                                </ul>
-                            </article>
-                        </section>
-                    )}
-
                     <div className="meeting-transcript">
-                        <div className="meeting-transcript-toolbar">
-                            <input
-                                type="text"
-                                value={transcriptQuery}
-                                onChange={(event) => setTranscriptQuery(event.target.value)}
-                                placeholder="Search transcript text..."
-                            />
-                            <span>
-                                {transcript ? `${filteredSegments.length}/${transcript.segments.length} segments` : ""}
-                            </span>
-                        </div>
                         {!transcript && <p className="meeting-empty">No transcript selected.</p>}
-                        {transcript && filteredSegments.length === 0 && (
-                            <p className="meeting-empty">No segments match your search.</p>
+                        {transcript && transcript.segments.length === 0 && (
+                            <p className="meeting-empty">No transcript segments yet for this meeting.</p>
                         )}
-                        {filteredSegments.map((segment) => (
+                        {transcript?.segments.map((segment) => (
                             <article key={segment.id} className="segment-row">
                                 <div className="segment-time">
                                     {formatTime(segment.start_timestamp)} - {formatTime(segment.end_timestamp)}
                                 </div>
-                                <div className="segment-text">
-                                    {highlightSegment(segment.text || "(empty segment)", transcriptQuery)}
-                                </div>
+                                <div className="segment-text">{segment.text || "(empty segment)"}</div>
                             </article>
                         ))}
                     </div>
@@ -374,20 +289,6 @@ export function MeetingRecorderPanel({ isVisible, onClose, onOpenAgent }: Meetin
     );
 }
 
-function safeName(title: string): string {
-    return title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "meeting";
-}
-
-function downloadText(filename: string, content: string, mime: string) {
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
-}
-
 function formatTime(ts: number): string {
     return new Date(ts).toLocaleTimeString(undefined, {
         hour: "2-digit",
@@ -396,90 +297,7 @@ function formatTime(ts: number): string {
     });
 }
 
-function formatConsentState(state?: "unknown" | "pending" | "detected" | "denied"): string {
-    switch (state) {
-        case "detected":
-            return "detected";
-        case "denied":
-            return "denied";
-        case "pending":
-            return "pending";
-        default:
-            return "unknown";
-    }
-}
-
-function summarizeMeeting(transcript: MeetingTranscript | null): MeetingInsights {
-    const fallback: MeetingInsights = {
-        actionItems: ["No clear action items yet."],
-        decisions: ["No explicit decisions detected yet."],
-        reminders: ["No time-sensitive reminders detected yet."],
-    };
-
-    if (!transcript?.full_text?.trim()) {
-        return fallback;
-    }
-
-    const sentences = transcript.full_text
-        .replace(/\n+/g, " ")
-        .split(/(?<=[.!?])\s+/)
-        .map((sentence) => sentence.trim())
-        .filter((sentence) => sentence.length > 8);
-
-    const actions = uniqTop(
-        sentences.filter((sentence) =>
-            /(action item|next step|todo|follow up|follow-up|send|share|review|implement|fix|ship|assign|owner)/i.test(
-                sentence
-            )
-        )
-    );
-    const decisions = uniqTop(
-        sentences.filter((sentence) =>
-            /(decision|decided|agreed|approved|resolved|we will|we'll|finalize|chose)/i.test(sentence)
-        )
-    );
-    const reminders = uniqTop(
-        sentences.filter((sentence) =>
-            /(by|before|deadline|due|tomorrow|next week|next month|monday|tuesday|wednesday|thursday|friday)/i.test(
-                sentence
-            )
-        )
-    );
-
-    return {
-        actionItems: actions.length > 0 ? actions : fallback.actionItems,
-        decisions: decisions.length > 0 ? decisions : fallback.decisions,
-        reminders: reminders.length > 0 ? reminders : fallback.reminders,
-    };
-}
-
-function uniqTop(items: string[], limit = 5): string[] {
-    const seen = new Set<string>();
-    const output: string[] = [];
-    for (const item of items) {
-        const normalized = item.toLowerCase().replace(/\s+/g, " ").trim();
-        if (!normalized || seen.has(normalized)) {
-            continue;
-        }
-        seen.add(normalized);
-        output.push(item);
-        if (output.length >= limit) {
-            break;
-        }
-    }
-    return output;
-}
-
-function highlightSegment(text: string, query: string): (string | JSX.Element)[] | string {
-    const normalizedQuery = query.trim();
-    if (!normalizedQuery) {
-        return text;
-    }
-
-    const escaped = normalizedQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`(${escaped})`, "ig");
-    const parts = text.split(pattern);
-    return parts.map((part, index) =>
-        index % 2 === 1 ? <mark key={`${part}-${index}`}>{part}</mark> : part
-    );
+function formatDuration(durationSeconds: number): string {
+    const minutes = Math.max(1, Math.round(durationSeconds / 60));
+    return `${minutes} min`;
 }

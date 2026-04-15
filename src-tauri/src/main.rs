@@ -88,7 +88,7 @@ fn main() {
             if let Err(err) =
                 fndr_lib::meeting::bind_runtime(app.handle().clone(), runtime_state.clone())
             {
-                tracing::warn!("Meeting auto-monitor initialization failed: {}", err);
+                tracing::warn!("Meeting runtime initialization failed: {}", err);
             }
 
             Ok(())
@@ -109,6 +109,7 @@ fn main() {
             api::commands::start_meeting_recording,
             api::commands::stop_meeting_recording,
             api::commands::list_meetings,
+            api::commands::delete_meeting,
             api::commands::get_meeting_transcript,
             api::commands::search_meeting_transcripts,
             // Voice / Speech
