@@ -76,8 +76,8 @@ function StepWelcome({
             <span className="ob-icon">⌘</span>
             <h1 className="ob-title">Your memory, on your Mac.</h1>
             <p className="ob-subtitle">
-                FNDR remembers what you've worked on so you don't have to.
-                Search across apps, documents, and conversations — instantly.
+                FNDR remembers what you&apos;ve worked on so you don&apos;t have to.
+                Synthesize meetings, track tasks, and explore your knowledge graph — all instantly.
                 <br /><br />
                 Everything runs on your computer. Nothing leaves it. Ever.
             </p>
@@ -99,6 +99,9 @@ function StepWelcome({
             />
             <button id="ob-get-started" className="ob-btn-primary" onClick={handleNext}>
                 Get Started
+            </button>
+            <button className="ob-btn-ghost" onClick={handleNext}>
+                Skip for now
             </button>
         </>
     );
@@ -143,7 +146,7 @@ function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s:
                 {loading ? "Authenticating…" : "Enable Touch ID Lock"}
             </button>
             <button className="ob-btn-ghost" onClick={handleSkip}>
-                Use Mac password instead
+                Skip for now
             </button>
         </>
     );
@@ -160,22 +163,22 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
                     {
                         icon: "✅",
                         title: "What FNDR stores",
-                        body: "Text and a thumbnail of your active screen, every few seconds. This lives in a private folder on your Mac.",
+                        body: "Text, window metadata, and snapshots of your screen. This is indexed into a local LanceDB store on your Mac.",
                     },
                     {
                         icon: "🌐",
                         title: "Nothing leaves your Mac",
-                        body: "No servers. No cloud. No company can read your memories — ever.",
+                        body: "No servers. No cloud. Local Qwen3-VL and Whisper models process everything offline.",
                     },
                     {
                         icon: "🎭",
                         title: "Automatic privacy",
-                        body: "Password managers and banking apps are automatically skipped.",
+                        body: "Password managers and banking apps are automatically skipped using perceptual deduplication and blocklists.",
                     },
                     {
                         icon: "🗑",
                         title: "You're in control",
-                        body: "Delete any memory anytime — or wipe everything in one tap.",
+                        body: "Delete any memory, clear your history, or wipe the entire local database in one tap.",
                     },
                 ].map(({ icon, title, body }) => (
                     <div className="ob-privacy-item" key={title}>
@@ -192,7 +195,13 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
                 className="ob-btn-primary"
                 onClick={() => onSave({ ...state, step: "model_download" })}
             >
-                I'm in — Continue
+                I&apos;m in — Continue
+            </button>
+            <button
+                className="ob-btn-ghost"
+                onClick={() => onSave({ ...state, step: "model_download" })}
+            >
+                Skip for now
             </button>
         </>
     );
@@ -290,6 +299,12 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
                 title={canContinue ? undefined : "Screen Recording is required to continue"}
             >
                 {canContinue ? "Open FNDR →" : "Grant Screen Recording to continue"}
+            </button>
+            <button
+                className="ob-btn-ghost"
+                onClick={handleContinue}
+            >
+                Skip for now
             </button>
         </>
     );
@@ -420,10 +435,12 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     return (
         <>
             <span className="ob-icon">🧠</span>
-            <h1 className="ob-title">Download FNDR&apos;s local Gemma model</h1>
+            <h1 className="ob-title">Select your local AI model</h1>
             <p className="ob-subtitle">
-                Gemma 4 E4B is the required on-device model for summaries, memory Q&amp;A, and smarter indexing.
-                Optional helpers like Whisper Small, Orpheus, and FastVLM only load later if you actually use those features.
+                Choose the &apos;brain&apos; for your FNDR. Qwen3-VL (4B) is recommended for best-in-class 
+                summaries, memory Q&amp;A, and screen understanding.
+                <br /><br />
+                Optional helpers for transcription and TTS are loaded only when needed.
             </p>
 
             {!isDownloading && (
@@ -455,19 +472,19 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                 <div className="ob-privacy-list" style={{ marginBottom: 24 }}>
                     {[
                         {
-                            icon: "✅",
-                            title: "Required right now",
-                            body: "Gemma 4 E4B powers the core FNDR experience and is the only model you need to finish setup.",
-                        },
-                        {
-                            icon: "🖼",
-                            title: "FastVLM stays optional",
-                            body: "Apple FastVLM is no longer on the hot path. We can bring it in later for screenshot-heavy features only.",
+                            icon: "✨",
+                            title: "Multi-modal Intelligence",
+                            body: "Qwen3-VL powers the core experience, enabling search by screen content and natural language synthesis.",
                         },
                         {
                             icon: "🎙",
-                            title: "Voice models stay optional",
-                            body: "Whisper and Orpheus are only downloaded when you use meeting transcription, voice search, voice control, or text to speech.",
+                            title: "Local Meeting Recording",
+                            body: "Whisper GGUF models are used for automatic meeting detection and privacy-first transcription.",
+                        },
+                        {
+                            icon: "🕸",
+                            title: "Graph & Tasks",
+                            body: "FNDR extracts reminders and connects memories into a local knowledge graph automatically.",
                         },
                     ].map(({ icon, title, body }) => (
                         <div className="ob-privacy-item" key={title}>
@@ -554,7 +571,22 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                             ? `Use ${selected?.name}`
                             : `Download ${selected?.name ?? ""} · ${selected?.size_label ?? ""}`}
                     </button>
+                    <button
+                        className="ob-btn-ghost"
+                        onClick={() => onSave({ ...state, step: "permissions" })}
+                    >
+                        Skip for now
+                    </button>
                 </>
+            )}
+
+            {isDownloading && (
+                <button
+                    className="ob-btn-ghost"
+                    onClick={() => onSave({ ...state, step: "permissions" })}
+                >
+                    Skip for now
+                </button>
             )}
         </>
     );
