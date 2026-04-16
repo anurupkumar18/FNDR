@@ -569,18 +569,53 @@ pub async fn list_memory_cards(
     app_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<MemoryCard>, String> {
-    let limit = limit.unwrap_or(MEMORY_GRAPH_LIMIT).clamp(1, 2_000);
-    let results = state
-        .inner()
-        .store
-        .list_recent_results(limit, app_filter.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+    let requested_limit = limit.unwrap_or(MEMORY_GRAPH_LIMIT).clamp(1, 2_000);
+    let is_all_apps = app_filter
+        .as_deref()
+        .map(|value| value.trim().is_empty())
+        .unwrap_or(true);
+    let primary_limit = if is_all_apps {
+        requested_limit.min(450)
+    } else {
+        requested_limit
+    };
+
+    let results = match timeout(Duration::from_millis(3_200), async {
+        state
+            .inner()
+            .store
+            .list_recent_results(primary_limit, app_filter.as_deref())
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await
+    {
+        Ok(Ok(results)) => results,
+        Ok(Err(err)) => return Err(err),
+        Err(_) => {
+            tracing::warn!(
+                all_apps = is_all_apps,
+                limit = primary_limit,
+                "list_memory_cards timed out, retrying with lighter limit"
+            );
+            let fallback_limit = if is_all_apps {
+                primary_limit.min(200)
+            } else {
+                primary_limit.min(120)
+            };
+            state
+                .inner()
+                .store
+                .list_recent_results(fallback_limit, app_filter.as_deref())
+                .await
+                .map_err(|e| e.to_string())?
+        }
+    };
 
     let filtered = strip_internal_fndr_results(results);
     // Browsing should always feel instant. Use deterministic card construction
     // here to avoid expensive grouping/synthesis stalls on large "All Apps" sets.
-    let mut cards = MemoryCardSynthesizer::deterministic_from_results("", &filtered, limit);
+    let mut cards = MemoryCardSynthesizer::deterministic_from_results("", &filtered, primary_limit);
     cards.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     refine_memory_card_titles(&mut cards);
     Ok(cards)

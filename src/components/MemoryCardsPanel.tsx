@@ -44,7 +44,6 @@ const PERSPECTIVE_FILTER_OPTIONS: Array<{ value: PerspectiveFilter; label: strin
     { value: "communication", label: "Communication" },
     { value: "docs", label: "Docs & writing" },
 ];
-const MEMORY_CARDS_LOAD_TIMEOUT_MS = 12000;
 
 function normalizeText(value: string | undefined | null): string {
     if (!value) {
@@ -269,20 +268,12 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
         setLoading(true);
         setError(null);
 
-        const loadPromise = listMemoryCards(1500, selectedApp);
-        const timeoutPromise = new Promise<MemoryCard[]>((_, reject) => {
-            const timeout = window.setTimeout(() => {
-                reject(new Error("Loading memory cards timed out. Please try changing a filter."));
-            }, MEMORY_CARDS_LOAD_TIMEOUT_MS);
-            loadPromise.finally(() => window.clearTimeout(timeout));
-        });
-
-        void Promise.race([loadPromise, timeoutPromise])
+        void listMemoryCards(1500, selectedApp)
             .then((items) => {
                 if (cancelled) {
                     return;
                 }
-                setCards(items as MemoryCard[]);
+                setCards(items);
             })
             .catch((err) => {
                 if (cancelled) {
