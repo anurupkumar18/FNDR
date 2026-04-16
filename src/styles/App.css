@@ -191,7 +191,7 @@
 
 .app-main.search-centered .search-shell {
     margin: 0 0 14px;
-    width: min(820px, 100%);
+    width: min(820px, calc(100vw - 260px));
 }
 
 .home-focus-header {
