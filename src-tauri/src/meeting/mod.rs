@@ -5,7 +5,9 @@
 
 use crate::{
     speech,
-    store::{MeetingBreakdown, MeetingSegment, MeetingSession, MemoryRecord, Store},
+    store::{
+        MeetingBreakdown, MeetingSegment, MeetingSession, MemoryRecord, Store, Task, TaskType,
+    },
     AppState,
 };
 use parking_lot::Mutex;
@@ -879,6 +881,14 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
 
     let transcript_path: Option<String> = None;
 
+    if let Err(err) = persist_breakdown_tasks(&store, &meeting_id, &breakdown).await {
+        tracing::warn!(
+            "Failed to persist meeting breakdown tasks for {}: {}",
+            meeting_id,
+            err
+        );
+    }
+
     // 3. Update meeting with results
     let _ = store
         .update_meeting_breakdown(&meeting_id, breakdown, transcript_path.clone())
@@ -896,6 +906,80 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
         let _ = handle.emit(STATUS_EVENT, &status);
     }
     Ok(status)
+}
+
+async fn persist_breakdown_tasks(
+    store: &MeetingStore,
+    meeting_id: &str,
+    breakdown: &MeetingBreakdown,
+) -> Result<(), String> {
+    let mut existing = store.store.list_tasks().await.map_err(|e| e.to_string())?;
+    let mut seen_active: HashSet<(String, &'static str)> = existing
+        .iter()
+        .filter(|task| !task.is_completed && !task.is_dismissed)
+        .map(|task| {
+            (
+                task.title.trim().to_lowercase(),
+                task_type_key(&task.task_type),
+            )
+        })
+        .collect();
+
+    let created_at = now_ms();
+    let source_app = format!("Meeting:{}", meeting_id);
+    let mut added_any = false;
+
+    let mut add_task = |items: &[String], task_type: TaskType| {
+        let type_key = task_type_key(&task_type);
+        for item in items {
+            let title = item.trim();
+            if title.len() < 3 {
+                continue;
+            }
+            let dedupe_key = (title.to_lowercase(), type_key);
+            if seen_active.contains(&dedupe_key) {
+                continue;
+            }
+            seen_active.insert(dedupe_key);
+            existing.push(Task {
+                id: Uuid::new_v4().to_string(),
+                title: title.to_string(),
+                description: String::new(),
+                source_app: source_app.clone(),
+                source_memory_id: None,
+                created_at,
+                due_date: None,
+                is_completed: false,
+                is_dismissed: false,
+                task_type: task_type.clone(),
+                linked_urls: Vec::new(),
+                linked_memory_ids: Vec::new(),
+            });
+            added_any = true;
+        }
+    };
+
+    add_task(&breakdown.todos, TaskType::Todo);
+    add_task(&breakdown.reminders, TaskType::Reminder);
+    add_task(&breakdown.followups, TaskType::Followup);
+
+    if !added_any {
+        return Ok(());
+    }
+
+    store
+        .store
+        .upsert_tasks(&existing)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn task_type_key(task_type: &TaskType) -> &'static str {
+    match task_type {
+        TaskType::Todo => "todo",
+        TaskType::Reminder => "reminder",
+        TaskType::Followup => "followup",
+    }
 }
 
 fn spawn_ffmpeg_recorder(segment_pattern: &Path) -> Result<Child, String> {

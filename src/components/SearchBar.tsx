@@ -11,7 +11,9 @@ import "./SearchBar.css";
 
 interface SearchBarProps {
     value: string;
+    submittedValue: string;
     onChange: (value: string) => void;
+    onSubmit: (value?: string) => void;
     timeFilter: string | null;
     onTimeFilterChange: (filter: string | null) => void;
     appFilter: string | null;
@@ -31,7 +33,9 @@ const DEFAULT_PLACEHOLDER = "Recall a specific meeting, note, or idea...";
 
 export function SearchBar({
     value,
+    submittedValue,
     onChange,
+    onSubmit,
     timeFilter,
     onTimeFilterChange,
     appFilter,
@@ -60,7 +64,8 @@ export function SearchBar({
     const recordingStartedAtRef = useRef<number>(0);
     const summaryRequestRef = useRef(0);
     const searchResultsRef = useRef(searchResults);
-    const hasQuery = value.trim().length > 0;
+    const hasQuery = submittedValue.trim().length > 0;
+    const hasPendingSubmit = value.trim() !== submittedValue.trim();
     const showMetaRow = hasQuery;
     const hasInput = value.length > 0;
     const activePlaceholder =
@@ -94,7 +99,7 @@ export function SearchBar({
     }, [placeholderIndex]);
 
     useEffect(() => {
-        const activeValue = value.trim();
+        const activeValue = submittedValue.trim();
         const requestId = ++summaryRequestRef.current;
 
         if (!activeValue || resultCount === 0) {
@@ -148,7 +153,7 @@ export function SearchBar({
             cancelled = true;
             window.clearTimeout(timer);
         };
-    }, [value, resultCount]);
+    }, [submittedValue, resultCount]);
     
     useEffect(() => {
         if (inputRef.current && value.length > 0) {
@@ -175,12 +180,13 @@ export function SearchBar({
 
             if (key === "escape" && !disabled) {
                 onChange("");
+                onSubmit("");
             }
         };
 
         window.addEventListener("keydown", handleKeydown);
         return () => window.removeEventListener("keydown", handleKeydown);
-    }, [disabled, onChange]);
+    }, [disabled, onChange, onSubmit]);
 
     async function handleVoiceTranscript(transcript: string) {
         const cleaned = transcript.trim();
@@ -194,6 +200,7 @@ export function SearchBar({
 
         if (normalized === "clear" || normalized === "clear search" || normalized === "reset search") {
             onChange("");
+            onSubmit("");
             setVoiceStatus("Search cleared.");
             return;
         }
@@ -201,6 +208,7 @@ export function SearchBar({
         if (normalized.startsWith("search for ")) {
             const nextQuery = cleaned.slice("search for ".length).trim();
             onChange(nextQuery);
+            onSubmit(nextQuery);
             setVoiceStatus(`Searching for: ${nextQuery}`);
             return;
         }
@@ -208,6 +216,7 @@ export function SearchBar({
         if (normalized.startsWith("find ")) {
             const nextQuery = cleaned.slice("find ".length).trim();
             onChange(nextQuery);
+            onSubmit(nextQuery);
             setVoiceStatus(`Searching for: ${nextQuery}`);
             return;
         }
@@ -215,6 +224,7 @@ export function SearchBar({
         if (normalized.startsWith("look for ")) {
             const nextQuery = cleaned.slice("look for ".length).trim();
             onChange(nextQuery);
+            onSubmit(nextQuery);
             setVoiceStatus(`Searching for: ${nextQuery}`);
             return;
         }
@@ -258,6 +268,7 @@ export function SearchBar({
         }
 
         onChange(cleaned);
+        onSubmit(cleaned);
         setVoiceStatus(`Searching for: ${cleaned}`);
         setTimeout(() => setVoiceStatus(null), 2000);
     }
@@ -374,6 +385,9 @@ export function SearchBar({
                             onKeyDown={(e) => {
                                 if (e.key === "Enter") {
                                     e.preventDefault();
+                                    if (!disabled) {
+                                        onSubmit();
+                                    }
                                 }
                             }}
                             placeholder={activePlaceholder}
@@ -413,7 +427,10 @@ export function SearchBar({
                     {value && (
                         <button
                             className="search-clear"
-                            onClick={() => onChange("")}
+                            onClick={() => {
+                                onChange("");
+                                onSubmit("");
+                            }}
                             aria-label="Clear search"
                             disabled={disabled}
                         >
@@ -471,6 +488,12 @@ export function SearchBar({
                     <div className="result-count">
                         {hasQuery ? `${resultCount} results` : "Ready"}
                     </div>
+                </div>
+            )}
+
+            {hasPendingSubmit && (
+                <div className="voice-status">
+                    Press Enter to search
                 </div>
             )}
 

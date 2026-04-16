@@ -1015,6 +1015,18 @@ impl Store {
         Ok(records)
     }
 
+    /// Return all stored memory records ordered oldest -> newest.
+    pub async fn list_all_memories(&self) -> Result<Vec<MemoryRecord>, Box<dyn std::error::Error>> {
+        let batches: Vec<RecordBatch> = self.table.query().execute().await?.try_collect().await?;
+
+        let mut records = Vec::new();
+        for batch in &batches {
+            records.extend(batch_to_memory_records(batch));
+        }
+        records.sort_by_key(|record| record.timestamp);
+        Ok(records)
+    }
+
     /// Fetch a single record by id.
     pub async fn get_memory_by_id(
         &self,

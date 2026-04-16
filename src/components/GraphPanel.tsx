@@ -513,21 +513,6 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
         [viewMode, clusterLens, activityFacet, selectedNodeId, selectedClusterKey, journeyStartId, journeyEndId, focusMode]
     );
 
-    const applyNavigationSnapshot = useCallback((snapshot: GraphNavigationSnapshot) => {
-        isRestoringNavigation.current = true;
-        setViewMode(snapshot.viewMode);
-        setClusterLens(snapshot.clusterLens);
-        setActivityFacet(snapshot.activityFacet);
-        setSelectedNodeId(snapshot.selectedNodeId);
-        setSelectedClusterKey(snapshot.selectedClusterKey);
-        setJourneyStartId(snapshot.journeyStartId);
-        setJourneyEndId(snapshot.journeyEndId);
-        setFocusMode(snapshot.focusMode);
-        window.setTimeout(() => {
-            isRestoringNavigation.current = false;
-        }, 0);
-    }, []);
-
     useEffect(() => {
         if (!isVisible || loading || isRestoringNavigation.current) {
             return;
@@ -547,43 +532,6 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
         });
     }, [isVisible, loading, navigationSnapshot]);
 
-    const goBack = useCallback(() => {
-        setNavigation((current) => {
-            if (current.past.length <= 1) {
-                return current;
-            }
-
-            const snapshot = current.past[current.past.length - 2];
-            const active = current.past[current.past.length - 1];
-            applyNavigationSnapshot(snapshot);
-
-            return {
-                past: current.past.slice(0, -1),
-                future: [active, ...current.future].slice(0, 80),
-            };
-        });
-    }, [applyNavigationSnapshot]);
-
-    const goForward = useCallback(() => {
-        setNavigation((current) => {
-            if (current.future.length === 0) {
-                return current;
-            }
-
-            const [next, ...rest] = current.future;
-            applyNavigationSnapshot(next);
-
-            const nextPast = [...current.past, next];
-            if (nextPast.length > 80) {
-                nextPast.shift();
-            }
-
-            return { past: nextPast, future: rest };
-        });
-    }, [applyNavigationSnapshot]);
-
-    const canGoBack = navigation.past.length > 1;
-    const canGoForward = navigation.future.length > 0;
     const activeViewLabel = VIEW_MODES.find((mode) => mode.key === viewMode)?.label ?? "Graph";
 
     if (!isVisible) {
@@ -602,6 +550,7 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
                         <span>Edges {filteredEdges.length.toLocaleString()} / {rawEdges.length.toLocaleString()}</span>
                         <span>Sessions {uniqueSessions.toLocaleString()}</span>
                         <span>Scene Budget {constellationNodes.length.toLocaleString()}</span>
+                        <span>History {navigation.past.length.toLocaleString()}</span>
                     </div>
                 </div>
                 <div className="graph-nav-controls" role="group" aria-label="Graph navigation">

@@ -20,6 +20,8 @@ pub struct MemoryCard {
     pub url: Option<String>,
     pub score: f32,
     pub source_count: usize,
+    #[serde(default)]
+    pub continuity: bool,
     pub raw_snippets: Vec<String>,
     #[serde(default)]
     pub evidence_ids: Vec<String>,
@@ -157,6 +159,7 @@ impl MemoryCardSynthesizer {
                 url: anchor.url.clone(),
                 score,
                 source_count,
+                continuity: source_count > 1 || snippets.iter().any(|value| value.contains(" • ")),
                 raw_snippets: snippets,
                 evidence_ids,
                 confidence,
@@ -487,6 +490,7 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         url: result.url.clone(),
         score: result.score,
         source_count: 1,
+        continuity: snippets.iter().any(|value| value.contains(" • ")),
         raw_snippets: snippets,
         evidence_ids,
         confidence,
@@ -496,12 +500,12 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
 fn sanitize_title(raw: &str, app_name: &str, window_title: &str) -> String {
     let candidate = normalize_sentence(raw);
     if !candidate.is_empty() && !is_generic_title(&candidate) {
-        return truncate_words(&candidate, 8);
+        return truncate_words(&candidate, 18);
     }
 
     let clean_window = normalize_sentence(window_title);
     if !clean_window.is_empty() && !is_generic_title(&clean_window) {
-        return truncate_words(&clean_window, 8);
+        return truncate_words(&clean_window, 18);
     }
 
     format!("{} activity", app_name)

@@ -238,6 +238,8 @@ fn main() {
             api::commands::set_retention_days,
             api::commands::delete_older_than,
             api::commands::get_app_names,
+            api::commands::run_memory_repair_backfill,
+            api::commands::get_memory_repair_progress,
             // Tasks / Todos
             api::commands::add_todo,
             api::commands::get_todos,

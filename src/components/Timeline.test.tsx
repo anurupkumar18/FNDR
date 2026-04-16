@@ -45,7 +45,9 @@ describe("Timeline", () => {
         );
 
         expect(screen.getAllByText("Safari").length).toBeGreaterThan(0);
-        expect(screen.getByText("Test window")).toBeInTheDocument();
+        expect(
+            screen.getByText(/reviewed test content in safari while validating timeline rendering behavior\./i)
+        ).toBeInTheDocument();
         expect(screen.getByText(/score 0\.870/i)).toBeInTheDocument();
     });
 });

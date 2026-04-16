@@ -8,7 +8,9 @@ afterEach(() => {
 
 const defaultProps = {
     value: "",
+    submittedValue: "",
     onChange: vi.fn(),
+    onSubmit: vi.fn(),
     timeFilter: null,
     onTimeFilterChange: () => {},
     appFilter: null,
@@ -24,9 +26,17 @@ describe("SearchBar", () => {
     it("renders input and forwards changes", () => {
         const onChange = vi.fn();
         render(<SearchBar {...defaultProps} onChange={onChange} />);
-        const input = screen.getByPlaceholderText(/what do you remember/i);
+        const input = screen.getByRole("textbox", { name: /search memories/i });
         fireEvent.change(input, { target: { value: "oauth" } });
         expect(onChange).toHaveBeenCalledWith("oauth");
+    });
+
+    it("submits only when Enter is pressed", () => {
+        const onSubmit = vi.fn();
+        render(<SearchBar {...defaultProps} value="oauth flow" onSubmit={onSubmit} />);
+        const input = screen.getByRole("textbox", { name: /search memories/i });
+        fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+        expect(onSubmit).toHaveBeenCalledTimes(1);
     });
 
     it("renders the voice button", () => {

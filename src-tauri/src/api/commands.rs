@@ -1,8 +1,12 @@
 //! Tauri command handlers
 
+use crate::capture::{
+    continuity_anchor_for_memory, eligible_for_story_merge, merge_memory_records_with_policy,
+    passes_merge_threshold, score_memory_candidate,
+};
 use crate::embed::{embedding_runtime_status, Embedder, EmbeddingBackend};
 use crate::privacy::Blocklist;
-use crate::store::{GraphEdge, GraphNode, NodeType};
+use crate::store::{GraphEdge, GraphNode, MemoryRecord, NodeType};
 
 use crate::mcp::{self, McpServerStatus};
 use crate::meeting::{self, MeetingRecorderStatus, MeetingTranscript};
@@ -13,8 +17,9 @@ use crate::store::{MeetingSession, SearchResult, Stats, Task, TaskType};
 use crate::AppState;
 use chrono::Timelike;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::sync::atomic::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Manager, State};
 use tokio::time::{timeout, Duration, Instant};
@@ -71,6 +76,11 @@ const TASK_LOOKBACK_HOURS: u32 = 120;
 const TASK_EXTRACTION_WINDOW: usize = 12;
 const TASK_TARGET_ACTIVE: usize = 9;
 const TASK_MAX_NEW_PER_REFRESH: usize = 8;
+const MEMORY_REPAIR_CHECKPOINT_VERSION: u32 = 2;
+const MEMORY_REPAIR_SIMILARITY_SCAN_LIMIT: usize = 96;
+const MEMORY_REPAIR_CHECKPOINT_ITEM_STEP: usize = 300;
+const MEMORY_REPAIR_CHECKPOINT_MS: u64 = 12_000;
+static MEMORY_REPAIR_RUNNING: AtomicBool = AtomicBool::new(false);
 
 fn shared_embedder() -> Result<&'static Embedder, String> {
     match SHARED_EMBEDDER.get_or_init(Embedder::new) {
@@ -177,7 +187,7 @@ fn title_from_summary(summary: &str, app_name: &str) -> Option<String> {
         return None;
     }
 
-    let candidate = truncate_chars(cleaned, 88);
+    let candidate = cleaned.to_string();
     if is_low_signal_title(&candidate, app_name) {
         None
     } else {
@@ -205,14 +215,20 @@ fn card_summary(result: &SearchResult) -> String {
     if base.is_empty() {
         format!("Captured activity in {}", result.app_name)
     } else {
-        truncate_chars(base, 240)
+        base.to_string()
     }
+}
+
+fn has_continuity_signal(result: &SearchResult) -> bool {
+    result.snippet.contains(" • ")
+        || result.clean_text.contains(" • ")
+        || result.text.contains(" • ")
 }
 
 fn card_title(result: &SearchResult, summary: &str) -> String {
     let title = result.window_title.trim();
     if !title.is_empty() {
-        let candidate = truncate_chars(title, 88);
+        let candidate = title.to_string();
         if !is_low_signal_title(&candidate, &result.app_name) {
             return candidate;
         }
@@ -223,7 +239,7 @@ fn card_title(result: &SearchResult, summary: &str) -> String {
     }
 
     if let Some(domain) = result.url.as_deref().and_then(card_domain) {
-        return truncate_chars(&format!("{} · {}", result.app_name, domain), 88);
+        return format!("{} · {}", result.app_name, domain);
     }
 
     format!("{} memory", result.app_name)
@@ -248,7 +264,6 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
     } else {
         "Revisit context".to_string()
     };
-
     MemoryCard {
         id: memory_id.clone(),
         title,
@@ -261,6 +276,7 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         url,
         score,
         source_count: 1,
+        continuity: has_continuity_signal(&result),
         raw_snippets: vec![fallback_snippet],
         evidence_ids: vec![memory_id],
         confidence: score.clamp(0.0, 1.0),
@@ -274,7 +290,7 @@ fn refine_memory_card_title(card: &mut MemoryCard) {
 
     let window_title = card.window_title.trim();
     if !window_title.is_empty() && !is_low_signal_title(window_title, &card.app_name) {
-        card.title = truncate_chars(window_title, 88);
+        card.title = window_title.to_string();
         return;
     }
 
@@ -284,7 +300,7 @@ fn refine_memory_card_title(card: &mut MemoryCard) {
     }
 
     if let Some(domain) = card.url.as_deref().and_then(card_domain) {
-        card.title = truncate_chars(&format!("{} · {}", card.app_name, domain), 88);
+        card.title = format!("{} · {}", card.app_name, domain);
         return;
     }
 
@@ -1073,6 +1089,644 @@ pub async fn delete_older_than(
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())
 }
 
+fn merge_bucket_for_anchor(anchor: Option<&str>, app_name: &str) -> &'static str {
+    if let Some(anchor) = anchor {
+        let lower = anchor.to_lowercase();
+        if lower.starts_with("spotify:") || lower.contains("spotify") {
+            return "spotify";
+        }
+        if lower.starts_with("youtube:") || lower.contains("youtube") {
+            return "youtube";
+        }
+        if lower.starts_with("codex:") || lower.contains("codex") || lower.contains("cursor") {
+            return "codex";
+        }
+        if lower.starts_with("discord:") || lower.contains("discord") {
+            return "discord";
+        }
+        if lower.starts_with("gitlab:") || lower.contains("gitlab") {
+            return "gitlab";
+        }
+        if lower.starts_with("antigravity:") || lower.contains("antigravity") {
+            return "antigravity";
+        }
+    }
+
+    let app = app_name.to_lowercase();
+    if app.contains("spotify") {
+        return "spotify";
+    }
+    if app.contains("youtube") {
+        return "youtube";
+    }
+    if app.contains("codex") || app.contains("cursor") {
+        return "codex";
+    }
+    if app.contains("discord") {
+        return "discord";
+    }
+    if app.contains("gitlab") {
+        return "gitlab";
+    }
+    if app.contains("antigravity") {
+        return "antigravity";
+    }
+    "generic"
+}
+
+#[tauri::command]
+pub async fn run_memory_repair_backfill(
+    state: State<'_, Arc<AppState>>,
+) -> Result<MemoryRepairSummary, String> {
+    if MEMORY_REPAIR_RUNNING.swap(true, Ordering::AcqRel) {
+        return Err("Memory continuity repair is already running".to_string());
+    }
+    struct MemoryRepairRunGuard;
+    impl Drop for MemoryRepairRunGuard {
+        fn drop(&mut self) {
+            MEMORY_REPAIR_RUNNING.store(false, Ordering::Release);
+        }
+    }
+    let _run_guard = MemoryRepairRunGuard;
+
+    let progress_path = memory_repair_progress_path(state.inner());
+    let checkpoint_path = memory_repair_checkpoint_path(state.inner());
+    let mut all_memories = state
+        .inner()
+        .store
+        .list_all_memories()
+        .await
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+
+    if all_memories.is_empty() {
+        let _ = std::fs::remove_file(&checkpoint_path);
+        persist_memory_repair_progress(
+            &progress_path,
+            &MemoryRepairProgress {
+                is_running: false,
+                phase: "complete".to_string(),
+                processed: 0,
+                total: 0,
+                merged_count: 0,
+                anchor_merges: 0,
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            },
+        );
+        return Ok(MemoryRepairSummary {
+            total_before: 0,
+            total_after: 0,
+            merged_count: 0,
+            anchor_merges: 0,
+            task_reference_updates: 0,
+            screenshots_cleaned: 0,
+            spotify_merges: 0,
+            youtube_merges: 0,
+            codex_merges: 0,
+            discord_merges: 0,
+            gitlab_merges: 0,
+            antigravity_merges: 0,
+            app_merges: Vec::new(),
+        });
+    }
+
+    all_memories.sort_by_key(|memory| memory.timestamp);
+    let before_count = all_memories.len();
+    let source_fingerprint = memory_repair_source_fingerprint(&all_memories);
+    let source_first_id = all_memories
+        .first()
+        .map(|memory| memory.id.clone())
+        .unwrap_or_default();
+    let source_last_id = all_memories
+        .last()
+        .map(|memory| memory.id.clone())
+        .unwrap_or_default();
+
+    let before_screenshots: HashSet<String> = all_memories
+        .iter()
+        .filter_map(|memory| memory.screenshot_path.clone())
+        .collect();
+
+    let embedder = shared_embedder()?;
+    let backfill_engine: Option<&Arc<crate::inference::InferenceEngine>> = None;
+
+    let mut merged_memories: Vec<MemoryRecord> = Vec::with_capacity(before_count);
+    let mut anchor_index: HashMap<String, usize> = HashMap::new();
+    let mut app_index: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut id_redirect: HashMap<String, String> = HashMap::new();
+    let mut processed = 0usize;
+    let mut resumed_from_checkpoint = false;
+
+    let mut merged_count = 0usize;
+    let mut anchor_merges = 0usize;
+    let mut spotify_merges = 0usize;
+    let mut youtube_merges = 0usize;
+    let mut codex_merges = 0usize;
+    let mut discord_merges = 0usize;
+    let mut gitlab_merges = 0usize;
+    let mut antigravity_merges = 0usize;
+    let mut app_merge_counts: HashMap<String, usize> = HashMap::new();
+
+    if let Some(checkpoint) = load_memory_repair_checkpoint(&checkpoint_path) {
+        let checkpoint_valid = (checkpoint.version == MEMORY_REPAIR_CHECKPOINT_VERSION
+            || checkpoint.version == 1)
+            && checkpoint.source_total == before_count
+            && checkpoint.source_fingerprint == source_fingerprint
+            && checkpoint.source_first_id == source_first_id
+            && checkpoint.source_last_id == source_last_id
+            && checkpoint.processed <= before_count
+            && checkpoint.merged_memories.len() <= checkpoint.processed
+            && checkpoint.id_redirect.len() <= checkpoint.processed;
+
+        if checkpoint_valid {
+            merged_memories = checkpoint.merged_memories;
+            id_redirect = checkpoint.id_redirect;
+            processed = checkpoint.processed;
+            merged_count = checkpoint.merged_count;
+            anchor_merges = checkpoint.anchor_merges;
+            spotify_merges = checkpoint.spotify_merges;
+            youtube_merges = checkpoint.youtube_merges;
+            codex_merges = checkpoint.codex_merges;
+            discord_merges = checkpoint.discord_merges;
+            gitlab_merges = checkpoint.gitlab_merges;
+            antigravity_merges = checkpoint.antigravity_merges;
+            app_merge_counts = checkpoint.app_merge_counts;
+
+            for (index, memory) in merged_memories.iter().enumerate() {
+                if let Some(anchor) = continuity_anchor_for_memory(memory) {
+                    anchor_index.insert(anchor, index);
+                }
+                app_index
+                    .entry(memory.app_name.to_lowercase())
+                    .or_default()
+                    .push(index);
+            }
+
+            resumed_from_checkpoint = true;
+            tracing::info!(
+                "memory_repair_backfill: resumed from checkpoint at {}/{}",
+                processed,
+                before_count
+            );
+        } else {
+            let _ = std::fs::remove_file(&checkpoint_path);
+        }
+    }
+
+    persist_memory_repair_progress(
+        &progress_path,
+        &MemoryRepairProgress {
+            is_running: true,
+            phase: if resumed_from_checkpoint {
+                "resuming".to_string()
+            } else {
+                "scanning".to_string()
+            },
+            processed,
+            total: before_count,
+            merged_count,
+            anchor_merges,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        },
+    );
+
+    let mut last_heartbeat = Instant::now();
+    let heartbeat_interval = Duration::from_secs(1);
+    let heartbeat_count_step = 75usize;
+    let checkpoint_interval = Duration::from_millis(MEMORY_REPAIR_CHECKPOINT_MS);
+    let mut last_checkpoint = Instant::now();
+
+    for incoming in all_memories.into_iter().skip(processed) {
+        processed += 1;
+        let incoming_id = incoming.id.clone();
+        let normalized_app = incoming.app_name.to_lowercase();
+        let incoming_anchor = continuity_anchor_for_memory(&incoming);
+        let mut merged_into_idx: Option<usize> = None;
+
+        if eligible_for_story_merge(&incoming) {
+            if let Some(anchor) = incoming_anchor.as_ref() {
+                if let Some(index) = anchor_index.get(anchor).copied() {
+                    if merged_memories
+                        .get(index)
+                        .map(|existing| existing.app_name == incoming.app_name)
+                        .unwrap_or(false)
+                    {
+                        merged_into_idx = Some(index);
+                        anchor_merges += 1;
+                    }
+                }
+            }
+
+            if merged_into_idx.is_none() {
+                if let Some(candidates) = app_index.get(&normalized_app) {
+                    let mut best: Option<(usize, f32)> = None;
+                    for candidate_index in candidates
+                        .iter()
+                        .rev()
+                        .take(MEMORY_REPAIR_SIMILARITY_SCAN_LIMIT)
+                    {
+                        let existing = &merged_memories[*candidate_index];
+                        let score = score_memory_candidate(&incoming, existing);
+                        if !passes_merge_threshold(score) {
+                            continue;
+                        }
+                        if best
+                            .as_ref()
+                            .map(|(_, best_score)| score.score > *best_score)
+                            .unwrap_or(true)
+                        {
+                            best = Some((*candidate_index, score.score));
+                        }
+                    }
+                    merged_into_idx = best.map(|(index, _)| index);
+                }
+            }
+        }
+
+        if let Some(target_index) = merged_into_idx {
+            let existing_id = merged_memories[target_index].id.clone();
+            let merged = merge_memory_records_with_policy(
+                merged_memories[target_index].clone(),
+                incoming.clone(),
+                embedder,
+                backfill_engine,
+                false,
+                false,
+            )
+            .await;
+            merged_memories[target_index] = merged.clone();
+            id_redirect.insert(incoming_id, existing_id);
+            merged_count += 1;
+
+            let merge_bucket =
+                merge_bucket_for_anchor(incoming_anchor.as_deref(), &incoming.app_name);
+            match merge_bucket {
+                "spotify" => spotify_merges += 1,
+                "youtube" => youtube_merges += 1,
+                "codex" => codex_merges += 1,
+                "discord" => discord_merges += 1,
+                "gitlab" => gitlab_merges += 1,
+                "antigravity" => antigravity_merges += 1,
+                _ => {}
+            }
+            *app_merge_counts
+                .entry(incoming.app_name.clone())
+                .or_insert(0) += 1;
+
+            if let Some(anchor) = continuity_anchor_for_memory(&merged) {
+                anchor_index.insert(anchor, target_index);
+            }
+            if processed % heartbeat_count_step == 0
+                || last_heartbeat.elapsed() >= heartbeat_interval
+            {
+                tracing::info!(
+                    "memory_repair_backfill:progress processed={} total={} merged={} anchor_merges={}",
+                    processed,
+                    before_count,
+                    merged_count,
+                    anchor_merges
+                );
+                persist_memory_repair_progress(
+                    &progress_path,
+                    &MemoryRepairProgress {
+                        is_running: true,
+                        phase: "scanning".to_string(),
+                        processed,
+                        total: before_count,
+                        merged_count,
+                        anchor_merges,
+                        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    },
+                );
+                last_heartbeat = Instant::now();
+            }
+
+            if processed % MEMORY_REPAIR_CHECKPOINT_ITEM_STEP == 0
+                || last_checkpoint.elapsed() >= checkpoint_interval
+            {
+                persist_memory_repair_checkpoint(
+                    &checkpoint_path,
+                    &MemoryRepairCheckpoint {
+                        version: MEMORY_REPAIR_CHECKPOINT_VERSION,
+                        source_total: before_count,
+                        source_fingerprint,
+                        source_first_id: source_first_id.clone(),
+                        source_last_id: source_last_id.clone(),
+                        processed,
+                        merged_memories: merged_memories.clone(),
+                        id_redirect: id_redirect.clone(),
+                        merged_count,
+                        anchor_merges,
+                        spotify_merges,
+                        youtube_merges,
+                        codex_merges,
+                        discord_merges,
+                        gitlab_merges,
+                        antigravity_merges,
+                        app_merge_counts: app_merge_counts.clone(),
+                    },
+                );
+                last_checkpoint = Instant::now();
+            }
+            continue;
+        }
+
+        let index = merged_memories.len();
+        if let Some(anchor) = incoming_anchor {
+            anchor_index.insert(anchor, index);
+        }
+        app_index.entry(normalized_app).or_default().push(index);
+        merged_memories.push(incoming);
+
+        if processed % heartbeat_count_step == 0 || last_heartbeat.elapsed() >= heartbeat_interval {
+            tracing::info!(
+                "memory_repair_backfill:progress processed={} total={} merged={} anchor_merges={}",
+                processed,
+                before_count,
+                merged_count,
+                anchor_merges
+            );
+            persist_memory_repair_progress(
+                &progress_path,
+                &MemoryRepairProgress {
+                    is_running: true,
+                    phase: "scanning".to_string(),
+                    processed,
+                    total: before_count,
+                    merged_count,
+                    anchor_merges,
+                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                },
+            );
+            last_heartbeat = Instant::now();
+        }
+
+        if processed % MEMORY_REPAIR_CHECKPOINT_ITEM_STEP == 0
+            || last_checkpoint.elapsed() >= checkpoint_interval
+        {
+            persist_memory_repair_checkpoint(
+                &checkpoint_path,
+                &MemoryRepairCheckpoint {
+                    version: MEMORY_REPAIR_CHECKPOINT_VERSION,
+                    source_total: before_count,
+                    source_fingerprint,
+                    source_first_id: source_first_id.clone(),
+                    source_last_id: source_last_id.clone(),
+                    processed,
+                    merged_memories: merged_memories.clone(),
+                    id_redirect: id_redirect.clone(),
+                    merged_count,
+                    anchor_merges,
+                    spotify_merges,
+                    youtube_merges,
+                    codex_merges,
+                    discord_merges,
+                    gitlab_merges,
+                    antigravity_merges,
+                    app_merge_counts: app_merge_counts.clone(),
+                },
+            );
+            last_checkpoint = Instant::now();
+        }
+    }
+
+    persist_memory_repair_progress(
+        &progress_path,
+        &MemoryRepairProgress {
+            is_running: true,
+            phase: "writing".to_string(),
+            processed: before_count,
+            total: before_count,
+            merged_count,
+            anchor_merges,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        },
+    );
+    persist_memory_repair_checkpoint(
+        &checkpoint_path,
+        &MemoryRepairCheckpoint {
+            version: MEMORY_REPAIR_CHECKPOINT_VERSION,
+            source_total: before_count,
+            source_fingerprint,
+            source_first_id: source_first_id.clone(),
+            source_last_id: source_last_id.clone(),
+            processed: before_count,
+            merged_memories: merged_memories.clone(),
+            id_redirect: id_redirect.clone(),
+            merged_count,
+            anchor_merges,
+            spotify_merges,
+            youtube_merges,
+            codex_merges,
+            discord_merges,
+            gitlab_merges,
+            antigravity_merges,
+            app_merge_counts: app_merge_counts.clone(),
+        },
+    );
+
+    if let Err(err) = state.inner().store.delete_all().await {
+        persist_memory_repair_progress(
+            &progress_path,
+            &MemoryRepairProgress {
+                is_running: false,
+                phase: "error".to_string(),
+                processed,
+                total: before_count,
+                merged_count,
+                anchor_merges,
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            },
+        );
+        persist_memory_repair_checkpoint(
+            &checkpoint_path,
+            &MemoryRepairCheckpoint {
+                version: MEMORY_REPAIR_CHECKPOINT_VERSION,
+                source_total: before_count,
+                source_fingerprint,
+                source_first_id: source_first_id.clone(),
+                source_last_id: source_last_id.clone(),
+                processed,
+                merged_memories,
+                id_redirect,
+                merged_count,
+                anchor_merges,
+                spotify_merges,
+                youtube_merges,
+                codex_merges,
+                discord_merges,
+                gitlab_merges,
+                antigravity_merges,
+                app_merge_counts,
+            },
+        );
+        return Err(err.to_string());
+    }
+    if let Err(err) = state.inner().store.add_batch(&merged_memories).await {
+        persist_memory_repair_progress(
+            &progress_path,
+            &MemoryRepairProgress {
+                is_running: false,
+                phase: "error".to_string(),
+                processed,
+                total: before_count,
+                merged_count,
+                anchor_merges,
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            },
+        );
+        persist_memory_repair_checkpoint(
+            &checkpoint_path,
+            &MemoryRepairCheckpoint {
+                version: MEMORY_REPAIR_CHECKPOINT_VERSION,
+                source_total: before_count,
+                source_fingerprint,
+                source_first_id: source_first_id.clone(),
+                source_last_id: source_last_id.clone(),
+                processed,
+                merged_memories,
+                id_redirect,
+                merged_count,
+                anchor_merges,
+                spotify_merges,
+                youtube_merges,
+                codex_merges,
+                discord_merges,
+                gitlab_merges,
+                antigravity_merges,
+                app_merge_counts,
+            },
+        );
+        return Err(err.to_string());
+    }
+
+    let after_screenshots: HashSet<String> = merged_memories
+        .iter()
+        .filter_map(|memory| memory.screenshot_path.clone())
+        .collect();
+    let screenshots_cleaned = before_screenshots
+        .difference(&after_screenshots)
+        .filter(|path| std::fs::remove_file(path).is_ok())
+        .count();
+
+    let mut task_reference_updates = 0usize;
+    let mut tasks = state
+        .inner()
+        .store
+        .list_tasks()
+        .await
+        .map_err(|e| e.to_string())?;
+    for task in &mut tasks {
+        if let Some(source_id) = task.source_memory_id.clone() {
+            if let Some(new_id) = id_redirect.get(&source_id) {
+                if new_id != &source_id {
+                    task.source_memory_id = Some(new_id.clone());
+                    task_reference_updates += 1;
+                }
+            }
+        }
+
+        if !task.linked_memory_ids.is_empty() {
+            let before = task.linked_memory_ids.clone();
+            let mut seen = HashSet::new();
+            let rewritten: Vec<String> = before
+                .iter()
+                .map(|memory_id| {
+                    id_redirect
+                        .get(memory_id)
+                        .cloned()
+                        .unwrap_or_else(|| memory_id.clone())
+                })
+                .filter(|memory_id| seen.insert(memory_id.clone()))
+                .collect();
+            if rewritten != before {
+                task_reference_updates += before
+                    .iter()
+                    .zip(rewritten.iter())
+                    .filter(|(left, right)| left != right)
+                    .count()
+                    + before.len().saturating_sub(rewritten.len());
+                task.linked_memory_ids = rewritten;
+            }
+        }
+    }
+
+    if task_reference_updates > 0 {
+        if let Err(err) = state.inner().store.upsert_tasks(&tasks).await {
+            persist_memory_repair_progress(
+                &progress_path,
+                &MemoryRepairProgress {
+                    is_running: false,
+                    phase: "error".to_string(),
+                    processed: before_count,
+                    total: before_count,
+                    merged_count,
+                    anchor_merges,
+                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                },
+            );
+            persist_memory_repair_checkpoint(
+                &checkpoint_path,
+                &MemoryRepairCheckpoint {
+                    version: MEMORY_REPAIR_CHECKPOINT_VERSION,
+                    source_total: before_count,
+                    source_fingerprint,
+                    source_first_id: source_first_id.clone(),
+                    source_last_id: source_last_id.clone(),
+                    processed: before_count,
+                    merged_memories,
+                    id_redirect,
+                    merged_count,
+                    anchor_merges,
+                    spotify_merges,
+                    youtube_merges,
+                    codex_merges,
+                    discord_merges,
+                    gitlab_merges,
+                    antigravity_merges,
+                    app_merge_counts,
+                },
+            );
+            return Err(err.to_string());
+        }
+    }
+
+    persist_memory_repair_progress(
+        &progress_path,
+        &MemoryRepairProgress {
+            is_running: false,
+            phase: "complete".to_string(),
+            processed: before_count,
+            total: before_count,
+            merged_count,
+            anchor_merges,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        },
+    );
+    let _ = std::fs::remove_file(&checkpoint_path);
+
+    let mut app_merges: Vec<AppMergeCount> = app_merge_counts
+        .into_iter()
+        .map(|(app_name, merged)| AppMergeCount { app_name, merged })
+        .collect();
+    app_merges.sort_by(|left, right| right.merged.cmp(&left.merged));
+
+    Ok(MemoryRepairSummary {
+        total_before: before_count,
+        total_after: merged_memories.len(),
+        merged_count,
+        anchor_merges,
+        task_reference_updates,
+        screenshots_cleaned,
+        spotify_merges,
+        youtube_merges,
+        codex_merges,
+        discord_merges,
+        gitlab_merges,
+        antigravity_merges,
+        app_merges,
+    })
+}
+
 // ========== Task Commands ==========
 
 /// Add a new todo
@@ -1187,6 +1841,139 @@ pub struct GraphDataResponse {
     pub edges: Vec<GraphEdge>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRepairSummary {
+    pub total_before: usize,
+    pub total_after: usize,
+    pub merged_count: usize,
+    pub anchor_merges: usize,
+    pub task_reference_updates: usize,
+    pub screenshots_cleaned: usize,
+    pub spotify_merges: usize,
+    pub youtube_merges: usize,
+    pub codex_merges: usize,
+    pub discord_merges: usize,
+    pub gitlab_merges: usize,
+    pub antigravity_merges: usize,
+    pub app_merges: Vec<AppMergeCount>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppMergeCount {
+    pub app_name: String,
+    pub merged: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRepairProgress {
+    pub is_running: bool,
+    pub phase: String,
+    pub processed: usize,
+    pub total: usize,
+    pub merged_count: usize,
+    pub anchor_merges: usize,
+    pub timestamp_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MemoryRepairCheckpoint {
+    version: u32,
+    source_total: usize,
+    source_fingerprint: u64,
+    source_first_id: String,
+    source_last_id: String,
+    processed: usize,
+    merged_memories: Vec<MemoryRecord>,
+    id_redirect: HashMap<String, String>,
+    merged_count: usize,
+    anchor_merges: usize,
+    spotify_merges: usize,
+    youtube_merges: usize,
+    codex_merges: usize,
+    discord_merges: usize,
+    gitlab_merges: usize,
+    antigravity_merges: usize,
+    app_merge_counts: HashMap<String, usize>,
+}
+
+fn memory_repair_source_fingerprint(memories: &[MemoryRecord]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for memory in memories {
+        for byte in memory.id.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        for byte in memory.timestamp.to_le_bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    hash
+}
+
+fn memory_repair_progress_path(state: &AppState) -> PathBuf {
+    state.store.data_dir().join("memory_repair_progress.json")
+}
+
+fn memory_repair_checkpoint_path(state: &AppState) -> PathBuf {
+    state.store.data_dir().join("memory_repair_checkpoint.json")
+}
+
+fn persist_memory_repair_progress(path: &PathBuf, progress: &MemoryRepairProgress) {
+    if let Ok(serialized) = serde_json::to_string_pretty(progress) {
+        let _ = std::fs::write(path, serialized);
+    }
+}
+
+fn persist_memory_repair_checkpoint(path: &PathBuf, checkpoint: &MemoryRepairCheckpoint) {
+    let tmp = path.with_extension("json.tmp");
+    if let Ok(serialized) = serde_json::to_string(checkpoint) {
+        if std::fs::write(&tmp, serialized).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+}
+
+fn load_memory_repair_checkpoint(path: &PathBuf) -> Option<MemoryRepairCheckpoint> {
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<MemoryRepairCheckpoint>(&content).ok()
+}
+
+#[tauri::command]
+pub async fn get_memory_repair_progress(
+    state: State<'_, Arc<AppState>>,
+) -> Result<MemoryRepairProgress, String> {
+    let path = memory_repair_progress_path(state.inner());
+    if !path.exists() {
+        return Ok(MemoryRepairProgress {
+            is_running: false,
+            phase: "idle".to_string(),
+            processed: 0,
+            total: 0,
+            merged_count: 0,
+            anchor_merges: 0,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        });
+    }
+
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut progress: MemoryRepairProgress =
+        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+    // If heartbeat is stale for over 2 minutes, mark as not running.
+    if progress.is_running {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if now_ms.saturating_sub(progress.timestamp_ms) > 120_000 {
+            progress.is_running = false;
+            progress.phase = "stale".to_string();
+            progress.timestamp_ms = now_ms;
+            persist_memory_repair_progress(&path, &progress);
+        }
+    }
+
+    Ok(progress)
+}
+
 fn graph_node_app_name(node: &GraphNode) -> Option<&str> {
     node.metadata
         .get("app_name")
@@ -1227,30 +2014,6 @@ pub async fn get_graph_data(state: State<'_, Arc<AppState>>) -> Result<GraphData
                 && !blocked_memory_node_ids.contains(&edge.target)
         })
         .collect::<Vec<_>>();
-
-    if nodes.len() > MEMORY_GRAPH_LIMIT {
-        nodes.sort_by_key(|node| std::cmp::Reverse(node.created_at));
-        let seed_ids: HashSet<String> = nodes
-            .iter()
-            .take(MEMORY_GRAPH_LIMIT)
-            .map(|node| node.id.clone())
-            .collect();
-
-        let mut keep_ids = seed_ids.clone();
-        let expansion_limit = MEMORY_GRAPH_LIMIT + (MEMORY_GRAPH_LIMIT / 3);
-        for edge in &edges {
-            if keep_ids.len() >= expansion_limit {
-                break;
-            }
-            if seed_ids.contains(&edge.source) || seed_ids.contains(&edge.target) {
-                keep_ids.insert(edge.source.clone());
-                keep_ids.insert(edge.target.clone());
-            }
-        }
-
-        nodes.retain(|node| keep_ids.contains(&node.id));
-        edges.retain(|edge| keep_ids.contains(&edge.source) && keep_ids.contains(&edge.target));
-    }
 
     nodes.sort_by_key(|node| std::cmp::Reverse(node.created_at));
     edges.sort_by_key(|edge| std::cmp::Reverse(edge.timestamp));

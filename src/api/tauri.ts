@@ -27,6 +27,7 @@ export interface MemoryCard {
     url?: string;
     score: number;
     source_count: number;
+    continuity?: boolean;
     raw_snippets: string[];
     evidence_ids?: string[];
     confidence?: number;

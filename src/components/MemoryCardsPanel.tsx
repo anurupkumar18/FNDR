@@ -71,6 +71,18 @@ function pickReadable(...candidates: Array<string | undefined | null>): string {
 }
 
 function fallbackTitle(card: MemoryCard): string {
+    const windowTitle = normalizeText(card.window_title);
+    const title = normalizeText(card.title);
+    const lowerWindow = windowTitle.toLowerCase();
+    const lowerApp = card.app_name.toLowerCase();
+    const genericWindow = !windowTitle
+        || lowerWindow === lowerApp
+        || includesAny(lowerWindow, ["new tab", "dashboard", "home", "settings"]);
+
+    if (!genericWindow && (title.endsWith("...") || !title)) {
+        return windowTitle;
+    }
+
     return pickReadable(card.title, card.window_title)
         || `Memory in ${card.app_name}`;
 }
@@ -89,27 +101,56 @@ function parseHost(rawUrl: string): string {
     }
 }
 
-function extractSite(card: MemoryCard): string {
-    if (card.url) {
-        const host = parseHost(card.url);
-        if (host) {
-            return host;
+function extractUrlPath(rawUrl: string): string {
+    try {
+        const normalized = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
+        const pathname = new URL(normalized).pathname;
+        const segments = pathname.split("/").filter((segment) => segment.trim().length > 0);
+        if (segments.length === 0) {
+            return "";
         }
-    }
-
-    const siteContext = card.context.find((item) => /^site\s*:/i.test(normalizeText(item)));
-    if (!siteContext) {
+        return segments.slice(0, 3).join("/");
+    } catch {
         return "";
     }
-    return normalizeText(siteContext).replace(/^site\s*:/i, "").trim();
 }
 
-function normalizeForCompare(value: string): string {
-    return normalizeText(value)
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
+function extractPathHint(...candidates: Array<string | undefined | null>): string {
+    const pathRegex = /([A-Za-z0-9._-]+\/[A-Za-z0-9._/\-]+)/;
+    for (const candidate of candidates) {
+        const cleaned = normalizeText(candidate);
+        if (!cleaned) {
+            continue;
+        }
+        const match = cleaned.match(pathRegex);
+        if (match && match[1]) {
+            return match[1].slice(0, 56);
+        }
+    }
+    return "";
+}
+
+function extractSite(card: MemoryCard, titleHint?: string): string {
+    if (!card.url) {
+        return "";
+    }
+    const host = parseHost(card.url);
+    if (!host) {
+        return "";
+    }
+
+    const urlPath = extractUrlPath(card.url);
+    const titlePath = extractPathHint(titleHint, card.window_title);
+    const details = [urlPath, titlePath]
+        .map((value) => normalizeText(value))
+        .filter((value, index, arr) => value.length > 0 && arr.indexOf(value) === index)
+        .slice(0, 2);
+
+    if (details.length === 0) {
+        return host;
+    }
+
+    return `${host} · ${details.join(" · ")}`;
 }
 
 function includesAny(haystack: string, needles: string[]): boolean {
@@ -176,99 +217,62 @@ function matchesFilters(
     return true;
 }
 
-function looksTooSimilar(a: string, b: string): boolean {
-    const left = normalizeForCompare(a);
-    const right = normalizeForCompare(b);
-    if (!left || !right) {
-        return false;
-    }
-
-    if (left === right || left.includes(right) || right.includes(left)) {
-        return true;
-    }
-
-    const leftTokens = new Set(left.split(" "));
-    const rightTokens = new Set(right.split(" "));
-    let overlap = 0;
-    leftTokens.forEach((token) => {
-        if (rightTokens.has(token)) {
-            overlap += 1;
-        }
-    });
-    const denominator = Math.max(leftTokens.size, rightTokens.size, 1);
-    return overlap / denominator >= 0.72;
+function isStoryStyleApp(card: MemoryCard): boolean {
+    const app = card.app_name.toLowerCase();
+    const title = (card.window_title || "").toLowerCase();
+    const haystack = `${app} ${title}`;
+    return includesAny(haystack, [
+        "codex",
+        "antigravity",
+        "chatgpt",
+        "gemini",
+        "claude",
+        "cursor",
+        "visual studio code",
+        "vscode",
+        "vs code",
+        "terminal",
+        "iterm",
+        "zed",
+        "xcode",
+        "intellij",
+    ]);
 }
 
-function cardCopy(card: MemoryCard): { title: string; summary: string; site: string } {
-    let site = extractSite(card);
+function isContinuityCard(card: MemoryCard): boolean {
+    return Boolean(card.continuity) || card.source_count > 1;
+}
+
+function buildStoryText(
+    title: string,
+    summary: string,
+    windowTitle: string
+): string {
+    return (
+        normalizeText(summary)
+        || normalizeText(title)
+        || normalizeText(windowTitle)
+    );
+}
+
+function cardCopy(
+    card: MemoryCard
+): {
+    title: string;
+    summary: string;
+    site: string;
+    storyMode: boolean;
+    story: string;
+    continuity: boolean;
+} {
     const title = fallbackTitle(card);
+    const site = extractSite(card, title);
+    const storyMode = isStoryStyleApp(card);
+    const continuity = isContinuityCard(card);
+    const summary = fallbackSummary(card);
+    const story = buildStoryText(title, summary, card.window_title);
 
-    const isCoding = card.app_name.toLowerCase().includes("code") 
-        || (card.app_name.toLowerCase() === "codex")
-        || includesAny((card.window_title || "").toLowerCase(), ["terminal", "git", "cursor", "iterm", "code"]);
-    
-    if (isCoding && !site) {
-        site = "Codex";
-    }
-
-    const contextCandidates = card.context
-        .map((item) => normalizeText(item))
-        .filter((item) => {
-            const lower = item.toLowerCase();
-            return (
-                item.length > 0 &&
-                !lower.startsWith("app:") &&
-                !lower.startsWith("type:") &&
-                !lower.startsWith("site:") &&
-                !lower.startsWith("sources:")
-            );
-        });
-
-    const summaryCandidates = [
-        card.summary,
-        card.raw_snippets[0],
-        card.raw_snippets[1],
-        ...contextCandidates,
-        card.window_title,
-    ];
-
-    const techKeywords = [
-        "const", "function", "func", "let", "def", "class", "import", "export", 
-        "struct", "enum", "impl", "async", "await", "error", "exception", 
-        "panic", "failed", "stack", "expected", "found", "{", "}", "->", "=>"
-    ];
-
-    let summary = "";
-    
-    // First pass: look for technical/error depth
-    for (const candidate of summaryCandidates) {
-        const cleaned = normalizeText(candidate);
-        if (!cleaned) continue;
-        if (includesAny(cleaned.toLowerCase(), techKeywords)) {
-            summary = cleaned;
-            break;
-        }
-    }
-
-    // Second pass: standard heuristic
-    if (!summary) {
-        for (const candidate of summaryCandidates) {
-            const cleaned = normalizeText(candidate);
-            if (!cleaned) continue;
-            if (!looksTooSimilar(cleaned, title)) {
-                summary = cleaned;
-                break;
-            }
-        }
-    }
-
-    if (!summary) {
-        summary = site
-            ? `Captured context in ${card.app_name} on ${site}.`
-            : fallbackSummary(card);
-    }
-
-    return { title, summary, site };
+    return { title, summary, site, storyMode, story, continuity };
 }
 
 function formatDay(timestamp: number): string {
@@ -369,6 +373,18 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
         } finally {
             setDeletingId(null);
         }
+    };
+
+    const toggleExpanded = (memoryId: string) => {
+        setExpandedCardIds((previous) => {
+            const next = new Set(previous);
+            if (next.has(memoryId)) {
+                next.delete(memoryId);
+            } else {
+                next.add(memoryId);
+            }
+            return next;
+        });
     };
 
     return (
@@ -525,11 +541,33 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                         </button>
                                     </div>
                                     <div className="memory-browse-content">
-                                        <div className="memory-browse-title">{title}</div>
-                                        <div className="memory-browse-summary">{summary}</div>
-                                        {site && (
-                                            <div className="memory-browse-site">
-                                                {site === "Codex" ? site : `Site: ${site}`}
+                                        {storyMode ? (
+                                            <div className={`memory-browse-summary memory-browse-summary-primary ${collapseState}`}>
+                                                {story}
+                                            </div>
+                                        ) : (
+                                            <div className={`memory-browse-summary memory-browse-summary-primary ${collapseState}`}>
+                                                {summary}
+                                            </div>
+                                        )}
+                                        {(site || canExpand) && (
+                                            <div className="memory-browse-footer-row">
+                                                {site ? (
+                                                    <div className="memory-browse-site">
+                                                        {`Site: ${site}`}
+                                                    </div>
+                                                ) : (
+                                                    <span className="memory-browse-footer-spacer" aria-hidden="true" />
+                                                )}
+                                                {canExpand && (
+                                                    <button
+                                                        type="button"
+                                                        className="memory-browse-expand"
+                                                        onClick={() => toggleExpanded(card.id)}
+                                                    >
+                                                        {isExpanded ? "Show less" : "See more"}
+                                                    </button>
+                                                )}
                                             </div>
                                         )}
                                     </div>

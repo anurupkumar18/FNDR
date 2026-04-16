@@ -236,9 +236,18 @@
     word-break: break-word;
 }
 
+.memory-browse-title.collapsed {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    line-clamp: 3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .memory-browse-summary {
     display: block;
-    margin-top: 10px;
+    margin-top: 2px;
     font-size: 0.94rem;
     line-height: 1.6;
     color: rgba(255, 255, 255, 0.72);
@@ -248,8 +257,44 @@
     text-overflow: clip;
 }
 
+.memory-browse-summary.collapsed {
+    display: -webkit-box;
+    -webkit-line-clamp: 5;
+    -webkit-box-orient: vertical;
+    line-clamp: 5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.memory-browse-summary.memory-browse-summary-primary {
+    font-size: 1.05rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: rgba(255, 255, 255, 0.96);
+    margin-top: 0;
+}
+
+.memory-browse-story {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.98rem;
+    line-height: 1.65;
+    color: rgba(255, 255, 255, 0.9);
+    white-space: normal;
+    word-break: break-word;
+}
+
+.memory-browse-story.collapsed {
+    display: -webkit-box;
+    -webkit-line-clamp: 6;
+    -webkit-box-orient: vertical;
+    line-clamp: 6;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .memory-browse-site {
-    margin-top: 14px;
+    margin-top: 0;
     font-size: 0.78rem;
     color: #aaaaaa;
     background: rgba(160, 160, 160, 0.12);
@@ -262,6 +307,35 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.memory-browse-footer-row {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.memory-browse-footer-spacer {
+    flex: 1 1 auto;
+}
+
+.memory-browse-expand {
+    margin-top: 0;
+    margin-left: auto;
+    border: 0;
+    background: transparent;
+    color: rgba(214, 214, 214, 0.86);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0;
+    cursor: pointer;
+}
+
+.memory-browse-expand:hover {
+    color: #ffffff;
 }
 
 .memory-delete-btn {
@@ -363,6 +437,14 @@
     color: rgba(26, 26, 26, 0.65);
 }
 
+[data-theme="light"] .memory-browse-summary.memory-browse-summary-primary {
+    color: rgba(26, 26, 26, 0.95);
+}
+
+[data-theme="light"] .memory-browse-story {
+    color: rgba(26, 26, 26, 0.8);
+}
+
 [data-theme="light"] .memory-browse-site {
     color: #555;
     background: rgba(0, 0, 0, 0.06);
@@ -378,4 +460,12 @@
 [data-theme="light"] .memory-delete-btn:hover:not(:disabled) {
     border-color: rgba(0, 0, 0, 0.25);
     background: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .memory-browse-expand {
+    color: rgba(26, 26, 26, 0.7);
+}
+
+[data-theme="light"] .memory-browse-expand:hover {
+    color: rgba(26, 26, 26, 0.95);
 }

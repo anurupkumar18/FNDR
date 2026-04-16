@@ -67,9 +67,11 @@ export function Timeline({
     evalUi = false,
 }: TimelineProps) {
     const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
+    const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
     useEffect(() => {
         setVisibleCount(INITIAL_VISIBLE);
+        setExpandedIds(new Set());
     }, [query]);
 
     if (isLoading) {
@@ -87,7 +89,7 @@ export function Timeline({
                 <div className="timeline-state timeline-welcome">
                     <div className="welcome-icon">⌘</div>
                     <h2>Welcome to FNDR</h2>
-                    <p>Your memories are being captured. Start typing below to search.</p>
+                    <p>Your memories are being captured. Type a query and press Enter to search.</p>
                 </div>
             );
         }
@@ -103,12 +105,34 @@ export function Timeline({
     const visibleResults = results.slice(0, visibleCount);
     const hasMore = results.length > visibleCount;
     const filteredResults = filterConsecutiveSimilar(visibleResults);
+    const toggleExpanded = (id: string) => {
+        setExpandedIds((previous) => {
+            const next = new Set(previous);
+            if (next.has(id)) {
+                next.delete(id);
+            } else {
+                next.add(id);
+            }
+            return next;
+        });
+    };
 
     return (
         <div className="timeline-container">
             <div className="timeline-stream">
                 {filteredResults.map((result) => {
                     const cleanSummary = stripLegacySources(result.summary);
+                    const displayTitle = preferredTitle(result);
+                    const primaryText = cleanSummary || displayTitle || "Captured memory";
+                    const storyMode = isStoryStyleApp(result);
+                    const story = storyMode ? buildStorySummary(result) : "";
+                    const continuity = isContinuityCard(result);
+                    const contentLength = storyMode
+                        ? story.length
+                        : primaryText.length;
+                    const canExpand = continuity && contentLength > 220;
+                    const isExpanded = expandedIds.has(result.id);
+                    const collapseState = canExpand && !isExpanded ? "collapsed" : "expanded";
                     return (
                         <article
                             key={result.id}
@@ -155,9 +179,28 @@ export function Timeline({
                                     )}
                                 </div>
                             </div>
-                            <h3 className="result-title">{result.title || "Untitled memory"}</h3>
-                            {!isLowSignalPreview(cleanSummary, result.app_name) && (
-                                <p className="result-preview">{cleanSummary}</p>
+                            {storyMode ? (
+                                <p className={`result-primary ${collapseState}`}>
+                                    {story}
+                                </p>
+                            ) : (
+                                <p className={`result-primary ${collapseState}`}>
+                                    {!isLowSignalPreview(primaryText, result.app_name)
+                                        ? primaryText
+                                        : (displayTitle || "Untitled memory")}
+                                </p>
+                            )}
+                            {canExpand && (
+                                <button
+                                    type="button"
+                                    className="result-expand"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        toggleExpanded(result.id);
+                                    }}
+                                >
+                                    {isExpanded ? "Show less" : "See more"}
+                                </button>
                             )}
 
                             {result.context.some((item) => !/^sources\s*:/i.test(item)) && (
@@ -188,6 +231,72 @@ export function Timeline({
                 </div>
             )}
         </div>
+    );
+}
+
+function preferredTitle(result: MemoryCard): string {
+    const title = (result.title || "").trim();
+    const windowTitle = (result.window_title || "").trim();
+    const app = result.app_name.toLowerCase();
+    const lowerWindow = windowTitle.toLowerCase();
+    const genericWindow =
+        !windowTitle
+        || lowerWindow === app
+        || includesAny(lowerWindow, ["new tab", "dashboard", "home", "settings"]);
+
+    if (!genericWindow && (title.endsWith("...") || !title)) {
+        return windowTitle;
+    }
+
+    return title || windowTitle;
+}
+
+function isStoryStyleApp(result: MemoryCard): boolean {
+    const app = result.app_name.toLowerCase();
+    const title = (result.window_title || "").toLowerCase();
+    const haystack = `${app} ${title}`;
+    return includesAny(haystack, [
+        "codex",
+        "antigravity",
+        "chatgpt",
+        "gemini",
+        "claude",
+        "cursor",
+        "visual studio code",
+        "vscode",
+        "vs code",
+        "terminal",
+        "iterm",
+        "zed",
+        "xcode",
+        "intellij",
+    ]);
+}
+
+function isContinuityCard(result: MemoryCard): boolean {
+    return Boolean(result.continuity) || result.source_count > 1;
+}
+
+function includesAny(haystack: string, needles: string[]): boolean {
+    return needles.some((needle) => haystack.includes(needle));
+}
+
+function normalizeStoryText(value: string | undefined | null): string {
+    if (!value) {
+        return "";
+    }
+    return value
+        .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function buildStorySummary(result: MemoryCard): string {
+    return (
+        normalizeStoryText(stripLegacySources(result.summary))
+        || normalizeStoryText(result.title)
+        || normalizeStoryText(result.window_title)
+        || "Captured continuity context."
     );
 }
 

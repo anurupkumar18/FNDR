@@ -38,6 +38,7 @@ function formatHomeDate(now: Date): string {
 
 
 function App() {
+    const [queryDraft, setQueryDraft] = useState("");
     const [query, setQuery] = useState("");
     const [timeFilter, setTimeFilter] = useState<string | null>(null);
     const [appFilter, setAppFilter] = useState<string | null>(null);
@@ -188,6 +189,18 @@ function App() {
         setAppFilter(null);
     }, [query]);
 
+    const handleSearchSubmit = (nextValue?: string) => {
+        const source = nextValue ?? queryDraft;
+        const normalized = source
+            .replace(/\r?\n/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        setQuery(normalized);
+        if (typeof nextValue === "string") {
+            setQueryDraft(nextValue);
+        }
+    };
+
 
 
     useEffect(() => {
@@ -323,8 +336,10 @@ function App() {
 
                 <section className={`search-shell ${query.trim() ? "is-active" : ""}`}>
                     <SearchBar
-                        value={query}
-                        onChange={setQuery}
+                        value={queryDraft}
+                        submittedValue={query}
+                        onChange={setQueryDraft}
+                        onSubmit={handleSearchSubmit}
                         timeFilter={timeFilter}
                         onTimeFilterChange={setTimeFilter}
                         appFilter={appFilter}

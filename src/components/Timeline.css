@@ -110,6 +110,17 @@
   color: rgba(255, 255, 255, 0.95);
   margin: 0 0 12px 0;
   line-height: 1.3;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.result-title.collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  line-clamp: 3;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .result-preview {
@@ -117,12 +128,70 @@
   line-height: 1.6;
   color: rgba(255, 255, 255, 0.65);
   margin: 0;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.result-preview.collapsed {
   display: -webkit-box;
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   line-clamp: 4;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.result-story {
+  font-size: 0.98rem;
+  line-height: 1.68;
+  color: rgba(255, 255, 255, 0.84);
+  margin: 0;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.result-story.collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  line-clamp: 6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-primary {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.result-primary.collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  line-clamp: 5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-expand {
+  margin-top: 10px;
+  border: 0;
+  background: transparent;
+  color: rgba(214, 214, 214, 0.84);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0;
+  cursor: pointer;
+}
+
+.result-expand:hover {
+  color: #fff;
 }
 
 .result-context-chips {
@@ -246,6 +315,14 @@
   color: rgba(26, 26, 26, 0.6);
 }
 
+[data-theme="light"] .result-story {
+  color: rgba(26, 26, 26, 0.72);
+}
+
+[data-theme="light"] .result-primary {
+  color: rgba(26, 26, 26, 0.95);
+}
+
 [data-theme="light"] .result-chip {
   color: rgba(26, 26, 26, 0.75);
   background: rgba(0, 0, 0, 0.05);
@@ -294,4 +371,12 @@
   background: rgba(0, 0, 0, 0.08);
   border-color: rgba(0, 0, 0, 0.2);
   color: var(--text-primary);
+}
+
+[data-theme="light"] .result-expand {
+  color: rgba(26, 26, 26, 0.68);
+}
+
+[data-theme="light"] .result-expand:hover {
+  color: rgba(26, 26, 26, 0.95);
 }

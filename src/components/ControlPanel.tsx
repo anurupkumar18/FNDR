@@ -3,10 +3,13 @@ import { useCallback, useEffect, useState } from "react";
 type Theme = "dark" | "light";
 import {
     CaptureStatus,
+    MemoryRepairProgress,
+    MemoryRepairSummary,
     McpServerStatus,
     deleteAllData,
     deleteOlderThan,
     getBlocklist,
+    getMemoryRepairProgress,
     getMcpServerStatus,
     getRetentionDays,
     pauseCapture,
@@ -15,6 +18,7 @@ import {
     setRetentionDays,
     startMcpServer,
     stopMcpServer,
+    runMemoryRepairBackfill,
 } from "../api/tauri";
 import {
     ModelInfo,
@@ -53,6 +57,10 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [profileDraft, setProfileDraft] = useState("");
     const [profileBusy, setProfileBusy] = useState(false);
     const [profileMsg, setProfileMsg] = useState<string | null>(null);
+    const [repairBusy, setRepairBusy] = useState(false);
+    const [repairSummary, setRepairSummary] = useState<MemoryRepairSummary | null>(null);
+    const [repairError, setRepairError] = useState<string | null>(null);
+    const [repairProgress, setRepairProgress] = useState<MemoryRepairProgress | null>(null);
 
     // Theme state
     const [theme, setTheme] = useState<Theme>(() => {
@@ -298,6 +306,48 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         }
     };
 
+    const handleRunRepairBackfill = async () => {
+        setRepairBusy(true);
+        setRepairError(null);
+        setRepairSummary(null);
+        try {
+            const summary = await runMemoryRepairBackfill();
+            setRepairSummary(summary);
+        } catch (e) {
+            setRepairError(String(e));
+        } finally {
+            setRepairBusy(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!repairBusy) {
+            return;
+        }
+
+        let mounted = true;
+        const pollProgress = async () => {
+            try {
+                const progress = await getMemoryRepairProgress();
+                if (mounted) {
+                    setRepairProgress(progress);
+                }
+            } catch {
+                // Ignore transient polling failures while repair is running.
+            }
+        };
+
+        void pollProgress();
+        const timer = window.setInterval(() => {
+            void pollProgress();
+        }, 1000);
+
+        return () => {
+            mounted = false;
+            window.clearInterval(timer);
+        };
+    }, [repairBusy]);
+
     const handleToggleMcpServer = async () => {
         setMcpBusy(true);
         try {
@@ -362,7 +412,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                     <circle cx="12" cy="12" r="3" />
                     <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.86l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.86-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.86.34l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.86 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.86l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.86.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.86-.34l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.86v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z" />
                 </svg>
-                <span className="settings-toggle-label">Settings</span>
             </button>
 
             {isOpen && <div className="panel-backdrop" onClick={() => setIsOpen(false)} />}
@@ -680,6 +729,33 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
 
                             <section className="panel-section danger-section">
                                 <h3>Danger Zone</h3>
+                                <p className="section-hint">
+                                    One-time repair can merge historical duplicate memories into continuity cards.
+                                </p>
+                                <button
+                                    className="ui-action-btn"
+                                    onClick={() => void handleRunRepairBackfill()}
+                                    disabled={repairBusy}
+                                >
+                                    {repairBusy ? "Repairing..." : "Run memory continuity repair (one-time)"}
+                                </button>
+                                {repairBusy && repairProgress && (
+                                    <p className="section-hint" style={{ marginTop: 8 }}>
+                                        Progress: {repairProgress.processed.toLocaleString()} / {repairProgress.total.toLocaleString()} ·
+                                        phase {repairProgress.phase} · merged {repairProgress.merged_count.toLocaleString()} ·
+                                        anchor merges {repairProgress.anchor_merges.toLocaleString()}
+                                    </p>
+                                )}
+                                {repairSummary && (
+                                    <p className="section-hint" style={{ marginTop: 8 }}>
+                                        Merged {repairSummary.merged_count} duplicates ({repairSummary.total_before} → {repairSummary.total_after} cards),
+                                        updated {repairSummary.task_reference_updates} task references.
+                                        Spotify {repairSummary.spotify_merges}, YouTube {repairSummary.youtube_merges},
+                                        Codex {repairSummary.codex_merges}, Discord {repairSummary.discord_merges},
+                                        GitLab {repairSummary.gitlab_merges}, Antigravity {repairSummary.antigravity_merges}.
+                                    </p>
+                                )}
+                                {repairError && <p className="section-hint" style={{ marginTop: 8 }}>{repairError}</p>}
                                 <button
                                     className={`ui-action-btn btn-danger ${confirmDelete ? "confirm" : ""}`}
                                     onClick={() => void handleDeleteAll()}
