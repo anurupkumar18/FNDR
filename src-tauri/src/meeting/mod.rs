@@ -689,6 +689,39 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
     let _ = recorder.wait();
     let _ = worker.await;
 
+    // 0. Discover WAV segment files that ffmpeg produced and create segment records.
+    //    The worker thread no longer does this, so we must do it before transcription.
+    let meeting_for_segments = store.get_meeting(&meeting_id).await;
+    if let Some(ref meeting) = meeting_for_segments {
+        let audio_dir = store.resolve_relative_path(&meeting.audio_dir);
+        let wav_files = collect_segment_files(&audio_dir);
+        tracing::info!(
+            "Meeting {}: discovered {} WAV segment files in {:?}",
+            meeting_id,
+            wav_files.len(),
+            audio_dir
+        );
+        for wav_path in &wav_files {
+            let index = parse_segment_index(wav_path);
+            let seg_start = meeting.start_timestamp + (index as i64 * SEGMENT_SECONDS * 1000);
+            let seg_end = seg_start + (SEGMENT_SECONDS * 1000);
+            let segment = MeetingSegment {
+                id: Uuid::new_v4().to_string(),
+                meeting_id: meeting_id.clone(),
+                index,
+                start_timestamp: seg_start,
+                end_timestamp: seg_end,
+                text: String::new(), // will be filled by transcription
+                audio_chunk_path: wav_path.to_string_lossy().to_string(),
+                model: model.clone(),
+                created_at: now_ms(),
+            };
+            if let Err(err) = store.add_segment(segment).await {
+                tracing::warn!("Failed to create segment record for {:?}: {}", wav_path, err);
+            }
+        }
+    }
+
     // 1. Perform unified transcription of ALL segments at high quality
     if let Err(err) = transcribe_meeting_postprocess(store.as_ref(), &meeting_id, &model).await {
         tracing::warn!("Post-meeting transcription pass failed: {}", err);
@@ -697,9 +730,12 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
     let transcript = store.get_transcript(&meeting_id).await?;
     let full_text = transcript.full_text.clone();
 
-    // 2. Perform AI Breakdown analysis
+    // 2. Perform AI Breakdown analysis (only if we have real transcript content)
     let mut breakdown = MeetingBreakdown::default();
-    if let Some(engine) = app_state.as_ref().and_then(|s| s.inference_engine()) {
+    if full_text.trim().is_empty() {
+        tracing::info!("Meeting {}: transcript is empty, skipping AI breakdown", meeting_id);
+        breakdown.summary = "No audio was captured or transcription produced no text.".to_string();
+    } else if let Some(engine) = app_state.as_ref().and_then(|s| s.inference_engine()) {
         tracing::info!("Starting AI breakdown for meeting: {}", meeting_id);
         let breakdown_prompt = format!(
             "Review this meeting transcript and provide a structured breakdown.\n\nTRANSCRIPT:\n{}\n\n\
