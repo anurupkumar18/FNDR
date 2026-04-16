@@ -1,4 +1,7 @@
-//! Adaptive sampling based on user activity
+//! Adaptive sampling based on user activity.
+//!
+//! Uses `CGEventSourceSecondsSinceLastEventType` to detect keyboard/mouse idle
+//! time without spawning a background thread or requiring a run-loop.
 
 use crate::config::Config;
 
@@ -29,7 +32,7 @@ pub struct AdaptiveSampler {}
 
 impl AdaptiveSampler {
     pub fn new() -> Self {
-        Self {}
+        Self
     }
 
     /// Get the current FPS based on configuration and user activity.

@@ -191,14 +191,14 @@
 
 .app-main.search-centered .search-shell {
     margin: 0 0 14px;
-    width: min(820px, 100%);
+    width: min(820px, calc(100vw - 260px));
 }
 
 .home-focus-header {
     display: grid;
-    gap: 8px;
+    gap: 16px;
     justify-items: center;
-    margin-bottom: 10px;
+    margin-bottom: 32px;
 }
 
 .home-greeting {
@@ -213,7 +213,7 @@
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: rgba(141, 146, 157, 0.76);
-    margin-bottom: 12px;
+    margin-bottom: 24px;
 }
 
 .main-layout {

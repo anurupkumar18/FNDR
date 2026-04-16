@@ -30,6 +30,15 @@ pub struct Config {
     /// VLM model size: "4B" (primary)
     #[serde(default = "default_vlm_model_size")]
     pub vlm_model_size: String,
+    /// Days to retain screenshot files on disk (records kept; only pixel data deleted). 0 = keep forever.
+    #[serde(default = "default_screenshot_retention_days")]
+    pub screenshot_retention_days: u32,
+    /// Enable proactive surface: nudges when current screen is semantically close to old unresolved context.
+    #[serde(default = "default_proactive_surface_enabled")]
+    pub proactive_surface_enabled: bool,
+    /// Half-life for Ebbinghaus memory decay in days. Records decay toward 0.15 floor over time.
+    #[serde(default = "default_decay_half_life_days")]
+    pub decay_half_life_days: u32,
 }
 
 fn default_use_vlm() -> bool {
@@ -38,6 +47,18 @@ fn default_use_vlm() -> bool {
 
 fn default_vlm_model_size() -> String {
     "4B".to_string()
+}
+
+fn default_screenshot_retention_days() -> u32 {
+    30
+}
+
+fn default_proactive_surface_enabled() -> bool {
+    true
+}
+
+fn default_decay_half_life_days() -> u32 {
+    21
 }
 
 impl Default for Config {
@@ -59,6 +80,9 @@ impl Default for Config {
             min_text_length: 20,
             use_vlm: true,
             vlm_model_size: "4B".to_string(),
+            screenshot_retention_days: 30,
+            proactive_surface_enabled: true,
+            decay_half_life_days: 21,
         }
     }
 }

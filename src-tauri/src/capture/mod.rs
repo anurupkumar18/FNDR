@@ -286,6 +286,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &image_data,
         );
 
+        let snippet_embed_input = final_snippet.clone();
+
         let record = MemoryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: now.timestamp_millis(),
@@ -309,20 +311,40 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             summary_source,
             noise_score,
             session_key,
-            embedding: text_embedder
-                .embed_batch(&[text.clone()])
-                .ok()
-                .and_then(|mut vectors| vectors.drain(..).next())
-                .unwrap_or_else(|| vec![0.0; 384]),
+            embedding: {
+                let emb = text_embedder
+                    .embed_batch(&[text.clone()])
+                    .ok()
+                    .and_then(|mut vectors| vectors.drain(..).next())
+                    .unwrap_or_else(|| vec![0.0; 384]);
+                *state.last_embedding.write() = emb.clone();
+                emb
+            },
             image_embedding: image_embedder.embed_image(&image_data),
             screenshot_path,
             url,
+            snippet_embedding: text_embedder
+                .embed_batch(&[snippet_embed_input])
+                .ok()
+                .and_then(|mut vectors| vectors.drain(..).next())
+                .unwrap_or_else(|| vec![0.0; 384]),
+            decay_score: 1.0,
+            last_accessed_at: 0,
         };
         batch.push(record);
         if let Some(last) = batch.last() {
             if let Err(err) = state.graph.ingest_memory(last).await {
                 tracing::warn!("Failed to ingest memory into graph: {}", err);
             }
+            // Fire-and-forget: auto-link to a task cluster based on embedding similarity.
+            let record_clone = last.clone();
+            let cluster_store = state.store.clone();
+            tauri::async_runtime::spawn(async move {
+                let graph = crate::graph::GraphStore::new(cluster_store);
+                if let Err(e) = graph.auto_link_to_task(&record_clone).await {
+                    tracing::debug!("Auto task link: {e}");
+                }
+            });
         }
 
         state.frames_captured.fetch_add(1, Ordering::Relaxed);

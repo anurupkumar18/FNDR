@@ -26,12 +26,21 @@ use parking_lot::RwLock;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use store::Store;
+use store::{Stats, Store};
 use tokio::sync::Mutex as AsyncMutex;
 
 pub struct LoadedAiEngines {
     pub inference: Option<Arc<InferenceEngine>>,
     pub vlm: Option<Arc<VlmEngine>>,
+}
+
+/// A proactive suggestion surfaced when the current screen matches a past memory.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProactiveSuggestion {
+    pub memory_id: String,
+    pub snippet: String,
+    pub similarity: f32,
+    pub task_title: Option<String>,
 }
 
 /// Application state shared across threads
@@ -49,6 +58,13 @@ pub struct AppState {
     /// Vision Language Model for intelligent screen analysis (optional)
     pub vlm: RwLock<Option<Arc<VlmEngine>>>,
     inference_init: AsyncMutex<()>,
+    /// Cached stats: (result, computed_at_ms). Invalidated by stats_dirty.
+    pub stats_cache: RwLock<Option<(Stats, i64)>>,
+    pub stats_dirty: AtomicBool,
+    /// Most recent text embedding from the capture loop — used by proactive surface.
+    pub last_embedding: RwLock<Vec<f32>>,
+    pub proactive_tx: tokio::sync::watch::Sender<Option<ProactiveSuggestion>>,
+    pub proactive_rx: tokio::sync::watch::Receiver<Option<ProactiveSuggestion>>,
 }
 
 impl AppState {
@@ -60,6 +76,7 @@ impl AppState {
         inference: Option<Arc<InferenceEngine>>,
         vlm: Option<Arc<VlmEngine>>,
     ) -> Self {
+        let (proactive_tx, proactive_rx) = tokio::sync::watch::channel(None);
         Self {
             app_data_dir,
             config: RwLock::new(config),
@@ -73,6 +90,11 @@ impl AppState {
             inference: RwLock::new(inference),
             vlm: RwLock::new(vlm),
             inference_init: AsyncMutex::new(()),
+            stats_cache: RwLock::new(None),
+            stats_dirty: AtomicBool::new(false),
+            last_embedding: RwLock::new(Vec::new()),
+            proactive_tx,
+            proactive_rx,
         }
     }
 

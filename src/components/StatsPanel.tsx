@@ -28,11 +28,17 @@ function formatTimestamp(ts: number | null) {
     });
 }
 
+type CardId = 'metrics' | 'insights' | 'ranks' | 'hourly' | 'rhythms';
+const ALL_CARDS: CardId[] = ['metrics', 'insights', 'ranks', 'hourly', 'rhythms'];
+
 export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
     const [stats, setStats] = useState<Stats | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [refreshing, setRefreshing] = useState(false);
+
+    const [viewMode, setViewMode] = useState<"stacked" | "grid">("stacked");
+    const [deckOrder, setDeckOrder] = useState<CardId[]>(ALL_CARDS);
 
     const loadStats = async (showLoading = false) => {
         if (showLoading) {
@@ -119,6 +125,189 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
         ];
     }, [stats]);
 
+    const handleCardClick = (id: CardId) => {
+        if (viewMode !== "stacked") return;
+        setDeckOrder((prev) => {
+            if (prev[0] === id) {
+                return [...prev.slice(1), id];
+            } else {
+                return [id, ...prev.filter(c => c !== id)];
+            }
+        });
+    };
+
+    const renderCardContent = (id: CardId) => {
+        if (!stats) return null;
+        switch (id) {
+            case 'metrics':
+                return (
+                    <div className="stats-card-scroller">
+                        <h3>Quick Metrics</h3>
+                        <div className="stats-page-grid">
+                            {quickStats.map((item) => (
+                                <div key={item.label} className="stats-page-card stats-data-card">
+                                    <span className="stats-page-value">{item.value}</span>
+                                    <span className="stats-page-label">{item.label}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            case 'insights':
+                return (
+                    <div className="stats-card-scroller">
+                        <h3>Quick Insights</h3>
+                        <div className="stats-page-insights">
+                            {insights.map((insight) => (
+                                <p key={insight}>{insight}</p>
+                            ))}
+                        </div>
+                    </div>
+                );
+            case 'ranks':
+                return (
+                    <div className="stats-card-scroller stats-two-column">
+                        <div>
+                            <h3>Top Apps</h3>
+                            <div className="stats-page-rank-list">
+                                {stats.apps.length === 0 && <p className="stats-page-empty">No app activity yet.</p>}
+                                {stats.apps.map((app) => {
+                                    const max = Math.max(stats.apps[0]?.count ?? 1, 1);
+                                    const width = (app.count / max) * 100;
+                                    return (
+                                        <div key={app.name} className="stats-page-rank-row">
+                                            <div className="stats-page-rank-meta">
+                                                <span>{app.name}</span>
+                                                <span>{app.count.toLocaleString()}</span>
+                                            </div>
+                                            <div className="stats-page-rank-bar">
+                                                <span style={{ width: `${width}%` }} />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                        <div>
+                            <h3>Top Domains</h3>
+                            <div className="stats-page-rank-list">
+                                {stats.top_domains.length === 0 && <p className="stats-page-empty">No domain activity yet.</p>}
+                                {stats.top_domains.map((domain) => {
+                                    const max = Math.max(stats.top_domains[0]?.count ?? 1, 1);
+                                    const width = (domain.count / max) * 100;
+                                    return (
+                                        <div key={domain.domain} className="stats-page-rank-row">
+                                            <div className="stats-page-rank-meta">
+                                                <span>{domain.domain}</span>
+                                                <span>{domain.count.toLocaleString()}</span>
+                                            </div>
+                                            <div className="stats-page-rank-bar">
+                                                <span style={{ width: `${width}%` }} />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                );
+            case 'hourly':
+                return (
+                    <div className="stats-card-scroller">
+                        <h3>Hourly Distribution</h3>
+                        <div className="stats-hourly-heatmap" aria-label="Hourly capture distribution">
+                            {stats.hourly_distribution.map((entry) => {
+                                const maxHourly = Math.max(...stats.hourly_distribution.map((h) => h.count), 1);
+                                const intensity = Math.max(0.12, entry.count / maxHourly);
+                                return (
+                                    <div
+                                        key={entry.hour}
+                                        className="stats-hour-cell"
+                                        style={{ opacity: intensity }}
+                                        title={`${formatHourLabel(entry.hour)}: ${entry.count.toLocaleString()}`}
+                                    />
+                                );
+                            })}
+                        </div>
+                        <div className="stats-hour-labels">
+                            <span>12AM</span>
+                            <span>6AM</span>
+                            <span>12PM</span>
+                            <span>6PM</span>
+                            <span>11PM</span>
+                        </div>
+                    </div>
+                );
+            case 'rhythms':
+                return (
+                    <div className="stats-card-scroller">
+                        <h3>Capture Timeline</h3>
+                        <div className="stats-page-meta-grid" style={{ marginBottom: "20px" }}>
+                            <div className="stats-page-meta-row">
+                                <span>First capture</span>
+                                <strong>{formatTimestamp(stats.first_capture_ts)}</strong>
+                            </div>
+                            <div className="stats-page-meta-row">
+                                <span>Most recent capture</span>
+                                <strong>{formatTimestamp(stats.last_capture_ts)}</strong>
+                            </div>
+                            <div className="stats-page-meta-row">
+                                <span>Busiest day</span>
+                                <strong>{stats.busiest_day ? `${stats.busiest_day.day} (${stats.busiest_day.count.toLocaleString()})` : "—"}</strong>
+                            </div>
+                            <div className="stats-page-meta-row">
+                                <span>Quietest day</span>
+                                <strong>{stats.quietest_day ? `${stats.quietest_day.day} (${stats.quietest_day.count.toLocaleString()})` : "—"}</strong>
+                            </div>
+                        </div>
+
+                        <div className="stats-two-column">
+                            <div>
+                                <h3>Weekday</h3>
+                                <div className="stats-page-rank-list">
+                                    {stats.weekday_distribution.map((entry) => {
+                                        const maxWeekday = Math.max(...stats.weekday_distribution.map((d) => d.count), 1);
+                                        const width = (entry.count / maxWeekday) * 100;
+                                        return (
+                                            <div key={entry.weekday} className="stats-page-rank-row">
+                                                <div className="stats-page-rank-meta">
+                                                    <span>{entry.weekday}</span>
+                                                    <span>{entry.count.toLocaleString()}</span>
+                                                </div>
+                                                <div className="stats-page-rank-bar">
+                                                    <span style={{ width: `${width}%` }} />
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                            <div>
+                                <h3>Daypart</h3>
+                                <div className="stats-page-rank-list">
+                                    {stats.daypart_distribution.map((entry) => {
+                                        const maxDaypart = Math.max(...stats.daypart_distribution.map((d) => d.count), 1);
+                                        const width = (entry.count / maxDaypart) * 100;
+                                        return (
+                                            <div key={entry.daypart} className="stats-page-rank-row">
+                                                <div className="stats-page-rank-meta">
+                                                    <span>{entry.daypart}</span>
+                                                    <span>{entry.count.toLocaleString()}</span>
+                                                </div>
+                                                <div className="stats-page-rank-bar">
+                                                    <span style={{ width: `${width}%` }} />
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+        }
+    };
+
     if (!isVisible) {
         return null;
     }
@@ -131,6 +320,12 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                     <p>Full analytics page for capture quality, behavior, cadence, and context breadth.</p>
                 </div>
                 <div className="stats-page-actions">
+                    <button
+                        className="ui-action-btn stats-layout-btn"
+                        onClick={() => setViewMode(v => v === "stacked" ? "grid" : "stacked")}
+                    >
+                        {viewMode === "stacked" ? "Lay Out All" : "Stack Cards"}
+                    </button>
                     <button
                         className="ui-action-btn stats-refresh-btn"
                         onClick={() => void loadStats(false)}
@@ -159,164 +354,25 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                 )}
 
                 {!loading && !error && stats && (
-                    <div className="stats-page-content">
-                        <section className="stats-page-section">
-                            <h3>Quick Metrics</h3>
-                            <div className="stats-page-grid">
-                                {quickStats.map((item) => (
-                                    <div key={item.label} className="stats-page-card">
-                                        <span className="stats-page-value">{item.value}</span>
-                                        <span className="stats-page-label">{item.label}</span>
+                    <div className={`stats-deck-container is-${viewMode}`}>
+                        {ALL_CARDS.map(id => {
+                            const stackIndex = deckOrder.indexOf(id);
+                            return (
+                                <div
+                                    key={id}
+                                    className={`stats-playing-card ${stackIndex === 0 ? "is-top" : ""} card-${id}`}
+                                    style={{ "--stack-index": stackIndex } as React.CSSProperties}
+                                    onClick={() => handleCardClick(id)}
+                                    role="button"
+                                    tabIndex={0}
+                                >
+                                    <div className={`stats-card-bg bg-${id}`} />
+                                    <div className="stats-card-content">
+                                        {renderCardContent(id)}
                                     </div>
-                                ))}
-                            </div>
-                        </section>
-
-                        <section className="stats-page-section">
-                            <h3>Quick Insights</h3>
-                            <div className="stats-page-insights">
-                                {insights.map((insight) => (
-                                    <p key={insight}>{insight}</p>
-                                ))}
-                            </div>
-                        </section>
-
-                        <section className="stats-page-section stats-two-column">
-                            <div>
-                                <h3>Top Apps</h3>
-                                <div className="stats-page-rank-list">
-                                    {stats.apps.length === 0 && <p className="stats-page-empty">No app activity yet.</p>}
-                                    {stats.apps.map((app) => {
-                                        const max = Math.max(stats.apps[0]?.count ?? 1, 1);
-                                        const width = (app.count / max) * 100;
-                                        return (
-                                            <div key={app.name} className="stats-page-rank-row">
-                                                <div className="stats-page-rank-meta">
-                                                    <span>{app.name}</span>
-                                                    <span>{app.count.toLocaleString()}</span>
-                                                </div>
-                                                <div className="stats-page-rank-bar">
-                                                    <span style={{ width: `${width}%` }} />
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
                                 </div>
-                            </div>
-                            <div>
-                                <h3>Top Domains</h3>
-                                <div className="stats-page-rank-list">
-                                    {stats.top_domains.length === 0 && <p className="stats-page-empty">No domain activity yet.</p>}
-                                    {stats.top_domains.map((domain) => {
-                                        const max = Math.max(stats.top_domains[0]?.count ?? 1, 1);
-                                        const width = (domain.count / max) * 100;
-                                        return (
-                                            <div key={domain.domain} className="stats-page-rank-row">
-                                                <div className="stats-page-rank-meta">
-                                                    <span>{domain.domain}</span>
-                                                    <span>{domain.count.toLocaleString()}</span>
-                                                </div>
-                                                <div className="stats-page-rank-bar">
-                                                    <span style={{ width: `${width}%` }} />
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        </section>
-
-
-                        <section className="stats-page-section">
-                            <h3>Hourly Distribution</h3>
-                            <div className="stats-hourly-heatmap" aria-label="Hourly capture distribution">
-                                {stats.hourly_distribution.map((entry) => {
-                                    const maxHourly = Math.max(...stats.hourly_distribution.map((h) => h.count), 1);
-                                    const intensity = Math.max(0.12, entry.count / maxHourly);
-                                    return (
-                                        <div
-                                            key={entry.hour}
-                                            className="stats-hour-cell"
-                                            style={{ opacity: intensity }}
-                                            title={`${formatHourLabel(entry.hour)}: ${entry.count.toLocaleString()}`}
-                                        />
-                                    );
-                                })}
-                            </div>
-                            <div className="stats-hour-labels">
-                                <span>12AM</span>
-                                <span>6AM</span>
-                                <span>12PM</span>
-                                <span>6PM</span>
-                                <span>11PM</span>
-                            </div>
-                        </section>
-
-                        <section className="stats-page-section stats-two-column">
-                            <div>
-                                <h3>Weekday Distribution</h3>
-                                <div className="stats-page-rank-list">
-                                    {stats.weekday_distribution.map((entry) => {
-                                        const maxWeekday = Math.max(...stats.weekday_distribution.map((d) => d.count), 1);
-                                        const width = (entry.count / maxWeekday) * 100;
-                                        return (
-                                            <div key={entry.weekday} className="stats-page-rank-row">
-                                                <div className="stats-page-rank-meta">
-                                                    <span>{entry.weekday}</span>
-                                                    <span>{entry.count.toLocaleString()}</span>
-                                                </div>
-                                                <div className="stats-page-rank-bar">
-                                                    <span style={{ width: `${width}%` }} />
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                            <div>
-                                <h3>Daypart Distribution</h3>
-                                <div className="stats-page-rank-list">
-                                    {stats.daypart_distribution.map((entry) => {
-                                        const maxDaypart = Math.max(...stats.daypart_distribution.map((d) => d.count), 1);
-                                        const width = (entry.count / maxDaypart) * 100;
-                                        return (
-                                            <div key={entry.daypart} className="stats-page-rank-row">
-                                                <div className="stats-page-rank-meta">
-                                                    <span>{entry.daypart}</span>
-                                                    <span>{entry.count.toLocaleString()}</span>
-                                                </div>
-                                                <div className="stats-page-rank-bar">
-                                                    <span style={{ width: `${width}%` }} />
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        </section>
-
-                        <section className="stats-page-section">
-                            <h3>Capture Timeline</h3>
-                            <div className="stats-page-meta-grid">
-                                <div className="stats-page-meta-row">
-                                    <span>First capture</span>
-                                    <strong>{formatTimestamp(stats.first_capture_ts)}</strong>
-                                </div>
-                                <div className="stats-page-meta-row">
-                                    <span>Most recent capture</span>
-                                    <strong>{formatTimestamp(stats.last_capture_ts)}</strong>
-                                </div>
-                                <div className="stats-page-meta-row">
-                                    <span>Busiest day</span>
-                                    <strong>{stats.busiest_day ? `${stats.busiest_day.day} (${stats.busiest_day.count.toLocaleString()})` : "—"}</strong>
-                                </div>
-                                <div className="stats-page-meta-row">
-                                    <span>Quietest day</span>
-                                    <strong>{stats.quietest_day ? `${stats.quietest_day.day} (${stats.quietest_day.count.toLocaleString()})` : "—"}</strong>
-                                </div>
-                            </div>
-                        </section>
-
+                            );
+                        })}
                     </div>
                 )}
             </div>

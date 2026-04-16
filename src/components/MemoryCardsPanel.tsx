@@ -298,6 +298,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(TIME_FILTER_ALL);
     const [perspectiveFilter, setPerspectiveFilter] = useState<PerspectiveFilter>(PERSPECTIVE_FILTER_ALL);
     const [deletingId, setDeletingId] = useState<string | null>(null);
+    const [expandedId, setExpandedId] = useState<string | null>(null);
 
     const selectableApps = useMemo(() => {
         return appNames
@@ -469,7 +470,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                     <div className="memory-cards-stream">
                         {filteredCards.map((card) => {
                             const { title, summary, site } = cardCopy(card);
-                            const chips = card.context
+                            const allChips = card.context
                                 .map((item) => normalizeText(item))
                                 .filter((item) => {
                                     const lower = item.toLowerCase();
@@ -480,11 +481,23 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                         && !lower.startsWith("site:")
                                         && !lower.startsWith("sources:")
                                     );
-                                })
-                                .slice(0, 4);
+                                });
+                            const chips = allChips.slice(0, 4);
+                            const isExpanded = expandedId === card.id;
+
+                            const validSnippets = card.raw_snippets
+                                .map((s) => normalizeText(s))
+                                .filter((s) => s.length > 20 && hasReadableCharacters(s))
+                                .filter((s) => !looksTooSimilar(s, summary) && !looksTooSimilar(s, title));
 
                             return (
-                                <article key={card.id} className="result-card memory-browse-card">
+                                <article
+                                    key={card.id}
+                                    className={`result-card memory-browse-card${isExpanded ? " expanded" : ""}`}
+                                    onClick={() => setExpandedId(isExpanded ? null : card.id)}
+                                    tabIndex={0}
+                                    onKeyDown={(e) => e.key === "Enter" && setExpandedId(isExpanded ? null : card.id)}
+                                >
                                     <div className="result-meta memory-browse-meta">
                                         <div className="memory-browse-meta-main">
                                             <span className="result-app">{card.app_name}</span>
@@ -495,10 +508,15 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                                     minute: "2-digit",
                                                 })}
                                             </span>
+                                            {card.source_count > 1 && (
+                                                <span className="memory-source-count" title={`Composed from ${card.source_count} captures`}>
+                                                    {card.source_count} captures
+                                                </span>
+                                            )}
                                         </div>
                                         <button
                                             className="ui-action-btn memory-delete-btn"
-                                            onClick={() => void handleDeleteCard(card.id)}
+                                            onClick={(e) => { e.stopPropagation(); void handleDeleteCard(card.id); }}
                                             disabled={deletingId === card.id}
                                             aria-label="Delete memory card"
                                             title="Delete this memory"
@@ -522,6 +540,42 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                                     {item}
                                                 </span>
                                             ))}
+                                        </div>
+                                    )}
+                                    {isExpanded && (
+                                        <div className="memory-expand-details" onClick={(e) => e.stopPropagation()}>
+                                            {card.url && (
+                                                <a
+                                                    className="memory-browse-url"
+                                                    href={card.url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    title={card.url}
+                                                >
+                                                    🔗 {card.url}
+                                                </a>
+                                            )}
+                                            {allChips.length > 4 && (
+                                                <div className="result-context-chips memory-expand-extra-chips">
+                                                    {allChips.slice(4).map((item, index) => (
+                                                        <span key={`${card.id}-extra-${index}`} className="result-chip">
+                                                            {item}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {validSnippets.length > 0 && (
+                                                <div className="memory-snippets">
+                                                    <div className="memory-snippets-label">
+                                                        Captured text · {validSnippets.length} segment{validSnippets.length !== 1 ? "s" : ""}
+                                                    </div>
+                                                    {validSnippets.slice(0, 6).map((snippet, index) => (
+                                                        <div key={`${card.id}-snip-${index}`} className="memory-snippet-item">
+                                                            {snippet}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </article>
