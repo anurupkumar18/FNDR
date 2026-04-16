@@ -168,7 +168,7 @@ export function SearchBar({
             const key = event.key.toLowerCase();
             if ((event.metaKey || event.ctrlKey) && key === "k") {
                 event.preventDefault();
-                const input = document.getElementById("fndr-search-input") as HTMLInputElement | null;
+                const input = document.getElementById("fndr-search-input") as HTMLElement | null;
                 input?.focus();
                 return;
             }
@@ -367,16 +367,17 @@ export function SearchBar({
                         <textarea
                             id="fndr-search-input"
                             ref={inputRef}
+                            rows={1}
+                            wrap="off"
                             value={value}
-                            onChange={(e) => onChange(e.target.value.replace(/\r?\n/g, ""))}
+                            onChange={(e) => onChange(e.target.value.replace(/\r?\n/g, " "))}
                             onKeyDown={(e) => {
                                 if (e.key === "Enter") {
                                     e.preventDefault();
                                 }
                             }}
-                            rows={1}
                             placeholder={activePlaceholder}
-                            className="search-input search-input-cycling"
+                            className="search-input search-input-cycling search-input-scrollable"
                             autoComplete="off"
                             disabled={disabled}
                             aria-disabled={disabled}
