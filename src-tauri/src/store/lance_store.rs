@@ -193,7 +193,15 @@ impl Store {
         &self,
         nodes: &[GraphNode],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let batch = nodes_to_batch(nodes)?;
+        // Read existing nodes, merge by id (new wins), write back everything.
+        let mut existing = self.get_all_nodes().await.unwrap_or_default();
+        let mut by_id: std::collections::HashMap<String, GraphNode> =
+            existing.drain(..).map(|n| (n.id.clone(), n)).collect();
+        for n in nodes {
+            by_id.insert(n.id.clone(), n.clone());
+        }
+        let all: Vec<GraphNode> = by_id.into_values().collect();
+        let batch = nodes_to_batch(&all)?;
         let schema = Arc::new(node_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
         self.nodes_table
@@ -257,7 +265,35 @@ impl Store {
         &self,
         edges: &[GraphEdge],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let batch = edges_to_batch(edges)?;
+        // Read existing edges, deduplicate by (source, target, edge_type) to avoid
+        // accumulating redundant edges, then write back the full set.
+        let mut existing = self.get_all_edges().await.unwrap_or_default();
+
+        // Dedup key: (source, target, edge_type string). New edges win (they replace
+        // an old edge with the same relationship).
+        let mut by_rel: std::collections::HashMap<(String, String, String), GraphEdge> = existing
+            .drain(..)
+            .map(|e| {
+                let key = (
+                    e.source.clone(),
+                    e.target.clone(),
+                    format!("{:?}", e.edge_type),
+                );
+                (key, e)
+            })
+            .collect();
+
+        for e in edges {
+            let key = (
+                e.source.clone(),
+                e.target.clone(),
+                format!("{:?}", e.edge_type),
+            );
+            by_rel.insert(key, e.clone());
+        }
+
+        let all: Vec<GraphEdge> = by_rel.into_values().collect();
+        let batch = edges_to_batch(&all)?;
         let schema = Arc::new(edge_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
         self.edges_table

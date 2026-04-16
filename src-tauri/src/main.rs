@@ -209,6 +209,7 @@ fn main() {
             api::commands::search_memory_cards,
             api::commands::list_memory_cards,
             api::commands::summarize_search,
+            api::commands::get_fun_greeting,
             api::commands::get_status,
             // MCP
             api::commands::get_mcp_server_status,
@@ -248,6 +249,7 @@ fn main() {
             api::commands::stop_agent,
             api::commands::get_graph_data,
             api::commands::link_audio_to_memories,
+            api::commands::generate_daily_briefing,
             // Onboarding
             api::onboarding::get_onboarding_state,
             api::onboarding::save_onboarding_state,
