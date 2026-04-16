@@ -527,3 +527,39 @@ export async function chatWithGemma(messages: ChatMessage[]): Promise<string> {
     const snippets = messages.filter((m) => m.role === "user").map((m) => m.content);
     return invoke<string>("summarize_search", { query: last.content, resultsSnippets: snippets });
 }
+
+// ========== Memory Repair ==========
+
+export interface MemoryRepairProgress {
+    is_running: boolean;
+    phase: string;
+    processed: number;
+    total: number;
+    merged_count: number;
+    anchor_merges: number;
+    timestamp_ms: number;
+}
+
+export interface MemoryRepairSummary {
+    total_before: number;
+    total_after: number;
+    merged_count: number;
+    anchor_merges: number;
+    task_reference_updates: number;
+    screenshots_cleaned: number;
+    spotify_merges: number;
+    youtube_merges: number;
+    codex_merges: number;
+    discord_merges: number;
+    gitlab_merges: number;
+    antigravity_merges: number;
+    app_merges: { app_name: string; merged: number }[];
+}
+
+export async function runMemoryRepairBackfill(): Promise<MemoryRepairSummary> {
+    return invoke<MemoryRepairSummary>("run_memory_repair_backfill");
+}
+
+export async function getMemoryRepairProgress(): Promise<MemoryRepairProgress> {
+    return invoke<MemoryRepairProgress>("get_memory_repair_progress");
+}
