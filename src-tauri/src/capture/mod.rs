@@ -332,6 +332,15 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             if let Err(err) = state.graph.ingest_memory(last).await {
                 tracing::warn!("Failed to ingest memory into graph: {}", err);
             }
+            // Fire-and-forget: auto-link to a task cluster based on embedding similarity.
+            let record_clone = last.clone();
+            let cluster_store = state.store.clone();
+            tauri::async_runtime::spawn(async move {
+                let graph = crate::graph::GraphStore::new(cluster_store);
+                if let Err(e) = graph.auto_link_to_task(&record_clone).await {
+                    tracing::debug!("Auto task link: {e}");
+                }
+            });
         }
 
         state.frames_captured.fetch_add(1, Ordering::Relaxed);
