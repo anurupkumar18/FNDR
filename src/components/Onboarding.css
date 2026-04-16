@@ -24,10 +24,26 @@
     background: #fff;
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-strong);
-    padding: 48px 52px;
-    max-width: 560px;
-    width: 100%;
+    padding: 40px 48px;
+    max-width: 580px;
+    width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
     animation: ob-slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    /* Custom scrollbar for the card */
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-muted) transparent;
+}
+
+.ob-card::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ob-card::-webkit-scrollbar-thumb {
+    background: var(--text-muted);
+    border-radius: 10px;
 }
 
 @keyframes ob-slide-up {
@@ -318,13 +334,14 @@
 .ob-model-card {
     border: 1.5px solid var(--bg-tertiary);
     border-radius: var(--radius-md);
-    padding: 16px 18px;
+    padding: 14px 16px;
     cursor: pointer;
     transition: all 0.2s;
     position: relative;
     text-align: left;
     width: 100%;
     background: #fff;
+    flex-shrink: 0;
 }
 
 .ob-model-card:hover {
