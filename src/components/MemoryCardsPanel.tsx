@@ -157,6 +157,17 @@ function includesAny(haystack: string, needles: string[]): boolean {
     return needles.some((needle) => haystack.includes(needle));
 }
 
+function looksTooSimilar(a: string, b: string): boolean {
+    if (!a || !b) return false;
+    const na = a.toLowerCase().trim();
+    const nb = b.toLowerCase().trim();
+    if (na === nb) return true;
+    if (na.length > 20 && nb.length > 20) {
+        return na.includes(nb) || nb.includes(na);
+    }
+    return false;
+}
+
 function matchesFilters(
     card: MemoryCard, 
     timeFilter: TimeFilter, 
@@ -376,15 +387,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
     };
 
     const toggleExpanded = (memoryId: string) => {
-        setExpandedCardIds((previous) => {
-            const next = new Set(previous);
-            if (next.has(memoryId)) {
-                next.delete(memoryId);
-            } else {
-                next.add(memoryId);
-            }
-            return next;
-        });
+        setExpandedId((previous) => (previous === memoryId ? null : memoryId));
     };
 
     return (
@@ -485,7 +488,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                 {!loading && !error && filteredCards.length > 0 && (
                     <div className="memory-cards-stream">
                         {filteredCards.map((card) => {
-                            const { title, summary, site } = cardCopy(card);
+                            const { title, summary, site, storyMode, story } = cardCopy(card);
                             const allChips = card.context
                                 .map((item) => normalizeText(item))
                                 .filter((item) => {
@@ -542,15 +545,15 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                     </div>
                                     <div className="memory-browse-content">
                                         {storyMode ? (
-                                            <div className={`memory-browse-summary memory-browse-summary-primary ${collapseState}`}>
+                                            <div className="memory-browse-summary memory-browse-summary-primary">
                                                 {story}
                                             </div>
                                         ) : (
-                                            <div className={`memory-browse-summary memory-browse-summary-primary ${collapseState}`}>
+                                            <div className="memory-browse-summary memory-browse-summary-primary">
                                                 {summary}
                                             </div>
                                         )}
-                                        {(site || canExpand) && (
+                                        {(site || validSnippets.length > 0) && (
                                             <div className="memory-browse-footer-row">
                                                 {site ? (
                                                     <div className="memory-browse-site">
@@ -559,7 +562,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                                 ) : (
                                                     <span className="memory-browse-footer-spacer" aria-hidden="true" />
                                                 )}
-                                                {canExpand && (
+                                                {validSnippets.length > 0 && (
                                                     <button
                                                         type="button"
                                                         className="memory-browse-expand"

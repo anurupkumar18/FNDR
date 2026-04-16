@@ -532,6 +532,45 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
         });
     }, [isVisible, loading, navigationSnapshot]);
 
+    const canGoBack = navigation.past.length > 1;
+    const canGoForward = navigation.future.length > 0;
+
+    const goBack = useCallback(() => {
+        setNavigation((current) => {
+            if (current.past.length <= 1) return current;
+            const newPast = [...current.past];
+            const snapshot = newPast.pop()!;
+            const previous = newPast[newPast.length - 1];
+            isRestoringNavigation.current = true;
+            setViewMode(previous.viewMode);
+            setClusterLens(previous.clusterLens);
+            setActivityFacet(previous.activityFacet);
+            setSelectedNodeId(previous.selectedNodeId);
+            setSelectedClusterKey(previous.selectedClusterKey);
+            setJourneyStartId(previous.journeyStartId);
+            setJourneyEndId(previous.journeyEndId);
+            setFocusMode(previous.focusMode);
+            return { past: newPast, future: [snapshot, ...current.future] };
+        });
+    }, []);
+
+    const goForward = useCallback(() => {
+        setNavigation((current) => {
+            if (current.future.length === 0) return current;
+            const [next, ...rest] = current.future;
+            isRestoringNavigation.current = true;
+            setViewMode(next.viewMode);
+            setClusterLens(next.clusterLens);
+            setActivityFacet(next.activityFacet);
+            setSelectedNodeId(next.selectedNodeId);
+            setSelectedClusterKey(next.selectedClusterKey);
+            setJourneyStartId(next.journeyStartId);
+            setJourneyEndId(next.journeyEndId);
+            setFocusMode(next.focusMode);
+            return { past: [...current.past, next], future: rest };
+        });
+    }, []);
+
     const activeViewLabel = VIEW_MODES.find((mode) => mode.key === viewMode)?.label ?? "Graph";
 
     if (!isVisible) {

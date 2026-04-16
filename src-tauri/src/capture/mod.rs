@@ -4,6 +4,7 @@
 //! Qwen handles the core local summarization path, while optional accelerators
 //! like FastVLM stay off the hot path until a dedicated feature needs them.
 
+pub mod clipboard;
 mod dedupe;
 mod macos;
 pub mod permissions;
@@ -12,6 +13,17 @@ pub mod text_cleanup;
 
 pub use dedupe::PerceptualHasher;
 pub use sampling::AdaptiveSampler;
+
+/// Convenience wrapper: return just the frontmost app name on macOS.
+/// Used by the proactive notification system outside the capture crate.
+pub fn macos_frontmost_app_name() -> Option<String> {
+    let ctx = macos::get_frontmost_app_info();
+    if ctx.app_name == "Unknown" {
+        None
+    } else {
+        Some(ctx.app_name)
+    }
+}
 
 use crate::embed::{ClipEmbedder, Embedder};
 use crate::ocr::OcrEngine;
@@ -24,6 +36,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
 /// Resolve the FastVLM sidecar Python script path.
@@ -129,6 +143,10 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
     // Force capture timer
     let mut last_forced_capture = Instant::now();
+
+    // Semantic dedup: skip expensive LLM/VLM/embedding passes when the OCR
+    // text content is identical to the previous frame (e.g. blinking cursor).
+    let mut last_semantic_hash: u64 = 0;
 
     tracing::info!("Capture loop started");
 
@@ -236,6 +254,26 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
+        // ── Semantic dedup ────────────────────────────────────────────────
+        // Hash (app_name, window_title, clean_text). If the hash is
+        // identical to the previous frame, the user is staring at the
+        // same content (blinking cursor, ticking clock, etc.).  Skip the
+        // entire LLM → VLM → embedding pipeline to save CPU/battery.
+        {
+            let mut h = DefaultHasher::new();
+            app_name.hash(&mut h);
+            window_title.hash(&mut h);
+            text.hash(&mut h);
+            let semantic_hash = h.finish();
+            if semantic_hash == last_semantic_hash && !force_capture {
+                tracing::debug!("Semantic dedup: identical content, skipping pipeline");
+                state.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(sleep_duration).await;
+                continue;
+            }
+            last_semantic_hash = semantic_hash;
+        }
+
         // Summarize each persisted memory with the local AI model when available.
         let engine = if let Some(engine) = state.inference_engine() {
             Some(engine)
@@ -260,7 +298,31 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             String::new()
         };
 
-        let (final_snippet, summary_source) = if summary.is_empty() {
+        // Run VLM analysis in parallel to extract structured metadata (Action + Context).
+        // This enriches the record even when the LLM summary path produces a weak fallback.
+        let vlm_analysis = if let Some(vlm) = state.vlm_engine() {
+            match vlm.analyze_screen(&text, &app_name).await {
+                Ok(analysis) if !analysis.trim().is_empty() => {
+                    tracing::info!("VLM analysis: {}", analysis);
+                    Some(analysis)
+                }
+                Ok(_) => None,
+                Err(err) => {
+                    tracing::debug!("VLM analysis failed (non-fatal): {}", err);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let (final_snippet, summary_source) = if !summary.is_empty() {
+            // Best case: we have a good LLM summary.
+            (summary, "llm".to_string())
+        } else if let Some(ref vlm_text) = vlm_analysis {
+            // Second best: VLM produced structured metadata.
+            (vlm_text.clone(), "vlm".to_string())
+        } else {
             let fallback = text_cleanup::concise_fallback_snippet(&app_name, &window_title, &text);
             if fallback.is_empty() {
                 (
@@ -270,12 +332,17 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             } else {
                 (fallback, "fallback".to_string())
             }
-        } else {
-            (summary, "llm".to_string())
         };
 
-        // Persist screenshot first (needed for FastVLM)
+        // Persist screenshot to a temporary file so any sidecar (FastVLM) can
+        // reference it. The file is deleted once the pipeline finishes.
         let now = Local::now();
+        let temp_screenshot_path = persist_screenshot(
+            &state.store.data_dir(),
+            &now.format("%Y%m%d").to_string(),
+            &image_data,
+        );
+
         let url = macos::get_browser_url(&app_name);
         if let Some(ref u) = url {
             tracing::info!("Captured URL: {}", u);
@@ -283,11 +350,12 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let session_key = build_session_key(&app_name, &window_title, url.as_deref());
         let noise_score = text_cleanup::estimate_noise_score(&app_name, &ocr_result.text);
 
-        let screenshot_path = persist_screenshot(
-            &state.store.data_dir(),
-            &now.format("%Y%m%d").to_string(),
-            &image_data,
-        );
+        // Enrich clean_text with VLM metadata when available.
+        let enriched_clean_text = if let Some(ref vlm_text) = vlm_analysis {
+            format!("{}\n\n[VLM] {}", text, vlm_text)
+        } else {
+            text.clone()
+        };
 
         let snippet_embed_input = final_snippet.clone();
 
@@ -307,7 +375,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     .unwrap_or_else(|| app_name.to_lowercase().replace(' ', "_"))
             ),
             text: text.clone(),
-            clean_text: text.clone(),
+            clean_text: enriched_clean_text,
             ocr_confidence: ocr_result.confidence,
             ocr_block_count: ocr_result.block_count as u32,
             snippet: final_snippet,
@@ -324,7 +392,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 emb
             },
             image_embedding: image_embedder.embed_image(&image_data),
-            screenshot_path,
+            // Screenshots are NOT persisted long-term. The temp file is
+            // deleted below once all extraction is done.
+            screenshot_path: None,
             url,
             snippet_embedding: text_embedder
                 .embed_batch(&[snippet_embed_input])
@@ -338,24 +408,27 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state.as_ref(),
             &mut batch,
             &mut continuity_index,
-            incoming_record.clone(),
+            record.clone(),
             &text_embedder,
             engine.as_ref(),
         )
         .await
         {
-            Ok(record) => record,
+            Ok(merged) => merged,
             Err(err) => {
                 tracing::warn!(
                     "Memory continuity merge failed for {}: {}",
-                    incoming_record.id,
+                    record.id,
                     err
                 );
-                batch.push(incoming_record.clone());
-                incoming_record
+                batch.push(record.clone());
+                record
             }
-            // Fire-and-forget: auto-link to a task cluster based on embedding similarity.
-            let record_clone = last.clone();
+        };
+
+        // Fire-and-forget: auto-link to a task cluster based on embedding similarity.
+        {
+            let record_clone = merged_or_new.clone();
             let cluster_store = state.store.clone();
             tauri::async_runtime::spawn(async move {
                 let graph = crate::graph::GraphStore::new(cluster_store);
@@ -369,6 +442,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         state
             .last_capture_time
             .store(now.timestamp_millis() as u64, Ordering::Relaxed);
+
+        // Pipeline complete — delete the temporary screenshot from disk.
+        // All useful information (OCR, embeddings, VLM analysis, LLM summary)
+        // has already been extracted into the MemoryRecord.
+        cleanup_screenshot_path(temp_screenshot_path);
 
         // Drop image data immediately (important for memory)
         drop(image_data);
@@ -668,6 +746,9 @@ pub(crate) async fn merge_memory_records_with_policy(
             .clone()
             .or(incoming.screenshot_path.clone()),
         url: incoming.url.clone().or(existing.url.clone()),
+        snippet_embedding: existing.snippet_embedding.clone(),
+        decay_score: existing.decay_score,
+        last_accessed_at: existing.last_accessed_at.max(incoming.last_accessed_at),
     }
 }
 

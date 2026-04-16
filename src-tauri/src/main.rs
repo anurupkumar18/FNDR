@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use fndr_lib::{api, capture, config::Config, graph::GraphStore, store::Store, AppState, ProactiveSuggestion};
+use chrono::Timelike;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -188,6 +189,180 @@ fn main() {
 
                             let _ = proactive_state.proactive_tx.send(Some(suggestion.clone()));
                             let _ = app_handle.emit("proactive_suggestion", suggestion);
+                        }
+                    }
+                });
+            }
+
+            // Background task: clipboard watcher — indexes clipboard copies into the graph.
+            {
+                let clip_store = state.store.clone();
+                tauri::async_runtime::spawn(async move {
+                    fndr_lib::capture::clipboard::run_clipboard_watcher(clip_store).await;
+                });
+            }
+
+            // Background task: proactive intelligence — morning/evening briefings
+            // and stale task nudges delivered as system notifications.
+            {
+                let notif_state = state.clone();
+                let notif_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use std::time::Duration;
+
+                    // Wait 60s at startup before checking — let the system settle.
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+
+                    let mut briefing_sent_today = false;
+                    let mut last_stale_check =
+                        std::time::Instant::now() - Duration::from_secs(7200);
+                    let mut last_context_switch_check = std::time::Instant::now();
+                    let mut recent_app_switches: std::collections::VecDeque<String> =
+                        std::collections::VecDeque::with_capacity(20);
+
+                    let mut interval = tokio::time::interval(Duration::from_secs(30));
+                    loop {
+                        interval.tick().await;
+
+                        let now = chrono::Local::now();
+                        let hour = now.hour();
+
+                        // ── Morning/evening briefing ──────────────────────────
+                        // Send a briefing notification once per day.
+                        // Morning (8-10am) or evening (6-8pm).
+                        if !briefing_sent_today
+                            && ((8..=10).contains(&hour) || (18..=20).contains(&hour))
+                        {
+                            let mode = if hour < 12 { "morning" } else { "evening" };
+                            if let Some(engine) = notif_state.inference_engine() {
+                                // Gather today's memory snippets for briefing
+                                let start_of_day = now
+                                    .date_naive()
+                                    .and_hms_opt(0, 0, 0)
+                                    .map(|t| t.and_utc().timestamp_millis())
+                                    .unwrap_or(0);
+                                let now_ms = chrono::Utc::now().timestamp_millis();
+                                let memories = notif_state
+                                    .store
+                                    .get_memories_in_range(start_of_day, now_ms)
+                                    .await
+                                    .unwrap_or_default();
+
+                                if memories.len() >= 3 {
+                                    let card_lines: Vec<String> = memories
+                                        .iter()
+                                        .take(20)
+                                        .map(|m| {
+                                            format!(
+                                                "[{}] {} — {}",
+                                                m.app_name, m.window_title, m.snippet
+                                            )
+                                        })
+                                        .collect();
+
+                                    let briefing = engine
+                                        .generate_daily_briefing(&card_lines, mode)
+                                        .await;
+
+                                    if !briefing.trim().is_empty() {
+                                        let title = if mode == "morning" {
+                                            "☀️ FNDR Morning Briefing"
+                                        } else {
+                                            "🌙 FNDR Evening Recap"
+                                        };
+                                        let _ = notif_handle.emit(
+                                            "fndr_notification",
+                                            serde_json::json!({
+                                                "title": title,
+                                                "body": briefing,
+                                                "kind": "briefing",
+                                            }),
+                                        );
+                                        tracing::info!(
+                                            "Sent {} briefing notification",
+                                            mode
+                                        );
+                                        briefing_sent_today = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Reset flag at midnight
+                        if hour == 0 {
+                            briefing_sent_today = false;
+                        }
+
+                        // ── Stale task nudge ──────────────────────────────────
+                        // Every 2 hours, check for tasks > 3 days old.
+                        if last_stale_check.elapsed() > Duration::from_secs(7200) {
+                            last_stale_check = std::time::Instant::now();
+                            if let Ok(tasks) = notif_state.store.list_tasks().await {
+                                let stale_cutoff =
+                                    chrono::Utc::now().timestamp_millis() - 3 * 86_400_000;
+                                let stale: Vec<_> = tasks
+                                    .iter()
+                                    .filter(|t| {
+                                        !t.is_completed
+                                            && !t.is_dismissed
+                                            && t.created_at < stale_cutoff
+                                    })
+                                    .collect();
+
+                                if !stale.is_empty() {
+                                    let titles: Vec<_> = stale
+                                        .iter()
+                                        .take(3)
+                                        .map(|t| t.title.as_str())
+                                        .collect();
+                                    let body = format!(
+                                        "You have {} stale tasks: {}",
+                                        stale.len(),
+                                        titles.join(", ")
+                                    );
+                                    let _ = notif_handle.emit(
+                                        "fndr_notification",
+                                        serde_json::json!({
+                                            "title": "📋 Stale Tasks",
+                                            "body": body,
+                                            "kind": "stale_tasks",
+                                        }),
+                                    );
+                                }
+                            }
+                        }
+
+                        // ── Context-switch alert ─────────────────────────────
+                        // Track app switches. If > 8 switches in 5 minutes,
+                        // nudge the user about context switching.
+                        if last_context_switch_check.elapsed() > Duration::from_secs(10) {
+                            last_context_switch_check = std::time::Instant::now();
+                            let current_app = fndr_lib::capture::macos_frontmost_app_name();
+                            if let Some(app) = current_app {
+                                let last = recent_app_switches.back().cloned();
+                                if last.as_deref() != Some(&app) {
+                                    recent_app_switches.push_back(app);
+                                    if recent_app_switches.len() > 15 {
+                                        recent_app_switches.pop_front();
+                                    }
+                                }
+                            }
+                            // Check if there are > 8 unique apps in the window
+                            if recent_app_switches.len() >= 8 {
+                                let unique: std::collections::HashSet<_> =
+                                    recent_app_switches.iter().collect();
+                                if unique.len() >= 6 {
+                                    let _ = notif_handle.emit(
+                                        "fndr_notification",
+                                        serde_json::json!({
+                                            "title": "🔀 High Context Switching",
+                                            "body": "You've been switching between many apps. Want to refocus?",
+                                            "kind": "context_switch",
+                                        }),
+                                    );
+                                    recent_app_switches.clear();
+                                }
+                            }
                         }
                     }
                 });

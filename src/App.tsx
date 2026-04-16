@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { SearchBar } from "./components/SearchBar";
 import { Timeline } from "./components/Timeline";
 import { ControlPanel } from "./components/ControlPanel";
@@ -24,7 +24,7 @@ import {
     getStatus,
     getFunGreeting,
 } from "./api/tauri";
-import { getOnboardingState } from "./api/onboarding";
+import { getOnboardingState, requestBiometricAuth } from "./api/onboarding";
 import { EVAL_UI } from "./evalUi";
 import "./styles/App.css";
 
@@ -35,7 +35,53 @@ function formatHomeDate(now: Date): string {
     return `${weekday} · ${month} ${day}`;
 }
 
+// ── Biometric Lock Screen ─────────────────────────────────────────────────
+function BiometricLockScreen({ onUnlock }: { onUnlock: () => void }) {
+    const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
 
+    const authenticate = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const ok = await requestBiometricAuth("Unlock FNDR — your private screen history");
+            if (ok) {
+                onUnlock();
+            } else {
+                setError("Authentication failed. Tap to try again.");
+            }
+        } catch {
+            setError("Biometric auth unavailable. Tap to retry.");
+        } finally {
+            setLoading(false);
+        }
+    }, [onUnlock]);
+
+    // Auto-trigger on mount
+    useEffect(() => {
+        void authenticate();
+    }, [authenticate]);
+
+    return (
+        <div className="biometric-lock-overlay">
+            <div className="biometric-lock-card">
+                <div className="biometric-lock-icon">🔐</div>
+                <h1 className="biometric-lock-title">FNDR is Locked</h1>
+                <p className="biometric-lock-subtitle">
+                    Authenticate with Touch ID or your system password to access your memories.
+                </p>
+                {error && <div className="biometric-lock-error">{error}</div>}
+                <button
+                    className="biometric-lock-btn"
+                    onClick={() => void authenticate()}
+                    disabled={loading}
+                >
+                    {loading ? "Authenticating…" : "Unlock with Touch ID"}
+                </button>
+            </div>
+        </div>
+    );
+}
 
 function App() {
     const [queryDraft, setQueryDraft] = useState("");
@@ -52,6 +98,8 @@ function App() {
     const [showStatsPanel, setShowStatsPanel] = useState(false);
     const [showTodoPanel, setShowTodoPanel] = useState(false);
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
+    const [biometricRequired, setBiometricRequired] = useState<boolean | null>(null);
+    const [biometricUnlocked, setBiometricUnlocked] = useState(false);
     const [selectedResult, setSelectedResult] = useState<MemoryCard | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [deletedMemoryIds, setDeletedMemoryIds] = useState<Set<string>>(new Set());
@@ -74,10 +122,12 @@ function App() {
             .then((s) => {
                 setOnboardingDone(s.step === "complete" && s.model_downloaded);
                 setDisplayName(s.display_name ?? null);
+                setBiometricRequired(s.biometric_enabled === true);
             })
             .catch(() => {
                 setOnboardingDone(false);
                 setDisplayName(null);
+                setBiometricRequired(false);
             });
     }, []);
 
@@ -239,7 +289,7 @@ function App() {
         }
     };
 
-    if (onboardingDone === null) {
+    if (onboardingDone === null || biometricRequired === null) {
         return null;
     }
 
@@ -249,9 +299,18 @@ function App() {
                 onComplete={(next) => {
                     setOnboardingDone(true);
                     setDisplayName(next.display_name ?? null);
+                    setBiometricRequired(next.biometric_enabled === true);
+                    // If they just enabled biometrics, mark as already unlocked for this session
+                    if (next.biometric_enabled) {
+                        setBiometricUnlocked(true);
+                    }
                 }}
             />
         );
+    }
+
+    if (biometricRequired && !biometricUnlocked) {
+        return <BiometricLockScreen onUnlock={() => setBiometricUnlocked(true)} />;
     }
 
     return (
