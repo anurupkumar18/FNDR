@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     MeetingRecorderStatus,
     MeetingSession,
@@ -22,6 +22,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
     const [status, setStatus] = useState<MeetingRecorderStatus | null>(null);
     const [meetings, setMeetings] = useState<MeetingSession[]>([]);
     const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
+    const userSelectedId = useRef<string | null>(null);
     const [transcript, setTranscript] = useState<MeetingTranscript | null>(null);
     const [titleInput, setTitleInput] = useState("");
     const [starting, setStarting] = useState(false);
@@ -33,7 +34,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
         [meetings, selectedMeetingId]
     );
 
-    const refresh = async (preferCurrent = true) => {
+    const refresh = async (autoSelect = false) => {
         if (!isVisible) return;
         try {
             const [meetingStatus, meetingList] = await Promise.all([
@@ -44,22 +45,33 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
             setStatus(meetingStatus);
             setMeetings(meetingList);
 
-            if (preferCurrent) {
-                const nextId = meetingStatus.current_meeting_id ?? meetingList[0]?.id ?? null;
-                setSelectedMeetingId(nextId);
-                if (nextId) {
-                    const data = await getMeetingTranscript(nextId);
-                    setTranscript(data);
-                }
-            } else if (selectedMeetingId) {
-                const stillExists = meetingList.some(m => m.id === selectedMeetingId);
+            // Determine which meeting tab to show.
+            // If the user has explicitly clicked a tab, preserve it.
+            // Only auto-switch when: first mount, or autoSelect is forced
+            // (e.g. after starting/stopping a recording).
+            let nextId: string | null = null;
+
+            if (userSelectedId.current) {
+                // User explicitly selected a tab — keep it if it still exists.
+                const stillExists = meetingList.some(m => m.id === userSelectedId.current);
+                nextId = stillExists ? userSelectedId.current : (meetingList[0]?.id ?? null);
                 if (!stillExists) {
-                    setSelectedMeetingId(meetingList[0]?.id ?? null);
-                    if (meetingList[0]) {
-                        const data = await getMeetingTranscript(meetingList[0].id);
-                        setTranscript(data);
-                    }
+                    userSelectedId.current = null;
                 }
+            } else if (autoSelect) {
+                // Auto-select: prefer current recording, else first in list.
+                nextId = meetingStatus.current_meeting_id ?? meetingList[0]?.id ?? null;
+            } else {
+                // Background refresh with no user selection yet — keep current or pick first.
+                nextId = selectedMeetingId ?? meetingList[0]?.id ?? null;
+            }
+
+            setSelectedMeetingId(nextId);
+            if (nextId) {
+                const data = await getMeetingTranscript(nextId);
+                setTranscript(data);
+            } else {
+                setTranscript(null);
             }
             setError(null);
         } catch (err) {
@@ -74,7 +86,9 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
         const unlistenPromise = onMeetingStatus((nextStatus) => {
             setStatus(nextStatus);
             if (!nextStatus.is_recording) {
-                refresh(false);
+                // Recording just stopped — auto-select the finished meeting.
+                userSelectedId.current = null;
+                refresh(true);
             }
         });
 
@@ -114,6 +128,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
     };
 
     const handleSelectMeeting = async (meetingId: string) => {
+        userSelectedId.current = meetingId;
         setSelectedMeetingId(meetingId);
         try {
             const data = await getMeetingTranscript(meetingId);
@@ -191,7 +206,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                 {selectedMeeting && !status?.is_recording && !stopping && (
                     <section className="meeting-breakdown">
                         <div className="breakdown-header">
-                            <h3>{selectedMeeting.title}</h3>
+                            <h3>{displayTitle(selectedMeeting)}</h3>
                             <span className="breakdown-meta">
                                 {new Date(selectedMeeting.start_timestamp).toLocaleDateString()} • {Math.round(selectedMeeting.duration_seconds / 60)} min
                             </span>
@@ -264,7 +279,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                                 className={`ui-action-btn meeting-btn history-pill ${selectedMeetingId === m.id ? "active" : ""}`}
                                 onClick={() => handleSelectMeeting(m.id)}
                             >
-                                {m.title}
+                                {displayTitle(m)}
                             </button>
                         ))}
                     </div>
@@ -274,4 +289,31 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
             {error && <div className="meeting-error">{error}</div>}
         </div>
     );
+}
+
+/** Weak/generic titles that should be replaced with a more meaningful label. */
+const WEAK_TITLES = new Set([
+    "join meeting",
+    "login",
+    "detected meeting",
+    "fndr",
+    "meeting",
+    "untitled meeting",
+    "untitled",
+    "",
+]);
+
+function displayTitle(meeting: MeetingSession): string {
+    const raw = (meeting.title ?? "").trim();
+    if (raw.length <= 1 || WEAK_TITLES.has(raw.toLowerCase())) {
+        const date = new Date(meeting.start_timestamp);
+        const formatted = date.toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+        });
+        return `Meeting — ${formatted}`;
+    }
+    return raw;
 }
