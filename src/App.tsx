@@ -10,7 +10,6 @@ import { MemoryCardsPanel } from "./components/MemoryCardsPanel";
 import { StatsPanel } from "./components/StatsPanel";
 import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
-import { DailyBriefing } from "./components/DailyBriefing";
 
 import { useSearch } from "./hooks/useSearch";
 import {
@@ -330,7 +329,6 @@ function App() {
                     <div className="home-focus-header">
                         <div className="home-greeting">{homeGreeting}</div>
                         <div className="home-date-context">{homeDateLabel}</div>
-                        <DailyBriefing onCardClick={(q) => setQuery(q)} />
                     </div>
                 )}
 

@@ -41,6 +41,34 @@
     border-bottom: 1px solid var(--border);
 }
 
+.todo-briefing-row {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.todo-briefing-summary {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    padding: 10px 12px;
+}
+
+.todo-briefing-label {
+    margin: 0;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.todo-briefing-text {
+    margin: 6px 0 0;
+    font-size: 0.83rem;
+    color: var(--text-secondary);
+    line-height: 1.45;
+    white-space: pre-wrap;
+}
+
 .todo-create-row input {
     background: #0d0d0d;
     border: 1px solid var(--border);

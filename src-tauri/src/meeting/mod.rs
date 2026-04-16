@@ -775,7 +775,7 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
     stop_flag.store(true, Ordering::SeqCst);
 
     request_ffmpeg_stop(&mut recorder);
-    let stopped = wait_for_process_exit(&mut recorder, Duration::from_secs(2));
+    let stopped = wait_for_process_exit(&mut recorder, Duration::from_secs(6));
     if !stopped {
         if let Err(err) = recorder.kill() {
             tracing::warn!("Failed to terminate ffmpeg recorder cleanly: {}", err);
@@ -789,7 +789,14 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
     let meeting_for_segments = store.get_meeting(&meeting_id).await;
     if let Some(ref meeting) = meeting_for_segments {
         let audio_dir = store.resolve_relative_path(&meeting.audio_dir);
+        wait_for_segment_stability(&audio_dir, Duration::from_millis(1200));
         let wav_files = collect_segment_files(&audio_dir);
+        let existing_indices: HashSet<u32> = store
+            .get_segments_for_meeting(&meeting_id)
+            .await
+            .into_iter()
+            .map(|segment| segment.index)
+            .collect();
         tracing::info!(
             "Meeting {}: discovered {} WAV segment files in {:?}",
             meeting_id,
@@ -798,6 +805,9 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
         );
         for wav_path in &wav_files {
             let index = parse_segment_index(wav_path);
+            if existing_indices.contains(&index) {
+                continue;
+            }
             let seg_start = meeting.start_timestamp + (index as i64 * SEGMENT_SECONDS * 1000);
             let seg_end = seg_start + (SEGMENT_SECONDS * 1000);
             let segment = MeetingSegment {
@@ -1000,9 +1010,23 @@ fn spawn_ffmpeg_recorder(segment_pattern: &Path) -> Result<Child, String> {
 
     #[cfg(target_os = "macos")]
     {
-        let av_input = resolve_macos_audio_input_spec();
-        tracing::info!("Meeting recorder using avfoundation input {}", av_input);
-        cmd.args(["-f", "avfoundation", "-i", av_input.as_str()]);
+        let capture = resolve_macos_audio_capture_plan();
+        for input in &capture.inputs {
+            cmd.args(["-f", "avfoundation", "-i", input.as_str()]);
+        }
+        if capture.mix_inputs {
+            cmd.args([
+                "-filter_complex",
+                "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2[aout]",
+                "-map",
+                "[aout]",
+            ]);
+        }
+        tracing::info!(
+            "Meeting recorder using avfoundation inputs {:?} mix={}",
+            capture.inputs,
+            capture.mix_inputs
+        );
     }
     #[cfg(target_os = "linux")]
     {
@@ -1070,23 +1094,54 @@ fn wait_for_process_exit(process: &mut Child, timeout: Duration) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn resolve_macos_audio_input_spec() -> String {
+#[derive(Debug)]
+struct MacAudioCapturePlan {
+    inputs: Vec<String>,
+    mix_inputs: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_macos_audio_capture_plan() -> MacAudioCapturePlan {
     if let Ok(explicit) = std::env::var("FNDR_MEETING_AUDIO_DEVICE") {
         let trimmed = explicit.trim().trim_start_matches(':');
         if !trimmed.is_empty() {
-            return format!(":{trimmed}");
+            return MacAudioCapturePlan {
+                inputs: vec![format!(":{trimmed}")],
+                mix_inputs: false,
+            };
         }
     }
 
-    if let Some(loopback_index) = detect_macos_loopback_audio_device_index() {
-        return format!(":{loopback_index}");
+    let loopback_index = detect_macos_loopback_audio_device_index();
+    let mic_index = detect_macos_preferred_microphone_index();
+
+    if let (Some(loopback), Some(mic)) = (loopback_index.clone(), mic_index.clone()) {
+        if loopback != mic {
+            return MacAudioCapturePlan {
+                inputs: vec![format!(":{loopback}"), format!(":{mic}")],
+                mix_inputs: true,
+            };
+        }
     }
 
-    if let Some(mic_index) = detect_macos_preferred_microphone_index() {
-        return format!(":{mic_index}");
+    if let Some(loopback) = loopback_index {
+        return MacAudioCapturePlan {
+            inputs: vec![format!(":{loopback}")],
+            mix_inputs: false,
+        };
     }
 
-    ":0".to_string()
+    if let Some(mic) = mic_index {
+        return MacAudioCapturePlan {
+            inputs: vec![format!(":{mic}")],
+            mix_inputs: false,
+        };
+    }
+
+    MacAudioCapturePlan {
+        inputs: vec![":0".to_string()],
+        mix_inputs: false,
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1338,29 +1393,22 @@ async fn transcribe_meeting_postprocess(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| store.root_dir.clone());
     let segments = store.get_segments_for_meeting(meeting_id).await;
+    let mut seen_indices = HashSet::new();
     for segment in segments {
-        let latest_text = store
-            .get_segments_for_meeting(meeting_id)
-            .await
-            .into_iter()
-            .find(|candidate| candidate.index == segment.index)
-            .map(|candidate| candidate.text)
-            .unwrap_or_default();
-        if !should_retry_segment_text(&latest_text) {
+        if !seen_indices.insert(segment.index) {
             continue;
         }
-
         if !should_retry_segment_text(&segment.text) {
             continue;
         }
 
         let audio_path = PathBuf::from(&segment.audio_chunk_path);
-        let text = match transcribe_segment(&audio_path, model, &app_data_dir).await {
+        let text = match transcribe_segment_with_retry(&audio_path, model, &app_data_dir).await {
             Ok(text) => text,
             Err(err) => {
                 let size = fs::metadata(&audio_path).map(|m| m.len()).unwrap_or(0);
                 // Ignore tiny/corrupt trailing chunks that can happen when a meeting stops mid-segment.
-                if size < 32_000 {
+                if size < 1_500 {
                     String::new()
                 } else {
                     format!(
@@ -1376,6 +1424,20 @@ async fn transcribe_meeting_postprocess(
             .await?;
     }
     Ok(())
+}
+
+async fn transcribe_segment_with_retry(
+    segment_path: &Path,
+    model: &str,
+    app_data_dir: &Path,
+) -> Result<String, String> {
+    let first = transcribe_segment(segment_path, model, app_data_dir).await;
+    if first.is_ok() {
+        return first;
+    }
+
+    tokio::time::sleep(Duration::from_millis(140)).await;
+    transcribe_segment(segment_path, model, app_data_dir).await
 }
 
 fn transcript_search_terms(query: &str) -> Vec<String> {
@@ -1536,6 +1598,19 @@ fn collect_segment_files(audio_dir: &Path) -> Vec<PathBuf> {
 
     files.sort();
     files
+}
+
+fn wait_for_segment_stability(audio_dir: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let unstable = collect_segment_files(audio_dir)
+            .iter()
+            .any(|path| is_recently_modified(path, 300));
+        if !unstable || Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(60));
+    }
 }
 
 fn parse_segment_index(path: &Path) -> u32 {

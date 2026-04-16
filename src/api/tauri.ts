@@ -56,6 +56,37 @@ export interface McpServerStatus {
     last_error?: string | null;
 }
 
+export interface AppMergeCount {
+    app_name: string;
+    merged: number;
+}
+
+export interface MemoryRepairSummary {
+    total_before: number;
+    total_after: number;
+    merged_count: number;
+    anchor_merges: number;
+    task_reference_updates: number;
+    screenshots_cleaned: number;
+    spotify_merges: number;
+    youtube_merges: number;
+    codex_merges: number;
+    discord_merges: number;
+    gitlab_merges: number;
+    antigravity_merges: number;
+    app_merges: AppMergeCount[];
+}
+
+export interface MemoryRepairProgress {
+    is_running: boolean;
+    phase: string;
+    processed: number;
+    total: number;
+    merged_count: number;
+    anchor_merges: number;
+    timestamp_ms: number;
+}
+
 export interface MeetingBreakdown {
     todos: string[];
     reminders: string[];
@@ -488,6 +519,14 @@ export interface GraphEdgeData {
 
 export async function getGraphData(): Promise<{ nodes: GraphNodeData[]; edges: GraphEdgeData[] }> {
     return invoke<{ nodes: GraphNodeData[]; edges: GraphEdgeData[] }>("get_graph_data");
+}
+
+export async function runMemoryRepairBackfill(): Promise<MemoryRepairSummary> {
+    return invoke<MemoryRepairSummary>("run_memory_repair_backfill");
+}
+
+export async function getMemoryRepairProgress(): Promise<MemoryRepairProgress> {
+    return invoke<MemoryRepairProgress>("get_memory_repair_progress");
 }
 
 export interface ChatMessage {

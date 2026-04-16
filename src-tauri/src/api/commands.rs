@@ -574,10 +574,17 @@ pub async fn list_memory_cards(
         .await
         .map_err(|e| e.to_string())?;
 
-    let mut cards: Vec<MemoryCard> = strip_internal_fndr_results(results)
-        .into_iter()
-        .map(memory_card_from_result)
-        .collect();
+    let filtered = strip_internal_fndr_results(results);
+    let mut cards = MemoryCardSynthesizer::from_results_with_policy(
+        None,
+        "",
+        &filtered,
+        limit,
+        0,
+        Duration::from_millis(1),
+    )
+    .await;
+    cards.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     refine_memory_card_titles(&mut cards);
     Ok(cards)
 }
@@ -2278,7 +2285,6 @@ pub fn get_fun_greeting(name: Option<String>) -> Result<String, String> {
         "What are we exploring today?",
         "Time to make some magic happen.",
         "Welcome back to the matrix.",
-        "Your command center awaits.",
         "Let's get productive.",
         "System fully operational.",
     ];

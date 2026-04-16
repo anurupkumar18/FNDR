@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { MemoryCard, deleteMemory, listMemoryCards } from "../api/tauri";
 import "./MemoryCardsPanel.css";
 
@@ -115,46 +116,46 @@ function extractUrlPath(rawUrl: string): string {
     }
 }
 
-function extractPathHint(...candidates: Array<string | undefined | null>): string {
-    const pathRegex = /([A-Za-z0-9._-]+\/[A-Za-z0-9._/\-]+)/;
-    for (const candidate of candidates) {
-        const cleaned = normalizeText(candidate);
-        if (!cleaned) {
-            continue;
-        }
-        const match = cleaned.match(pathRegex);
-        if (match && match[1]) {
-            return match[1].slice(0, 56);
-        }
+function normalizeExternalUrl(rawUrl: string): string {
+    const trimmed = rawUrl.trim();
+    if (!trimmed) {
+        return trimmed;
     }
-    return "";
+    if (/^https?:\/\//i.test(trimmed)) {
+        return trimmed;
+    }
+    return `https://${trimmed}`;
 }
 
-function extractSite(card: MemoryCard, titleHint?: string): string {
-    if (!card.url) {
-        return "";
-    }
-    const host = parseHost(card.url);
+function usefulLinkLabel(rawUrl: string): string {
+    const host = parseHost(rawUrl);
+    const path = extractUrlPath(rawUrl);
     if (!host) {
-        return "";
+        return "Open link";
     }
-
-    const urlPath = extractUrlPath(card.url);
-    const titlePath = extractPathHint(titleHint, card.window_title);
-    const details = [urlPath, titlePath]
-        .map((value) => normalizeText(value))
-        .filter((value, index, arr) => value.length > 0 && arr.indexOf(value) === index)
-        .slice(0, 2);
-
-    if (details.length === 0) {
+    if (!path) {
         return host;
     }
-
-    return `${host} · ${details.join(" · ")}`;
+    return `${host}/${path}`;
 }
 
 function includesAny(haystack: string, needles: string[]): boolean {
     return needles.some((needle) => haystack.includes(needle));
+}
+
+function looksTooSimilar(a: string, b: string): boolean {
+    const left = normalizeText(a).toLowerCase();
+    const right = normalizeText(b).toLowerCase();
+    if (!left || !right) {
+        return false;
+    }
+    if (left === right) {
+        return true;
+    }
+    if (left.includes(right) || right.includes(left)) {
+        return true;
+    }
+    return false;
 }
 
 function matchesFilters(
@@ -260,19 +261,17 @@ function cardCopy(
 ): {
     title: string;
     summary: string;
-    site: string;
     storyMode: boolean;
     story: string;
     continuity: boolean;
 } {
     const title = fallbackTitle(card);
-    const site = extractSite(card, title);
     const storyMode = isStoryStyleApp(card);
     const continuity = isContinuityCard(card);
     const summary = fallbackSummary(card);
     const story = buildStoryText(title, summary, card.window_title);
 
-    return { title, summary, site, storyMode, story, continuity };
+    return { title, summary, storyMode, story, continuity };
 }
 
 function formatDay(timestamp: number): string {
@@ -376,15 +375,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
     };
 
     const toggleExpanded = (memoryId: string) => {
-        setExpandedCardIds((previous) => {
-            const next = new Set(previous);
-            if (next.has(memoryId)) {
-                next.delete(memoryId);
-            } else {
-                next.add(memoryId);
-            }
-            return next;
-        });
+        setExpandedId((previous) => (previous === memoryId ? null : memoryId));
     };
 
     return (
@@ -485,7 +476,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                 {!loading && !error && filteredCards.length > 0 && (
                     <div className="memory-cards-stream">
                         {filteredCards.map((card) => {
-                            const { title, summary, site } = cardCopy(card);
+                            const { title, summary, storyMode, story } = cardCopy(card);
                             const allChips = card.context
                                 .map((item) => normalizeText(item))
                                 .filter((item) => {
@@ -505,6 +496,10 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                 .map((s) => normalizeText(s))
                                 .filter((s) => s.length > 20 && hasReadableCharacters(s))
                                 .filter((s) => !looksTooSimilar(s, summary) && !looksTooSimilar(s, title));
+                            const linkUrl = card.url ? normalizeExternalUrl(card.url) : "";
+                            const linkLabel = linkUrl ? usefulLinkLabel(linkUrl) : "";
+                            const canExpand = Boolean(validSnippets.length > 0 || allChips.length > 4);
+                            const collapseState = isExpanded ? "expanded" : "collapsed";
 
                             return (
                                 <article
@@ -550,12 +545,20 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                                 {summary}
                                             </div>
                                         )}
-                                        {(site || canExpand) && (
+                                        {(linkUrl || canExpand) && (
                                             <div className="memory-browse-footer-row">
-                                                {site ? (
-                                                    <div className="memory-browse-site">
-                                                        {`Site: ${site}`}
-                                                    </div>
+                                                {linkUrl ? (
+                                                    <button
+                                                        type="button"
+                                                        className="memory-browse-link"
+                                                        onClick={(event) => {
+                                                            event.stopPropagation();
+                                                            void openExternal(linkUrl);
+                                                        }}
+                                                        title={linkUrl}
+                                                    >
+                                                        {`Open link: ${linkLabel}`}
+                                                    </button>
                                                 ) : (
                                                     <span className="memory-browse-footer-spacer" aria-hidden="true" />
                                                 )}
@@ -582,17 +585,6 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                     )}
                                     {isExpanded && (
                                         <div className="memory-expand-details" onClick={(e) => e.stopPropagation()}>
-                                            {card.url && (
-                                                <a
-                                                    className="memory-browse-url"
-                                                    href={card.url}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    title={card.url}
-                                                >
-                                                    🔗 {card.url}
-                                                </a>
-                                            )}
                                             {allChips.length > 4 && (
                                                 <div className="result-context-chips memory-expand-extra-chips">
                                                     {allChips.slice(4).map((item, index) => (

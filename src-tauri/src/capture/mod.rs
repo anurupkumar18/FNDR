@@ -338,7 +338,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state.as_ref(),
             &mut batch,
             &mut continuity_index,
-            incoming_record.clone(),
+            record.clone(),
             &text_embedder,
             engine.as_ref(),
         )
@@ -348,22 +348,22 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             Err(err) => {
                 tracing::warn!(
                     "Memory continuity merge failed for {}: {}",
-                    incoming_record.id,
+                    record.id,
                     err
                 );
-                batch.push(incoming_record.clone());
-                incoming_record
+                batch.push(record.clone());
+                record
             }
-            // Fire-and-forget: auto-link to a task cluster based on embedding similarity.
-            let record_clone = last.clone();
-            let cluster_store = state.store.clone();
-            tauri::async_runtime::spawn(async move {
-                let graph = crate::graph::GraphStore::new(cluster_store);
-                if let Err(e) = graph.auto_link_to_task(&record_clone).await {
-                    tracing::debug!("Auto task link: {e}");
-                }
-            });
-        }
+        };
+        // Fire-and-forget: auto-link to a task cluster based on embedding similarity.
+        let record_clone = merged_or_new.clone();
+        let cluster_store = state.store.clone();
+        tauri::async_runtime::spawn(async move {
+            let graph = crate::graph::GraphStore::new(cluster_store);
+            if let Err(e) = graph.auto_link_to_task(&record_clone).await {
+                tracing::debug!("Auto task link: {e}");
+            }
+        });
 
         state.frames_captured.fetch_add(1, Ordering::Relaxed);
         state
@@ -407,27 +407,25 @@ async fn merge_or_append_memory_record(
     if let Some(anchor) = incoming_anchor.as_ref() {
         if let Some(anchor_id) = continuity_index.get(anchor).cloned() {
             if let Some(batch_idx) = batch.iter().position(|record| record.id == anchor_id) {
-                if batch[batch_idx].app_name == incoming.app_name {
-                    let merged = merge_memory_records(
-                        batch[batch_idx].clone(),
-                        incoming.clone(),
-                        text_embedder,
-                        engine,
-                    )
-                    .await;
-                    tracing::info!(
-                        "Merged memory {} into in-flight continuity card {} via anchor {}",
-                        incoming.id,
-                        merged.id,
-                        anchor
-                    );
-                    if merged.screenshot_path != incoming.screenshot_path {
-                        cleanup_screenshot_path(incoming.screenshot_path.clone());
-                    }
-                    batch[batch_idx] = merged.clone();
-                    continuity_index.insert(anchor.clone(), merged.id.clone());
-                    return Ok(merged);
+                let merged = merge_memory_records(
+                    batch[batch_idx].clone(),
+                    incoming.clone(),
+                    text_embedder,
+                    engine,
+                )
+                .await;
+                tracing::info!(
+                    "Merged memory {} into in-flight continuity card {} via anchor {}",
+                    incoming.id,
+                    merged.id,
+                    anchor
+                );
+                if merged.screenshot_path != incoming.screenshot_path {
+                    cleanup_screenshot_path(incoming.screenshot_path.clone());
                 }
+                batch[batch_idx] = merged.clone();
+                continuity_index.insert(anchor.clone(), merged.id.clone());
+                return Ok(merged);
             }
 
             if let Some(existing) = state
@@ -436,36 +434,34 @@ async fn merge_or_append_memory_record(
                 .await
                 .map_err(|e| e.to_string())?
             {
-                if existing.app_name == incoming.app_name {
-                    let merged = merge_memory_records(
-                        existing.clone(),
-                        incoming.clone(),
-                        text_embedder,
-                        engine,
-                    )
-                    .await;
-                    tracing::info!(
-                        "Merged memory {} into persisted continuity card {} via anchor {}",
-                        incoming.id,
-                        merged.id,
-                        anchor
-                    );
-                    state
-                        .store
-                        .delete_memory_by_id(&existing.id)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    state
-                        .store
-                        .add_batch(&[merged.clone()])
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    if merged.screenshot_path != incoming.screenshot_path {
-                        cleanup_screenshot_path(incoming.screenshot_path.clone());
-                    }
-                    continuity_index.insert(anchor.clone(), merged.id.clone());
-                    return Ok(merged);
+                let merged = merge_memory_records(
+                    existing.clone(),
+                    incoming.clone(),
+                    text_embedder,
+                    engine,
+                )
+                .await;
+                tracing::info!(
+                    "Merged memory {} into persisted continuity card {} via anchor {}",
+                    incoming.id,
+                    merged.id,
+                    anchor
+                );
+                state
+                    .store
+                    .delete_memory_by_id(&existing.id)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                state
+                    .store
+                    .add_batch(&[merged.clone()])
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if merged.screenshot_path != incoming.screenshot_path {
+                    cleanup_screenshot_path(incoming.screenshot_path.clone());
                 }
+                continuity_index.insert(anchor.clone(), merged.id.clone());
+                return Ok(merged);
             }
         }
     }
@@ -534,10 +530,12 @@ pub(crate) fn eligible_for_story_merge(record: &MemoryRecord) -> bool {
 fn best_batch_merge_target(batch: &[MemoryRecord], incoming: &MemoryRecord) -> Option<usize> {
     let mut best: Option<(usize, MergeScore)> = None;
     for (index, candidate) in batch.iter().enumerate() {
-        if candidate.app_name != incoming.app_name {
+        let scored = score_memory_candidate(incoming, candidate);
+        if incoming.app_name != candidate.app_name
+            && !allows_cross_app_merge_from_memory(incoming, candidate, scored)
+        {
             continue;
         }
-        let scored = score_memory_candidate(incoming, candidate);
         if !passes_merge_threshold(scored) {
             continue;
         }
@@ -557,13 +555,13 @@ async fn best_persisted_merge_target(
     state: &AppState,
     incoming: &MemoryRecord,
 ) -> Result<Option<MemoryRecord>, String> {
-    let candidates = state
+    let same_app_candidates = state
         .store
         .vector_search(&incoming.embedding, 24, None, Some(&incoming.app_name))
         .await
         .map_err(|e| e.to_string())?;
 
-    let best = candidates
+    let best_same_app = same_app_candidates
         .iter()
         .filter(|candidate| candidate.id != incoming.id)
         .filter_map(|candidate| {
@@ -575,7 +573,37 @@ async fn best_persisted_merge_target(
         })
         .max_by(|a, b| a.1.total_cmp(&b.1));
 
-    if let Some((best_id, _)) = best {
+    if let Some((best_id, _)) = best_same_app {
+        return state
+            .store
+            .get_memory_by_id(&best_id)
+            .await
+            .map_err(|e| e.to_string());
+    }
+
+    let cross_app_candidates = state
+        .store
+        .vector_search(&incoming.embedding, 32, None, None)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let best_cross_app = cross_app_candidates
+        .iter()
+        .filter(|candidate| candidate.id != incoming.id)
+        .filter(|candidate| candidate.app_name != incoming.app_name)
+        .filter_map(|candidate| {
+            let scored = score_search_candidate(incoming, candidate);
+            if !passes_merge_threshold(scored) {
+                return None;
+            }
+            if !allows_cross_app_merge_from_search(incoming, candidate, scored) {
+                return None;
+            }
+            Some((candidate.id.clone(), scored.score))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1));
+
+    if let Some((best_id, _)) = best_cross_app {
         return state
             .store
             .get_memory_by_id(&best_id)
@@ -644,6 +672,15 @@ pub(crate) async fn merge_memory_records_with_policy(
     } else {
         existing.embedding.clone()
     };
+    let merged_snippet_embedding = if recompute_embedding {
+        text_embedder
+            .embed_batch(&[merged_snippet.clone()])
+            .ok()
+            .and_then(|mut vectors| vectors.drain(..).next())
+            .unwrap_or_else(|| existing.snippet_embedding.clone())
+    } else {
+        existing.snippet_embedding.clone()
+    };
 
     MemoryRecord {
         id: existing.id.clone(),
@@ -668,6 +705,9 @@ pub(crate) async fn merge_memory_records_with_policy(
             .clone()
             .or(incoming.screenshot_path.clone()),
         url: incoming.url.clone().or(existing.url.clone()),
+        snippet_embedding: merged_snippet_embedding,
+        decay_score: existing.decay_score.max(incoming.decay_score),
+        last_accessed_at: existing.last_accessed_at.max(incoming.last_accessed_at),
     }
 }
 
@@ -814,6 +854,62 @@ pub(crate) fn passes_merge_threshold(score: MergeScore) -> bool {
         return score.score >= 0.62;
     }
     score.score >= 0.86 && score.vector >= 0.82 && score.lexical >= 0.28
+}
+
+fn allows_cross_app_merge_from_memory(
+    incoming: &MemoryRecord,
+    candidate: &MemoryRecord,
+    score: MergeScore,
+) -> bool {
+    if !is_cross_app_merge_window(incoming.timestamp, candidate.timestamp) {
+        return false;
+    }
+    if matching_effective_url(incoming.url.as_deref(), candidate.url.as_deref()) {
+        return true;
+    }
+    score.vector >= 0.90 && score.lexical >= 0.62
+}
+
+fn allows_cross_app_merge_from_search(
+    incoming: &MemoryRecord,
+    candidate: &SearchResult,
+    score: MergeScore,
+) -> bool {
+    if !is_cross_app_merge_window(incoming.timestamp, candidate.timestamp) {
+        return false;
+    }
+    if matching_effective_url(incoming.url.as_deref(), candidate.url.as_deref()) {
+        return true;
+    }
+    score.vector >= 0.90 && score.lexical >= 0.62
+}
+
+fn is_cross_app_merge_window(left_ts: i64, right_ts: i64) -> bool {
+    (left_ts - right_ts).abs() <= 90 * 60 * 1000
+}
+
+fn matching_effective_url(left: Option<&str>, right: Option<&str>) -> bool {
+    let Some(left) = left else {
+        return false;
+    };
+    let Some(right) = right else {
+        return false;
+    };
+    normalize_url_for_merge(left) == normalize_url_for_merge(right)
+}
+
+fn normalize_url_for_merge(raw: &str) -> String {
+    let lowered = raw.trim().to_lowercase();
+    if lowered.is_empty() {
+        return String::new();
+    }
+    let no_scheme = lowered
+        .strip_prefix("https://")
+        .or_else(|| lowered.strip_prefix("http://"))
+        .unwrap_or(&lowered);
+    let no_query = no_scheme.split('?').next().unwrap_or(no_scheme);
+    let no_fragment = no_query.split('#').next().unwrap_or(no_query);
+    no_fragment.trim_end_matches('/').to_string()
 }
 
 pub(crate) fn continuity_anchor_for_memory(record: &MemoryRecord) -> Option<String> {

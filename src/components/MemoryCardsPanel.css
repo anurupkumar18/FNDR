@@ -160,21 +160,25 @@
     gap: 12px;
 }
 
-.memory-browse-url {
-    display: block;
+.memory-browse-link {
     font-size: 0.78rem;
-    color: rgba(160, 200, 255, 0.8);
+    color: rgba(255, 255, 255, 0.74);
     text-decoration: none;
-    word-break: break-all;
-    background: rgba(100, 160, 255, 0.06);
-    border: 1px solid rgba(100, 160, 255, 0.14);
-    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 9px;
     padding: 6px 10px;
-    transition: background 0.15s;
+    background: rgba(255, 255, 255, 0.03);
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 72%;
 }
 
-.memory-browse-url:hover {
-    background: rgba(100, 160, 255, 0.12);
+.memory-browse-link:hover {
+    border-color: rgba(255, 255, 255, 0.22);
+    color: rgba(255, 255, 255, 0.92);
+    background: rgba(255, 255, 255, 0.08);
 }
 
 .memory-expand-extra-chips {

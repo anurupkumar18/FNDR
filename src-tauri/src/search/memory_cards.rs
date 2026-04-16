@@ -143,7 +143,10 @@ impl MemoryCardSynthesizer {
             let score = aggregate_score(&group.members);
             let source_count = group.members.len();
             let confidence = grounding_confidence(query, &summary, score, &snippets);
-            if confidence < 0.42 && !summary.to_lowercase().starts_with("low confidence:") {
+            if !query.trim().is_empty()
+                && confidence < 0.42
+                && !summary.to_lowercase().starts_with("low confidence:")
+            {
                 summary = format!("Low confidence: {}", summary);
             }
 
@@ -233,10 +236,6 @@ fn grouping_key(result: &SearchResult) -> String {
 }
 
 fn should_group(a: &SearchResult, b: &SearchResult) -> bool {
-    if a.app_name != b.app_name {
-        return false;
-    }
-
     let within_time_window = (a.timestamp - b.timestamp).abs() <= 5 * 60 * 1000;
     if !within_time_window {
         return false;
@@ -246,11 +245,26 @@ fn should_group(a: &SearchResult, b: &SearchResult) -> bool {
         return true;
     }
 
+    let same_app = a.app_name == b.app_name;
     let title_sim = token_overlap(&a.window_title, &b.window_title);
+    let snippet_sim = token_overlap(&a.snippet, &b.snippet);
     let text_sim = token_overlap(&merged_text(a), &merged_text(b));
     let domain_match = extract_domain(a.url.as_deref()) == extract_domain(b.url.as_deref());
+    let same_url = same_effective_url(a.url.as_deref(), b.url.as_deref());
 
-    domain_match || title_sim >= 0.55 || text_sim >= 0.40
+    if same_app {
+        return domain_match || title_sim >= 0.55 || text_sim >= 0.40;
+    }
+
+    if same_url {
+        return true;
+    }
+
+    if domain_match && (text_sim >= 0.64 || snippet_sim >= 0.64) {
+        return true;
+    }
+
+    text_sim >= 0.78 && title_sim >= 0.64
 }
 
 fn merged_text(result: &SearchResult) -> String {
@@ -475,7 +489,10 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     let (title, mut summary, action, context) = deterministic_fallback(query, result, &snippets);
     let evidence_ids = vec![result.id.clone()];
     let confidence = grounding_confidence(query, &summary, result.score, &snippets);
-    if confidence < 0.42 && !summary.to_lowercase().starts_with("low confidence:") {
+    if !query.trim().is_empty()
+        && confidence < 0.42
+        && !summary.to_lowercase().starts_with("low confidence:")
+    {
         summary = format!("Low confidence: {}", summary);
     }
     MemoryCard {
@@ -835,6 +852,30 @@ fn extract_domain(url: Option<&str>) -> Option<String> {
     } else {
         Some(host.to_string())
     }
+}
+
+fn same_effective_url(left: Option<&str>, right: Option<&str>) -> bool {
+    let Some(left) = left else {
+        return false;
+    };
+    let Some(right) = right else {
+        return false;
+    };
+    normalize_effective_url(left) == normalize_effective_url(right)
+}
+
+fn normalize_effective_url(raw: &str) -> String {
+    let lowered = raw.trim().to_lowercase();
+    if lowered.is_empty() {
+        return String::new();
+    }
+    let no_scheme = lowered
+        .strip_prefix("https://")
+        .or_else(|| lowered.strip_prefix("http://"))
+        .unwrap_or(&lowered);
+    let no_query = no_scheme.split('?').next().unwrap_or(no_scheme);
+    let no_fragment = no_query.split('#').next().unwrap_or(no_query);
+    no_fragment.trim_end_matches('/').to_string()
 }
 
 #[cfg(test)]

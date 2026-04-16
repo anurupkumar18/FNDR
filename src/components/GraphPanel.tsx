@@ -499,6 +499,21 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
         setSelectedNodeId(nodeId);
     }, []);
 
+    const applySnapshot = useCallback((snapshot: GraphNavigationSnapshot) => {
+        isRestoringNavigation.current = true;
+        setViewMode(snapshot.viewMode);
+        setClusterLens(snapshot.clusterLens);
+        setActivityFacet(snapshot.activityFacet);
+        setSelectedNodeId(snapshot.selectedNodeId);
+        setSelectedClusterKey(snapshot.selectedClusterKey);
+        setJourneyStartId(snapshot.journeyStartId);
+        setJourneyEndId(snapshot.journeyEndId);
+        setFocusMode(snapshot.focusMode);
+        window.setTimeout(() => {
+            isRestoringNavigation.current = false;
+        }, 0);
+    }, []);
+
     const navigationSnapshot = useMemo<GraphNavigationSnapshot>(
         () => ({
             viewMode,
@@ -531,6 +546,38 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
             return { past: nextPast, future: [] };
         });
     }, [isVisible, loading, navigationSnapshot]);
+
+    const canGoBack = navigation.past.length > 1;
+    const canGoForward = navigation.future.length > 0;
+
+    const goBack = useCallback(() => {
+        setNavigation((current) => {
+            if (current.past.length <= 1) {
+                return current;
+            }
+            const previous = current.past[current.past.length - 2];
+            const currentSnapshot = current.past[current.past.length - 1];
+            applySnapshot(previous);
+            return {
+                past: current.past.slice(0, -1),
+                future: [currentSnapshot, ...current.future],
+            };
+        });
+    }, [applySnapshot]);
+
+    const goForward = useCallback(() => {
+        setNavigation((current) => {
+            if (current.future.length === 0) {
+                return current;
+            }
+            const [next, ...restFuture] = current.future;
+            applySnapshot(next);
+            return {
+                past: [...current.past, next],
+                future: restFuture,
+            };
+        });
+    }, [applySnapshot]);
 
     const activeViewLabel = VIEW_MODES.find((mode) => mode.key === viewMode)?.label ?? "Graph";
 

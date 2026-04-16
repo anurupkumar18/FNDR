@@ -280,7 +280,7 @@ impl RealEmbedder {
 
         let mut input_ids = Array2::<i64>::zeros((batch_size, seq_len));
         let mut attention_mask = Array2::<i64>::zeros((batch_size, seq_len));
-        let mut token_type_ids = Array2::<i64>::zeros((batch_size, seq_len));
+        let token_type_ids = Array2::<i64>::zeros((batch_size, seq_len));
 
         for (i, enc) in encodings.iter().enumerate() {
             let ids = enc.get_ids();

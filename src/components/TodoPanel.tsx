@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Task, addTodo, dismissTodo, getTodos } from "../api/tauri";
+import { Task, addTodo, dismissTodo, generateDailyBriefing, getTodos } from "../api/tauri";
 import "./TodoPanel.css";
 
 interface TodoPanelProps {
@@ -21,6 +21,8 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
     const [newTitle, setNewTitle] = useState("");
     const [newType, setNewType] = useState<TodoType>("Todo");
     const [activeStage, setActiveStage] = useState<StageFilter>("Todo");
+    const [dailyBriefing, setDailyBriefing] = useState<string>("");
+    const [dailyBriefingLoading, setDailyBriefingLoading] = useState(false);
 
     const loadTasks = async (showLoading = false) => {
         if (showLoading) {
@@ -49,6 +51,36 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             void loadTasks(false);
         }, 20_000);
         return () => window.clearInterval(timer);
+    }, [isVisible]);
+
+    useEffect(() => {
+        if (!isVisible) {
+            return;
+        }
+        let mounted = true;
+        setDailyBriefingLoading(true);
+        generateDailyBriefing()
+            .then((text) => {
+                if (!mounted) {
+                    return;
+                }
+                setDailyBriefing((text ?? "").trim());
+            })
+            .catch(() => {
+                if (!mounted) {
+                    return;
+                }
+                setDailyBriefing("");
+            })
+            .finally(() => {
+                if (!mounted) {
+                    return;
+                }
+                setDailyBriefingLoading(false);
+            });
+        return () => {
+            mounted = false;
+        };
     }, [isVisible]);
 
     const sortedTasks = useMemo(
@@ -140,6 +172,17 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                     </button>
                 </div>
             </header>
+
+            <section className="todo-briefing-row">
+                <section className="todo-briefing-summary" aria-live="polite">
+                    <p className="todo-briefing-label">Today&apos;s Briefing</p>
+                    <p className="todo-briefing-text">
+                        {dailyBriefingLoading
+                            ? "Generating your summary..."
+                            : dailyBriefing || "No briefing available yet."}
+                    </p>
+                </section>
+            </section>
 
             <section className="todo-create-row">
                 <input

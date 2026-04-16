@@ -32,7 +32,7 @@ pub struct AdaptiveSampler {}
 
 impl AdaptiveSampler {
     pub fn new() -> Self {
-        Self
+        Self {}
     }
 
     /// Get the current FPS based on configuration and user activity.
