@@ -229,3 +229,43 @@
         padding: 12px;
     }
 }
+
+/* ===== Light Theme ===== */
+[data-theme="light"] .memory-cards-filter select {
+    border-color: rgba(0, 0, 0, 0.12);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(240, 240, 242, 0.95));
+    color: var(--text-primary);
+}
+
+[data-theme="light"] .memory-cards-filter select:focus {
+    border-color: rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="light"] .memory-cards-filter-arrow {
+    color: rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="light"] .memory-browse-title {
+    color: rgba(26, 26, 26, 0.95);
+}
+
+[data-theme="light"] .memory-browse-summary {
+    color: rgba(26, 26, 26, 0.65);
+}
+
+[data-theme="light"] .memory-browse-site {
+    color: #555;
+    background: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="light"] .memory-delete-btn {
+    color: #555;
+    border-color: rgba(0, 0, 0, 0.15);
+    background: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .memory-delete-btn:hover:not(:disabled) {
+    border-color: rgba(0, 0, 0, 0.25);
+    background: rgba(0, 0, 0, 0.08);
+}

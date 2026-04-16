@@ -803,3 +803,78 @@
 
 .btn-danger-sm:hover { background: rgba(198, 40, 40, 0.15); }
 .btn-danger-sm.confirm { background: var(--danger); color: white; border-color: var(--danger); }
+
+/* ===== Theme Toggle Button ===== */
+.theme-toggle-btn {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border-radius: 10px;
+    font-size: 1.1rem;
+    line-height: 1;
+}
+
+/* ===== Light Theme overrides for hardcoded colors ===== */
+[data-theme="light"] .settings-panel {
+    border-left-color: var(--border);
+}
+
+[data-theme="light"] .panel-tabs {
+    background: var(--surface-elevated);
+    border-bottom-color: var(--border);
+}
+
+[data-theme="light"] .tab.active {
+    background: rgba(255, 255, 255, 0.85);
+}
+
+[data-theme="light"] .profile-input,
+[data-theme="light"] .add-app-input,
+[data-theme="light"] .mcp-link-input {
+    background: var(--surface-elevated);
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+
+[data-theme="light"] .profile-input:focus,
+[data-theme="light"] .add-app-input:focus {
+    border-color: rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="light"] .retention-select {
+    background: var(--surface-elevated);
+    border-color: var(--border);
+    color: var(--text-secondary);
+}
+
+[data-theme="light"] .memory-preview-item {
+    background: var(--surface-elevated);
+}
+
+[data-theme="light"] .blocklist-item button:hover {
+    background: var(--surface-elevated);
+    color: var(--text-secondary);
+}
+
+[data-theme="light"] .mcp-pill.running {
+    background: var(--surface-elevated);
+    border-color: var(--border);
+}
+
+[data-theme="light"] .btn-primary-sm {
+    border-color: rgba(0, 0, 0, 0.15);
+    background: linear-gradient(180deg, rgba(50, 50, 50, 0.9), rgba(30, 30, 30, 0.9));
+    color: #ffffff;
+}
+
+[data-theme="light"] .btn-liquid-glass {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(240, 240, 242, 0.9));
+    color: var(--text-primary);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .btn-liquid-glass:hover:not(:disabled) {
+    background: linear-gradient(180deg, rgba(245, 245, 247, 0.95), rgba(230, 230, 235, 0.95));
+    border-color: rgba(0, 0, 0, 0.18);
+}

@@ -373,3 +373,100 @@
     width: auto;
   }
 }
+
+/* ===== Light Theme ===== */
+[data-theme="light"] .search-bar {
+  background:
+    radial-gradient(140% 140% at 50% -20%, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0) 52%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(240, 240, 242, 0.96));
+  border-color: rgba(0, 0, 0, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .search-bar:focus-within {
+  border-color: rgba(0, 0, 0, 0.3);
+  background:
+    radial-gradient(140% 140% at 50% -20%, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 52%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(245, 245, 247, 0.97));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 0 0 1px rgba(0, 0, 0, 0.08),
+    0 6px 16px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .search-icon {
+  color: rgba(100, 100, 110, 0.7);
+}
+
+[data-theme="light"] .search-input::placeholder {
+  color: rgba(100, 100, 110, 0.6);
+}
+
+[data-theme="light"] .search-placeholder-overlay {
+  color: rgba(100, 100, 110, 0.6);
+}
+
+[data-theme="light"] .search-shortcut {
+  border-color: rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.03);
+  color: rgba(100, 100, 110, 0.7);
+}
+
+[data-theme="light"] .search-clear {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: rgba(100, 100, 110, 0.8);
+}
+
+[data-theme="light"] .search-clear:hover:not(:disabled) {
+  color: #1a1a1a;
+  border-color: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .filter-select {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: var(--text-secondary);
+}
+
+[data-theme="light"] .filter-select:hover:not(:disabled) {
+  border-color: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .filter-select.active {
+  color: var(--text-primary);
+  border-color: rgba(0, 0, 0, 0.25);
+  background: rgba(240, 240, 242, 0.95);
+}
+
+[data-theme="light"] .filter-icon,
+[data-theme="light"] .select-arrow {
+  color: rgba(100, 100, 110, 0.6);
+}
+
+[data-theme="light"] .voice-btn {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(240, 240, 242, 0.9));
+  color: var(--text-secondary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+[data-theme="light"] .voice-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .summary-bubble {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(245, 245, 247, 0.95));
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .voice-status {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}

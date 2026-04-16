@@ -236,3 +236,17 @@
 .btn-done:hover {
     filter: brightness(1.1);
 }
+
+/* ===== Light Theme ===== */
+[data-theme="light"] .agent-overlay {
+    background: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .agent-message .value {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .agent-footer {
+    border-top-color: rgba(0, 0, 0, 0.08);
+}
