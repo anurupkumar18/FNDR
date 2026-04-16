@@ -578,15 +578,9 @@ pub async fn list_memory_cards(
         .map_err(|e| e.to_string())?;
 
     let filtered = strip_internal_fndr_results(results);
-    let mut cards = MemoryCardSynthesizer::from_results_with_policy(
-        None,
-        "",
-        &filtered,
-        limit,
-        0,
-        Duration::from_millis(1),
-    )
-    .await;
+    // Browsing should always feel instant. Use deterministic card construction
+    // here to avoid expensive grouping/synthesis stalls on large "All Apps" sets.
+    let mut cards = MemoryCardSynthesizer::deterministic_from_results("", &filtered, limit);
     cards.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     refine_memory_card_titles(&mut cards);
     Ok(cards)
