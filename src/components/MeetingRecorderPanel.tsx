@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
     MeetingRecorderStatus,
     MeetingSession,
@@ -24,25 +24,17 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
     const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<MeetingTranscript | null>(null);
     const [titleInput, setTitleInput] = useState("");
-    const [loading, setLoading] = useState(false);
     const [starting, setStarting] = useState(false);
     const [stopping, setStopping] = useState(false);
-    const [deletingId, setDeletingId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const selectedMeetingIdRef = useRef<string | null>(null);
-
-    useEffect(() => {
-        selectedMeetingIdRef.current = selectedMeetingId;
-    }, [selectedMeetingId]);
 
     const selectedMeeting = useMemo(
-        () => meetings.find((meeting) => meeting.id === selectedMeetingId) ?? null,
+        () => meetings.find((m) => m.id === selectedMeetingId) ?? null,
         [meetings, selectedMeetingId]
     );
 
     const refresh = async (preferCurrent = true) => {
         if (!isVisible) return;
-        setLoading(true);
         try {
             const [meetingStatus, meetingList] = await Promise.all([
                 getMeetingStatus(),
@@ -52,62 +44,42 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
             setStatus(meetingStatus);
             setMeetings(meetingList);
 
-            const currentSelection = selectedMeetingIdRef.current;
-            const selectionStillExists = currentSelection
-                ? meetingList.some((meeting) => meeting.id === currentSelection)
-                : false;
-            const nextId = selectionStillExists
-                ? currentSelection
-                : preferCurrent
-                    ? meetingStatus.current_meeting_id ?? meetingList[0]?.id ?? null
-                    : meetingList[0]?.id ?? null;
-
-            selectedMeetingIdRef.current = nextId;
-            setSelectedMeetingId(nextId);
-            if (nextId) {
-                const data = await getMeetingTranscript(nextId);
-                setTranscript(data);
-            } else {
-                setTranscript(null);
+            if (preferCurrent) {
+                const nextId = meetingStatus.current_meeting_id ?? meetingList[0]?.id ?? null;
+                setSelectedMeetingId(nextId);
+                if (nextId) {
+                    const data = await getMeetingTranscript(nextId);
+                    setTranscript(data);
+                }
+            } else if (selectedMeetingId) {
+                const stillExists = meetingList.some(m => m.id === selectedMeetingId);
+                if (!stillExists) {
+                    setSelectedMeetingId(meetingList[0]?.id ?? null);
+                    if (meetingList[0]) {
+                        const data = await getMeetingTranscript(meetingList[0].id);
+                        setTranscript(data);
+                    }
+                }
             }
             setError(null);
         } catch (err) {
             setError(String(err));
-        } finally {
-            setLoading(false);
         }
     };
 
     useEffect(() => {
         if (!isVisible) return;
+        refresh(true);
 
-        let mounted = true;
-        let unlisten: (() => void) | null = null;
-
-        const run = async () => {
-            if (!mounted) return;
-            await refresh(true);
-        };
-
-        const subscribe = async () => {
-            try {
-                unlisten = await onMeetingStatus((nextStatus) => {
-                    if (!mounted) return;
-                    setStatus(nextStatus);
-                });
-            } catch {
-                // Ignore listener errors; manual refresh and actions still work.
+        const unlistenPromise = onMeetingStatus((nextStatus) => {
+            setStatus(nextStatus);
+            if (!nextStatus.is_recording) {
+                refresh(false);
             }
-        };
-
-        void run();
-        void subscribe();
+        });
 
         return () => {
-            mounted = false;
-            if (unlisten) {
-                unlisten();
-            }
+             unlistenPromise.then(unlisten => unlisten());
         };
     }, [isVisible]);
 
@@ -142,7 +114,6 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
     };
 
     const handleSelectMeeting = async (meetingId: string) => {
-        selectedMeetingIdRef.current = meetingId;
         setSelectedMeetingId(meetingId);
         try {
             const data = await getMeetingTranscript(meetingId);
@@ -152,152 +123,155 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
         }
     };
 
-    const handleDeleteMeeting = async (meetingId: string) => {
-        if (deletingId) return;
-        setDeletingId(meetingId);
-        setError(null);
+    const handleDelete = async (meetingId: string) => {
         try {
             await deleteMeeting(meetingId);
             await refresh(false);
         } catch (err) {
             setError(String(err));
-        } finally {
-            setDeletingId(null);
         }
     };
 
     if (!isVisible) return null;
 
     return (
-        <div className="meeting-panel">
+        <div className="meeting-panel simplified">
             <header className="meeting-panel-header">
                 <div className="meeting-headline">
-                    <h2>Meetings</h2>
-                    <p>Manual recording only. Start, stop, and review transcripts.</p>
+                    <h2>Meeting Intelligence</h2>
+                    <p>Audio recording and post-meeting analysis.</p>
                 </div>
-                <div className="meeting-header-actions">
-                    <button className="ui-action-btn meeting-ghost-btn" onClick={() => void refresh(true)} disabled={loading}>
-                        {loading ? "Refreshing..." : "Refresh"}
-                    </button>
-                    <button className="ui-action-btn meeting-close-btn" onClick={onClose}>
-                        ✕ Close
-                    </button>
-                </div>
+                <button className="ui-action-btn meeting-btn meeting-close-btn" onClick={onClose}>
+                    ✕ Close
+                </button>
             </header>
 
-            <div className="meeting-panel-body">
-                <aside className="meeting-sidebar">
-                    <section className="meeting-card meeting-card-primary">
-                        <div className="meeting-live-row">
-                            <div>
-                                <span className={`meeting-dot ${status?.is_recording ? "live" : "idle"}`} />
-                                <strong>{status?.is_recording ? "Recording in progress" : "Ready to record"}</strong>
-                            </div>
-                            {status?.is_recording && (
-                                <button className="ui-action-btn meeting-ghost-btn" onClick={() => void handleStop()} disabled={stopping}>
-                                    {stopping ? "Stopping..." : "Stop"}
-                                </button>
-                            )}
-                        </div>
-                        <p className="meeting-subtle">
-                            {status?.is_recording
-                                ? `Recording: ${status.current_title ?? "Meeting"}`
-                                : "Click Start to begin recording your current meeting audio."}
-                        </p>
-                        <div className="meeting-start-row">
+            <div className="meeting-panel-content">
+                {/* 1. Main Recording Control */}
+                <section className="meeting-main-ctrl">
+                    {!status?.is_recording && !stopping && (
+                        <div className="meeting-start-form">
                             <input
                                 className="meeting-title-input"
                                 value={titleInput}
-                                onChange={(event) => setTitleInput(event.target.value)}
-                                placeholder="Meeting title (optional)"
-                                disabled={Boolean(status?.is_recording)}
+                                onChange={(e) => setTitleInput(e.target.value)}
+                                placeholder="Enter meeting title..."
                             />
-                            <button
-                                className="ui-action-btn meeting-primary-btn"
-                                onClick={() => void handleStart()}
-                                disabled={Boolean(status?.is_recording) || starting || !status?.ffmpeg_available}
+                            <button 
+                                className="ui-action-btn meeting-btn meeting-hero-btn"
+                                onClick={handleStart}
+                                disabled={starting || !status?.ffmpeg_available}
                             >
-                                {starting ? "Starting..." : "Start"}
+                                {starting ? "Starting..." : "● START RECORDING"}
                             </button>
                         </div>
-                        <p className="meeting-subtle">
-                            Segments: {status?.segment_count ?? 0} • Audio: {status?.ffmpeg_available ? "ready" : "missing"}
-                        </p>
-                    </section>
+                    )}
 
-                    <section className="meeting-card">
-                        <h3>Recent Meetings</h3>
-                        <div className="meeting-list">
-                            {meetings.length === 0 && <p className="meeting-empty">No meetings captured yet.</p>}
-                            {meetings.map((meeting) => (
-                                <div key={meeting.id} className="meeting-list-row">
-                                    <button
-                                        className={`meeting-list-item ${selectedMeetingId === meeting.id ? "active" : ""}`}
-                                        onClick={() => void handleSelectMeeting(meeting.id)}
-                                    >
-                                        <span className="meeting-title">{meeting.title}</span>
-                                        <span className="meeting-sub">
-                                            {new Date(meeting.start_timestamp).toLocaleString()} • {meeting.segment_count} segments
-                                        </span>
-                                    </button>
-                                    <button
-                                        className="ui-action-btn meeting-delete-btn"
-                                        onClick={() => void handleDeleteMeeting(meeting.id)}
-                                        disabled={deletingId === meeting.id}
-                                        title="Delete this meeting"
-                                        aria-label="Delete meeting"
-                                    >
-                                        {deletingId === meeting.id ? "Deleting..." : "Delete"}
-                                    </button>
+                    {status?.is_recording && (
+                        <div className="meeting-recording-state">
+                            <div className="recording-pulse">
+                                <span className="pulse-dot" />
+                                <span>Recording: {status.current_title}</span>
+                            </div>
+                            <button className="ui-action-btn meeting-btn meeting-hero-btn" onClick={handleStop} disabled={stopping}>
+                                {stopping ? "Analyzing..." : "■ STOP & ANALYZE"}
+                            </button>
+                        </div>
+                    )}
+
+                    {stopping && (
+                        <div className="meeting-analyzing-state">
+                            <div className="spinner" />
+                            <p>Transcribing and extracting action items...</p>
+                        </div>
+                    )}
+                </section>
+
+                {/* 2. Breakdown Results */}
+                {selectedMeeting && !status?.is_recording && !stopping && (
+                    <section className="meeting-breakdown">
+                        <div className="breakdown-header">
+                            <h3>{selectedMeeting.title}</h3>
+                            <span className="breakdown-meta">
+                                {new Date(selectedMeeting.start_timestamp).toLocaleDateString()} • {Math.round(selectedMeeting.duration_seconds / 60)} min
+                            </span>
+                            <button
+                                className="ui-action-btn meeting-btn delete-session-btn"
+                                onClick={() => handleDelete(selectedMeeting.id)}
+                            >
+                                Delete
+                            </button>
+                        </div>
+
+                        {selectedMeeting.breakdown ? (
+                            <div className="breakdown-grids">
+                                {selectedMeeting.breakdown.summary && (
+                                    <div className="breakdown-item summary-box">
+                                        <h4>Summary</h4>
+                                        <p>{selectedMeeting.breakdown.summary}</p>
+                                    </div>
+                                )}
+                                
+                                <div className="breakdown-grid-row">
+                                    <div className="breakdown-item todo-box">
+                                        <h4>To-dos</h4>
+                                        {selectedMeeting.breakdown.todos.length > 0 ? (
+                                            <ul>{selectedMeeting.breakdown.todos.map((item, i) => <li key={i}>{item}</li>)}</ul>
+                                        ) : <p className="empty-sub">No tasks detected.</p>}
+                                    </div>
+                                    <div className="breakdown-item reminder-box">
+                                        <h4>Reminders</h4>
+                                        {selectedMeeting.breakdown.reminders.length > 0 ? (
+                                            <ul>{selectedMeeting.breakdown.reminders.map((item, i) => <li key={i}>{item}</li>)}</ul>
+                                        ) : <p className="empty-sub">No reminders detected.</p>}
+                                    </div>
+                                    <div className="breakdown-item followup-box">
+                                        <h4>Follow-ups</h4>
+                                        {selectedMeeting.breakdown.followups.length > 0 ? (
+                                            <ul>{selectedMeeting.breakdown.followups.map((item, i) => <li key={i}>{item}</li>)}</ul>
+                                        ) : <p className="empty-sub">No follow-ups detected.</p>}
+                                    </div>
                                 </div>
-                            ))}
-                        </div>
-                    </section>
-                </aside>
-
-                <section className="meeting-main">
-                    <div className="meeting-main-header">
-                        <div>
-                            <h3>{selectedMeeting?.title ?? "Transcript"}</h3>
-                            <p>
-                                {selectedMeeting
-                                    ? `${selectedMeeting.segment_count} segments • ${formatDuration(selectedMeeting.duration_seconds)}`
-                                    : "Select a meeting"}
-                            </p>
-                        </div>
-                    </div>
-
-                    <div className="meeting-transcript">
-                        {!transcript && <p className="meeting-empty">No transcript selected.</p>}
-                        {transcript && transcript.segments.length === 0 && (
-                            <p className="meeting-empty">No transcript segments yet for this meeting.</p>
+                            </div>
+                        ) : (
+                            <p className="empty-results">No analysis results yet. Process transcript if needed.</p>
                         )}
-                        {transcript?.segments.map((segment) => (
-                            <article key={segment.id} className="segment-row">
-                                <div className="segment-time">
-                                    {formatTime(segment.start_timestamp)} - {formatTime(segment.end_timestamp)}
-                                </div>
-                                <div className="segment-text">{segment.text || "(empty segment)"}</div>
-                            </article>
+
+                        <details className="raw-transcript-details">
+                            <summary>View Full Transcript</summary>
+                            <div className="transcript-text">
+                                {transcript?.full_text || "Transcript not loaded."}
+                            </div>
+                        </details>
+                    </section>
+                )}
+
+                {!selectedMeeting && !status?.is_recording && !stopping && (
+                    <div className="meeting-empty-state">
+                        <p>No meeting active. Start recording to capture one.</p>
+                    </div>
+                )}
+            </div>
+
+            {/* 3. Minimalist History Row */}
+            {meetings.length > 1 && !status?.is_recording && !stopping && (
+                <footer className="meeting-history-footer">
+                    <span>Recent:</span>
+                    <div className="history-pills">
+                        {meetings.slice(0, 5).map(m => (
+                            <button 
+                                key={m.id} 
+                                className={`ui-action-btn meeting-btn history-pill ${selectedMeetingId === m.id ? "active" : ""}`}
+                                onClick={() => handleSelectMeeting(m.id)}
+                            >
+                                {m.title}
+                            </button>
                         ))}
                     </div>
-                </section>
-            </div>
+                </footer>
+            )}
 
             {error && <div className="meeting-error">{error}</div>}
         </div>
     );
-}
-
-function formatTime(ts: number): string {
-    return new Date(ts).toLocaleTimeString(undefined, {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-    });
-}
-
-function formatDuration(durationSeconds: number): string {
-    const minutes = Math.max(1, Math.round(durationSeconds / 60));
-    return `${minutes} min`;
 }

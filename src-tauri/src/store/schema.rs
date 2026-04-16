@@ -186,3 +186,105 @@ pub struct DaypartCount {
     pub daypart: String,
     pub count: usize,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TaskType {
+    Todo,
+    Reminder,
+    Followup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Task {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub source_app: String,
+    pub source_memory_id: Option<String>,
+    pub created_at: i64,
+    pub due_date: Option<i64>,
+    pub is_completed: bool,
+    pub is_dismissed: bool,
+    pub task_type: TaskType,
+    #[serde(default)]
+    pub linked_urls: Vec<String>,
+    #[serde(default)]
+    pub linked_memory_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MeetingBreakdown {
+    pub summary: String,
+    pub todos: Vec<String>,
+    pub reminders: Vec<String>,
+    pub followups: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeetingSession {
+    pub id: String,
+    pub title: String,
+    pub participants: Vec<String>,
+    pub model: String,
+    pub status: String,
+    pub start_timestamp: i64,
+    pub end_timestamp: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub segment_count: usize,
+    pub duration_seconds: u64,
+    pub meeting_dir: String,
+    pub audio_dir: String,
+    pub transcript_path: Option<String>,
+    pub breakdown: Option<MeetingBreakdown>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeetingSegment {
+    pub id: String,
+    pub meeting_id: String,
+    pub index: u32,
+    pub start_timestamp: i64,
+    pub end_timestamp: i64,
+    pub text: String,
+    pub audio_chunk_path: String,
+    pub model: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NodeType {
+    MemoryChunk,
+    Entity,
+    Task,
+    Url,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EdgeType {
+    #[serde(rename = "PART_OF_SESSION")]
+    PartOfSession,
+    #[serde(rename = "REFERENCE_FOR_TASK")]
+    ReferenceForTask,
+    #[serde(rename = "OCCURRED_AT")]
+    OccurredAt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphNode {
+    pub id: String,
+    pub node_type: NodeType,
+    pub label: String,
+    pub created_at: i64,
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphEdge {
+    pub id: String,
+    pub source: String,
+    pub target: String,
+    pub edge_type: EdgeType,
+    pub timestamp: i64,
+    pub metadata: serde_json::Value,
+}

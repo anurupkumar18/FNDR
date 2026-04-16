@@ -316,7 +316,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         };
         batch.push(record);
         if let Some(last) = batch.last() {
-            if let Err(err) = state.graph.ingest_memory(last) {
+            if let Err(err) = state.graph.ingest_memory(last).await {
                 tracing::warn!("Failed to ingest memory into graph: {}", err);
             }
         }

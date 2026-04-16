@@ -15,6 +15,7 @@ Output JSON:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import socket
@@ -27,6 +28,9 @@ from typing import Any, Dict, List
 _MODEL = None
 _MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 _SOCKET_PATH = os.path.join(tempfile.gettempdir(), "fndr_minilm_embedder.sock")
+_LOCK_PATH = os.path.join(tempfile.gettempdir(), "fndr_minilm_embedder.lock")
+_REQUEST_TIMEOUT_SEC = 25.0
+_IDLE_TIMEOUT_SEC = float(os.environ.get("FNDR_EMBEDDER_IDLE_TIMEOUT_SEC", "120"))
 
 
 def _load_model():
@@ -76,7 +80,6 @@ def _read_json_stdin() -> Dict[str, Any]:
 
 
 def cmd_ping() -> int:
-    _load_model()
     sys.stdout.write("ok\n")
     return 0
 
@@ -93,7 +96,7 @@ def cmd_embed() -> int:
     return 0
 
 
-def _request_daemon(payload: Dict[str, Any], timeout_sec: float = 2.5) -> Dict[str, Any]:
+def _request_daemon(payload: Dict[str, Any], timeout_sec: float = _REQUEST_TIMEOUT_SEC) -> Dict[str, Any]:
     raw = json.dumps(payload).encode("utf-8") + b"\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.settimeout(timeout_sec)
@@ -115,6 +118,18 @@ def _request_daemon(payload: Dict[str, Any], timeout_sec: float = 2.5) -> Dict[s
     return json.loads(line.decode("utf-8"))
 
 
+def _daemon_running() -> bool:
+    lock_fd = os.open(_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        os.close(lock_fd)
+
+
 def _spawn_daemon() -> None:
     subprocess.Popen(
         [sys.executable, os.path.abspath(__file__), "--serve-daemon"],
@@ -126,6 +141,12 @@ def _spawn_daemon() -> None:
     )
 
 
+def _spawn_daemon_if_needed() -> None:
+    if _daemon_running():
+        return
+    _spawn_daemon()
+
+
 def cmd_embed_via_daemon() -> int:
     payload = _read_json_stdin()
     texts = payload.get("texts", [])
@@ -134,22 +155,20 @@ def cmd_embed_via_daemon() -> int:
     normalized = [str(item) for item in texts]
     request = {"texts": normalized}
 
-    # Fast path: daemon already available.
-    try:
-        response = _request_daemon(request)
-    except Exception:
-        _spawn_daemon()
-        # Retry for cold start.
-        last_exc: Exception | None = None
-        for _ in range(30):
-            try:
-                response = _request_daemon(request, timeout_sec=4.0)
-                break
-            except Exception as exc:  # pragma: no cover - startup race
-                last_exc = exc
-                time.sleep(0.1)
-        else:
-            raise RuntimeError(f"Embedding daemon unavailable: {last_exc}")
+    last_exc: Exception | None = None
+    for attempt in range(45):
+        if attempt in (0, 1, 10):
+            _spawn_daemon_if_needed()
+        try:
+            response = _request_daemon(request)
+            break
+        except Exception as exc:  # pragma: no cover - runtime race/retry path
+            last_exc = exc
+            if attempt in (2, 8, 20):
+                _spawn_daemon_if_needed()
+            time.sleep(0.1)
+    else:
+        raise RuntimeError(f"Embedding daemon unavailable: {last_exc}")
 
     if "error" in response:
         raise RuntimeError(str(response["error"]))
@@ -161,41 +180,91 @@ def cmd_embed_via_daemon() -> int:
     return 0
 
 
-def cmd_serve_daemon() -> int:
-    # Load once; keep model hot for all future requests.
-    _load_model()
+def _acquire_singleton_lock() -> int | None:
+    lock_fd = os.open(_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        if os.path.exists(_SOCKET_PATH):
-            os.unlink(_SOCKET_PATH)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.ftruncate(lock_fd, 0)
+        os.write(lock_fd, str(os.getpid()).encode("utf-8"))
+        return lock_fd
+    except OSError:
+        os.close(lock_fd)
+        return None
+
+
+def _release_singleton_lock(lock_fd: int) -> None:
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
     except OSError:
         pass
+    os.close(lock_fd)
 
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(_SOCKET_PATH)
-    os.chmod(_SOCKET_PATH, 0o600)
-    server.listen(8)
 
-    while True:
-        conn, _ = server.accept()
-        with conn:
+def cmd_serve_daemon() -> int:
+    # Ensure only one daemon can own the socket and model at a time.
+    lock_fd = _acquire_singleton_lock()
+    if lock_fd is None:
+        return 0
+
+    server: socket.socket | None = None
+    try:
+        # Load once; keep model hot for all future requests.
+        _load_model()
+
+        try:
+            if os.path.exists(_SOCKET_PATH):
+                os.unlink(_SOCKET_PATH)
+        except OSError:
+            pass
+
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(_SOCKET_PATH)
+        os.chmod(_SOCKET_PATH, 0o600)
+        server.listen(8)
+        server.settimeout(1.0)
+        last_activity = time.monotonic()
+
+        while True:
+            if time.monotonic() - last_activity > _IDLE_TIMEOUT_SEC:
+                break
+
             try:
-                data = b""
-                while not data.endswith(b"\n"):
-                    part = conn.recv(8192)
-                    if not part:
-                        break
-                    data += part
+                conn, _ = server.accept()
+            except socket.timeout:
+                continue
 
-                payload = json.loads(data.decode("utf-8").strip() or "{}")
-                texts = payload.get("texts", [])
-                if not isinstance(texts, list):
-                    raise RuntimeError("Field 'texts' must be an array")
-                normalized = [str(item) for item in texts]
-                embeddings = _embed_texts(normalized)
-                response = {"embeddings": embeddings}
-            except Exception as exc:  # pragma: no cover - daemon runtime path
-                response = {"error": str(exc)}
-            conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
+            with conn:
+                try:
+                    data = b""
+                    while not data.endswith(b"\n"):
+                        part = conn.recv(8192)
+                        if not part:
+                            break
+                        data += part
+
+                    payload = json.loads(data.decode("utf-8").strip() or "{}")
+                    if payload.get("ping"):
+                        response = {"ok": True}
+                    else:
+                        texts = payload.get("texts", [])
+                        if not isinstance(texts, list):
+                            raise RuntimeError("Field 'texts' must be an array")
+                        normalized = [str(item) for item in texts]
+                        embeddings = _embed_texts(normalized)
+                        response = {"embeddings": embeddings}
+                    last_activity = time.monotonic()
+                except Exception as exc:  # pragma: no cover - daemon runtime path
+                    response = {"error": str(exc)}
+                conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
+    finally:
+        if server is not None:
+            server.close()
+        try:
+            if os.path.exists(_SOCKET_PATH):
+                os.unlink(_SOCKET_PATH)
+        except OSError:
+            pass
+        _release_singleton_lock(lock_fd)
     return 0
 
 

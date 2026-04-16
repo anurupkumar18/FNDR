@@ -1,21 +1,18 @@
 //! Tauri command handlers
 
 use crate::embed::Embedder;
-use crate::graph::{GraphEdge, GraphNode, NodeType};
 use crate::privacy::Blocklist;
+use crate::store::{GraphEdge, GraphNode, NodeType};
 
 use crate::mcp::{self, McpServerStatus};
-use crate::meeting::{
-    self, MeetingRecorderStatus, MeetingSearchResult, MeetingSession, MeetingTranscript,
-};
+use crate::meeting::{self, MeetingRecorderStatus, MeetingTranscript};
 
 use crate::search::{HybridSearcher, MemoryCard, MemoryCardSynthesizer};
 use crate::speech;
-use crate::store::{MemoryRecord, SearchResult, Stats};
+use crate::store::{MeetingSession, SearchResult, Stats, Task, TaskType};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Manager, State};
@@ -482,7 +479,6 @@ pub async fn search_memory_cards(
     let mut raw_results =
         HybridSearcher::fuse_and_rerank(&query, &semantic_results, &keyword_results, RERANK_LIMIT);
     raw_results = strip_internal_fndr_results(raw_results);
-    raw_results = strip_fallback_results(raw_results);
     raw_results.truncate(RERANK_LIMIT);
     tracing::info!(count = raw_results.len(), "search_memory_cards:rerank:done");
     if raw_results.is_empty() {
@@ -894,7 +890,7 @@ pub async fn stop_meeting_recording() -> Result<MeetingRecorderStatus, String> {
 /// List all local meeting sessions
 #[tauri::command]
 pub async fn list_meetings() -> Result<Vec<MeetingSession>, String> {
-    meeting::list_meetings()
+    meeting::list_meetings().await
 }
 
 /// Delete a local meeting session and its persisted artifacts
@@ -907,15 +903,6 @@ pub async fn delete_meeting(meeting_id: String) -> Result<bool, String> {
 #[tauri::command]
 pub async fn get_meeting_transcript(meeting_id: String) -> Result<MeetingTranscript, String> {
     meeting::get_meeting_transcript(&meeting_id).await
-}
-
-/// Search across meeting transcripts
-#[tauri::command]
-pub async fn search_meeting_transcripts(
-    query: String,
-    limit: Option<usize>,
-) -> Result<Vec<MeetingSearchResult>, String> {
-    meeting::search_meeting_transcripts(&query, limit.unwrap_or(20))
 }
 
 /// Transcribe a short voice input clip for voice search and voice control
@@ -999,7 +986,7 @@ pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), Stri
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
     // 2. Clear knowledge graph
-    if let Err(e) = state.inner().graph.clear_all() {
+    if let Err(e) = state.inner().graph.clear_all().await {
         tracing::warn!("Failed to clear graph store during delete_all: {}", e);
     }
 
@@ -1012,9 +999,6 @@ pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), Stri
             }
         }
     }
-
-    // 4. Clear task store
-    let _ = get_task_store().lock().clear_all();
 
     tracing::info!("All FNDR data deleted");
     Ok(())
@@ -1077,337 +1061,23 @@ pub async fn delete_older_than(
 
 // ========== Task Commands ==========
 
-use crate::tasks::{parse_tasks_from_llm_response, Task, TaskStore, TaskType};
-use parking_lot::Mutex;
-
-// Global task store (singleton pattern for now)
-static TASK_STORE: OnceLock<Mutex<TaskStore>> = OnceLock::new();
-
-fn default_task_store_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("fndr")
-}
-
-fn build_task_store(data_dir: &Path) -> Mutex<TaskStore> {
-    let store = TaskStore::new(data_dir)
-        .or_else(|_| TaskStore::new(&default_task_store_dir()))
-        .or_else(|_| TaskStore::new(Path::new(".")))
-        .unwrap_or_else(|err| panic!("Failed to initialize task store: {err}"));
-    Mutex::new(store)
-}
-
-pub fn init_task_store(data_dir: &Path) {
-    let _ = TASK_STORE.get_or_init(|| build_task_store(data_dir));
-}
-
-fn get_task_store() -> &'static Mutex<TaskStore> {
-    TASK_STORE.get_or_init(|| build_task_store(&default_task_store_dir()))
-}
-
-fn task_type_priority(task_type: &TaskType) -> u8 {
-    match task_type {
-        TaskType::Reminder => 0,
-        TaskType::Followup => 1,
-        TaskType::Todo => 2,
-    }
-}
-
-fn sort_active_tasks(tasks: &mut [Task]) {
-    tasks.sort_by(|left, right| {
-        let left_priority = task_type_priority(&left.task_type);
-        let right_priority = task_type_priority(&right.task_type);
-        left_priority
-            .cmp(&right_priority)
-            .then(right.created_at.cmp(&left.created_at))
-    });
-}
-
-fn normalize_task_title_for_dedupe(title: &str) -> String {
-    title
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-fn looks_like_reminder_title(title: &str) -> bool {
-    let normalized = title.to_lowercase();
-    [
-        "tomorrow",
-        "today",
-        "tonight",
-        "next week",
-        "next month",
-        "monday",
-        "tuesday",
-        "wednesday",
-        "thursday",
-        "friday",
-        "saturday",
-        "sunday",
-        "am",
-        "pm",
-        "deadline",
-        "due",
-        "before",
-        "by ",
-        "calendar",
-        "remind",
-        "schedule",
-    ]
-    .iter()
-    .any(|keyword| normalized.contains(keyword))
-}
-
-fn looks_like_followup_title(title: &str) -> bool {
-    let normalized = title.to_lowercase();
-    [
-        "follow up",
-        "follow-up",
-        "reply",
-        "respond",
-        "email",
-        "message",
-        "ping",
-        "ask",
-        "check in",
-        "send to",
-        "share with",
-        "confirm with",
-    ]
-    .iter()
-    .any(|keyword| normalized.contains(keyword))
-}
-
-fn rebalance_task_types(mut tasks: Vec<Task>) -> Vec<Task> {
-    for task in &mut tasks {
-        if task.task_type != TaskType::Todo {
-            continue;
-        }
-        if looks_like_reminder_title(&task.title) {
-            task.task_type = TaskType::Reminder;
-        } else if looks_like_followup_title(&task.title) {
-            task.task_type = TaskType::Followup;
-        }
-    }
-
-    let reminder_count = tasks
-        .iter()
-        .filter(|task| task.task_type == TaskType::Reminder)
-        .count();
-    let followup_count = tasks
-        .iter()
-        .filter(|task| task.task_type == TaskType::Followup)
-        .count();
-
-    if reminder_count == 0 {
-        if let Some(task) = tasks
-            .iter_mut()
-            .find(|task| task.task_type == TaskType::Todo)
-        {
-            task.task_type = TaskType::Reminder;
-        }
-    }
-
-    if followup_count == 0 {
-        if let Some(task) = tasks
-            .iter_mut()
-            .find(|task| task.task_type == TaskType::Todo)
-        {
-            task.task_type = TaskType::Followup;
-        }
-    }
-    tasks
-}
-
-fn memory_to_task_line(memory: &MemoryRecord) -> String {
-    let window_title = memory.window_title.trim();
-    let snippet = memory.snippet.trim();
-    format!(
-        "[{}] {} | {} | {}",
-        memory.id, memory.app_name, window_title, snippet
-    )
-}
-
-fn graph_node_app_name(node: &GraphNode) -> Option<&str> {
-    node.metadata
-        .get("app_name")
-        .and_then(|value| value.as_str())
-}
-
-fn graph_node_bundle_id(node: &GraphNode) -> Option<&str> {
-    node.metadata
-        .get("bundle_id")
-        .and_then(|value| value.as_str())
-}
-
-/// Get extracted todos/reminders from recent memories
-#[tauri::command]
-pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, String> {
-    let memories = state
-        .inner()
-        .store
-        .get_recent_memories(TASK_LOOKBACK_HOURS)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let (mut active_tasks, seen_memory_ids) = {
-        let mut task_store = get_task_store().lock();
-        let _ = task_store.cleanup_old_tasks();
-        let active_tasks: Vec<Task> = task_store
-            .get_active_tasks()
-            .iter()
-            .map(|task| (*task).clone())
-            .collect();
-        (active_tasks, task_store.seen_memory_ids())
-    };
-
-    sort_active_tasks(&mut active_tasks);
-    if active_tasks.len() >= TASK_TARGET_ACTIVE || memories.is_empty() {
-        return Ok(active_tasks);
-    }
-
-    let mut sorted_memories = memories
-        .iter()
-        .filter(|memory| !Blocklist::is_internal_app(&memory.app_name, memory.bundle_id.as_deref()))
-        .collect::<Vec<_>>();
-    sorted_memories.sort_by_key(|memory| std::cmp::Reverse(memory.timestamp));
-
-    let unseen_memories: Vec<&MemoryRecord> = sorted_memories
-        .iter()
-        .copied()
-        .filter(|memory| !seen_memory_ids.contains(&memory.id))
-        .collect();
-
-    let extraction_memories: Vec<&MemoryRecord> = if unseen_memories.len() >= 3 {
-        unseen_memories
-    } else {
-        sorted_memories
-    };
-    let extraction_memories = extraction_memories
-        .into_iter()
-        .take(TASK_EXTRACTION_WINDOW)
-        .collect::<Vec<_>>();
-
-    if extraction_memories.is_empty() {
-        return Ok(active_tasks);
-    }
-
-    let combined_text = extraction_memories
-        .iter()
-        .map(|memory| memory_to_task_line(memory))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Extract new todos via LLM
-    let llm_response = match state.inner().ensure_inference_engine().await {
-        Ok(Some(engine)) => engine.extract_todos(&combined_text).await,
-        Ok(None) => String::new(),
-        Err(err) => {
-            tracing::warn!("Failed to lazy-load AI model for todo extraction: {}", err);
-            String::new()
-        }
-    };
-
-    // Parse + rebalance task types so reminders/follow-ups are consistently represented.
-    let mut new_tasks = parse_tasks_from_llm_response(&llm_response, "FNDR");
-    let mut seen_titles = HashSet::new();
-    new_tasks.retain(|task| {
-        let normalized = normalize_task_title_for_dedupe(&task.title);
-        !normalized.is_empty() && seen_titles.insert(normalized)
-    });
-    new_tasks = rebalance_task_types(new_tasks);
-    new_tasks.truncate(TASK_MAX_NEW_PER_REFRESH);
-
-    if new_tasks.is_empty() {
-        return Ok(active_tasks);
-    }
-
-    let mut linked_urls = state
-        .inner()
-        .store
-        .get_recent_urls(5)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    for memory in extraction_memories.iter().rev() {
-        if let Some(url) = memory.url.as_ref() {
-            linked_urls.push(url.clone());
-        }
-        if linked_urls.len() >= 8 {
-            break;
-        }
-    }
-    linked_urls = {
-        let mut seen = HashSet::new();
-        linked_urls
-            .into_iter()
-            .filter(|url| seen.insert(url.clone()))
-            .take(5)
-            .collect()
-    };
-
-    {
-        let mut store = get_task_store().lock();
-        for (index, mut task) in new_tasks.into_iter().enumerate() {
-            let anchor = extraction_memories[index % extraction_memories.len()];
-            task.source_app = anchor.app_name.clone();
-            task.source_memory_id = Some(anchor.id.clone());
-            task.linked_memory_ids = extraction_memories
-                .iter()
-                .skip(index % extraction_memories.len())
-                .take(3)
-                .map(|memory| memory.id.clone())
-                .collect();
-            task.linked_urls = linked_urls.iter().take(3).cloned().collect();
-
-            if let Err(err) = state.inner().graph.link_task(&task) {
-                tracing::warn!("Failed linking task in graph: {}", err);
-            }
-            let _ = store.add_task(task);
-        }
-    }
-
-    let mut refreshed = get_task_store()
-        .lock()
-        .get_active_tasks()
-        .iter()
-        .map(|task| (*task).clone())
-        .collect::<Vec<_>>();
-    sort_active_tasks(&mut refreshed);
-    Ok(refreshed)
-}
-
-/// Create a manual todo/reminder/follow-up task
+/// Add a new todo
 #[tauri::command]
 pub async fn add_todo(
     state: State<'_, Arc<AppState>>,
     title: String,
-    description: Option<String>,
     task_type: Option<String>,
 ) -> Result<Task, String> {
-    let title = title.trim();
-    if title.is_empty() {
-        return Err("Task title cannot be empty".to_string());
-    }
-
-    let parsed_task_type = match task_type
-        .unwrap_or_else(|| "Todo".to_string())
-        .trim()
-        .to_lowercase()
-        .as_str()
-    {
-        "todo" => TaskType::Todo,
-        "reminder" => TaskType::Reminder,
-        "followup" | "follow-up" => TaskType::Followup,
-        other => return Err(format!("Unsupported task type: {other}")),
+    let parsed_task_type = match task_type.as_deref() {
+        Some("Reminder") => TaskType::Reminder,
+        Some("Followup") => TaskType::Followup,
+        _ => TaskType::Todo,
     };
 
     let task = Task {
         id: uuid::Uuid::new_v4().to_string(),
-        title: title.to_string(),
-        description: description.unwrap_or_default().trim().to_string(),
+        title: title.clone(),
+        description: String::new(),
         source_app: "Manual".to_string(),
         source_memory_id: None,
         created_at: chrono::Utc::now().timestamp_millis(),
@@ -1419,45 +1089,54 @@ pub async fn add_todo(
         linked_memory_ids: Vec::new(),
     };
 
-    {
-        let mut store = get_task_store().lock();
-        store
-            .add_task(task.clone())
-            .map_err(|e| format!("Failed to save task: {e}"))?;
-    }
+    let mut tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
+    tasks.push(task.clone());
+    state.store.upsert_tasks(&tasks).await.map_err(|e| e.to_string())?;
 
-    if let Err(err) = state.inner().graph.link_task(&task) {
+    if let Err(err) = state.inner().graph.link_task(&task).await {
         tracing::warn!("Failed linking manual task in graph: {}", err);
     }
 
     Ok(task)
 }
 
-/// Dismiss a task
+/// Get all active todos
 #[tauri::command]
-pub async fn dismiss_todo(task_id: String) -> Result<bool, String> {
-    get_task_store()
-        .lock()
-        .dismiss_task(&task_id)
-        .map_err(|e| e.to_string())
+pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, String> {
+    let tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
+    Ok(tasks.into_iter().filter(|t| !t.is_completed && !t.is_dismissed).collect())
 }
 
-/// Mark a task for CUA execution
+/// Dismiss a task
+#[tauri::command]
+pub async fn dismiss_todo(
+    state: State<'_, Arc<AppState>>,
+    task_id: String
+) -> Result<bool, String> {
+    let mut tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
+    if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
+        task.is_dismissed = true;
+        state.store.upsert_tasks(&tasks).await.map_err(|e| e.to_string())?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Mark a task for execution
 #[tauri::command]
 pub async fn execute_todo(
     state: State<'_, Arc<AppState>>,
     task_id: String,
 ) -> Result<Task, String> {
-    let store = get_task_store().lock();
-    let mut task = store
-        .get_active_tasks()
+    let tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
+    let mut task = tasks
         .into_iter()
         .find(|t| t.id == task_id)
-        .cloned()
         .ok_or_else(|| "Task not found".to_string())?;
 
     if task.linked_urls.is_empty() {
-        task.linked_urls = state.inner().graph.related_urls_for_task(&task.id);
+        task.linked_urls = state.inner().graph.related_urls_for_task(&task.id).await;
     }
 
     Ok(task)
@@ -1483,9 +1162,17 @@ pub struct GraphDataResponse {
     pub edges: Vec<GraphEdge>,
 }
 
+fn graph_node_app_name(node: &GraphNode) -> Option<&str> {
+    node.metadata.get("app_name").and_then(|v: &serde_json::Value| v.as_str())
+}
+
+fn graph_node_bundle_id(node: &GraphNode) -> Option<&str> {
+    node.metadata.get("bundle_id").and_then(|v: &serde_json::Value| v.as_str())
+}
+
 #[tauri::command]
 pub async fn get_graph_data(state: State<'_, Arc<AppState>>) -> Result<GraphDataResponse, String> {
-    let (all_nodes, all_edges) = state.inner().graph.export_for_visualization();
+    let (all_nodes, all_edges) = state.inner().graph.export_for_visualization().await;
 
     let blocked_memory_node_ids: HashSet<String> = all_nodes
         .iter()

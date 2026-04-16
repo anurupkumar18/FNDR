@@ -1,10 +1,36 @@
+# Dependencies
 node_modules/
 target/
-dist/
-*.gguf
-memories.json
-.DS_Store
-.env
-*.log
 src-tauri/target/
+dist/
+
+# AI Models (large binaries)
+*.gguf
 src-tauri/models/*.gguf
+
+# User Data & Storage (CRITICAL: MUST NOT BE COMMITTED)
+*.json
+*.json.migrated
+*.lancedb/
+*.db/
+*.lance/
+data/
+meetings/
+*.wav
+*.mp3
+*.webm
+*.transcript.md
+
+# Environment & Config
+.env
+.env.*
+!.env.example
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+*.log
+
+# Migration artifacts
+*.migrated

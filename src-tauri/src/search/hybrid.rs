@@ -633,7 +633,7 @@ fn apply_relevance_gate(
         } else {
             0.0
         };
-    let effective_absolute_floor = absolute_floor.min((top_score * 0.90).max(0.12));
+    let effective_absolute_floor = absolute_floor.min((top_score * 0.90).max(0.01));
     let relative_floor = top_score * RELATIVE_RELEVANCE_FLOOR;
     let min_coverage = if profile.primary_terms.len() >= 4 {
         0.34

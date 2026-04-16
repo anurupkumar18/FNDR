@@ -94,7 +94,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
         setCreating(true);
         setError(null);
         try {
-            const created = await addTodo(title, "", newType);
+            const created = await addTodo(title, newType);
             setTasks((prev) => [created, ...prev]);
             setNewTitle("");
             setActiveStage(created.task_type);

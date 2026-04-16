@@ -4,23 +4,30 @@
 //! All methods that touch LanceDB are async.
 
 use super::schema::{
-    AppCount, DayCount, DaypartCount, DomainCount, HourCount, MemoryRecord, SearchResult, Stats,
+    AppCount, DayCount, DaypartCount, DomainCount, EdgeType, GraphEdge, GraphNode, HourCount,
+    MemoryRecord, MeetingSegment, MeetingSession, NodeType, SearchResult, Stats, Task, TaskType,
     WeekdayCount,
 };
 use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, Int64Array, RecordBatch, RecordBatchIterator,
-    RecordBatchReader, StringArray,
+    builder::{Int64Builder, StringBuilder},
+    Array, BooleanArray, FixedSizeListArray, Float32Array, Int64Array, RecordBatch,
+    RecordBatchIterator, RecordBatchReader, StringArray, UInt32Array,
 };
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::table::NewColumnTransform;
+use lancedb::table::{AddDataMode, NewColumnTransform};
 use lancedb::{Connection, Table};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const TABLE_NAME: &str = "memories";
+pub const MEMORIES_TABLE: &str = "memories";
+pub const TASKS_TABLE: &str = "tasks";
+pub const MEETINGS_TABLE: &str = "meetings";
+pub const SEGMENTS_TABLE: &str = "segments";
+pub const NODES_TABLE: &str = "knowledge_nodes";
+pub const EDGES_TABLE: &str = "knowledge_edges";
 const TEXT_EMBED_DIM: i32 = 384;
 const IMAGE_EMBED_DIM: i32 = 512;
 
@@ -28,6 +35,11 @@ const IMAGE_EMBED_DIM: i32 = 512;
 pub struct Store {
     data_dir: PathBuf,
     table: Table,
+    tasks_table: Table,
+    meetings_table: Table,
+    segments_table: Table,
+    nodes_table: Table,
+    edges_table: Table,
 }
 
 impl Store {
@@ -46,15 +58,184 @@ impl Store {
             .enable_all()
             .build()?;
 
-        let table = rt.block_on(open_or_create_table(&db_path))?;
-
-        // Migrate from legacy memories.json if present.
-        let json_path = data_dir.join("memories.json");
-        if json_path.exists() {
-            rt.block_on(migrate_from_json(&table, &json_path));
+        let (table, tasks_table, meetings_table, segments_table, nodes_table, edges_table) =
+            rt.block_on(open_all_tables(&db_path))?;
+ 
+        // Migrate legacy storages if present.
+        let memories_json = data_dir.join("memories.json");
+        if memories_json.exists() {
+            rt.block_on(migrate_from_json(&table, &memories_json));
         }
+ 
+        let tasks_json = data_dir.join("tasks.json");
+        if tasks_json.exists() {
+            rt.block_on(migrate_tasks_from_json(&tasks_table, &tasks_json));
+        }
+ 
+        let meetings_json = data_dir.join("meetings/meetings.json");
+        if meetings_json.exists() {
+            rt.block_on(migrate_meetings_from_json(&meetings_table, &meetings_json));
+        }
+ 
+        let segments_json = data_dir.join("meetings/segments.json");
+        if segments_json.exists() {
+            rt.block_on(migrate_segments_from_json(&segments_table, &segments_json));
+        }
+ 
+        let graph_json = data_dir.join("memory_graph.json");
+        if graph_json.exists() {
+            rt.block_on(migrate_graph_from_json(
+                &nodes_table,
+                &edges_table,
+                &graph_json,
+            ));
+        }
+ 
+        Ok(Self {
+            data_dir,
+            table,
+            tasks_table,
+            meetings_table,
+            segments_table,
+            nodes_table,
+            edges_table,
+        })
+    }
 
-        Ok(Self { data_dir, table })
+    pub async fn upsert_tasks(&self, tasks: &[Task]) -> Result<(), Box<dyn std::error::Error>> {
+        let batch = task_to_batch(tasks)?;
+        let schema = Arc::new(task_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.tasks_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Overwrite)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_tasks(&self) -> Result<Vec<Task>, Box<dyn std::error::Error>> {
+        let batches = self.tasks_table.query().execute().await?.try_collect::<Vec<_>>().await?;
+        let mut results = Vec::new();
+        for b in batches {
+            results.extend(batch_to_tasks(&b));
+        }
+        Ok(results)
+    }
+
+    pub async fn upsert_meetings(&self, meetings: &[MeetingSession]) -> Result<(), Box<dyn std::error::Error>> {
+        let batch = meeting_to_batch(meetings)?;
+        let schema = Arc::new(meeting_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.meetings_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Overwrite)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_segments(&self, segments: &[MeetingSegment]) -> Result<(), Box<dyn std::error::Error>> {
+        let batch = segment_to_batch(segments)?;
+        let schema = Arc::new(segment_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.segments_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Append)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_all_nodes(&self) -> Result<Vec<GraphNode>, Box<dyn std::error::Error>> {
+        let batches = self.nodes_table.query().execute().await?.try_collect::<Vec<_>>().await?;
+        let mut results = Vec::new();
+        for b in batches {
+            results.extend(batch_to_nodes(&b));
+        }
+        Ok(results)
+    }
+
+    pub async fn get_all_edges(&self) -> Result<Vec<GraphEdge>, Box<dyn std::error::Error>> {
+        let batches = self.edges_table.query().execute().await?.try_collect::<Vec<_>>().await?;
+        let mut results = Vec::new();
+        for b in batches {
+            results.extend(batch_to_edges(&b));
+        }
+        Ok(results)
+    }
+
+    pub async fn upsert_nodes(&self, nodes: &[GraphNode]) -> Result<(), Box<dyn std::error::Error>> {
+        let batch = nodes_to_batch(nodes)?;
+        let schema = Arc::new(node_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.nodes_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Overwrite)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_segments_full(
+        &self,
+        segments: &[MeetingSegment],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.segments_table.delete("id IS NOT NULL").await?;
+        if segments.is_empty() {
+            return Ok(());
+        }
+        let batch = segment_to_batch(segments)?;
+        let schema = Arc::new(segment_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.segments_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Overwrite)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_meetings(&self) -> Result<Vec<MeetingSession>, Box<dyn std::error::Error>> {
+        let batches = self
+            .meetings_table
+            .query()
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut meetings = Vec::new();
+        for batch in batches {
+            meetings.extend(batch_to_meetings(&batch));
+        }
+        Ok(meetings)
+    }
+
+    pub async fn list_segments(&self) -> Result<Vec<MeetingSegment>, Box<dyn std::error::Error>> {
+        let batches = self
+            .segments_table
+            .query()
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut segments = Vec::new();
+        for batch in batches {
+            segments.extend(batch_to_segments(&batch));
+        }
+        Ok(segments)
+    }
+
+    pub async fn upsert_edges(&self, edges: &[GraphEdge]) -> Result<(), Box<dyn std::error::Error>> {
+        let batch = edges_to_batch(edges)?;
+        let schema = Arc::new(edge_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.edges_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Overwrite)
+            .execute()
+            .await?;
+        Ok(())
     }
 
     /// Return the data directory (sync — no DB access).
@@ -124,13 +305,13 @@ impl Store {
 
         let mut clauses = Vec::new();
         for term in &terms {
-            let escaped = sql_escape(term);
-            clauses.push(format!("text LIKE '%{escaped}%'"));
-            clauses.push(format!("clean_text LIKE '%{escaped}%'"));
-            clauses.push(format!("snippet LIKE '%{escaped}%'"));
-            clauses.push(format!("window_title LIKE '%{escaped}%'"));
-            clauses.push(format!("app_name LIKE '%{escaped}%'"));
-            clauses.push(format!("url LIKE '%{escaped}%'"));
+            let escaped = sql_escape(&term.to_lowercase());
+            clauses.push(format!("LOWER(text) LIKE '%{escaped}%'"));
+            clauses.push(format!("LOWER(clean_text) LIKE '%{escaped}%'"));
+            clauses.push(format!("LOWER(snippet) LIKE '%{escaped}%'"));
+            clauses.push(format!("LOWER(window_title) LIKE '%{escaped}%'"));
+            clauses.push(format!("LOWER(app_name) LIKE '%{escaped}%'"));
+            clauses.push(format!("LOWER(url) LIKE '%{escaped}%'"));
         }
         let keyword_pred = format!("({})", clauses.join(" OR "));
 
@@ -559,7 +740,7 @@ impl Store {
             busiest_hour,
             hourly_distribution,
             weekday_distribution,
-            daypart_distribution,
+        daypart_distribution,
         })
     }
 
@@ -799,6 +980,90 @@ fn memory_schema() -> Schema {
     ])
 }
 
+fn task_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("title", DataType::Utf8, false),
+        Field::new("description", DataType::Utf8, false),
+        Field::new("source_app", DataType::Utf8, false),
+        Field::new("source_memory_id", DataType::Utf8, true),
+        Field::new("created_at", DataType::Int64, false),
+        Field::new("due_date", DataType::Int64, true),
+        Field::new("is_completed", DataType::Boolean, false),
+        Field::new("is_dismissed", DataType::Boolean, false),
+        Field::new("task_type", DataType::Utf8, false),
+        Field::new(
+            "linked_urls",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "linked_memory_ids",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+    ])
+}
+
+fn meeting_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("title", DataType::Utf8, false),
+        Field::new(
+            "participants",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new("model", DataType::Utf8, false),
+        Field::new("status", DataType::Utf8, false),
+        Field::new("start_timestamp", DataType::Int64, false),
+        Field::new("end_timestamp", DataType::Int64, true),
+        Field::new("created_at", DataType::Int64, false),
+        Field::new("updated_at", DataType::Int64, false),
+        Field::new("segment_count", DataType::Int64, false),
+        Field::new("duration_seconds", DataType::Int64, false),
+        Field::new("meeting_dir", DataType::Utf8, false),
+        Field::new("audio_dir", DataType::Utf8, false),
+        Field::new("transcript_path", DataType::Utf8, true),
+        Field::new("breakdown_json", DataType::Utf8, true),
+    ])
+}
+
+fn segment_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("meeting_id", DataType::Utf8, false),
+        Field::new("index", DataType::UInt32, false),
+        Field::new("start_timestamp", DataType::Int64, false),
+        Field::new("end_timestamp", DataType::Int64, false),
+        Field::new("text", DataType::Utf8, false),
+        Field::new("audio_chunk_path", DataType::Utf8, false),
+        Field::new("model", DataType::Utf8, false),
+        Field::new("created_at", DataType::Int64, false),
+    ])
+}
+
+fn node_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("node_type", DataType::Utf8, false),
+        Field::new("label", DataType::Utf8, false),
+        Field::new("created_at", DataType::Int64, false),
+        Field::new("metadata_json", DataType::Utf8, false),
+    ])
+}
+
+fn edge_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("source", DataType::Utf8, false),
+        Field::new("target", DataType::Utf8, false),
+        Field::new("edge_type", DataType::Utf8, false),
+        Field::new("timestamp", DataType::Int64, false),
+        Field::new("metadata_json", DataType::Utf8, false),
+    ])
+}
+
 // ── Arrow ↔ MemoryRecord conversion ─────────────────────────────────────────
 
 fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError> {
@@ -962,7 +1227,12 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
         .map(|i| {
             let score = dist_col
                 .as_ref()
-                .map(|c| 1.0 / (1.0 + c.value(i))) // distance → similarity
+                .map(|c| {
+                    let d = c.value(i);
+                    // Standard L2 distance → similarity mapping.
+                    // Using a gentle decay handles both normalized and un-normalized distance scales.
+                    1.0 / (1.0 + d * 0.01)
+                })
                 .unwrap_or(1.0);
             SearchResult {
                 id: get_str(&ids, i),
@@ -1013,6 +1283,22 @@ fn f32_col(batch: &RecordBatch, name: &str) -> Option<Float32Array> {
         .cloned()
 }
 
+fn bool_col(batch: &RecordBatch, name: &str) -> Option<BooleanArray> {
+    batch
+        .column_by_name(name)?
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .cloned()
+}
+
+fn u32_col(batch: &RecordBatch, name: &str) -> Option<UInt32Array> {
+    batch
+        .column_by_name(name)?
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .cloned()
+}
+
 fn get_str(col: &Option<StringArray>, i: usize) -> String {
     col.as_ref()
         .map(|c| c.value(i).to_string())
@@ -1046,6 +1332,10 @@ fn get_i64(col: &Option<Int64Array>, i: usize) -> i64 {
 
 fn get_f32(col: &Option<Float32Array>, i: usize) -> f32 {
     col.as_ref().map(|c| c.value(i)).unwrap_or(0.0)
+}
+
+fn get_u32(col: &Option<UInt32Array>, i: usize) -> u32 {
+    col.as_ref().map(|c| c.value(i)).unwrap_or(0)
 }
 
 fn extract_domain(url: &str) -> Option<String> {
@@ -1117,6 +1407,34 @@ fn compute_activity_streaks(
     (current_streak, longest_streak)
 }
 
+fn get_bool(col: &Option<BooleanArray>, i: usize) -> bool {
+    col.as_ref().map(|c| c.value(i)).unwrap_or(false)
+}
+
+fn get_opt_i64(col: &Option<Int64Array>, i: usize) -> Option<i64> {
+    col.as_ref().and_then(|c| {
+        if c.is_null(i) {
+            None
+        } else {
+            Some(c.value(i))
+        }
+    })
+}
+
+fn extract_str_list(col: &Option<arrow_array::ListArray>, i: usize) -> Vec<String> {
+    if let Some(list) = col {
+        if let Some(values) = list
+            .value(i)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .cloned()
+        {
+            return (0..values.len()).map(|j| values.value(j).to_string()).collect();
+        }
+    }
+    Vec::new()
+}
+
 fn extract_f32_list(col: &Option<FixedSizeListArray>, i: usize, dim: usize) -> Vec<f32> {
     if let Some(list) = col {
         if let Some(values) = list
@@ -1131,7 +1449,423 @@ fn extract_f32_list(col: &Option<FixedSizeListArray>, i: usize, dim: usize) -> V
     vec![0.0; dim]
 }
 
-// ── Filter helpers ────────────────────────────────────────────────────────────
+// ── Arrow ↔ Task conversion ──────────────────────────────────────────────────
+
+fn task_to_batch(tasks: &[Task]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(task_schema());
+    let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+    let titles: Vec<&str> = tasks.iter().map(|t| t.title.as_str()).collect();
+    let descriptions: Vec<&str> = tasks.iter().map(|t| t.description.as_str()).collect();
+    let source_apps: Vec<&str> = tasks.iter().map(|t| t.source_app.as_str()).collect();
+    let source_memory_ids: Vec<Option<&str>> =
+        tasks.iter().map(|t| t.source_memory_id.as_deref()).collect();
+    let created_at: Vec<i64> = tasks.iter().map(|t| t.created_at).collect();
+    let due_date: Vec<Option<i64>> = tasks.iter().map(|t| t.due_date).collect();
+    let is_completed: Vec<bool> = tasks.iter().map(|t| t.is_completed).collect();
+    let is_dismissed: Vec<bool> = tasks.iter().map(|t| t.is_dismissed).collect();
+    let task_types: Vec<String> = tasks.iter().map(|t| format!("{:?}", t.task_type)).collect();
+
+    // List columns
+    let mut url_builder = arrow_array::builder::ListBuilder::new(arrow_array::builder::StringBuilder::new());
+    let mut mem_id_builder = arrow_array::builder::ListBuilder::new(arrow_array::builder::StringBuilder::new());
+
+    for t in tasks {
+        for url in &t.linked_urls {
+            url_builder.values().append_value(url);
+        }
+        url_builder.append(true);
+
+        for mid in &t.linked_memory_ids {
+            mem_id_builder.values().append_value(mid);
+        }
+        mem_id_builder.append(true);
+    }
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(titles)),
+            Arc::new(StringArray::from(descriptions)),
+            Arc::new(StringArray::from(source_apps)),
+            Arc::new(StringArray::from(source_memory_ids)),
+            Arc::new(Int64Array::from(created_at)),
+            Arc::new(Int64Array::from(due_date)),
+            Arc::new(arrow_array::BooleanArray::from(is_completed)),
+            Arc::new(arrow_array::BooleanArray::from(is_dismissed)),
+            Arc::new(StringArray::from(task_types)),
+            Arc::new(url_builder.finish()),
+            Arc::new(mem_id_builder.finish()),
+        ],
+    )
+}
+
+fn nodes_to_batch(nodes: &[GraphNode]) -> Result<RecordBatch, Box<dyn std::error::Error>> {
+    let mut ids = StringBuilder::new();
+    let mut types = StringBuilder::new();
+    let mut labels = StringBuilder::new();
+    let mut created = Int64Builder::new();
+    let mut metadata = StringBuilder::new();
+
+    for n in nodes {
+        ids.append_value(&n.id);
+        types.append_value(match n.node_type {
+            NodeType::Entity => "Entity",
+            NodeType::Task => "Task",
+            NodeType::Url => "Url",
+            NodeType::MemoryChunk => "MemoryChunk",
+        });
+        labels.append_value(&n.label);
+        created.append_value(n.created_at);
+        metadata.append_value(serde_json::to_string(&n.metadata).unwrap_or_default());
+    }
+
+    RecordBatch::try_new(
+        Arc::new(node_schema()),
+        vec![
+            Arc::new(ids.finish()),
+            Arc::new(types.finish()),
+            Arc::new(labels.finish()),
+            Arc::new(created.finish()),
+            Arc::new(metadata.finish()),
+        ],
+    )
+    .map_err(|e| e.into())
+}
+
+fn edges_to_batch(edges: &[GraphEdge]) -> Result<RecordBatch, Box<dyn std::error::Error>> {
+    let mut ids = StringBuilder::new();
+    let mut sources = StringBuilder::new();
+    let mut targets = StringBuilder::new();
+    let mut types = StringBuilder::new();
+    let mut timestamps = Int64Builder::new();
+    let mut metadata = StringBuilder::new();
+
+    for e in edges {
+        ids.append_value(&e.id);
+        sources.append_value(&e.source);
+        targets.append_value(&e.target);
+        types.append_value(match e.edge_type {
+            EdgeType::PartOfSession => "PART_OF_SESSION",
+            EdgeType::ReferenceForTask => "REFERENCE_FOR_TASK",
+            EdgeType::OccurredAt => "OCCURRED_AT",
+        });
+        timestamps.append_value(e.timestamp);
+        metadata.append_value(serde_json::to_string(&e.metadata).unwrap_or_default());
+    }
+
+    RecordBatch::try_new(
+        Arc::new(edge_schema()),
+        vec![
+            Arc::new(ids.finish()),
+            Arc::new(sources.finish()),
+            Arc::new(targets.finish()),
+            Arc::new(types.finish()),
+            Arc::new(timestamps.finish()),
+            Arc::new(metadata.finish()),
+        ],
+    )
+    .map_err(|e| e.into())
+}
+
+fn batch_to_nodes(batch: &RecordBatch) -> Vec<GraphNode> {
+    let n = batch.num_rows();
+    let ids = str_col(batch, "id");
+    let types = str_col(batch, "node_type");
+    let labels = str_col(batch, "label");
+    let created = i64_col(batch, "created_at");
+    let meta = str_col(batch, "metadata_json");
+
+    let mut nodes = Vec::with_capacity(n);
+    for i in 0..n {
+        let node_type = match get_str(&types, i).as_str() {
+            "Entity" => NodeType::Entity,
+            "Task" => NodeType::Task,
+            "Url" => NodeType::Url,
+            _ => NodeType::MemoryChunk,
+        };
+        nodes.push(GraphNode {
+            id: get_str(&ids, i),
+            node_type,
+            label: get_str(&labels, i),
+            created_at: get_i64(&created, i),
+            metadata: serde_json::from_str(&get_str(&meta, i)).unwrap_or_default(),
+        });
+    }
+    nodes
+}
+
+fn batch_to_edges(batch: &RecordBatch) -> Vec<GraphEdge> {
+    let n = batch.num_rows();
+    let ids = str_col(batch, "id");
+    let sources = str_col(batch, "source");
+    let targets = str_col(batch, "target");
+    let types = str_col(batch, "edge_type");
+    let ts = i64_col(batch, "timestamp");
+    let meta = str_col(batch, "metadata_json");
+
+    let mut edges = Vec::with_capacity(n);
+    for i in 0..n {
+        let edge_type = match get_str(&types, i).as_str() {
+            "PART_OF_SESSION" | "PartOfSession" | "MentionedIn" => EdgeType::PartOfSession,
+            "REFERENCE_FOR_TASK" | "ReferenceForTask" | "References" => {
+                EdgeType::ReferenceForTask
+            }
+            "OCCURRED_AT" | "OccurredAt" | "LinkedTo" => EdgeType::OccurredAt,
+            _ => EdgeType::OccurredAt,
+        };
+        edges.push(GraphEdge {
+            id: get_str(&ids, i),
+            source: get_str(&sources, i),
+            target: get_str(&targets, i),
+            edge_type,
+            timestamp: get_i64(&ts, i),
+            metadata: serde_json::from_str(&get_str(&meta, i)).unwrap_or_default(),
+        });
+    }
+    edges
+}
+
+fn batch_to_meetings(batch: &RecordBatch) -> Vec<MeetingSession> {
+    let n = batch.num_rows();
+    let id = str_col(batch, "id");
+    let title = str_col(batch, "title");
+    let participants = batch
+        .column_by_name("participants")
+        .and_then(|c| c.as_any().downcast_ref::<arrow_array::ListArray>().cloned());
+    let model = str_col(batch, "model");
+    let status = str_col(batch, "status");
+    let start = i64_col(batch, "start_timestamp");
+    let end = i64_col(batch, "end_timestamp");
+    let created = i64_col(batch, "created_at");
+    let updated = i64_col(batch, "updated_at");
+    let segment_count = i64_col(batch, "segment_count");
+    let duration = i64_col(batch, "duration_seconds");
+    let mdir = str_col(batch, "meeting_dir");
+    let adir = str_col(batch, "audio_dir");
+    let tpath = str_col(batch, "transcript_path");
+    let breakdown = str_col(batch, "breakdown_json");
+
+    let mut results = Vec::with_capacity(n);
+    for i in 0..n {
+        results.push(MeetingSession {
+            id: get_str(&id, i),
+            title: get_str(&title, i),
+            participants: extract_str_list(&participants, i),
+            model: get_str(&model, i),
+            status: get_str(&status, i),
+            start_timestamp: get_i64(&start, i),
+            end_timestamp: Some(get_i64(&end, i)).filter(|t| *t > 0),
+            created_at: get_i64(&created, i),
+            updated_at: get_i64(&updated, i),
+            segment_count: get_i64(&segment_count, i) as usize,
+            duration_seconds: get_i64(&duration, i) as u64,
+            meeting_dir: get_str(&mdir, i),
+            audio_dir: get_str(&adir, i),
+            transcript_path: Some(get_str(&tpath, i)).filter(|s| !s.is_empty()),
+            breakdown: serde_json::from_str(&get_str(&breakdown, i)).ok(),
+        });
+    }
+    results
+}
+
+fn batch_to_segments(batch: &RecordBatch) -> Vec<MeetingSegment> {
+    let n = batch.num_rows();
+    let id = str_col(batch, "id");
+    let mid = str_col(batch, "meeting_id");
+    let index = u32_col(batch, "index");
+    let start = i64_col(batch, "start_timestamp");
+    let end = i64_col(batch, "end_timestamp");
+    let text = str_col(batch, "text");
+    let audio = str_col(batch, "audio_chunk_path");
+    let model = str_col(batch, "model");
+    let created = i64_col(batch, "created_at");
+
+    let mut results = Vec::with_capacity(n);
+    for i in 0..n {
+        results.push(MeetingSegment {
+            id: get_str(&id, i),
+            meeting_id: get_str(&mid, i),
+            index: get_u32(&index, i),
+            start_timestamp: get_i64(&start, i),
+            end_timestamp: get_i64(&end, i),
+            text: get_str(&text, i),
+            audio_chunk_path: get_str(&audio, i),
+            model: get_str(&model, i),
+            created_at: get_i64(&created, i),
+        });
+    }
+    results
+}
+
+fn batch_to_tasks(batch: &RecordBatch) -> Vec<Task> {
+    let n = batch.num_rows();
+    let ids = str_col(batch, "id");
+    let titles = str_col(batch, "title");
+    let descriptions = str_col(batch, "description");
+    let source_apps = str_col(batch, "source_app");
+    let source_memory_ids = str_col(batch, "source_memory_id");
+    let created_at = i64_col(batch, "created_at");
+    let due_date = i64_col(batch, "due_date");
+    let is_completed = bool_col(batch, "is_completed");
+    let is_dismissed = bool_col(batch, "is_dismissed");
+    let task_types = str_col(batch, "task_type");
+
+    let url_col = batch
+        .column_by_name("linked_urls")
+        .and_then(|c| c.as_any().downcast_ref::<arrow_array::ListArray>().cloned());
+    let mem_id_col = batch
+        .column_by_name("linked_memory_ids")
+        .and_then(|c| c.as_any().downcast_ref::<arrow_array::ListArray>().cloned());
+
+    (0..n)
+        .map(|i| {
+            let t_type = match get_str(&task_types, i).as_str() {
+                "Reminder" => TaskType::Reminder,
+                "Followup" => TaskType::Followup,
+                _ => TaskType::Todo,
+            };
+
+            Task {
+                id: get_str(&ids, i),
+                title: get_str(&titles, i),
+                description: get_str(&descriptions, i),
+                source_app: get_str(&source_apps, i),
+                source_memory_id: get_opt_str(&source_memory_ids, i),
+                created_at: get_i64(&created_at, i),
+                due_date: get_opt_i64(&due_date, i),
+                is_completed: get_bool(&is_completed, i),
+                is_dismissed: get_bool(&is_dismissed, i),
+                task_type: t_type,
+                linked_urls: extract_str_list(&url_col, i),
+                linked_memory_ids: extract_str_list(&mem_id_col, i),
+            }
+        })
+        .collect()
+}
+
+// ── Arrow ↔ Meeting conversion ───────────────────────────────────────────────
+
+fn meeting_to_batch(meetings: &[MeetingSession]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(meeting_schema());
+    let ids: Vec<&str> = meetings.iter().map(|m| m.id.as_str()).collect();
+    let titles: Vec<&str> = meetings.iter().map(|m| m.title.as_str()).collect();
+    let models: Vec<&str> = meetings.iter().map(|m| m.model.as_str()).collect();
+    let statuses: Vec<&str> = meetings.iter().map(|m| m.status.as_str()).collect();
+    let starts: Vec<i64> = meetings.iter().map(|m| m.start_timestamp).collect();
+    let ends: Vec<Option<i64>> = meetings.iter().map(|m| m.end_timestamp).collect();
+    let created: Vec<i64> = meetings.iter().map(|m| m.created_at).collect();
+    let updated: Vec<i64> = meetings.iter().map(|m| m.updated_at).collect();
+    let counts: Vec<i64> = meetings.iter().map(|m| m.segment_count as i64).collect();
+    let durations: Vec<i64> = meetings.iter().map(|m| m.duration_seconds as i64).collect();
+    let meeting_dirs: Vec<&str> = meetings.iter().map(|m| m.meeting_dir.as_str()).collect();
+    let audio_dirs: Vec<&str> = meetings.iter().map(|m| m.audio_dir.as_str()).collect();
+    let transcript_paths: Vec<Option<&str>> = meetings.iter().map(|m| m.transcript_path.as_deref()).collect();
+    let breakdowns: Vec<Option<String>> = meetings.iter().map(|m| {
+        m.breakdown.as_ref().and_then(|b| serde_json::to_string(b).ok())
+    }).collect();
+
+    let mut participants_builder = arrow_array::builder::ListBuilder::new(arrow_array::builder::StringBuilder::new());
+    for m in meetings {
+        for p in &m.participants {
+            participants_builder.values().append_value(p);
+        }
+        participants_builder.append(true);
+    }
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(titles)),
+            Arc::new(participants_builder.finish()),
+            Arc::new(StringArray::from(models)),
+            Arc::new(StringArray::from(statuses)),
+            Arc::new(Int64Array::from(starts)),
+            Arc::new(Int64Array::from(ends)),
+            Arc::new(Int64Array::from(created)),
+            Arc::new(Int64Array::from(updated)),
+            Arc::new(Int64Array::from(counts)),
+            Arc::new(Int64Array::from(durations)),
+            Arc::new(StringArray::from(meeting_dirs)),
+            Arc::new(StringArray::from(audio_dirs)),
+            Arc::new(StringArray::from(transcript_paths)),
+            Arc::new(StringArray::from(breakdowns)),
+        ],
+    )
+}
+
+fn segment_to_batch(segments: &[MeetingSegment]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(segment_schema());
+    let ids: Vec<&str> = segments.iter().map(|s| s.id.as_str()).collect();
+    let m_ids: Vec<&str> = segments.iter().map(|s| s.meeting_id.as_str()).collect();
+    let indices: Vec<u32> = segments.iter().map(|s| s.index).collect();
+    let starts: Vec<i64> = segments.iter().map(|s| s.start_timestamp).collect();
+    let ends: Vec<i64> = segments.iter().map(|s| s.end_timestamp).collect();
+    let texts: Vec<&str> = segments.iter().map(|s| s.text.as_str()).collect();
+    let paths: Vec<&str> = segments.iter().map(|s| s.audio_chunk_path.as_str()).collect();
+    let models: Vec<&str> = segments.iter().map(|s| s.model.as_str()).collect();
+    let created: Vec<i64> = segments.iter().map(|s| s.created_at).collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(m_ids)),
+            Arc::new(arrow_array::UInt32Array::from(indices)),
+            Arc::new(Int64Array::from(starts)),
+            Arc::new(Int64Array::from(ends)),
+            Arc::new(StringArray::from(texts)),
+            Arc::new(StringArray::from(paths)),
+            Arc::new(StringArray::from(models)),
+            Arc::new(Int64Array::from(created)),
+        ],
+    )
+}
+
+// ── Arrow ↔ Graph conversion ─────────────────────────────────────────────────
+
+fn node_to_batch(nodes: &[GraphNode]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(node_schema());
+    let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+    let types: Vec<String> = nodes.iter().map(|n| format!("{:?}", n.node_type)).collect();
+    let labels: Vec<&str> = nodes.iter().map(|n| n.label.as_str()).collect();
+    let created: Vec<i64> = nodes.iter().map(|n| n.created_at).collect();
+    let metadata: Vec<String> = nodes.iter().map(|n| n.metadata.to_string()).collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(types)),
+            Arc::new(StringArray::from(labels)),
+            Arc::new(Int64Array::from(created)),
+            Arc::new(StringArray::from(metadata)),
+        ],
+    )
+}
+
+fn edge_to_batch(edges: &[GraphEdge]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(edge_schema());
+    let ids: Vec<&str> = edges.iter().map(|e| e.id.as_str()).collect();
+    let sources: Vec<&str> = edges.iter().map(|e| e.source.as_str()).collect();
+    let targets: Vec<&str> = edges.iter().map(|e| e.target.as_str()).collect();
+    let types: Vec<String> = edges.iter().map(|e| format!("{:?}", e.edge_type)).collect();
+    let timestamps: Vec<i64> = edges.iter().map(|e| e.timestamp).collect();
+    let metadata: Vec<String> = edges.iter().map(|e| e.metadata.to_string()).collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(sources)),
+            Arc::new(StringArray::from(targets)),
+            Arc::new(StringArray::from(types)),
+            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(StringArray::from(metadata)),
+        ],
+    )
+}
 
 fn build_filter(time_filter: Option<&str>, app_filter: Option<&str>) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
@@ -1350,30 +2084,47 @@ fn sql_escape(s: &str) -> String {
 
 // ── DB initialization ─────────────────────────────────────────────────────────
 
-async fn open_or_create_table(db_path: &Path) -> Result<Table, lancedb::Error> {
+async fn open_all_tables(
+    db_path: &Path,
+) -> Result<(Table, Table, Table, Table, Table, Table), lancedb::Error> {
     let uri = db_path.to_string_lossy();
     let conn: Connection = lancedb::connect(&uri).execute().await?;
-
     let names = conn.table_names().execute().await?;
-    if names.contains(&TABLE_NAME.to_string()) {
-        let table = conn.open_table(TABLE_NAME).execute().await?;
-        ensure_memory_schema_columns(&table).await?;
-        Ok(table)
+ 
+    let table = open_or_create_named_table(&conn, &names, MEMORIES_TABLE, Arc::new(memory_schema())).await?;
+    ensure_memory_schema_columns(&table).await?;
+ 
+    let tasks = open_or_create_named_table(&conn, &names, TASKS_TABLE, Arc::new(task_schema())).await?;
+    let meetings = open_or_create_named_table(&conn, &names, MEETINGS_TABLE, Arc::new(meeting_schema())).await?;
+    let segments = open_or_create_named_table(&conn, &names, SEGMENTS_TABLE, Arc::new(segment_schema())).await?;
+    let nodes = open_or_create_named_table(&conn, &names, NODES_TABLE, Arc::new(node_schema())).await?;
+    let edges = open_or_create_named_table(&conn, &names, EDGES_TABLE, Arc::new(edge_schema())).await?;
+ 
+    Ok((table, tasks, meetings, segments, nodes, edges))
+}
+ 
+async fn open_or_create_named_table(
+    conn: &Connection,
+    existing_tables: &[String],
+    name: &str,
+    schema: Arc<Schema>,
+) -> Result<Table, lancedb::Error> {
+    if existing_tables.contains(&name.to_string()) {
+        conn.open_table(name).execute().await
     } else {
-        let schema = Arc::new(memory_schema());
         let empty = RecordBatchIterator::new(
             std::iter::empty::<Result<RecordBatch, ArrowError>>(),
             schema,
         );
         conn.create_table(
-            TABLE_NAME,
+            name,
             Box::new(empty) as Box<dyn RecordBatchReader + Send>,
         )
         .execute()
         .await
     }
 }
-
+ 
 async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Error> {
     let schema = table.schema().await?;
     let existing: std::collections::HashSet<String> = schema
@@ -1381,7 +2132,7 @@ async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Erro
         .iter()
         .map(|field| field.name().to_string())
         .collect();
-
+ 
     let mut transforms: Vec<(String, String)> = Vec::new();
     if !existing.contains("clean_text") {
         transforms.push(("clean_text".to_string(), "text".to_string()));
@@ -1407,7 +2158,7 @@ async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Erro
     if !existing.contains("session_key") {
         transforms.push(("session_key".to_string(), "''".to_string()));
     }
-
+ 
     if !transforms.is_empty() {
         tracing::info!(
             "Migrating LanceDB memories table schema with {} new columns",
@@ -1417,7 +2168,7 @@ async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Erro
             .add_columns(NewColumnTransform::SqlExpressions(transforms), None)
             .await?;
     }
-
+ 
     Ok(())
 }
 
@@ -1430,7 +2181,7 @@ async fn migrate_from_json(table: &Table, json_path: &Path) {
         if records.is_empty() {
             return Ok(());
         }
-
+ 
         // Backfill day_bucket for legacy records that predate the field.
         for r in &mut records {
             if r.day_bucket.is_empty() {
@@ -1440,12 +2191,12 @@ async fn migrate_from_json(table: &Table, json_path: &Path) {
                     .to_string();
             }
         }
-
+ 
         tracing::info!(
             "Migrating {} records from memories.json to LanceDB",
             records.len()
         );
-
+ 
         // Insert in chunks to avoid huge Arrow batches.
         for chunk in records.chunks(500) {
             let batch = records_to_batch(chunk)?;
@@ -1456,11 +2207,10 @@ async fn migrate_from_json(table: &Table, json_path: &Path) {
                 .execute()
                 .await?;
         }
-
-        // Rename the JSON file so we don't migrate again on next start.
-        let backup = json_path.with_extension("json.migrated");
-        std::fs::rename(json_path, backup)?;
-
+ 
+        // Remove the legacy JSON source once migration has completed successfully.
+        std::fs::remove_file(json_path)?;
+ 
         tracing::info!("Migration complete");
         Ok(())
     })
@@ -1468,5 +2218,120 @@ async fn migrate_from_json(table: &Table, json_path: &Path) {
 
     if let Err(e) = result {
         tracing::warn!("JSON migration failed (data not lost): {}", e);
+    }
+}
+async fn migrate_tasks_from_json(table: &Table, json_path: &Path) {
+    let result: Result<(), Box<dyn std::error::Error>> = (async {
+        let data = std::fs::read(json_path)?;
+        let tasks: Vec<Task> = serde_json::from_slice(&data)?;
+        if tasks.is_empty() {
+            return Ok(());
+        }
+        tracing::info!("Migrating {} tasks to LanceDB", tasks.len());
+        let batch = task_to_batch(&tasks)?;
+        let schema = Arc::new(task_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Overwrite)
+            .execute()
+            .await?;
+        std::fs::remove_file(json_path)?;
+        Ok(())
+    })
+    .await;
+    if let Err(e) = result {
+        tracing::warn!("Task migration failed: {}", e);
+    }
+}
+
+async fn migrate_meetings_from_json(table: &Table, json_path: &Path) {
+    let result: Result<(), Box<dyn std::error::Error>> = (async {
+        let data = std::fs::read(json_path)?;
+        let meetings: Vec<MeetingSession> = serde_json::from_slice(&data)?;
+        if meetings.is_empty() {
+            return Ok(());
+        }
+        tracing::info!("Migrating {} meetings to LanceDB", meetings.len());
+        let batch = meeting_to_batch(&meetings)?;
+        let schema = Arc::new(meeting_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Overwrite)
+            .execute()
+            .await?;
+        std::fs::remove_file(json_path)?;
+        Ok(())
+    })
+    .await;
+    if let Err(e) = result {
+        tracing::warn!("Meeting migration failed: {}", e);
+    }
+}
+
+async fn migrate_segments_from_json(table: &Table, json_path: &Path) {
+    let result: Result<(), Box<dyn std::error::Error>> = (async {
+        let data = std::fs::read(json_path)?;
+        let segments: Vec<MeetingSegment> = serde_json::from_slice(&data)?;
+        if segments.is_empty() {
+            return Ok(());
+        }
+        tracing::info!("Migrating {} segments to LanceDB", segments.len());
+        let batch = segment_to_batch(&segments)?;
+        let schema = Arc::new(segment_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Overwrite)
+            .execute()
+            .await?;
+        std::fs::remove_file(json_path)?;
+        Ok(())
+    })
+    .await;
+    if let Err(e) = result {
+        tracing::warn!("Segment migration failed: {}", e);
+    }
+}
+
+async fn migrate_graph_from_json(nodes_table: &Table, edges_table: &Table, json_path: &Path) {
+    #[derive(serde::Deserialize)]
+    struct LegacyGraph {
+        nodes: Vec<GraphNode>,
+        edges: Vec<GraphEdge>,
+    }
+
+    let result: Result<(), Box<dyn std::error::Error>> = (async {
+        let data = std::fs::read(json_path)?;
+        let graph: LegacyGraph = serde_json::from_slice(&data)?;
+        if !graph.nodes.is_empty() {
+            tracing::info!("Migrating {} graph nodes to LanceDB", graph.nodes.len());
+            let batch = node_to_batch(&graph.nodes)?;
+            let schema = Arc::new(node_schema());
+            let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+            nodes_table
+                .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+                .mode(AddDataMode::Overwrite)
+                .execute()
+                .await?;
+        }
+        if !graph.edges.is_empty() {
+            tracing::info!("Migrating {} graph edges to LanceDB", graph.edges.len());
+            let batch = edge_to_batch(&graph.edges)?;
+            let schema = Arc::new(edge_schema());
+            let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+            edges_table
+                .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+                .mode(AddDataMode::Overwrite)
+                .execute()
+                .await?;
+        }
+        std::fs::remove_file(json_path)?;
+        Ok(())
+    })
+    .await;
+    if let Err(e) = result {
+        tracing::warn!("Graph migration failed: {}", e);
     }
 }

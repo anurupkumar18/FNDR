@@ -52,12 +52,19 @@ export interface McpServerStatus {
     last_error?: string | null;
 }
 
+export interface MeetingBreakdown {
+    todos: string[];
+    reminders: string[];
+    followups: string[];
+    summary: string;
+}
+
 export interface MeetingSession {
     id: string;
     title: string;
     participants: string[];
     model: string;
-    status: "recording" | "stopped" | "error";
+    status: "recording" | "stopped" | "error" | "analyzing";
     start_timestamp: number;
     end_timestamp?: number | null;
     created_at: number;
@@ -67,6 +74,7 @@ export interface MeetingSession {
     meeting_dir: string;
     audio_dir: string;
     transcript_path?: string | null;
+    breakdown?: MeetingBreakdown | null;
 }
 
 export interface MeetingSegment {
@@ -87,10 +95,6 @@ export interface MeetingRecorderStatus {
     current_title?: string | null;
     model?: string | null;
     started_at?: number | null;
-    segment_count: number;
-    consent_state: "unknown" | "pending" | "detected" | "denied";
-    consent_evidence?: string | null;
-    consent_checked_segments: number;
     ffmpeg_available: boolean;
     transcription_backend: string;
     last_error?: string | null;
@@ -102,16 +106,6 @@ export interface MeetingTranscript {
     full_text: string;
 }
 
-export interface MeetingSearchResult {
-    meeting_id: string;
-    meeting_title: string;
-    segment_id: string;
-    index: number;
-    text: string;
-    score: number;
-    start_timestamp: number;
-    end_timestamp: number;
-}
 
 export interface Stats {
     total_records: number;
@@ -344,12 +338,6 @@ export async function getMeetingTranscript(meetingId: string): Promise<MeetingTr
     return invoke<MeetingTranscript>("get_meeting_transcript", { meetingId });
 }
 
-export async function searchMeetingTranscripts(
-    query: string,
-    limit?: number
-): Promise<MeetingSearchResult[]> {
-    return invoke<MeetingSearchResult[]>("search_meeting_transcripts", { query, limit });
-}
 
 export async function transcribeVoiceInput(
     audioBytes: number[],
@@ -426,10 +414,9 @@ export async function getTodos(): Promise<Task[]> {
 
 export async function addTodo(
     title: string,
-    description?: string,
     taskType?: "Todo" | "Reminder" | "Followup"
 ): Promise<Task> {
-    return invoke<Task>("add_todo", { title, description, taskType });
+    return invoke<Task>("add_todo", { title, taskType });
 }
 
 export async function dismissTodo(taskId: string): Promise<boolean> {

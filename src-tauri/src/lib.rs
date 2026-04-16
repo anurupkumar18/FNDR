@@ -38,7 +38,7 @@ pub struct LoadedAiEngines {
 pub struct AppState {
     pub app_data_dir: PathBuf,
     pub config: RwLock<Config>,
-    pub store: Store,
+    pub store: Arc<Store>,
     pub graph: GraphStore,
     pub is_paused: AtomicBool,
     pub is_incognito: AtomicBool,
@@ -55,7 +55,7 @@ impl AppState {
     pub fn new(
         app_data_dir: PathBuf,
         config: Config,
-        store: Store,
+        store: Arc<Store>,
         graph: GraphStore,
         inference: Option<Arc<InferenceEngine>>,
         vlm: Option<Arc<VlmEngine>>,

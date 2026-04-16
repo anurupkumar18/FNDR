@@ -10,6 +10,40 @@ interface MemoryCardsPanelProps {
 }
 
 const APP_FILTER_ALL = "__all__";
+const TIME_FILTER_ALL = "__time_all__";
+const PERSPECTIVE_FILTER_ALL = "__perspective_all__";
+
+type TimeFilter = 
+    | typeof TIME_FILTER_ALL 
+    | "last_hour" 
+    | "today" 
+    | "last_24h" 
+    | "last_7d";
+
+type PerspectiveFilter =
+    | typeof PERSPECTIVE_FILTER_ALL
+    | "web"
+    | "coding"
+    | "meetings"
+    | "communication"
+    | "docs";
+
+const TIME_FILTER_OPTIONS: Array<{ value: TimeFilter; label: string }> = [
+    { value: TIME_FILTER_ALL, label: "All history" },
+    { value: "last_hour", label: "Last hour" },
+    { value: "today", label: "Today" },
+    { value: "last_24h", label: "Last 24 hours" },
+    { value: "last_7d", label: "Last 7 days" },
+];
+
+const PERSPECTIVE_FILTER_OPTIONS: Array<{ value: PerspectiveFilter; label: string }> = [
+    { value: PERSPECTIVE_FILTER_ALL, label: "All perspectives" },
+    { value: "web", label: "Web pages" },
+    { value: "coding", label: "Coding sessions" },
+    { value: "meetings", label: "Meetings" },
+    { value: "communication", label: "Communication" },
+    { value: "docs", label: "Docs & writing" },
+];
 
 function normalizeText(value: string | undefined | null): string {
     if (!value) {
@@ -78,6 +112,70 @@ function normalizeForCompare(value: string): string {
         .trim();
 }
 
+function includesAny(haystack: string, needles: string[]): boolean {
+    return needles.some((needle) => haystack.includes(needle));
+}
+
+function matchesFilters(
+    card: MemoryCard, 
+    timeFilter: TimeFilter, 
+    perspectiveFilter: PerspectiveFilter
+): boolean {
+    const now = Date.now();
+    const timestamp = Number(card.timestamp) || 0;
+
+    // 1. Time Filtering
+    if (timeFilter !== TIME_FILTER_ALL && timestamp > 0) {
+        if (timeFilter === "last_hour" && timestamp < now - 60 * 60 * 1000) return false;
+        if (timeFilter === "today" && new Date(timestamp).toDateString() !== new Date(now).toDateString()) return false;
+        if (timeFilter === "last_24h" && timestamp < now - 24 * 60 * 60 * 1000) return false;
+        if (timeFilter === "last_7d" && timestamp < now - 7 * 24 * 60 * 60 * 1000) return false;
+    }
+
+    // 2. Perspective Filtering
+    if (perspectiveFilter === PERSPECTIVE_FILTER_ALL) {
+        return true;
+    }
+
+    const app = card.app_name.toLowerCase();
+    const windowTitle = (card.window_title || "").toLowerCase();
+    const context = card.context.join(" ").toLowerCase();
+    const summary = (card.summary || "").toLowerCase();
+    const haystack = `${app} ${windowTitle} ${context} ${summary}`;
+
+    if (perspectiveFilter === "web") {
+        return Boolean(card.url) || includesAny(haystack, [
+            "chrome", "safari", "firefox", "brave", "arc browser", "edge", "url:", "site:",
+        ]);
+    }
+
+    if (perspectiveFilter === "coding") {
+        return includesAny(haystack, [
+            "code", "codex", "cursor", "terminal", "iterm", "xcode", "intellij", "pycharm", "webstorm", "android studio", "git",
+        ]);
+    }
+
+    if (perspectiveFilter === "meetings") {
+        return includesAny(haystack, [
+            "meeting", "zoom", "teams", "meet.google", "call", "transcript", "fndr meetings",
+        ]);
+    }
+
+    if (perspectiveFilter === "communication") {
+        return includesAny(haystack, [
+            "slack", "mail", "gmail", "messages", "discord", "inbox", "outlook", "chat",
+        ]);
+    }
+
+    if (perspectiveFilter === "docs") {
+        return includesAny(haystack, [
+            "notion", "docs", "word", "pages", "pdf", "preview", "obsidian", "confluence", "readme", "document",
+        ]);
+    }
+
+    return true;
+}
+
 function looksTooSimilar(a: string, b: string): boolean {
     const left = normalizeForCompare(a);
     const right = normalizeForCompare(b);
@@ -102,8 +200,16 @@ function looksTooSimilar(a: string, b: string): boolean {
 }
 
 function cardCopy(card: MemoryCard): { title: string; summary: string; site: string } {
-    const site = extractSite(card);
+    let site = extractSite(card);
     const title = fallbackTitle(card);
+
+    const isCoding = card.app_name.toLowerCase().includes("code") 
+        || (card.app_name.toLowerCase() === "codex")
+        || includesAny((card.window_title || "").toLowerCase(), ["terminal", "git", "cursor", "iterm", "code"]);
+    
+    if (isCoding && !site) {
+        site = "Codex";
+    }
 
     const contextCandidates = card.context
         .map((item) => normalizeText(item))
@@ -126,15 +232,33 @@ function cardCopy(card: MemoryCard): { title: string; summary: string; site: str
         card.window_title,
     ];
 
+    const techKeywords = [
+        "const", "function", "func", "let", "def", "class", "import", "export", 
+        "struct", "enum", "impl", "async", "await", "error", "exception", 
+        "panic", "failed", "stack", "expected", "found", "{", "}", "->", "=>"
+    ];
+
     let summary = "";
+    
+    // First pass: look for technical/error depth
     for (const candidate of summaryCandidates) {
         const cleaned = normalizeText(candidate);
-        if (!cleaned) {
-            continue;
-        }
-        if (!looksTooSimilar(cleaned, title)) {
+        if (!cleaned) continue;
+        if (includesAny(cleaned.toLowerCase(), techKeywords)) {
             summary = cleaned;
             break;
+        }
+    }
+
+    // Second pass: standard heuristic
+    if (!summary) {
+        for (const candidate of summaryCandidates) {
+            const cleaned = normalizeText(candidate);
+            if (!cleaned) continue;
+            if (!looksTooSimilar(cleaned, title)) {
+                summary = cleaned;
+                break;
+            }
         }
     }
 
@@ -171,6 +295,8 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [appFilter, setAppFilter] = useState<string>(APP_FILTER_ALL);
+    const [timeFilter, setTimeFilter] = useState<TimeFilter>(TIME_FILTER_ALL);
+    const [perspectiveFilter, setPerspectiveFilter] = useState<PerspectiveFilter>(PERSPECTIVE_FILTER_ALL);
     const [deletingId, setDeletingId] = useState<string | null>(null);
 
     const selectableApps = useMemo(() => {
@@ -179,6 +305,11 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
             .filter((name) => name.length > 0)
             .sort((a, b) => a.localeCompare(b));
     }, [appNames]);
+
+    const filteredCards = useMemo(
+        () => cards.filter((card) => matchesFilters(card, timeFilter, perspectiveFilter)),
+        [cards, timeFilter, perspectiveFilter]
+    );
 
     useEffect(() => {
         if (!isVisible) {
@@ -252,26 +383,66 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
             </div>
 
             <div className="memory-cards-toolbar">
-                <label className="memory-cards-filter">
-                    App
-                    <div className="memory-cards-filter-control">
-                        <select
-                            value={appFilter}
-                            onChange={(event) => setAppFilter(event.target.value)}
-                        >
-                            <option value={APP_FILTER_ALL}>All apps</option>
-                            {selectableApps.map((name) => (
-                                <option key={name} value={name}>
-                                    {name}
-                                </option>
-                            ))}
-                        </select>
-                        <svg className="memory-cards-filter-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                            <path d="M6 9l6 6 6-6" />
-                        </svg>
-                    </div>
-                </label>
-                <div className="memory-cards-count">{cards.length} cards</div>
+                <div className="memory-cards-filters">
+                    <label className="memory-cards-filter">
+                        Universe
+                        <div className="memory-cards-filter-control">
+                            <select
+                                value={appFilter}
+                                onChange={(event) => setAppFilter(event.target.value)}
+                            >
+                                <option value={APP_FILTER_ALL}>All Apps</option>
+                                {selectableApps.map((name) => (
+                                    <option key={name} value={name}>
+                                        {name}
+                                    </option>
+                                ))}
+                            </select>
+                            <svg className="memory-cards-filter-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                <path d="M6 9l6 6 6-6" />
+                            </svg>
+                        </div>
+                    </label>
+
+                    <label className="memory-cards-filter">
+                        History
+                        <div className="memory-cards-filter-control">
+                            <select
+                                value={timeFilter}
+                                onChange={(event) => setTimeFilter(event.target.value as TimeFilter)}
+                            >
+                                {TIME_FILTER_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                        {option.label}
+                                    </option>
+                                ))}
+                            </select>
+                            <svg className="memory-cards-filter-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                <path d="M6 9l6 6 6-6" />
+                            </svg>
+                        </div>
+                    </label>
+
+                    <label className="memory-cards-filter">
+                        Perspective
+                        <div className="memory-cards-filter-control">
+                            <select
+                                value={perspectiveFilter}
+                                onChange={(event) => setPerspectiveFilter(event.target.value as PerspectiveFilter)}
+                            >
+                                {PERSPECTIVE_FILTER_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                        {option.label}
+                                    </option>
+                                ))}
+                            </select>
+                            <svg className="memory-cards-filter-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                <path d="M6 9l6 6 6-6" />
+                            </svg>
+                        </div>
+                    </label>
+                </div>
+                <div className="memory-cards-count">{filteredCards.length} cards</div>
             </div>
 
             <div className="memory-cards-body">
@@ -288,15 +459,15 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                     </div>
                 )}
 
-                {!loading && !error && cards.length === 0 && (
+                {!loading && !error && filteredCards.length === 0 && (
                     <div className="memory-cards-state">
                         <p>No memory cards yet for this filter.</p>
                     </div>
                 )}
 
-                {!loading && !error && cards.length > 0 && (
+                {!loading && !error && filteredCards.length > 0 && (
                     <div className="memory-cards-stream">
-                        {cards.map((card) => {
+                        {filteredCards.map((card) => {
                             const { title, summary, site } = cardCopy(card);
                             const chips = card.context
                                 .map((item) => normalizeText(item))
@@ -338,7 +509,11 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                     <div className="memory-browse-content">
                                         <div className="memory-browse-title">{title}</div>
                                         <div className="memory-browse-summary">{summary}</div>
-                                        {site && <div className="memory-browse-site">Site: {site}</div>}
+                                        {site && (
+                                            <div className="memory-browse-site">
+                                                {site === "Codex" ? site : `Site: ${site}`}
+                                            </div>
+                                        )}
                                     </div>
                                     {chips.length > 0 && (
                                         <div className="result-context-chips">

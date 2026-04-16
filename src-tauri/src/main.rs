@@ -38,20 +38,24 @@ fn main() {
             let config = Config::load_or_create()?;
             tracing::info!("Configuration loaded");
 
-            // Initialize store
+            // Initialize store (LanceDB)
             let data_dir = app.path().app_data_dir()?;
             let store = Store::new(&data_dir)?;
-            api::commands::init_task_store(&data_dir);
-            tracing::info!("Store initialized at {:?}", data_dir);
-            let graph = GraphStore::new(&data_dir)?;
-            tracing::info!("Graph store initialized at {:?}", data_dir);
-            if let Err(err) = fndr_lib::meeting::init(data_dir.clone()) {
+            let store_arc = Arc::new(store);
+            tracing::info!("Consolidated store initialized at {:?}", data_dir);
+
+            let graph = GraphStore::new(store_arc.clone());
+            tracing::info!("Graph store initialized");
+
+            if let Err(err) = tauri::async_runtime::block_on(fndr_lib::meeting::init(data_dir.clone(), store_arc.clone())) {
                 tracing::warn!("Meeting subsystem initialization failed: {}", err);
             }
 
             // Apply retention: remove records older than config.retention_days (0 = keep forever)
             if config.retention_days > 0 {
-                match tauri::async_runtime::block_on(store.delete_older_than(config.retention_days))
+                match tauri::async_runtime::block_on(
+                    store_arc.delete_older_than(config.retention_days),
+                )
                 {
                     Ok(n) if n > 0 => tracing::info!("Retention: removed {} old records", n),
                     Ok(_) => {}
@@ -65,7 +69,7 @@ fn main() {
             let state = Arc::new(AppState::new(
                 data_dir.clone(),
                 config,
-                store,
+                store_arc,
                 graph,
                 None,
                 None,
@@ -111,7 +115,6 @@ fn main() {
             api::commands::list_meetings,
             api::commands::delete_meeting,
             api::commands::get_meeting_transcript,
-            api::commands::search_meeting_transcripts,
             // Voice / Speech
             api::commands::transcribe_voice_input,
             api::commands::speak_text,

@@ -281,34 +281,34 @@ function App() {
                     <div className="sidebar-group sidebar-actions">
                         <div className="sidebar-label">Features</div>
                         <button
-                            className={`ui-action-btn todo-toggle-btn ${showTodoPanel ? "active" : ""}`}
-                            onClick={() => setShowTodoPanel((open) => !open)}
-                        >
-                            Todo
-                        </button>
-                        <button
-                            className={`ui-action-btn meeting-toggle-btn ${showMeetingPanel ? "active" : ""}`}
-                            onClick={() => setShowMeetingPanel((open) => !open)}
-                        >
-                            Meetings
-                        </button>
-                        <button
-                            className={`ui-action-btn graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
-                            onClick={() => setShowGraphPanel((open) => !open)}
-                        >
-                            Graph
-                        </button>
-                        <button
                             className={`ui-action-btn memory-cards-toggle-btn ${showMemoryCardsPanel ? "active" : ""}`}
                             onClick={() => setShowMemoryCardsPanel((open) => !open)}
                         >
-                            All Cards
+                            Memory Cards
                         </button>
                         <button
                             className={`ui-action-btn stats-toggle-btn ${showStatsPanel ? "active" : ""}`}
                             onClick={() => setShowStatsPanel((open) => !open)}
                         >
                             Stats
+                        </button>
+                        <button
+                            className={`ui-action-btn todo-toggle-btn ${showTodoPanel ? "active" : ""}`}
+                            onClick={() => setShowTodoPanel((open) => !open)}
+                        >
+                            To do
+                        </button>
+                        <button
+                            className={`ui-action-btn graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
+                            onClick={() => setShowGraphPanel((open) => !open)}
+                        >
+                            Knowledge Graph
+                        </button>
+                        <button
+                            className={`ui-action-btn meeting-toggle-btn ${showMeetingPanel ? "active" : ""}`}
+                            onClick={() => setShowMeetingPanel((open) => !open)}
+                        >
+                            Meetings
                         </button>
                     </div>
                 </aside>

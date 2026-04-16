@@ -38,6 +38,13 @@
     padding: 10px 16px 12px;
 }
 
+.memory-cards-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: flex-end;
+}
+
 .memory-cards-filter {
     display: flex;
     flex-direction: column;
@@ -55,7 +62,7 @@
 }
 
 .memory-cards-filter select {
-    min-width: 220px;
+    min-width: 190px;
     max-width: 45vw;
     border-radius: 10px;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -116,7 +123,8 @@
 .memory-browse-card {
     cursor: default;
     animation: none;
-    min-height: 148px;
+    min-height: 142px;
+    padding: 22px 24px;
 }
 
 .memory-browse-card:hover {
@@ -127,6 +135,7 @@
     justify-content: space-between;
     align-items: center;
     gap: 10px;
+    margin-bottom: 12px;
 }
 
 .memory-browse-meta-main {
@@ -138,15 +147,15 @@
 
 .memory-browse-content {
     display: block;
-    min-height: 52px;
+    min-height: 48px;
 }
 
 .memory-browse-title {
     display: block;
-    margin-top: 2px;
-    font-size: 1rem;
+    margin-top: 0;
+    font-size: 1.05rem;
     font-weight: 600;
-    line-height: 1.35;
+    line-height: 1.4;
     color: rgba(255, 255, 255, 0.96);
     white-space: normal;
     word-break: break-word;
@@ -154,9 +163,9 @@
 
 .memory-browse-summary {
     display: block;
-    margin-top: 8px;
-    font-size: 0.92rem;
-    line-height: 1.55;
+    margin-top: 10px;
+    font-size: 0.94rem;
+    line-height: 1.6;
     color: rgba(255, 255, 255, 0.72);
     white-space: normal;
     word-break: break-word;
@@ -165,7 +174,7 @@
 }
 
 .memory-browse-site {
-    margin-top: 8px;
+    margin-top: 14px;
     font-size: 0.78rem;
     color: #aaaaaa;
     background: rgba(160, 160, 160, 0.12);
@@ -206,9 +215,14 @@
         padding-right: 12px;
     }
 
+    .memory-cards-filters {
+        width: 100%;
+        gap: 10px;
+    }
+
     .memory-cards-filter select {
-        min-width: 150px;
-        max-width: 58vw;
+        min-width: 140px;
+        max-width: 46vw;
     }
 
     .memory-cards-stream {

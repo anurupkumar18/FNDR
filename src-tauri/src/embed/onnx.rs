@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 /// Embedding dimension for all-MiniLM-L6-v2.
 pub const EMBEDDING_DIM: usize = 384;
 const SIDECAR_HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
-const SIDECAR_EMBED_TIMEOUT: Duration = Duration::from_secs(6);
+const SIDECAR_EMBED_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingBackend {

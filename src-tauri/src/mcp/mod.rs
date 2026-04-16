@@ -430,9 +430,22 @@ async fn mcp_handler(
     if let Some(err_resp) = check_auth(&headers, &state.token) {
         return err_resp;
     }
-    match handle_payload(payload, state.app_state.clone()).await {
-        Some(response_payload) => (StatusCode::OK, Json(response_payload)).into_response(),
-        None => StatusCode::NO_CONTENT.into_response(),
+
+    let app_state = state.app_state.clone();
+    let handled = tokio::task::spawn_blocking(move || {
+        let handle = tokio::runtime::Handle::current();
+        handle.block_on(handle_payload(payload, app_state))
+    })
+    .await;
+
+    match handled {
+        Ok(Some(response_payload)) => (StatusCode::OK, Json(response_payload)).into_response(),
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("MCP handler task failed: {err}") })),
+        )
+            .into_response(),
     }
 }
 
@@ -849,6 +862,7 @@ async fn run_search_meeting_transcripts(
     args: SearchMeetingTranscriptsArgs,
 ) -> Result<Value, JsonRpcError> {
     let results = meeting::search_meeting_transcripts(&args.query, args.limit)
+        .await
         .map_err(internal_tool_error)?;
     Ok(tool_success(json!({
         "query": args.query,
