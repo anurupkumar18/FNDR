@@ -10,6 +10,7 @@ import { MemoryCardsPanel } from "./components/MemoryCardsPanel";
 import { StatsPanel } from "./components/StatsPanel";
 import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
+import { DailyBriefing } from "./components/DailyBriefing";
 
 import { useSearch } from "./hooks/useSearch";
 import {
@@ -21,6 +22,7 @@ import {
     getMeetingStatus,
     onMeetingStatus,
     getStatus,
+    getFunGreeting,
 } from "./api/tauri";
 import { getOnboardingState } from "./api/onboarding";
 import { EVAL_UI } from "./evalUi";
@@ -33,19 +35,7 @@ function formatHomeDate(now: Date): string {
     return `${weekday} · ${month} ${day}`;
 }
 
-function formatGreeting(now: Date, displayName: string | null): string {
-    const hour = now.getHours();
-    const prefix =
-        hour >= 4 && hour < 12
-            ? "Good Morning"
-            : hour >= 12 && hour < 16
-                ? "Good Afternoon"
-                : hour >= 16 && hour < 20
-                    ? "Good Evening"
-                    : "Good Night";
-    const normalizedName = displayName?.trim();
-    return normalizedName ? `${prefix}, ${normalizedName}` : prefix;
-}
+
 
 function App() {
     const [query, setQuery] = useState("");
@@ -92,7 +82,15 @@ function App() {
 
     const isFocusMode = !query.trim();
     const homeDateLabel = useMemo(() => formatHomeDate(now), [now]);
-    const homeGreeting = useMemo(() => formatGreeting(now, displayName), [displayName, now]);
+    
+    const [homeGreeting, setHomeGreeting] = useState("Loading...");
+
+    // Fetch the fun animated greeting anytime they log in or the name changes
+    useEffect(() => {
+        getFunGreeting(displayName).then(setHomeGreeting).catch(() => {
+            setHomeGreeting("Welcome back to FNDR.");
+        });
+    }, [displayName]);
 
     useEffect(() => {
         const loadAppNames = async () => {
@@ -319,6 +317,7 @@ function App() {
                     <div className="home-focus-header">
                         <div className="home-greeting">{homeGreeting}</div>
                         <div className="home-date-context">{homeDateLabel}</div>
+                        <DailyBriefing onCardClick={(q) => setQuery(q)} />
                     </div>
                 )}
 

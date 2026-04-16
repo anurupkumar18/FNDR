@@ -11,6 +11,7 @@ use crate::search::{HybridSearcher, MemoryCard, MemoryCardSynthesizer};
 use crate::speech;
 use crate::store::{MeetingSession, SearchResult, Stats, Task, TaskType};
 use crate::AppState;
+use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -1417,4 +1418,110 @@ pub async fn stop_agent() -> Result<AgentStatus, String> {
     };
 
     Ok(status.clone())
+}
+
+/// Generate a smart daily briefing paragraph using the local LLM.
+/// `mode`: "morning" (actionable: what to focus on) or "evening" (recap + tomorrow).
+/// Defaults to time-of-day detection when None.
+#[tauri::command]
+pub async fn generate_daily_briefing(
+    state: State<'_, Arc<AppState>>,
+    mode: Option<String>,
+) -> Result<String, String> {
+    // Detect mode from local hour if not specified
+    let resolved_mode = mode.unwrap_or_else(|| {
+        let hour = chrono::Local::now().hour();
+        if hour >= 17 { "evening".to_string() } else { "morning".to_string() }
+    });
+
+    // Fetch the most recent cards (today + a few recent ones for context)
+    let limit = 10usize;
+    let results = state
+        .store
+        .list_recent_results(limit, None)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut cards: Vec<MemoryCard> = strip_internal_fndr_results(results)
+        .into_iter()
+        .map(memory_card_from_result)
+        .collect();
+    refine_memory_card_titles(&mut cards);
+
+    if cards.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Build compact per-card lines for the LLM context
+    let card_lines: Vec<String> = cards
+        .iter()
+        .take(8)
+        .map(|c| format!("- [{}] {}: {}", c.app_name, c.title, c.summary))
+        .collect();
+
+    // Grab inference engine
+    let engine = {
+        let guard = state.inference.read();
+        guard.as_ref().map(Arc::clone)
+    };
+
+    let Some(engine) = engine else {
+        return Ok(String::new());
+    };
+
+    let briefing = engine
+        .generate_daily_briefing(&card_lines, &resolved_mode)
+        .await;
+    Ok(briefing)
+}
+
+/// Link all segments of a completed meeting to overlapping memory records via
+/// `OccurredDuringAudio` edges. Called automatically when a meeting is stopped.
+#[tauri::command]
+pub async fn link_audio_to_memories(
+    meeting_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<usize, String> {
+    let segments = crate::meeting::get_meeting_segments(&meeting_id).await;
+    let count = segments.len();
+    state
+        .graph
+        .link_audio_to_memories(&segments)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+#[tauri::command]
+pub fn get_fun_greeting(name: Option<String>) -> Result<String, String> {
+    use rand::prelude::IndexedRandom;
+    let base_name = name.unwrap_or_else(|| "there".to_string());
+    
+    let hour = chrono::Local::now().hour();
+    
+    let prefix = if hour >= 4 && hour < 12 {
+        "Good Morning"
+    } else if hour >= 12 && hour < 16 {
+        "Good Afternoon"
+    } else if hour >= 16 && hour < 20 {
+        "Good Evening"
+    } else {
+        "Good Night"
+    };
+
+    let fun_suffixes = vec![
+        "Ready to conquer the day?",
+        "Let's dive into your memories.",
+        "What are we exploring today?",
+        "Time to make some magic happen.",
+        "Welcome back to the matrix.",
+        "Your command center awaits.",
+        "Let's get productive.",
+        "System fully operational.",
+    ];
+
+    let mut rng = rand::rng();
+    let random_suffix = fun_suffixes.choose(&mut rng).unwrap_or(&"");
+
+    Ok(format!("{}, {}! {}", prefix, base_name, random_suffix))
 }
