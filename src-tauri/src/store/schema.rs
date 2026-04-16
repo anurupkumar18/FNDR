@@ -10,6 +10,14 @@ fn default_image_embedding() -> Vec<f32> {
     vec![0.0; 512]
 }
 
+fn default_snippet_embedding() -> Vec<f32> {
+    vec![0.0; 384]
+}
+
+fn default_decay_score() -> f32 {
+    1.0
+}
+
 fn default_summary_source() -> String {
     "fallback".to_string()
 }
@@ -68,6 +76,15 @@ pub struct MemoryRecord {
     /// URL of the page (for browser windows)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Embedding of the LLM/VLM snippet text (second semantic tower for search)
+    #[serde(default = "default_snippet_embedding")]
+    pub snippet_embedding: Vec<f32>,
+    /// Ebbinghaus decay score: starts at 1.0, decays toward 0.15 floor when not accessed
+    #[serde(default = "default_decay_score")]
+    pub decay_score: f32,
+    /// Unix ms timestamp of last search access; used for decay computation
+    #[serde(default)]
+    pub last_accessed_at: i64,
 }
 
 /// Search result returned to the UI
@@ -101,6 +118,9 @@ pub struct SearchResult {
     /// URL of the page (for browser windows)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Ebbinghaus decay score for this record (used in reranking)
+    #[serde(default = "default_decay_score")]
+    pub decay_score: f32,
 }
 
 /// Statistics about stored data
@@ -258,6 +278,10 @@ pub enum NodeType {
     Entity,
     Task,
     Url,
+    /// Clipboard item copied while in a session
+    Clipboard,
+    /// Audio/meeting transcript segment
+    AudioSegment,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -268,6 +292,12 @@ pub enum EdgeType {
     ReferenceForTask,
     #[serde(rename = "OCCURRED_AT")]
     OccurredAt,
+    /// Clipboard item was copied during this memory chunk's session
+    #[serde(rename = "CLIPBOARD_COPIED")]
+    ClipboardCopied,
+    /// Memory chunk co-occurred with an audio/meeting segment
+    #[serde(rename = "OCCURRED_DURING_AUDIO")]
+    OccurredDuringAudio,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

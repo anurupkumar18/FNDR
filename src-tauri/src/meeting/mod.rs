@@ -417,6 +417,14 @@ pub async fn list_meetings() -> Result<Vec<MeetingSession>, String> {
     Ok(store.list_meetings().await)
 }
 
+/// Return all segments for a given meeting, sorted by index.
+pub async fn get_meeting_segments(meeting_id: &str) -> Vec<crate::store::MeetingSegment> {
+    match get_store() {
+        Ok(store) => store.get_segments_for_meeting(meeting_id).await,
+        Err(_) => Vec::new(),
+    }
+}
+
 pub async fn delete_meeting(meeting_id: &str) -> Result<bool, String> {
     let should_stop_active = {
         let rt = runtime().lock();
@@ -1131,6 +1139,9 @@ async fn ingest_transcript_into_fndr_memory(
         image_embedding: vec![0.0; 512],
         screenshot_path: None,
         url: transcript_path.map(|p| p.to_string()),
+        snippet_embedding: vec![0.0; 384],
+        decay_score: 1.0,
+        last_accessed_at: 0,
     };
 
     app_state

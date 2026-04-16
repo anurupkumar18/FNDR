@@ -290,6 +290,118 @@ impl Store {
         Ok(results)
     }
 
+    /// ANN search over the `snippet_embedding` column (second semantic tower).
+    pub async fn snippet_vector_search(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        time_filter: Option<&str>,
+        app_filter: Option<&str>,
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        let filter = build_filter(time_filter, app_filter);
+        let query_vec: Vec<f32> = query_embedding.to_vec();
+
+        let mut vq = self
+            .table
+            .vector_search(query_vec)?
+            .column("snippet_embedding")
+            .limit(limit);
+
+        if let Some(f) = filter {
+            vq = vq.only_if(f);
+        }
+
+        let batches: Vec<RecordBatch> = vq.execute().await?.try_collect().await?;
+        let mut results = Vec::new();
+        for batch in &batches {
+            results.extend(batch_to_search_results(batch));
+        }
+        Ok(results)
+    }
+
+    /// Asynchronously update snippet + summary_source for a single record (post-LLM).
+    pub async fn update_snippet(
+        &self,
+        id: &str,
+        snippet: &str,
+        source: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let escaped_id = sql_escape(id);
+        let escaped_snippet = sql_escape(snippet);
+        let escaped_source = sql_escape(source);
+        self.table
+            .update()
+            .only_if(format!("id = '{escaped_id}'"))
+            .column("snippet", format!("'{escaped_snippet}'"))
+            .column("summary_source", format!("'{escaped_source}'"))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Batch-apply Ebbinghaus decay scores. `updates` is a vec of (id, new_decay_score).
+    pub async fn apply_decay_batch(
+        &self,
+        updates: &[(String, f32)],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for (id, new_decay) in updates {
+            let escaped_id = sql_escape(id);
+            self.table
+                .update()
+                .only_if(format!("id = '{escaped_id}'"))
+                .column("decay_score", format!("{new_decay}"))
+                .execute()
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Touch accessed records: reset decay to 1.0 and update last_accessed_at.
+    pub async fn touch_accessed(
+        &self,
+        ids: &[String],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for id in ids {
+            let escaped_id = sql_escape(id);
+            self.table
+                .update()
+                .only_if(format!("id = '{escaped_id}'"))
+                .column("decay_score", "1.0".to_string())
+                .column("last_accessed_at", format!("{now_ms}"))
+                .execute()
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Return the path to the frames directory (for screenshot eviction).
+    pub fn frames_dir(&self) -> PathBuf {
+        self.data_dir.join("frames")
+    }
+
+    /// Return all memory records whose timestamp falls within [start_ms, end_ms].
+    pub async fn get_memories_in_range(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<Vec<MemoryRecord>, Box<dyn std::error::Error>> {
+        let filter = format!("timestamp >= {start_ms} AND timestamp <= {end_ms}");
+        let batches: Vec<RecordBatch> = self
+            .table
+            .query()
+            .only_if(filter)
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
+        let mut records = Vec::new();
+        for batch in &batches {
+            records.extend(batch_to_memory_records(batch));
+        }
+        Ok(records)
+    }
+
     /// Full-scan keyword search using SQL LIKE predicates.
     pub async fn keyword_search(
         &self,
@@ -765,14 +877,10 @@ impl Store {
 
             if let Some(col) = app_col {
                 for i in 0..batch.num_rows() {
-                    let summary_source = summary_col
-                        .as_ref()
-                        .map(|s| s.value(i))
-                        .unwrap_or("fallback");
-                    if summary_source.eq_ignore_ascii_case("fallback") {
-                        continue;
+                    let name = col.value(i);
+                    if !name.is_empty() {
+                        names.insert(name.to_string());
                     }
-                    names.insert(col.value(i).to_string());
                 }
             }
         }
@@ -977,6 +1085,16 @@ fn memory_schema() -> Schema {
         ),
         Field::new("screenshot_path", DataType::Utf8, true),
         Field::new("url", DataType::Utf8, true),
+        Field::new(
+            "snippet_embedding",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                TEXT_EMBED_DIM,
+            ),
+            false,
+        ),
+        Field::new("decay_score", DataType::Float32, false),
+        Field::new("last_accessed_at", DataType::Int64, false),
     ])
 }
 
@@ -1117,6 +1235,22 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
         None,
     )?;
 
+    // Snippet embeddings (second semantic tower)
+    let flat_snip: Vec<f32> = records
+        .iter()
+        .flat_map(|r| r.snippet_embedding.iter().copied())
+        .collect();
+    let snip_values = Arc::new(Float32Array::from(flat_snip)) as Arc<dyn Array>;
+    let snippet_embedding_array = FixedSizeListArray::try_new(
+        Arc::new(Field::new("item", DataType::Float32, true)),
+        TEXT_EMBED_DIM,
+        snip_values,
+        None,
+    )?;
+
+    let decay_scores: Vec<f32> = records.iter().map(|r| r.decay_score).collect();
+    let last_accessed: Vec<i64> = records.iter().map(|r| r.last_accessed_at).collect();
+
     RecordBatch::try_new(
         schema,
         vec![
@@ -1139,6 +1273,9 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
             Arc::new(image_embedding_array),
             Arc::new(StringArray::from(screenshot_paths)),
             Arc::new(StringArray::from(urls)),
+            Arc::new(snippet_embedding_array),
+            Arc::new(Float32Array::from(decay_scores)),
+            Arc::new(Int64Array::from(last_accessed)),
         ],
     )
 }
@@ -1169,11 +1306,17 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
     let img_col = batch
         .column_by_name("image_embedding")
         .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>().cloned());
+    let snip_embed_col = batch
+        .column_by_name("snippet_embedding")
+        .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>().cloned());
+    let decay_scores = f32_col(batch, "decay_score");
+    let last_accessed = i64_col(batch, "last_accessed_at");
 
     (0..n)
         .map(|i| {
             let embedding = extract_f32_list(&embed_col, i, TEXT_EMBED_DIM as usize);
             let image_embedding = extract_f32_list(&img_col, i, IMAGE_EMBED_DIM as usize);
+            let snippet_embedding = extract_f32_list(&snip_embed_col, i, TEXT_EMBED_DIM as usize);
             MemoryRecord {
                 id: get_str(&ids, i),
                 timestamp: timestamps.as_ref().map(|c| c.value(i)).unwrap_or(0),
@@ -1194,6 +1337,9 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
                 image_embedding,
                 screenshot_path: get_opt_str(&screenshot_paths, i),
                 url: get_opt_str(&urls, i),
+                snippet_embedding,
+                decay_score: get_f32(&decay_scores, i).max(0.01),
+                last_accessed_at: get_i64(&last_accessed, i),
             }
         })
         .collect()
@@ -1222,6 +1368,7 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
     let dist_col = batch
         .column_by_name("_distance")
         .and_then(|c| c.as_any().downcast_ref::<Float32Array>().cloned());
+    let decay_scores = f32_col(batch, "decay_score");
 
     (0..n)
         .map(|i| {
@@ -1252,6 +1399,7 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
                 score,
                 screenshot_path: get_opt_str(&screenshot_paths, i),
                 url: get_opt_str(&urls, i),
+                decay_score: get_f32(&decay_scores, i).max(0.15),
             }
         })
         .collect()
@@ -1514,6 +1662,8 @@ fn nodes_to_batch(nodes: &[GraphNode]) -> Result<RecordBatch, Box<dyn std::error
             NodeType::Task => "Task",
             NodeType::Url => "Url",
             NodeType::MemoryChunk => "MemoryChunk",
+            NodeType::Clipboard => "Clipboard",
+            NodeType::AudioSegment => "AudioSegment",
         });
         labels.append_value(&n.label);
         created.append_value(n.created_at);
@@ -1549,6 +1699,8 @@ fn edges_to_batch(edges: &[GraphEdge]) -> Result<RecordBatch, Box<dyn std::error
             EdgeType::PartOfSession => "PART_OF_SESSION",
             EdgeType::ReferenceForTask => "REFERENCE_FOR_TASK",
             EdgeType::OccurredAt => "OCCURRED_AT",
+            EdgeType::ClipboardCopied => "CLIPBOARD_COPIED",
+            EdgeType::OccurredDuringAudio => "OCCURRED_DURING_AUDIO",
         });
         timestamps.append_value(e.timestamp);
         metadata.append_value(serde_json::to_string(&e.metadata).unwrap_or_default());
@@ -1582,6 +1734,8 @@ fn batch_to_nodes(batch: &RecordBatch) -> Vec<GraphNode> {
             "Entity" => NodeType::Entity,
             "Task" => NodeType::Task,
             "Url" => NodeType::Url,
+            "Clipboard" => NodeType::Clipboard,
+            "AudioSegment" => NodeType::AudioSegment,
             _ => NodeType::MemoryChunk,
         };
         nodes.push(GraphNode {
@@ -1611,7 +1765,8 @@ fn batch_to_edges(batch: &RecordBatch) -> Vec<GraphEdge> {
             "REFERENCE_FOR_TASK" | "ReferenceForTask" | "References" => {
                 EdgeType::ReferenceForTask
             }
-            "OCCURRED_AT" | "OccurredAt" | "LinkedTo" => EdgeType::OccurredAt,
+            "CLIPBOARD_COPIED" | "ClipboardCopied" => EdgeType::ClipboardCopied,
+            "OCCURRED_DURING_AUDIO" | "OccurredDuringAudio" => EdgeType::OccurredDuringAudio,
             _ => EdgeType::OccurredAt,
         };
         edges.push(GraphEdge {
@@ -2158,7 +2313,20 @@ async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Erro
     if !existing.contains("session_key") {
         transforms.push(("session_key".to_string(), "''".to_string()));
     }
- 
+    if !existing.contains("snippet_embedding") {
+        // Placeholder zeros — will be computed properly for new captures.
+        transforms.push((
+            "snippet_embedding".to_string(),
+            "embedding".to_string(),
+        ));
+    }
+    if !existing.contains("decay_score") {
+        transforms.push(("decay_score".to_string(), "CAST(1.0 AS FLOAT)".to_string()));
+    }
+    if !existing.contains("last_accessed_at") {
+        transforms.push(("last_accessed_at".to_string(), "timestamp".to_string()));
+    }
+
     if !transforms.is_empty() {
         tracing::info!(
             "Migrating LanceDB memories table schema with {} new columns",

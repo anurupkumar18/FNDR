@@ -858,6 +858,7 @@ mod tests {
             score: 0.8,
             screenshot_path: None,
             url: Some("https://www.youtube.com/watch?v=123".to_string()),
+            decay_score: 1.0,
         };
 
         let mut second = base.clone();
@@ -899,6 +900,7 @@ mod tests {
             score: 0.4,
             screenshot_path: None,
             url: Some("https://www.youtube.com/results?search_query=cricket".to_string()),
+            decay_score: 1.0,
         };
 
         let (_, summary, _, _) = deterministic_fallback(

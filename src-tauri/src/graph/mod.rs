@@ -1,6 +1,6 @@
 use crate::embed::Embedder;
 use crate::search::HybridSearcher;
-use crate::store::{EdgeType, GraphEdge, GraphNode, MemoryRecord, NodeType, Store};
+use crate::store::{EdgeType, GraphEdge, GraphNode, MeetingSegment, MemoryRecord, NodeType, Store};
 use crate::tasks::Task;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -176,6 +176,60 @@ impl GraphStore {
             });
         }
 
+        if !edges.is_empty() {
+            self.store.upsert_edges(&edges).await?;
+        }
+        Ok(())
+    }
+
+    /// For each segment in `segments`, query memories that overlap the segment's
+    /// time window and create `OccurredDuringAudio` edges + AudioSegment nodes.
+    pub async fn link_audio_to_memories(
+        &self,
+        segments: &[MeetingSegment],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+
+        for segment in segments {
+            let seg_node_id = format!("audio_segment:{}", segment.id);
+
+            nodes.push(GraphNode {
+                id: seg_node_id.clone(),
+                node_type: NodeType::AudioSegment,
+                label: segment.text.chars().take(120).collect(),
+                created_at: segment.start_timestamp,
+                metadata: serde_json::json!({
+                    "meeting_id": segment.meeting_id,
+                    "index": segment.index,
+                    "start_ts": segment.start_timestamp,
+                    "end_ts": segment.end_timestamp,
+                    "model": segment.model,
+                }),
+            });
+
+            let memories = self
+                .store
+                .get_memories_in_range(segment.start_timestamp, segment.end_timestamp)
+                .await
+                .unwrap_or_default();
+
+            for memory in &memories {
+                edges.push(GraphEdge {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    source: memory_node_id(&memory.id),
+                    target: seg_node_id.clone(),
+                    edge_type: EdgeType::OccurredDuringAudio,
+                    timestamp: now,
+                    metadata: serde_json::json!({}),
+                });
+            }
+        }
+
+        if !nodes.is_empty() {
+            self.store.upsert_nodes(&nodes).await?;
+        }
         if !edges.is_empty() {
             self.store.upsert_edges(&edges).await?;
         }

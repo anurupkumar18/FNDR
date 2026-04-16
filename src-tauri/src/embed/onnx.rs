@@ -1,17 +1,15 @@
-//! Local text embedding backend for all-MiniLM-L6-v2.
+//! Local text embedding backend for all-MiniLM-L6-v2 via native ONNX Runtime.
 
 use super::TextChunker;
-use serde::{Deserialize, Serialize};
-use std::io::Write;
+use ndarray::Array2;
+use ort::session::Session;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::sync::Mutex;
 
 /// Embedding dimension for all-MiniLM-L6-v2.
 pub const EMBEDDING_DIM: usize = 384;
-const SIDECAR_HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
-const SIDECAR_EMBED_TIMEOUT: Duration = Duration::from_secs(20);
+/// Maximum token sequence length (matches model training config).
+const MAX_SEQ_LEN: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingBackend {
@@ -123,143 +121,136 @@ impl Default for Embedder {
     }
 }
 
-#[derive(Debug)]
 struct RealEmbedder {
-    python_cmd: PathBuf,
-    script_path: PathBuf,
-}
-
-#[derive(Debug, Serialize)]
-struct EmbedRequest<'a> {
-    texts: &'a [String],
-}
-
-#[derive(Debug, Deserialize)]
-struct EmbedResponse {
-    embeddings: Vec<Vec<f32>>,
+    session: Mutex<Session>,
+    tokenizer: tokenizers::Tokenizer,
 }
 
 impl RealEmbedder {
     fn new() -> Result<Self, String> {
-        let python_cmd = python_cmd_for_sidecar();
-        let script_path = resolve_embedder_sidecar()
-            .ok_or_else(|| "Could not locate minilm_embedder.py sidecar".to_string())?;
+        let model_dir = resolve_model_dir()
+            .ok_or_else(|| "Could not determine model directory".to_string())?;
 
-        let embedder = Self {
-            python_cmd,
-            script_path,
-        };
-        embedder.healthcheck()?;
-        Ok(embedder)
-    }
+        let onnx_path = model_dir.join("all-MiniLM-L6-v2.onnx");
+        let tokenizer_path = model_dir.join("tokenizer.json");
 
-    fn healthcheck(&self) -> Result<(), String> {
-        let output = self.run_sidecar(&["--ping"], None, SIDECAR_HEALTHCHECK_TIMEOUT)?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(format!(
-                "Embedding sidecar healthcheck failed (status={}): {}",
-                output.status, stderr
-            ));
+        if !onnx_path.exists() {
+            return Err(format!("ONNX model not found at {}", onnx_path.display()));
+        }
+        if !tokenizer_path.exists() {
+            return Err(format!("Tokenizer not found at {}", tokenizer_path.display()));
         }
 
-        Ok(())
+        let session = Session::builder()
+            .map_err(|e| format!("Failed to create ort session builder: {e}"))?
+            .commit_from_file(&onnx_path)
+            .map_err(|e| format!("Failed to load ONNX model from {}: {e}", onnx_path.display()))?;
+
+        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
+            .map_err(|e| format!("Failed to load tokenizer from {}: {e}", tokenizer_path.display()))?;
+
+        tracing::info!(
+            model = %onnx_path.display(),
+            "Native ort text embedder initialized"
+        );
+        Ok(Self { session: Mutex::new(session), tokenizer })
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-        let payload = serde_json::to_vec(&EmbedRequest { texts })
-            .map_err(|e| format!("Failed to serialize embedding request: {e}"))?;
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        let output =
-            self.run_sidecar(&["--embed-daemon"], Some(&payload), SIDECAR_EMBED_TIMEOUT)?;
+        let encodings = self
+            .tokenizer
+            .encode_batch(texts.to_vec(), true)
+            .map_err(|e| format!("Tokenization failed: {e}"))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let batch_size = texts.len();
+        let seq_len = encodings
+            .iter()
+            .map(|e| e.get_ids().len())
+            .max()
+            .unwrap_or(0)
+            .min(MAX_SEQ_LEN);
+
+        if seq_len == 0 {
+            return Ok(vec![vec![0.0f32; EMBEDDING_DIM]; batch_size]);
+        }
+
+        let mut input_ids = Array2::<i64>::zeros((batch_size, seq_len));
+        let mut attention_mask = Array2::<i64>::zeros((batch_size, seq_len));
+        let mut token_type_ids = Array2::<i64>::zeros((batch_size, seq_len));
+
+        for (i, enc) in encodings.iter().enumerate() {
+            let ids = enc.get_ids();
+            let mask = enc.get_attention_mask();
+            let len = ids.len().min(seq_len);
+            for j in 0..len {
+                input_ids[[i, j]] = ids[j] as i64;
+                attention_mask[[i, j]] = mask[j] as i64;
+            }
+        }
+
+        // Wrap ndarray arrays into ort Tensors (requires ndarray feature).
+        // Clone attention_mask for mean-pooling after ownership is transferred to the session.
+        let attention_mask_pooling = attention_mask.clone();
+        let ids_t = ort::value::Tensor::from_array(input_ids)
+            .map_err(|e| format!("Failed to create input_ids tensor: {e}"))?;
+        let mask_t = ort::value::Tensor::from_array(attention_mask)
+            .map_err(|e| format!("Failed to create attention_mask tensor: {e}"))?;
+        let types_t = ort::value::Tensor::from_array(token_type_ids)
+            .map_err(|e| format!("Failed to create token_type_ids tensor: {e}"))?;
+        let mut session_guard = self
+            .session
+            .lock()
+            .map_err(|e| format!("Session mutex poisoned: {e}"))?;
+        let outputs = session_guard
+            .run(ort::inputs![
+                "input_ids" => ids_t,
+                "attention_mask" => mask_t,
+                "token_type_ids" => types_t,
+            ])
+            .map_err(|e| format!("ONNX inference failed: {e}"))?;
+
+        // ort 2.x RC: try_extract_tensor returns (Shape, &[T]).
+        let (shape, data) = outputs["last_hidden_state"]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| format!("Failed to extract hidden state tensor: {e}"))?;
+
+        // shape: [batch, seq_len, EMBEDDING_DIM]
+        let actual_seq = shape.get(1).copied().unwrap_or(seq_len as i64) as usize;
+        let actual_dim = shape.get(2).copied().unwrap_or(EMBEDDING_DIM as i64) as usize;
+        if actual_dim != EMBEDDING_DIM {
             return Err(format!(
-                "Embedding sidecar failed (status={}): {}",
-                output.status, stderr
+                "Unexpected hidden state dim {actual_dim}, expected {EMBEDDING_DIM}"
             ));
         }
 
-        let response: EmbedResponse = serde_json::from_slice(&output.stdout)
-            .map_err(|e| format!("Failed to parse embedding output: {e}"))?;
-
-        for (idx, vec) in response.embeddings.iter().enumerate() {
-            if vec.len() != EMBEDDING_DIM {
-                return Err(format!(
-                    "Embedding {} had dim {}, expected {}",
-                    idx,
-                    vec.len(),
-                    EMBEDDING_DIM
-                ));
-            }
-        }
-
-        Ok(response.embeddings)
-    }
-
-    fn run_sidecar(
-        &self,
-        args: &[&str],
-        stdin_payload: Option<&[u8]>,
-        timeout: Duration,
-    ) -> Result<std::process::Output, String> {
-        let mut command = Command::new(&self.python_cmd);
-        command
-            .arg(&self.script_path)
-            .args(args)
-            .env("TOKENIZERS_PARALLELISM", "false")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = command
-            .spawn()
-            .map_err(|e| format!("Failed to start embedding sidecar: {e}"))?;
-
-        if let Some(payload) = stdin_payload {
-            if let Some(stdin) = child.stdin.as_mut() {
-                stdin
-                    .write_all(payload)
-                    .map_err(|e| format!("Failed to write embedding input: {e}"))?;
-            }
-        }
-
-        let start = Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    return child
-                        .wait_with_output()
-                        .map_err(|e| format!("Embedding sidecar execution failed: {e}"));
-                }
-                Ok(None) => {
-                    if start.elapsed() > timeout {
-                        let _ = child.kill();
-                        let output = child.wait_with_output().map_err(|e| {
-                            format!("Embedding sidecar timed out and kill wait failed: {e}")
-                        })?;
-                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                        tracing::warn!(
-                            timeout_ms = timeout.as_millis(),
-                            stderr = %stderr,
-                            "Embedding sidecar timed out"
-                        );
-                        return Err(format!(
-                            "Embedding sidecar timed out after {}ms",
-                            timeout.as_millis()
-                        ));
+        let mut embeddings = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let mut sum = vec![0.0f32; EMBEDDING_DIM];
+            let mut count = 0.0f32;
+            for j in 0..actual_seq {
+                let mask_j = j.min(seq_len - 1);
+                if attention_mask_pooling[[i, mask_j]] > 0 {
+                    let offset = (i * actual_seq + j) * EMBEDDING_DIM;
+                    for k in 0..EMBEDDING_DIM {
+                        sum[k] += data[offset + k];
                     }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(err) => {
-                    return Err(format!(
-                        "Embedding sidecar process status check failed: {err}"
-                    ));
+                    count += 1.0;
                 }
             }
+            if count > 0.0 {
+                for v in &mut sum {
+                    *v /= count;
+                }
+            }
+            normalize(&mut sum);
+            embeddings.push(sum);
         }
+
+        Ok(embeddings)
     }
 }
 
@@ -309,30 +300,24 @@ fn allow_mock_embedder() -> bool {
             .unwrap_or(false)
 }
 
-fn python_cmd_for_sidecar() -> PathBuf {
-    if let Some(docs) = dirs::document_dir() {
-        let venv_py = docs.join("FNDR Meetings/venv/bin/python3");
-        if venv_py.exists() {
-            return venv_py;
-        }
-    }
-    PathBuf::from("python3")
-}
-
-fn resolve_embedder_sidecar() -> Option<PathBuf> {
-    // Packaged: <exe>/../Resources/sidecar/minilm_embedder.py
-    let packaged = std::env::current_exe().ok().and_then(|p| {
-        p.parent()
-            .map(|d| d.join("../Resources/sidecar/minilm_embedder.py"))
-    });
-    if let Some(ref p) = packaged {
+/// Resolve the directory containing ONNX model files.
+/// Checks (in order): env var override, standard app data dir, dev CARGO_MANIFEST_DIR fallback.
+fn resolve_model_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("FNDR_MODEL_DIR") {
+        let p = PathBuf::from(dir);
         if p.exists() {
-            return Some(p.clone());
+            return Some(p);
         }
     }
 
-    // Dev path.
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sidecar/minilm_embedder.py");
+    if let Some(proj) = directories::ProjectDirs::from("com", "fndr", "FNDR") {
+        let data_models = proj.data_dir().join("models");
+        if data_models.exists() {
+            return Some(data_models);
+        }
+    }
+
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models");
     if dev.exists() {
         return Some(dev);
     }

@@ -1390,3 +1390,20 @@ pub async fn stop_agent() -> Result<AgentStatus, String> {
 
     Ok(status.clone())
 }
+
+/// Link all segments of a completed meeting to overlapping memory records via
+/// `OccurredDuringAudio` edges. Called automatically when a meeting is stopped.
+#[tauri::command]
+pub async fn link_audio_to_memories(
+    meeting_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<usize, String> {
+    let segments = crate::meeting::get_meeting_segments(&meeting_id).await;
+    let count = segments.len();
+    state
+        .graph
+        .link_audio_to_memories(&segments)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(count)
+}
