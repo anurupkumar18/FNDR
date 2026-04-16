@@ -3,6 +3,7 @@ node_modules/
 target/
 src-tauri/target/
 dist/
+.venv/
 
 # AI Models (large binaries)
 *.gguf

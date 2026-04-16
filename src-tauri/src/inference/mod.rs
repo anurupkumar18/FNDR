@@ -38,7 +38,7 @@ pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, Box<dyn std::error::Er
 pub use vlm::VlmEngine;
 
 const MAX_OCR_SUMMARY_CHARS: usize = 1100;
-const MAX_SUMMARY_CHARS: usize = 120;
+const MAX_SUMMARY_CHARS: usize = 220;
 
 fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -124,13 +124,20 @@ fn strip_known_prefixes(value: &str) -> String {
 }
 
 fn clean_summary_output(raw: &str) -> String {
-    let mut candidate = raw
+    let picked_lines = raw
         .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !is_separator_line(line))
-        .unwrap_or(raw.trim())
-        .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`')
-        .to_string();
+        .filter(|line| !line.is_empty() && !is_separator_line(line))
+        .take(2)
+        .collect::<Vec<_>>();
+    let mut candidate = if picked_lines.is_empty() {
+        raw.trim().to_string()
+    } else {
+        picked_lines.join(" ")
+    }
+    .trim()
+    .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`')
+    .to_string();
 
     // Handle "Action: X | Context: Y" style output.
     if let Some((left, right)) = candidate.split_once("| Context:") {
@@ -147,6 +154,19 @@ fn clean_summary_output(raw: &str) -> String {
         candidate = stripped;
     }
     candidate = normalize_whitespace(&candidate);
+
+    // Keep at most two sentences for browsing ergonomics.
+    let normalized = candidate.replace('!', ".").replace('?', ".");
+    let mut sentences = normalized
+        .split('.')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if sentences.len() > 2 {
+        sentences.truncate(2);
+        candidate = format!("{}.", sentences.join(". "));
+    }
+
     truncate_chars(candidate.trim(), MAX_SUMMARY_CHARS)
 }
 
@@ -156,6 +176,9 @@ fn is_usable_summary(summary: &str) -> bool {
         return false;
     }
     if trimmed.split_whitespace().count() < 2 {
+        return false;
+    }
+    if trimmed.split_whitespace().count() > 44 {
         return false;
     }
     if is_separator_line(trimmed) {
@@ -369,13 +392,14 @@ impl InferenceEngine {
         let prompt = match self.build_prompt(
             "You generate memory snippets from OCR text.\n\
             RULES:\n\
-            - Output exactly one concise sentence, maximum 14 words.\n\
-            - Keep only the primary user activity and key object/topic.\n\
+            - Output 1-2 short sentences, 16-34 words total.\n\
+            - Capture the primary user activity and at least one concrete detail (entity, file, metric, or next step).\n\
             - Ignore UI chrome, menu labels, status bars, repeated file/path lists, and separators.\n\
+            - Keep wording grounded to app/window/OCR evidence only.\n\
             - No preambles like 'I see' or 'The screen shows'.\n\
             - No markdown, no bullet points, no extra labels.",
             &format!(
-                "APP: {}\nWINDOW: {}\n\nOCR TEXT:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Return only the best memory snippet.",
+                "APP: {}\nWINDOW: {}\n\nOCR TEXT:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Return only the best memory snippet with useful details for future search recall.",
                 app_name,
                 window_title,
                 ocr_text.chars().take(MAX_OCR_SUMMARY_CHARS).collect::<String>()
@@ -392,7 +416,7 @@ impl InferenceEngine {
             "Summarizing OCR text for memory node ({} chars)...",
             ocr_text.len()
         );
-        let raw_summary = self.complete(&prompt, 48).await;
+        let raw_summary = self.complete(&prompt, 90).await;
         let summary = clean_summary_output(&raw_summary);
 
         if !is_usable_summary(&summary) {

@@ -42,6 +42,9 @@ export interface CaptureStatus {
     ai_model_available: boolean;
     ai_model_loaded: boolean;
     loaded_model_id: string | null;
+    embedding_backend: string;
+    embedding_degraded: boolean;
+    embedding_detail: string;
 }
 
 export interface McpServerStatus {
@@ -97,6 +100,7 @@ export interface MeetingRecorderStatus {
     started_at?: number | null;
     ffmpeg_available: boolean;
     transcription_backend: string;
+    is_analyzing: boolean;
     last_error?: string | null;
 }
 

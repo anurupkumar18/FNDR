@@ -34,6 +34,74 @@
     --header-border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+/* ===== Light Theme ===== */
+[data-theme="light"] {
+    --bg-primary: #f5f5f7;
+    --surface: #ffffff;
+    --surface-elevated: #f0f0f2;
+    --border: #d8d8dc;
+    --bg-secondary: var(--surface);
+    --bg-tertiary: var(--surface-elevated);
+    --text-primary: #1a1a1a;
+    --text-secondary: #555560;
+    --text-muted: #8e8e93;
+    --accent: #1a1a1a;
+    --accent-hover: #000000;
+    --accent-light: rgba(0, 0, 0, 0.06);
+    --danger: #999999;
+    --danger-light: rgba(180, 180, 180, 0.15);
+    --success: #555555;
+    --success-light: rgba(100, 100, 100, 0.1);
+    --shadow-soft: 0 2px 6px rgba(0, 0, 0, 0.06);
+    --shadow-medium: 0 8px 22px rgba(0, 0, 0, 0.08);
+    --shadow-strong: 0 14px 32px rgba(0, 0, 0, 0.1);
+    --panel-bg: rgba(248, 248, 250, 0.97);
+    --header-border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] ::selection {
+    background: rgba(0, 0, 0, 0.15);
+    color: #000;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.14);
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.22);
+}
+
+[data-theme="light"] .ui-action-btn {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(240, 240, 242, 0.9));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 1px 3px rgba(0, 0, 0, 0.08);
+    color: var(--text-secondary);
+}
+
+[data-theme="light"] .ui-action-btn:hover:not(:disabled) {
+    background: linear-gradient(180deg, rgba(245, 245, 247, 0.95), rgba(230, 230, 235, 0.95));
+    border-color: rgba(0, 0, 0, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 3px 8px rgba(0, 0, 0, 0.1);
+    color: var(--text-primary);
+}
+
+[data-theme="light"] .ui-action-btn.active {
+    background: linear-gradient(180deg, rgba(230, 230, 235, 0.95), rgba(215, 215, 220, 0.95));
+    border-color: rgba(0, 0, 0, 0.2);
+    color: var(--text-primary);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .ui-action-btn:disabled {
+    background: rgba(240, 240, 242, 0.6);
+    border-color: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .ui-action-btn::before {
+    background: radial-gradient(120% 90% at 50% -20%, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 55%);
+}
+
 * {
     box-sizing: border-box;
     margin: 0;

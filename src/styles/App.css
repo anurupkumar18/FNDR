@@ -52,6 +52,9 @@
     top: 10px;
     right: 10px;
     z-index: 80;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .recording-consent-banner {
@@ -282,4 +285,36 @@
     .home-greeting {
         font-size: 1.24rem;
     }
+}
+
+/* ===== Light Theme overrides ===== */
+[data-theme="light"] .left-sidebar {
+    background: rgba(245, 245, 247, 0.92);
+    border-right-color: var(--border);
+}
+
+[data-theme="light"] .sidebar-scrim {
+    background: rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="light"] .panel-backdrop {
+    background: rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="light"] .home-greeting {
+    color: rgba(26, 26, 26, 0.95);
+}
+
+[data-theme="light"] .home-date-context {
+    color: rgba(100, 100, 110, 0.76);
+}
+
+[data-theme="light"] .recording-consent-banner {
+    background: rgba(255, 240, 240, 0.96);
+    border-color: rgba(180, 80, 80, 0.3);
+}
+
+[data-theme="light"] .error-banner {
+    background: var(--surface);
+    border-color: var(--border);
 }

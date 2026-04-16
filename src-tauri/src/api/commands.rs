@@ -1,6 +1,6 @@
 //! Tauri command handlers
 
-use crate::embed::Embedder;
+use crate::embed::{embedding_runtime_status, Embedder, EmbeddingBackend};
 use crate::privacy::Blocklist;
 use crate::store::{GraphEdge, GraphNode, NodeType};
 
@@ -29,6 +29,9 @@ pub struct CaptureStatus {
     pub ai_model_available: bool,
     pub ai_model_loaded: bool,
     pub loaded_model_id: Option<String>,
+    pub embedding_backend: String,
+    pub embedding_degraded: bool,
+    pub embedding_detail: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,10 +58,10 @@ static SHARED_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
 const BRANCH_LIMIT: usize = 28;
 const RERANK_LIMIT: usize = 18;
 const GROUP_LIMIT: usize = 6;
-const LLM_GROUP_LIMIT: usize = 0;
+const LLM_GROUP_LIMIT: usize = 2;
 
-const EMBED_TIMEOUT: Duration = Duration::from_millis(1200);
-const VECTOR_TIMEOUT: Duration = Duration::from_millis(1200);
+const EMBED_TIMEOUT: Duration = Duration::from_millis(2200);
+const VECTOR_TIMEOUT: Duration = Duration::from_millis(1800);
 const KEYWORD_TIMEOUT: Duration = Duration::from_millis(1200);
 const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
 const LLM_SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(1500);
@@ -81,15 +84,6 @@ fn is_internal_fndr_result(result: &SearchResult) -> bool {
 
 fn strip_internal_fndr_results(mut results: Vec<SearchResult>) -> Vec<SearchResult> {
     results.retain(|result| !is_internal_fndr_result(result));
-    results
-}
-
-fn is_fallback_summary_source(summary_source: &str) -> bool {
-    summary_source.trim().eq_ignore_ascii_case("fallback")
-}
-
-fn strip_fallback_results(mut results: Vec<SearchResult>) -> Vec<SearchResult> {
-    results.retain(|result| !is_fallback_summary_source(&result.summary_source));
     results
 }
 
@@ -324,16 +318,26 @@ pub async fn search(
 
     let embedder = shared_embedder()?;
 
-    let results = HybridSearcher::search(
-        &state.inner().store,
-        &embedder,
-        &query,
-        limit,
-        time_filter.as_deref(),
-        app_filter.as_deref(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let results = if embedder.backend() == EmbeddingBackend::Mock {
+        tracing::warn!("search:mock_embedder keyword_only_mode=true");
+        state
+            .inner()
+            .store
+            .keyword_search(&query, limit, time_filter.as_deref(), app_filter.as_deref())
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        HybridSearcher::search(
+            &state.inner().store,
+            &embedder,
+            &query,
+            limit,
+            time_filter.as_deref(),
+            app_filter.as_deref(),
+        )
+        .await
+        .map_err(|e| e.to_string())?
+    };
 
     Ok(strip_internal_fndr_results(results))
 }
@@ -374,28 +378,33 @@ pub async fn search_memory_cards(
     tracing::info!("search_memory_cards:embed:start");
     let maybe_query_embedding = match shared_embedder() {
         Ok(embedder) => {
-            let query_text = query.clone();
-            match timeout(
-                EMBED_TIMEOUT,
-                tokio::task::spawn_blocking(move || embedder.embed_batch(&[query_text])),
-            )
-            .await
-            {
-                Ok(Ok(Ok(vectors))) => vectors.into_iter().next(),
-                Ok(Ok(Err(err))) => {
-                    tracing::warn!("search_memory_cards:embed:failed err={}", err);
-                    None
-                }
-                Ok(Err(err)) => {
-                    tracing::warn!("search_memory_cards:embed:join_failed err={}", err);
-                    None
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        timeout_ms = EMBED_TIMEOUT.as_millis(),
-                        "search_memory_cards:embed:timeout"
-                    );
-                    None
+            if embedder.backend() == EmbeddingBackend::Mock {
+                tracing::warn!("search_memory_cards:embed:mock_backend keyword_only_mode=true");
+                None
+            } else {
+                let query_text = query.clone();
+                match timeout(
+                    EMBED_TIMEOUT,
+                    tokio::task::spawn_blocking(move || embedder.embed_batch(&[query_text])),
+                )
+                .await
+                {
+                    Ok(Ok(Ok(vectors))) => vectors.into_iter().next(),
+                    Ok(Ok(Err(err))) => {
+                        tracing::warn!("search_memory_cards:embed:failed err={}", err);
+                        None
+                    }
+                    Ok(Err(err)) => {
+                        tracing::warn!("search_memory_cards:embed:join_failed err={}", err);
+                        None
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            timeout_ms = EMBED_TIMEOUT.as_millis(),
+                            "search_memory_cards:embed:timeout"
+                        );
+                        None
+                    }
                 }
             }
         }
@@ -548,7 +557,7 @@ pub async fn list_memory_cards(
         .await
         .map_err(|e| e.to_string())?;
 
-    let mut cards: Vec<MemoryCard> = strip_fallback_results(strip_internal_fndr_results(results))
+    let mut cards: Vec<MemoryCard> = strip_internal_fndr_results(results)
         .into_iter()
         .map(memory_card_from_result)
         .collect();
@@ -830,6 +839,7 @@ fn build_grounded_search_summary(query: &str, evidence: &[SummaryEvidence]) -> S
 /// Get capture status
 #[tauri::command]
 pub async fn get_status(state: State<'_, Arc<AppState>>) -> Result<CaptureStatus, String> {
+    let embed_status = embedding_runtime_status();
     Ok(CaptureStatus {
         is_capturing: state.inner().is_capturing(),
         is_paused: state.inner().is_paused.load(Ordering::SeqCst),
@@ -840,6 +850,9 @@ pub async fn get_status(state: State<'_, Arc<AppState>>) -> Result<CaptureStatus
         ai_model_available: state.inner().ai_model_available(),
         ai_model_loaded: state.inner().ai_model_loaded(),
         loaded_model_id: state.inner().loaded_model_id(),
+        embedding_backend: embed_status.backend,
+        embedding_degraded: embed_status.degraded,
+        embedding_detail: embed_status.detail,
     })
 }
 
@@ -1091,7 +1104,11 @@ pub async fn add_todo(
 
     let mut tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
     tasks.push(task.clone());
-    state.store.upsert_tasks(&tasks).await.map_err(|e| e.to_string())?;
+    state
+        .store
+        .upsert_tasks(&tasks)
+        .await
+        .map_err(|e| e.to_string())?;
 
     if let Err(err) = state.inner().graph.link_task(&task).await {
         tracing::warn!("Failed linking manual task in graph: {}", err);
@@ -1104,19 +1121,26 @@ pub async fn add_todo(
 #[tauri::command]
 pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, String> {
     let tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
-    Ok(tasks.into_iter().filter(|t| !t.is_completed && !t.is_dismissed).collect())
+    Ok(tasks
+        .into_iter()
+        .filter(|t| !t.is_completed && !t.is_dismissed)
+        .collect())
 }
 
 /// Dismiss a task
 #[tauri::command]
 pub async fn dismiss_todo(
     state: State<'_, Arc<AppState>>,
-    task_id: String
+    task_id: String,
 ) -> Result<bool, String> {
     let mut tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
     if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
         task.is_dismissed = true;
-        state.store.upsert_tasks(&tasks).await.map_err(|e| e.to_string())?;
+        state
+            .store
+            .upsert_tasks(&tasks)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(true)
     } else {
         Ok(false)
@@ -1163,11 +1187,15 @@ pub struct GraphDataResponse {
 }
 
 fn graph_node_app_name(node: &GraphNode) -> Option<&str> {
-    node.metadata.get("app_name").and_then(|v: &serde_json::Value| v.as_str())
+    node.metadata
+        .get("app_name")
+        .and_then(|v: &serde_json::Value| v.as_str())
 }
 
 fn graph_node_bundle_id(node: &GraphNode) -> Option<&str> {
-    node.metadata.get("bundle_id").and_then(|v: &serde_json::Value| v.as_str())
+    node.metadata
+        .get("bundle_id")
+        .and_then(|v: &serde_json::Value| v.as_str())
 }
 
 #[tauri::command]

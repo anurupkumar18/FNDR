@@ -469,8 +469,7 @@ fn deterministic_fallback(
 
 fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     let snippets = collect_group_snippets(std::slice::from_ref(result));
-    let (title, mut summary, action, context) =
-        deterministic_fallback(query, result, &snippets);
+    let (title, mut summary, action, context) = deterministic_fallback(query, result, &snippets);
     let evidence_ids = vec![result.id.clone()];
     let confidence = grounding_confidence(query, &summary, result.score, &snippets);
     if confidence < 0.42 && !summary.to_lowercase().starts_with("low confidence:") {

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+
+type Theme = "dark" | "light";
 import {
     CaptureStatus,
     McpServerStatus,
@@ -51,6 +53,11 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [profileDraft, setProfileDraft] = useState("");
     const [profileBusy, setProfileBusy] = useState(false);
     const [profileMsg, setProfileMsg] = useState<string | null>(null);
+
+    // Theme state
+    const [theme, setTheme] = useState<Theme>(() => {
+        return (localStorage.getItem("fndr-theme") as Theme) || "dark";
+    });
 
     // Model tab state
     const [models, setModels] = useState<ModelInfo[]>([]);
@@ -127,6 +134,12 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
             return () => window.removeEventListener("keydown", handleEscape);
         }
     }, [isOpen]);
+
+    // Apply theme to document root
+    useEffect(() => {
+        document.documentElement.setAttribute("data-theme", theme);
+        localStorage.setItem("fndr-theme", theme);
+    }, [theme]);
 
     useEffect(() => {
         if (!downloadingId || downloadStatus.model_id !== downloadingId) {
@@ -355,6 +368,15 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 )}
             </button>
 
+            <button
+                className="ui-action-btn theme-toggle-btn"
+                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+                title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            >
+                {theme === "dark" ? "☀️" : "🌙"}
+            </button>
+
             {isOpen && <div className="panel-backdrop" onClick={() => setIsOpen(false)} />}
 
             <aside className={`settings-panel ${isOpen ? "open" : ""}`}>
@@ -507,6 +529,14 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         ? " It is currently loaded in memory."
                                         : " It is downloaded and will load automatically when needed."
                                     : " It is not downloaded yet."}
+                            </p>
+                            <p className="section-hint">
+                                Search embeddings: {status
+                                    ? status.embedding_degraded
+                                        ? `degraded (${status.embedding_backend})`
+                                        : status.embedding_backend
+                                    : "unknown"}.
+                                {status?.embedding_detail ? ` ${status.embedding_detail}` : ""}
                             </p>
 
                             {modelError && <div className="model-error">{modelError}</div>}

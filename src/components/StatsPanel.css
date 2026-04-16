@@ -259,3 +259,30 @@
         grid-template-columns: 1fr;
     }
 }
+
+/* ===== Light Theme ===== */
+[data-theme="light"] .stats-page-section {
+    background: rgba(0, 0, 0, 0.015);
+}
+
+[data-theme="light"] .stats-page-rank-bar {
+    background: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .stats-page-rank-bar span {
+    background: linear-gradient(90deg, rgba(80, 80, 80, 0.7), rgba(140, 140, 140, 0.5));
+}
+
+[data-theme="light"] .stats-hour-cell {
+    background: linear-gradient(180deg, rgba(80, 80, 80, 0.7), rgba(140, 140, 140, 0.5));
+    border-color: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .stats-page-insights p {
+    background: rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="light"] .stats-raw-json {
+    background: rgba(0, 0, 0, 0.03);
+    color: #333;
+}

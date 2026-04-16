@@ -37,7 +37,10 @@ impl GraphStore {
         Self { store }
     }
 
-    pub async fn ingest_memory(&self, record: &MemoryRecord) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn ingest_memory(
+        &self,
+        record: &MemoryRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let now = chrono::Utc::now().timestamp_millis();
 
         let memory_node_id = memory_node_id(&record.id);
@@ -385,7 +388,12 @@ impl GraphStore {
         })
     }
 
-    fn structural_context_for_query(&self, query: &str, nodes: &[GraphNode], edges: &[GraphEdge]) -> Vec<String> {
+    fn structural_context_for_query(
+        &self,
+        query: &str,
+        nodes: &[GraphNode],
+        edges: &[GraphEdge],
+    ) -> Vec<String> {
         let normalized = query.to_lowercase();
         let include_tasks = normalized.contains("task")
             || normalized.contains("todo")
@@ -420,7 +428,12 @@ impl GraphStore {
         notes
     }
 
-    fn map_cards(&self, results: Vec<crate::store::SearchResult>, nodes: &[GraphNode], edges: &[GraphEdge]) -> Vec<MemoryCard> {
+    fn map_cards(
+        &self,
+        results: Vec<crate::store::SearchResult>,
+        nodes: &[GraphNode],
+        edges: &[GraphEdge],
+    ) -> Vec<MemoryCard> {
         let memory_to_tasks = task_edges_by_memory(nodes, edges);
 
         results
@@ -578,10 +591,8 @@ fn related_urls_for_task_from_snapshot(
     task_id: &str,
 ) -> Vec<String> {
     let task_node = task_node_id(task_id);
-    let node_map: HashMap<&str, &GraphNode> = nodes
-        .iter()
-        .map(|node| (node.id.as_str(), node))
-        .collect();
+    let node_map: HashMap<&str, &GraphNode> =
+        nodes.iter().map(|node| (node.id.as_str(), node)).collect();
 
     let mut memory_targets = Vec::new();
     let mut urls = Vec::new();

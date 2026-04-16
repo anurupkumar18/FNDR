@@ -47,7 +47,10 @@ fn main() {
             let graph = GraphStore::new(store_arc.clone());
             tracing::info!("Graph store initialized");
 
-            if let Err(err) = tauri::async_runtime::block_on(fndr_lib::meeting::init(data_dir.clone(), store_arc.clone())) {
+            if let Err(err) = tauri::async_runtime::block_on(fndr_lib::meeting::init(
+                data_dir.clone(),
+                store_arc.clone(),
+            )) {
                 tracing::warn!("Meeting subsystem initialization failed: {}", err);
             }
 
@@ -55,8 +58,7 @@ fn main() {
             if config.retention_days > 0 {
                 match tauri::async_runtime::block_on(
                     store_arc.delete_older_than(config.retention_days),
-                )
-                {
+                ) {
                     Ok(n) if n > 0 => tracing::info!("Retention: removed {} old records", n),
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Retention cleanup failed: {}", e),

@@ -55,6 +55,7 @@ export function SearchBar({
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
+    const inputRef = useRef<HTMLTextAreaElement>(null);
     const mimeTypeRef = useRef<string>("audio/webm");
     const recordingStartedAtRef = useRef<number>(0);
     const summaryRequestRef = useRef(0);
@@ -148,6 +149,12 @@ export function SearchBar({
             window.clearTimeout(timer);
         };
     }, [value, resultCount]);
+    
+    useEffect(() => {
+        if (inputRef.current && value.length > 0) {
+            inputRef.current.scrollLeft = inputRef.current.scrollWidth;
+        }
+    }, [value]);
 
     useEffect(() => {
         return () => {
@@ -357,11 +364,17 @@ export function SearchBar({
                     </svg>
 
                     <div className="search-input-wrap">
-                        <input
+                        <textarea
                             id="fndr-search-input"
-                            type="text"
+                            ref={inputRef}
                             value={value}
-                            onChange={(e) => onChange(e.target.value)}
+                            onChange={(e) => onChange(e.target.value.replace(/\r?\n/g, ""))}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                    e.preventDefault();
+                                }
+                            }}
+                            rows={1}
                             placeholder={activePlaceholder}
                             className="search-input search-input-cycling"
                             autoComplete="off"
