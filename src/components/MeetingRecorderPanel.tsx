@@ -45,25 +45,20 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
             setStatus(meetingStatus);
             setMeetings(meetingList);
 
-            // Determine which meeting tab to show.
-            // If the user has explicitly clicked a tab, preserve it.
-            // Only auto-switch when: first mount, or autoSelect is forced
-            // (e.g. after starting/stopping a recording).
+            const pinnedId = selectedMeetingId && meetingList.some((m) => m.id === selectedMeetingId)
+                ? selectedMeetingId
+                : null;
             let nextId: string | null = null;
-
             if (userSelectedId.current) {
-                // User explicitly selected a tab — keep it if it still exists.
-                const stillExists = meetingList.some(m => m.id === userSelectedId.current);
+                const stillExists = meetingList.some((m) => m.id === userSelectedId.current);
                 nextId = stillExists ? userSelectedId.current : (meetingList[0]?.id ?? null);
                 if (!stillExists) {
                     userSelectedId.current = null;
                 }
             } else if (autoSelect) {
-                // Auto-select: prefer current recording, else first in list.
-                nextId = meetingStatus.current_meeting_id ?? meetingList[0]?.id ?? null;
+                nextId = meetingStatus.current_meeting_id ?? pinnedId ?? meetingList[0]?.id ?? null;
             } else {
-                // Background refresh with no user selection yet — keep current or pick first.
-                nextId = selectedMeetingId ?? meetingList[0]?.id ?? null;
+                nextId = pinnedId ?? meetingList[0]?.id ?? null;
             }
 
             setSelectedMeetingId(nextId);
@@ -194,7 +189,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                         </div>
                     )}
 
-                    {stopping && (
+                    {(stopping || status?.is_analyzing) && (
                         <div className="meeting-analyzing-state">
                             <div className="spinner" />
                             <p>Transcribing and extracting action items...</p>
@@ -255,7 +250,11 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                         <details className="raw-transcript-details">
                             <summary>View Full Transcript</summary>
                             <div className="transcript-text">
-                                {transcript?.full_text || "Transcript not loaded."}
+                                {transcript?.full_text
+                                    ? transcript.full_text
+                                    : selectedMeeting.segment_count > 0
+                                        ? `Transcript unavailable in UI right now (${selectedMeeting.segment_count} segment(s) recorded). Try switching meetings and back to reload.`
+                                        : "No transcript segments were captured for this meeting yet."}
                             </div>
                         </details>
                     </section>

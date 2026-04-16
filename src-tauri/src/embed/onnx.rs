@@ -5,13 +5,16 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 /// Embedding dimension for all-MiniLM-L6-v2.
 pub const EMBEDDING_DIM: usize = 384;
-const SIDECAR_HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
-const SIDECAR_EMBED_TIMEOUT: Duration = Duration::from_secs(20);
+const SIDECAR_HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(30);
+const SIDECAR_EMBED_TIMEOUT: Duration = Duration::from_secs(30);
+const HEALTHCHECK_PROBE_TEXT: &str = "fndr embedding smoke check";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingBackend {
@@ -19,10 +22,61 @@ pub enum EmbeddingBackend {
     Mock,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingRuntimeStatus {
+    pub backend: String,
+    pub degraded: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone)]
+struct EmbeddingRuntimeState {
+    backend: String,
+    degraded: bool,
+    detail: String,
+}
+
+static EMBEDDING_RUNTIME_STATE: OnceLock<Mutex<EmbeddingRuntimeState>> = OnceLock::new();
+
+fn runtime_state() -> &'static Mutex<EmbeddingRuntimeState> {
+    EMBEDDING_RUNTIME_STATE.get_or_init(|| {
+        Mutex::new(EmbeddingRuntimeState {
+            backend: "unknown".to_string(),
+            degraded: false,
+            detail: "Embedder not initialized yet".to_string(),
+        })
+    })
+}
+
+fn set_runtime_state(backend: &str, degraded: bool, detail: impl Into<String>) {
+    if let Ok(mut guard) = runtime_state().lock() {
+        guard.backend = backend.to_string();
+        guard.degraded = degraded;
+        guard.detail = detail.into();
+    }
+}
+
+pub fn embedding_runtime_status() -> EmbeddingRuntimeStatus {
+    if let Ok(guard) = runtime_state().lock() {
+        EmbeddingRuntimeStatus {
+            backend: guard.backend.clone(),
+            degraded: guard.degraded,
+            detail: guard.detail.clone(),
+        }
+    } else {
+        EmbeddingRuntimeStatus {
+            backend: "unknown".to_string(),
+            degraded: true,
+            detail: "Embedding runtime state lock poisoned".to_string(),
+        }
+    }
+}
+
 /// Embedder with pluggable backend.
 pub struct Embedder {
     chunker: TextChunker,
     backend: Backend,
+    degraded_to_mock: AtomicBool,
 }
 
 enum Backend {
@@ -35,21 +89,37 @@ impl Embedder {
         let chunker = TextChunker::new();
 
         match RealEmbedder::new() {
-            Ok(real) => Ok(Self {
-                chunker,
-                backend: Backend::Real(real),
-            }),
+            Ok(real) => {
+                set_runtime_state("real", false, "MiniLM embedder ready");
+                Ok(Self {
+                    chunker,
+                    backend: Backend::Real(real),
+                    degraded_to_mock: AtomicBool::new(false),
+                })
+            }
             Err(err) => {
                 if allow_mock_embedder() {
+                    let reason =
+                        format!("Semantic embeddings degraded to mock mode. Reason: {}", err);
                     tracing::warn!(
-                        "MiniLM embedder fallback active: using MOCK embeddings in this build. Reason: {}",
-                        err
+                        "MiniLM embedder fallback active: using MOCK embeddings. {}",
+                        reason
                     );
+                    set_runtime_state("mock", true, reason);
                     Ok(Self {
                         chunker,
                         backend: Backend::Mock(MockEmbedder::default()),
+                        degraded_to_mock: AtomicBool::new(true),
                     })
                 } else {
+                    set_runtime_state(
+                        "unavailable",
+                        true,
+                        format!(
+                            "MiniLM embedder failed and mock fallback is disabled: {}",
+                            err
+                        ),
+                    );
                     Err(format!(
                         "Failed to initialize real all-MiniLM-L6-v2 embedder and mock fallback is disabled: {err}"
                     ))
@@ -59,6 +129,10 @@ impl Embedder {
     }
 
     pub fn backend(&self) -> EmbeddingBackend {
+        if self.degraded_to_mock.load(Ordering::Relaxed) {
+            return EmbeddingBackend::Mock;
+        }
+
         match self.backend {
             Backend::Real(_) => EmbeddingBackend::Real,
             Backend::Mock(_) => EmbeddingBackend::Mock,
@@ -111,7 +185,34 @@ impl Embedder {
 
     fn backend_embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         match &self.backend {
-            Backend::Real(real) => real.embed_batch(texts),
+            Backend::Real(real) => {
+                if self.degraded_to_mock.load(Ordering::Relaxed) {
+                    return Ok(MockEmbedder.embed_batch(texts));
+                }
+
+                match real.embed_batch(texts) {
+                    Ok(vectors) => Ok(vectors),
+                    Err(err) => {
+                        if allow_mock_embedder() {
+                            self.degraded_to_mock.store(true, Ordering::Relaxed);
+                            let detail = format!(
+                                "Runtime embedding failure; switched to mock mode: {}",
+                                err
+                            );
+                            tracing::warn!("{}", detail);
+                            set_runtime_state("mock", true, detail);
+                            Ok(MockEmbedder.embed_batch(texts))
+                        } else {
+                            set_runtime_state(
+                                "unavailable",
+                                true,
+                                format!("Runtime embedding failure: {}", err),
+                            );
+                            Err(err)
+                        }
+                    }
+                }
+            }
             Backend::Mock(mock) => Ok(mock.embed_batch(texts)),
         }
     }
@@ -154,7 +255,14 @@ impl RealEmbedder {
     }
 
     fn healthcheck(&self) -> Result<(), String> {
-        let output = self.run_sidecar(&["--ping"], None, SIDECAR_HEALTHCHECK_TIMEOUT)?;
+        let probe = vec![HEALTHCHECK_PROBE_TEXT.to_string()];
+        let payload = serde_json::to_vec(&EmbedRequest { texts: &probe })
+            .map_err(|e| format!("Failed to serialize embedder healthcheck payload: {e}"))?;
+        let output = self.run_sidecar(
+            &["--embed-daemon"],
+            Some(&payload),
+            SIDECAR_HEALTHCHECK_TIMEOUT,
+        )?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -162,6 +270,24 @@ impl RealEmbedder {
                 "Embedding sidecar healthcheck failed (status={}): {}",
                 output.status, stderr
             ));
+        }
+
+        let response: EmbedResponse = serde_json::from_slice(&output.stdout)
+            .map_err(|e| format!("Embedding sidecar healthcheck parse failed: {e}"))?;
+        let first = response
+            .embeddings
+            .first()
+            .ok_or_else(|| "Embedding sidecar healthcheck returned no vectors".to_string())?;
+        if first.len() != EMBEDDING_DIM {
+            return Err(format!(
+                "Embedding sidecar healthcheck returned dim {}, expected {}",
+                first.len(),
+                EMBEDDING_DIM
+            ));
+        }
+        let norm = first.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if norm <= 0.0 {
+            return Err("Embedding sidecar healthcheck returned an all-zero vector".to_string());
         }
 
         Ok(())
@@ -210,13 +336,21 @@ impl RealEmbedder {
             .arg(&self.script_path)
             .args(args)
             .env("TOKENIZERS_PARALLELISM", "false")
+            .env(
+                "FNDR_EMBEDDER_REQUEST_TIMEOUT_SEC",
+                format!("{:.3}", timeout.as_secs_f64()),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let mut child = command
-            .spawn()
-            .map_err(|e| format!("Failed to start embedding sidecar: {e}"))?;
+        let mut child = command.spawn().map_err(|e| {
+            format!(
+                "Failed to start embedding sidecar (python={} script={}): {e}",
+                self.python_cmd.display(),
+                self.script_path.display()
+            )
+        })?;
 
         if let Some(payload) = stdin_payload {
             if let Some(stdin) = child.stdin.as_mut() {
@@ -247,8 +381,13 @@ impl RealEmbedder {
                             "Embedding sidecar timed out"
                         );
                         return Err(format!(
-                            "Embedding sidecar timed out after {}ms",
-                            timeout.as_millis()
+                            "Embedding sidecar timed out after {}ms (stderr: {})",
+                            timeout.as_millis(),
+                            if stderr.is_empty() {
+                                "<empty>"
+                            } else {
+                                &stderr
+                            }
                         ));
                     }
                     thread::sleep(Duration::from_millis(10));
@@ -302,11 +441,24 @@ impl MockEmbedder {
 }
 
 fn allow_mock_embedder() -> bool {
-    cfg!(test)
-        || cfg!(debug_assertions)
-        || std::env::var("FNDR_ALLOW_MOCK_EMBEDDER")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
+    if let Ok(value) = std::env::var("FNDR_ALLOW_MOCK_EMBEDDER") {
+        return parse_env_bool(&value);
+    }
+
+    if let Ok(value) = std::env::var("FNDR_DISABLE_MOCK_EMBEDDER") {
+        if parse_env_bool(&value) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn parse_env_bool(value: &str) -> bool {
+    value == "1"
+        || value.eq_ignore_ascii_case("true")
+        || value.eq_ignore_ascii_case("yes")
+        || value.eq_ignore_ascii_case("on")
 }
 
 fn python_cmd_for_sidecar() -> PathBuf {

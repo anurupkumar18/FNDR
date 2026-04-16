@@ -525,6 +525,13 @@ pub async fn transcribe_audio_file(
     transcribe_audio_file_with_hint(app_data_dir, audio_path, TranscriptionHint::Default).await
 }
 
+pub async fn transcribe_audio_file_voice_command(
+    app_data_dir: &Path,
+    audio_path: &Path,
+) -> Result<String, String> {
+    transcribe_audio_file_with_hint(app_data_dir, audio_path, TranscriptionHint::VoiceCommand).await
+}
+
 async fn transcribe_audio_file_with_hint(
     app_data_dir: &Path,
     audio_path: &Path,

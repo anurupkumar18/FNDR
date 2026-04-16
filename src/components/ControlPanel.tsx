@@ -508,6 +508,14 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         : " It is downloaded and will load automatically when needed."
                                     : " It is not downloaded yet."}
                             </p>
+                            <p className="section-hint">
+                                Search embeddings: {status
+                                    ? status.embedding_degraded
+                                        ? `degraded (${status.embedding_backend})`
+                                        : status.embedding_backend
+                                    : "unknown"}.
+                                {status?.embedding_detail ? ` ${status.embedding_detail}` : ""}
+                            </p>
 
                             {modelError && <div className="model-error">{modelError}</div>}
 

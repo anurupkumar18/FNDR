@@ -202,9 +202,12 @@ async fn save_payload(table: &Table, key: &str, payload: &str) -> Result<(), Str
         .await
         .map_err(|e| format!("State delete-before-save failed: {e}"))?;
 
-    let batch =
-        state_rows_to_batch(&[(key.to_string(), payload.to_string(), chrono::Utc::now().timestamp_millis())])
-            .map_err(|e| format!("Failed to build state batch: {e}"))?;
+    let batch = state_rows_to_batch(&[(
+        key.to_string(),
+        payload.to_string(),
+        chrono::Utc::now().timestamp_millis(),
+    )])
+    .map_err(|e| format!("Failed to build state batch: {e}"))?;
     let schema = Arc::new(state_schema());
     let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
 

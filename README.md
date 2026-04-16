@@ -7,13 +7,13 @@ FNDR is a privacy-first local memory assistant for macOS. It captures on-screen 
 - Background capture loop with:
   - screenshot capture,
   - OCR extraction,
-  - adaptive sampling,
+  - adaptive cadence baseline (activity-adaptive tuning in progress),
   - perceptual deduplication.
 - Local memory storage in LanceDB (text/image embeddings + metadata).
 - Hybrid search pipeline (vector + keyword + sentence-aware reranking).
 - Memory card retrieval/synthesis for timeline and card views.
 - Local model-backed memory summarization.
-- Task extraction (Todo / Reminder / Follow-up) from recent memories.
+- Local task panel (Todo / Reminder / Follow-up) with persisted task state.
 - Local graph store + graph visualization panel.
 - Meeting recorder with:
   - automatic meeting detection heuristics,

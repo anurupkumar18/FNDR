@@ -4,9 +4,11 @@
 //! tab strips and compact toolbar captions so memory records favor page content,
 //! titles, and body text already kept by the OCR noise filter.
 
+use std::collections::HashSet;
+
 /// Match the default OCR `min_line_length` so we do not resurrect junk lines.
 const MIN_LINE_LEN: usize = 7;
-const MAX_FALLBACK_SNIPPET_CHARS: usize = 140;
+const MAX_FALLBACK_SNIPPET_CHARS: usize = 220;
 
 const GENERIC_BROWSER_LABELS: &[&str] = &[
     "new tab",
@@ -168,6 +170,10 @@ fn truncate_snippet(text: &str, max_chars: usize) -> String {
     out
 }
 
+fn snippet_dedup_key(value: &str) -> String {
+    normalize_inline(value).to_lowercase()
+}
+
 fn title_is_generic_for_app(app_name: &str, title: &str) -> bool {
     let title_lower = title.to_lowercase();
     let app_lower = app_name.to_lowercase();
@@ -312,14 +318,47 @@ pub fn estimate_noise_score(app_name: &str, text: &str) -> f32 {
 /// Build a compact fallback snippet when model summarization is unavailable.
 pub fn concise_fallback_snippet(app_name: &str, window_title: &str, text: &str) -> String {
     let normalized_title = normalize_inline(window_title.trim());
-    if !normalized_title.is_empty() && is_useful_snippet_line(app_name, &normalized_title) {
-        return truncate_snippet(&normalized_title, MAX_FALLBACK_SNIPPET_CHARS);
+    let title_is_useful =
+        !normalized_title.is_empty() && is_useful_snippet_line(app_name, &normalized_title);
+    let mut details = Vec::new();
+    let mut seen = HashSet::new();
+    if title_is_useful {
+        seen.insert(snippet_dedup_key(&normalized_title));
     }
-
     for line in text.lines() {
         if is_useful_snippet_line(app_name, line) {
-            return truncate_snippet(&normalize_inline(line), MAX_FALLBACK_SNIPPET_CHARS);
+            let normalized = normalize_inline(line);
+            if normalized.is_empty() {
+                continue;
+            }
+            if looks_like_file_inventory(&normalized) || looks_like_json_inventory(&normalized) {
+                continue;
+            }
+            let key = snippet_dedup_key(&normalized);
+            if seen.insert(key) {
+                details.push(normalized);
+            }
+            if details.len() >= 2 {
+                break;
+            }
         }
+    }
+
+    if title_is_useful {
+        let mut snippet = normalized_title.clone();
+        if let Some(first) = details.first() {
+            snippet.push_str(": ");
+            snippet.push_str(first);
+            if let Some(second) = details.get(1) {
+                snippet.push_str(" | ");
+                snippet.push_str(second);
+            }
+        }
+        return truncate_snippet(&snippet, MAX_FALLBACK_SNIPPET_CHARS);
+    }
+
+    if !details.is_empty() {
+        return truncate_snippet(&details.join(" | "), MAX_FALLBACK_SNIPPET_CHARS);
     }
 
     if !normalized_title.is_empty() {
@@ -415,6 +454,17 @@ mod tests {
             "src/app.tsx src/lib.rs src/main.rs src-tauri/src/store/schema.rs\nFix memory summarization for OCR snippets",
         );
         assert_eq!(snippet, "Fix memory summarization for OCR snippets");
+    }
+
+    #[test]
+    fn fallback_combines_title_with_useful_lines() {
+        let snippet = concise_fallback_snippet(
+            "Canva",
+            "Series A investor deck",
+            "Resizing design for instagram post and story sizes\nUpdated CTA slide with pricing details",
+        );
+        assert!(snippet.contains("Series A investor deck"));
+        assert!(snippet.contains("Resizing design for instagram"));
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! capture and local transcription.
 
 use crate::{
+    embed::Embedder,
     speech,
     store::{MeetingBreakdown, MeetingSegment, MeetingSession, MemoryRecord, Store},
     AppState,
@@ -27,6 +28,17 @@ const STATUS_EVENT: &str = "meeting://status";
 const SEGMENT_EVENT: &str = "meeting://segment";
 const FORCED_MODEL: &str = "whisper-large-v3-turbo-gguf";
 const CONSENT_LOOKBACK_SEGMENTS: usize = 120;
+const TRANSCRIPT_EMBED_TIMEOUT: Duration = Duration::from_secs(4);
+const BREAKDOWN_LLM_TIMEOUT: Duration = Duration::from_secs(15);
+
+static SHARED_MEETING_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
+
+fn meeting_embedder() -> Result<&'static Embedder, String> {
+    match SHARED_MEETING_EMBEDDER.get_or_init(Embedder::new) {
+        Ok(embedder) => Ok(embedder),
+        Err(err) => Err(err.clone()),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeetingRecorderStatus {
@@ -41,6 +53,7 @@ pub struct MeetingRecorderStatus {
     pub consent_checked_segments: usize,
     pub ffmpeg_available: bool,
     pub transcription_backend: String,
+    pub is_analyzing: bool,
     pub last_error: Option<String>,
 }
 
@@ -77,7 +90,11 @@ impl MeetingStore {
     }
 
     async fn recover_unfinished(&self) -> Result<(), String> {
-        let mut meetings = self.store.list_meetings().await.map_err(|e| e.to_string())?;
+        let mut meetings = self
+            .store
+            .list_meetings()
+            .await
+            .map_err(|e| e.to_string())?;
         let mut touched = false;
         for meeting in meetings.iter_mut() {
             if meeting.status == "recording" {
@@ -88,7 +105,10 @@ impl MeetingStore {
             }
         }
         if touched {
-            self.store.upsert_meetings(&meetings).await.map_err(|e| e.to_string())?;
+            self.store
+                .upsert_meetings(&meetings)
+                .await
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
@@ -127,21 +147,51 @@ impl MeetingStore {
             breakdown: None,
         };
 
-        let mut meetings = self.store.list_meetings().await.map_err(|e| e.to_string())?;
+        let mut meetings = self
+            .store
+            .list_meetings()
+            .await
+            .map_err(|e| e.to_string())?;
         meetings.push(meeting.clone());
-        self.store.upsert_meetings(&meetings).await.map_err(|e| e.to_string())?;
+        self.store
+            .upsert_meetings(&meetings)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(meeting)
     }
 
+    async fn set_meeting_status(&self, meeting_id: &str, status: &str) -> Result<(), String> {
+        let mut meetings = self
+            .store
+            .list_meetings()
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(meeting) = meetings.iter_mut().find(|m| m.id == meeting_id) {
+            meeting.status = status.to_string();
+            meeting.updated_at = now_ms();
+        }
+        self.store
+            .upsert_meetings(&meetings)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     async fn set_meeting_error(&self, meeting_id: &str, message: &str) -> Result<(), String> {
-        let mut meetings = self.store.list_meetings().await.map_err(|e| e.to_string())?;
+        let mut meetings = self
+            .store
+            .list_meetings()
+            .await
+            .map_err(|e| e.to_string())?;
         if let Some(meeting) = meetings.iter_mut().find(|m| m.id == meeting_id) {
             meeting.status = "error".to_string();
             meeting.updated_at = now_ms();
             meeting.end_timestamp = Some(now_ms());
             meeting.transcript_path = Some(message.to_string());
         }
-        self.store.upsert_meetings(&meetings).await.map_err(|e| e.to_string())
+        self.store
+            .upsert_meetings(&meetings)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn update_meeting_breakdown(
@@ -150,7 +200,11 @@ impl MeetingStore {
         breakdown: MeetingBreakdown,
         transcript_path: Option<String>,
     ) -> Result<(), String> {
-        let mut meetings = self.store.list_meetings().await.map_err(|e| e.to_string())?;
+        let mut meetings = self
+            .store
+            .list_meetings()
+            .await
+            .map_err(|e| e.to_string())?;
         if let Some(meeting) = meetings.iter_mut().find(|m| m.id == meeting_id) {
             meeting.status = "stopped".to_string();
             meeting.end_timestamp = Some(now_ms());
@@ -158,28 +212,47 @@ impl MeetingStore {
             meeting.transcript_path = transcript_path;
             meeting.breakdown = Some(breakdown);
             if let Some(end) = meeting.end_timestamp {
-                meeting.duration_seconds =
-                    ((end - meeting.start_timestamp).max(0) / 1000) as u64;
+                meeting.duration_seconds = ((end - meeting.start_timestamp).max(0) / 1000) as u64;
             }
         }
-        self.store.upsert_meetings(&meetings).await.map_err(|e| e.to_string())
+        self.store
+            .upsert_meetings(&meetings)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn add_segment(&self, segment: MeetingSegment) -> Result<(), String> {
         let meeting_id = segment.meeting_id.clone();
         let segment_end = segment.end_timestamp;
-        
-        self.store.upsert_segments(&[segment]).await.map_err(|e| e.to_string())?;
 
-        let mut meetings = self.store.list_meetings().await.map_err(|e| e.to_string())?;
+        self.store
+            .upsert_segments(&[segment])
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut meetings = self
+            .store
+            .list_meetings()
+            .await
+            .map_err(|e| e.to_string())?;
         if let Some(meeting) = meetings.iter_mut().find(|m| m.id == meeting_id) {
-            let segments = self.store.list_segments().await.map_err(|e| e.to_string())?;
-            meeting.segment_count = segments.iter().filter(|s| s.meeting_id == meeting_id).count();
+            let segments = self
+                .store
+                .list_segments()
+                .await
+                .map_err(|e| e.to_string())?;
+            meeting.segment_count = segments
+                .iter()
+                .filter(|s| s.meeting_id == meeting_id)
+                .count();
             meeting.duration_seconds =
                 ((segment_end - meeting.start_timestamp).max(0) / 1000) as u64;
             meeting.updated_at = now_ms();
         }
-        self.store.upsert_meetings(&meetings).await.map_err(|e| e.to_string())?;
+        self.store
+            .upsert_meetings(&meetings)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -195,7 +268,11 @@ impl MeetingStore {
     }
 
     async fn delete_meeting(&self, meeting_id: &str) -> Result<bool, String> {
-        let mut meetings = self.store.list_meetings().await.map_err(|e| e.to_string())?;
+        let mut meetings = self
+            .store
+            .list_meetings()
+            .await
+            .map_err(|e| e.to_string())?;
         let removed = if let Some(index) = meetings.iter().position(|m| m.id == meeting_id) {
             Some(meetings.remove(index))
         } else {
@@ -206,12 +283,22 @@ impl MeetingStore {
             return Ok(false);
         };
 
-        self.store.upsert_meetings(&meetings).await.map_err(|e| e.to_string())?;
+        self.store
+            .upsert_meetings(&meetings)
+            .await
+            .map_err(|e| e.to_string())?;
 
         // Removal of segments
-        let mut segments = self.store.list_segments().await.map_err(|e| e.to_string())?;
+        let mut segments = self
+            .store
+            .list_segments()
+            .await
+            .map_err(|e| e.to_string())?;
         segments.retain(|s| s.meeting_id != meeting_id);
-        self.store.upsert_segments_full(&segments).await.map_err(|e| e.to_string())?;
+        self.store
+            .upsert_segments_full(&segments)
+            .await
+            .map_err(|e| e.to_string())?;
 
         if let Some(transcript_path) = meeting.transcript_path.as_ref() {
             let full_path = self.resolve_relative_path(transcript_path);
@@ -231,22 +318,21 @@ impl MeetingStore {
 
     async fn get_segments_for_meeting(&self, meeting_id: &str) -> Vec<MeetingSegment> {
         let all = self.store.list_segments().await.unwrap_or_default();
-        let mut segments: Vec<MeetingSegment> = all.into_iter().filter(|s| s.meeting_id == meeting_id).collect();
+        let mut segments: Vec<MeetingSegment> = all
+            .into_iter()
+            .filter(|s| s.meeting_id == meeting_id)
+            .collect();
         segments.sort_by_key(|s| s.index);
         segments
     }
 
     async fn get_transcript(&self, meeting_id: &str) -> Result<MeetingTranscript, String> {
         let meeting = self
-            .get_meeting(meeting_id).await
+            .get_meeting(meeting_id)
+            .await
             .ok_or_else(|| "Meeting not found".to_string())?;
         let segments = self.get_segments_for_meeting(meeting_id).await;
-        let full_text = segments
-            .iter()
-            .map(|s| s.text.trim())
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let full_text = render_transcript_for_display(&meeting, &segments);
 
         Ok(MeetingTranscript {
             meeting,
@@ -263,14 +349,21 @@ impl MeetingStore {
         segment_index: u32,
         text: String,
     ) -> Result<(), String> {
-        let mut segments = self.store.list_segments().await.map_err(|e| e.to_string())?;
+        let mut segments = self
+            .store
+            .list_segments()
+            .await
+            .map_err(|e| e.to_string())?;
         if let Some(seg) = segments
             .iter_mut()
             .find(|s| s.meeting_id == meeting_id && s.index == segment_index)
         {
             seg.text = text;
         }
-        self.store.upsert_segments_full(&segments).await.map_err(|e| e.to_string())
+        self.store
+            .upsert_segments_full(&segments)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn set_transcript_path(
@@ -278,12 +371,19 @@ impl MeetingStore {
         meeting_id: &str,
         transcript_path: Option<String>,
     ) -> Result<(), String> {
-        let mut meetings = self.store.list_meetings().await.map_err(|e| e.to_string())?;
+        let mut meetings = self
+            .store
+            .list_meetings()
+            .await
+            .map_err(|e| e.to_string())?;
         if let Some(meeting) = meetings.iter_mut().find(|m| m.id == meeting_id) {
             meeting.transcript_path = transcript_path;
             meeting.updated_at = now_ms();
         }
-        self.store.upsert_meetings(&meetings).await.map_err(|e| e.to_string())
+        self.store
+            .upsert_meetings(&meetings)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     fn resolve_relative_path(&self, rel: &str) -> PathBuf {
@@ -457,7 +557,11 @@ pub async fn search_meeting_transcripts(
 
     let terms = transcript_search_terms(&normalized_query);
     let mut results = Vec::new();
-    let all_segments = store.store.list_segments().await.map_err(|e| e.to_string())?;
+    let all_segments = store
+        .store
+        .list_segments()
+        .await
+        .map_err(|e| e.to_string())?;
     for segment in all_segments {
         let text = segment.text.trim();
         if text.is_empty() {
@@ -514,9 +618,12 @@ pub fn recorder_status() -> Result<MeetingRecorderStatus, String> {
             consent_checked_segments: 0,
             ffmpeg_available,
             transcription_backend: backend,
+            is_analyzing: false,
             last_error: rt.last_error.clone(),
         });
     }
+
+    let is_analyzing = postprocess_in_flight().lock().len() > 0;
 
     Ok(MeetingRecorderStatus {
         is_recording: false,
@@ -530,6 +637,7 @@ pub fn recorder_status() -> Result<MeetingRecorderStatus, String> {
         consent_checked_segments: 0,
         ffmpeg_available,
         transcription_backend: backend,
+        is_analyzing,
         last_error: rt.last_error.clone(),
     })
 }
@@ -689,111 +797,143 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
     let _ = recorder.wait();
     let _ = worker.await;
 
-    // 0. Discover WAV segment files that ffmpeg produced and create segment records.
-    //    The worker thread no longer does this, so we must do it before transcription.
-    let meeting_for_segments = store.get_meeting(&meeting_id).await;
-    if let Some(ref meeting) = meeting_for_segments {
-        let audio_dir = store.resolve_relative_path(&meeting.audio_dir);
-        let wav_files = collect_segment_files(&audio_dir);
-        tracing::info!(
-            "Meeting {}: discovered {} WAV segment files in {:?}",
-            meeting_id,
-            wav_files.len(),
-            audio_dir
-        );
-        for wav_path in &wav_files {
-            let index = parse_segment_index(wav_path);
-            let seg_start = meeting.start_timestamp + (index as i64 * SEGMENT_SECONDS * 1000);
-            let seg_end = seg_start + (SEGMENT_SECONDS * 1000);
-            let segment = MeetingSegment {
-                id: Uuid::new_v4().to_string(),
-                meeting_id: meeting_id.clone(),
-                index,
-                start_timestamp: seg_start,
-                end_timestamp: seg_end,
-                text: String::new(), // will be filled by transcription
-                audio_chunk_path: wav_path.to_string_lossy().to_string(),
-                model: model.clone(),
-                created_at: now_ms(),
-            };
-            if let Err(err) = store.add_segment(segment).await {
-                tracing::warn!("Failed to create segment record for {:?}: {}", wav_path, err);
+    // Move heavy work to background task
+    let meeting_id_task = meeting_id.clone();
+    let model_task = model.clone();
+    let store_task = store.clone();
+    let app_handle_task = app_handle.clone();
+    let app_state_task = app_state.clone();
+
+    tokio::spawn(async move {
+        tracing::info!("Starting background post-processing for meeting: {}", meeting_id_task);
+        
+        // 0. Set meeting status to analyzing
+        let _ = store_task.set_meeting_status(&meeting_id_task, "analyzing").await;
+        if let Some(handle) = app_handle_task.clone() {
+            if let Ok(status) = recorder_status() {
+                let _ = handle.emit("meeting://status", &status);
             }
         }
-    }
 
-    // 1. Perform unified transcription of ALL segments at high quality
-    if let Err(err) = transcribe_meeting_postprocess(store.as_ref(), &meeting_id, &model).await {
-        tracing::warn!("Post-meeting transcription pass failed: {}", err);
-    }
+        // 1. Perform unified transcription of ALL segments at high quality
+        if let Err(err) = transcribe_meeting_postprocess(store_task.as_ref(), &meeting_id_task, &model_task).await {
+            tracing::warn!("Post-meeting transcription pass failed: {}", err);
+        }
 
-    let transcript = store.get_transcript(&meeting_id).await?;
-    let full_text = transcript.full_text.clone();
+        let run_post_summary = async {
+            let transcript = store_task.get_transcript(&meeting_id_task).await?;
+            let transcript_plain = transcript_plain_text(&transcript.segments);
+            let has_transcript_signal = has_min_transcript_signal(&transcript_plain);
+            let has_breakdown_signal = has_breakdown_ready_signal(&transcript_plain);
 
-    // 2. Perform AI Breakdown analysis (only if we have real transcript content)
-    let mut breakdown = MeetingBreakdown::default();
-    if full_text.trim().is_empty() {
-        tracing::info!("Meeting {}: transcript is empty, skipping AI breakdown", meeting_id);
-        breakdown.summary = "No audio was captured or transcription produced no text.".to_string();
-    } else if let Some(engine) = app_state.as_ref().and_then(|s| s.inference_engine()) {
-        tracing::info!("Starting AI breakdown for meeting: {}", meeting_id);
-        let breakdown_prompt = format!(
-            "Review this meeting transcript and provide a structured breakdown.\n\nTRANSCRIPT:\n{}\n\n\
-            Format your response exactly as:\n\
-            SUMMARY: [one paragraph summary]\n\
-            TODOS:\n- [task]\n\
-            REMINDERS:\n- [reminder]\n\
-            FOLLOWUPS:\n- [followup]",
-            full_text
-        );
-        let raw = engine.extract_todos(&breakdown_prompt).await;
-        
-        // Simple manual parsing
-        let mut section = "";
-        for line in raw.lines() {
-            let line = line.trim();
-            if line.is_empty() { continue; }
-            
-            if line.starts_with("SUMMARY:") {
-                breakdown.summary = line["SUMMARY:".len()..].trim().to_string();
-                section = "summary";
-            } else if line.starts_with("TODOS:") {
-                section = "todos";
-            } else if line.starts_with("REMINDERS:") {
-                section = "reminders";
-            } else if line.starts_with("FOLLOWUPS:") {
-                section = "followups";
-            } else if line.starts_with("- ") || line.starts_with("* ") {
-                let item = line[2..].trim().to_string();
-                match section {
-                    "todos" => breakdown.todos.push(item),
-                    "reminders" => breakdown.reminders.push(item),
-                    "followups" => breakdown.followups.push(item),
-                    _ => {}
+            // 2. Perform AI Breakdown analysis
+            let mut breakdown = heuristic_breakdown_from_transcript(&transcript_plain);
+            if has_breakdown_signal {
+                if let Some(engine) = app_state_task.as_ref().and_then(|s| s.inference_engine()) {
+                    tracing::info!("Starting AI breakdown for meeting: {}", meeting_id_task);
+                    let breakdown_prompt = format!(
+                        "Review this meeting transcript and provide a structured breakdown.\n\nTRANSCRIPT:\n{}\n\n\
+                        Format your response exactly as:\n\
+                        SUMMARY: [one paragraph summary]\n\
+                        TODOS:\n- [task]\n\
+                        REMINDERS:\n- [reminder]\n\
+                        FOLLOWUPS:\n- [followup]",
+                        transcript_plain
+                    );
+                    
+                    // Add timeout to AI breakdown
+                    let ai_result =
+                        tokio::time::timeout(BREAKDOWN_LLM_TIMEOUT, engine.extract_todos(&breakdown_prompt)).await;
+
+                    match ai_result {
+                        Ok(raw) => {
+                            let llm_breakdown = sanitize_breakdown(parse_breakdown_from_raw(&raw));
+                            if breakdown_has_signal(&llm_breakdown) {
+                                breakdown = llm_breakdown;
+                            }
+                        }
+                        Err(_) => {
+                            tracing::warn!("AI breakdown timed out for meeting: {}", meeting_id_task);
+                            breakdown.summary = "AI breakdown timed out. Full transcript is still available below.".to_string();
+                        }
+                    }
+                }
+            } else {
+                if has_transcript_signal {
+                    breakdown.summary = "Transcript was captured but looked low-confidence or repetitive, so AI breakdown was skipped to avoid inaccurate summary."
+                        .to_string();
+                } else {
+                    let mut msg = "Transcript did not capture readable speech. Check the full transcript below for per-segment diagnostics and audio-device issues.".to_string();
+                    #[cfg(target_os = "macos")]
+                    {
+                        msg.push_str("\n\nTip: On macOS, to capture system audio (like movies or calls), you must install a virtual audio device (e.g., BlackHole) and use a Multi-Output Device.");
+                    }
+                    breakdown.summary = msg;
                 }
             }
+
+            if !breakdown_has_signal(&breakdown) {
+                breakdown.summary =
+                    "Meeting recorded, but no reliable summary could be extracted from transcript."
+                        .to_string();
+            }
+
+            if breakdown.todos.is_empty() && breakdown.reminders.is_empty() && breakdown.followups.is_empty() {
+                if let Some(action_hint) = find_action_hint(&transcript_plain) {
+                    breakdown.todos.push(action_hint);
+                }
+            }
+
+            breakdown = sanitize_breakdown(breakdown);
+            if breakdown.summary.is_empty() {
+                breakdown.summary =
+                    "No summary extracted yet. Expand full transcript to inspect raw meeting text."
+                        .to_string();
+            }
+
+            if !has_transcript_signal {
+                let diagnostic = transcript
+                    .segments
+                    .iter()
+                    .map(|segment| segment.text.trim())
+                    .find(|line| line.starts_with("[Transcription unavailable"))
+                    .map(|line| line.to_string());
+                if let Some(line) = diagnostic {
+                    breakdown.reminders.push(line);
+                    breakdown = sanitize_breakdown(breakdown);
+                }
+            }
+
+            if breakdown.summary.len() > 480 {
+                breakdown.summary = breakdown.summary.chars().take(477).collect::<String>() + "...";
+            }
+
+            if let Some(state) = app_state_task.clone() {
+                if let Err(err) = ingest_transcript_into_fndr_memory(state, &transcript, None).await {
+                    tracing::warn!("Failed to ingest meeting transcript into memory: {}", err);
+                }
+            }
+
+            let _ = store_task.update_meeting_breakdown(&meeting_id_task, breakdown, None).await;
+            let _ = store_task.purge_audio_chunks(&meeting_id_task).await;
+            
+            Ok::<(), String>(())
+        };
+
+        if let Err(err) = run_post_summary.await {
+            tracing::error!("Meeting background analysis failed: {}", err);
         }
-    }
 
-    let transcript_path: Option<String> = None;
-    
-    // 3. Update meeting with results
-    let _ = store.update_meeting_breakdown(&meeting_id, breakdown, transcript_path.clone()).await;
+        // Emit final status update
+        if let Some(handle) = app_handle_task {
+             if let Ok(status) = recorder_status() {
+                 let _ = handle.emit("meeting://status", &status);
+             }
+        }
+    });
 
-    if let Some(state) = app_state {
-        let _ = ingest_transcript_into_fndr_memory(state, &transcript, None).await;
-    }
-    if let Err(err) = store.purge_audio_chunks(&meeting_id).await {
-        tracing::warn!("Failed to purge meeting audio chunks: {}", err);
-    }
-
-    let status = recorder_status()?;
-    if let Some(handle) = app_handle {
-        let _ = handle.emit(STATUS_EVENT, &status);
-    }
-    Ok(status)
+    recorder_status()
 }
-
 
 fn spawn_ffmpeg_recorder(segment_pattern: &Path) -> Result<Child, String> {
     let ffmpeg_path = resolve_ffmpeg_binary().ok_or_else(|| {
@@ -973,12 +1113,39 @@ async fn transcribe_segment(
         ));
     }
 
-    let text = speech::transcribe_audio_file(app_data_dir, segment_path).await?;
-    let text = normalize_transcribed_text(&text);
-    if text.is_empty() {
-        Err("Whisper GGUF runner returned empty transcript".to_string())
-    } else {
-        Ok(text)
+    let primary = speech::transcribe_audio_file(app_data_dir, segment_path).await;
+    match primary {
+        Ok(text) => {
+            let normalized = normalize_transcribed_text(&text);
+            if has_min_transcript_signal(&normalized) {
+                return Ok(normalized);
+            }
+
+            let fallback = speech::transcribe_audio_file_voice_command(app_data_dir, segment_path)
+                .await
+                .map(|value| normalize_transcribed_text(&value))?;
+            if fallback.is_empty() {
+                Err("Whisper GGUF runner returned empty transcript".to_string())
+            } else {
+                Ok(fallback)
+            }
+        }
+        Err(primary_err) => {
+            let fallback = speech::transcribe_audio_file_voice_command(app_data_dir, segment_path)
+                .await
+                .map(|value| normalize_transcribed_text(&value))
+                .map_err(|fallback_err| {
+                    format!(
+                        "Whisper default mode failed: {}; voice-command fallback failed: {}",
+                        primary_err, fallback_err
+                    )
+                })?;
+            if fallback.is_empty() {
+                Err("Whisper GGUF runner returned empty transcript".to_string())
+            } else {
+                Ok(fallback)
+            }
+        }
     }
 }
 
@@ -995,6 +1162,290 @@ fn normalize_transcribed_text(raw: &str) -> String {
         .join(" ")
         .trim()
         .to_string()
+}
+
+fn has_min_transcript_signal(text: &str) -> bool {
+    let words = text.split_whitespace().count();
+    words >= 4
+}
+
+fn has_breakdown_ready_signal(text: &str) -> bool {
+    let tokens = text.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 8 {
+        return false;
+    }
+
+    let mut word_freq: HashMap<String, usize> = HashMap::new();
+    let mut alpha_tokens = 0usize;
+    let mut bracketed_tokens = 0usize;
+
+    for token in &tokens {
+        let trimmed = token.trim_matches(|c: char| {
+            c.is_ascii_punctuation() || matches!(c, '[' | ']' | '(' | ')' | '{' | '}')
+        });
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if token.contains('[') || token.contains(']') {
+            bracketed_tokens += 1;
+        }
+        if trimmed.chars().any(|c| c.is_ascii_alphabetic()) {
+            alpha_tokens += 1;
+        }
+        *word_freq.entry(trimmed.to_lowercase()).or_insert(0) += 1;
+    }
+
+    let total = tokens.len().max(1);
+    let max_repeat = word_freq.values().copied().max().unwrap_or(0);
+    let unique = word_freq.len();
+    let alpha_ratio = alpha_tokens as f32 / total as f32;
+    let unique_ratio = unique as f32 / total as f32;
+    let repeat_ratio = max_repeat as f32 / total as f32;
+    let bracket_ratio = bracketed_tokens as f32 / total as f32;
+
+    let lower = text.to_lowercase();
+    let has_known_hallucination_marker = lower.contains("top left")
+        || lower.contains("subscribe")
+        || lower.contains("thank you for watching");
+
+    alpha_ratio >= 0.6
+        && unique_ratio >= 0.35
+        && repeat_ratio <= 0.45
+        && bracket_ratio <= 0.2
+        && !has_known_hallucination_marker
+}
+
+fn transcript_plain_text(segments: &[MeetingSegment]) -> String {
+    segments
+        .iter()
+        .map(|segment| segment.text.trim())
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.starts_with("[Segment"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_transcript_for_display(meeting: &MeetingSession, segments: &[MeetingSegment]) -> String {
+    if segments.is_empty() {
+        return format!(
+            "No recorded segments found for this meeting. Title: {}",
+            meeting.title
+        );
+    }
+
+    let mut rendered = Vec::with_capacity(segments.len());
+    for segment in segments {
+        let offset_start_sec =
+            ((segment.start_timestamp - meeting.start_timestamp).max(0) as f64) / 1000.0;
+        let offset_end_sec =
+            ((segment.end_timestamp - meeting.start_timestamp).max(0) as f64) / 1000.0;
+        let text = if segment.text.trim().is_empty() {
+            "(empty transcription; possible silence or capture issue)".to_string()
+        } else {
+            segment.text.trim().to_string()
+        };
+        rendered.push(format!(
+            "[Segment {} | +{:.1}s to +{:.1}s] {}",
+            segment.index, offset_start_sec, offset_end_sec, text
+        ));
+    }
+
+    rendered.join("\n")
+}
+
+fn parse_breakdown_from_raw(raw: &str) -> MeetingBreakdown {
+    let mut breakdown = MeetingBreakdown::default();
+    let mut section = "";
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.starts_with("SUMMARY:") {
+            breakdown.summary = trimmed["SUMMARY:".len()..].trim().to_string();
+            section = "summary";
+            continue;
+        }
+        if trimmed.starts_with("TODOS:") {
+            section = "todos";
+            continue;
+        }
+        if trimmed.starts_with("REMINDERS:") {
+            section = "reminders";
+            continue;
+        }
+        if trimmed.starts_with("FOLLOWUPS:") || trimmed.starts_with("FOLLOW-UPS:") {
+            section = "followups";
+            continue;
+        }
+
+        if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+            let item = trimmed[2..].trim().to_string();
+            match section {
+                "todos" => breakdown.todos.push(item),
+                "reminders" => breakdown.reminders.push(item),
+                "followups" => breakdown.followups.push(item),
+                _ => {}
+            }
+        } else if section == "summary" && breakdown.summary.is_empty() {
+            breakdown.summary = trimmed.to_string();
+        }
+    }
+
+    breakdown
+}
+
+fn sanitize_breakdown(mut breakdown: MeetingBreakdown) -> MeetingBreakdown {
+    breakdown.summary = sanitize_breakdown_summary(&breakdown.summary);
+    breakdown.todos = sanitize_breakdown_items(&breakdown.todos);
+    breakdown.reminders = sanitize_breakdown_items(&breakdown.reminders);
+    breakdown.followups = sanitize_breakdown_items(&breakdown.followups);
+    breakdown
+}
+
+fn sanitize_breakdown_summary(summary: &str) -> String {
+    let normalized = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return String::new();
+    }
+
+    let lower = normalized.to_lowercase();
+    if lower == "[summary]"
+        || lower == "summary"
+        || lower == "n/a"
+        || lower == "none"
+        || lower.starts_with("the team reviewed project timelines")
+    {
+        return String::new();
+    }
+
+    normalized
+}
+
+fn sanitize_breakdown_items(items: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut cleaned = Vec::new();
+
+    for item in items {
+        let normalized = item
+            .trim()
+            .trim_start_matches("- ")
+            .trim_start_matches("* ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        if normalized.is_empty() {
+            continue;
+        }
+
+        let lower = normalized.to_lowercase();
+        if matches!(
+            lower.as_str(),
+            "[task]"
+                | "[todo]"
+                | "[reminder]"
+                | "[followup]"
+                | "[follow-up]"
+                | "task"
+                | "todo"
+                | "reminder"
+                | "followup"
+                | "follow-up"
+                | "n/a"
+                | "none"
+        ) {
+            continue;
+        }
+
+        let looks_like_bracket_placeholder =
+            normalized.starts_with('[') && normalized.ends_with(']') && normalized.len() <= 24;
+        if looks_like_bracket_placeholder {
+            continue;
+        }
+
+        if seen.insert(lower) {
+            cleaned.push(normalized);
+        }
+    }
+
+    cleaned
+}
+
+fn breakdown_has_signal(breakdown: &MeetingBreakdown) -> bool {
+    !breakdown.summary.trim().is_empty()
+        || !breakdown.todos.is_empty()
+        || !breakdown.reminders.is_empty()
+        || !breakdown.followups.is_empty()
+}
+
+fn heuristic_breakdown_from_transcript(text: &str) -> MeetingBreakdown {
+    let mut breakdown = MeetingBreakdown::default();
+    if text.trim().is_empty() {
+        return breakdown;
+    }
+
+    let normalized = text.replace('\n', " ").replace('?', ".").replace('!', ".");
+    let sentences = normalized
+        .split('.')
+        .map(str::trim)
+        .filter(|sentence| !sentence.is_empty())
+        .collect::<Vec<_>>();
+
+    let mut summary_parts = Vec::new();
+    for sentence in sentences.iter().take(2) {
+        let clipped = sentence
+            .split_whitespace()
+            .take(28)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !clipped.is_empty() {
+            summary_parts.push(clipped);
+        }
+    }
+    if !summary_parts.is_empty() {
+        breakdown.summary = format!("{}.", summary_parts.join(". "));
+    }
+
+    breakdown
+}
+
+fn find_action_hint(text: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let normalized = text.replace('\n', ". ");
+    let lines = normalized
+        .split('.')
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    for line in lines {
+        let lower = line.to_lowercase();
+        if lower.contains("next")
+            || lower.contains("follow up")
+            || lower.contains("todo")
+            || lower.contains("action")
+            || lower.contains("deadline")
+            || lower.contains("send")
+            || lower.contains("schedule")
+        {
+            let clipped = line
+                .split_whitespace()
+                .take(18)
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !clipped.is_empty() {
+                return Some(clipped);
+            }
+        }
+    }
+    None
 }
 
 fn detect_transcription_backend() -> String {
@@ -1014,6 +1465,7 @@ async fn transcribe_meeting_postprocess(
     meeting_id: &str,
     model: &str,
 ) -> Result<(), String> {
+    use futures::stream::{self, StreamExt};
     let _guard = acquire_postprocess_guard(meeting_id).await;
 
     let app_data_dir = store
@@ -1021,44 +1473,90 @@ async fn transcribe_meeting_postprocess(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| store.root_dir.clone());
-    let segments = store.get_segments_for_meeting(meeting_id).await;
-    for segment in segments {
-        let latest_text = store
-            .get_segments_for_meeting(meeting_id)
-            .await
-            .into_iter()
-            .find(|candidate| candidate.index == segment.index)
-            .map(|candidate| candidate.text)
-            .unwrap_or_default();
-        if !should_retry_segment_text(&latest_text) {
-            continue;
-        }
+    
+    let meeting = store
+        .get_meeting(meeting_id)
+        .await
+        .ok_or_else(|| format!("Meeting {meeting_id} not found during post-process"))?;
+    let audio_dir = store.resolve_relative_path(&meeting.audio_dir);
+    let files = collect_segment_files(&audio_dir);
+    let existing_segments = store.get_segments_for_meeting(meeting_id).await;
+    let existing_indices: std::collections::HashSet<u32> = existing_segments.iter().map(|s| s.index).collect();
 
-        if !should_retry_segment_text(&segment.text) {
-            continue;
-        }
-
-        let audio_path = PathBuf::from(&segment.audio_chunk_path);
-        let text = match transcribe_segment(&audio_path, model, &app_data_dir).await {
-            Ok(text) => text,
-            Err(err) => {
-                let size = fs::metadata(&audio_path).map(|m| m.len()).unwrap_or(0);
-                // Ignore tiny/corrupt trailing chunks that can happen when a meeting stops mid-segment.
-                if size < 32_000 {
-                    String::new()
-                } else {
-                    format!(
-                        "[Transcription unavailable for segment {}: {}]",
-                        segment.index, err
-                    )
-                }
+    for file_path in files {
+        let index = parse_segment_index(&file_path);
+        if !existing_indices.contains(&index) {
+            let start_ts = meeting.start_timestamp + (index as i64 * SEGMENT_SECONDS * 1000);
+            let end_ts = start_ts + (SEGMENT_SECONDS * 1000);
+            let segment = MeetingSegment {
+                id: Uuid::new_v4().to_string(),
+                meeting_id: meeting_id.to_string(),
+                index,
+                start_timestamp: start_ts,
+                end_timestamp: end_ts,
+                text: "".to_string(),
+                audio_chunk_path: file_path.to_string_lossy().to_string(),
+                model: model.to_string(),
+                created_at: now_ms(),
+            };
+            if let Err(e) = store.add_segment(segment).await {
+                tracing::warn!("Failed to add discovered segment {} to store: {}", index, e);
             }
-        };
-
-        store
-            .set_segment_text(meeting_id, segment.index, text)
-            .await?;
+        }
     }
+
+    let segments = store.get_segments_for_meeting(meeting_id).await;
+    let store_arc = Arc::new(store.store.clone()); // We need Arc for store access in tasks
+    let root_dir = store.root_dir.clone();
+
+    // Parallel transcription with concurrency limit of 2
+    let stream = stream::iter(segments);
+    stream
+        .map(|segment| {
+            let app_data_dir = app_data_dir.clone();
+            let model = model.to_string();
+            let meeting_id_inner = meeting_id.to_string();
+            let store_inner = store_arc.clone();
+            let root_dir_inner = root_dir.clone();
+            
+            async move {
+                let latest_segments = store_inner.list_segments().await.unwrap_or_default();
+                let latest_text = latest_segments.into_iter()
+                    .find(|candidate| candidate.meeting_id == meeting_id_inner && candidate.index == segment.index)
+                    .map(|candidate| candidate.text)
+                    .unwrap_or_default();
+
+                if !should_retry_segment_text(&latest_text) {
+                    return Ok(());
+                }
+
+                let audio_path = PathBuf::from(&segment.audio_chunk_path);
+                let text = match transcribe_segment(&audio_path, &model, &app_data_dir).await {
+                    Ok(text) => text,
+                    Err(err) => {
+                        let size = fs::metadata(&audio_path).map(|m| m.len()).unwrap_or(0);
+                        if size < 32_000 {
+                            format!("[Segment {} had no usable audio ({} bytes).]", segment.index, size)
+                        } else {
+                            format!("[Transcription unavailable for segment {}: {}]", segment.index, err)
+                        }
+                    }
+                };
+
+                // Inline persistence to avoid double-borrow of MeetingStore
+                let mut all_segments = store_inner.list_segments().await.map_err(|e| e.to_string())?;
+                if let Some(seg) = all_segments.iter_mut().find(|s| s.meeting_id == meeting_id_inner && s.index == segment.index) {
+                    seg.text = text;
+                }
+                store_inner.upsert_segments_full(&all_segments).await.map_err(|e| e.to_string())?;
+                
+                Ok::<(), String>(())
+            }
+        })
+        .buffer_unordered(2)
+        .collect::<Vec<_>>()
+        .await;
+
     Ok(())
 }
 
@@ -1142,6 +1640,51 @@ async fn ingest_transcript_into_fndr_memory(
     let now = transcript.meeting.end_timestamp.unwrap_or_else(now_ms);
 
     let snippet: String = transcript.full_text.chars().take(260).collect::<String>();
+    let embedding_text = if transcript.full_text.trim().is_empty() {
+        build_meeting_markdown(transcript)
+    } else {
+        transcript.full_text.clone()
+    };
+    let text_embedding = match meeting_embedder() {
+        Ok(embedder) => {
+            let embed_text = embedding_text.clone();
+            match tokio::time::timeout(
+                TRANSCRIPT_EMBED_TIMEOUT,
+                tokio::task::spawn_blocking(move || embedder.embed_batch(&[embed_text])),
+            )
+            .await
+            {
+                Ok(Ok(Ok(mut vectors))) => {
+                    vectors.drain(..).next().unwrap_or_else(|| vec![0.0; 384])
+                }
+                Ok(Ok(Err(err))) => {
+                    tracing::warn!("Meeting transcript embedding failed: {}", err);
+                    vec![0.0; 384]
+                }
+                Ok(Err(join_err)) => {
+                    tracing::warn!(
+                        "Meeting transcript embedding task join failed: {}",
+                        join_err
+                    );
+                    vec![0.0; 384]
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "Meeting transcript embedding timed out after {}ms",
+                        TRANSCRIPT_EMBED_TIMEOUT.as_millis()
+                    );
+                    vec![0.0; 384]
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                "Meeting transcript embedder unavailable; storing zero vector: {}",
+                err
+            );
+            vec![0.0; 384]
+        }
+    };
 
     let record = MemoryRecord {
         id: Uuid::new_v4().to_string(),
@@ -1163,7 +1706,7 @@ async fn ingest_transcript_into_fndr_memory(
         summary_source: "fallback".to_string(),
         noise_score: 0.0,
         session_key: format!("meeting:{}", transcript.meeting.id),
-        embedding: vec![0.0; 384],
+        embedding: text_embedding,
         image_embedding: vec![0.0; 512],
         screenshot_path: None,
         url: transcript_path.map(|p| p.to_string()),
@@ -1304,6 +1847,65 @@ fn resolve_ffmpeg_binary() -> Option<PathBuf> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_breakdown_drops_placeholders() {
+        let raw = MeetingBreakdown {
+            summary: "Summary".to_string(),
+            todos: vec!["[task]".to_string(), "Ship investor deck".to_string()],
+            reminders: vec!["[reminder]".to_string()],
+            followups: vec![
+                "[followup]".to_string(),
+                "Follow up with design".to_string(),
+            ],
+        };
+        let clean = sanitize_breakdown(raw);
+        assert!(clean.summary.is_empty());
+        assert_eq!(clean.todos, vec!["Ship investor deck".to_string()]);
+        assert!(clean.reminders.is_empty());
+        assert_eq!(clean.followups, vec!["Follow up with design".to_string()]);
+    }
+
+    #[test]
+    fn render_transcript_shows_segment_markers_for_empty_text() {
+        let meeting = MeetingSession {
+            id: "m1".to_string(),
+            title: "Test meeting".to_string(),
+            participants: Vec::new(),
+            model: "whisper".to_string(),
+            status: "stopped".to_string(),
+            start_timestamp: 1_000,
+            end_timestamp: Some(10_000),
+            created_at: 1_000,
+            updated_at: 10_000,
+            segment_count: 1,
+            duration_seconds: 9,
+            meeting_dir: "rel://meetings/m1".to_string(),
+            audio_dir: "rel://meetings/m1/audio".to_string(),
+            transcript_path: None,
+            breakdown: None,
+        };
+        let segments = vec![MeetingSegment {
+            id: "s1".to_string(),
+            meeting_id: "m1".to_string(),
+            index: 0,
+            start_timestamp: 1_000,
+            end_timestamp: 5_000,
+            text: "".to_string(),
+            audio_chunk_path: "/tmp/segment.wav".to_string(),
+            model: "whisper".to_string(),
+            created_at: 1_000,
+        }];
+
+        let rendered = render_transcript_for_display(&meeting, &segments);
+        assert!(rendered.contains("[Segment 0"));
+        assert!(rendered.contains("empty transcription"));
+    }
 }
 
 fn get_store() -> Result<Arc<MeetingStore>, String> {

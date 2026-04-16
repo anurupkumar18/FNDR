@@ -6,4 +6,6 @@ mod onnx;
 
 pub use chunking::TextChunker;
 pub use clip::ClipEmbedder;
-pub use onnx::{Embedder, EmbeddingBackend, EMBEDDING_DIM};
+pub use onnx::{
+    embedding_runtime_status, Embedder, EmbeddingBackend, EmbeddingRuntimeStatus, EMBEDDING_DIM,
+};

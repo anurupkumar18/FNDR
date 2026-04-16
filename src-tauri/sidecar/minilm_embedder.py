@@ -29,7 +29,8 @@ _MODEL = None
 _MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 _SOCKET_PATH = os.path.join(tempfile.gettempdir(), "fndr_minilm_embedder.sock")
 _LOCK_PATH = os.path.join(tempfile.gettempdir(), "fndr_minilm_embedder.lock")
-_REQUEST_TIMEOUT_SEC = 25.0
+_DAEMON_LOG_PATH = os.path.join(tempfile.gettempdir(), "fndr_minilm_embedder.log")
+_REQUEST_TIMEOUT_SEC = float(os.environ.get("FNDR_EMBEDDER_REQUEST_TIMEOUT_SEC", "30"))
 _IDLE_TIMEOUT_SEC = float(os.environ.get("FNDR_EMBEDDER_IDLE_TIMEOUT_SEC", "120"))
 
 
@@ -131,14 +132,16 @@ def _daemon_running() -> bool:
 
 
 def _spawn_daemon() -> None:
-    subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__), "--serve-daemon"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
+    os.makedirs(os.path.dirname(_DAEMON_LOG_PATH), exist_ok=True)
+    with open(_DAEMON_LOG_PATH, "ab", buffering=0) as log_file:
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--serve-daemon"],
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
+            start_new_session=True,
+            close_fds=True,
+        )
 
 
 def _spawn_daemon_if_needed() -> None:
@@ -168,7 +171,9 @@ def cmd_embed_via_daemon() -> int:
                 _spawn_daemon_if_needed()
             time.sleep(0.1)
     else:
-        raise RuntimeError(f"Embedding daemon unavailable: {last_exc}")
+        raise RuntimeError(
+            f"Embedding daemon unavailable: {last_exc}. See daemon log: {_DAEMON_LOG_PATH}"
+        )
 
     if "error" in response:
         raise RuntimeError(str(response["error"]))

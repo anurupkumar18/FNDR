@@ -46,7 +46,7 @@ FNDR is a **local-first, privacy-focused memory assistant** for macOS. It contin
 | LLM model | Llama 3.2 1B Q4 | Balance of quality and speed on consumer hardware |
 | VLM model | SmolVLM-500M/256M | Tiny footprint for on-device screen understanding |
 | Search | Hybrid (semantic + keyword + RRF) | Better recall than either approach alone |
-| Graph storage | JSON + optional Graphiti | Works offline, upgradeable to full graph DB |
+| Graph storage | LanceDB + local graph tables | Fast local retrieval with structured node/edge persistence |
 | Agent SDK | Anthropic Messages API | Standard tool-use patterns, streaming support |
 | Frontend | React + Vanilla CSS | Minimal dependencies, full control over design |
 
@@ -76,7 +76,7 @@ Screen Capture → Deduplication → OCR → VLM Analysis → LLM Summary
                                   ↓
                            Graph Ingestion
                                   ↓
-                      Local JSON / Graphiti DB
+                    Local LanceDB + graph tables
 ```
 
 ### Privacy Guarantees
@@ -92,20 +92,20 @@ Screen Capture → Deduplication → OCR → VLM Analysis → LLM Summary
 ## Graphiti Integration Strategy
 
 ### Current State (v1)
-- Custom Rust `GraphStore` using JSON persistence
+- Local Rust `GraphStore` persisted through LanceDB-backed tables
 - Nodes: MemoryChunk, Entity, Task, Url
-- Edges: MentionedIn, Related, UsedIn, FollowedBy, ExtractedFrom, LinksTo
+- Edges: PartOfSession, ReferenceForTask, OccurredAt
 
 ### Future State (v2 — Optional)
 - Python sidecar running `graphiti-core` with FalkorDB
-- Richer entity extraction using Anthropic LLM
+- Richer entity extraction and temporal graph analytics
 - Temporal knowledge decay and community detection
 - Graph-enhanced search (traverse relationships for better context)
 
 ### Migration Path
-1. The local JSON graph remains the primary, always-available store
-2. Graphiti sidecar is optional—starts only if FalkorDB is running
-3. Both systems can coexist; Graphiti enriches but doesn't replace
+1. Local LanceDB graph remains the primary, always-available store
+2. Graphiti sidecar is optional—starts only if its runtime is present
+3. Both systems can coexist; sidecar enrichments remain additive
 
 ---
 
@@ -135,7 +135,6 @@ Screen Capture → Deduplication → OCR → VLM Analysis → LLM Summary
 ## Future Roadmap
 
 ### Near Term
-- [ ] LanceDB vector store (replace JSON-based embeddings)
 - [ ] Advanced idle detection (mouse/keyboard activity)
 - [ ] Multi-monitor capture support
 - [ ] Metal kernel pre-compilation (eliminate cold-start latency)
