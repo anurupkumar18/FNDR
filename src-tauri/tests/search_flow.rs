@@ -37,6 +37,9 @@ fn keyword_search_finds_seeded_content() {
         image_embedding: vec![0.0; 512],
         screenshot_path: None,
         url: None,
+        snippet_embedding: vec![0.0; 384],
+        decay_score: 1.0,
+        last_accessed_at: 0,
     };
 
     let rt = tokio::runtime::Runtime::new().expect("runtime");

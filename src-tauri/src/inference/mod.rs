@@ -591,6 +591,73 @@ Rules:\n\
         self.complete(&prompt, 200).await
     }
 
+    /// Generate a smart daily briefing paragraph from today's memory cards.
+    /// `mode` is either "morning" (actionable: what to work on) or "evening" (recap + tomorrow).
+    pub async fn generate_daily_briefing(
+        &self,
+        card_lines: &[String],
+        mode: &str,
+    ) -> String {
+        if card_lines.is_empty() {
+            return String::new();
+        }
+
+        let cards_block = card_lines.join("\n");
+
+        let (system_msg, task_instruction) = if mode == "evening" {
+            (
+                "You are a smart personal assistant that writes concise end-of-day briefings.\n\
+                RULES:\n\
+                - Write exactly 2-3 sentences in plain English.\n\
+                - Sentence 1: What the user worked on today (specific activities, not generic).\n\
+                - Sentence 2: One important thing to carry forward or revisit tomorrow.\n\
+                - Sentence 3 (optional): A cross-connection you noticed across activities.\n\
+                - Be specific. Name real tasks, tools, or topics from the memories.\n\
+                - Write in second person (\"You worked on...\", \"You'll want to...\").\n\
+                - No bullet points. No headers. Just prose.",
+                "Based on today's activity below, write the end-of-day briefing paragraph.\nReturn only the paragraph, nothing else.",
+            )
+        } else {
+            (
+                "You are a smart personal assistant that writes concise morning/daytime briefings.\n\
+                RULES:\n\
+                - Write exactly 2-3 sentences in plain English.\n\
+                - Sentence 1: What deserves attention today, based on recent activity.\n\
+                - Sentence 2: A specific piece of context or info from memory that will be useful.\n\
+                - Sentence 3 (optional): Something in progress that needs a follow-up.\n\
+                - Be specific. Name real tasks, tools, topics, or people from the memories.\n\
+                - Write in second person (\"You need to...\", \"You'll want to...\", \"You were working on...\").\n\
+                - No bullet points. No headers. Just prose.",
+                "Based on recent activity below, write the morning briefing paragraph.\nReturn only the paragraph, nothing else.",
+            )
+        };
+
+        let user_msg = format!(
+            "RECENT ACTIVITY:\n{}\n\n{}",
+            cards_block.chars().take(900).collect::<String>(),
+            task_instruction
+        );
+
+        let prompt = match self.build_prompt(system_msg, &user_msg) {
+            Ok(p) => p,
+            Err(err) => {
+                tracing::error!("Daily briefing prompt build failed: {}", err);
+                return String::new();
+            }
+        };
+
+        tracing::info!("Generating daily briefing (mode={})...", mode);
+        let raw = self.complete(&prompt, 160).await;
+        tracing::info!("Daily briefing result: {}", raw);
+
+        // Strip any leading label the model might emit
+        let cleaned = raw
+            .trim()
+            .trim_matches(|ch| ch == '"' || ch == '\'')
+            .to_string();
+        cleaned
+    }
+
     fn build_prompt(&self, system_message: &str, user_message: &str) -> Result<String, String> {
         let messages = vec![
             LlamaChatMessage::new("system".to_string(), system_message.replace('\0', " "))

@@ -605,6 +605,22 @@ export function GraphPanel({ isVisible, onClose }: GraphPanelProps) {
                     </div>
                 </div>
                 <div className="graph-nav-controls" role="group" aria-label="Graph navigation">
+                    <button
+                        className="ui-action-btn"
+                        onClick={goBack}
+                        disabled={!canGoBack}
+                        title="Navigate back"
+                    >
+                        ←
+                    </button>
+                    <button
+                        className="ui-action-btn"
+                        onClick={goForward}
+                        disabled={!canGoForward}
+                        title="Navigate forward"
+                    >
+                        →
+                    </button>
                     <button className="ui-action-btn graph-close-btn" onClick={onClose}>
                         ✕ Close
                     </button>

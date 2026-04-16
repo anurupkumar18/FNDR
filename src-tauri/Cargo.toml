@@ -65,11 +65,14 @@ arrow-array = "57"
 arrow-schema = "57"
 futures = "0.3"
 
-# ONNX Runtime for embeddings (disabled for prototype, using hash-based embeddings)
-# ort = { version = "2.0.0-rc.11", default-features = false }
+# ONNX Runtime for native in-process text + image embeddings
+ort = { version = "2.0.0-rc.12", features = ["download-binaries", "ndarray"] }
 
-# Tokenization - use simpler approach
-# tokenizers = "0.20"
+# HuggingFace tokenizers for all-MiniLM-L6-v2
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+
+# N-dimensional arrays for tensor operations in embedder
+ndarray = "0.17"
 
 # Tantivy for full-text search
 tantivy = "0.22"
@@ -87,13 +90,14 @@ dirs = "6.0.0"
 thiserror = "2.0.18"
 regex = "1.12.3"
 tauri-plugin-autostart = "2.5.1"
+rand = "0.10.1"
 
 # macOS specific
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSString", "NSData", "NSDictionary", "NSArray"] }
-objc2-app-kit = { version = "0.2", features = ["NSWorkspace", "NSRunningApplication", "NSImage"] }
+objc2-app-kit = { version = "0.2", features = ["NSWorkspace", "NSRunningApplication", "NSImage", "NSPasteboard"] }
 block2 = "0.5"
 
 [dev-dependencies]

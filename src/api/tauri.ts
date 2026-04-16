@@ -288,6 +288,14 @@ export async function deleteMemory(memoryId: string): Promise<boolean> {
     return invoke<boolean>("delete_memory", { memoryId });
 }
 
+export async function generateDailyBriefing(mode?: "morning" | "evening"): Promise<string> {
+    return invoke<string>("generate_daily_briefing", { mode });
+}
+
+export async function getFunGreeting(name?: string | null): Promise<string> {
+    return invoke<string>("get_fun_greeting", { name });
+}
+
 
 
 // Capture control
@@ -479,4 +487,16 @@ export interface GraphEdgeData {
 
 export async function getGraphData(): Promise<{ nodes: GraphNodeData[]; edges: GraphEdgeData[] }> {
     return invoke<{ nodes: GraphNodeData[]; edges: GraphEdgeData[] }>("get_graph_data");
+}
+
+export interface ChatMessage {
+    role: "user" | "assistant";
+    content: string;
+}
+
+export async function chatWithGemma(messages: ChatMessage[]): Promise<string> {
+    const last = messages[messages.length - 1];
+    if (!last) return "";
+    const snippets = messages.filter((m) => m.role === "user").map((m) => m.content);
+    return invoke<string>("summarize_search", { query: last.content, resultsSnippets: snippets });
 }

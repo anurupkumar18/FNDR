@@ -11,8 +11,12 @@ const RRF_K: f32 = 60.0;
 const CANDIDATE_MULTIPLIER: usize = 6;
 const MAX_KEYWORD_VARIANTS: usize = 4;
 const MAX_RERANK_POOL: usize = 28;
-const SEMANTIC_WEIGHT: f32 = 0.50;
-const LEXICAL_WEIGHT: f32 = 0.50;
+// Text ANN + snippet ANN together = 0.70; lexical = 0.30.
+const SEMANTIC_WEIGHT: f32 = 0.40;
+const SNIPPET_WEIGHT: f32 = 0.30;
+const LEXICAL_WEIGHT: f32 = 0.30;
+/// Ebbinghaus decay floor — very old unaccessed records still surface if highly relevant.
+const DECAY_FLOOR: f32 = 0.15;
 const ABSOLUTE_RELEVANCE_FLOOR: f32 = 0.31;
 const RELATIVE_RELEVANCE_FLOOR: f32 = 0.56;
 
@@ -41,6 +45,7 @@ struct QueryProfile {
 #[derive(Debug, Clone, Default)]
 struct FusionSignals {
     semantic_score: Option<f32>,
+    snippet_score: Option<f32>,
     keyword_score: Option<f32>,
     lexical_score: f32,
     coverage: f32,
@@ -225,6 +230,10 @@ impl HybridSearcher {
         let semantic_results = store
             .vector_search(&query_embedding, branch_limit, time_filter, app_filter)
             .await?;
+        let snippet_results = store
+            .snippet_vector_search(&query_embedding, branch_limit, time_filter, app_filter)
+            .await
+            .unwrap_or_default();
 
         let mut keyword_results = Vec::new();
         for (variant_idx, variant) in profile.keyword_variants().iter().enumerate() {
@@ -242,7 +251,7 @@ impl HybridSearcher {
         }
         let keyword_results = dedup_by_best_score(keyword_results);
 
-        let fused = Self::hybrid_fusion(&profile, &semantic_results, &keyword_results);
+        let fused = Self::hybrid_fusion(&profile, &semantic_results, &snippet_results, &keyword_results);
         let reranked = Self::rerank_with_profile(&profile, fused, limit);
 
         Ok(reranked)
@@ -256,7 +265,7 @@ impl HybridSearcher {
         limit: usize,
     ) -> Vec<SearchResult> {
         let profile = QueryProfile::from_query(query);
-        let fused = Self::hybrid_fusion(&profile, semantic, keyword);
+        let fused = Self::hybrid_fusion(&profile, semantic, &[], keyword);
         Self::rerank_with_profile(&profile, fused, limit)
     }
 
@@ -311,6 +320,7 @@ impl HybridSearcher {
     fn hybrid_fusion(
         profile: &QueryProfile,
         semantic: &[SearchResult],
+        snippet: &[SearchResult],
         keyword: &[SearchResult],
     ) -> Vec<SearchResult> {
         let mut signals: HashMap<String, FusionSignals> = HashMap::new();
@@ -338,6 +348,32 @@ impl HybridSearcher {
                 })
                 .or_insert_with(|| FusionSignals {
                     semantic_score: Some(result.score),
+                    ..FusionSignals::default()
+                });
+        }
+
+        for result in snippet {
+            candidates
+                .entry(result.id.clone())
+                .and_modify(|existing| {
+                    if result.score > existing.score {
+                        *existing = result.clone();
+                    }
+                })
+                .or_insert_with(|| result.clone());
+
+            signals
+                .entry(result.id.clone())
+                .and_modify(|signal| {
+                    signal.snippet_score = Some(
+                        signal
+                            .snippet_score
+                            .map(|current| current.max(result.score))
+                            .unwrap_or(result.score),
+                    );
+                })
+                .or_insert_with(|| FusionSignals {
+                    snippet_score: Some(result.score),
                     ..FusionSignals::default()
                 });
         }
@@ -405,12 +441,17 @@ impl HybridSearcher {
             .values()
             .map(|s| s.semantic_score.unwrap_or(0.0))
             .collect::<Vec<_>>();
+        let snippet_values = signals
+            .values()
+            .map(|s| s.snippet_score.unwrap_or(0.0))
+            .collect::<Vec<_>>();
         let lexical_values = signals
             .values()
             .map(|s| s.lexical_score)
             .collect::<Vec<_>>();
 
         let semantic_range = value_range(&semantic_values);
+        let snippet_range = value_range(&snippet_values);
         let lexical_range = value_range(&lexical_values);
 
         let mut fused = Vec::new();
@@ -419,9 +460,13 @@ impl HybridSearcher {
 
             let semantic_norm =
                 normalize_range(signal.semantic_score.unwrap_or(0.0), semantic_range);
+            let snippet_norm =
+                normalize_range(signal.snippet_score.unwrap_or(0.0), snippet_range);
             let lexical_norm = normalize_range(signal.lexical_score, lexical_range);
 
-            let mut score = semantic_norm * SEMANTIC_WEIGHT + lexical_norm * LEXICAL_WEIGHT;
+            let mut score = semantic_norm * SEMANTIC_WEIGHT
+                + snippet_norm * SNIPPET_WEIGHT
+                + lexical_norm * LEXICAL_WEIGHT;
             score += signal.coverage * 0.12;
             score += signal.phrase_score * 0.08;
 
@@ -563,6 +608,9 @@ impl HybridSearcher {
             if coherence > 1 {
                 score *= 1.0 + (coherence as f32 * 0.04).min(0.16);
             }
+
+            // Ebbinghaus decay: recent + accessed records score higher.
+            score *= candidate.decay_score.max(DECAY_FLOOR);
 
             candidate.score = score;
         }
@@ -1162,6 +1210,7 @@ mod tests {
             score,
             screenshot_path: None,
             url: Some("https://example.com".to_string()),
+            decay_score: 1.0,
         }
     }
 
