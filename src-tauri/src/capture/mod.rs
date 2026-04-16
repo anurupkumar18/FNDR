@@ -157,6 +157,10 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         // Calculate sleep duration based on FPS
         let fps = sampler.get_current_fps(&config);
+        if fps <= 0.0 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
         let sleep_duration = Duration::from_secs_f64(1.0 / fps);
 
         // Get active application info

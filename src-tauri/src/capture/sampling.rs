@@ -5,46 +5,45 @@
 
 use crate::config::Config;
 
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    /// Returns the elapsed time since the last event of the given types was
-    /// received from HID state (kCGEventSourceStateHIDSystemState = 1).
-    fn CGEventSourceSecondsSinceLastEventType(
-        state_id: i32,
-        event_type: u32,
-    ) -> f64;
+#[cfg(target_os = "macos")]
+mod macos_idle {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(sourceStateID: i32, eventType: u32) -> f64;
+    }
+
+    pub fn get_idle_seconds() -> f64 {
+        unsafe {
+            // kCGAnyInputEventType = ~0 = 0xFFFFFFFF, kCGEventSourceStateHIDSystemState = 1
+            CGEventSourceSecondsSinceLastEventType(1, 0xFFFFFFFF)
+        }
+    }
 }
 
-/// Bitmask covering mouse moves, clicks, drags, scroll, and key events.
-/// 0xFFFFFFFF is the wildcard mask accepted by the API (kCGAnyInputEventType).
-const CG_ANY_INPUT_EVENT_TYPE: u32 = 0xFFFF_FFFF;
-
-/// CGEventSourceStateID = HIDSystemState (1) — reflects physical device input.
-const CG_EVENT_SOURCE_HID: i32 = 1;
-
-/// Returns the number of seconds since the user last generated a keyboard or
-/// mouse event, queried directly from the HID state.
-fn seconds_since_last_input() -> f64 {
-    // SAFETY: CGEventSourceSecondsSinceLastEventType is a pure read-only C
-    // function from the CoreGraphics framework with no side-effects.
-    unsafe { CGEventSourceSecondsSinceLastEventType(CG_EVENT_SOURCE_HID, CG_ANY_INPUT_EVENT_TYPE) }
+#[cfg(not(target_os = "macos"))]
+mod macos_idle {
+    pub fn get_idle_seconds() -> f64 {
+        0.0 // Fallback for non-macOS
+    }
 }
 
-/// Adaptive sampler that adjusts FPS based on user activity.
-pub struct AdaptiveSampler;
+/// Adaptive sampler that adjusts FPS based on user activity
+pub struct AdaptiveSampler {}
 
 impl AdaptiveSampler {
     pub fn new() -> Self {
         Self
     }
 
-    /// Returns the capture FPS appropriate for the current idle state.
-    ///
-    /// If the user has been idle longer than `config.idle_pause_seconds`, returns
-    /// `config.idle_fps`; otherwise returns `config.fps_base`.
+    /// Get the current FPS based on configuration and user activity.
+    /// Returns 0.0 if the system is in deep idle (e.g. > 5 minutes).
     pub fn get_current_fps(&self, config: &Config) -> f64 {
-        let idle_secs = seconds_since_last_input();
-        if idle_secs >= config.idle_pause_seconds as f64 {
+        let idle_secs = macos_idle::get_idle_seconds();
+        let deep_idle_seconds = 300.0; // 5 minutes completely untouched
+        
+        if idle_secs >= deep_idle_seconds {
+            0.0 // Pause completely
+        } else if idle_secs >= config.idle_pause_seconds as f64 {
             config.idle_fps
         } else {
             config.fps_base
