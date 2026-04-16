@@ -243,6 +243,7 @@ fn main() {
             // Tasks / Todos
             api::commands::add_todo,
             api::commands::get_todos,
+            api::commands::update_todo,
             api::commands::dismiss_todo,
             api::commands::execute_todo,
             // Agent SDK

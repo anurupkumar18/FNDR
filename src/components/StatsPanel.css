@@ -38,6 +38,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    margin-left: auto;
 }
 
 .stats-refresh-btn,
@@ -147,6 +148,10 @@
 .stats-deck-container.is-grid .stats-playing-card:hover {
     border-color: rgba(255, 255, 255, 0.16);
     transform: translateY(-2px);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+        0 0 22px rgba(255, 255, 255, 0.08),
+        0 14px 30px rgba(0, 0, 0, 0.35);
 }
 
 .stats-deck-container.is-grid .stats-playing-card.card-metrics {
@@ -654,8 +659,8 @@
 
 @media (max-width: 920px) {
     .stats-page-header {
-        flex-direction: column;
-        align-items: flex-start;
+        flex-wrap: wrap;
+        align-items: center;
     }
 
     .stats-meter-row {
@@ -694,6 +699,14 @@
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 10px 28px rgba(0, 0, 0, 0.08);
 }
 
+[data-theme="light"] .stats-deck-container.is-grid .stats-playing-card:hover {
+    border-color: rgba(0, 0, 0, 0.2);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.85),
+        0 0 18px rgba(93, 104, 122, 0.18),
+        0 12px 28px rgba(0, 0, 0, 0.14);
+}
+
 [data-theme="light"] .stats-deck-container.is-stacked .stats-playing-card {
     background: #f4f5f8;
     border-color: rgba(0, 0, 0, 0.12);
@@ -702,6 +715,34 @@
 
 [data-theme="light"] .stats-card-bg {
     display: none;
+}
+
+[data-theme="light"] .stats-card-scroller > h3 {
+    color: rgba(56, 63, 76, 0.78);
+}
+
+[data-theme="light"] .stats-page-label,
+[data-theme="light"] .stats-meter-card span,
+[data-theme="light"] .stats-chart-head span,
+[data-theme="light"] .stats-hour-labels,
+[data-theme="light"] .stats-page-empty {
+    color: rgba(75, 82, 96, 0.88);
+}
+
+[data-theme="light"] .stats-intel-strip p {
+    color: rgba(28, 34, 44, 0.9);
+}
+
+[data-theme="light"] .stats-intel-strip p span {
+    color: rgba(92, 100, 116, 0.82);
+}
+
+[data-theme="light"] .stats-page-rank-meta,
+[data-theme="light"] .stats-daypart-row,
+[data-theme="light"] .stats-weekday-row,
+[data-theme="light"] .stats-donut-legend-row,
+[data-theme="light"] .stats-page-meta-row {
+    color: rgba(45, 52, 64, 0.88);
 }
 
 [data-theme="light"] .stats-page-card,

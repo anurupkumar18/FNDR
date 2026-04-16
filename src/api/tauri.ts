@@ -471,6 +471,14 @@ export async function executeTodo(taskId: string): Promise<Task> {
     return invoke<Task>("execute_todo", { taskId });
 }
 
+export async function updateTodo(
+    taskId: string,
+    title: string,
+    taskType?: "Todo" | "Reminder" | "Followup"
+): Promise<Task> {
+    return invoke<Task>("update_todo", { taskId, title, taskType });
+}
+
 // ========== Agent SDK Functions ==========
 
 export interface AgentStatus {

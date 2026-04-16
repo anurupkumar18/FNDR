@@ -76,6 +76,9 @@ const TASK_LOOKBACK_HOURS: u32 = 120;
 const TASK_EXTRACTION_WINDOW: usize = 12;
 const TASK_TARGET_ACTIVE: usize = 9;
 const TASK_MAX_NEW_PER_REFRESH: usize = 8;
+const TASK_MIN_ACTIVE_PER_TYPE: usize = 5;
+const TASK_MAX_ACTIVE_PER_TYPE: usize = 20;
+const TASK_LINK_SCAN_LIMIT: usize = 260;
 const MEMORY_REPAIR_CHECKPOINT_VERSION: u32 = 2;
 const MEMORY_REPAIR_SIMILARITY_SCAN_LIMIT: usize = 96;
 const MEMORY_REPAIR_CHECKPOINT_ITEM_STEP: usize = 300;
@@ -1736,6 +1739,246 @@ pub async fn run_memory_repair_backfill(
 
 // ========== Task Commands ==========
 
+fn task_type_label(task_type: &TaskType) -> &'static str {
+    match task_type {
+        TaskType::Todo => "Todo",
+        TaskType::Reminder => "Reminder",
+        TaskType::Followup => "Followup",
+    }
+}
+
+fn task_type_sort_key(task_type: &TaskType) -> u8 {
+    match task_type {
+        TaskType::Todo => 0,
+        TaskType::Reminder => 1,
+        TaskType::Followup => 2,
+    }
+}
+
+fn parse_task_type(task_type: Option<&str>) -> TaskType {
+    match task_type {
+        Some("Reminder") => TaskType::Reminder,
+        Some("Followup") => TaskType::Followup,
+        _ => TaskType::Todo,
+    }
+}
+
+fn normalize_task_text(value: &str) -> String {
+    value.to_lowercase()
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn task_terms(title: &str) -> Vec<String> {
+    normalize_task_text(title)
+        .split_whitespace()
+        .filter(|term| term.len() >= 3)
+        .filter(|term| {
+            !matches!(
+                *term,
+                "the"
+                    | "and"
+                    | "for"
+                    | "with"
+                    | "from"
+                    | "that"
+                    | "this"
+                    | "todo"
+                    | "task"
+                    | "follow"
+                    | "followup"
+                    | "reminder"
+            )
+        })
+        .map(|term| term.to_string())
+        .collect()
+}
+
+fn task_priority_score(task: &Task, now_ms: i64) -> i64 {
+    let age_hours = ((now_ms - task.created_at).max(0) / 3_600_000) as i64;
+    let recency_bonus = (72 - age_hours).clamp(0, 72);
+    let memory_bonus = (task.linked_memory_ids.len().min(10) as i64) * 4;
+    let url_bonus = (task.linked_urls.len().min(6) as i64) * 2;
+    let due_bonus = if task.due_date.is_some() { 9 } else { 0 };
+    let source_bonus = if task.source_app.eq_ignore_ascii_case("manual") {
+        6
+    } else {
+        3
+    };
+    recency_bonus + memory_bonus + url_bonus + due_bonus + source_bonus
+}
+
+fn memory_topic(result: &SearchResult) -> Option<String> {
+    let mut text = result.snippet.trim().to_string();
+    if text.is_empty() {
+        text = result.clean_text.trim().to_string();
+    }
+    if text.is_empty() {
+        text = result.window_title.trim().to_string();
+    }
+    if text.is_empty() {
+        return None;
+    }
+    let first_sentence = text
+        .split(['.', '!', '?'])
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if first_sentence.is_empty() {
+        None
+    } else {
+        Some(
+            first_sentence
+                .split_whitespace()
+                .take(10)
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    }
+}
+
+fn build_seed_task_from_memory(result: &SearchResult, task_type: TaskType, now_ms: i64) -> Option<Task> {
+    let topic = memory_topic(result)?;
+    let title = match task_type {
+        TaskType::Todo => format!("Complete: {topic}"),
+        TaskType::Reminder => format!("Remember: {topic}"),
+        TaskType::Followup => format!("Follow up: {topic}"),
+    };
+
+    Some(Task {
+        id: uuid::Uuid::new_v4().to_string(),
+        title,
+        description: String::new(),
+        source_app: "Auto".to_string(),
+        source_memory_id: Some(result.id.clone()),
+        created_at: now_ms,
+        due_date: None,
+        is_completed: false,
+        is_dismissed: false,
+        task_type,
+        linked_urls: result.url.clone().map(|url| vec![url]).unwrap_or_default(),
+        linked_memory_ids: vec![result.id.clone()],
+    })
+}
+
+fn update_task_links_from_memories(tasks: &mut [Task], recent_memories: &[SearchResult]) -> bool {
+    let mut changed = false;
+
+    for task in tasks.iter_mut().filter(|t| !t.is_completed && !t.is_dismissed) {
+        let terms = task_terms(&task.title);
+        if terms.is_empty() {
+            continue;
+        }
+
+        let mut known_memory_ids: HashSet<String> = task.linked_memory_ids.iter().cloned().collect();
+        let mut known_urls: HashSet<String> = task.linked_urls.iter().cloned().collect();
+
+        for memory in recent_memories.iter().take(TASK_LINK_SCAN_LIMIT) {
+            let blob = format!("{} {} {}", memory.snippet, memory.clean_text, memory.window_title);
+            let normalized_blob = normalize_task_text(&blob);
+            let matches = terms
+                .iter()
+                .filter(|term| normalized_blob.contains(term.as_str()))
+                .count();
+            let required = if terms.len() >= 4 { 2 } else { 1 };
+            if matches < required {
+                continue;
+            }
+
+            if known_memory_ids.insert(memory.id.clone()) {
+                task.linked_memory_ids.push(memory.id.clone());
+                changed = true;
+            }
+
+            if let Some(url) = memory.url.clone() {
+                if known_urls.insert(url.clone()) {
+                    task.linked_urls.push(url);
+                    changed = true;
+                }
+            }
+        }
+
+        task.linked_memory_ids.truncate(18);
+        task.linked_urls.truncate(8);
+    }
+
+    changed
+}
+
+fn enforce_task_inventory_bounds(tasks: &mut Vec<Task>, recent_memories: &[SearchResult]) -> bool {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut changed = false;
+    let all_types = [TaskType::Todo, TaskType::Reminder, TaskType::Followup];
+
+    for task_type in all_types {
+        let mut active_indices = tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| {
+                !task.is_completed && !task.is_dismissed && std::mem::discriminant(&task.task_type) == std::mem::discriminant(&task_type)
+            })
+            .map(|(idx, _)| idx)
+            .collect::<Vec<_>>();
+
+        active_indices.sort_by(|left, right| {
+            let l_score = task_priority_score(&tasks[*left], now_ms);
+            let r_score = task_priority_score(&tasks[*right], now_ms);
+            r_score
+                .cmp(&l_score)
+                .then_with(|| tasks[*right].created_at.cmp(&tasks[*left].created_at))
+        });
+
+        for idx in active_indices.iter().skip(TASK_MAX_ACTIVE_PER_TYPE) {
+            if !tasks[*idx].is_dismissed {
+                tasks[*idx].is_dismissed = true;
+                changed = true;
+            }
+        }
+
+        let active_count = active_indices.len().min(TASK_MAX_ACTIVE_PER_TYPE);
+        if active_count >= TASK_MIN_ACTIVE_PER_TYPE {
+            continue;
+        }
+
+        let needed = TASK_MIN_ACTIVE_PER_TYPE - active_count;
+        let existing_keys = tasks
+            .iter()
+            .filter(|task| !task.is_completed && !task.is_dismissed)
+            .map(|task| {
+                (
+                    normalize_task_text(&task.title),
+                    task_type_label(&task.task_type).to_string(),
+                )
+            })
+            .collect::<HashSet<_>>();
+
+        let mut seen_keys = existing_keys;
+        let mut added = 0usize;
+        for memory in recent_memories.iter().take(TASK_LINK_SCAN_LIMIT) {
+            if added >= needed {
+                break;
+            }
+            let Some(candidate) = build_seed_task_from_memory(memory, task_type.clone(), now_ms) else {
+                continue;
+            };
+            let key = (
+                normalize_task_text(&candidate.title),
+                task_type_label(&candidate.task_type).to_string(),
+            );
+            if !seen_keys.insert(key) {
+                continue;
+            }
+            tasks.push(candidate);
+            added += 1;
+            changed = true;
+        }
+    }
+
+    changed
+}
+
 /// Add a new todo
 #[tauri::command]
 pub async fn add_todo(
@@ -1743,11 +1986,7 @@ pub async fn add_todo(
     title: String,
     task_type: Option<String>,
 ) -> Result<Task, String> {
-    let parsed_task_type = match task_type.as_deref() {
-        Some("Reminder") => TaskType::Reminder,
-        Some("Followup") => TaskType::Followup,
-        _ => TaskType::Todo,
-    };
+    let parsed_task_type = parse_task_type(task_type.as_deref());
 
     let task = Task {
         id: uuid::Uuid::new_v4().to_string(),
@@ -1772,21 +2011,39 @@ pub async fn add_todo(
         .await
         .map_err(|e| e.to_string())?;
 
-    if let Err(err) = state.inner().graph.link_task(&task).await {
-        tracing::warn!("Failed linking manual task in graph: {}", err);
-    }
-
     Ok(task)
 }
 
 /// Get all active todos
 #[tauri::command]
 pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, String> {
-    let tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
-    Ok(tasks
+    let mut tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
+    let recent_memories = state
+        .store
+        .list_recent_results(TASK_LINK_SCAN_LIMIT, None)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let links_changed = update_task_links_from_memories(&mut tasks, &recent_memories);
+    let inventory_changed = enforce_task_inventory_bounds(&mut tasks, &recent_memories);
+    if links_changed || inventory_changed {
+        state
+            .store
+            .upsert_tasks(&tasks)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    let mut visible = tasks
         .into_iter()
         .filter(|t| !t.is_completed && !t.is_dismissed)
-        .collect())
+        .collect::<Vec<_>>();
+    visible.sort_by(|left, right| {
+        task_type_sort_key(&left.task_type)
+            .cmp(&task_type_sort_key(&right.task_type))
+            .then_with(|| right.created_at.cmp(&left.created_at))
+    });
+    Ok(visible)
 }
 
 /// Dismiss a task
@@ -1816,16 +2073,45 @@ pub async fn execute_todo(
     task_id: String,
 ) -> Result<Task, String> {
     let tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
-    let mut task = tasks
+    let task = tasks
         .into_iter()
         .find(|t| t.id == task_id)
         .ok_or_else(|| "Task not found".to_string())?;
 
-    if task.linked_urls.is_empty() {
-        task.linked_urls = state.inner().graph.related_urls_for_task(&task.id).await;
+    Ok(task)
+}
+
+/// Update an existing task's title and/or type
+#[tauri::command]
+pub async fn update_todo(
+    state: State<'_, Arc<AppState>>,
+    task_id: String,
+    title: String,
+    task_type: Option<String>,
+) -> Result<Task, String> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return Err("Task title cannot be empty.".to_string());
     }
 
-    Ok(task)
+    let parsed_type = parse_task_type(task_type.as_deref());
+    let mut tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
+    let task = tasks
+        .iter_mut()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| "Task not found".to_string())?;
+
+    task.title = trimmed.to_string();
+    task.task_type = parsed_type;
+    task.created_at = chrono::Utc::now().timestamp_millis();
+    let updated = task.clone();
+
+    state
+        .store
+        .upsert_tasks(&tasks)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(updated)
 }
 
 // ========== Agent Commands ==========

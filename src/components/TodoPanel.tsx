@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Task, addTodo, dismissTodo, generateDailyBriefing, getTodos } from "../api/tauri";
+import { Task, addTodo, dismissTodo, generateDailyBriefing, getTodos, updateTodo } from "../api/tauri";
 import "./TodoPanel.css";
 
 interface TodoPanelProps {
@@ -15,20 +15,19 @@ const STAGE_ORDER: TodoType[] = ["Todo", "Reminder", "Followup"];
 export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
     const [tasks, setTasks] = useState<Task[]>([]);
     const [loading, setLoading] = useState(false);
-    const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [creating, setCreating] = useState(false);
     const [newTitle, setNewTitle] = useState("");
     const [newType, setNewType] = useState<TodoType>("Todo");
     const [activeStage, setActiveStage] = useState<StageFilter>("Todo");
+    const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+    const [editingTitle, setEditingTitle] = useState("");
     const [dailyBriefing, setDailyBriefing] = useState<string>("");
     const [dailyBriefingLoading, setDailyBriefingLoading] = useState(false);
 
     const loadTasks = async (showLoading = false) => {
         if (showLoading) {
             setLoading(true);
-        } else {
-            setRefreshing(true);
         }
         setError(null);
         try {
@@ -38,7 +37,6 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             setError(err instanceof Error ? err.message : "Unable to load tasks.");
         } finally {
             setLoading(false);
-            setRefreshing(false);
         }
     };
 
@@ -160,13 +158,6 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                     <p>Stage through Todos, Reminders, and Follow-ups pulled from distinct memories.</p>
                 </div>
                 <div className="todo-page-actions">
-                    <button
-                        className="ui-action-btn todo-refresh-btn"
-                        onClick={() => void loadTasks(false)}
-                        disabled={loading || refreshing}
-                    >
-                        {refreshing ? "Refreshing..." : "Refresh"}
-                    </button>
                     <button className="ui-action-btn todo-close-btn" onClick={onClose}>
                         ✕ Close
                     </button>
@@ -197,18 +188,16 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                         }
                     }}
                 />
-                <div className="todo-type-toggle" role="tablist" aria-label="Task type">
-                    {(["Todo", "Reminder", "Followup"] as TodoType[]).map((type) => (
-                        <button
-                            key={type}
-                            type="button"
-                            className={`ui-action-btn todo-type-btn ${newType === type ? "active" : ""}`}
-                            onClick={() => setNewType(type)}
-                        >
-                            {type === "Followup" ? "Follow-up" : type}
-                        </button>
-                    ))}
-                </div>
+                <label className="todo-type-select-wrap" aria-label="Task type">
+                    <select
+                        value={newType}
+                        onChange={(event) => setNewType(event.target.value as TodoType)}
+                    >
+                        <option value="Todo">To-do</option>
+                        <option value="Reminder">Reminder</option>
+                        <option value="Followup">Follow-up</option>
+                    </select>
+                </label>
                 <button
                     className="ui-action-btn todo-add-btn"
                     onClick={() => void handleAddTask()}
@@ -273,15 +262,66 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                                     <h3>{task.title}</h3>
                                     <p>
                                         {new Date(task.created_at).toLocaleString()}
-                                        {task.linked_memory_ids.length > 0
-                                            ? ` · ${task.linked_memory_ids.length} linked memories`
-                                            : ""}
                                         {task.linked_urls.length > 0
                                             ? ` · ${task.linked_urls.length} context links`
                                             : ""}
                                     </p>
+                                    {editingTaskId === task.id && (
+                                        <div className="todo-edit-row">
+                                            <input
+                                                value={editingTitle}
+                                                onChange={(event) => setEditingTitle(event.target.value)}
+                                                placeholder="Edit task title"
+                                            />
+                                            <div className="todo-edit-actions">
+                                                <button
+                                                    className="ui-action-btn"
+                                                    onClick={() => {
+                                                        setEditingTaskId(null);
+                                                        setEditingTitle("");
+                                                    }}
+                                                >
+                                                    Cancel
+                                                </button>
+                                                <button
+                                                    className="ui-action-btn"
+                                                    onClick={async () => {
+                                                        const nextTitle = editingTitle.trim();
+                                                        if (!nextTitle) {
+                                                            return;
+                                                        }
+                                                        try {
+                                                            const updated = await updateTodo(task.id, nextTitle, task.task_type);
+                                                            setTasks((prev) =>
+                                                                prev.map((item) => (item.id === updated.id ? updated : item))
+                                                            );
+                                                            setEditingTaskId(null);
+                                                            setEditingTitle("");
+                                                        } catch (err) {
+                                                            setError(
+                                                                err instanceof Error
+                                                                    ? err.message
+                                                                    : "Unable to update task."
+                                                            );
+                                                        }
+                                                    }}
+                                                >
+                                                    Save
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="todo-page-item-actions">
+                                    <button
+                                        className="ui-action-btn todo-edit-btn"
+                                        onClick={() => {
+                                            setEditingTaskId(task.id);
+                                            setEditingTitle(task.title);
+                                        }}
+                                    >
+                                        Edit
+                                    </button>
                                     <button
                                         className="ui-action-btn todo-done-btn"
                                         onClick={() => void handleDismiss(task.id)}

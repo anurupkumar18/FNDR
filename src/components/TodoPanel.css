@@ -31,11 +31,12 @@
 .todo-page-actions {
     display: flex;
     gap: 8px;
+    margin-left: auto;
 }
 
 .todo-create-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(210px, 290px) 110px;
+    grid-template-columns: minmax(0, 1fr) 180px 110px;
     gap: 8px;
     padding: 10px 16px;
     border-bottom: 1px solid var(--border);
@@ -78,23 +79,19 @@
     font-size: 0.82rem;
 }
 
-.todo-type-toggle {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
+.todo-type-select-wrap {
+    display: block;
 }
 
-.todo-type-btn {
+.todo-type-select-wrap select {
     width: 100%;
     height: 36px;
-    font-size: 12px;
-}
-
-.todo-type-btn.active {
-    border-color: rgba(255, 255, 255, 0.35);
-    background: linear-gradient(180deg, rgba(50, 50, 50, 0.85), rgba(25, 25, 25, 0.9));
-    color: #ffffff;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 4px 12px rgba(0, 0, 0, 0.4);
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #0d0d0d;
+    color: var(--text-primary);
+    padding: 0 10px;
+    font-size: 0.82rem;
 }
 
 .todo-page-body {
@@ -175,7 +172,39 @@
 
 .todo-page-item-actions {
     display: flex;
-    gap: 8px;
+    flex-direction: column;
+    gap: 10px;
+    align-items: stretch;
+    min-width: 90px;
+}
+
+.todo-edit-btn {
+    margin-top: 2px;
+}
+
+.todo-done-btn {
+    margin-top: 8px;
+}
+
+.todo-edit-row {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.todo-edit-row input {
+    background: #0d0d0d;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-primary);
+    padding: 7px 9px;
+    font-size: 0.8rem;
+}
+
+.todo-edit-actions {
+    display: flex;
+    gap: 6px;
 }
 
 .todo-pill {
@@ -228,12 +257,21 @@
     background: var(--surface-elevated);
 }
 
-[data-theme="light"] .todo-type-btn.active,
+[data-theme="light"] .todo-type-select-wrap select,
+[data-theme="light"] .todo-stage-btn.active {
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+}
+
 [data-theme="light"] .todo-stage-btn.active {
     border-color: rgba(0, 0, 0, 0.2);
     background: linear-gradient(180deg, rgba(230, 230, 235, 0.95), rgba(215, 215, 220, 0.95));
     color: var(--text-primary);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .todo-edit-row input {
+    background: var(--surface-elevated);
 }
 
 [data-theme="light"] .todo-stage-btn.active strong {
