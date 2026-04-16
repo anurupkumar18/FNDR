@@ -2464,7 +2464,11 @@ pub async fn generate_daily_briefing(
     // Detect mode from local hour if not specified
     let resolved_mode = mode.unwrap_or_else(|| {
         let hour = chrono::Local::now().hour();
-        if hour >= 17 { "evening".to_string() } else { "morning".to_string() }
+        if hour >= 17 {
+            "evening".to_string()
+        } else {
+            "morning".to_string()
+        }
     });
 
     // Fetch the most recent cards (today + a few recent ones for context)
@@ -2529,9 +2533,9 @@ pub async fn link_audio_to_memories(
 pub fn get_fun_greeting(name: Option<String>) -> Result<String, String> {
     use rand::prelude::IndexedRandom;
     let base_name = name.unwrap_or_else(|| "there".to_string());
-    
+
     let hour = chrono::Local::now().hour();
-    
+
     let prefix = if hour >= 4 && hour < 12 {
         "Good Morning"
     } else if hour >= 12 && hour < 16 {

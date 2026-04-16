@@ -3,10 +3,10 @@
 use super::TextChunker;
 use ndarray::Array2;
 use ort::session::Session;
-use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Embedding dimension for all-MiniLM-L6-v2.
 pub const EMBEDDING_DIM: usize = 384;
@@ -228,8 +228,8 @@ struct RealEmbedder {
 
 impl RealEmbedder {
     fn new() -> Result<Self, String> {
-        let model_dir = resolve_model_dir()
-            .ok_or_else(|| "Could not determine model directory".to_string())?;
+        let model_dir =
+            resolve_model_dir().ok_or_else(|| "Could not determine model directory".to_string())?;
 
         let onnx_path = model_dir.join("all-MiniLM-L6-v2.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
@@ -238,22 +238,37 @@ impl RealEmbedder {
             return Err(format!("ONNX model not found at {}", onnx_path.display()));
         }
         if !tokenizer_path.exists() {
-            return Err(format!("Tokenizer not found at {}", tokenizer_path.display()));
+            return Err(format!(
+                "Tokenizer not found at {}",
+                tokenizer_path.display()
+            ));
         }
 
         let session = Session::builder()
             .map_err(|e| format!("Failed to create ort session builder: {e}"))?
             .commit_from_file(&onnx_path)
-            .map_err(|e| format!("Failed to load ONNX model from {}: {e}", onnx_path.display()))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to load ONNX model from {}: {e}",
+                    onnx_path.display()
+                )
+            })?;
 
-        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| format!("Failed to load tokenizer from {}: {e}", tokenizer_path.display()))?;
+        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|e| {
+            format!(
+                "Failed to load tokenizer from {}: {e}",
+                tokenizer_path.display()
+            )
+        })?;
 
         tracing::info!(
             model = %onnx_path.display(),
             "Native ort text embedder initialized"
         );
-        Ok(Self { session: Mutex::new(session), tokenizer })
+        Ok(Self {
+            session: Mutex::new(session),
+            tokenizer,
+        })
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {

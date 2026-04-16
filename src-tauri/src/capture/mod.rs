@@ -32,12 +32,12 @@ use crate::store::{MemoryRecord, SearchResult, Task, TaskType};
 use crate::tasks::parse_tasks_from_llm_response;
 use crate::AppState;
 use chrono::Local;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
 /// Resolve the FastVLM sidecar Python script path.
@@ -416,11 +416,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         {
             Ok(merged) => merged,
             Err(err) => {
-                tracing::warn!(
-                    "Memory continuity merge failed for {}: {}",
-                    record.id,
-                    err
-                );
+                tracing::warn!("Memory continuity merge failed for {}: {}", record.id, err);
                 batch.push(record.clone());
                 record
             }
