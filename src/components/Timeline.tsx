@@ -67,11 +67,9 @@ export function Timeline({
     evalUi = false,
 }: TimelineProps) {
     const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
-    const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
     useEffect(() => {
         setVisibleCount(INITIAL_VISIBLE);
-        setExpandedIds(new Set());
     }, [query]);
 
     if (isLoading) {
@@ -105,18 +103,6 @@ export function Timeline({
     const visibleResults = results.slice(0, visibleCount);
     const hasMore = results.length > visibleCount;
     const filteredResults = filterConsecutiveSimilar(visibleResults);
-    const toggleExpanded = (id: string) => {
-        setExpandedIds((previous) => {
-            const next = new Set(previous);
-            if (next.has(id)) {
-                next.delete(id);
-            } else {
-                next.add(id);
-            }
-            return next;
-        });
-    };
-
     return (
         <div className="timeline-container">
             <div className="timeline-stream">
@@ -126,13 +112,6 @@ export function Timeline({
                     const primaryText = cleanSummary || displayTitle || "Captured memory";
                     const storyMode = isStoryStyleApp(result);
                     const story = storyMode ? buildStorySummary(result) : "";
-                    const continuity = isContinuityCard(result);
-                    const contentLength = storyMode
-                        ? story.length
-                        : primaryText.length;
-                    const canExpand = continuity && contentLength > 220;
-                    const isExpanded = expandedIds.has(result.id);
-                    const collapseState = canExpand && !isExpanded ? "collapsed" : "expanded";
                     return (
                         <article
                             key={result.id}
@@ -180,40 +159,15 @@ export function Timeline({
                                 </div>
                             </div>
                             {storyMode ? (
-                                <p className={`result-primary ${collapseState}`}>
+                                <p className="result-primary">
                                     {story}
                                 </p>
                             ) : (
-                                <p className={`result-primary ${collapseState}`}>
+                                <p className="result-primary">
                                     {!isLowSignalPreview(primaryText, result.app_name)
                                         ? primaryText
                                         : (displayTitle || "Untitled memory")}
                                 </p>
-                            )}
-                            {canExpand && (
-                                <button
-                                    type="button"
-                                    className="result-expand"
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        toggleExpanded(result.id);
-                                    }}
-                                >
-                                    {isExpanded ? "Show less" : "See more"}
-                                </button>
-                            )}
-
-                            {result.context.some((item) => !/^sources\s*:/i.test(item)) && (
-                                <div className="result-context-chips">
-                                    {result.context
-                                        .filter((item) => !/^sources\s*:/i.test(item))
-                                        .slice(0, 4)
-                                        .map((item, idx) => (
-                                            <span key={`${result.id}-ctx-${idx}`} className="result-chip">
-                                                {item}
-                                            </span>
-                                        ))}
-                                </div>
                             )}
                         </article>
                     );
@@ -273,10 +227,6 @@ function isStoryStyleApp(result: MemoryCard): boolean {
     ]);
 }
 
-function isContinuityCard(result: MemoryCard): boolean {
-    return Boolean(result.continuity) || result.source_count > 1;
-}
-
 function includesAny(haystack: string, needles: string[]): boolean {
     return needles.some((needle) => haystack.includes(needle));
 }
@@ -287,6 +237,8 @@ function normalizeStoryText(value: string | undefined | null): string {
     }
     return value
         .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+        .replace(/^\s*(then|and then|after that|next)\s*[,:-]?\s+/i, "")
+        .replace(/\.\s*(then|and then|after that|next)\s+/gi, ". ")
         .replace(/\s+/g, " ")
         .trim();
 }

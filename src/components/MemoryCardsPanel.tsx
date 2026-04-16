@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { MemoryCard, deleteMemory, listMemoryCards } from "../api/tauri";
 import "./MemoryCardsPanel.css";
 
@@ -89,73 +88,17 @@ function fallbackTitle(card: MemoryCard): string {
 }
 
 function fallbackSummary(card: MemoryCard): string {
-    return pickReadable(card.summary, card.raw_snippets[0], card.window_title)
+    const raw = pickReadable(card.summary, card.raw_snippets[0], card.window_title)
         || `Captured context in ${card.app_name}.`;
-}
-
-function parseHost(rawUrl: string): string {
-    try {
-        const normalized = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
-        return new URL(normalized).host;
-    } catch {
-        return rawUrl.replace(/^https?:\/\//i, "").split("/")[0].trim();
-    }
-}
-
-function extractUrlPath(rawUrl: string): string {
-    try {
-        const normalized = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
-        const pathname = new URL(normalized).pathname;
-        const segments = pathname.split("/").filter((segment) => segment.trim().length > 0);
-        if (segments.length === 0) {
-            return "";
-        }
-        return segments.slice(0, 3).join("/");
-    } catch {
-        return "";
-    }
-}
-
-function normalizeExternalUrl(rawUrl: string): string {
-    const trimmed = rawUrl.trim();
-    if (!trimmed) {
-        return trimmed;
-    }
-    if (/^https?:\/\//i.test(trimmed)) {
-        return trimmed;
-    }
-    return `https://${trimmed}`;
-}
-
-function usefulLinkLabel(rawUrl: string): string {
-    const host = parseHost(rawUrl);
-    const path = extractUrlPath(rawUrl);
-    if (!host) {
-        return "Open link";
-    }
-    if (!path) {
-        return host;
-    }
-    return `${host}/${path}`;
+    return raw
+        .replace(/^\s*(then|and then|after that|next)\s*[,:-]?\s+/i, "")
+        .replace(/\.\s*(then|and then|after that|next)\s+/gi, ". ")
+        .replace(/\s+/g, " ")
+        .trim();
 }
 
 function includesAny(haystack: string, needles: string[]): boolean {
     return needles.some((needle) => haystack.includes(needle));
-}
-
-function looksTooSimilar(a: string, b: string): boolean {
-    const left = normalizeText(a).toLowerCase();
-    const right = normalizeText(b).toLowerCase();
-    if (!left || !right) {
-        return false;
-    }
-    if (left === right) {
-        return true;
-    }
-    if (left.includes(right) || right.includes(left)) {
-        return true;
-    }
-    return false;
 }
 
 function matchesFilters(
@@ -301,7 +244,6 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(TIME_FILTER_ALL);
     const [perspectiveFilter, setPerspectiveFilter] = useState<PerspectiveFilter>(PERSPECTIVE_FILTER_ALL);
     const [deletingId, setDeletingId] = useState<string | null>(null);
-    const [expandedId, setExpandedId] = useState<string | null>(null);
 
     const selectableApps = useMemo(() => {
         return appNames
@@ -372,10 +314,6 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
         } finally {
             setDeletingId(null);
         }
-    };
-
-    const toggleExpanded = (memoryId: string) => {
-        setExpandedId((previous) => (previous === memoryId ? null : memoryId));
     };
 
     return (
@@ -476,38 +414,12 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                 {!loading && !error && filteredCards.length > 0 && (
                     <div className="memory-cards-stream">
                         {filteredCards.map((card) => {
-                            const { title, summary, storyMode, story } = cardCopy(card);
-                            const allChips = card.context
-                                .map((item) => normalizeText(item))
-                                .filter((item) => {
-                                    const lower = item.toLowerCase();
-                                    return (
-                                        item.length > 0
-                                        && !lower.startsWith("app:")
-                                        && !lower.startsWith("type:")
-                                        && !lower.startsWith("site:")
-                                        && !lower.startsWith("sources:")
-                                    );
-                                });
-                            const chips = allChips.slice(0, 4);
-                            const isExpanded = expandedId === card.id;
-
-                            const validSnippets = card.raw_snippets
-                                .map((s) => normalizeText(s))
-                                .filter((s) => s.length > 20 && hasReadableCharacters(s))
-                                .filter((s) => !looksTooSimilar(s, summary) && !looksTooSimilar(s, title));
-                            const linkUrl = card.url ? normalizeExternalUrl(card.url) : "";
-                            const linkLabel = linkUrl ? usefulLinkLabel(linkUrl) : "";
-                            const canExpand = Boolean(validSnippets.length > 0 || allChips.length > 4);
-                            const collapseState = isExpanded ? "expanded" : "collapsed";
+                            const { summary, storyMode, story } = cardCopy(card);
 
                             return (
                                 <article
                                     key={card.id}
-                                    className={`result-card memory-browse-card${isExpanded ? " expanded" : ""}`}
-                                    onClick={() => setExpandedId(isExpanded ? null : card.id)}
-                                    tabIndex={0}
-                                    onKeyDown={(e) => e.key === "Enter" && setExpandedId(isExpanded ? null : card.id)}
+                                    className="result-card memory-browse-card"
                                 >
                                     <div className="result-meta memory-browse-meta">
                                         <div className="memory-browse-meta-main">
@@ -537,77 +449,15 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                     </div>
                                     <div className="memory-browse-content">
                                         {storyMode ? (
-                                            <div className={`memory-browse-summary memory-browse-summary-primary ${collapseState}`}>
+                                            <div className="memory-browse-summary memory-browse-summary-primary">
                                                 {story}
                                             </div>
                                         ) : (
-                                            <div className={`memory-browse-summary memory-browse-summary-primary ${collapseState}`}>
+                                            <div className="memory-browse-summary memory-browse-summary-primary">
                                                 {summary}
                                             </div>
                                         )}
-                                        {(linkUrl || canExpand) && (
-                                            <div className="memory-browse-footer-row">
-                                                {linkUrl ? (
-                                                    <button
-                                                        type="button"
-                                                        className="memory-browse-link"
-                                                        onClick={(event) => {
-                                                            event.stopPropagation();
-                                                            void openExternal(linkUrl);
-                                                        }}
-                                                        title={linkUrl}
-                                                    >
-                                                        {`Open link: ${linkLabel}`}
-                                                    </button>
-                                                ) : (
-                                                    <span className="memory-browse-footer-spacer" aria-hidden="true" />
-                                                )}
-                                                {canExpand && (
-                                                    <button
-                                                        type="button"
-                                                        className="memory-browse-expand"
-                                                        onClick={() => toggleExpanded(card.id)}
-                                                    >
-                                                        {isExpanded ? "Show less" : "See more"}
-                                                    </button>
-                                                )}
-                                            </div>
-                                        )}
                                     </div>
-                                    {chips.length > 0 && (
-                                        <div className="result-context-chips">
-                                            {chips.map((item, index) => (
-                                                <span key={`${card.id}-ctx-${index}`} className="result-chip">
-                                                    {item}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    )}
-                                    {isExpanded && (
-                                        <div className="memory-expand-details" onClick={(e) => e.stopPropagation()}>
-                                            {allChips.length > 4 && (
-                                                <div className="result-context-chips memory-expand-extra-chips">
-                                                    {allChips.slice(4).map((item, index) => (
-                                                        <span key={`${card.id}-extra-${index}`} className="result-chip">
-                                                            {item}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            {validSnippets.length > 0 && (
-                                                <div className="memory-snippets">
-                                                    <div className="memory-snippets-label">
-                                                        Captured text · {validSnippets.length} segment{validSnippets.length !== 1 ? "s" : ""}
-                                                    </div>
-                                                    {validSnippets.slice(0, 6).map((snippet, index) => (
-                                                        <div key={`${card.id}-snip-${index}`} className="memory-snippet-item">
-                                                            {snippet}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
                                 </article>
                             );
                         })}

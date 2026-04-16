@@ -19,7 +19,6 @@ interface SearchBarProps {
     appFilter: string | null;
     onAppFilterChange: (filter: string | null) => void;
     onSetMeetingPanelOpen: (open: boolean) => void;
-    onSetGraphPanelOpen: (open: boolean) => void;
     appNames: string[];
     resultCount: number;
     searchResults: MemoryCard[];
@@ -41,7 +40,6 @@ export function SearchBar({
     appFilter,
     onAppFilterChange,
     onSetMeetingPanelOpen,
-    onSetGraphPanelOpen,
     appNames,
     resultCount,
     searchResults,
@@ -240,20 +238,6 @@ export function SearchBar({
             setVoiceStatus("Closed Meetings.");
             return;
         }
-
-        if (normalized.includes("open graph") || normalized.includes("show graph")) {
-            onSetGraphPanelOpen(true);
-            setVoiceStatus("Opened Knowledge Graph.");
-            return;
-        }
-
-        if (normalized.includes("close graph") || normalized.includes("hide graph")) {
-            onSetGraphPanelOpen(false);
-            setVoiceStatus("Closed Knowledge Graph.");
-            return;
-        }
-
-
 
         if (normalized.includes("pause capture") || normalized.includes("pause recording")) {
             await pauseCapture();

@@ -4,7 +4,6 @@ import { Timeline } from "./components/Timeline";
 import { ControlPanel } from "./components/ControlPanel";
 import { TodoPanel } from "./components/TodoPanel";
 import { AgentPanel } from "./components/AgentPanel";
-import { GraphPanel } from "./components/GraphPanel";
 import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
 import { MemoryCardsPanel } from "./components/MemoryCardsPanel";
 import { StatsPanel } from "./components/StatsPanel";
@@ -46,7 +45,6 @@ function App() {
     const [meetingStatus, setMeetingStatus] = useState<MeetingRecorderStatus | null>(null);
     const [showAgentPanel, setShowAgentPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
-    const [showGraphPanel, setShowGraphPanel] = useState(false);
     const [showMemoryCardsPanel, setShowMemoryCardsPanel] = useState(false);
     const [showStatsPanel, setShowStatsPanel] = useState(false);
     const [showTodoPanel, setShowTodoPanel] = useState(false);
@@ -309,12 +307,6 @@ function App() {
                             To do
                         </button>
                         <button
-                            className={`ui-action-btn graph-toggle-btn ${showGraphPanel ? "active" : ""}`}
-                            onClick={() => setShowGraphPanel((open) => !open)}
-                        >
-                            Knowledge Graph
-                        </button>
-                        <button
                             className={`ui-action-btn meeting-toggle-btn ${showMeetingPanel ? "active" : ""}`}
                             onClick={() => setShowMeetingPanel((open) => !open)}
                         >
@@ -343,7 +335,6 @@ function App() {
                         appFilter={appFilter}
                         onAppFilterChange={setAppFilter}
                         onSetMeetingPanelOpen={setShowMeetingPanel}
-                        onSetGraphPanelOpen={setShowGraphPanel}
                         appNames={appNames}
                         resultCount={visibleResults.length}
                         searchResults={visibleResults}
@@ -379,10 +370,6 @@ function App() {
                     <MeetingRecorderPanel
                         isVisible={showMeetingPanel}
                         onClose={() => setShowMeetingPanel(false)}
-                    />
-                    <GraphPanel
-                        isVisible={showGraphPanel}
-                        onClose={() => setShowGraphPanel(false)}
                     />
                     <MemoryCardsPanel
                         isVisible={showMemoryCardsPanel}

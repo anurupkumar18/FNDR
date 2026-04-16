@@ -75,18 +75,6 @@ export function MemoryCard({ result, query, onClick, isLarge }: MemoryCardProps)
                 <div className="card-window-title" title={result.title}>
                     {result.title}
                 </div>
-                {result.url && (
-                    <a
-                        className="card-url"
-                        href={result.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        title={result.url}
-                    >
-                        🔗 Open Site
-                    </a>
-                )}
             </footer>
         </article>
     );

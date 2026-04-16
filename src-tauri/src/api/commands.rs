@@ -6,7 +6,7 @@ use crate::capture::{
 };
 use crate::embed::{embedding_runtime_status, Embedder, EmbeddingBackend};
 use crate::privacy::Blocklist;
-use crate::store::{GraphEdge, GraphNode, MemoryRecord, NodeType};
+use crate::store::MemoryRecord;
 
 use crate::mcp::{self, McpServerStatus};
 use crate::meeting::{self, MeetingRecorderStatus, MeetingTranscript};
@@ -1842,12 +1842,6 @@ pub struct AgentStatus {
     pub status: String, // "idle" | "running" | "completed" | "error"
 }
 
-#[derive(Debug, Serialize)]
-pub struct GraphDataResponse {
-    pub nodes: Vec<GraphNode>,
-    pub edges: Vec<GraphEdge>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRepairSummary {
     pub total_before: usize,
@@ -1979,52 +1973,6 @@ pub async fn get_memory_repair_progress(
     }
 
     Ok(progress)
-}
-
-fn graph_node_app_name(node: &GraphNode) -> Option<&str> {
-    node.metadata
-        .get("app_name")
-        .and_then(|v: &serde_json::Value| v.as_str())
-}
-
-fn graph_node_bundle_id(node: &GraphNode) -> Option<&str> {
-    node.metadata
-        .get("bundle_id")
-        .and_then(|v: &serde_json::Value| v.as_str())
-}
-
-#[tauri::command]
-pub async fn get_graph_data(state: State<'_, Arc<AppState>>) -> Result<GraphDataResponse, String> {
-    let (all_nodes, all_edges) = state.inner().graph.export_for_visualization().await;
-
-    let blocked_memory_node_ids: HashSet<String> = all_nodes
-        .iter()
-        .filter(|node| {
-            node.node_type == NodeType::MemoryChunk
-                && graph_node_app_name(node)
-                    .map(|app_name| {
-                        Blocklist::is_internal_app(app_name, graph_node_bundle_id(node))
-                    })
-                    .unwrap_or(false)
-        })
-        .map(|node| node.id.clone())
-        .collect();
-
-    let mut nodes = all_nodes
-        .into_iter()
-        .filter(|node| !blocked_memory_node_ids.contains(&node.id))
-        .collect::<Vec<_>>();
-    let mut edges = all_edges
-        .into_iter()
-        .filter(|edge| {
-            !blocked_memory_node_ids.contains(&edge.source)
-                && !blocked_memory_node_ids.contains(&edge.target)
-        })
-        .collect::<Vec<_>>();
-
-    nodes.sort_by_key(|node| std::cmp::Reverse(node.created_at));
-    edges.sort_by_key(|edge| std::cmp::Reverse(edge.timestamp));
-    Ok(GraphDataResponse { nodes, edges })
 }
 
 static AGENT_PROCESS: AgentOnceLock<AgentMutex<Option<Child>>> = AgentOnceLock::new();

@@ -538,7 +538,7 @@ fn sanitize_action(raw: &str) -> String {
 }
 
 fn sanitize_summary(raw: &str) -> Option<String> {
-    let summary = normalize_sentence(raw);
+    let summary = clean_story_fact(raw);
     if summary.is_empty() {
         return None;
     }
@@ -559,13 +559,10 @@ fn sanitize_summary(raw: &str) -> Option<String> {
         return None;
     }
 
-    let mut sentences = summary
-        .replace('!', ".")
-        .replace('?', ".")
-        .split('.')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(normalize_sentence)
+    let mut sentences = split_sentences_preserving_decimals(&summary)
+        .into_iter()
+        .map(|s| normalize_sentence(&s))
+        .map(|s| trim_trailing_fragment(&s))
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>();
     if sentences.is_empty() {
@@ -639,8 +636,13 @@ fn build_story_summary(anchor: &SearchResult, snippets: &[String]) -> String {
 
     let mut summary = ensure_sentence_period(&facts[0]);
     if let Some(second) = facts.get(1) {
-        summary.push_str(" Then ");
-        summary.push_str(&ensure_sentence_period(second));
+        let second_sentence = ensure_sentence_period(second);
+        if token_overlap(&summary, &second_sentence) < 0.72 {
+            summary.push(' ');
+            summary.push_str("Also, ");
+            summary.push_str(second_sentence.trim_end_matches('.'));
+            summary.push('.');
+        }
     }
 
     summary
@@ -693,10 +695,10 @@ fn build_context(anchor: &SearchResult, snippets: &[String]) -> Vec<String> {
 
 fn extract_story_facts(snippets: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
-    let mut facts = Vec::new();
+    let mut facts: Vec<String> = Vec::new();
 
     for snippet in snippets {
-        let cleaned = normalize_sentence(snippet);
+        let cleaned = clean_story_fact(snippet);
         if cleaned.is_empty() {
             continue;
         }
@@ -715,7 +717,11 @@ fn extract_story_facts(snippets: &[String]) -> Vec<String> {
         }
 
         let clipped = truncate_words(&cleaned, 18);
-        if clipped.split_whitespace().count() >= 4 {
+        if clipped.split_whitespace().count() >= 4
+            && !facts
+                .iter()
+                .any(|existing| token_overlap(existing, &clipped) >= 0.78)
+        {
             facts.push(clipped);
         }
         if facts.len() >= 2 {
@@ -727,20 +733,119 @@ fn extract_story_facts(snippets: &[String]) -> Vec<String> {
 }
 
 fn apply_story_continuity(cards: &mut [MemoryCard]) {
-    if cards.len() <= 1 {
-        return;
-    }
+    for card in cards.iter_mut() {
+        if let Some(cleaned) = sanitize_summary(&card.summary) {
+            card.summary = cleaned;
+            continue;
+        }
 
-    for idx in 1..cards.len() {
-        let previous = cards[idx - 1].timestamp;
-        let current = cards[idx].timestamp;
-        if previous >= current && previous - current <= 20 * 60 * 1000 {
-            let lower = cards[idx].summary.to_lowercase();
-            if !lower.starts_with("then ") && !lower.starts_with("after that") {
-                cards[idx].summary = format!("Then, {}", cards[idx].summary);
-            }
+        let fallback = ensure_sentence_period(&trim_trailing_fragment(&clean_story_fact(&card.summary)));
+        if fallback.split_whitespace().count() >= 4 {
+            card.summary = fallback;
         }
     }
+}
+
+fn clean_story_fact(value: &str) -> String {
+    let mut cleaned = normalize_sentence(value);
+    cleaned = cleaned.replace(" • ", " ");
+    cleaned = strip_leading_transitions(&cleaned);
+
+    let tokens = cleaned
+        .split_whitespace()
+        .filter(|token| !looks_like_diff_stat(token))
+        .collect::<Vec<_>>();
+    trim_trailing_fragment(&normalize_sentence(&tokens.join(" ")))
+}
+
+fn split_sentences_preserving_decimals(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let bytes = value.as_bytes();
+
+    for (idx, ch) in value.char_indices() {
+        if !matches!(ch, '.' | '!' | '?') {
+            continue;
+        }
+
+        // Keep decimal values like 35.1 intact.
+        if ch == '.'
+            && idx > 0
+            && idx + 1 < value.len()
+            && bytes[idx - 1].is_ascii_digit()
+            && bytes[idx + 1].is_ascii_digit()
+        {
+            continue;
+        }
+
+        let candidate = value[start..=idx].trim();
+        if !candidate.is_empty() {
+            out.push(candidate.to_string());
+        }
+        start = idx + ch.len_utf8();
+    }
+
+    if start < value.len() {
+        let tail = value[start..].trim();
+        if !tail.is_empty() {
+            out.push(tail.to_string());
+        }
+    }
+
+    out
+}
+
+fn strip_leading_transitions(value: &str) -> String {
+    let mut out = value.trim().to_string();
+    let prefixes = [
+        "then, ",
+        "then ",
+        "and then ",
+        "after that, ",
+        "after that ",
+        "next, ",
+        "next ",
+    ];
+
+    loop {
+        let mut stripped = false;
+        let trimmed = out.trim_start();
+        for prefix in prefixes {
+            if starts_with_ascii_case_insensitive(trimmed, prefix) {
+                out = trimmed[prefix.len()..]
+                    .trim_start_matches(|ch: char| matches!(ch, ' ' | ',' | ':' | ';' | '-'))
+                    .to_string();
+                stripped = true;
+                break;
+            }
+        }
+        if !stripped {
+            break;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn starts_with_ascii_case_insensitive(value: &str, prefix: &str) -> bool {
+    if value.len() < prefix.len() {
+        return false;
+    }
+    value[..prefix.len()].eq_ignore_ascii_case(prefix)
+}
+
+fn looks_like_diff_stat(token: &str) -> bool {
+    let trimmed = token.trim_matches(|ch: char| matches!(ch, ',' | ';' | ':' | '.' | ')' | '('));
+    if trimmed.len() < 2 {
+        return false;
+    }
+    let mut chars = trimmed.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if first != '+' && first != '-' {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_digit())
 }
 
 fn extract_entities(text: &str) -> Vec<String> {
@@ -790,6 +895,31 @@ fn normalize_sentence(value: &str) -> String {
         .join(" ")
         .trim_matches(|ch: char| ch == '"' || ch == '\'' || ch == '`')
         .to_string()
+}
+
+fn trim_trailing_fragment(value: &str) -> String {
+    let mut words = value
+        .split_whitespace()
+        .map(|token| token.trim_matches(|ch: char| matches!(ch, ',' | ';' | ':' | '-')))
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_string())
+        .collect::<Vec<_>>();
+
+    let dangling = [
+        "for", "with", "and", "or", "to", "of", "in", "on", "by", "at", "from", "via", "about",
+        "after", "before", "than", "then", "while", "during", "including",
+    ];
+
+    while let Some(last) = words.last() {
+        let last_lc = last.to_lowercase();
+        if dangling.contains(&last_lc.as_str()) {
+            words.pop();
+            continue;
+        }
+        break;
+    }
+
+    normalize_sentence(&words.join(" "))
 }
 
 fn token_overlap(a: &str, b: &str) -> f32 {

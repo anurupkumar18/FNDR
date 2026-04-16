@@ -16,7 +16,6 @@ const defaultProps = {
     appFilter: null,
     onAppFilterChange: () => {},
     onSetMeetingPanelOpen: () => {},
-    onSetGraphPanelOpen: () => {},
     appNames: ["Safari"],
     resultCount: 0,
     searchResults: [],

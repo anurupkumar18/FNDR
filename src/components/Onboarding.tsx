@@ -77,7 +77,7 @@ function StepWelcome({
             <h1 className="ob-title">Your memory, on your Mac.</h1>
             <p className="ob-subtitle">
                 FNDR remembers what you&apos;ve worked on so you don&apos;t have to.
-                Synthesize meetings, track tasks, and explore your knowledge graph — all instantly.
+                Synthesize meetings and track tasks — all instantly.
                 <br /><br />
                 Everything runs on your computer. Nothing leaves it. Ever.
             </p>
@@ -483,8 +483,8 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                         },
                         {
                             icon: "🕸",
-                            title: "Graph & Tasks",
-                            body: "FNDR extracts reminders and connects memories into a local knowledge graph automatically.",
+                            title: "Tasks",
+                            body: "FNDR extracts reminders and converts them into local tasks automatically.",
                         },
                     ].map(({ icon, title, body }) => (
                         <div className="ob-privacy-item" key={title}>

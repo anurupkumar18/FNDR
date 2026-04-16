@@ -249,7 +249,6 @@ fn main() {
             api::commands::start_agent_task,
             api::commands::get_agent_status,
             api::commands::stop_agent,
-            api::commands::get_graph_data,
             api::commands::link_audio_to_memories,
             api::commands::generate_daily_briefing,
             // Onboarding

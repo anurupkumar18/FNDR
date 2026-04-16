@@ -500,27 +500,6 @@ export async function summarizeSearch(query: string, snippets: string[]): Promis
     return invoke<string>("summarize_search", { query, resultsSnippets: snippets });
 }
 
-export interface GraphNodeData {
-    id: string;
-    node_type: string;
-    label: string;
-    created_at: number;
-    metadata: Record<string, any>;
-}
-
-export interface GraphEdgeData {
-    id: string;
-    source: string;
-    target: string;
-    edge_type: string;
-    timestamp: number;
-    metadata: Record<string, any>;
-}
-
-export async function getGraphData(): Promise<{ nodes: GraphNodeData[]; edges: GraphEdgeData[] }> {
-    return invoke<{ nodes: GraphNodeData[]; edges: GraphEdgeData[] }>("get_graph_data");
-}
-
 export async function runMemoryRepairBackfill(): Promise<MemoryRepairSummary> {
     return invoke<MemoryRepairSummary>("run_memory_repair_backfill");
 }

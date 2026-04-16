@@ -138,7 +138,6 @@
     margin-top: 10px;
 }
 
-.graph-toggle-btn,
 .todo-toggle-btn,
 .meeting-toggle-btn,
 .memory-cards-toggle-btn,
@@ -152,7 +151,6 @@
 
 .todo-toggle-btn.active,
 .meeting-toggle-btn.active,
-.graph-toggle-btn.active,
 .memory-cards-toggle-btn.active,
 .stats-toggle-btn.active {
     border-color: rgba(255, 255, 255, 0.35);
