@@ -324,7 +324,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                         className="ui-action-btn stats-layout-btn"
                         onClick={() => setViewMode(v => v === "stacked" ? "grid" : "stacked")}
                     >
-                        {viewMode === "stacked" ? "⊞ Lay Out All" : "📚 Stack Cards"}
+                        {viewMode === "stacked" ? "Lay Out All" : "Stack Cards"}
                     </button>
                     <button
                         className="ui-action-btn stats-refresh-btn"
@@ -358,7 +358,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                         {ALL_CARDS.map(id => {
                             const stackIndex = deckOrder.indexOf(id);
                             return (
-                                <div 
+                                <div
                                     key={id}
                                     className={`stats-playing-card ${stackIndex === 0 ? "is-top" : ""} card-${id}`}
                                     style={{ "--stack-index": stackIndex } as React.CSSProperties}

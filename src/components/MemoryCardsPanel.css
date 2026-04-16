@@ -121,17 +121,89 @@
 }
 
 .memory-browse-card {
-    cursor: default;
+    cursor: pointer;
     animation: none;
     min-height: 142px;
     height: auto;
     flex: 0 0 auto;
     overflow: visible;
     padding: 22px 24px;
+    transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .memory-browse-card:hover {
     transform: none;
+    border-color: rgba(255, 255, 255, 0.14);
+}
+
+.memory-browse-card.expanded {
+    border-color: rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.memory-source-count {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.38);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 999px;
+    padding: 1px 7px;
+    white-space: nowrap;
+}
+
+.memory-expand-details {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.memory-browse-url {
+    display: block;
+    font-size: 0.78rem;
+    color: rgba(160, 200, 255, 0.8);
+    text-decoration: none;
+    word-break: break-all;
+    background: rgba(100, 160, 255, 0.06);
+    border: 1px solid rgba(100, 160, 255, 0.14);
+    border-radius: 8px;
+    padding: 6px 10px;
+    transition: background 0.15s;
+}
+
+.memory-browse-url:hover {
+    background: rgba(100, 160, 255, 0.12);
+}
+
+.memory-expand-extra-chips {
+    margin-top: 0;
+}
+
+.memory-snippets {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.memory-snippets-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.3);
+}
+
+.memory-snippet-item {
+    font-size: 0.82rem;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.03);
+    border-left: 2px solid rgba(255, 255, 255, 0.1);
+    padding: 6px 10px;
+    border-radius: 0 6px 6px 0;
+    word-break: break-word;
+    user-select: text;
 }
 
 .memory-browse-meta {
@@ -234,6 +306,41 @@
 }
 
 /* ===== Light Theme ===== */
+[data-theme="light"] .memory-browse-card.expanded {
+    border-color: rgba(0, 0, 0, 0.18);
+    background: rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="light"] .memory-source-count {
+    color: rgba(0, 0, 0, 0.4);
+    background: rgba(0, 0, 0, 0.05);
+    border-color: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .memory-expand-details {
+    border-top-color: rgba(0, 0, 0, 0.07);
+}
+
+[data-theme="light"] .memory-browse-url {
+    color: #2060c0;
+    background: rgba(30, 100, 200, 0.05);
+    border-color: rgba(30, 100, 200, 0.15);
+}
+
+[data-theme="light"] .memory-browse-url:hover {
+    background: rgba(30, 100, 200, 0.1);
+}
+
+[data-theme="light"] .memory-snippets-label {
+    color: rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="light"] .memory-snippet-item {
+    color: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.02);
+    border-left-color: rgba(0, 0, 0, 0.12);
+}
+
 [data-theme="light"] .memory-cards-filter select {
     border-color: rgba(0, 0, 0, 0.12);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(240, 240, 242, 0.95));
