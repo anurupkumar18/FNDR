@@ -1,27 +1,34 @@
 .settings-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     border-radius: 12px;
     cursor: pointer;
     z-index: 200;
-    padding: 8px 10px;
+    padding: 8px 12px;
     font-size: 0.78rem;
-    font-weight: 500;
+    font-weight: 600;
     text-align: left;
+    line-height: 1;
 }
 
 .settings-toggle.compact {
-    width: 34px;
+    width: auto;
     height: 34px;
-    padding: 0;
+    padding: 0 11px;
     border-radius: 10px;
-    display: inline-flex;
-    align-items: center;
     justify-content: center;
-    text-align: center;
 }
 
-.settings-toggle.compact svg {
+.settings-toggle-icon {
     width: 16px;
     height: 16px;
+    flex-shrink: 0;
+}
+
+.settings-toggle-label {
+    display: inline-block;
+    letter-spacing: 0.01em;
 }
 
 .settings-toggle:hover {
@@ -254,6 +261,32 @@
     margin: 8px 0 0;
     font-size: 0.78rem;
     color: var(--text-muted);
+}
+
+.theme-choice-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.theme-choice {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 8px 10px;
+}
+
+.theme-choice.active {
+    border-color: rgba(192, 198, 208, 0.44);
+    color: var(--text-primary);
+    background: linear-gradient(180deg, rgba(50, 54, 59, 0.74), rgba(21, 23, 26, 0.78));
+}
+
+.theme-choice-icon {
+    line-height: 1;
 }
 
 .mcp-status-row {
@@ -805,15 +838,6 @@
 .btn-danger-sm.confirm { background: var(--danger); color: white; border-color: var(--danger); }
 
 /* ===== Theme Toggle Button ===== */
-.theme-toggle-btn {
-    width: 34px;
-    height: 34px;
-    padding: 0;
-    border-radius: 10px;
-    font-size: 1.1rem;
-    line-height: 1;
-}
-
 /* ===== Light Theme overrides for hardcoded colors ===== */
 [data-theme="light"] .settings-panel {
     border-left-color: var(--border);
@@ -877,4 +901,9 @@
 [data-theme="light"] .btn-liquid-glass:hover:not(:disabled) {
     background: linear-gradient(180deg, rgba(245, 245, 247, 0.95), rgba(230, 230, 235, 0.95));
     border-color: rgba(0, 0, 0, 0.18);
+}
+
+[data-theme="light"] .theme-choice.active {
+    border-color: rgba(0, 0, 0, 0.18);
+    background: linear-gradient(180deg, rgba(252, 252, 254, 0.95), rgba(238, 238, 241, 0.95));
 }

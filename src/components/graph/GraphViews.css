@@ -1,13 +1,45 @@
+.graph-panel {
+    --graph-surface-border: rgba(255, 255, 255, 0.14);
+    --graph-surface-bg: rgba(8, 8, 10, 0.95);
+    --graph-control-bg: linear-gradient(180deg, rgba(18, 18, 20, 0.95), rgba(9, 9, 11, 0.96));
+    --graph-control-border: rgba(255, 255, 255, 0.17);
+    --graph-control-fg: var(--text-primary);
+    --graph-panel-bg: rgba(12, 12, 14, 0.94);
+    --graph-panel-border: rgba(255, 255, 255, 0.13);
+    --graph-row-bg: rgba(16, 16, 18, 0.95);
+    --graph-row-border: rgba(255, 255, 255, 0.12);
+    --graph-muted: var(--text-secondary);
+    --graph-emphasis: var(--text-primary);
+    --graph-selected-bg: linear-gradient(180deg, rgba(26, 26, 28, 0.95), rgba(12, 12, 14, 0.96));
+    --graph-selected-border: rgba(255, 255, 255, 0.24);
+}
+
+[data-theme="light"] .graph-panel {
+    --graph-surface-border: rgba(0, 0, 0, 0.14);
+    --graph-surface-bg: rgba(255, 255, 255, 0.9);
+    --graph-control-bg: linear-gradient(180deg, rgba(253, 253, 253, 0.95), rgba(241, 241, 241, 0.96));
+    --graph-control-border: rgba(0, 0, 0, 0.16);
+    --graph-control-fg: var(--text-primary);
+    --graph-panel-bg: rgba(255, 255, 255, 0.9);
+    --graph-panel-border: rgba(0, 0, 0, 0.13);
+    --graph-row-bg: rgba(248, 248, 248, 0.95);
+    --graph-row-border: rgba(0, 0, 0, 0.12);
+    --graph-muted: var(--text-secondary);
+    --graph-emphasis: var(--text-primary);
+    --graph-selected-bg: linear-gradient(180deg, rgba(244, 244, 244, 0.98), rgba(236, 236, 236, 0.98));
+    --graph-selected-border: rgba(0, 0, 0, 0.2);
+}
+
 .graph-canvas-surface,
 .cluster-map-surface,
 .constellation-map-surface,
 .focus-map-surface,
 .timeline-spine-surface,
 .journey-route-surface {
-    border: 1px solid #242932;
+    border: 1px solid var(--graph-surface-border);
     border-radius: 12px;
     overflow: hidden;
-    background: #0a0d12;
+    background: var(--graph-surface-bg);
 }
 
 .cluster-map-svg,
@@ -34,10 +66,13 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    border: 1px solid #313742;
+    border: 1px solid var(--graph-control-border);
     border-radius: 999px;
-    padding: 3px;
-    background: #12161d;
+    padding: 4px;
+    background: var(--graph-control-bg);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.11),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.35);
 }
 
 .graph-canvas-controls .ui-action-btn {
@@ -46,19 +81,39 @@
     padding: 0 9px;
     border-radius: 999px;
     font-size: 11px;
+    border-color: var(--graph-control-border);
+    background: linear-gradient(180deg, rgba(19, 19, 21, 0.94), rgba(11, 11, 13, 0.96));
+    color: var(--graph-control-fg);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.graph-canvas-controls .ui-action-btn:hover {
+    background: var(--graph-selected-bg);
+    border-color: var(--graph-selected-border);
+}
+
+.graph-canvas-controls .ui-action-btn.active {
+    background: var(--graph-selected-bg);
+    border-color: var(--graph-selected-border);
+}
+
+.graph-canvas-controls .ui-action-btn[aria-label="Zoom out"],
+.graph-canvas-controls .ui-action-btn[aria-label="Zoom in"] {
+    min-width: 32px;
+    padding: 0;
 }
 
 .graph-canvas-zoom {
     min-width: 52px;
     text-align: center;
     font-size: 11px;
-    color: #c7cfdb;
+    color: color-mix(in srgb, var(--graph-muted) 88%, white 12%);
     font-variant-numeric: tabular-nums;
 }
 
 .generate-path-btn {
-    border-color: #5a6473;
-    color: #ffffff;
+    border-color: var(--graph-selected-border);
+    color: var(--graph-emphasis);
 }
 
 .cluster-map-layout,
@@ -88,7 +143,7 @@
 }
 
 .constellation-hull {
-    fill: #9aa4b4;
+    fill: color-mix(in srgb, var(--graph-muted) 78%, transparent);
 }
 
 .constellation-node.peripheral {
@@ -101,30 +156,30 @@
 
 .constellation-cluster-label,
 .cluster-island-node .cluster-label-title {
-    fill: #dce3ed;
+    fill: var(--graph-emphasis);
     font-size: 10px;
     letter-spacing: 0.05em;
     text-transform: uppercase;
 }
 
 .constellation-node-label {
-    fill: #f4f7fb;
+    fill: var(--graph-emphasis);
     font-size: 10px;
 }
 
 .constellation-inspector-note {
     margin: 9px 2px 0;
     font-size: 11px;
-    color: #a4adba;
+    color: var(--graph-muted);
 }
 
 .cluster-inspector,
 .focus-panel,
 .journey-panel,
 .timeline-panel {
-    border: 1px solid #2a2f37;
+    border: 1px solid var(--graph-panel-border);
     border-radius: 12px;
-    background: #0e1116;
+    background: var(--graph-panel-bg);
     padding: 10px;
     display: flex;
     flex-direction: column;
@@ -137,7 +192,7 @@
 .journey-panel h4,
 .timeline-panel h4 {
     margin: 0;
-    color: #f5f8fc;
+    color: var(--graph-emphasis);
     font-size: 12px;
     font-weight: 650;
 }
@@ -151,7 +206,7 @@
 }
 
 .inspector-title-row strong {
-    color: #f5f8fc;
+    color: var(--graph-emphasis);
     font-size: 13px;
     font-weight: 650;
 }
@@ -159,7 +214,7 @@
 .inspector-title-row span,
 .inspector-meta span,
 .inspector-meta small {
-    color: #9aa3b0;
+    color: var(--graph-muted);
     font-size: 11px;
 }
 
@@ -173,7 +228,7 @@
     font-size: 10px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #88909b;
+    color: var(--graph-muted);
 }
 
 .inspector-row-list {
@@ -186,9 +241,9 @@
 
 .inspector-row-btn,
 .inspector-row {
-    border: 1px solid #2b3038;
+    border: 1px solid var(--graph-row-border);
     border-radius: 9px;
-    background: #11151b;
+    background: var(--graph-row-bg);
     color: inherit;
     text-align: left;
     padding: 7px 8px;
@@ -201,13 +256,13 @@
 }
 
 .inspector-row-btn:hover {
-    border-color: #434b58;
+    border-color: var(--graph-selected-border);
 }
 
 .inspector-row-btn strong,
 .inspector-row strong {
     display: block;
-    color: #f4f7fc;
+    color: var(--graph-emphasis);
     font-size: 11px;
     font-weight: 600;
     margin-bottom: 2px;
@@ -217,7 +272,7 @@
 .inspector-row small,
 .inspector-row-btn span,
 .inspector-row span {
-    color: #a5adba;
+    color: var(--graph-muted);
     font-size: 10px;
 }
 
@@ -228,9 +283,9 @@
 }
 
 .cluster-list-rail button {
-    border: 1px solid #2a313b;
+    border: 1px solid var(--graph-row-border);
     border-radius: 9px;
-    background: #11161d;
+    background: var(--graph-row-bg);
     color: inherit;
     text-align: left;
     padding: 7px 8px;
@@ -238,18 +293,18 @@
 }
 
 .cluster-list-rail button.active {
-    border-color: #6a7383;
-    background: #1a1f28;
+    border-color: var(--graph-selected-border);
+    background: var(--graph-selected-bg);
 }
 
 .cluster-list-rail strong {
-    color: #f3f7fb;
+    color: var(--graph-emphasis);
     font-size: 11px;
     display: block;
 }
 
 .cluster-list-rail span {
-    color: #9aa4b0;
+    color: var(--graph-muted);
     font-size: 10px;
 }
 
@@ -276,14 +331,14 @@
 .timeline-segment-strip .ui-action-btn.active,
 .constellation-control-row .ui-action-btn.active,
 .cluster-lens-tabs .ui-action-btn.active {
-    border-color: #646f7e;
-    background: #1e2530;
-    color: #ffffff;
+    border-color: var(--graph-selected-border);
+    background: var(--graph-selected-bg);
+    color: var(--graph-emphasis);
 }
 
 .focus-ring {
     fill: none;
-    stroke: #535f70;
+    stroke: color-mix(in srgb, var(--graph-muted) 70%, transparent);
     stroke-dasharray: 4 6;
     opacity: 0.6;
 }
@@ -298,22 +353,22 @@
 
 .focus-short {
     font-weight: 700;
-    fill: #f8fbff;
+    fill: var(--graph-emphasis);
     font-size: 10px;
 }
 
 .focus-label {
-    fill: #d1d7e0;
+    fill: var(--graph-muted);
     font-size: 10px;
 }
 
 .focus-node-select,
 .journey-controls select {
     height: 30px;
-    border: 1px solid #313844;
+    border: 1px solid var(--graph-row-border);
     border-radius: 8px;
-    background: #101010;
-    color: #f4f6fb;
+    background: var(--graph-row-bg);
+    color: var(--graph-emphasis);
     font-size: 12px;
     padding: 0 9px;
 }
@@ -321,7 +376,7 @@
 .inline-empty {
     margin: 0;
     font-size: 12px;
-    color: #9ea7b3;
+    color: var(--graph-muted);
 }
 
 .journey-controls {
@@ -337,36 +392,36 @@
     flex-direction: column;
     gap: 4px;
     font-size: 11px;
-    color: #949eab;
+    color: var(--graph-muted);
 }
 
 .journey-main-edge {
     fill: none;
-    stroke: #96c8ff;
+    stroke: color-mix(in srgb, var(--graph-emphasis) 52%, transparent);
     stroke-width: 1.45;
 }
 
 .journey-branch-edge {
     fill: none;
-    stroke: #8492a5;
+    stroke: color-mix(in srgb, var(--graph-muted) 72%, transparent);
     stroke-width: 1;
     stroke-dasharray: 3 4;
 }
 
 .journey-route-node.main circle {
-    fill: #171717;
-    stroke: #9cc7ff;
+    fill: var(--graph-row-bg);
+    stroke: color-mix(in srgb, var(--graph-emphasis) 52%, transparent);
     stroke-width: 1.3;
 }
 
 .journey-route-node.branch circle {
-    fill: #1c1c1c;
-    stroke: #98a5b7;
+    fill: var(--graph-row-bg);
+    stroke: color-mix(in srgb, var(--graph-muted) 72%, transparent);
     stroke-width: 1;
 }
 
 .journey-hop-label {
-    fill: #cfd6e2;
+    fill: var(--graph-muted);
     font-size: 9px;
     letter-spacing: 0.03em;
 }
@@ -378,9 +433,9 @@
 }
 
 .journey-step-row {
-    border: 1px solid #2a313c;
+    border: 1px solid var(--graph-row-border);
     border-radius: 9px;
-    background: #10151c;
+    background: var(--graph-row-bg);
     padding: 7px;
     display: grid;
     grid-template-columns: 90px minmax(0, 1fr) 150px;
@@ -400,26 +455,26 @@
 .journey-step-row .role,
 .journey-step-row .reason {
     font-size: 10px;
-    color: #93a0b2;
+    color: var(--graph-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
 
 .journey-step-row .title {
-    color: #f7f9fb;
+    color: var(--graph-emphasis);
     font-size: 11px;
     line-height: 1.3;
 }
 
 .journey-step-row .meta {
-    color: #a5afbb;
+    color: var(--graph-muted);
     font-size: 10px;
 }
 
 .journey-fallback p {
     margin: 0;
     font-size: 12px;
-    color: #a6afbb;
+    color: var(--graph-muted);
 }
 
 .timeline-header-row {
@@ -432,11 +487,11 @@
 .timeline-header-row p {
     margin: 0;
     font-size: 11px;
-    color: #9fa8b5;
+    color: var(--graph-muted);
 }
 
 .timeline-wave-dot text {
-    fill: #c6d0dd;
+    fill: var(--graph-muted);
     font-size: 9px;
 }
 
@@ -447,17 +502,17 @@
 }
 
 .timeline-group {
-    border: 1px solid #27303a;
+    border: 1px solid var(--graph-row-border);
     border-radius: 10px;
-    background: #0f141b;
+    background: var(--graph-panel-bg);
     overflow: hidden;
 }
 
 .timeline-group-header {
     width: 100%;
     border: 0;
-    border-bottom: 1px solid #232b35;
-    background: #121212;
+    border-bottom: 1px solid var(--graph-row-border);
+    background: var(--graph-row-bg);
     color: inherit;
     cursor: pointer;
     text-align: left;
@@ -470,18 +525,18 @@
 
 .timeline-group-header strong {
     display: block;
-    color: #f6f8fb;
+    color: var(--graph-emphasis);
     font-size: 12px;
     margin-bottom: 2px;
 }
 
 .timeline-group-header small {
-    color: #9aa3b0;
+    color: var(--graph-muted);
     font-size: 10px;
 }
 
 .timeline-item-card {
-    border-top: 1px solid #222a33;
+    border-top: 1px solid var(--graph-row-border);
     padding: 8px 10px;
 }
 
@@ -500,13 +555,13 @@
     justify-content: space-between;
     gap: 8px;
     font-size: 10px;
-    color: #a2aab6;
+    color: var(--graph-muted);
     margin-bottom: 4px;
 }
 
 .timeline-item-card h6 {
     margin: 0;
-    color: #f6f9fc;
+    color: var(--graph-emphasis);
     font-size: 12px;
     line-height: 1.35;
     font-weight: 560;
@@ -520,17 +575,17 @@
 }
 
 .timeline-meta-line span {
-    border: 1px solid #353d48;
+    border: 1px solid var(--graph-row-border);
     border-radius: 999px;
     padding: 2px 7px;
     font-size: 10px;
-    color: #aeb7c3;
-    background: #131922;
+    color: var(--graph-muted);
+    background: var(--graph-row-bg);
 }
 
 .timeline-meta-line span.pivot {
-    border-color: #5b6675;
-    color: #eef2f8;
+    border-color: var(--graph-selected-border);
+    color: var(--graph-emphasis);
 }
 
 @media (max-width: 1100px) {

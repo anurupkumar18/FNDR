@@ -124,6 +124,9 @@
     cursor: default;
     animation: none;
     min-height: 142px;
+    height: auto;
+    flex: 0 0 auto;
+    overflow: visible;
     padding: 22px 24px;
 }
 

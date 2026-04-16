@@ -358,23 +358,11 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 onClick={() => setIsOpen(!isOpen)}
                 aria-label="Open settings"
             >
-                {compact ? (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                        <circle cx="12" cy="12" r="3" />
-                        <path d="M12 2v2.2m0 15.6V22m9.8-10H19.6m-15.4 0H2m16.1 6.1l-1.6-1.6M7.5 7.5 5.9 5.9m12.2 0-1.6 1.6M7.5 16.5l-1.6 1.6" />
-                    </svg>
-                ) : (
-                    "Settings"
-                )}
-            </button>
-
-            <button
-                className="ui-action-btn theme-toggle-btn"
-                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-                title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-            >
-                {theme === "dark" ? "☀️" : "🌙"}
+                <svg className="settings-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.86l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.86-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.86.34l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.86 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.86l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.86.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.86-.34l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.86v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z" />
+                </svg>
+                <span className="settings-toggle-label">Settings</span>
             </button>
 
             {isOpen && <div className="panel-backdrop" onClick={() => setIsOpen(false)} />}
@@ -441,6 +429,29 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                     </button>
                                 </div>
                                 {profileMsg && <p className="profile-msg">{profileMsg}</p>}
+                            </section>
+
+                            <section className="panel-section">
+                                <h3>Appearance</h3>
+                                <p className="section-hint">Choose your interface theme.</p>
+                                <div className="theme-choice-row" role="radiogroup" aria-label="Theme selection">
+                                    <button
+                                        className={`ui-action-btn theme-choice ${theme === "dark" ? "active" : ""}`}
+                                        onClick={() => setTheme("dark")}
+                                        aria-pressed={theme === "dark"}
+                                    >
+                                        <span className="theme-choice-icon" aria-hidden="true">🌙</span>
+                                        Dark
+                                    </button>
+                                    <button
+                                        className={`ui-action-btn theme-choice ${theme === "light" ? "active" : ""}`}
+                                        onClick={() => setTheme("light")}
+                                        aria-pressed={theme === "light"}
+                                    >
+                                        <span className="theme-choice-icon" aria-hidden="true">☀️</span>
+                                        Light
+                                    </button>
+                                </div>
                             </section>
 
                             <section className="panel-section">

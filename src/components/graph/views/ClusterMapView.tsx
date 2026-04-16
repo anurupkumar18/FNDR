@@ -174,11 +174,11 @@ export function ClusterMapView({
                                             cx={0}
                                             cy={0}
                                             r={radius}
-                                            fill={isActive ? "rgba(13, 20, 30, 0.98)" : "rgba(11, 15, 21, 0.95)"}
+                                            fill={isActive ? "var(--graph-selected-bg)" : "var(--graph-row-bg)"}
                                             stroke={color}
                                             strokeWidth={isActive ? 1.8 : 1}
                                         />
-                                        <text x={0} y={2} textAnchor="middle" style={{ fill: "#e8edf6", fontSize: 11, fontWeight: 600 }}>
+                                        <text x={0} y={2} textAnchor="middle" style={{ fill: "var(--graph-emphasis)", fontSize: 11, fontWeight: 600 }}>
                                             {cluster.nodeIds.length}
                                         </text>
                                         <text className="cluster-label-title" x={0} y={radius + 13} textAnchor="middle">

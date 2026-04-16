@@ -117,9 +117,6 @@ export function ConstellationView({
                     <p>{isolatedCluster ? `Isolated: ${shorten(isolatedCluster, 18)}` : "Scale-ready constellation with adaptive labels."}</p>
                 </div>
                 <div className="graph-canvas-controls" role="group" aria-label="Constellation controls">
-                    <button className={`ui-action-btn ${!isolatedCluster ? "active" : ""}`} onClick={() => setIsolatedCluster(null)}>
-                        Full
-                    </button>
                     <button className="ui-action-btn" onClick={viewport.zoomOut} aria-label="Zoom out">
                         -
                     </button>
@@ -260,7 +257,8 @@ export function ConstellationView({
                                     onMouseLeave={() => setHoveredNodeId(null)}
                                     onClick={(event) => {
                                         if (event.altKey) {
-                                            setIsolatedCluster(clusterKeyByNode.get(node.id) ?? null);
+                                            const clusterKey = clusterKeyByNode.get(node.id) ?? null;
+                                            setIsolatedCluster((current) => (current === clusterKey ? null : clusterKey));
                                             return;
                                         }
                                         onSelectNodeId(node.id);
