@@ -121,7 +121,7 @@ function App() {
     const [meetingStatus, setMeetingStatus] = useState<MeetingRecorderStatus | null>(null);
     const [showAgentPanel, setShowAgentPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
-    const [showMemoryCardsPanel, setShowMemoryCardsPanel] = useState(true);
+    const [showMemoryCardsPanel, setShowMemoryCardsPanel] = useState(false);
     const [showStatsPanel, setShowStatsPanel] = useState(false);
     const [showTodoPanel, setShowTodoPanel] = useState(false);
     const [showDailySummaryPanel, setShowDailySummaryPanel] = useState(false);
@@ -176,7 +176,7 @@ function App() {
 
     const isFocusMode = !query.trim();
     const homeDateLabel = useMemo(() => formatHomeDate(now), [now]);
-    
+
     const [homeGreeting, setHomeGreeting] = useState("Loading...");
 
     // Fetch the fun animated greeting anytime they log in or the name changes
