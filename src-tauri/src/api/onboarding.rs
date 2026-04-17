@@ -155,21 +155,40 @@ pub async fn save_onboarding_state(app: AppHandle, state: OnboardingState) -> Re
 
 #[tauri::command]
 pub async fn request_biometric_auth(reason: String) -> Result<bool, String> {
-    // We call osascript to trigger a macOS Touch ID / password dialog.
-    // This is the simplest approach that works without a native framework dep.
+    // We leverage Swift to hook directly into the macOS LocalAuthentication framework.
+    // This securely triggers Touch ID natively, gracefully falling back to device password if needed.
+    let safe_reason = reason.replace('"', "\\\"");
     let script = format!(
-        r#"do shell script "echo authenticated" with prompt "{}" with administrator privileges"#,
-        reason.replace('"', "'")
+        r#"
+import LocalAuthentication
+import Foundation
+
+let context = LAContext()
+var error: NSError?
+if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {{
+    let sema = DispatchSemaphore(value: 0)
+    context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "{}") {{ success, _ in
+        if success {{ print("authenticated") }}
+        else {{ print("failed") }}
+        sema.signal()
+    }}
+    sema.wait()
+}} else {{
+    print("unavailable")
+}}
+"#,
+        safe_reason
     );
 
-    let output = tokio::process::Command::new("osascript")
+    let output = tokio::process::Command::new("swift")
         .arg("-e")
         .arg(&script)
         .output()
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(output.status.success())
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.trim() == "authenticated")
 }
 
 // ---------------------------------------------------------------------------
