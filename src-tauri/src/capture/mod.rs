@@ -862,7 +862,7 @@ fn score_search_candidate(incoming: &MemoryRecord, candidate: &SearchResult) -> 
         .map(|(left, right)| left == right)
         .unwrap_or(false);
 
-    let mut score = vector * 0.5 + lexical * 0.42;
+    let mut score = vector * 0.68 + lexical * 0.24;
     if same_domain {
         score += 0.08;
     }
@@ -904,7 +904,7 @@ pub(crate) fn score_memory_candidate(
         .map(|(left, right)| left == right)
         .unwrap_or(false);
 
-    let mut score = vector * 0.5 + lexical * 0.42;
+    let mut score = vector * 0.68 + lexical * 0.24;
     if same_domain {
         score += 0.08;
     }
@@ -924,7 +924,7 @@ pub(crate) fn passes_merge_threshold(score: MergeScore) -> bool {
     if score.anchor_match {
         return score.score >= 0.62;
     }
-    score.score >= 0.86 && score.vector >= 0.82 && score.lexical >= 0.28
+    score.score >= 0.86 && score.vector >= 0.82 && score.lexical >= 0.12
 }
 
 fn allows_cross_app_merge_from_memory(

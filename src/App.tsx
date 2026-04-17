@@ -102,6 +102,7 @@ function App() {
     const [deletedMemoryIds, setDeletedMemoryIds] = useState<Set<string>>(new Set());
     const [displayName, setDisplayName] = useState<string | null>(null);
     const [now, setNow] = useState(() => new Date());
+    const handleUnlock = useCallback(() => setBiometricUnlocked(true), []);
 
     const searchAllowed = true;
     const { results, isLoading, error } = useSearch(
@@ -307,7 +308,7 @@ function App() {
     }
 
     if (biometricRequired && !biometricUnlocked) {
-        return <BiometricLockScreen onUnlock={() => setBiometricUnlocked(true)} />;
+        return <BiometricLockScreen onUnlock={handleUnlock} />;
     }
 
     return (

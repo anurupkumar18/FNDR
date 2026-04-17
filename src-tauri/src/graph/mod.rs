@@ -390,21 +390,13 @@ impl GraphStore {
 
     fn structural_context_for_query(
         &self,
-        query: &str,
+        _query: &str,
         nodes: &[GraphNode],
         edges: &[GraphEdge],
     ) -> Vec<String> {
-        let normalized = query.to_lowercase();
-        let include_tasks = normalized.contains("task")
-            || normalized.contains("todo")
-            || normalized.contains("follow up")
-            || normalized.contains("reminder")
-            || normalized.contains("url");
-
-        if !include_tasks {
-            return Vec::new();
-        }
-
+        // Always surface task context — the hybrid search pipeline already
+        // ensures that only semantically relevant results reach this point,
+        // so hard-coded keyword gates ("task", "todo", etc.) are unnecessary.
         let mut task_nodes: Vec<&GraphNode> = nodes
             .iter()
             .filter(|node| node.node_type == NodeType::Task)
@@ -412,7 +404,7 @@ impl GraphStore {
         task_nodes.sort_by_key(|node| std::cmp::Reverse(node.created_at));
 
         let mut notes = Vec::new();
-        for task in task_nodes.into_iter().take(3) {
+        for task in task_nodes.into_iter().take(5) {
             let id = task.id.trim_start_matches("task:");
             let urls = related_urls_for_task_from_snapshot(nodes, edges, id);
             if urls.is_empty() {

@@ -11,10 +11,10 @@ const RRF_K: f32 = 60.0;
 const CANDIDATE_MULTIPLIER: usize = 6;
 const MAX_KEYWORD_VARIANTS: usize = 4;
 const MAX_RERANK_POOL: usize = 28;
-// Text ANN + snippet ANN together = 0.70; lexical = 0.30.
-const SEMANTIC_WEIGHT: f32 = 0.40;
+// Text ANN + snippet ANN together = 0.80; lexical = 0.20.
+const SEMANTIC_WEIGHT: f32 = 0.50;
 const SNIPPET_WEIGHT: f32 = 0.30;
-const LEXICAL_WEIGHT: f32 = 0.30;
+const LEXICAL_WEIGHT: f32 = 0.20;
 /// Ebbinghaus decay floor — very old unaccessed records still surface if highly relevant.
 const DECAY_FLOOR: f32 = 0.15;
 const ABSOLUTE_RELEVANCE_FLOOR: f32 = 0.31;

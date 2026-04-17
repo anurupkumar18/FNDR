@@ -4,7 +4,7 @@ use crate::capture::{
     continuity_anchor_for_memory, eligible_for_story_merge, merge_memory_records_with_policy,
     passes_merge_threshold, score_memory_candidate,
 };
-use crate::embed::{embedding_runtime_status, Embedder, EmbeddingBackend};
+use crate::embed::{embedding_runtime_status, Embedder};
 use crate::privacy::Blocklist;
 use crate::store::MemoryRecord;
 
@@ -338,26 +338,16 @@ pub async fn search(
 
     let embedder = shared_embedder()?;
 
-    let results = if embedder.backend() == EmbeddingBackend::Mock {
-        tracing::warn!("search:mock_embedder keyword_only_mode=true");
-        state
-            .inner()
-            .store
-            .keyword_search(&query, limit, time_filter.as_deref(), app_filter.as_deref())
-            .await
-            .map_err(|e| e.to_string())?
-    } else {
-        HybridSearcher::search(
-            &state.inner().store,
-            &embedder,
-            &query,
-            limit,
-            time_filter.as_deref(),
-            app_filter.as_deref(),
-        )
-        .await
-        .map_err(|e| e.to_string())?
-    };
+    let results = HybridSearcher::search(
+        &state.inner().store,
+        &embedder,
+        &query,
+        limit,
+        time_filter.as_deref(),
+        app_filter.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(strip_internal_fndr_results(results))
 }
@@ -398,33 +388,28 @@ pub async fn search_memory_cards(
     tracing::info!("search_memory_cards:embed:start");
     let maybe_query_embedding = match shared_embedder() {
         Ok(embedder) => {
-            if embedder.backend() == EmbeddingBackend::Mock {
-                tracing::warn!("search_memory_cards:embed:mock_backend keyword_only_mode=true");
-                None
-            } else {
-                let query_text = query.clone();
-                match timeout(
-                    EMBED_TIMEOUT,
-                    tokio::task::spawn_blocking(move || embedder.embed_batch(&[query_text])),
-                )
-                .await
-                {
-                    Ok(Ok(Ok(vectors))) => vectors.into_iter().next(),
-                    Ok(Ok(Err(err))) => {
-                        tracing::warn!("search_memory_cards:embed:failed err={}", err);
-                        None
-                    }
-                    Ok(Err(err)) => {
-                        tracing::warn!("search_memory_cards:embed:join_failed err={}", err);
-                        None
-                    }
-                    Err(_) => {
-                        tracing::warn!(
-                            timeout_ms = EMBED_TIMEOUT.as_millis(),
-                            "search_memory_cards:embed:timeout"
-                        );
-                        None
-                    }
+            let query_text = query.clone();
+            match timeout(
+                EMBED_TIMEOUT,
+                tokio::task::spawn_blocking(move || embedder.embed_batch(&[query_text])),
+            )
+            .await
+            {
+                Ok(Ok(Ok(vectors))) => vectors.into_iter().next(),
+                Ok(Ok(Err(err))) => {
+                    tracing::warn!("search_memory_cards:embed:failed err={}", err);
+                    None
+                }
+                Ok(Err(err)) => {
+                    tracing::warn!("search_memory_cards:embed:join_failed err={}", err);
+                    None
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        timeout_ms = EMBED_TIMEOUT.as_millis(),
+                        "search_memory_cards:embed:timeout"
+                    );
+                    None
                 }
             }
         }
