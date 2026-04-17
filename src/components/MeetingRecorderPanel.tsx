@@ -29,6 +29,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
     const [starting, setStarting] = useState(false);
     const [stopping, setStopping] = useState(false);
     const [exporting, setExporting] = useState(false);
+    const [showToast, setShowToast] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const selectedMeeting = useMemo(
@@ -150,9 +151,11 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
         setError(null);
         try {
             const path = await exportMeetingPdf(meetingId);
-            // Optional: show a temporary "Success" hint instead of alert.
             console.log("PDF exported to:", path);
-            alert(`Transcript exported successfully to:\n${path}`);
+            setShowToast(true);
+            setTimeout(() => {
+                setShowToast(false);
+            }, 4000);
         } catch (err) {
             setError(String(err));
         } finally {
@@ -313,6 +316,13 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
             )}
 
             {error && <div className="meeting-error">{error}</div>}
+            
+            {showToast && (
+                <div className="meeting-toast">
+                    <span className="toast-icon">✓</span>
+                    PDF downloaded
+                </div>
+            )}
         </div>
     );
 }
