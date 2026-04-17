@@ -276,7 +276,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
         let cancelled = false;
         const selectedApp = appFilter === APP_FILTER_ALL ? undefined : appFilter;
 
-        setLoading(true);
+        setLoading(cards.length === 0);
         setError(null);
 
         void listMemoryCards(1500, selectedApp)
@@ -290,7 +290,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                 if (cancelled) {
                     return;
                 }
-                setCards([]);
+                // Preserve existing cards if refresh fails so the panel remains usable.
                 setError(err instanceof Error ? err.message : "Unable to load memory cards.");
             })
             .finally(() => {
@@ -403,14 +403,14 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
             </div>
 
             <div className="memory-cards-body">
-                {loading && (
+                {loading && cards.length === 0 && (
                     <div className="memory-cards-state">
                         <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
                         <p>Loading memory cards...</p>
                     </div>
                 )}
 
-                {!loading && error && (
+                {!loading && error && cards.length === 0 && (
                     <div className="memory-cards-state">
                         <p>{error}</p>
                     </div>

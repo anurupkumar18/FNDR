@@ -72,13 +72,9 @@ const KEYWORD_TIMEOUT: Duration = Duration::from_millis(1200);
 const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
 const LLM_SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(1500);
 const MEMORY_GRAPH_LIMIT: usize = 1_500;
-const TASK_LOOKBACK_HOURS: u32 = 120;
-const TASK_EXTRACTION_WINDOW: usize = 12;
-const TASK_TARGET_ACTIVE: usize = 9;
-const TASK_MAX_NEW_PER_REFRESH: usize = 8;
-const TASK_MIN_ACTIVE_PER_TYPE: usize = 5;
-const TASK_MAX_ACTIVE_PER_TYPE: usize = 20;
 const TASK_LINK_SCAN_LIMIT: usize = 260;
+const TASK_MEETING_LOOKBACK_DAYS: i64 = 14;
+const TASK_MEMORY_BACKFILL_LIMIT: usize = 6;
 const MEMORY_REPAIR_CHECKPOINT_VERSION: u32 = 2;
 const MEMORY_REPAIR_SIMILARITY_SCAN_LIMIT: usize = 96;
 const MEMORY_REPAIR_CHECKPOINT_ITEM_STEP: usize = 300;
@@ -1753,14 +1749,6 @@ pub async fn run_memory_repair_backfill(
 
 // ========== Task Commands ==========
 
-fn task_type_label(task_type: &TaskType) -> &'static str {
-    match task_type {
-        TaskType::Todo => "Todo",
-        TaskType::Reminder => "Reminder",
-        TaskType::Followup => "Followup",
-    }
-}
-
 fn task_type_sort_key(task_type: &TaskType) -> u8 {
     match task_type {
         TaskType::Todo => 0,
@@ -1810,71 +1798,88 @@ fn task_terms(title: &str) -> Vec<String> {
         .collect()
 }
 
+fn is_manual_task(task: &Task) -> bool {
+    task.source_app.eq_ignore_ascii_case("manual")
+}
+
+fn is_meeting_task(task: &Task) -> bool {
+    task.source_app.starts_with("Meeting:")
+}
+
+fn is_memory_task(task: &Task) -> bool {
+    task.source_app.starts_with("Memory:") || task.source_app.eq_ignore_ascii_case("auto")
+}
+
+fn task_has_supporting_context(task: &Task) -> bool {
+    task.source_memory_id.is_some() || !task.linked_memory_ids.is_empty() || !task.linked_urls.is_empty()
+}
+
+fn is_low_signal_task_title(title: &str) -> bool {
+    let normalized = normalize_task_text(title);
+    if normalized.len() < 6 {
+        return true;
+    }
+    if normalized.split_whitespace().count() < 2 {
+        return true;
+    }
+
+    if matches!(
+        normalized.as_str(),
+        "todo"
+            | "to do"
+            | "task"
+            | "follow up"
+            | "followup"
+            | "reminder"
+            | "none"
+            | "n a"
+            | "check this"
+            | "look into this"
+            | "work on this"
+    ) {
+        return true;
+    }
+
+    let generic_prefixes = [
+        "complete ",
+        "remember ",
+        "follow up ",
+        "followup ",
+        "work on ",
+        "check ",
+        "look into ",
+    ];
+    generic_prefixes
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix) && normalized.split_whitespace().count() <= 3)
+}
+
 fn task_priority_score(task: &Task, now_ms: i64) -> i64 {
     let age_hours = ((now_ms - task.created_at).max(0) / 3_600_000) as i64;
-    let recency_bonus = (72 - age_hours).clamp(0, 72);
+    let recency_bonus = (96 - age_hours).clamp(0, 96);
     let memory_bonus = (task.linked_memory_ids.len().min(10) as i64) * 4;
     let url_bonus = (task.linked_urls.len().min(6) as i64) * 2;
-    let due_bonus = if task.due_date.is_some() { 9 } else { 0 };
-    let source_bonus = if task.source_app.eq_ignore_ascii_case("manual") {
+    let due_bonus = if task.due_date.is_some() { 12 } else { 0 };
+    let source_bonus = if is_manual_task(task) {
+        22
+    } else if is_meeting_task(task) {
+        16
+    } else if is_memory_task(task) {
+        11
+    } else {
         6
-    } else {
-        3
     };
-    recency_bonus + memory_bonus + url_bonus + due_bonus + source_bonus
+    let context_penalty = if !task_has_supporting_context(task) && !is_manual_task(task) && !is_meeting_task(task) {
+        18
+    } else {
+        0
+    };
+    let title_penalty = if is_low_signal_task_title(&task.title) { 24 } else { 0 };
+    recency_bonus + memory_bonus + url_bonus + due_bonus + source_bonus - context_penalty - title_penalty
 }
 
-fn memory_topic(result: &SearchResult) -> Option<String> {
-    let mut text = result.snippet.trim().to_string();
-    if text.is_empty() {
-        text = result.clean_text.trim().to_string();
-    }
-    if text.is_empty() {
-        text = result.window_title.trim().to_string();
-    }
-    if text.is_empty() {
-        return None;
-    }
-    let first_sentence = text
-        .split(['.', '!', '?'])
-        .next()
-        .unwrap_or_default()
-        .trim();
-    if first_sentence.is_empty() {
-        None
-    } else {
-        Some(
-            first_sentence
-                .split_whitespace()
-                .take(10)
-                .collect::<Vec<_>>()
-                .join(" "),
-        )
-    }
-}
-
-fn build_seed_task_from_memory(result: &SearchResult, task_type: TaskType, now_ms: i64) -> Option<Task> {
-    let topic = memory_topic(result)?;
-    let title = match task_type {
-        TaskType::Todo => format!("Complete: {topic}"),
-        TaskType::Reminder => format!("Remember: {topic}"),
-        TaskType::Followup => format!("Follow up: {topic}"),
-    };
-
-    Some(Task {
-        id: uuid::Uuid::new_v4().to_string(),
-        title,
-        description: String::new(),
-        source_app: "Auto".to_string(),
-        source_memory_id: Some(result.id.clone()),
-        created_at: now_ms,
-        due_date: None,
-        is_completed: false,
-        is_dismissed: false,
-        task_type,
-        linked_urls: result.url.clone().map(|url| vec![url]).unwrap_or_default(),
-        linked_memory_ids: vec![result.id.clone()],
-    })
+fn required_term_matches(terms: &[String]) -> usize {
+    if terms.len() >= 4 { 2 } else { 1 }
 }
 
 fn update_task_links_from_memories(tasks: &mut [Task], recent_memories: &[SearchResult]) -> bool {
@@ -1896,7 +1901,7 @@ fn update_task_links_from_memories(tasks: &mut [Task], recent_memories: &[Search
                 .iter()
                 .filter(|term| normalized_blob.contains(term.as_str()))
                 .count();
-            let required = if terms.len() >= 4 { 2 } else { 1 };
+            let required = required_term_matches(&terms);
             if matches < required {
                 continue;
             }
@@ -1921,71 +1926,295 @@ fn update_task_links_from_memories(tasks: &mut [Task], recent_memories: &[Search
     changed
 }
 
-fn enforce_task_inventory_bounds(tasks: &mut Vec<Task>, recent_memories: &[SearchResult]) -> bool {
-    let now_ms = chrono::Utc::now().timestamp_millis();
+fn backfill_tasks_from_meetings(tasks: &mut Vec<Task>, meetings: &[MeetingSession]) -> bool {
     let mut changed = false;
-    let all_types = [TaskType::Todo, TaskType::Reminder, TaskType::Followup];
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let cutoff = now_ms - (TASK_MEETING_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+    let mut dedupe = tasks
+        .iter()
+        .map(|task| (normalize_task_text(&task.title), task_type_sort_key(&task.task_type)))
+        .collect::<HashSet<_>>();
 
-    for task_type in all_types {
-        let mut active_indices = tasks
-            .iter()
-            .enumerate()
-            .filter(|(_, task)| {
-                !task.is_completed && !task.is_dismissed && std::mem::discriminant(&task.task_type) == std::mem::discriminant(&task_type)
-            })
-            .map(|(idx, _)| idx)
-            .collect::<Vec<_>>();
+    let mut ordered = meetings.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        right
+            .end_timestamp
+            .unwrap_or(right.updated_at)
+            .cmp(&left.end_timestamp.unwrap_or(left.updated_at))
+    });
 
-        active_indices.sort_by(|left, right| {
-            let l_score = task_priority_score(&tasks[*left], now_ms);
-            let r_score = task_priority_score(&tasks[*right], now_ms);
-            r_score
-                .cmp(&l_score)
-                .then_with(|| tasks[*right].created_at.cmp(&tasks[*left].created_at))
-        });
+    for meeting in ordered {
+        let event_ts = meeting.end_timestamp.unwrap_or(meeting.updated_at);
+        if event_ts < cutoff {
+            continue;
+        }
+        let Some(breakdown) = meeting.breakdown.as_ref() else {
+            continue;
+        };
+        let source_app = format!("Meeting:{}", meeting.id);
 
-        for idx in active_indices.iter().skip(TASK_MAX_ACTIVE_PER_TYPE) {
-            if !tasks[*idx].is_dismissed {
-                tasks[*idx].is_dismissed = true;
+        let mut add_items = |items: &[String], task_type: TaskType| {
+            let type_key = task_type_sort_key(&task_type);
+            for item in items {
+                let title = item.trim();
+                if title.is_empty() || is_low_signal_task_title(title) {
+                    continue;
+                }
+                let dedupe_key = (normalize_task_text(title), type_key);
+                if !dedupe.insert(dedupe_key) {
+                    continue;
+                }
+                tasks.push(Task {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    title: title.to_string(),
+                    description: String::new(),
+                    source_app: source_app.clone(),
+                    source_memory_id: None,
+                    created_at: event_ts,
+                    due_date: None,
+                    is_completed: false,
+                    is_dismissed: false,
+                    task_type: task_type.clone(),
+                    linked_urls: Vec::new(),
+                    linked_memory_ids: Vec::new(),
+                });
                 changed = true;
             }
-        }
+        };
 
-        let active_count = active_indices.len().min(TASK_MAX_ACTIVE_PER_TYPE);
-        if active_count >= TASK_MIN_ACTIVE_PER_TYPE {
+        add_items(&breakdown.todos, TaskType::Todo);
+        add_items(&breakdown.reminders, TaskType::Reminder);
+        add_items(&breakdown.followups, TaskType::Followup);
+    }
+
+    changed
+}
+
+#[derive(Debug, Clone)]
+struct MemoryTaskCandidate {
+    title: String,
+    task_type: TaskType,
+    score: i64,
+    created_at: i64,
+    source_app: String,
+    source_memory_id: String,
+    linked_urls: Vec<String>,
+}
+
+fn first_sentence(text: &str) -> String {
+    text.split(['.', '!', '?'])
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .take(18)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn classify_task_type_from_text(text: &str) -> TaskType {
+    let lower = text.to_lowercase();
+    if [
+        "follow up",
+        "follow-up",
+        "reply to",
+        "reach out",
+        "check in with",
+        "ping ",
+    ]
+    .iter()
+    .any(|cue| lower.contains(cue))
+    {
+        TaskType::Followup
+    } else if [
+        "tomorrow",
+        "today",
+        "tonight",
+        "next week",
+        "next month",
+        "deadline",
+        "due ",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    ]
+    .iter()
+    .any(|cue| lower.contains(cue))
+    {
+        TaskType::Reminder
+    } else {
+        TaskType::Todo
+    }
+}
+
+fn build_memory_task_candidate(memory: &SearchResult) -> Option<MemoryTaskCandidate> {
+    if is_internal_fndr_result(memory) {
+        return None;
+    }
+
+    let mut text = memory.snippet.trim().to_string();
+    if text.is_empty() {
+        text = memory.clean_text.trim().to_string();
+    }
+    if text.is_empty() {
+        text = memory.window_title.trim().to_string();
+    }
+    if text.is_empty() {
+        return None;
+    }
+
+    let sentence = first_sentence(&text);
+    if sentence.is_empty() {
+        return None;
+    }
+
+    let cleaned = sentence
+        .trim()
+        .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`')
+        .trim_start_matches("TODO:")
+        .trim_start_matches("To do:")
+        .trim_start_matches("to do:")
+        .trim()
+        .to_string();
+    if cleaned.is_empty() || is_low_signal_task_title(&cleaned) {
+        return None;
+    }
+
+    let lower = cleaned.to_lowercase();
+    let action_cues = [
+        "need to",
+        "should",
+        "must",
+        "todo",
+        "to do",
+        "action item",
+        "send",
+        "reply",
+        "schedule",
+        "book",
+        "finish",
+        "complete",
+        "prepare",
+        "submit",
+        "review",
+        "update",
+        "fix",
+        "call",
+        "email",
+        "draft",
+        "plan",
+        "confirm",
+        "deploy",
+        "ship",
+        "follow up",
+    ];
+    let action_hits = action_cues
+        .iter()
+        .filter(|cue| lower.contains(*cue))
+        .count() as i64;
+    if action_hits == 0 {
+        return None;
+    }
+
+    let reminder_hits = [
+        "tomorrow",
+        "today",
+        "tonight",
+        "next week",
+        "next month",
+        "deadline",
+        "due ",
+    ]
+    .iter()
+    .filter(|cue| lower.contains(*cue))
+    .count() as i64;
+    let followup_hits = [
+        "follow up",
+        "follow-up",
+        "reply to",
+        "reach out",
+        "check in with",
+    ]
+    .iter()
+    .filter(|cue| lower.contains(*cue))
+    .count() as i64;
+    let score = action_hits * 4 + reminder_hits * 3 + followup_hits * 4;
+    if score < 4 {
+        return None;
+    }
+
+    Some(MemoryTaskCandidate {
+        title: cleaned,
+        task_type: classify_task_type_from_text(&lower),
+        score,
+        created_at: memory.timestamp,
+        source_app: format!("Memory:{}", memory.app_name),
+        source_memory_id: memory.id.clone(),
+        linked_urls: memory.url.clone().map(|url| vec![url]).unwrap_or_default(),
+    })
+}
+
+fn backfill_tasks_from_memories(tasks: &mut Vec<Task>, recent_memories: &[SearchResult]) -> bool {
+    let mut changed = false;
+    let mut dedupe = tasks
+        .iter()
+        .map(|task| (normalize_task_text(&task.title), task_type_sort_key(&task.task_type)))
+        .collect::<HashSet<_>>();
+
+    let mut candidates = recent_memories
+        .iter()
+        .filter_map(build_memory_task_candidate)
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| right.created_at.cmp(&left.created_at))
+    });
+
+    for candidate in candidates.into_iter().take(TASK_MEMORY_BACKFILL_LIMIT) {
+        let type_key = task_type_sort_key(&candidate.task_type);
+        let dedupe_key = (normalize_task_text(&candidate.title), type_key);
+        if !dedupe.insert(dedupe_key) {
             continue;
         }
 
-        let needed = TASK_MIN_ACTIVE_PER_TYPE - active_count;
-        let existing_keys = tasks
-            .iter()
-            .filter(|task| !task.is_completed && !task.is_dismissed)
-            .map(|task| {
-                (
-                    normalize_task_text(&task.title),
-                    task_type_label(&task.task_type).to_string(),
-                )
-            })
-            .collect::<HashSet<_>>();
+        tasks.push(Task {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: candidate.title,
+            description: String::new(),
+            source_app: candidate.source_app,
+            source_memory_id: Some(candidate.source_memory_id.clone()),
+            created_at: candidate.created_at,
+            due_date: None,
+            is_completed: false,
+            is_dismissed: false,
+            task_type: candidate.task_type.clone(),
+            linked_urls: candidate.linked_urls,
+            linked_memory_ids: vec![candidate.source_memory_id],
+        });
+        changed = true;
+    }
 
-        let mut seen_keys = existing_keys;
-        let mut added = 0usize;
-        for memory in recent_memories.iter().take(TASK_LINK_SCAN_LIMIT) {
-            if added >= needed {
-                break;
-            }
-            let Some(candidate) = build_seed_task_from_memory(memory, task_type.clone(), now_ms) else {
-                continue;
-            };
-            let key = (
-                normalize_task_text(&candidate.title),
-                task_type_label(&candidate.task_type).to_string(),
-            );
-            if !seen_keys.insert(key) {
-                continue;
-            }
-            tasks.push(candidate);
-            added += 1;
+    changed
+}
+
+fn dismiss_low_quality_auto_tasks(tasks: &mut [Task]) -> bool {
+    let mut changed = false;
+
+    for task in tasks.iter_mut().filter(|task| !task.is_completed && !task.is_dismissed) {
+        if is_manual_task(task) || is_meeting_task(task) {
+            continue;
+        }
+
+        let stale_auto_seed = task.source_app.eq_ignore_ascii_case("auto");
+        let weak_title = is_low_signal_task_title(&task.title);
+        let missing_context = !task_has_supporting_context(task);
+        if stale_auto_seed || weak_title || (is_memory_task(task) && missing_context) {
+            task.is_dismissed = true;
             changed = true;
         }
     }
@@ -2000,11 +2229,16 @@ pub async fn add_todo(
     title: String,
     task_type: Option<String>,
 ) -> Result<Task, String> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return Err("Task title cannot be empty.".to_string());
+    }
+
     let parsed_task_type = parse_task_type(task_type.as_deref());
 
     let task = Task {
         id: uuid::Uuid::new_v4().to_string(),
-        title: title.clone(),
+        title: trimmed.to_string(),
         description: String::new(),
         source_app: "Manual".to_string(),
         source_memory_id: None,
@@ -2037,10 +2271,13 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .list_recent_results(TASK_LINK_SCAN_LIMIT, None)
         .await
         .map_err(|e| e.to_string())?;
+    let meetings = state.store.list_meetings().await.map_err(|e| e.to_string())?;
 
     let links_changed = update_task_links_from_memories(&mut tasks, &recent_memories);
-    let inventory_changed = enforce_task_inventory_bounds(&mut tasks, &recent_memories);
-    if links_changed || inventory_changed {
+    let memory_backfill_changed = backfill_tasks_from_memories(&mut tasks, &recent_memories);
+    let meeting_backfill_changed = backfill_tasks_from_meetings(&mut tasks, &meetings);
+    let cleanup_changed = dismiss_low_quality_auto_tasks(&mut tasks);
+    if links_changed || memory_backfill_changed || meeting_backfill_changed || cleanup_changed {
         state
             .store
             .upsert_tasks(&tasks)
@@ -2050,12 +2287,18 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
 
     let mut visible = tasks
         .into_iter()
-        .filter(|t| !t.is_completed && !t.is_dismissed)
+        .filter(|task| !task.is_completed && !task.is_dismissed)
+        .filter(|task| !is_low_signal_task_title(&task.title))
+        .filter(|task| is_manual_task(task) || is_meeting_task(task) || task_has_supporting_context(task))
         .collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    visible.retain(|task| seen.insert((normalize_task_text(&task.title), task_type_sort_key(&task.task_type))));
+    let now_ms = chrono::Utc::now().timestamp_millis();
     visible.sort_by(|left, right| {
-        task_type_sort_key(&left.task_type)
-            .cmp(&task_type_sort_key(&right.task_type))
+        task_priority_score(right, now_ms)
+            .cmp(&task_priority_score(left, now_ms))
             .then_with(|| right.created_at.cmp(&left.created_at))
+            .then_with(|| task_type_sort_key(&left.task_type).cmp(&task_type_sort_key(&right.task_type)))
     });
     Ok(visible)
 }

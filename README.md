@@ -51,6 +51,7 @@ Models are selected/downloaded in onboarding/settings.
 git clone <repo-url>
 cd fndr
 npm install
+./download_embedding_model.sh
 npm run tauri dev
 ```
 

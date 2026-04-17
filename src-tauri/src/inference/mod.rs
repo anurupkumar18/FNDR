@@ -271,6 +271,17 @@ pub struct MemoryCardDraft {
     pub context: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MeetingTaskBreakdownDraft {
+    pub summary: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
+    #[serde(default)]
+    pub reminders: Vec<String>,
+    #[serde(default)]
+    pub followups: Vec<String>,
+}
+
 /// AI Inference Engine for FNDR using llama-cpp-2
 /// Persists the LlamaContext to prevent Metal resource exhaustion crashes.
 pub struct InferenceEngine {
@@ -568,16 +579,20 @@ impl InferenceEngine {
         let prompt = match self.build_prompt(
             "You identify clear follow-up actions from recent screen activity.",
             &format!(
-                "Extract actionable items from these screen captures.\n\
+                "Extract only clearly actionable items from this activity.\n\
 Format each line exactly as one of:\n\
-- TODO: [clear action]\n\
-- REMINDER: [time/date-sensitive reminder]\n\
-- FOLLOWUP: [person/team to follow up with + why]\n\
+- TODO: [clear next action]\n\
+- REMINDER: [date/time-sensitive reminder]\n\
+- FOLLOWUP: [person/team + reason]\n\
 Rules:\n\
-- Return 3 to 8 total items.\n\
-- Include at least one REMINDER and one FOLLOWUP when evidence exists.\n\
-- Keep each item specific, concise, and non-duplicate.\n\
-- Skip vague or generic tasks.\n\n{}",
+- Return 0 to 4 total lines.\n\
+- If nothing is clearly actionable, return exactly: NONE\n\
+- Do NOT infer tasks from passive browsing or generic reading.\n\
+- TODO must sound like a real self-note someone would actually write.\n\
+- REMINDER requires explicit time/day/deadline signal in the evidence.\n\
+- FOLLOWUP requires a concrete person or team and why follow-up is needed.\n\
+- Keep each line short, specific, and non-duplicate.\n\
+- No extra commentary.\n\n{}",
                 memories_text.chars().take(2000).collect::<String>()
             ),
         ) {
@@ -589,6 +604,93 @@ Rules:\n\
         };
 
         self.complete(&prompt, 200).await
+    }
+
+    /// Extract structured meeting summary + action items.
+    pub async fn extract_meeting_breakdown(
+        &self,
+        transcript: &str,
+    ) -> Option<MeetingTaskBreakdownDraft> {
+        if transcript.trim().is_empty() {
+            return None;
+        }
+
+        let prompt = self
+            .build_prompt(
+                "You extract only high-confidence meeting outcomes from transcripts.",
+                &format!(
+                    "Read the meeting transcript and return STRICT JSON with keys:\n\
+summary, todos, reminders, followups\n\
+\n\
+Schema:\n\
+{{\"summary\":\"...\",\"todos\":[\"...\"],\"reminders\":[\"...\"],\"followups\":[\"...\"]}}\n\
+\n\
+Rules:\n\
+- summary: exactly 1 short paragraph (1-3 sentences) based only on transcript facts.\n\
+- todos: concrete next actions someone explicitly committed to.\n\
+- reminders: only explicit date/time/deadline reminders.\n\
+- followups: specific people/teams to follow up with and why.\n\
+- If evidence is weak, leave arrays empty.\n\
+- 0-5 items per array, no duplicates, no generic filler.\n\
+- Return JSON only.\n\
+\n\
+TRANSCRIPT:\n{}",
+                    transcript.chars().take(7000).collect::<String>()
+                ),
+            )
+            .ok()?;
+
+        let raw = self.complete(&prompt, 360).await;
+        let candidate = extract_json_object(&raw)?;
+        let mut draft: MeetingTaskBreakdownDraft = serde_json::from_str(&candidate).ok()?;
+
+        let clean_item = |value: String| {
+            let cleaned = normalize_whitespace(
+                value
+                    .trim()
+                    .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`'),
+            );
+            if cleaned.len() < 6 {
+                return None;
+            }
+            let lower = cleaned.to_lowercase();
+            if matches!(
+                lower.as_str(),
+                "none" | "n/a" | "na" | "no action items" | "no follow-ups" | "no reminders"
+            ) {
+                return None;
+            }
+            Some(cleaned)
+        };
+
+        let clean_vec = |items: Vec<String>| {
+            let mut out = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for item in items {
+                let Some(cleaned) = clean_item(item) else {
+                    continue;
+                };
+                let key = cleaned.to_lowercase();
+                if seen.insert(key) {
+                    out.push(cleaned);
+                }
+                if out.len() >= 5 {
+                    break;
+                }
+            }
+            out
+        };
+
+        draft.summary = normalize_whitespace(draft.summary.trim());
+        draft.todos = clean_vec(draft.todos);
+        draft.reminders = clean_vec(draft.reminders);
+        draft.followups = clean_vec(draft.followups);
+
+        if draft.summary.is_empty() && draft.todos.is_empty() && draft.reminders.is_empty() && draft.followups.is_empty() {
+            return None;
+        }
+
+        Some(draft)
     }
 
     /// Generate a smart daily briefing paragraph from today's memory cards.

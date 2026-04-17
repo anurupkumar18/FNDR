@@ -2,19 +2,86 @@
 
 pub use crate::store::{Task, TaskType};
 
+fn normalize_task_text(value: &str) -> String {
+    value
+        .to_lowercase()
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn strip_list_prefix(line: &str) -> &str {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix("- ") {
+        return rest.trim();
+    }
+    if let Some(rest) = trimmed.strip_prefix("* ") {
+        return rest.trim();
+    }
+
+    if let Some((prefix, rest)) = trimmed.split_once(' ') {
+        let numbered = prefix.ends_with('.')
+            || prefix.ends_with(')')
+            || prefix.ends_with(':');
+        let digits = prefix
+            .trim_end_matches(|ch: char| matches!(ch, '.' | ')' | ':'))
+            .chars()
+            .all(|ch| ch.is_ascii_digit());
+        if numbered && digits {
+            return rest.trim();
+        }
+    }
+
+    trimmed
+}
+
+fn is_actionable_task_title(title: &str) -> bool {
+    let normalized = normalize_task_text(title);
+    if normalized.len() < 6 {
+        return false;
+    }
+    if normalized.split_whitespace().count() < 2 {
+        return false;
+    }
+
+    if matches!(
+        normalized.as_str(),
+        "todo"
+            | "to do"
+            | "task"
+            | "follow up"
+            | "followup"
+            | "reminder"
+            | "none"
+            | "n a"
+            | "no action items"
+            | "no followups"
+            | "no reminders"
+    ) {
+        return false;
+    }
+
+    true
+}
+
 /// Parse LLM response into task structs.
 pub fn parse_tasks_from_llm_response(response: &str, source_app: &str) -> Vec<Task> {
     let mut tasks = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let now = chrono::Utc::now().timestamp_millis();
 
     for line in response.lines() {
-        let line = line.trim();
+        let line = line.trim().trim_matches('|');
         if line.is_empty() {
+            continue;
+        }
+        if line.eq_ignore_ascii_case("none") {
             continue;
         }
 
         // Parse lines like "TODO: Send email", "REMINDER: ...", "FOLLOW-UP: ..."
-        let stripped = line.strip_prefix("- ").unwrap_or(line).trim();
+        let stripped = strip_list_prefix(line);
         let (task_type, title) = if let Some((prefix, rest)) = stripped.split_once(':') {
             let normalized_prefix = prefix
                 .trim()
@@ -29,21 +96,42 @@ pub fn parse_tasks_from_llm_response(response: &str, source_app: &str) -> Vec<Ta
             };
             if let Some(parsed_type) = parsed_type {
                 (parsed_type, rest.trim())
-            } else if line.starts_with("- ") {
+            } else if line.starts_with("- ") || line.starts_with("* ") {
                 (TaskType::Todo, stripped)
             } else {
                 continue;
             }
-        } else if line.starts_with("- ") {
+        } else if line.starts_with("- ") || line.starts_with("* ") {
             (TaskType::Todo, stripped)
         } else {
             continue;
         };
 
-        if title.len() > 5 {
+        let cleaned_title = title
+            .trim()
+            .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`')
+            .trim_start_matches(|ch: char| matches!(ch, '-' | '*' | ':' | ' '))
+            .trim();
+        if !is_actionable_task_title(cleaned_title) {
+            continue;
+        }
+
+        let dedupe_key = (
+            normalize_task_text(cleaned_title),
+            match task_type {
+                TaskType::Todo => "todo",
+                TaskType::Reminder => "reminder",
+                TaskType::Followup => "followup",
+            },
+        );
+        if !seen.insert(dedupe_key) {
+            continue;
+        }
+
+        if cleaned_title.len() > 5 {
             tasks.push(Task {
                 id: uuid::Uuid::new_v4().to_string(),
-                title: title.to_string(),
+                title: cleaned_title.to_string(),
                 description: String::new(),
                 source_app: source_app.to_string(),
                 source_memory_id: None,
