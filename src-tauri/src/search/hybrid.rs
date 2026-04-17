@@ -251,7 +251,12 @@ impl HybridSearcher {
         }
         let keyword_results = dedup_by_best_score(keyword_results);
 
-        let fused = Self::hybrid_fusion(&profile, &semantic_results, &snippet_results, &keyword_results);
+        let fused = Self::hybrid_fusion(
+            &profile,
+            &semantic_results,
+            &snippet_results,
+            &keyword_results,
+        );
         let reranked = Self::rerank_with_profile(&profile, fused, limit);
 
         Ok(reranked)
@@ -460,8 +465,7 @@ impl HybridSearcher {
 
             let semantic_norm =
                 normalize_range(signal.semantic_score.unwrap_or(0.0), semantic_range);
-            let snippet_norm =
-                normalize_range(signal.snippet_score.unwrap_or(0.0), snippet_range);
+            let snippet_norm = normalize_range(signal.snippet_score.unwrap_or(0.0), snippet_range);
             let lexical_norm = normalize_range(signal.lexical_score, lexical_range);
 
             let mut score = semantic_norm * SEMANTIC_WEIGHT
@@ -689,6 +693,8 @@ fn apply_relevance_gate(
         0.28
     } else if profile.primary_terms.len() >= 2 {
         0.20
+    } else if profile.intent == QueryIntent::Definition && !profile.primary_terms.is_empty() {
+        0.18
     } else {
         0.0
     };

@@ -89,7 +89,7 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
                     {loading && (
                         <div className="daily-summary-state">
                             <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
-                            <p>Analyzing context and generating your summary...</p>
+                            <p>Clustering the day&apos;s local memories...</p>
                         </div>
                     )}
 

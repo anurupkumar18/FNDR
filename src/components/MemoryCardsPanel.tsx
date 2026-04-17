@@ -13,11 +13,11 @@ const APP_FILTER_ALL = "__all__";
 const TIME_FILTER_ALL = "__time_all__";
 const PERSPECTIVE_FILTER_ALL = "__perspective_all__";
 
-type TimeFilter = 
-    | typeof TIME_FILTER_ALL 
-    | "last_hour" 
-    | "today" 
-    | "last_24h" 
+type TimeFilter =
+    | typeof TIME_FILTER_ALL
+    | "last_hour"
+    | "today"
+    | "last_24h"
     | "last_7d";
 
 type PerspectiveFilter =
@@ -102,8 +102,8 @@ function includesAny(haystack: string, needles: string[]): boolean {
 }
 
 function matchesFilters(
-    card: MemoryCard, 
-    timeFilter: TimeFilter, 
+    card: MemoryCard,
+    timeFilter: TimeFilter,
     perspectiveFilter: PerspectiveFilter
 ): boolean {
     const now = Date.now();
@@ -263,7 +263,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
         }
 
         let cancelled = false;
-        const selectedApp = appFilter === APP_FILTER_ALL ? undefined : appFilter;
+        const selectedApp = appFilter === APP_FILTER_ALL ? null : appFilter;
 
         setLoading(cards.length === 0);
         setError(null);
@@ -399,7 +399,13 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                     </div>
                 )}
 
-                {!loading && error && cards.length === 0 && (
+                {error && filteredCards.length > 0 && (
+                    <div className="memory-cards-inline-error">
+                        {error}
+                    </div>
+                )}
+
+                {error && filteredCards.length === 0 && (
                     <div className="memory-cards-state">
                         <p>{error}</p>
                     </div>
@@ -411,7 +417,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                     </div>
                 )}
 
-                {!loading && !error && filteredCards.length > 0 && (
+                {filteredCards.length > 0 && (
                     <div className="memory-cards-stream">
                         {filteredCards.map((card) => {
                             const { summary, storyMode, story } = cardCopy(card);

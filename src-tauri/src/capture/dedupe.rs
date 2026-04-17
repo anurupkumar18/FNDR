@@ -6,6 +6,7 @@ use img_hash::{HasherConfig, ImageHash};
 pub struct PerceptualHasher {
     hasher: img_hash::Hasher,
     last_hash: Option<ImageHash>,
+    last_average_rgb: Option<[u8; 3]>,
 }
 
 impl PerceptualHasher {
@@ -14,6 +15,7 @@ impl PerceptualHasher {
         Self {
             hasher,
             last_hash: None,
+            last_average_rgb: None,
         }
     }
 
@@ -28,20 +30,54 @@ impl PerceptualHasher {
 
         // Compute hash
         let hash = self.hasher.hash_image(&image);
+        let average_rgb = average_rgb(&image);
 
         // Compare with last hash
-        let is_dup = if let Some(ref last) = self.last_hash {
+        let is_dup = if let (Some(ref last), Some(last_average_rgb)) =
+            (&self.last_hash, self.last_average_rgb)
+        {
             let distance = hash.dist(last);
-            distance < threshold
+            distance < threshold && rgb_distance(average_rgb, last_average_rgb) <= 24
         } else {
             false
         };
 
         // Update last hash
         self.last_hash = Some(hash);
+        self.last_average_rgb = Some(average_rgb);
 
         is_dup
     }
+}
+
+fn average_rgb(image: &image::DynamicImage) -> [u8; 3] {
+    let rgb = image.to_rgb8();
+    let mut sums = [0_u64; 3];
+    let mut count = 0_u64;
+
+    for pixel in rgb.pixels() {
+        sums[0] += pixel[0] as u64;
+        sums[1] += pixel[1] as u64;
+        sums[2] += pixel[2] as u64;
+        count += 1;
+    }
+
+    if count == 0 {
+        return [0, 0, 0];
+    }
+
+    [
+        (sums[0] / count) as u8,
+        (sums[1] / count) as u8,
+        (sums[2] / count) as u8,
+    ]
+}
+
+fn rgb_distance(a: [u8; 3], b: [u8; 3]) -> u32 {
+    a.iter()
+        .zip(b)
+        .map(|(left, right)| (*left as i32 - right as i32).unsigned_abs())
+        .sum()
 }
 
 impl Default for PerceptualHasher {

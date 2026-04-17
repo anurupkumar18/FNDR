@@ -322,11 +322,11 @@
 .app-main.search-centered {
     display: flex;
     flex-direction: column;
-    justify-content: flex-start;
+    justify-content: center;
     align-items: center;
     min-height: 100vh;
-    padding-top: 86px;
-    padding-bottom: 28px;
+    padding-top: 44px;
+    padding-bottom: 44px;
 }
 
 .search-shell {
@@ -347,9 +347,9 @@
 
 .home-focus-header {
     display: grid;
-    gap: 16px;
+    gap: 10px;
     justify-items: center;
-    margin-bottom: 32px;
+    margin-bottom: 26px;
 }
 
 .home-greeting {
@@ -364,7 +364,7 @@
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: rgba(141, 146, 157, 0.76);
-    margin-bottom: 24px;
+    margin-bottom: 0;
 }
 
 .main-layout {
@@ -407,7 +407,8 @@
     }
 
     .app-main.search-centered {
-        padding-top: 70px;
+        padding-top: 54px;
+        justify-content: center;
     }
 
     .main-layout.with-reconstruction {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { SearchBar } from "./components/SearchBar";
 import { Timeline } from "./components/Timeline";
 import { ControlPanel } from "./components/ControlPanel";
@@ -23,7 +23,7 @@ import {
     getStatus,
     getFunGreeting,
 } from "./api/tauri";
-import { getOnboardingState, requestBiometricAuth } from "./api/onboarding";
+import { getOnboardingState, requestBiometricAuth, saveOnboardingState } from "./api/onboarding";
 import { EVAL_UI } from "./evalUi";
 import "./styles/App.css";
 
@@ -35,9 +35,18 @@ function formatHomeDate(now: Date): string {
 }
 
 // ── Biometric Lock Screen ─────────────────────────────────────────────────
-function BiometricLockScreen({ onUnlock }: { onUnlock: () => void }) {
+function BiometricLockScreen({
+    onUnlock,
+    onDisableBiometricLock,
+}: {
+    onUnlock: () => void;
+    onDisableBiometricLock: () => Promise<void>;
+}) {
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
+    const [disabling, setDisabling] = useState(false);
+    const [attemptCount, setAttemptCount] = useState(0);
+    const autoPromptedRef = useRef(false);
 
     const authenticate = useCallback(async () => {
         setLoading(true);
@@ -48,9 +57,11 @@ function BiometricLockScreen({ onUnlock }: { onUnlock: () => void }) {
                 onUnlock();
             } else {
                 setError("Authentication failed. Tap to try again.");
+                setAttemptCount((count) => count + 1);
             }
         } catch {
-            setError("Biometric auth unavailable. Tap to retry.");
+            setError("Touch ID is unavailable right now. You can retry or continue without lock.");
+            setAttemptCount((count) => count + 1);
         } finally {
             setLoading(false);
         }
@@ -58,6 +69,12 @@ function BiometricLockScreen({ onUnlock }: { onUnlock: () => void }) {
 
     // Auto-trigger on mount
     useEffect(() => {
+        // React Strict Mode intentionally mounts effects twice in development.
+        // Gate auto-auth so users do not get duplicate biometric prompts.
+        if (autoPromptedRef.current) {
+            return;
+        }
+        autoPromptedRef.current = true;
         void authenticate();
     }, [authenticate]);
 
@@ -77,6 +94,18 @@ function BiometricLockScreen({ onUnlock }: { onUnlock: () => void }) {
                 >
                     {loading ? "Authenticating…" : "Unlock with Touch ID"}
                 </button>
+                {attemptCount > 0 && (
+                    <button
+                        className="biometric-lock-btn"
+                        onClick={() => {
+                            setDisabling(true);
+                            void onDisableBiometricLock().finally(() => setDisabling(false));
+                        }}
+                        disabled={loading || disabling}
+                    >
+                        {disabling ? "Unlocking…" : "Continue without biometric lock"}
+                    </button>
+                )}
             </div>
         </div>
     );
@@ -92,7 +121,7 @@ function App() {
     const [meetingStatus, setMeetingStatus] = useState<MeetingRecorderStatus | null>(null);
     const [showAgentPanel, setShowAgentPanel] = useState(false);
     const [showMeetingPanel, setShowMeetingPanel] = useState(false);
-    const [showMemoryCardsPanel, setShowMemoryCardsPanel] = useState(false);
+    const [showMemoryCardsPanel, setShowMemoryCardsPanel] = useState(true);
     const [showStatsPanel, setShowStatsPanel] = useState(false);
     const [showTodoPanel, setShowTodoPanel] = useState(false);
     const [showDailySummaryPanel, setShowDailySummaryPanel] = useState(false);
@@ -105,6 +134,20 @@ function App() {
     const [displayName, setDisplayName] = useState<string | null>(null);
     const [now, setNow] = useState(() => new Date());
     const handleUnlock = useCallback(() => setBiometricUnlocked(true), []);
+    const handleDisableBiometricLock = useCallback(async () => {
+        try {
+            const current = await getOnboardingState();
+            await saveOnboardingState({
+                ...current,
+                biometric_enabled: false,
+            });
+        } catch (err) {
+            console.error("Failed to disable biometric lock:", err);
+        } finally {
+            setBiometricRequired(false);
+            setBiometricUnlocked(true);
+        }
+    }, []);
 
     const searchAllowed = true;
     const { results, isLoading, error } = useSearch(
@@ -310,7 +353,12 @@ function App() {
     }
 
     if (biometricRequired && !biometricUnlocked) {
-        return <BiometricLockScreen onUnlock={handleUnlock} />;
+        return (
+            <BiometricLockScreen
+                onUnlock={handleUnlock}
+                onDisableBiometricLock={handleDisableBiometricLock}
+            />
+        );
     }
 
     return (
@@ -387,8 +435,8 @@ function App() {
             <main className={`app-main ${isFocusMode ? "search-centered" : ""}`}>
                 {isFocusMode && (
                     <div className="home-focus-header">
-                        <div className="home-greeting">{homeGreeting}</div>
                         <div className="home-date-context">{homeDateLabel}</div>
+                        <div className="home-greeting">{homeGreeting}</div>
                     </div>
                 )}
 

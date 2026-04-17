@@ -16,7 +16,7 @@ use arrow_array::{
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use futures::TryStreamExt;
-use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::table::{AddDataMode, NewColumnTransform};
 use lancedb::{Connection, Table};
 use std::path::{Path, PathBuf};
@@ -28,6 +28,25 @@ pub const MEETINGS_TABLE: &str = "meetings";
 pub const SEGMENTS_TABLE: &str = "segments";
 pub const NODES_TABLE: &str = "knowledge_nodes";
 pub const EDGES_TABLE: &str = "knowledge_edges";
+const SEARCH_RESULT_COLUMNS: &[&str] = &[
+    "id",
+    "timestamp",
+    "app_name",
+    "bundle_id",
+    "window_title",
+    "session_id",
+    "text",
+    "clean_text",
+    "ocr_confidence",
+    "ocr_block_count",
+    "snippet",
+    "summary_source",
+    "noise_score",
+    "session_key",
+    "screenshot_path",
+    "url",
+    "decay_score",
+];
 const TEXT_EMBED_DIM: i32 = 384;
 const IMAGE_EMBED_DIM: i32 = 512;
 
@@ -423,10 +442,7 @@ impl Store {
     }
 
     /// Touch accessed records: reset decay to 1.0 and update last_accessed_at.
-    pub async fn touch_accessed(
-        &self,
-        ids: &[String],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn touch_accessed(&self, ids: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let now_ms = chrono::Utc::now().timestamp_millis();
         for id in ids {
             let escaped_id = sql_escape(id);
@@ -442,9 +458,15 @@ impl Store {
     }
 
     /// Retroactively delete all memories whose URL or window title matches the blocklist domain
-    pub async fn delete_memories_by_domain(&self, domain: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn delete_memories_by_domain(
+        &self,
+        domain: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let escaped = sql_escape(&domain.to_lowercase());
-        let filter = format!("LOWER(window_title) LIKE '%{}%' OR LOWER(url) LIKE '%{}%'", escaped, escaped);
+        let filter = format!(
+            "LOWER(window_title) LIKE '%{}%' OR LOWER(url) LIKE '%{}%'",
+            escaped, escaped
+        );
         self.table.delete(&filter).await?;
         Ok(())
     }
@@ -474,6 +496,18 @@ impl Store {
             records.extend(batch_to_memory_records(batch));
         }
         Ok(records)
+    }
+
+    /// Return lightweight search-style rows whose timestamp falls within [start_ms, end_ms].
+    pub async fn get_search_results_in_range(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        let filter = format!("timestamp >= {start_ms} AND timestamp <= {end_ms}");
+        let mut results = self.query_search_results(Some(filter)).await?;
+        results.sort_by_key(|result| result.timestamp);
+        Ok(results)
     }
 
     /// Full-scan keyword search using SQL LIKE predicates.
@@ -1127,6 +1161,30 @@ impl Store {
             results.extend(batch_results);
         }
         results.sort_by_key(|result| std::cmp::Reverse(result.timestamp));
+        Ok(results)
+    }
+
+    async fn query_search_results(
+        &self,
+        filter: Option<String>,
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        let mut query = self
+            .table
+            .query()
+            .select(Select::columns(SEARCH_RESULT_COLUMNS));
+        if let Some(filter) = filter {
+            query = query.only_if(filter);
+        }
+
+        let batches: Vec<RecordBatch> = query.execute().await?.try_collect().await?;
+        let mut results = Vec::new();
+        for batch in &batches {
+            let mut batch_results = batch_to_search_results(batch);
+            for result in &mut batch_results {
+                result.score = 1.0;
+            }
+            results.extend(batch_results);
+        }
         Ok(results)
     }
 }
@@ -1846,9 +1904,7 @@ fn batch_to_edges(batch: &RecordBatch) -> Vec<GraphEdge> {
     for i in 0..n {
         let edge_type = match get_str(&types, i).as_str() {
             "PART_OF_SESSION" | "PartOfSession" | "MentionedIn" => EdgeType::PartOfSession,
-            "REFERENCE_FOR_TASK" | "ReferenceForTask" | "References" => {
-                EdgeType::ReferenceForTask
-            }
+            "REFERENCE_FOR_TASK" | "ReferenceForTask" | "References" => EdgeType::ReferenceForTask,
             "CLIPBOARD_COPIED" | "ClipboardCopied" => EdgeType::ClipboardCopied,
             "OCCURRED_DURING_AUDIO" | "OccurredDuringAudio" => EdgeType::OccurredDuringAudio,
             "OCCURRED_AT" | "OccurredAt" | "LinkedTo" => EdgeType::OccurredAt,
@@ -2418,10 +2474,7 @@ async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Erro
     }
     if !existing.contains("snippet_embedding") {
         // Placeholder zeros — will be computed properly for new captures.
-        transforms.push((
-            "snippet_embedding".to_string(),
-            "embedding".to_string(),
-        ));
+        transforms.push(("snippet_embedding".to_string(), "embedding".to_string()));
     }
     if !existing.contains("decay_score") {
         transforms.push(("decay_score".to_string(), "CAST(1.0 AS FLOAT)".to_string()));

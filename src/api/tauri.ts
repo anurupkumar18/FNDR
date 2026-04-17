@@ -308,11 +308,11 @@ export async function searchMemoryCards(
 
 export async function listMemoryCards(
     limit?: number,
-    appFilter?: string
+    appFilter?: string | null
 ): Promise<MemoryCard[]> {
     return invoke<MemoryCard[]>("list_memory_cards", {
         limit,
-        appFilter,
+        appFilter: appFilter?.trim() || null,
     });
 }
 
@@ -554,4 +554,3 @@ export async function chatWithGemma(messages: ChatMessage[]): Promise<string> {
 export async function generateDailySummaryForDate(dateStr: string): Promise<string> {
     return invoke<string>("generate_daily_summary_for_date", { dateStr });
 }
-
