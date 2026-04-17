@@ -101,17 +101,6 @@ function includesAny(haystack: string, needles: string[]): boolean {
     return needles.some((needle) => haystack.includes(needle));
 }
 
-function looksTooSimilar(a: string, b: string): boolean {
-    if (!a || !b) return false;
-    const na = a.toLowerCase().trim();
-    const nb = b.toLowerCase().trim();
-    if (na === nb) return true;
-    if (na.length > 20 && nb.length > 20) {
-        return na.includes(nb) || nb.includes(na);
-    }
-    return false;
-}
-
 function matchesFilters(
     card: MemoryCard, 
     timeFilter: TimeFilter, 

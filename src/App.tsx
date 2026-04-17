@@ -403,6 +403,7 @@ function App() {
                         appFilter={appFilter}
                         onAppFilterChange={setAppFilter}
                         onSetMeetingPanelOpen={setShowMeetingPanel}
+                        onSetMemoryCardsPanelOpen={setShowMemoryCardsPanel}
                         appNames={appNames}
                         resultCount={visibleResults.length}
                         searchResults={visibleResults}
