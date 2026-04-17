@@ -431,6 +431,7 @@ fn main() {
             api::commands::stop_agent,
             api::commands::link_audio_to_memories,
             api::commands::generate_daily_briefing,
+            api::commands::generate_daily_summary_for_date,
             // Onboarding
             api::onboarding::get_onboarding_state,
             api::onboarding::save_onboarding_state,

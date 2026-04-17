@@ -1,0 +1,128 @@
+import { useState, useEffect } from "react";
+import { generateDailySummaryForDate } from "../api/tauri";
+import "./DailySummaryPanel.css";
+
+interface DailySummaryPanelProps {
+    isVisible: boolean;
+    onClose: () => void;
+}
+
+export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps) {
+    const [dateStr, setDateStr] = useState<string>("");
+    const [summary, setSummary] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [cache, setCache] = useState<Map<string, string>>(new Map());
+
+    // Initialize to today's date in local YYYY-MM-DD
+    useEffect(() => {
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, "0");
+        const dd = String(today.getDate()).padStart(2, "0");
+        setDateStr(`${yyyy}-${mm}-${dd}`);
+    }, []);
+
+    const handleGenerate = async () => {
+        if (!dateStr) return;
+
+        if (cache.has(dateStr)) {
+            setSummary(cache.get(dateStr) ?? null);
+            return;
+        }
+
+        setLoading(true);
+        setError(null);
+        setSummary(null);
+
+        try {
+            const rawSummary = await generateDailySummaryForDate(dateStr);
+            setSummary(rawSummary);
+            setCache((prevConfig) => new Map(prevConfig).set(dateStr, rawSummary));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to generate summary.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    if (!isVisible) {
+        return null;
+    }
+
+    return (
+        <div className="daily-summary-page">
+            <header className="daily-summary-header">
+                <div>
+                    <h2>Daily Summary</h2>
+                    <p>On-demand activity clustering and intelligence</p>
+                </div>
+                <div className="daily-summary-actions">
+                    <button className="ui-action-btn daily-summary-close-btn" onClick={onClose}>
+                        ✕ Close
+                    </button>
+                </div>
+            </header>
+
+            <div className="daily-summary-body">
+                <div className="daily-summary-controls">
+                    <div className="date-picker-wrapper">
+                        <label htmlFor="daily-summary-date">Select Date</label>
+                        <input
+                            id="daily-summary-date"
+                            type="date"
+                            value={dateStr}
+                            onChange={(e) => setDateStr(e.target.value)}
+                            max={new Date().toISOString().split("T")[0]}
+                        />
+                    </div>
+                    <button 
+                        className="ui-action-btn generate-btn" 
+                        onClick={() => void handleGenerate()}
+                        disabled={loading || !dateStr}
+                    >
+                        {loading ? "Generating..." : "Generate Summary"}
+                    </button>
+                </div>
+
+                <div className="daily-summary-content">
+                    {loading && (
+                        <div className="daily-summary-state">
+                            <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                            <p>Analyzing context and generating your summary...</p>
+                        </div>
+                    )}
+
+                    {!loading && error && (
+                        <div className="daily-summary-state error-state">
+                            <p>{error}</p>
+                        </div>
+                    )}
+
+                    {!loading && !error && summary && (
+                        <div className="summary-bullets">
+                            {summary.split("\n").map((line, idx) => {
+                                const trim = line.trim();
+                                if (!trim) return null;
+                                return (
+                                    <p key={idx} className="summary-bullet">
+                                        {trim.startsWith("-") || trim.startsWith("•") || trim.startsWith("*") 
+                                            ? trim 
+                                            : `• ${trim}`}
+                                    </p>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    {!loading && !error && !summary && cache.size === 0 && (
+                        <div className="daily-summary-state empty-state">
+                            <span className="shining-shield">📅</span>
+                            <p>Select a date and click Generate Summary to see your daily briefing.</p>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}

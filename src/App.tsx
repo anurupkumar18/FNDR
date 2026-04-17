@@ -7,6 +7,7 @@ import { AgentPanel } from "./components/AgentPanel";
 import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
 import { MemoryCardsPanel } from "./components/MemoryCardsPanel";
 import { StatsPanel } from "./components/StatsPanel";
+import { DailySummaryPanel } from "./components/DailySummaryPanel";
 import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
 
@@ -94,6 +95,7 @@ function App() {
     const [showMemoryCardsPanel, setShowMemoryCardsPanel] = useState(false);
     const [showStatsPanel, setShowStatsPanel] = useState(false);
     const [showTodoPanel, setShowTodoPanel] = useState(false);
+    const [showDailySummaryPanel, setShowDailySummaryPanel] = useState(false);
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
     const [biometricRequired, setBiometricRequired] = useState<boolean | null>(null);
     const [biometricUnlocked, setBiometricUnlocked] = useState(false);
@@ -372,6 +374,12 @@ function App() {
                         >
                             Meetings
                         </button>
+                        <button
+                            className={`ui-action-btn daily-summary-toggle-btn ${showDailySummaryPanel ? "active" : ""}`}
+                            onClick={() => setShowDailySummaryPanel((open) => !open)}
+                        >
+                            Daily Summary
+                        </button>
                     </div>
                 </aside>
             )}
@@ -444,6 +452,10 @@ function App() {
                     <TodoPanel
                         isVisible={showTodoPanel}
                         onClose={() => setShowTodoPanel(false)}
+                    />
+                    <DailySummaryPanel
+                        isVisible={showDailySummaryPanel}
+                        onClose={() => setShowDailySummaryPanel(false)}
                     />
                 </>
             )}

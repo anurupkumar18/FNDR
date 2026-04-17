@@ -15,7 +15,7 @@ use crate::search::{HybridSearcher, MemoryCard, MemoryCardSynthesizer};
 use crate::speech;
 use crate::store::{MeetingSession, SearchResult, Stats, Task, TaskType};
 use crate::AppState;
-use chrono::Timelike;
+use chrono::{Timelike, TimeZone};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -2973,4 +2973,65 @@ pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> 
     }
 
     Ok(())
+}
+
+// ── Daily Summary Commands ───────────────────────────────────────────
+
+#[tauri::command]
+pub async fn generate_daily_summary_for_date(
+    state: State<'_, Arc<AppState>>,
+    date_str: String,
+) -> Result<String, String> {
+    let target_day = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid date format: {}", e))?;
+    let start = target_day.and_hms_opt(0, 0, 0).ok_or("Failed to create start time")?;
+    let end = (target_day + chrono::Duration::days(1)).and_hms_opt(0, 0, 0).ok_or("Failed to create end time")?;
+
+    let start_ms = chrono::Local
+        .from_local_datetime(&start)
+        .earliest()
+        .unwrap_or_else(|| chrono::Local.from_local_datetime(&start).latest().unwrap())
+        .timestamp_millis();
+    let end_ms = chrono::Local
+        .from_local_datetime(&end)
+        .earliest()
+        .unwrap_or_else(|| chrono::Local.from_local_datetime(&end).latest().unwrap())
+        .timestamp_millis() - 1;
+
+    let records = state.store.get_memories_in_range(start_ms, end_ms).await.map_err(|e| e.to_string())?;
+
+    if records.is_empty() {
+        return Ok("No memories recorded for this date.".to_string());
+    }
+
+    // Cluster by app_name and title to build safe, token-efficient context.
+    let mut clustered: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut total_records = 0;
+    for record in records {
+        total_records += 1;
+        let mut context = record.app_name.clone();
+        if !record.window_title.is_empty() {
+            let title = record.window_title;
+            let clean_title = if title.len() > 30 {
+                format!("{}...", &title[..30])
+            } else {
+                title
+            };
+            context = format!("{} ({})", context, clean_title);
+        }
+        *clustered.entry(context).or_insert(0) += 1;
+    }
+
+    let mut sorted_clusters: Vec<_> = clustered.into_iter().collect();
+    sorted_clusters.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let mut context_buffer = String::new();
+    context_buffer.push_str(&format!("Total interactions captured: {}\n", total_records));
+    for (context, count) in sorted_clusters.iter().take(20) { // Limit to 20 to avoid token overload
+        context_buffer.push_str(&format!("- {}: {} interactions\n", context, count));
+    }
+
+    let engine = state.ensure_inference_engine().await?.ok_or("Inference engine not available")?;
+    let summary = engine.generate_daily_summary(&context_buffer).await;
+    Ok(summary)
 }

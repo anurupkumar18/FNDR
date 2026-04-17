@@ -292,7 +292,8 @@
 .todo-toggle-btn,
 .meeting-toggle-btn,
 .memory-cards-toggle-btn,
-.stats-toggle-btn {
+.stats-toggle-btn,
+.daily-summary-toggle-btn {
     display: flex;
     align-items: center;
     justify-content: flex-start;
@@ -303,7 +304,8 @@
 .todo-toggle-btn.active,
 .meeting-toggle-btn.active,
 .memory-cards-toggle-btn.active,
-.stats-toggle-btn.active {
+.stats-toggle-btn.active,
+.daily-summary-toggle-btn.active {
     border-color: rgba(255, 255, 255, 0.35);
     background: linear-gradient(180deg, rgba(50, 50, 50, 0.85), rgba(25, 25, 25, 0.9));
     color: #ffffff;

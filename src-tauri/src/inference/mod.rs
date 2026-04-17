@@ -760,6 +760,42 @@ TRANSCRIPT:\n{}",
         cleaned
     }
 
+    /// Generate an on-demand, smart daily summary of grouped user activities.
+    pub async fn generate_daily_summary(&self, grouped_activity_text: &str) -> String {
+        if grouped_activity_text.is_empty() {
+            return String::new();
+        }
+
+        let system_msg = "You are a highly efficient personal assistant writing concise daily summaries based on the user's local, grouped context logs.\n\
+            RULES:\n\
+            - Write exactly 6 to 8 short bullet points.\n\
+            - Keep each point high-level but concrete (e.g., 'Spent most of the day coding in VS Code', 'Visited Discord several times for conversations and follow-ups', 'Did some browsing and research during the afternoon').\n\
+            - Name real tools, apps, or topics mentioned in the context.\n\
+            - Do not list chronological actions. Cluster by thematic activity.\n\
+            - Write in the second person ('You worked on...', 'You visited...').\n\
+            - Formatting: Output plain text bullet points starting with '- '.\n\
+            - No preambles, no Markdown bolding, just the bullets.";
+
+        let user_msg = format!(
+            "CLUSTERED DAILY ACTIVITY:\n{}\n\nReturn the 6-8 bullet daily summary.",
+            grouped_activity_text.chars().take(2000).collect::<String>()
+        );
+
+        let prompt = match self.build_prompt(system_msg, &user_msg) {
+            Ok(p) => p,
+            Err(err) => {
+                tracing::error!("Daily summary prompt build failed: {}", err);
+                return String::new();
+            }
+        };
+
+        tracing::info!("Generating on-demand daily summary...");
+        let raw = self.complete(&prompt, 350).await;
+        tracing::info!("Daily summary result:\n{}", raw);
+
+        raw.trim().trim_matches(|ch| ch == '"' || ch == '\'').to_string()
+    }
+
     fn build_prompt(&self, system_message: &str, user_message: &str) -> Result<String, String> {
         let messages = vec![
             LlamaChatMessage::new("system".to_string(), system_message.replace('\0', " "))
