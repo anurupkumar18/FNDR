@@ -554,3 +554,7 @@ export async function chatWithGemma(messages: ChatMessage[]): Promise<string> {
 export async function generateDailySummaryForDate(dateStr: string): Promise<string> {
     return invoke<string>("generate_daily_summary_for_date", { dateStr });
 }
+
+export async function exportDailySummaryPdf(dateStr: string, summaryText: string): Promise<string> {
+    return invoke<string>("export_daily_summary_pdf", { dateStr, summaryText });
+}

@@ -1085,6 +1085,98 @@ pub async fn export_meeting_pdf(
     Ok(target_path.to_string_lossy().to_string())
 }
 
+/// Export a daily summary text to a PDF in the Downloads folder
+#[tauri::command]
+pub async fn export_daily_summary_pdf(
+    _app: tauri::AppHandle,
+    date_str: String,
+    summary_text: String,
+) -> Result<String, String> {
+    // 1. Resolve Downloads folder
+    let downloads_dir = dirs::download_dir()
+        .ok_or_else(|| "Could not find Downloads folder on this system.".to_string())?;
+
+    // 2. Prepare filename
+    let safe_date = date_str.replace('/', "-").replace(' ', "_");
+    let filename = format!("FNDR_Daily_Summary_{}.pdf", safe_date);
+    let target_path = downloads_dir.join(filename);
+
+    // 3. Generate PDF
+    // Use a common macOS font path. Arial is standard in Supplemental.
+    let font_dir = std::path::Path::new("/System/Library/Fonts/Supplemental");
+
+    let regular = genpdf::fonts::FontData::load(font_dir.join("Arial.ttf"), None)
+        .map_err(|e| format!("Failed to load 'Arial.ttf' from {:?}: {}", font_dir, e))?;
+    let bold = genpdf::fonts::FontData::load(font_dir.join("Arial Bold.ttf"), None)
+        .map_err(|e| format!("Failed to load 'Arial Bold.ttf' from {:?}: {}", font_dir, e))?;
+    let italic =
+        genpdf::fonts::FontData::load(font_dir.join("Arial Italic.ttf"), None).map_err(|e| {
+            format!(
+                "Failed to load 'Arial Italic.ttf' from {:?}: {}",
+                font_dir, e
+            )
+        })?;
+    let bold_italic = genpdf::fonts::FontData::load(font_dir.join("Arial Bold Italic.ttf"), None)
+        .map_err(|e| {
+        format!(
+            "Failed to load 'Arial Bold Italic.ttf' from {:?}: {}",
+            font_dir, e
+        )
+    })?;
+
+    let font_family = genpdf::fonts::FontFamily {
+        regular,
+        bold,
+        italic,
+        bold_italic,
+    };
+
+    let mut doc = genpdf::Document::new(font_family);
+    doc.set_title(format!("FNDR Daily Summary: {}", date_str));
+
+    let mut decorator = genpdf::SimplePageDecorator::new();
+    decorator.set_margins(18);
+    doc.set_page_decorator(decorator);
+
+    // Title & Header
+    doc.push(
+        genpdf::elements::Text::new("FNDR Daily Summary")
+            .styled(genpdf::style::Style::new().bold().with_font_size(20)),
+    );
+    doc.push(
+        genpdf::elements::Text::new(format!("Date: {}", date_str))
+            .styled(genpdf::style::Style::new().with_font_size(10)),
+    );
+    doc.push(genpdf::elements::Break::new(1.5));
+
+    if !summary_text.is_empty() {
+        let mut list = genpdf::elements::UnorderedList::new();
+        for line in summary_text.split('\n') {
+            let trim = line.trim();
+            if !trim.is_empty() {
+                // Remove existing bullet points if present as genpdf adds its own
+                let content = if trim.starts_with("- ") || trim.starts_with("* ") || trim.starts_with("• ") {
+                    trim[2..].trim()
+                } else if trim.starts_with("-") || trim.starts_with("*") || trim.starts_with("•") {
+                    trim[1..].trim()
+                } else {
+                    trim
+                };
+                list.push(genpdf::elements::Paragraph::new(content.to_string()));
+            }
+        }
+        doc.push(list);
+    } else {
+        doc.push(genpdf::elements::Paragraph::new("No activity captured for this date."));
+    }
+
+    // Save
+    doc.render_to_file(&target_path)
+        .map_err(|e| format!("Failed to generate PDF file: {}", e))?;
+
+    Ok(target_path.to_string_lossy().to_string())
+}
+
 /// Transcribe a short voice input clip for voice search and voice control
 #[tauri::command]
 pub async fn transcribe_voice_input(

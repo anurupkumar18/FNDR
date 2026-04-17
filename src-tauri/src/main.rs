@@ -398,6 +398,7 @@ fn main() {
             api::commands::delete_meeting,
             api::commands::get_meeting_transcript,
             api::commands::export_meeting_pdf,
+            api::commands::export_daily_summary_pdf,
             // Voice / Speech
             api::commands::transcribe_voice_input,
             api::commands::speak_text,

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { generateDailySummaryForDate } from "../api/tauri";
+import { generateDailySummaryForDate, exportDailySummaryPdf } from "../api/tauri";
 import "./DailySummaryPanel.css";
 
 interface DailySummaryPanelProps {
@@ -12,6 +12,8 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
     const [summary, setSummary] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [exporting, setExporting] = useState(false);
+    const [showToast, setShowToast] = useState(false);
     const [cache, setCache] = useState<Map<string, string>>(new Map());
 
     // Initialize to today's date in local YYYY-MM-DD
@@ -43,6 +45,24 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
             setError(err instanceof Error ? err.message : "Failed to generate summary.");
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleDownloadPdf = async () => {
+        if (!dateStr || !summary) return;
+        setExporting(true);
+        setError(null);
+        try {
+            const path = await exportDailySummaryPdf(dateStr, summary);
+            console.log("Daily Summary PDF exported to:", path);
+            setShowToast(true);
+            setTimeout(() => {
+                setShowToast(false);
+            }, 4000);
+        } catch (err) {
+            setError(String(err));
+        } finally {
+            setExporting(false);
         }
     };
 
@@ -83,6 +103,15 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
                     >
                         {loading ? "Generating..." : "Generate Summary"}
                     </button>
+                    {summary && (
+                        <button
+                            className={`ui-action-btn generate-btn download-pdf-btn ${exporting ? "loading" : ""}`}
+                            onClick={() => void handleDownloadPdf()}
+                            disabled={exporting || loading}
+                        >
+                            {exporting ? "Exporting..." : "↓ Download PDF"}
+                        </button>
+                    )}
                 </div>
 
                 <div className="daily-summary-content">
@@ -123,6 +152,13 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
                     )}
                 </div>
             </div>
+
+            {showToast && (
+                <div className="daily-toast">
+                    <span className="toast-icon">✓</span>
+                    PDF downloaded
+                </div>
+            )}
         </div>
     );
 }
