@@ -25,7 +25,7 @@ pub fn macos_frontmost_app_name() -> Option<String> {
     }
 }
 
-use crate::embed::{ClipEmbedder, Embedder};
+use crate::embed::{ClipEmbedder, Embedder, EmbeddingBackend, EMBEDDING_DIM};
 use crate::ocr::OcrEngine;
 use crate::privacy::Blocklist;
 use crate::store::{MemoryRecord, SearchResult, Task, TaskType};
@@ -33,12 +33,62 @@ use crate::tasks::parse_tasks_from_llm_response;
 use crate::AppState;
 use chrono::Local;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+const EMBEDDING_CACHE_SIZE: usize = 256;
+const SEMANTIC_DEDUP_WINDOW_MS: i64 = 90_000;
+
+#[derive(Default)]
+struct SemanticDedupWindow {
+    seen_at_ms: HashMap<u64, i64>,
+}
+
+impl SemanticDedupWindow {
+    fn should_skip(&mut self, signature: u64, now_ms: i64) -> bool {
+        self.seen_at_ms
+            .retain(|_, seen_at| now_ms.saturating_sub(*seen_at) <= SEMANTIC_DEDUP_WINDOW_MS);
+
+        if let Some(last_seen) = self.seen_at_ms.get(&signature).copied() {
+            if now_ms.saturating_sub(last_seen) <= SEMANTIC_DEDUP_WINDOW_MS {
+                self.seen_at_ms.insert(signature, now_ms);
+                return true;
+            }
+        }
+
+        self.seen_at_ms.insert(signature, now_ms);
+        false
+    }
+}
+
+#[derive(Default)]
+struct EmbeddingMemo {
+    order: VecDeque<String>,
+    values: HashMap<String, Vec<f32>>,
+}
+
+impl EmbeddingMemo {
+    fn get(&self, key: &str) -> Option<Vec<f32>> {
+        self.values.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: String, value: Vec<f32>) {
+        if self.values.contains_key(&key) {
+            return;
+        }
+        if self.order.len() >= EMBEDDING_CACHE_SIZE {
+            if let Some(evicted) = self.order.pop_front() {
+                self.values.remove(&evicted);
+            }
+        }
+        self.order.push_back(key.clone());
+        self.values.insert(key, value);
+    }
+}
 
 /// Resolve the FastVLM sidecar Python script path.
 /// Checks both the packaged app bundle and the dev-time source tree.
@@ -144,9 +194,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
     // Force capture timer
     let mut last_forced_capture = Instant::now();
 
-    // Semantic dedup: skip expensive LLM/VLM/embedding passes when the OCR
-    // text content is identical to the previous frame (e.g. blinking cursor).
-    let mut last_semantic_hash: u64 = 0;
+    // Semantic dedup window suppresses repeated unchanged content bursts.
+    let mut semantic_window = SemanticDedupWindow::default();
+    let mut embedding_memo = EmbeddingMemo::default();
 
     tracing::info!("Capture loop started");
 
@@ -248,8 +298,17 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             ocr_result.block_count
         );
 
-        // Skip if text too short
+        // Skip if OCR output is too weak/noisy to improve recall.
+        if ocr_result.is_low_signal(config.min_text_length) {
+            tokio::time::sleep(sleep_duration).await;
+            continue;
+        }
         if text.len() < config.min_text_length {
+            tokio::time::sleep(sleep_duration).await;
+            continue;
+        }
+        let noise_score = text_cleanup::estimate_noise_score(&app_name, &text);
+        if noise_score > 0.97 {
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -265,13 +324,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             window_title.hash(&mut h);
             text.hash(&mut h);
             let semantic_hash = h.finish();
-            if semantic_hash == last_semantic_hash && !force_capture {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            if semantic_window.should_skip(semantic_hash, now_ms) && !force_capture {
                 tracing::debug!("Semantic dedup: identical content, skipping pipeline");
                 state.frames_dropped.fetch_add(1, Ordering::Relaxed);
                 tokio::time::sleep(sleep_duration).await;
                 continue;
             }
-            last_semantic_hash = semantic_hash;
         }
 
         // Summarize each persisted memory with the local AI model when available.
@@ -334,14 +393,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             }
         };
 
-        // Persist screenshot to a temporary file so any sidecar (FastVLM) can
-        // reference it. The file is deleted once the pipeline finishes.
         let now = Local::now();
-        let temp_screenshot_path = persist_screenshot(
-            &state.store.data_dir(),
-            &now.format("%Y%m%d").to_string(),
-            &image_data,
-        );
 
         let url = macos::get_browser_url(&app_name);
         if let Some(ref u) = url {
@@ -351,11 +403,18 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         // --- Proactive Privacy Check ---
         if Blocklist::is_sensitive_context(url.as_deref(), Some(&window_title)) {
             let domain_or_title = url.clone().unwrap_or_else(|| window_title.clone());
-            
+
             // Extract a cleaner domain from URL if possible, otherwise use the full string
             let clean_domain = if domain_or_title.starts_with("http") {
-                let without_schema = domain_or_title.split("://").nth(1).unwrap_or(&domain_or_title);
-                without_schema.split('/').next().unwrap_or(without_schema).to_string()
+                let without_schema = domain_or_title
+                    .split("://")
+                    .nth(1)
+                    .unwrap_or(&domain_or_title);
+                without_schema
+                    .split('/')
+                    .next()
+                    .unwrap_or(without_schema)
+                    .to_string()
             } else {
                 domain_or_title
             };
@@ -368,7 +427,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     false
                 }
             };
-            
+
             if !is_snoozed {
                 let mut pending = state.pending_privacy_alerts.write();
                 if !pending.iter().any(|a| a.domain_or_title == clean_domain) {
@@ -383,16 +442,27 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         }
 
         let session_key = build_session_key(&app_name, &window_title, url.as_deref());
-        let noise_score = text_cleanup::estimate_noise_score(&app_name, &ocr_result.text);
 
         // Enrich clean_text with VLM metadata when available.
         let enriched_clean_text = if let Some(ref vlm_text) = vlm_analysis {
-            format!("{}\n\n[VLM] {}", text, vlm_text)
+            merge_story_text(&text, vlm_text, 7000)
         } else {
             text.clone()
         };
-
         let snippet_embed_input = final_snippet.clone();
+
+        let embedding_inputs = vec![enriched_clean_text.clone(), snippet_embed_input.clone()];
+        let embedding_vectors =
+            embed_text_inputs_with_memo(&text_embedder, &mut embedding_memo, &embedding_inputs);
+        let text_embedding = embedding_vectors
+            .first()
+            .cloned()
+            .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
+        let snippet_embedding = embedding_vectors
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
+        *state.last_embedding.write() = text_embedding.clone();
 
         let record = MemoryRecord {
             id: uuid::Uuid::new_v4().to_string(),
@@ -417,25 +487,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             summary_source,
             noise_score,
             session_key,
-            embedding: {
-                let emb = text_embedder
-                    .embed_batch(&[text.clone()])
-                    .ok()
-                    .and_then(|mut vectors| vectors.drain(..).next())
-                    .unwrap_or_else(|| vec![0.0; 384]);
-                *state.last_embedding.write() = emb.clone();
-                emb
-            },
+            embedding: text_embedding,
             image_embedding: image_embedder.embed_image(&image_data),
-            // Screenshots are NOT persisted long-term. The temp file is
-            // deleted below once all extraction is done.
             screenshot_path: None,
             url,
-            snippet_embedding: text_embedder
-                .embed_batch(&[snippet_embed_input])
-                .ok()
-                .and_then(|mut vectors| vectors.drain(..).next())
-                .unwrap_or_else(|| vec![0.0; 384]),
+            snippet_embedding,
             decay_score: 1.0,
             last_accessed_at: 0,
         };
@@ -466,21 +522,76 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             }
         });
 
+        if let Err(err) =
+            maybe_create_tasks_from_memory(state.as_ref(), &merged_or_new, engine.as_ref()).await
+        {
+            tracing::debug!("Auto task extraction skipped: {}", err);
+        }
+
         state.frames_captured.fetch_add(1, Ordering::Relaxed);
         state
             .last_capture_time
             .store(now.timestamp_millis() as u64, Ordering::Relaxed);
-
-        // Pipeline complete — delete the temporary screenshot from disk.
-        // All useful information (OCR, embeddings, VLM analysis, LLM summary)
-        // has already been extracted into the MemoryRecord.
-        cleanup_screenshot_path(temp_screenshot_path);
 
         // Drop image data immediately (important for memory)
         drop(image_data);
 
         tokio::time::sleep(sleep_duration).await;
     }
+}
+
+fn embed_text_inputs_with_memo(
+    text_embedder: &Embedder,
+    memo: &mut EmbeddingMemo,
+    texts: &[String],
+) -> Vec<Vec<f32>> {
+    let mut out: Vec<Option<Vec<f32>>> = vec![None; texts.len()];
+    let mut missing = Vec::new();
+    let mut missing_positions = Vec::new();
+    let mut missing_dedup: HashMap<String, usize> = HashMap::new();
+
+    for (idx, text) in texts.iter().enumerate() {
+        let key = text.trim().to_string();
+        if key.is_empty() {
+            out[idx] = Some(vec![0.0; EMBEDDING_DIM]);
+            continue;
+        }
+
+        if let Some(cached) = memo.get(&key) {
+            out[idx] = Some(cached);
+            continue;
+        }
+
+        if let Some(unique_idx) = missing_dedup.get(&key).copied() {
+            missing_positions.push((idx, unique_idx));
+            continue;
+        }
+
+        let unique_idx = missing.len();
+        missing_dedup.insert(key.clone(), unique_idx);
+        missing_positions.push((idx, unique_idx));
+        missing.push(key);
+    }
+
+    if !missing.is_empty() {
+        if let Ok(vectors) = text_embedder.embed_batch(&missing) {
+            for (text, vector) in missing.iter().cloned().zip(vectors.iter().cloned()) {
+                memo.insert(text, vector);
+            }
+            for (idx, unique_idx) in missing_positions {
+                out[idx] = Some(
+                    vectors
+                        .get(unique_idx)
+                        .cloned()
+                        .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]),
+                );
+            }
+        }
+    }
+
+    out.into_iter()
+        .map(|maybe| maybe.unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]))
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -509,6 +620,7 @@ async fn merge_or_append_memory_record(
 
     let incoming_anchor = continuity_anchor_for_memory(&incoming);
     let incoming_id = incoming.id.clone();
+    let semantic_merge_enabled = matches!(text_embedder.backend(), EmbeddingBackend::Real);
 
     if let Some(anchor) = incoming_anchor.as_ref() {
         if let Some(anchor_id) = continuity_index.get(anchor).cloned() {
@@ -540,13 +652,9 @@ async fn merge_or_append_memory_record(
                 .await
                 .map_err(|e| e.to_string())?
             {
-                let merged = merge_memory_records(
-                    existing.clone(),
-                    incoming.clone(),
-                    text_embedder,
-                    engine,
-                )
-                .await;
+                let merged =
+                    merge_memory_records(existing.clone(), incoming.clone(), text_embedder, engine)
+                        .await;
                 tracing::info!(
                     "Merged memory {} into persisted continuity card {} via anchor {}",
                     incoming.id,
@@ -572,54 +680,57 @@ async fn merge_or_append_memory_record(
         }
     }
 
-    if let Some(batch_idx) = best_batch_merge_target(batch, &incoming) {
-        let merged = merge_memory_records(
-            batch[batch_idx].clone(),
-            incoming.clone(),
-            text_embedder,
-            engine,
-        )
-        .await;
-        tracing::info!(
-            "Merged memory {} into in-flight continuity card {} via similarity score",
-            incoming.id,
-            merged.id
-        );
-        if merged.screenshot_path != incoming.screenshot_path {
-            cleanup_screenshot_path(incoming.screenshot_path.clone());
+    if semantic_merge_enabled {
+        if let Some(batch_idx) = best_batch_merge_target(batch, &incoming) {
+            let merged = merge_memory_records(
+                batch[batch_idx].clone(),
+                incoming.clone(),
+                text_embedder,
+                engine,
+            )
+            .await;
+            tracing::info!(
+                "Merged memory {} into in-flight continuity card {} via similarity score",
+                incoming.id,
+                merged.id
+            );
+            if merged.screenshot_path != incoming.screenshot_path {
+                cleanup_screenshot_path(incoming.screenshot_path.clone());
+            }
+            batch[batch_idx] = merged.clone();
+            if let Some(anchor) = incoming_anchor {
+                continuity_index.insert(anchor, merged.id.clone());
+            }
+            return Ok(merged);
         }
-        batch[batch_idx] = merged.clone();
-        if let Some(anchor) = incoming_anchor {
-            continuity_index.insert(anchor, merged.id.clone());
-        }
-        return Ok(merged);
-    }
 
-    if let Some(existing) = best_persisted_merge_target(state, &incoming).await? {
-        let merged =
-            merge_memory_records(existing.clone(), incoming.clone(), text_embedder, engine).await;
-        tracing::info!(
-            "Merged memory {} into persisted continuity card {} via similarity score",
-            incoming.id,
-            merged.id
-        );
-        state
-            .store
-            .delete_memory_by_id(&existing.id)
-            .await
-            .map_err(|e| e.to_string())?;
-        state
-            .store
-            .add_batch(&[merged.clone()])
-            .await
-            .map_err(|e| e.to_string())?;
-        if merged.screenshot_path != incoming.screenshot_path {
-            cleanup_screenshot_path(incoming.screenshot_path.clone());
+        if let Some(existing) = best_persisted_merge_target(state, &incoming).await? {
+            let merged =
+                merge_memory_records(existing.clone(), incoming.clone(), text_embedder, engine)
+                    .await;
+            tracing::info!(
+                "Merged memory {} into persisted continuity card {} via similarity score",
+                incoming.id,
+                merged.id
+            );
+            state
+                .store
+                .delete_memory_by_id(&existing.id)
+                .await
+                .map_err(|e| e.to_string())?;
+            state
+                .store
+                .add_batch(&[merged.clone()])
+                .await
+                .map_err(|e| e.to_string())?;
+            if merged.screenshot_path != incoming.screenshot_path {
+                cleanup_screenshot_path(incoming.screenshot_path.clone());
+            }
+            if let Some(anchor) = continuity_anchor_for_memory(&merged) {
+                continuity_index.insert(anchor, merged.id.clone());
+            }
+            return Ok(merged);
         }
-        if let Some(anchor) = continuity_anchor_for_memory(&merged) {
-            continuity_index.insert(anchor, merged.id.clone());
-        }
-        return Ok(merged);
     }
 
     if let Some(anchor) = incoming_anchor {
@@ -663,7 +774,12 @@ async fn best_persisted_merge_target(
 ) -> Result<Option<MemoryRecord>, String> {
     let same_app_candidates = state
         .store
-        .vector_search(&incoming.embedding, 24, None, Some(&incoming.app_name))
+        .vector_search(
+            &incoming.embedding,
+            24,
+            Some("7d"),
+            Some(&incoming.app_name),
+        )
         .await
         .map_err(|e| e.to_string())?;
 
@@ -689,7 +805,7 @@ async fn best_persisted_merge_target(
 
     let cross_app_candidates = state
         .store
-        .vector_search(&incoming.embedding, 32, None, None)
+        .vector_search(&incoming.embedding, 32, Some("24h"), None)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -897,7 +1013,7 @@ fn score_search_candidate(incoming: &MemoryRecord, candidate: &SearchResult) -> 
         .map(|(left, right)| left == right)
         .unwrap_or(false);
 
-    let mut score = vector * 0.68 + lexical * 0.24;
+    let mut score = vector * 0.5 + lexical * 0.42;
     if same_domain {
         score += 0.08;
     }
@@ -939,7 +1055,7 @@ pub(crate) fn score_memory_candidate(
         .map(|(left, right)| left == right)
         .unwrap_or(false);
 
-    let mut score = vector * 0.68 + lexical * 0.24;
+    let mut score = vector * 0.5 + lexical * 0.42;
     if same_domain {
         score += 0.08;
     }
@@ -957,9 +1073,9 @@ pub(crate) fn score_memory_candidate(
 
 pub(crate) fn passes_merge_threshold(score: MergeScore) -> bool {
     if score.anchor_match {
-        return score.score >= 0.62;
+        return score.score >= 0.62 && score.lexical >= 0.18;
     }
-    score.score >= 0.86 && score.vector >= 0.82 && score.lexical >= 0.12
+    score.score >= 0.86 && score.vector >= 0.82 && score.lexical >= 0.28
 }
 
 fn allows_cross_app_merge_from_memory(
@@ -973,7 +1089,10 @@ fn allows_cross_app_merge_from_memory(
     if matching_effective_url(incoming.url.as_deref(), candidate.url.as_deref()) {
         return true;
     }
-    score.vector >= 0.90 && score.lexical >= 0.62
+    if !same_domain(incoming.url.as_deref(), candidate.url.as_deref()) {
+        return false;
+    }
+    (score.anchor_match && score.lexical >= 0.52) || (score.vector >= 0.93 && score.lexical >= 0.70)
 }
 
 fn allows_cross_app_merge_from_search(
@@ -987,11 +1106,14 @@ fn allows_cross_app_merge_from_search(
     if matching_effective_url(incoming.url.as_deref(), candidate.url.as_deref()) {
         return true;
     }
-    score.vector >= 0.90 && score.lexical >= 0.62
+    if !same_domain(incoming.url.as_deref(), candidate.url.as_deref()) {
+        return false;
+    }
+    (score.anchor_match && score.lexical >= 0.52) || (score.vector >= 0.93 && score.lexical >= 0.70)
 }
 
 fn is_cross_app_merge_window(left_ts: i64, right_ts: i64) -> bool {
-    (left_ts - right_ts).abs() <= 90 * 60 * 1000
+    (left_ts - right_ts).abs() <= 45 * 60 * 1000
 }
 
 fn matching_effective_url(left: Option<&str>, right: Option<&str>) -> bool {
@@ -1018,6 +1140,13 @@ fn normalize_url_for_merge(raw: &str) -> String {
     no_fragment.trim_end_matches('/').to_string()
 }
 
+fn same_domain(left: Option<&str>, right: Option<&str>) -> bool {
+    left.and_then(extract_domain)
+        .zip(right.and_then(extract_domain))
+        .map(|(l, r)| l.eq_ignore_ascii_case(&r))
+        .unwrap_or(false)
+}
+
 pub(crate) fn continuity_anchor_for_memory(record: &MemoryRecord) -> Option<String> {
     continuity_anchor(
         &record.app_name,
@@ -1042,152 +1171,31 @@ fn continuity_anchor(
     window_title: &str,
     snippet: &str,
 ) -> Option<String> {
-    let lower_app = app_name.to_lowercase();
-
     if let Some(raw_url) = url {
-        let lower_url = raw_url.to_lowercase();
-        if lower_url.contains("open.spotify.com/track/") {
-            if let Some(track_id) = extract_path_token(raw_url, "/track/") {
-                return Some(format!("spotify:track:{track_id}"));
-            }
-        }
-        if lower_url.contains("open.spotify.com/album/") {
-            if let Some(album_id) = extract_path_token(raw_url, "/album/") {
-                return Some(format!("spotify:album:{album_id}"));
-            }
-        }
-        if lower_url.contains("youtube.com/watch") {
-            if let Some(video_id) = extract_query_param(raw_url, "v") {
-                return Some(format!("youtube:video:{video_id}"));
-            }
-        }
-        if lower_url.contains("youtu.be/") {
-            if let Some(video_id) = extract_path_token(raw_url, "youtu.be/") {
-                return Some(format!("youtube:video:{video_id}"));
-            }
-        }
-        if lower_url.contains("discord.com/channels/") {
-            if let Some(path) = extract_first_path_segments(raw_url, 3) {
-                return Some(format!("discord:{path}"));
-            }
-        }
-        if lower_url.contains("gitlab.com/") {
-            if let Some(project_anchor) = extract_first_path_segments(raw_url, 3) {
-                return Some(format!("gitlab:{project_anchor}"));
-            }
-        }
-        if lower_url.contains("antigravity") {
-            if let Some(domain) = extract_domain(raw_url) {
-                let path = extract_first_path_segments(raw_url, 2).unwrap_or_default();
-                if !path.is_empty() {
-                    return Some(format!("antigravity:{domain}:{path}"));
-                }
-                return Some(format!("antigravity:{domain}"));
-            }
-        }
         if let Some(domain) = extract_domain(raw_url) {
             let domain_key = domain.to_lowercase();
-            if domain_key.contains("codex")
-                || domain_key.contains("discord")
-                || domain_key.contains("gitlab")
-                || domain_key.contains("spotify")
-                || domain_key.contains("youtube")
-            {
-                let path = extract_first_path_segments(raw_url, 2).unwrap_or_default();
-                if !path.is_empty() {
-                    return Some(format!("domain:{domain_key}:{path}"));
-                }
-                return Some(format!("domain:{domain_key}"));
+            let path = extract_first_path_segments(raw_url, 3).unwrap_or_default();
+            if !path.is_empty() {
+                return Some(format!("url:{domain_key}:{path}"));
+            }
+            if !domain_key.is_empty() {
+                return Some(format!("url:{domain_key}"));
             }
         }
     }
 
-    if lower_app.contains("spotify") || lower_app.contains("music") {
-        let normalized_title = normalize_anchor_text(window_title);
-        if normalized_title.len() >= 10 {
-            return Some(format!("music:title:{normalized_title}"));
-        }
-        let normalized_snippet = normalize_anchor_text(snippet);
-        if normalized_snippet.len() >= 10 {
-            return Some(format!("music:snippet:{normalized_snippet}"));
-        }
-    }
-
-    if lower_app.contains("discord") {
-        let channel = normalize_anchor_text(window_title);
-        if channel.len() >= 6 {
-            return Some(format!("discord:title:{channel}"));
-        }
-    }
-
-    if lower_app.contains("codex") || lower_app.contains("cursor") {
-        let normalized_title = normalize_anchor_text(window_title);
-        if normalized_title.len() >= 6 {
-            return Some(format!("codex:title:{normalized_title}"));
-        }
-    }
-
-    if lower_app.contains("gitlab") {
-        let normalized_title = normalize_anchor_text(window_title);
-        if normalized_title.len() >= 6 {
-            return Some(format!("gitlab:title:{normalized_title}"));
-        }
-    }
-
-    if lower_app.contains("antigravity") {
-        let normalized_title = normalize_anchor_text(window_title);
-        if normalized_title.len() >= 6 {
-            return Some(format!("antigravity:title:{normalized_title}"));
-        }
-    }
+    let app_key = normalize_app_key(app_name);
 
     let generic_title = normalize_anchor_text(window_title);
     if generic_title.len() >= 8 {
-        return Some(format!(
-            "app:{}:title:{}",
-            lower_app.replace(' ', "_"),
-            generic_title
-        ));
+        return Some(format!("app:{app_key}:title:{generic_title}"));
     }
 
     let generic_snippet = normalize_anchor_text(snippet);
     if generic_snippet.len() >= 10 {
-        return Some(format!(
-            "app:{}:snippet:{}",
-            lower_app.replace(' ', "_"),
-            generic_snippet
-        ));
+        return Some(format!("app:{app_key}:snippet:{generic_snippet}"));
     }
 
-    None
-}
-
-fn extract_path_token(value: &str, marker: &str) -> Option<String> {
-    let lower = value.to_lowercase();
-    let index = lower.find(marker)?;
-    let suffix = &value[index + marker.len()..];
-    let token = suffix
-        .split(['?', '&', '#', '/'])
-        .next()
-        .map(str::trim)
-        .unwrap_or("");
-    if token.is_empty() {
-        None
-    } else {
-        Some(token.to_string())
-    }
-}
-
-fn extract_query_param(url: &str, key: &str) -> Option<String> {
-    let query = url.split('?').nth(1)?;
-    for pair in query.split('&') {
-        let mut parts = pair.splitn(2, '=');
-        let param = parts.next()?.trim();
-        let value = parts.next().unwrap_or("").trim();
-        if param.eq_ignore_ascii_case(key) && !value.is_empty() {
-            return Some(value.to_string());
-        }
-    }
     None
 }
 
@@ -1207,27 +1215,29 @@ fn extract_first_path_segments(url: &str, count: usize) -> Option<String> {
     }
 }
 
+fn normalize_app_key(app_name: &str) -> String {
+    let normalized = app_name
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() { ch } else { '_' })
+        .collect::<String>();
+    let cleaned = normalized
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    if cleaned.is_empty() {
+        "unknown".to_string()
+    } else {
+        cleaned
+    }
+}
+
 fn normalize_anchor_text(text: &str) -> String {
     text.to_lowercase()
         .split(|ch: char| !ch.is_alphanumeric())
         .filter(|token| token.len() > 2)
-        .filter(|token| {
-            !matches!(
-                *token,
-                "spotify"
-                    | "lyrics"
-                    | "listen"
-                    | "playing"
-                    | "song"
-                    | "track"
-                    | "album"
-                    | "artist"
-                    | "radio"
-                    | "playlist"
-                    | "view"
-                    | "views"
-            )
-        })
+        .filter(|token| !is_generic_stop_word(token))
         .take(8)
         .collect::<Vec<_>>()
         .join("_")
@@ -1253,37 +1263,50 @@ fn tokenize(text: &str) -> HashSet<String> {
     text.to_lowercase()
         .split(|ch: char| !ch.is_alphanumeric())
         .filter(|token| token.len() > 2)
-        .filter(|token| {
-            !matches!(
-                *token,
-                "the"
-                    | "and"
-                    | "for"
-                    | "with"
-                    | "this"
-                    | "that"
-                    | "from"
-                    | "your"
-                    | "you"
-                    | "are"
-                    | "was"
-                    | "were"
-                    | "have"
-                    | "has"
-                    | "into"
-                    | "about"
-                    | "after"
-                    | "before"
-                    | "then"
-                    | "just"
-                    | "there"
-                    | "here"
-                    | "spotify"
-                    | "lyrics"
-            )
-        })
+        .filter(|token| !is_generic_stop_word(token))
         .map(|token| token.to_string())
         .collect()
+}
+
+fn is_generic_stop_word(token: &str) -> bool {
+    matches!(
+        token,
+        "the"
+            | "and"
+            | "for"
+            | "with"
+            | "this"
+            | "that"
+            | "from"
+            | "your"
+            | "you"
+            | "are"
+            | "was"
+            | "were"
+            | "have"
+            | "has"
+            | "into"
+            | "about"
+            | "after"
+            | "before"
+            | "then"
+            | "just"
+            | "there"
+            | "here"
+            | "user"
+            | "app"
+            | "window"
+            | "tab"
+            | "page"
+            | "open"
+            | "opened"
+            | "search"
+            | "searched"
+            | "www"
+            | "http"
+            | "https"
+            | "com"
+    )
 }
 
 fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
@@ -1449,24 +1472,6 @@ fn task_type_key(task_type: &TaskType) -> &'static str {
         TaskType::Todo => "todo",
         TaskType::Reminder => "reminder",
         TaskType::Followup => "followup",
-    }
-}
-
-fn persist_screenshot(
-    data_dir: &std::path::Path,
-    day_bucket: &str,
-    image_data: &[u8],
-) -> Option<String> {
-    let frames_dir = data_dir.join("frames").join(day_bucket);
-    if std::fs::create_dir_all(&frames_dir).is_err() {
-        return None;
-    }
-    let file_name = format!("{}.png", uuid::Uuid::new_v4());
-    let path = frames_dir.join(file_name);
-    if std::fs::write(&path, image_data).is_ok() {
-        Some(path.to_string_lossy().to_string())
-    } else {
-        None
     }
 }
 

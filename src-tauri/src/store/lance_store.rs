@@ -19,6 +19,7 @@ use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::table::{AddDataMode, NewColumnTransform};
 use lancedb::{Connection, Table};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -49,6 +50,11 @@ const SEARCH_RESULT_COLUMNS: &[&str] = &[
 ];
 const TEXT_EMBED_DIM: i32 = 384;
 const IMAGE_EMBED_DIM: i32 = 512;
+const VECTOR_QUERY_MULTIPLIER: usize = 3;
+const KEYWORD_QUERY_MULTIPLIER: usize = 8;
+const MAX_KEYWORD_SCAN: usize = 600;
+const RECENT_RESULTS_MULTIPLIER: usize = 8;
+const MAX_RECENT_SCAN: usize = 1200;
 
 /// LanceDB-backed store for memory records.
 pub struct Store {
@@ -336,7 +342,12 @@ impl Store {
         if records.is_empty() {
             return Ok(());
         }
-        let batch = records_to_batch(records)?;
+        let compacted = dedup_records_for_insert(records);
+        if compacted.is_empty() {
+            return Ok(());
+        }
+
+        let batch = records_to_batch(&compacted)?;
         let schema = Arc::new(memory_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
         self.table
@@ -356,12 +367,18 @@ impl Store {
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
         let filter = build_filter(time_filter, app_filter);
         let query_vec: Vec<f32> = query_embedding.to_vec();
+        let base_limit = limit.max(1);
+        let retrieval_limit = if base_limit >= 300 {
+            base_limit
+        } else {
+            base_limit.saturating_mul(VECTOR_QUERY_MULTIPLIER).min(300)
+        };
 
         let mut vq = self
             .table
             .vector_search(query_vec)?
             .column("embedding")
-            .limit(limit);
+            .limit(retrieval_limit);
 
         if let Some(f) = filter {
             vq = vq.only_if(f);
@@ -372,7 +389,7 @@ impl Store {
         for batch in &batches {
             results.extend(batch_to_search_results(batch));
         }
-        Ok(results)
+        Ok(dedup_search_results(results, limit))
     }
 
     /// ANN search over the `snippet_embedding` column (second semantic tower).
@@ -385,12 +402,18 @@ impl Store {
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
         let filter = build_filter(time_filter, app_filter);
         let query_vec: Vec<f32> = query_embedding.to_vec();
+        let base_limit = limit.max(1);
+        let retrieval_limit = if base_limit >= 300 {
+            base_limit
+        } else {
+            base_limit.saturating_mul(VECTOR_QUERY_MULTIPLIER).min(300)
+        };
 
         let mut vq = self
             .table
             .vector_search(query_vec)?
             .column("snippet_embedding")
-            .limit(limit);
+            .limit(retrieval_limit);
 
         if let Some(f) = filter {
             vq = vq.only_if(f);
@@ -401,7 +424,7 @@ impl Store {
         for batch in &batches {
             results.extend(batch_to_search_results(batch));
         }
-        Ok(results)
+        Ok(dedup_search_results(results, limit))
     }
 
     /// Asynchronously update snippet + summary_source for a single record (post-LLM).
@@ -522,6 +545,14 @@ impl Store {
         if terms.is_empty() {
             return Ok(Vec::new());
         }
+        let base_limit = limit.max(1);
+        let retrieval_limit = if base_limit >= MAX_KEYWORD_SCAN {
+            base_limit
+        } else {
+            base_limit
+                .saturating_mul(KEYWORD_QUERY_MULTIPLIER)
+                .min(MAX_KEYWORD_SCAN)
+        };
 
         let mut clauses = Vec::new();
         for term in &terms {
@@ -544,18 +575,21 @@ impl Store {
             .table
             .query()
             .only_if(filter)
-            .limit(limit)
+            .limit(retrieval_limit)
             .execute()
             .await?
             .try_collect()
             .await?;
 
         let mut results = Vec::new();
+        let now_ms = chrono::Utc::now().timestamp_millis();
         for batch in &batches {
             let mut batch_results = batch_to_search_results(batch);
             // Keyword branch gets a lexical relevance score before hybrid fusion.
             for r in &mut batch_results {
-                r.score = lexical_keyword_score(&terms, r);
+                let lexical = lexical_keyword_score(&terms, r);
+                let recency = recency_score(now_ms, r.timestamp);
+                r.score = (lexical * 0.86 + recency * 0.14).clamp(0.0, 1.0);
             }
             results.extend(batch_results);
         }
@@ -565,7 +599,7 @@ impl Store {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| b.timestamp.cmp(&a.timestamp))
         });
-        Ok(results)
+        Ok(dedup_search_results(results, limit))
     }
 
     /// Return comprehensive statistics and usage insights about stored data.
@@ -1146,7 +1180,16 @@ impl Store {
         limit: usize,
         app_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
-        let mut query = self.table.query().limit(limit);
+        let base_limit = limit.max(1);
+        let retrieval_limit = if base_limit >= MAX_RECENT_SCAN {
+            base_limit
+        } else {
+            base_limit
+                .saturating_mul(RECENT_RESULTS_MULTIPLIER)
+                .min(MAX_RECENT_SCAN)
+        };
+
+        let mut query = self.table.query().limit(retrieval_limit);
         if let Some(filter) = build_filter(None, app_filter) {
             query = query.only_if(filter);
         }
@@ -1161,6 +1204,7 @@ impl Store {
             results.extend(batch_results);
         }
         results.sort_by_key(|result| std::cmp::Reverse(result.timestamp));
+        results.truncate(base_limit);
         Ok(results)
     }
 
@@ -2383,6 +2427,105 @@ fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
     let coverage = matched_terms as f32 / terms.len() as f32;
     let normalized = (weighted / (terms.len() as f32 * 2.8)).min(1.0);
     (normalized * 0.7 + coverage * 0.3).clamp(0.0, 1.0)
+}
+
+fn recency_score(now_ms: i64, timestamp_ms: i64) -> f32 {
+    let age_hours = ((now_ms - timestamp_ms).max(0) as f32 / 3_600_000.0).min(24.0 * 30.0);
+    (1.0 / (1.0 + age_hours * 0.03)).clamp(0.0, 1.0)
+}
+
+fn dedup_records_for_insert(records: &[MemoryRecord]) -> Vec<MemoryRecord> {
+    let mut by_key: HashMap<String, MemoryRecord> = HashMap::new();
+
+    for record in records {
+        let key = record_insert_dedup_key(record);
+        by_key
+            .entry(key)
+            .and_modify(|existing| {
+                let existing_rank =
+                    existing.ocr_confidence + (1.0 - existing.noise_score).clamp(0.0, 1.0);
+                let incoming_rank =
+                    record.ocr_confidence + (1.0 - record.noise_score).clamp(0.0, 1.0);
+                if incoming_rank > existing_rank
+                    || (incoming_rank == existing_rank && record.timestamp > existing.timestamp)
+                {
+                    *existing = record.clone();
+                }
+            })
+            .or_insert_with(|| record.clone());
+    }
+
+    by_key.into_values().collect()
+}
+
+fn dedup_search_results(mut results: Vec<SearchResult>, limit: usize) -> Vec<SearchResult> {
+    if results.is_empty() {
+        return results;
+    }
+
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.timestamp.cmp(&a.timestamp))
+    });
+
+    let mut by_key: HashMap<String, SearchResult> = HashMap::new();
+    for result in results {
+        let key = search_result_dedup_key(&result);
+        by_key
+            .entry(key)
+            .and_modify(|existing| {
+                if result.score > existing.score
+                    || (result.score == existing.score && result.timestamp > existing.timestamp)
+                {
+                    *existing = result.clone();
+                }
+            })
+            .or_insert(result);
+    }
+
+    let mut out: Vec<SearchResult> = by_key.into_values().collect();
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.timestamp.cmp(&a.timestamp))
+    });
+    out.truncate(limit.max(1));
+    out
+}
+
+fn record_insert_dedup_key(record: &MemoryRecord) -> String {
+    format!(
+        "{}:{}:{}:{}:{}",
+        record.app_name.to_lowercase(),
+        normalize_keyword_text(&record.session_key),
+        normalize_keyword_text(&record.window_title),
+        normalize_keyword_text(&record.snippet),
+        record.timestamp / 15_000
+    )
+}
+
+fn search_result_dedup_key(result: &SearchResult) -> String {
+    let domain = result
+        .url
+        .as_deref()
+        .and_then(extract_domain)
+        .unwrap_or_default();
+    let session = if result.session_key.trim().is_empty() {
+        result.session_id.to_lowercase()
+    } else {
+        result.session_key.to_lowercase()
+    };
+    format!(
+        "{}:{}:{}:{}:{}",
+        result.app_name.to_lowercase(),
+        session,
+        domain,
+        normalize_keyword_text(&result.window_title),
+        normalize_keyword_text(&result.snippet)
+    )
 }
 
 /// Escape single quotes for SQL string literals.

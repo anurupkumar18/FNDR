@@ -18,6 +18,14 @@ pub struct TextChunker {
     overlap_chars: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct TextChunk {
+    pub text: String,
+    pub approx_tokens: usize,
+    pub chunk_index: usize,
+    pub line_kind: &'static str,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineKind {
     Title,
@@ -43,6 +51,19 @@ impl TextChunker {
 
     /// OCR-aware chunking that preserves semantic boundaries and drops low-signal lines.
     pub fn chunk_ocr_text(&self, app_name: &str, window_title: &str, text: &str) -> Vec<String> {
+        self.chunk_ocr_text_with_metadata(app_name, window_title, text)
+            .into_iter()
+            .map(|chunk| chunk.text)
+            .collect()
+    }
+
+    /// OCR-aware chunking with lightweight metadata used for diagnostics/ranking.
+    pub fn chunk_ocr_text_with_metadata(
+        &self,
+        app_name: &str,
+        window_title: &str,
+        text: &str,
+    ) -> Vec<TextChunk> {
         let cleaned_text = text_cleanup::reduce_chrome_noise_for_app(app_name, text);
         let mut lines = Vec::new();
         let title = normalize_line(window_title);
@@ -59,20 +80,32 @@ impl TextChunker {
         }
 
         if lines.is_empty() {
-            return self.chunk_by_chars(text);
+            return self
+                .chunk_by_chars(text)
+                .into_iter()
+                .enumerate()
+                .map(|(index, chunk)| TextChunk {
+                    approx_tokens: chunk.len() / CHARS_PER_TOKEN,
+                    text: chunk,
+                    chunk_index: index,
+                    line_kind: line_kind_label(LineKind::Plain),
+                })
+                .collect();
         }
 
-        let mut chunks = Vec::new();
+        let mut chunks: Vec<(String, LineKind)> = Vec::new();
         let mut current = String::new();
         let mut current_kind = LineKind::Plain;
 
         for (line, kind) in lines {
             if line.len() > OCR_TARGET_MAX {
                 if !current.trim().is_empty() {
-                    chunks.push(current.trim().to_string());
+                    chunks.push((current.trim().to_string(), current_kind));
                     current.clear();
                 }
-                chunks.extend(self.chunk_by_chars(&line));
+                for chunk in self.chunk_by_chars(&line) {
+                    chunks.push((chunk, kind));
+                }
                 current_kind = LineKind::Plain;
                 continue;
             }
@@ -86,7 +119,7 @@ impl TextChunker {
                     || (kind != current_kind && !current.is_empty());
 
             if should_boundary_break && !current.is_empty() && current.len() >= OCR_TARGET_MIN {
-                chunks.push(current.trim().to_string());
+                chunks.push((current.trim().to_string(), current_kind));
                 let prev_tail = overlap_tail(&current, 1);
                 current.clear();
                 if !prev_tail.is_empty() && kind == current_kind {
@@ -102,7 +135,7 @@ impl TextChunker {
             current_kind = kind;
 
             if current.len() >= OCR_TARGET_MAX {
-                chunks.push(current.trim().to_string());
+                chunks.push((current.trim().to_string(), current_kind));
                 let prev_tail = overlap_tail(&current, 1);
                 current.clear();
                 if !prev_tail.is_empty() {
@@ -112,14 +145,44 @@ impl TextChunker {
         }
 
         if !current.trim().is_empty() {
-            chunks.push(current.trim().to_string());
+            chunks.push((current.trim().to_string(), current_kind));
         }
 
-        if chunks.is_empty() {
+        let mut rendered = if chunks.is_empty() {
             self.chunk_by_chars(text)
+                .into_iter()
+                .enumerate()
+                .map(|(index, chunk)| TextChunk {
+                    approx_tokens: chunk.len() / CHARS_PER_TOKEN,
+                    text: chunk,
+                    chunk_index: index,
+                    line_kind: line_kind_label(LineKind::Plain),
+                })
+                .collect::<Vec<_>>()
         } else {
             chunks
+                .into_iter()
+                .enumerate()
+                .map(|(index, (chunk, kind))| TextChunk {
+                    approx_tokens: chunk.len() / CHARS_PER_TOKEN,
+                    text: chunk,
+                    chunk_index: index,
+                    line_kind: line_kind_label(kind),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Drop near-identical chunks from the same frame to keep index pressure low.
+        let mut seen = std::collections::HashSet::new();
+        rendered.retain(|chunk| {
+            let key = normalize_line(&chunk.text).to_lowercase();
+            seen.insert(key)
+        });
+        for (index, chunk) in rendered.iter_mut().enumerate() {
+            chunk.chunk_index = index;
         }
+
+        rendered
     }
 
     pub fn is_low_signal_line(&self, line: &str) -> bool {
@@ -221,6 +284,17 @@ impl TextChunker {
         }
 
         chunks
+    }
+}
+
+fn line_kind_label(kind: LineKind) -> &'static str {
+    match kind {
+        LineKind::Title => "title",
+        LineKind::Url => "url",
+        LineKind::Search => "search",
+        LineKind::Email => "email",
+        LineKind::Code => "code",
+        LineKind::Plain => "plain",
     }
 }
 

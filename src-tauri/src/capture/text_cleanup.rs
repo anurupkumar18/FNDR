@@ -156,6 +156,16 @@ fn looks_like_feed_fragment(line: &str) -> bool {
         || lower == "like"
 }
 
+fn looks_like_animation_fragment(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower == "loading"
+        || lower == "loading..."
+        || lower == "please wait"
+        || lower == "retry"
+        || lower == "refresh"
+        || lower == "updated just now"
+}
+
 fn normalize_inline(line: &str) -> String {
     line.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -254,6 +264,10 @@ fn should_drop_line(app_name: &str, line: &str) -> bool {
         return true;
     }
 
+    if looks_like_animation_fragment(line) {
+        return true;
+    }
+
     if !code_app && (looks_like_file_inventory(line) || looks_like_json_inventory(line)) {
         return true;
     }
@@ -296,7 +310,7 @@ fn is_useful_snippet_line(app_name: &str, line: &str) -> bool {
 /// Estimate noise score for ranking penalties (0 = clean, 1 = mostly noise).
 pub fn estimate_noise_score(app_name: &str, text: &str) -> f32 {
     let mut total = 0usize;
-    let mut noisy = 0usize;
+    let mut noisy_weight = 0.0_f32;
     for line in text.lines() {
         let line = normalize_inline(line.trim());
         if line.is_empty() {
@@ -304,7 +318,13 @@ pub fn estimate_noise_score(app_name: &str, text: &str) -> f32 {
         }
         total += 1;
         if should_drop_line(app_name, &line) || line.len() < MIN_LINE_LEN {
-            noisy += 1;
+            noisy_weight += 1.0;
+            continue;
+        }
+
+        let symbol = symbol_ratio(&line);
+        if symbol > 0.50 {
+            noisy_weight += ((symbol - 0.50) * 1.8).clamp(0.0, 1.0);
         }
     }
 
@@ -312,7 +332,7 @@ pub fn estimate_noise_score(app_name: &str, text: &str) -> f32 {
         return 1.0;
     }
 
-    noisy as f32 / total as f32
+    (noisy_weight / total as f32).clamp(0.0, 1.0)
 }
 
 /// Build a compact fallback snippet when model summarization is unavailable.
@@ -375,7 +395,7 @@ pub fn concise_fallback_snippet(app_name: &str, window_title: &str, text: &str) 
 /// Remove noisy lines; keep structure and duplicates handled upstream in OCR when possible.
 pub fn reduce_chrome_noise_for_app(app_name: &str, text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut prev = String::new();
+    let mut seen = HashSet::new();
 
     for line in text.lines() {
         let trimmed = normalize_inline(line.trim());
@@ -386,14 +406,14 @@ pub fn reduce_chrome_noise_for_app(app_name: &str, text: &str) -> String {
             tracing::trace!("Dropped likely chrome/noise line from capture text");
             continue;
         }
-        if trimmed == prev {
+        let dedup_key = snippet_dedup_key(&trimmed);
+        if !seen.insert(dedup_key) {
             continue;
         }
         if !out.is_empty() {
             out.push('\n');
         }
         out.push_str(&trimmed);
-        prev = trimmed;
     }
 
     out

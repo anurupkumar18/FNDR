@@ -33,12 +33,12 @@ impl ClipEmbedder {
         match RealClipEmbedder::new() {
             Ok(real) => {
                 tracing::info!("Native ort CLIP image embedder initialized");
-                Self { inner: Inner::Real(real) }
+                Self {
+                    inner: Inner::Real(real),
+                }
             }
             Err(e) => {
-                tracing::warn!(
-                    "CLIP ONNX model not available — using hash stub. Reason: {e}"
-                );
+                tracing::warn!("CLIP ONNX model not available — using hash stub. Reason: {e}");
                 Self { inner: Inner::Stub }
             }
         }
@@ -64,15 +64,22 @@ impl Default for ClipEmbedder {
 
 impl RealClipEmbedder {
     fn new() -> Result<Self, String> {
-        let model_path = resolve_clip_model()
-            .ok_or_else(|| "MobileCLIP ONNX model not found".to_string())?;
+        let model_path =
+            resolve_clip_model().ok_or_else(|| "MobileCLIP ONNX model not found".to_string())?;
 
         let session = Session::builder()
             .map_err(|e| format!("ort SessionBuilder error: {e}"))?
             .commit_from_file(&model_path)
-            .map_err(|e| format!("Failed to load CLIP model from {}: {e}", model_path.display()))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to load CLIP model from {}: {e}",
+                    model_path.display()
+                )
+            })?;
 
-        Ok(Self { session: Mutex::new(session) })
+        Ok(Self {
+            session: Mutex::new(session),
+        })
     }
 
     fn embed_image(&self, image_bytes: &[u8]) -> Result<Vec<f32>, String> {
@@ -91,7 +98,8 @@ impl RealClipEmbedder {
             .to_rgb8();
 
         // Build NCHW tensor [1, 3, 224, 224] with CLIP normalization.
-        let mut tensor = vec![0.0f32; 1 * 3 * (CLIP_IMAGE_SIZE as usize) * (CLIP_IMAGE_SIZE as usize)];
+        let mut tensor =
+            vec![0.0f32; 1 * 3 * (CLIP_IMAGE_SIZE as usize) * (CLIP_IMAGE_SIZE as usize)];
         let hw = (CLIP_IMAGE_SIZE * CLIP_IMAGE_SIZE) as usize;
 
         for (pixel_idx, pixel) in img.pixels().enumerate() {

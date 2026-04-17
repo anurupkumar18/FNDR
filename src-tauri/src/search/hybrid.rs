@@ -1,7 +1,7 @@
 //! Hybrid search combining semantic and keyword retrieval with query understanding.
 
 use crate::capture::text_cleanup;
-use crate::embed::Embedder;
+use crate::embed::{Embedder, EmbeddingBackend};
 use crate::store::{SearchResult, Store};
 use std::collections::{HashMap, HashSet};
 
@@ -11,10 +11,10 @@ const RRF_K: f32 = 60.0;
 const CANDIDATE_MULTIPLIER: usize = 6;
 const MAX_KEYWORD_VARIANTS: usize = 4;
 const MAX_RERANK_POOL: usize = 28;
-// Text ANN + snippet ANN together = 0.80; lexical = 0.20.
-const SEMANTIC_WEIGHT: f32 = 0.50;
+// Text ANN + snippet ANN together = 0.70; lexical = 0.30.
+const SEMANTIC_WEIGHT: f32 = 0.40;
 const SNIPPET_WEIGHT: f32 = 0.30;
-const LEXICAL_WEIGHT: f32 = 0.20;
+const LEXICAL_WEIGHT: f32 = 0.30;
 /// Ebbinghaus decay floor — very old unaccessed records still surface if highly relevant.
 const DECAY_FLOOR: f32 = 0.15;
 const ABSOLUTE_RELEVANCE_FLOOR: f32 = 0.31;
@@ -36,6 +36,7 @@ struct QueryProfile {
     raw: String,
     normalized: String,
     intent: QueryIntent,
+    wants_recency: bool,
     primary_terms: Vec<String>,
     expanded_terms: Vec<String>,
     number_terms: HashSet<String>,
@@ -62,6 +63,7 @@ impl QueryProfile {
                 raw: query.to_string(),
                 normalized,
                 intent: QueryIntent::General,
+                wants_recency: false,
                 primary_terms: Vec::new(),
                 expanded_terms: Vec::new(),
                 number_terms: HashSet::new(),
@@ -77,6 +79,7 @@ impl QueryProfile {
         }
 
         let intent = detect_intent(&normalized);
+        let wants_recency = query_wants_recency(&normalized);
 
         let mut primary_terms = tokens
             .iter()
@@ -100,10 +103,6 @@ impl QueryProfile {
                 push_unique(&mut expanded_terms, &stem);
             }
 
-            for alias in alias_terms(token) {
-                push_unique(&mut expanded_terms, &alias);
-            }
-
             if token.len() > 4 && token.ends_with('s') {
                 push_unique(&mut expanded_terms, &token[..token.len() - 1]);
             }
@@ -125,6 +124,7 @@ impl QueryProfile {
             raw: query.to_string(),
             normalized,
             intent,
+            wants_recency,
             primary_terms,
             expanded_terms,
             number_terms,
@@ -204,6 +204,10 @@ impl QueryProfile {
 
         parts.join(" ").trim().to_string()
     }
+
+    fn is_short_intent_query(&self) -> bool {
+        self.primary_terms.len() <= 2 && self.intent == QueryIntent::General
+    }
 }
 
 impl HybridSearcher {
@@ -222,34 +226,61 @@ impl HybridSearcher {
         }
 
         let branch_limit = limit.max(1) * CANDIDATE_MULTIPLIER;
+        let semantic_enabled = matches!(embedder.backend(), EmbeddingBackend::Real);
+        let query_embedding = if semantic_enabled {
+            let embedding_query = profile.embedding_query();
+            let vectors = embedder.embed_batch(&[embedding_query])?;
+            Some(vectors.into_iter().next().unwrap_or_default())
+        } else {
+            None
+        };
 
-        let embedding_query = profile.embedding_query();
-        let query_embedding = embedder.embed_batch(&[embedding_query])?;
-        let query_embedding = query_embedding.into_iter().next().unwrap_or_default();
-
-        let semantic_results = store
-            .vector_search(&query_embedding, branch_limit, time_filter, app_filter)
-            .await?;
-        let snippet_results = store
-            .snippet_vector_search(&query_embedding, branch_limit, time_filter, app_filter)
-            .await
-            .unwrap_or_default();
-
-        let mut keyword_results = Vec::new();
-        for (variant_idx, variant) in profile.keyword_variants().iter().enumerate() {
-            let mut hits = store
-                .keyword_search(variant, branch_limit, time_filter, app_filter)
-                .await?;
-
-            // Earlier variants are stronger rewrites; keep a light priority decay.
-            let decay = (1.0 - (variant_idx as f32 * 0.08)).max(0.72);
-            for hit in &mut hits {
-                hit.score *= decay;
+        let keyword_variants = profile.keyword_variants();
+        let semantic_fut = async {
+            if let Some(query_embedding) = query_embedding.as_ref() {
+                store
+                    .vector_search(query_embedding, branch_limit, time_filter, app_filter)
+                    .await
+                    .map_err(|err| err.to_string())
+            } else {
+                Ok::<Vec<SearchResult>, String>(Vec::new())
             }
+        };
+        let snippet_fut = async {
+            if let Some(query_embedding) = query_embedding.as_ref() {
+                store
+                    .snippet_vector_search(query_embedding, branch_limit, time_filter, app_filter)
+                    .await
+                    .map_err(|err| err.to_string())
+            } else {
+                Ok::<Vec<SearchResult>, String>(Vec::new())
+            }
+        };
+        let keyword_fut = async {
+            let mut keyword_results = Vec::new();
+            for (variant_idx, variant) in keyword_variants.iter().enumerate() {
+                let mut hits = store
+                    .keyword_search(variant, branch_limit, time_filter, app_filter)
+                    .await
+                    .map_err(|err| err.to_string())?;
 
-            keyword_results.extend(hits);
-        }
-        let keyword_results = dedup_by_best_score(keyword_results);
+                // Earlier variants are stronger rewrites; keep a light priority decay.
+                let decay = (1.0 - (variant_idx as f32 * 0.08)).max(0.72);
+                for hit in &mut hits {
+                    hit.score *= decay;
+                }
+
+                keyword_results.extend(hits);
+            }
+            Ok::<Vec<SearchResult>, String>(dedup_by_best_score(keyword_results))
+        };
+
+        let (semantic_results, snippet_results, keyword_results) =
+            tokio::join!(semantic_fut, snippet_fut, keyword_fut);
+
+        let semantic_results = semantic_results.map_err(boxed_error)?;
+        let snippet_results = snippet_results.unwrap_or_default();
+        let keyword_results = keyword_results.map_err(boxed_error)?;
 
         let fused = Self::hybrid_fusion(
             &profile,
@@ -442,6 +473,8 @@ impl HybridSearcher {
             }
         }
 
+        let has_semantic_signals = !semantic.is_empty() || !snippet.is_empty();
+
         let semantic_values = signals
             .values()
             .map(|s| s.semantic_score.unwrap_or(0.0))
@@ -468,9 +501,11 @@ impl HybridSearcher {
             let snippet_norm = normalize_range(signal.snippet_score.unwrap_or(0.0), snippet_range);
             let lexical_norm = normalize_range(signal.lexical_score, lexical_range);
 
-            let mut score = semantic_norm * SEMANTIC_WEIGHT
-                + snippet_norm * SNIPPET_WEIGHT
-                + lexical_norm * LEXICAL_WEIGHT;
+            let (semantic_weight, snippet_weight, lexical_weight) =
+                fusion_weights(profile, has_semantic_signals);
+            let mut score = semantic_norm * semantic_weight
+                + snippet_norm * snippet_weight
+                + lexical_norm * lexical_weight;
             score += signal.coverage * 0.12;
             score += signal.phrase_score * 0.08;
 
@@ -528,8 +563,21 @@ impl HybridSearcher {
             let key = session_key(candidate);
             *session_counts.entry(key).or_insert(0) += 1;
         }
+        let max_timestamp = candidates
+            .iter()
+            .map(|candidate| candidate.timestamp)
+            .max()
+            .unwrap_or(0);
+        let min_timestamp = candidates
+            .iter()
+            .map(|candidate| candidate.timestamp)
+            .min()
+            .unwrap_or(max_timestamp);
+        let timestamp_span = (max_timestamp - min_timestamp).max(1) as f32;
 
         let now = chrono::Utc::now().timestamp_millis();
+        let anchor_terms = query_anchor_terms(profile);
+        let require_anchor = should_require_anchor(profile, &anchor_terms);
 
         for candidate in &mut candidates {
             let mut score = candidate.score;
@@ -546,7 +594,17 @@ impl HybridSearcher {
             // Time decay (gentle).
             let age_hours =
                 ((now - candidate.timestamp).max(0) as f32 / 3_600_000.0).min(24.0 * 30.0);
-            score *= 1.0 / (1.0 + age_hours * 0.0012);
+            let age_decay = if profile.wants_recency {
+                1.0 / (1.0 + age_hours * 0.0048)
+            } else {
+                1.0 / (1.0 + age_hours * 0.0012)
+            };
+            score *= age_decay;
+            if profile.wants_recency {
+                let relative_freshness =
+                    ((candidate.timestamp - min_timestamp).max(0) as f32) / timestamp_span;
+                score *= 1.0 + relative_freshness * 0.28;
+            }
 
             // Penalties.
             if is_generic_title(&candidate.window_title) {
@@ -582,6 +640,24 @@ impl HybridSearcher {
                 score *= 0.68;
             }
 
+            if require_anchor && !has_anchor_term(profile, &anchor_terms, &merged_norm) {
+                score *= 0.22;
+            }
+
+            let source_alignment = query_source_alignment(
+                profile,
+                &title_norm,
+                &candidate.app_name,
+                candidate.url.as_deref(),
+                &text_norm,
+                &snippet_norm,
+            );
+            score *= 0.72 + source_alignment * 0.48;
+
+            if profile.primary_terms.len() == 1 && source_alignment < 0.30 {
+                score *= 0.68;
+            }
+
             let entity_overlap = named_entity_overlap(&profile.raw, &text);
             if entity_overlap > 0 {
                 score *= 1.0 + (entity_overlap as f32 * 0.06).min(0.18);
@@ -598,6 +674,12 @@ impl HybridSearcher {
                 }
                 if !domain.is_empty() && profile.primary_terms.iter().any(|t| domain.contains(t)) {
                     score *= 1.08;
+                }
+            }
+            if !candidate.app_name.trim().is_empty() {
+                let app_norm = normalize_text(&candidate.app_name);
+                if !app_norm.is_empty() && query_lower.contains(&app_norm) {
+                    score *= 1.16;
                 }
             }
 
@@ -693,17 +775,22 @@ fn apply_relevance_gate(
         0.28
     } else if profile.primary_terms.len() >= 2 {
         0.20
+    } else if profile.primary_terms.len() == 1 {
+        0.22
     } else if profile.intent == QueryIntent::Definition && !profile.primary_terms.is_empty() {
         0.18
     } else {
         0.0
     };
+    let anchor_terms = query_anchor_terms(profile);
+    let require_anchor = should_require_anchor(profile, &anchor_terms);
 
     let mut filtered = Vec::new();
     for candidate in candidates {
         let merged = merged_candidate_text(&candidate);
         let coverage = term_coverage(profile, &merged);
         let has_entity = mentions_query_entities(profile, &merged);
+        let has_anchor = has_anchor_term(profile, &anchor_terms, &merged);
 
         if candidate.score < effective_absolute_floor {
             continue;
@@ -714,6 +801,10 @@ fn apply_relevance_gate(
         }
 
         if !profile.primary_terms.is_empty() && coverage < min_coverage && !has_entity {
+            continue;
+        }
+
+        if require_anchor && !has_anchor {
             continue;
         }
 
@@ -905,15 +996,6 @@ fn stem_token(token: &str) -> String {
     lower
 }
 
-fn alias_terms(token: &str) -> Vec<String> {
-    match token {
-        "canva" => vec!["canvas".to_string(), "design".to_string()],
-        "canvas" => vec!["canva".to_string(), "design".to_string()],
-        "cricket" => vec!["ipl".to_string(), "match".to_string()],
-        _ => Vec::new(),
-    }
-}
-
 fn is_stop_word(token: &str) -> bool {
     matches!(
         token,
@@ -959,11 +1041,26 @@ fn detect_intent(query: &str) -> QueryIntent {
         QueryIntent::Definition
     } else if query.starts_with("how to ") || query.starts_with("how do ") {
         QueryIntent::HowTo
-    } else if query.starts_with("where ") || query.starts_with("when ") {
+    } else if query.starts_with("where ")
+        || query.starts_with("when ")
+        || query.contains(" before ")
+        || query.contains(" after ")
+    {
         QueryIntent::Lookup
     } else {
         QueryIntent::General
     }
+}
+
+fn query_wants_recency(query: &str) -> bool {
+    query.contains("last")
+        || query.contains("latest")
+        || query.contains("recent")
+        || query.contains("today")
+        || query.contains("yesterday")
+        || query.contains("just now")
+        || query.contains("before")
+        || query.contains("after")
 }
 
 fn push_unique(target: &mut Vec<String>, value: &str) {
@@ -1043,19 +1140,23 @@ fn term_coverage(profile: &QueryProfile, text: &str) -> f32 {
     let mut matched = 0usize;
 
     for term in &profile.primary_terms {
-        let stem = stem_token(term);
-        if token_set.contains(term)
-            || (!stem.is_empty() && token_set.contains(&stem))
-            || profile
-                .number_terms
-                .iter()
-                .any(|number| !number.is_empty() && token_set.contains(number))
+        if token_set_matches_term(&token_set, term) {
+            matched += 1;
+        }
+    }
+    let mut denominator = profile.primary_terms.len().max(1);
+    if !profile.number_terms.is_empty() {
+        denominator += 1;
+        if profile
+            .number_terms
+            .iter()
+            .any(|number| !number.is_empty() && token_set.contains(number))
         {
             matched += 1;
         }
     }
 
-    matched as f32 / profile.primary_terms.len().max(1) as f32
+    matched as f32 / denominator as f32
 }
 
 fn phrase_alignment(profile: &QueryProfile, text: &str) -> f32 {
@@ -1112,13 +1213,13 @@ fn sentence_level_relevance(profile: &QueryProfile, text: &str) -> f32 {
 }
 
 fn mentions_query_entities(profile: &QueryProfile, text: &str) -> bool {
-    let normalized = normalize_text(text);
+    let token_set = token_set_with_stems(text);
 
     if !profile.number_terms.is_empty()
         && profile
             .number_terms
             .iter()
-            .any(|number| normalized.contains(number))
+            .any(|number| token_set.contains(number))
     {
         return true;
     }
@@ -1126,7 +1227,140 @@ fn mentions_query_entities(profile: &QueryProfile, text: &str) -> bool {
     profile
         .primary_terms
         .iter()
-        .any(|term| normalized.contains(term) || normalized.contains(&stem_token(term)))
+        .any(|term| token_set_matches_term(&token_set, term))
+}
+
+fn fusion_weights(profile: &QueryProfile, has_semantic_signals: bool) -> (f32, f32, f32) {
+    if !has_semantic_signals {
+        return (0.0, 0.0, 1.0);
+    }
+
+    if profile.is_short_intent_query() {
+        // For short noun-like queries, lexical evidence should dominate.
+        (0.34, 0.22, 0.44)
+    } else {
+        (SEMANTIC_WEIGHT, SNIPPET_WEIGHT, LEXICAL_WEIGHT)
+    }
+}
+
+fn token_set_matches_term(token_set: &HashSet<String>, term: &str) -> bool {
+    let stem = stem_token(term);
+    token_set.contains(term) || (!stem.is_empty() && token_set.contains(&stem))
+}
+
+fn is_weak_query_term(term: &str) -> bool {
+    matches!(
+        term,
+        "last"
+            | "time"
+            | "times"
+            | "first"
+            | "recent"
+            | "latest"
+            | "watch"
+            | "watched"
+            | "watching"
+            | "find"
+            | "found"
+            | "show"
+            | "showed"
+            | "showing"
+            | "look"
+            | "looked"
+            | "open"
+            | "opened"
+    )
+}
+
+fn query_anchor_terms(profile: &QueryProfile) -> Vec<String> {
+    let mut anchors = profile
+        .primary_terms
+        .iter()
+        .filter(|term| term.len() >= 4 && !is_weak_query_term(term))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if anchors.is_empty() {
+        anchors = profile.primary_terms.iter().take(1).cloned().collect();
+    }
+
+    anchors
+}
+
+fn should_require_anchor(profile: &QueryProfile, anchors: &[String]) -> bool {
+    if anchors.is_empty() {
+        return false;
+    }
+    if profile.is_short_intent_query() {
+        return true;
+    }
+
+    anchors.len() <= (profile.primary_terms.len().max(1) / 2).max(1)
+}
+
+fn has_anchor_term(profile: &QueryProfile, anchors: &[String], text: &str) -> bool {
+    let token_set = token_set_with_stems(text);
+
+    if profile
+        .number_terms
+        .iter()
+        .any(|number| !number.is_empty() && token_set.contains(number))
+    {
+        return true;
+    }
+
+    for anchor in anchors {
+        if token_set_matches_term(&token_set, anchor) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn query_source_alignment(
+    profile: &QueryProfile,
+    title_norm: &str,
+    app_name: &str,
+    url: Option<&str>,
+    text_norm: &str,
+    snippet_norm: &str,
+) -> f32 {
+    let candidates = profile
+        .primary_terms
+        .iter()
+        .filter(|term| term.len() >= 3 && !is_weak_query_term(term))
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return 1.0;
+    }
+
+    let title_tokens = token_set_with_stems(title_norm);
+    let app_tokens = token_set_with_stems(app_name);
+    let source_tokens = token_set_with_stems(&format!("{text_norm} {snippet_norm}"));
+    let domain = url.map(extract_domain).unwrap_or_default();
+    let domain_tokens = token_set_with_stems(&domain);
+    let url_tokens = token_set_with_stems(url.unwrap_or_default());
+
+    let denom = candidates.len().max(1) as f32;
+    let mut total = 0.0f32;
+    for term in candidates {
+        if token_set_matches_term(&app_tokens, term) || token_set_matches_term(&domain_tokens, term)
+        {
+            total += 1.0;
+            continue;
+        }
+        if token_set_matches_term(&title_tokens, term) || token_set_matches_term(&url_tokens, term)
+        {
+            total += 0.85;
+            continue;
+        }
+        if token_set_matches_term(&source_tokens, term) {
+            total += 0.45;
+        }
+    }
+
+    (total / denom).clamp(0.0, 1.0)
 }
 
 fn value_range(values: &[f32]) -> (f32, f32) {
@@ -1193,6 +1427,10 @@ fn is_code_query(query: &str) -> bool {
         || lower.contains("terminal")
 }
 
+fn boxed_error(message: String) -> Box<dyn std::error::Error> {
+    Box::new(std::io::Error::other(message))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1229,10 +1467,14 @@ mod tests {
     }
 
     #[test]
-    fn query_profile_adds_canva_canvas_aliases() {
-        let profile = QueryProfile::from_query("canvas design");
-        assert!(profile.expanded_terms.iter().any(|term| term == "canva"));
-        assert!(profile.expanded_terms.iter().any(|term| term == "canvas"));
+    fn query_profile_expands_morphology_without_domain_aliases() {
+        let profile = QueryProfile::from_query("playlist recap");
+        assert!(profile.expanded_terms.iter().any(|term| term == "playlist"));
+        assert!(profile
+            .expanded_terms
+            .iter()
+            .any(|term| term == "playlists"));
+        assert!(!profile.expanded_terms.iter().any(|term| term == "spotify"));
     }
 
     #[test]
@@ -1294,5 +1536,207 @@ mod tests {
 
         let ranked = HybridSearcher::rerank("what is 4000", vec![other, relevant], 10);
         assert_eq!(ranked.first().map(|r| r.id.as_str()), Some("1"));
+    }
+
+    #[test]
+    fn single_term_query_requires_anchor_match() {
+        let irrelevant = sr(
+            "1",
+            "Codex Notes",
+            "User ran embedding scripts and explored files in Codex app",
+            0.92,
+        );
+        let relevant = sr(
+            "2",
+            "Spotify",
+            "Played tracks and explored playlists on Spotify",
+            0.61,
+        );
+
+        let ranked = HybridSearcher::rerank("spotify", vec![irrelevant, relevant], 10);
+        assert_eq!(ranked.first().map(|r| r.id.as_str()), Some("2"));
+        assert!(ranked
+            .iter()
+            .all(|r| merged_candidate_text(r).to_lowercase().contains("spotify")));
+    }
+
+    #[test]
+    fn temporal_query_still_requires_topic_anchor() {
+        let irrelevant = sr(
+            "1",
+            "Battery",
+            "User monitored app energy impact over last 12 hours",
+            0.9,
+        );
+        let relevant = sr(
+            "2",
+            "YouTube Cricket",
+            "Watched IPL cricket highlights and match recap",
+            0.57,
+        );
+
+        let ranked = HybridSearcher::rerank(
+            "the last time i watched cricket",
+            vec![irrelevant, relevant],
+            10,
+        );
+        assert_eq!(ranked.first().map(|r| r.id.as_str()), Some("2"));
+    }
+
+    #[test]
+    fn rerank_handles_diverse_query_styles() {
+        let cases = vec![
+            (
+                "that startup evaluation page with full points",
+                sr(
+                    "a1",
+                    "Course assignment",
+                    "Startup evaluation rubric with full points and scoring criteria",
+                    0.56,
+                ),
+                sr(
+                    "a2",
+                    "System stats",
+                    "CPU pressure and battery usage over last 12 hours",
+                    0.87,
+                ),
+                "a1",
+            ),
+            (
+                "\"graphs should be miniaturized\"",
+                sr(
+                    "b1",
+                    "Design notes",
+                    "Graphs should be miniaturized before export to preserve readability",
+                    0.52,
+                ),
+                sr(
+                    "b2",
+                    "General notes",
+                    "Explored visual options and export behavior",
+                    0.82,
+                ),
+                "b1",
+            ),
+            (
+                "chrome weather in herriman",
+                sr(
+                    "c1",
+                    "Weather in Herriman",
+                    "Viewed weather forecast in Chrome for Herriman this weekend",
+                    0.58,
+                ),
+                sr(
+                    "c2",
+                    "Editor window",
+                    "Refactored rust search pipeline in terminal and editor",
+                    0.78,
+                ),
+                "c1",
+            ),
+            (
+                "what was i doing before the pitch deck edits",
+                sr(
+                    "d1",
+                    "Pitch deck",
+                    "Compared two versions of the pitch deck and revised slide order",
+                    0.55,
+                ),
+                sr(
+                    "d2",
+                    "Music app",
+                    "Played tracks and changed volume settings",
+                    0.74,
+                ),
+                "d1",
+            ),
+        ];
+
+        for (query, relevant, distractor, expected) in cases {
+            let ranked = HybridSearcher::rerank(query, vec![distractor, relevant], 10);
+            assert_eq!(
+                ranked.first().map(|r| r.id.as_str()),
+                Some(expected),
+                "query: {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn recency_queries_prefer_newer_hits_when_relevance_is_close() {
+        let mut older = sr(
+            "1",
+            "Budget model",
+            "Updated budget model and revised assumptions",
+            0.58,
+        );
+        older.timestamp = 1_000_000;
+
+        let mut newer = sr(
+            "2",
+            "Budget model",
+            "Updated budget model and revised assumptions",
+            0.55,
+        );
+        newer.timestamp = 2_000_000;
+
+        let ranked = HybridSearcher::rerank("latest budget model updates", vec![older, newer], 10);
+        assert_eq!(ranked.first().map(|r| r.id.as_str()), Some("2"));
+    }
+
+    #[test]
+    fn app_hint_in_query_boosts_matching_source() {
+        let chrome_hit = sr(
+            "1",
+            "Weather",
+            "Viewed weather forecast and radar details",
+            0.54,
+        );
+
+        let mut vscode_hit = sr(
+            "2",
+            "Weather",
+            "Viewed weather forecast and radar details",
+            0.59,
+        );
+        vscode_hit.app_name = "VS Code".to_string();
+        vscode_hit.session_key = "vscode:test".to_string();
+
+        let ranked =
+            HybridSearcher::rerank("chrome weather forecast", vec![vscode_hit, chrome_hit], 10);
+        assert_eq!(ranked.first().map(|r| r.app_name.as_str()), Some("Chrome"));
+    }
+
+    #[test]
+    fn single_term_prefers_source_alignment_over_body_mention() {
+        let mut body_mention = sr(
+            "1",
+            "Codex workspace",
+            "User searched for spotify and updated memory pipeline",
+            0.88,
+        );
+        body_mention.app_name = "Codex".to_string();
+        body_mention.session_key = "codex:test".to_string();
+
+        let mut source_match = sr("2", "Spotify", "Played songs and explored playlists", 0.62);
+        source_match.app_name = "Spotify".to_string();
+        source_match.session_key = "spotify:test".to_string();
+        source_match.url = Some("https://open.spotify.com/track/123".to_string());
+
+        let ranked = HybridSearcher::rerank("spotify", vec![body_mention, source_match], 10);
+        assert_eq!(ranked.first().map(|r| r.id.as_str()), Some("2"));
+    }
+
+    #[test]
+    fn temporal_query_with_no_topic_anchor_returns_empty() {
+        let irrelevant = sr(
+            "1",
+            "Codex notes",
+            "User monitored app energy impact over last 12 hours and updated files",
+            0.92,
+        );
+        let ranked =
+            HybridSearcher::rerank("the last time i watched cricket", vec![irrelevant], 10);
+        assert!(ranked.is_empty());
     }
 }

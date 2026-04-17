@@ -8,6 +8,7 @@ import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
 import { MemoryCardsPanel } from "./components/MemoryCardsPanel";
 import { StatsPanel } from "./components/StatsPanel";
 import { DailySummaryPanel } from "./components/DailySummaryPanel";
+import { PipelineInspectorPanel } from "./components/PipelineInspectorPanel";
 import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
 
@@ -125,6 +126,7 @@ function App() {
     const [showStatsPanel, setShowStatsPanel] = useState(false);
     const [showTodoPanel, setShowTodoPanel] = useState(false);
     const [showDailySummaryPanel, setShowDailySummaryPanel] = useState(false);
+    const [showPipelineInspectorPanel, setShowPipelineInspectorPanel] = useState(false);
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
     const [biometricRequired, setBiometricRequired] = useState<boolean | null>(null);
     const [biometricUnlocked, setBiometricUnlocked] = useState(false);
@@ -428,6 +430,12 @@ function App() {
                         >
                             Daily Summary
                         </button>
+                        <button
+                            className={`ui-action-btn pipeline-toggle-btn ${showPipelineInspectorPanel ? "active" : ""}`}
+                            onClick={() => setShowPipelineInspectorPanel((open) => !open)}
+                        >
+                            Pipeline Inspector
+                        </button>
                     </div>
                 </aside>
             )}
@@ -505,6 +513,13 @@ function App() {
                     <DailySummaryPanel
                         isVisible={showDailySummaryPanel}
                         onClose={() => setShowDailySummaryPanel(false)}
+                    />
+                    <PipelineInspectorPanel
+                        isVisible={showPipelineInspectorPanel}
+                        onClose={() => setShowPipelineInspectorPanel(false)}
+                        currentQuery={query}
+                        timeFilter={timeFilter}
+                        appFilter={appFilter}
                     />
                 </>
             )}

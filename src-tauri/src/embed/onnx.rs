@@ -4,6 +4,7 @@ use super::TextChunker;
 use ndarray::Array2;
 use ort::session::Session;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -14,6 +15,8 @@ pub const EMBEDDING_DIM: usize = 384;
 const MAX_SEQ_LEN: usize = 128;
 const MODEL_FILENAME: &str = "all-MiniLM-L6-v2.onnx";
 const TOKENIZER_FILENAME: &str = "tokenizer.json";
+const EMBEDDING_CACHE_CAPACITY: usize = 1024;
+const MAX_BACKEND_BATCH: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingBackend {
@@ -76,11 +79,48 @@ pub struct Embedder {
     chunker: TextChunker,
     backend: Backend,
     degraded_to_mock: AtomicBool,
+    embedding_cache: Mutex<EmbeddingCache>,
 }
 
 enum Backend {
     Real(RealEmbedder),
     Mock(MockEmbedder),
+}
+
+#[derive(Debug)]
+struct EmbeddingCache {
+    capacity: usize,
+    order: VecDeque<String>,
+    values: HashMap<String, Vec<f32>>,
+}
+
+impl EmbeddingCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::with_capacity(capacity),
+            values: HashMap::with_capacity(capacity),
+        }
+    }
+
+    fn get(&self, text: &str) -> Option<Vec<f32>> {
+        self.values.get(text).cloned()
+    }
+
+    fn insert(&mut self, text: String, embedding: Vec<f32>) {
+        if self.values.contains_key(&text) {
+            return;
+        }
+
+        if self.order.len() >= self.capacity {
+            if let Some(evicted) = self.order.pop_front() {
+                self.values.remove(&evicted);
+            }
+        }
+
+        self.order.push_back(text.clone());
+        self.values.insert(text, embedding);
+    }
 }
 
 impl Embedder {
@@ -94,6 +134,7 @@ impl Embedder {
                     chunker,
                     backend: Backend::Real(real),
                     degraded_to_mock: AtomicBool::new(false),
+                    embedding_cache: Mutex::new(EmbeddingCache::new(EMBEDDING_CACHE_CAPACITY)),
                 })
             }
             Err(err) => {
@@ -109,6 +150,7 @@ impl Embedder {
                         chunker,
                         backend: Backend::Mock(MockEmbedder::default()),
                         degraded_to_mock: AtomicBool::new(true),
+                        embedding_cache: Mutex::new(EmbeddingCache::new(EMBEDDING_CACHE_CAPACITY)),
                     })
                 } else {
                     set_runtime_state(
@@ -164,7 +206,7 @@ impl Embedder {
             ranges.push((start, end));
         }
 
-        let chunk_embeddings = self.backend_embed_batch(&flattened_chunks)?;
+        let chunk_embeddings = self.embed_chunks_cached(&flattened_chunks)?;
         if chunk_embeddings.len() != flattened_chunks.len() {
             return Err(format!(
                 "Embedding backend returned {} vectors for {} chunks",
@@ -180,6 +222,94 @@ impl Embedder {
         }
 
         Ok(merged)
+    }
+
+    fn embed_chunks_cached(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut results: Vec<Option<Vec<f32>>> = vec![None; texts.len()];
+        let mut missing_unique = Vec::new();
+        let mut missing_by_text: HashMap<String, usize> = HashMap::new();
+        let mut missing_positions: Vec<(usize, usize)> = Vec::new();
+
+        if let Ok(cache) = self.embedding_cache.lock() {
+            for (index, text) in texts.iter().enumerate() {
+                if is_embedding_low_signal(text) {
+                    results[index] = Some(vec![0.0; EMBEDDING_DIM]);
+                    continue;
+                }
+
+                if let Some(hit) = cache.get(text) {
+                    results[index] = Some(hit);
+                    continue;
+                }
+
+                if let Some(unique_idx) = missing_by_text.get(text).copied() {
+                    missing_positions.push((index, unique_idx));
+                    continue;
+                }
+
+                let unique_idx = missing_unique.len();
+                missing_by_text.insert(text.clone(), unique_idx);
+                missing_unique.push(text.clone());
+                missing_positions.push((index, unique_idx));
+            }
+        } else {
+            // Cache lock poisoned: fall back to direct dedup without cache.
+            for (index, text) in texts.iter().enumerate() {
+                if is_embedding_low_signal(text) {
+                    results[index] = Some(vec![0.0; EMBEDDING_DIM]);
+                    continue;
+                }
+                if let Some(unique_idx) = missing_by_text.get(text).copied() {
+                    missing_positions.push((index, unique_idx));
+                    continue;
+                }
+                let unique_idx = missing_unique.len();
+                missing_by_text.insert(text.clone(), unique_idx);
+                missing_unique.push(text.clone());
+                missing_positions.push((index, unique_idx));
+            }
+        }
+
+        if !missing_unique.is_empty() {
+            let mut computed = Vec::with_capacity(missing_unique.len());
+            for chunk in missing_unique.chunks(MAX_BACKEND_BATCH) {
+                let batch = chunk.to_vec();
+                let vectors = self.backend_embed_batch(&batch)?;
+                computed.extend(vectors);
+            }
+
+            if computed.len() != missing_unique.len() {
+                return Err(format!(
+                    "Embedding backend returned {} vectors for {} cache misses",
+                    computed.len(),
+                    missing_unique.len()
+                ));
+            }
+
+            for (position, unique_idx) in &missing_positions {
+                results[*position] = Some(
+                    computed
+                        .get(*unique_idx)
+                        .cloned()
+                        .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]),
+                );
+            }
+
+            if let Ok(mut cache) = self.embedding_cache.lock() {
+                for (text, embedding) in missing_unique.into_iter().zip(computed.into_iter()) {
+                    cache.insert(text, embedding);
+                }
+            }
+        }
+
+        Ok(results
+            .into_iter()
+            .map(|value| value.unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]))
+            .collect())
     }
 
     fn backend_embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
@@ -215,6 +345,15 @@ impl Embedder {
             Backend::Mock(mock) => Ok(mock.embed_batch(texts)),
         }
     }
+}
+
+fn is_embedding_low_signal(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let alnum = trimmed.chars().filter(|ch| ch.is_alphanumeric()).count();
+    alnum < 3
 }
 
 impl Default for Embedder {

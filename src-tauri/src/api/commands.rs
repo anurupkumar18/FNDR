@@ -4,7 +4,7 @@ use crate::capture::{
     continuity_anchor_for_memory, eligible_for_story_merge, merge_memory_records_with_policy,
     passes_merge_threshold, score_memory_candidate,
 };
-use crate::embed::{embedding_runtime_status, Embedder};
+use crate::embed::{embedding_runtime_status, Embedder, EmbeddingBackend};
 use crate::privacy::Blocklist;
 use crate::store::MemoryRecord;
 
@@ -386,37 +386,47 @@ pub async fn search_memory_cards(
     };
 
     tracing::info!("search_memory_cards:embed:start");
-    let maybe_query_embedding = match shared_embedder() {
-        Ok(embedder) => {
-            let query_text = query.clone();
-            match timeout(
-                EMBED_TIMEOUT,
-                tokio::task::spawn_blocking(move || embedder.embed_batch(&[query_text])),
-            )
-            .await
-            {
-                Ok(Ok(Ok(vectors))) => vectors.into_iter().next(),
-                Ok(Ok(Err(err))) => {
-                    tracing::warn!("search_memory_cards:embed:failed err={}", err);
-                    None
-                }
-                Ok(Err(err)) => {
-                    tracing::warn!("search_memory_cards:embed:join_failed err={}", err);
-                    None
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        timeout_ms = EMBED_TIMEOUT.as_millis(),
-                        "search_memory_cards:embed:timeout"
-                    );
-                    None
+    let embedder = shared_embedder().ok();
+    let semantic_enabled = embedder
+        .as_ref()
+        .map(|value| matches!(value.backend(), EmbeddingBackend::Real))
+        .unwrap_or(false);
+    let maybe_query_embedding = if semantic_enabled {
+        match embedder {
+            Some(embedder) => {
+                let query_text = query.clone();
+                match timeout(
+                    EMBED_TIMEOUT,
+                    tokio::task::spawn_blocking(move || embedder.embed_batch(&[query_text])),
+                )
+                .await
+                {
+                    Ok(Ok(Ok(vectors))) => vectors.into_iter().next(),
+                    Ok(Ok(Err(err))) => {
+                        tracing::warn!("search_memory_cards:embed:failed err={}", err);
+                        None
+                    }
+                    Ok(Err(err)) => {
+                        tracing::warn!("search_memory_cards:embed:join_failed err={}", err);
+                        None
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            timeout_ms = EMBED_TIMEOUT.as_millis(),
+                            "search_memory_cards:embed:timeout"
+                        );
+                        None
+                    }
                 }
             }
+            None => {
+                tracing::warn!("search_memory_cards:embed:init_failed");
+                None
+            }
         }
-        Err(err) => {
-            tracing::warn!("search_memory_cards:embed:init_failed err={}", err);
-            None
-        }
+    } else {
+        tracing::info!("search_memory_cards:embed:skipped_degraded_backend");
+        None
     };
     tracing::info!(
         has_embedding = maybe_query_embedding.is_some(),

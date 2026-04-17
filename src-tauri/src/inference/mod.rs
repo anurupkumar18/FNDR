@@ -686,7 +686,11 @@ TRANSCRIPT:\n{}",
         draft.reminders = clean_vec(draft.reminders);
         draft.followups = clean_vec(draft.followups);
 
-        if draft.summary.is_empty() && draft.todos.is_empty() && draft.reminders.is_empty() && draft.followups.is_empty() {
+        if draft.summary.is_empty()
+            && draft.todos.is_empty()
+            && draft.reminders.is_empty()
+            && draft.followups.is_empty()
+        {
             return None;
         }
 
@@ -695,11 +699,7 @@ TRANSCRIPT:\n{}",
 
     /// Generate a smart daily briefing paragraph from today's memory cards.
     /// `mode` is either "morning" (actionable: what to work on) or "evening" (recap + tomorrow).
-    pub async fn generate_daily_briefing(
-        &self,
-        card_lines: &[String],
-        mode: &str,
-    ) -> String {
+    pub async fn generate_daily_briefing(&self, card_lines: &[String], mode: &str) -> String {
         if card_lines.is_empty() {
             return String::new();
         }
@@ -793,7 +793,9 @@ TRANSCRIPT:\n{}",
         let raw = self.complete(&prompt, 350).await;
         tracing::info!("Daily summary result:\n{}", raw);
 
-        raw.trim().trim_matches(|ch| ch == '"' || ch == '\'').to_string()
+        raw.trim()
+            .trim_matches(|ch| ch == '"' || ch == '\'')
+            .to_string()
     }
 
     fn build_prompt(&self, system_message: &str, user_message: &str) -> Result<String, String> {

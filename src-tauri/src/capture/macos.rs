@@ -4,12 +4,54 @@
 
 use image::ImageEncoder;
 use objc2_app_kit::NSWorkspace;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct FrontmostAppContext {
     pub app_name: String,
     pub bundle_id: Option<String>,
     pub window_title: String,
+}
+
+#[derive(Clone)]
+struct ScriptCacheEntry {
+    app_name: String,
+    value: Option<String>,
+    cached_at: Instant,
+}
+
+static WINDOW_TITLE_CACHE: OnceLock<Mutex<Option<ScriptCacheEntry>>> = OnceLock::new();
+static URL_CACHE: OnceLock<Mutex<Option<ScriptCacheEntry>>> = OnceLock::new();
+
+fn cache_get(
+    cache: &OnceLock<Mutex<Option<ScriptCacheEntry>>>,
+    app_name: &str,
+    ttl: Duration,
+) -> Option<String> {
+    let guard = cache.get_or_init(|| Mutex::new(None)).lock().ok()?;
+    let entry = guard.as_ref()?;
+    if !entry.app_name.eq_ignore_ascii_case(app_name) {
+        return None;
+    }
+    if entry.cached_at.elapsed() > ttl {
+        return None;
+    }
+    entry.value.clone()
+}
+
+fn cache_put(
+    cache: &OnceLock<Mutex<Option<ScriptCacheEntry>>>,
+    app_name: &str,
+    value: Option<String>,
+) {
+    if let Ok(mut guard) = cache.get_or_init(|| Mutex::new(None)).lock() {
+        *guard = Some(ScriptCacheEntry {
+            app_name: app_name.to_string(),
+            value,
+            cached_at: Instant::now(),
+        });
+    }
 }
 
 /// Capture the main screen and return PNG data
@@ -123,6 +165,10 @@ pub fn get_frontmost_app_info() -> FrontmostAppContext {
 
 /// Best-effort active window title via AppleScript (requires Accessibility permissions for generic fallback).
 fn get_front_window_title(app_name: &str) -> Option<String> {
+    if let Some(cached) = cache_get(&WINDOW_TITLE_CACHE, app_name, Duration::from_millis(900)) {
+        return Some(cached);
+    }
+
     let app_lower = app_name.to_lowercase();
     let script = if app_lower.contains("safari") {
         r#"tell application "Safari" to get name of current tab of front window"#
@@ -144,7 +190,7 @@ fn get_front_window_title(app_name: &str) -> Option<String> {
             end tell"#
     };
 
-    match std::process::Command::new("osascript")
+    let result = match std::process::Command::new("osascript")
         .arg("-e")
         .arg(script)
         .output()
@@ -158,11 +204,18 @@ fn get_front_window_title(app_name: &str) -> Option<String> {
             }
         }
         _ => None,
-    }
+    };
+
+    cache_put(&WINDOW_TITLE_CACHE, app_name, result.clone());
+    result
 }
 
 /// Get the current URL from the frontmost browser window using AppleScript
 pub fn get_browser_url(app_name: &str) -> Option<String> {
+    if let Some(cached) = cache_get(&URL_CACHE, app_name, Duration::from_millis(1200)) {
+        return Some(cached);
+    }
+
     let app_lower = app_name.to_lowercase();
 
     let script = if app_lower.contains("safari") {
@@ -179,11 +232,12 @@ pub fn get_browser_url(app_name: &str) -> Option<String> {
     } else if app_lower.contains("edge") {
         r#"tell application "Microsoft Edge" to get URL of active tab of front window"#
     } else {
+        cache_put(&URL_CACHE, app_name, None);
         return None;
     };
 
     // Run osascript to get the URL
-    match std::process::Command::new("osascript")
+    let result = match std::process::Command::new("osascript")
         .arg("-e")
         .arg(script)
         .output()
@@ -201,7 +255,10 @@ pub fn get_browser_url(app_name: &str) -> Option<String> {
             }
         }
         Err(_) => None,
-    }
+    };
+
+    cache_put(&URL_CACHE, app_name, result.clone());
+    result
 }
 
 // Core Graphics bindings

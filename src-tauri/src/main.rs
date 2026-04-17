@@ -4,8 +4,10 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use fndr_lib::{api, capture, config::Config, graph::GraphStore, store::Store, AppState, ProactiveSuggestion};
 use chrono::Timelike;
+use fndr_lib::{
+    api, capture, config::Config, graph::GraphStore, store::Store, AppState, ProactiveSuggestion,
+};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

@@ -73,7 +73,7 @@ pub struct AppState {
     pub last_embedding: RwLock<Vec<f32>>,
     pub proactive_tx: tokio::sync::watch::Sender<Option<ProactiveSuggestion>>,
     pub proactive_rx: tokio::sync::watch::Receiver<Option<ProactiveSuggestion>>,
-    
+
     // Privacy state memory
     pub pending_privacy_alerts: RwLock<Vec<PrivacyAlert>>,
     /// Key: domain_or_title, Value: snooze expiration timestamp (sec)

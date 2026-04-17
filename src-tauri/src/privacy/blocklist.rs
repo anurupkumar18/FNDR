@@ -33,15 +33,28 @@ impl Blocklist {
     /// that isn't already explicitly blocked, so we can prompt the user to block it.
     pub fn is_sensitive_context(url: Option<&str>, window_title: Option<&str>) -> bool {
         let keywords = [
-            "chase.com", "bankofamerica", "wellsfargo", "citibank", "capitalone", "usbank",
-            "fidelity", "vanguard", "schwab", "americanexpress", "discover.com",
-            "online banking", "sign in - bank", "login - bank",
+            "chase.com",
+            "bankofamerica",
+            "wellsfargo",
+            "citibank",
+            "capitalone",
+            "usbank",
+            "fidelity",
+            "vanguard",
+            "schwab",
+            "americanexpress",
+            "discover.com",
+            "online banking",
+            "sign in - bank",
+            "login - bank",
         ];
-        
+
         let url_lower = url.unwrap_or("").to_lowercase();
         let title_lower = window_title.unwrap_or("").to_lowercase();
-        
-        keywords.iter().any(|&k| url_lower.contains(k) || title_lower.contains(k))
+
+        keywords
+            .iter()
+            .any(|&k| url_lower.contains(k) || title_lower.contains(k))
     }
 }
 
