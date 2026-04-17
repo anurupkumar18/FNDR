@@ -81,10 +81,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
         };
     }, [isVisible]);
 
-    const sortedTasks = useMemo(
-        () => [...tasks].sort((a, b) => b.created_at - a.created_at),
-        [tasks]
-    );
+    const sortedTasks = useMemo(() => tasks, [tasks]);
 
     const countsByType = useMemo(() => {
         return sortedTasks.reduce(

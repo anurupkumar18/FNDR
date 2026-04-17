@@ -3,15 +3,17 @@
 use super::TextChunker;
 use ndarray::Array2;
 use ort::session::Session;
-use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Embedding dimension for all-MiniLM-L6-v2.
 pub const EMBEDDING_DIM: usize = 384;
 /// Maximum token sequence length (matches model training config).
 const MAX_SEQ_LEN: usize = 128;
+const MODEL_FILENAME: &str = "all-MiniLM-L6-v2.onnx";
+const TOKENIZER_FILENAME: &str = "tokenizer.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingBackend {
@@ -228,32 +230,54 @@ struct RealEmbedder {
 
 impl RealEmbedder {
     fn new() -> Result<Self, String> {
-        let model_dir = resolve_model_dir()
-            .ok_or_else(|| "Could not determine model directory".to_string())?;
+        let model_dir =
+            resolve_model_dir().ok_or_else(|| "Could not determine model directory".to_string())?;
 
-        let onnx_path = model_dir.join("all-MiniLM-L6-v2.onnx");
-        let tokenizer_path = model_dir.join("tokenizer.json");
+        let onnx_path = model_dir.join(MODEL_FILENAME);
+        let tokenizer_path = model_dir.join(TOKENIZER_FILENAME);
 
         if !onnx_path.exists() {
-            return Err(format!("ONNX model not found at {}", onnx_path.display()));
+            return Err(format!(
+                "ONNX model not found at {}. Download {} and {} or set FNDR_MODEL_DIR.",
+                onnx_path.display(),
+                MODEL_FILENAME,
+                TOKENIZER_FILENAME
+            ));
         }
         if !tokenizer_path.exists() {
-            return Err(format!("Tokenizer not found at {}", tokenizer_path.display()));
+            return Err(format!(
+                "Tokenizer not found at {}. Download {} and {} or set FNDR_MODEL_DIR.",
+                tokenizer_path.display(),
+                MODEL_FILENAME,
+                TOKENIZER_FILENAME
+            ));
         }
 
         let session = Session::builder()
             .map_err(|e| format!("Failed to create ort session builder: {e}"))?
             .commit_from_file(&onnx_path)
-            .map_err(|e| format!("Failed to load ONNX model from {}: {e}", onnx_path.display()))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to load ONNX model from {}: {e}",
+                    onnx_path.display()
+                )
+            })?;
 
-        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| format!("Failed to load tokenizer from {}: {e}", tokenizer_path.display()))?;
+        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|e| {
+            format!(
+                "Failed to load tokenizer from {}: {e}",
+                tokenizer_path.display()
+            )
+        })?;
 
         tracing::info!(
             model = %onnx_path.display(),
             "Native ort text embedder initialized"
         );
-        Ok(Self { session: Mutex::new(session), tokenizer })
+        Ok(Self {
+            session: Mutex::new(session),
+            tokenizer,
+        })
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
@@ -417,24 +441,47 @@ fn parse_env_bool(value: &str) -> bool {
 fn resolve_model_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("FNDR_MODEL_DIR") {
         let p = PathBuf::from(dir);
-        if p.exists() {
+        if model_assets_present(&p) {
             return Some(p);
         }
-    }
-
-    if let Some(proj) = directories::ProjectDirs::from("com", "fndr", "FNDR") {
-        let data_models = proj.data_dir().join("models");
-        if data_models.exists() {
-            return Some(data_models);
+        if p.exists() {
+            tracing::warn!(
+                "FNDR_MODEL_DIR is set to {}, but {} or {} is missing",
+                p.display(),
+                MODEL_FILENAME,
+                TOKENIZER_FILENAME
+            );
         }
     }
 
+    let app_models = directories::ProjectDirs::from("com", "fndr", "FNDR")
+        .map(|proj| proj.data_dir().join("models"));
+
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models");
+    if let Some(path) = app_models.as_ref() {
+        if model_assets_present(path) {
+            return Some(path.clone());
+        }
+    }
+
+    if model_assets_present(&dev) {
+        return Some(dev);
+    }
+
+    if let Some(path) = app_models {
+        if path.exists() {
+            return Some(path);
+        }
+    }
     if dev.exists() {
         return Some(dev);
     }
 
     None
+}
+
+fn model_assets_present(dir: &PathBuf) -> bool {
+    dir.join(MODEL_FILENAME).exists() && dir.join(TOKENIZER_FILENAME).exists()
 }
 
 fn stable_hash(input: &str) -> usize {

@@ -525,9 +525,11 @@ export interface ChatMessage {
     content: string;
 }
 
+
 export async function chatWithGemma(messages: ChatMessage[]): Promise<string> {
     const last = messages[messages.length - 1];
     if (!last) return "";
     const snippets = messages.filter((m) => m.role === "user").map((m) => m.content);
     return invoke<string>("summarize_search", { query: last.content, resultsSnippets: snippets });
 }
+

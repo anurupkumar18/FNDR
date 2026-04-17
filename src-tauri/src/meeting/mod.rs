@@ -849,44 +849,30 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
         breakdown.summary = "No audio was captured or transcription produced no text.".to_string();
     } else if let Some(engine) = app_state.as_ref().and_then(|s| s.inference_engine()) {
         tracing::info!("Starting AI breakdown for meeting: {}", meeting_id);
-        let breakdown_prompt = format!(
-            "Review this meeting transcript and provide a structured breakdown.\n\nTRANSCRIPT:\n{}\n\n\
-            Format your response exactly as:\n\
-            SUMMARY: [one paragraph summary]\n\
-            TODOS:\n- [task]\n\
-            REMINDERS:\n- [reminder]\n\
-            FOLLOWUPS:\n- [followup]",
-            full_text
-        );
-        let raw = engine.extract_todos(&breakdown_prompt).await;
-
-        // Simple manual parsing
-        let mut section = "";
-        for line in raw.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            if line.starts_with("SUMMARY:") {
-                breakdown.summary = line["SUMMARY:".len()..].trim().to_string();
-                section = "summary";
-            } else if line.starts_with("TODOS:") {
-                section = "todos";
-            } else if line.starts_with("REMINDERS:") {
-                section = "reminders";
-            } else if line.starts_with("FOLLOWUPS:") {
-                section = "followups";
-            } else if line.starts_with("- ") || line.starts_with("* ") {
-                let item = line[2..].trim().to_string();
-                match section {
-                    "todos" => breakdown.todos.push(item),
-                    "reminders" => breakdown.reminders.push(item),
-                    "followups" => breakdown.followups.push(item),
-                    _ => {}
+        if let Some(structured) = engine.extract_meeting_breakdown(&full_text).await {
+            breakdown.summary = structured.summary;
+            breakdown.todos = structured.todos;
+            breakdown.reminders = structured.reminders;
+            breakdown.followups = structured.followups;
+        } else {
+            let raw = engine.extract_todos(&full_text).await;
+            let parsed = crate::tasks::parse_tasks_from_llm_response(
+                &raw,
+                &format!("Meeting:{meeting_id}"),
+            );
+            for task in parsed {
+                match task.task_type {
+                    TaskType::Todo => breakdown.todos.push(task.title),
+                    TaskType::Reminder => breakdown.reminders.push(task.title),
+                    TaskType::Followup => breakdown.followups.push(task.title),
                 }
             }
+            if breakdown.summary.is_empty() {
+                breakdown.summary = summarize_transcript_fallback(&full_text);
+            }
         }
+    } else {
+        breakdown.summary = summarize_transcript_fallback(&full_text);
     }
 
     let transcript_path: Option<String> = None;
@@ -918,6 +904,19 @@ pub async fn stop_recording() -> Result<MeetingRecorderStatus, String> {
     Ok(status)
 }
 
+fn summarize_transcript_fallback(transcript: &str) -> String {
+    let normalized = transcript
+        .split_whitespace()
+        .take(48)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        "Meeting captured with limited transcript detail.".to_string()
+    } else {
+        format!("Discussion summary: {normalized}")
+    }
+}
+
 async fn persist_breakdown_tasks(
     store: &MeetingStore,
     meeting_id: &str,
@@ -929,7 +928,7 @@ async fn persist_breakdown_tasks(
         .filter(|task| !task.is_completed && !task.is_dismissed)
         .map(|task| {
             (
-                task.title.trim().to_lowercase(),
+                normalize_task_item_key(task.title.trim()),
                 task_type_key(&task.task_type),
             )
         })
@@ -943,10 +942,10 @@ async fn persist_breakdown_tasks(
         let type_key = task_type_key(&task_type);
         for item in items {
             let title = item.trim();
-            if title.len() < 3 {
+            if title.len() < 3 || !is_actionable_task_item(title) {
                 continue;
             }
-            let dedupe_key = (title.to_lowercase(), type_key);
+            let dedupe_key = (normalize_task_item_key(title), type_key);
             if seen_active.contains(&dedupe_key) {
                 continue;
             }
@@ -990,6 +989,58 @@ fn task_type_key(task_type: &TaskType) -> &'static str {
         TaskType::Reminder => "reminder",
         TaskType::Followup => "followup",
     }
+}
+
+fn normalize_task_item_key(value: &str) -> String {
+    value
+        .to_lowercase()
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_actionable_task_item(value: &str) -> bool {
+    let cleaned = normalize_task_item_key(value);
+    if cleaned.len() < 6 {
+        return false;
+    }
+    if cleaned.split_whitespace().count() < 2 {
+        return false;
+    }
+
+    if matches!(
+        cleaned.as_str(),
+        "todo"
+            | "to do"
+            | "task"
+            | "follow up"
+            | "reminder"
+            | "none"
+            | "n a"
+            | "no action items"
+            | "no reminders"
+            | "no followups"
+    ) {
+        return false;
+    }
+
+    let boilerplate_prefixes = [
+        "complete ",
+        "remember ",
+        "follow up ",
+        "followup ",
+        "do this ",
+        "work on ",
+    ];
+    if boilerplate_prefixes
+        .iter()
+        .any(|prefix| cleaned.starts_with(prefix) && cleaned.split_whitespace().count() <= 3)
+    {
+        return false;
+    }
+
+    true
 }
 
 fn spawn_ffmpeg_recorder(segment_pattern: &Path) -> Result<Child, String> {
