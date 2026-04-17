@@ -441,6 +441,14 @@ impl Store {
         Ok(())
     }
 
+    /// Retroactively delete all memories whose URL or window title matches the blocklist domain
+    pub async fn delete_memories_by_domain(&self, domain: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let escaped = sql_escape(&domain.to_lowercase());
+        let filter = format!("LOWER(window_title) LIKE '%{}%' OR LOWER(url) LIKE '%{}%'", escaped, escaped);
+        self.table.delete(&filter).await?;
+        Ok(())
+    }
+
     /// Return the path to the frames directory (for screenshot eviction).
     pub fn frames_dir(&self) -> PathBuf {
         self.data_dir.join("frames")

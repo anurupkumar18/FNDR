@@ -19,6 +19,9 @@ import {
     startMcpServer,
     stopMcpServer,
     runMemoryRepairBackfill,
+    getStats,
+    resetCacheAndCheckResources,
+    getPrivacyAlerts,
 } from "../api/tauri";
 import {
     ModelInfo,
@@ -32,6 +35,7 @@ import {
 } from "../api/onboarding";
 import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
 import "./ControlPanel.css";
+import { PrivacyPanel } from "./PrivacyPanel";
 
 interface ControlPanelProps {
     status: CaptureStatus | null;
@@ -46,6 +50,9 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [isOpen, setIsOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<Tab>("settings");
     const [blocklist, setBlocklistState] = useState<string[]>([]);
+    const [blocklistInput, setBlocklistInput] = useState("");
+    const [privacyPanelOpen, setPrivacyPanelOpen] = useState(false);
+    const [privacyAlertCount, setPrivacyAlertCount] = useState(0);
     const [newApp, setNewApp] = useState("");
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [retentionDays, setRetentionDaysState] = useState<number>(7);
@@ -124,6 +131,20 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         } finally {
             setModelsLoading(false);
         }
+    }, []);
+
+    useEffect(() => {
+        const checkAlerts = async () => {
+            try {
+                const alerts = await getPrivacyAlerts();
+                setPrivacyAlertCount(alerts.length);
+            } catch (err) {
+                console.error("Failed fetching alerts:", err);
+            }
+        };
+        checkAlerts();
+        const interval = setInterval(checkAlerts, 3000);
+        return () => clearInterval(interval);
     }, []);
 
     useEffect(() => {
@@ -402,7 +423,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     }
 
     return (
-        <>
+        <div className="control-panel-container">
             <button
                 className={`ui-action-btn settings-toggle ${compact ? "compact" : ""}`}
                 onClick={() => setIsOpen(!isOpen)}
@@ -414,8 +435,26 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 </svg>
             </button>
 
-            {isOpen && <div className="panel-backdrop" onClick={() => setIsOpen(false)} />}
+            {privacyAlertCount > 0 && (
+                <button
+                    className={`ui-action-btn settings-toggle privacy-shield-toggle ${compact ? "compact" : ""} ${privacyPanelOpen ? "active" : ""}`}
+                    onClick={() => setPrivacyPanelOpen(!privacyPanelOpen)}
+                    aria-label="Open privacy alerts"
+                >
+                    <svg className="settings-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                    </svg>
+                    <span className="privacy-badge">{privacyAlertCount}</span>
+                </button>
+            )}
 
+            <PrivacyPanel 
+                isVisible={privacyPanelOpen} 
+                onClose={() => setPrivacyPanelOpen(false)} 
+                onAlertsChange={setPrivacyAlertCount} 
+            />
+
+            {isOpen && <div className="panel-backdrop" onClick={() => setIsOpen(false)} />}
             <aside className={`settings-panel ${isOpen ? "open" : ""}`}>
                 <header className="panel-header">
                     <div>
@@ -767,6 +806,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                     )}
                 </div>
             </aside>
-        </>
+        </div>
     );
 }

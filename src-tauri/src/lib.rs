@@ -43,6 +43,14 @@ pub struct ProactiveSuggestion {
     pub task_title: Option<String>,
 }
 
+/// A privacy alert surfaced when the capture pipeline detects a highly sensitive context.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PrivacyAlert {
+    pub id: String,
+    pub domain_or_title: String,
+    pub detected_at: i64,
+}
+
 /// Application state shared across threads
 pub struct AppState {
     pub app_data_dir: PathBuf,
@@ -65,6 +73,11 @@ pub struct AppState {
     pub last_embedding: RwLock<Vec<f32>>,
     pub proactive_tx: tokio::sync::watch::Sender<Option<ProactiveSuggestion>>,
     pub proactive_rx: tokio::sync::watch::Receiver<Option<ProactiveSuggestion>>,
+    
+    // Privacy state memory
+    pub pending_privacy_alerts: RwLock<Vec<PrivacyAlert>>,
+    /// Key: domain_or_title, Value: snooze expiration timestamp (sec)
+    pub snoozed_privacy_alerts: RwLock<std::collections::HashMap<String, i64>>,
 }
 
 impl AppState {
@@ -95,6 +108,8 @@ impl AppState {
             last_embedding: RwLock::new(Vec::new()),
             proactive_tx,
             proactive_rx,
+            pending_privacy_alerts: RwLock::new(Vec::new()),
+            snoozed_privacy_alerts: RwLock::new(std::collections::HashMap::new()),
         }
     }
 

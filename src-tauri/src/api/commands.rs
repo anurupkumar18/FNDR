@@ -2924,3 +2924,53 @@ pub fn get_fun_greeting(name: Option<String>) -> Result<String, String> {
 
     Ok(format!("{}, {}! {}", prefix, base_name, random_suffix))
 }
+
+// ── Proactive Privacy Shield Commands ───────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_privacy_alerts(state: State<'_, Arc<AppState>>) -> Result<Vec<crate::PrivacyAlert>, String> {
+    let pending = state.pending_privacy_alerts.read();
+    Ok(pending.clone())
+}
+
+#[tauri::command]
+pub async fn dismiss_privacy_alert(site: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    {
+        let mut pending = state.pending_privacy_alerts.write();
+        pending.retain(|a| a.domain_or_title != site);
+    }
+    {
+        let mut snoozed = state.snoozed_privacy_alerts.write();
+        // snooze for 30 days
+        let expire = chrono::Local::now().timestamp() + (30 * 24 * 60 * 60);
+        snoozed.insert(site, expire);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    // 1. Remove from pending alerts
+    {
+        let mut pending = state.pending_privacy_alerts.write();
+        pending.retain(|a| a.domain_or_title != site);
+    }
+
+    // 2. Add to config blocklist
+    {
+        let mut config = state.config.write();
+        if !config.blocklist.iter().any(|b| b.eq_ignore_ascii_case(&site)) {
+            config.blocklist.push(site.clone());
+        }
+        if let Err(e) = config.save() {
+            tracing::error!("Failed to save config: {}", e);
+        }
+    }
+
+    // 3. Retroactively delete memories with this site if we grabbed it during the alert period
+    if let Err(e) = state.store.delete_memories_by_domain(&site).await {
+        tracing::error!("Failed to retroactively delete memories for blocked site {}: {}", site, e);
+    }
+
+    Ok(())
+}

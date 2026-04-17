@@ -347,6 +347,41 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         if let Some(ref u) = url {
             tracing::info!("Captured URL: {}", u);
         }
+
+        // --- Proactive Privacy Check ---
+        if Blocklist::is_sensitive_context(url.as_deref(), Some(&window_title)) {
+            let domain_or_title = url.clone().unwrap_or_else(|| window_title.clone());
+            
+            // Extract a cleaner domain from URL if possible, otherwise use the full string
+            let clean_domain = if domain_or_title.starts_with("http") {
+                let without_schema = domain_or_title.split("://").nth(1).unwrap_or(&domain_or_title);
+                without_schema.split('/').next().unwrap_or(without_schema).to_string()
+            } else {
+                domain_or_title
+            };
+
+            let is_snoozed = {
+                let snoozed = state.snoozed_privacy_alerts.read();
+                if let Some(&expire_time) = snoozed.get(&clean_domain) {
+                    now.timestamp() < expire_time
+                } else {
+                    false
+                }
+            };
+            
+            if !is_snoozed {
+                let mut pending = state.pending_privacy_alerts.write();
+                if !pending.iter().any(|a| a.domain_or_title == clean_domain) {
+                    pending.push(crate::PrivacyAlert {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        domain_or_title: clean_domain,
+                        detected_at: now.timestamp_millis(),
+                    });
+                    tracing::info!("Surfaced proactive privacy alert for sensitive context");
+                }
+            }
+        }
+
         let session_key = build_session_key(&app_name, &window_title, url.as_deref());
         let noise_score = text_cleanup::estimate_noise_score(&app_name, &ocr_result.text);
 

@@ -422,6 +422,24 @@ export async function deleteAllData(): Promise<void> {
     return invoke("delete_all_data");
 }
 
+export interface PrivacyAlert {
+    id: string;
+    domain_or_title: string;
+    detected_at: number;
+}
+
+export async function getPrivacyAlerts(): Promise<PrivacyAlert[]> {
+    return invoke("get_privacy_alerts");
+}
+
+export async function dismissPrivacyAlert(site: string): Promise<void> {
+    return invoke("dismiss_privacy_alert", { site });
+}
+
+export async function addSiteToBlocklist(site: string): Promise<void> {
+    return invoke("add_to_blocklist", { site });
+}
+
 // Stats
 export async function getStats(): Promise<Stats> {
     const raw = await invoke<Partial<Stats>>("get_stats");

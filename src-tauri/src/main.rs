@@ -416,6 +416,9 @@ fn main() {
             api::commands::get_app_names,
             api::commands::run_memory_repair_backfill,
             api::commands::get_memory_repair_progress,
+            api::commands::get_privacy_alerts,
+            api::commands::dismiss_privacy_alert,
+            api::commands::add_to_blocklist,
             // Tasks / Todos
             api::commands::add_todo,
             api::commands::get_todos,
