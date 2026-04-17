@@ -55,6 +55,13 @@ const KEYWORD_QUERY_MULTIPLIER: usize = 8;
 const MAX_KEYWORD_SCAN: usize = 600;
 const RECENT_RESULTS_MULTIPLIER: usize = 8;
 const MAX_RECENT_SCAN: usize = 1200;
+const INDEX_NOISE_HOSTS: &[&str] = &[
+    "accounts.google.com",
+    "auth.openai.com",
+    "idmsa.apple.com",
+    "login.live.com",
+    "login.microsoftonline.com",
+];
 
 /// LanceDB-backed store for memory records.
 pub struct Store {
@@ -342,7 +349,11 @@ impl Store {
         if records.is_empty() {
             return Ok(());
         }
-        let compacted = dedup_records_for_insert(records);
+        let normalized = records
+            .iter()
+            .map(normalize_record_for_index)
+            .collect::<Vec<_>>();
+        let compacted = dedup_records_for_insert(&normalized);
         if compacted.is_empty() {
             return Ok(());
         }
@@ -2434,6 +2445,210 @@ fn recency_score(now_ms: i64, timestamp_ms: i64) -> f32 {
     (1.0 / (1.0 + age_hours * 0.03)).clamp(0.0, 1.0)
 }
 
+fn estimate_signal_strength(
+    summary_source: &str,
+    ocr_confidence: f32,
+    noise_score: f32,
+    snippet: &str,
+    clean_text: &str,
+) -> f32 {
+    let summary_weight = match summary_source.trim().to_ascii_lowercase().as_str() {
+        "llm" => 1.0,
+        "vlm" => 0.9,
+        "fallback" => 0.66,
+        _ => 0.58,
+    };
+    let snippet_density = (normalize_keyword_text(snippet)
+        .split_whitespace()
+        .count()
+        .min(24) as f32
+        / 24.0)
+        .clamp(0.0, 1.0);
+    let text_density = (normalize_keyword_text(clean_text)
+        .split_whitespace()
+        .count()
+        .min(80) as f32
+        / 80.0)
+        .clamp(0.0, 1.0);
+
+    (ocr_confidence.clamp(0.0, 1.0) * 0.24
+        + (1.0 - noise_score.clamp(0.0, 1.0)) * 0.28
+        + summary_weight * 0.18
+        + snippet_density * 0.16
+        + text_density * 0.14)
+        .clamp(0.0, 1.0)
+}
+
+fn estimate_record_signal_strength(record: &MemoryRecord) -> f32 {
+    estimate_signal_strength(
+        &record.summary_source,
+        record.ocr_confidence,
+        record.noise_score,
+        &record.snippet,
+        &record.clean_text,
+    )
+}
+
+fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
+    let mut normalized = record.clone();
+    normalized.url = sanitize_index_url(
+        normalized.url.as_deref(),
+        &normalized.window_title,
+        &normalized.snippet,
+    );
+    normalized.session_key = build_index_session_key(&normalized);
+    normalized
+}
+
+fn sanitize_index_url(url: Option<&str>, title: &str, snippet: &str) -> Option<String> {
+    let raw = url?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let normalized = canonicalize_index_url(raw);
+    let domain = extract_domain(&normalized)?;
+    let context = normalize_keyword_text(&format!("{title} {snippet}"));
+    let path = extract_path_segments(&normalized, 3).unwrap_or_default();
+
+    if INDEX_NOISE_HOSTS.iter().any(|host| domain == *host) {
+        return None;
+    }
+    if looks_like_auth_or_error_context(&context) {
+        return None;
+    }
+    if !path.is_empty() && is_low_entropy_path(&path) && context.split_whitespace().count() < 6 {
+        return None;
+    }
+
+    Some(normalized)
+}
+
+fn canonicalize_index_url(url: &str) -> String {
+    let no_fragment = url.split('#').next().unwrap_or(url);
+    let no_query = no_fragment.split('?').next().unwrap_or(no_fragment);
+    no_query.trim_end_matches('/').to_string()
+}
+
+fn build_index_session_key(record: &MemoryRecord) -> String {
+    if record.session_key.starts_with("meeting:") {
+        return record.session_key.clone();
+    }
+
+    let app = normalize_app_key(&record.app_name);
+    if let Some(url) = record.url.as_deref() {
+        if let Some(domain) = extract_domain(url) {
+            if let Some(path) = extract_path_segments(url, 2) {
+                if !path.is_empty() {
+                    return format!("{app}:{domain}:{path}");
+                }
+            }
+            return format!("{app}:{domain}");
+        }
+    }
+
+    let title_key = normalize_anchor_key(&record.window_title);
+    if !title_key.is_empty() {
+        return format!("{app}:title:{title_key}");
+    }
+
+    let snippet_key = normalize_anchor_key(&record.snippet);
+    if !snippet_key.is_empty() {
+        return format!("{app}:snippet:{snippet_key}");
+    }
+
+    if !record.session_key.trim().is_empty() {
+        return record.session_key.clone();
+    }
+
+    app
+}
+
+fn normalize_app_key(app_name: &str) -> String {
+    let normalized = app_name
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>();
+    let compact = normalized
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    if compact.is_empty() {
+        "unknown".to_string()
+    } else {
+        compact
+    }
+}
+
+fn normalize_anchor_key(text: &str) -> String {
+    normalize_keyword_text(text)
+        .split_whitespace()
+        .filter(|token| token.len() > 2)
+        .take(8)
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+fn extract_path_segments(url: &str, count: usize) -> Option<String> {
+    let without_scheme = url.split("://").nth(1).unwrap_or(url);
+    let mut parts = without_scheme.split('/');
+    let _host = parts.next()?;
+    let segments = parts
+        .filter(|segment| !segment.trim().is_empty())
+        .map(|segment| {
+            normalize_keyword_text(segment)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join("_")
+        })
+        .filter(|segment| !segment.is_empty())
+        .take(count)
+        .collect::<Vec<_>>();
+
+    if segments.is_empty() {
+        None
+    } else {
+        Some(segments.join("/"))
+    }
+}
+
+fn is_low_entropy_path(path: &str) -> bool {
+    let normalized = normalize_keyword_text(path);
+    let tokens = normalized
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return true;
+    }
+
+    let unique = tokens
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    unique <= 2
+        && tokens.iter().all(|token| {
+            matches!(
+                *token,
+                "404" | "500" | "account" | "auth" | "error" | "login" | "signin"
+            )
+        })
+}
+
+fn looks_like_auth_or_error_context(context: &str) -> bool {
+    context.contains("sign in")
+        || context.contains("log in")
+        || context.contains("authenticate")
+        || context.contains("authorization")
+        || context.contains("404")
+        || context.contains("500")
+        || context.contains("not found")
+        || context.starts_with("error ")
+}
+
 fn dedup_records_for_insert(records: &[MemoryRecord]) -> Vec<MemoryRecord> {
     let mut by_key: HashMap<String, MemoryRecord> = HashMap::new();
 
@@ -2442,10 +2657,8 @@ fn dedup_records_for_insert(records: &[MemoryRecord]) -> Vec<MemoryRecord> {
         by_key
             .entry(key)
             .and_modify(|existing| {
-                let existing_rank =
-                    existing.ocr_confidence + (1.0 - existing.noise_score).clamp(0.0, 1.0);
-                let incoming_rank =
-                    record.ocr_confidence + (1.0 - record.noise_score).clamp(0.0, 1.0);
+                let existing_rank = estimate_record_signal_strength(existing);
+                let incoming_rank = estimate_record_signal_strength(record);
                 if incoming_rank > existing_rank
                     || (incoming_rank == existing_rank && record.timestamp > existing.timestamp)
                 {
@@ -2658,6 +2871,8 @@ async fn migrate_from_json(table: &Table, json_path: &Path) {
                     .to_string();
             }
         }
+        records = records.iter().map(normalize_record_for_index).collect();
+        records = dedup_records_for_insert(&records);
 
         tracing::info!(
             "Migrating {} records from memories.json to LanceDB",
@@ -2800,5 +3015,65 @@ async fn migrate_graph_from_json(nodes_table: &Table, edges_table: &Table, json_
     .await;
     if let Err(e) = result {
         tracing::warn!("Graph migration failed: {}", e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(url: Option<&str>, title: &str, snippet: &str) -> MemoryRecord {
+        MemoryRecord {
+            id: "memory-1".to_string(),
+            timestamp: 1_000,
+            day_bucket: "2026-04-17".to_string(),
+            app_name: "Chrome".to_string(),
+            bundle_id: None,
+            window_title: title.to_string(),
+            session_id: "session-1".to_string(),
+            text: snippet.to_string(),
+            clean_text: snippet.to_string(),
+            ocr_confidence: 0.9,
+            ocr_block_count: 4,
+            snippet: snippet.to_string(),
+            summary_source: "llm".to_string(),
+            noise_score: 0.1,
+            session_key: String::new(),
+            embedding: vec![0.0; 384],
+            image_embedding: vec![0.0; 512],
+            screenshot_path: None,
+            url: url.map(|value| value.to_string()),
+            snippet_embedding: vec![0.0; 384],
+            decay_score: 1.0,
+            last_accessed_at: 0,
+        }
+    }
+
+    #[test]
+    fn normalize_record_for_index_suppresses_auth_urls() {
+        let normalized = normalize_record_for_index(&record(
+            Some("https://accounts.google.com/signin/v2/challenge?foo=bar"),
+            "Sign in",
+            "Sign in to continue",
+        ));
+        assert!(normalized.url.is_none());
+        assert_eq!(normalized.session_key, "chrome:title:sign");
+    }
+
+    #[test]
+    fn normalize_record_for_index_keeps_specific_paths() {
+        let normalized = normalize_record_for_index(&record(
+            Some("https://docs.example.com/projects/fndr/pipeline?view=full"),
+            "Pipeline design",
+            "Reviewed the FNDR pipeline design and search notes",
+        ));
+        assert_eq!(
+            normalized.url.as_deref(),
+            Some("https://docs.example.com/projects/fndr/pipeline")
+        );
+        assert_eq!(
+            normalized.session_key,
+            "chrome:docs.example.com:projects/fndr"
+        );
     }
 }

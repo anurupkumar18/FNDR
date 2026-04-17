@@ -185,43 +185,53 @@ impl Embedder {
         self.chunker.chunk(text)
     }
 
+    /// Chunk text with app/window context so OCR-aware boundaries survive into embeddings.
+    pub fn chunk_text_with_context(
+        &self,
+        app_name: &str,
+        window_title: &str,
+        text: &str,
+    ) -> Vec<String> {
+        if app_name.trim().is_empty() && window_title.trim().is_empty() {
+            self.chunk_text(text)
+        } else {
+            self.chunker.chunk_ocr_text(app_name, window_title, text)
+        }
+    }
+
     /// Generate embeddings for a batch of texts.
     pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-        if texts.is_empty() {
-            return Ok(Vec::new());
-        }
+        let chunk_groups = texts
+            .iter()
+            .map(|text| {
+                let chunks = self.chunk_text(text);
+                if chunks.is_empty() && !text.trim().is_empty() {
+                    vec![text.clone()]
+                } else {
+                    chunks
+                }
+            })
+            .collect::<Vec<_>>();
+        self.embed_chunk_groups(chunk_groups)
+    }
 
-        let mut flattened_chunks = Vec::new();
-        let mut ranges = Vec::with_capacity(texts.len());
-
-        for text in texts {
-            let chunks = self.chunk_text(text);
-            let start = flattened_chunks.len();
-            if chunks.is_empty() {
-                flattened_chunks.push(text.clone());
-            } else {
-                flattened_chunks.extend(chunks);
-            }
-            let end = flattened_chunks.len();
-            ranges.push((start, end));
-        }
-
-        let chunk_embeddings = self.embed_chunks_cached(&flattened_chunks)?;
-        if chunk_embeddings.len() != flattened_chunks.len() {
-            return Err(format!(
-                "Embedding backend returned {} vectors for {} chunks",
-                chunk_embeddings.len(),
-                flattened_chunks.len()
-            ));
-        }
-
-        let mut merged = Vec::with_capacity(ranges.len());
-        for (start, end) in ranges {
-            let vectors = &chunk_embeddings[start..end];
-            merged.push(mean_pool(vectors));
-        }
-
-        Ok(merged)
+    /// Generate embeddings for texts while preserving app/window context during chunking.
+    pub fn embed_batch_with_context(
+        &self,
+        texts: &[(String, String, String)],
+    ) -> Result<Vec<Vec<f32>>, String> {
+        let chunk_groups = texts
+            .iter()
+            .map(|(app_name, window_title, text)| {
+                let chunks = self.chunk_text_with_context(app_name, window_title, text);
+                if chunks.is_empty() && !text.trim().is_empty() {
+                    vec![text.clone()]
+                } else {
+                    chunks
+                }
+            })
+            .collect::<Vec<_>>();
+        self.embed_chunk_groups(chunk_groups)
     }
 
     fn embed_chunks_cached(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
@@ -310,6 +320,47 @@ impl Embedder {
             .into_iter()
             .map(|value| value.unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]))
             .collect())
+    }
+
+    fn embed_chunk_groups(&self, chunk_groups: Vec<Vec<String>>) -> Result<Vec<Vec<f32>>, String> {
+        if chunk_groups.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut flattened_chunks = Vec::new();
+        let mut ranges = Vec::with_capacity(chunk_groups.len());
+
+        for chunks in chunk_groups {
+            let start = flattened_chunks.len();
+            flattened_chunks.extend(chunks);
+            let end = flattened_chunks.len();
+            ranges.push((start, end));
+        }
+
+        if flattened_chunks.is_empty() {
+            return Ok(vec![vec![0.0; EMBEDDING_DIM]; ranges.len()]);
+        }
+
+        let chunk_embeddings = self.embed_chunks_cached(&flattened_chunks)?;
+        if chunk_embeddings.len() != flattened_chunks.len() {
+            return Err(format!(
+                "Embedding backend returned {} vectors for {} chunks",
+                chunk_embeddings.len(),
+                flattened_chunks.len()
+            ));
+        }
+
+        let mut merged = Vec::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            if start == end {
+                merged.push(vec![0.0; EMBEDDING_DIM]);
+                continue;
+            }
+            let vectors = &chunk_embeddings[start..end];
+            merged.push(mean_pool(vectors));
+        }
+
+        Ok(merged)
     }
 
     fn backend_embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {

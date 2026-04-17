@@ -9,8 +9,9 @@ use std::collections::{HashMap, HashSet};
 const RRF_K: f32 = 60.0;
 
 const CANDIDATE_MULTIPLIER: usize = 6;
-const MAX_KEYWORD_VARIANTS: usize = 4;
-const MAX_RERANK_POOL: usize = 28;
+const MAX_KEYWORD_VARIANTS: usize = 6;
+const MAX_RERANK_POOL: usize = 36;
+const DIVERSITY_PRESERVE_TOP: usize = 3;
 // Text ANN + snippet ANN together = 0.70; lexical = 0.30.
 const SEMANTIC_WEIGHT: f32 = 0.40;
 const SNIPPET_WEIGHT: f32 = 0.30;
@@ -19,6 +20,8 @@ const LEXICAL_WEIGHT: f32 = 0.30;
 const DECAY_FLOOR: f32 = 0.15;
 const ABSOLUTE_RELEVANCE_FLOOR: f32 = 0.31;
 const RELATIVE_RELEVANCE_FLOOR: f32 = 0.56;
+const STRONG_RESULT_FLOOR: f32 = 0.70;
+const MEDIUM_RESULT_FLOOR: f32 = 0.60;
 
 /// Hybrid searcher combining semantic + lexical retrieval and sentence-aware reranking.
 pub struct HybridSearcher;
@@ -160,8 +163,24 @@ impl QueryProfile {
             if !joined.is_empty() {
                 push_unique(&mut variants, &joined);
             }
+
+            for pair in self.primary_terms.windows(2).take(3) {
+                push_unique(&mut variants, &pair.join(" "));
+            }
         }
 
+        let mut ranked_terms = self
+            .primary_terms
+            .iter()
+            .filter(|term| !is_weak_query_term(term))
+            .cloned()
+            .collect::<Vec<_>>();
+        ranked_terms
+            .sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
+
+        for term in ranked_terms.iter().take(4) {
+            push_unique(&mut variants, term);
+        }
         for term in self.primary_terms.iter().take(6) {
             push_unique(&mut variants, term);
         }
@@ -695,6 +714,22 @@ impl HybridSearcher {
                 score *= 1.0 + (coherence as f32 * 0.04).min(0.16);
             }
 
+            let signal_strength = estimate_result_signal_strength(candidate);
+            score *= 0.78 + signal_strength * 0.32;
+
+            let age_days = ((now - candidate.timestamp).max(0) as f32 / 86_400_000.0).max(0.0);
+            let retention_days = retention_days_for_signal(signal_strength);
+            if age_days > retention_days {
+                let overage_ratio =
+                    ((age_days - retention_days) / retention_days.max(1.0)).clamp(0.0, 1.5);
+                let stale_penalty = if query_requires_freshness(profile) {
+                    (1.0 - 0.78 * overage_ratio).clamp(0.12, 1.0)
+                } else {
+                    (1.0 - 0.30 * overage_ratio).clamp(0.58, 1.0)
+                };
+                score *= stale_penalty;
+            }
+
             // Ebbinghaus decay: recent + accessed records score higher.
             score *= candidate.decay_score.max(DECAY_FLOOR);
 
@@ -741,9 +776,11 @@ impl HybridSearcher {
             }
         }
 
-        let mut gated = apply_relevance_gate(profile, deduped);
-        gated.truncate(limit.min(30));
-        gated
+        diversify_results(
+            profile,
+            apply_relevance_gate(profile, deduped),
+            limit.min(30),
+        )
     }
 }
 
@@ -810,6 +847,17 @@ fn apply_relevance_gate(
 
         if !profile.number_terms.is_empty() && !has_entity {
             continue;
+        }
+
+        if query_requires_freshness(profile) {
+            let age_days = ((chrono::Utc::now().timestamp_millis() - candidate.timestamp).max(0)
+                as f32)
+                / 86_400_000.0;
+            let retention_days =
+                retention_days_for_signal(estimate_result_signal_strength(&candidate));
+            if age_days > retention_days {
+                continue;
+            }
         }
 
         filtered.push(candidate);
@@ -1063,6 +1111,16 @@ fn query_wants_recency(query: &str) -> bool {
         || query.contains("after")
 }
 
+fn query_requires_freshness(profile: &QueryProfile) -> bool {
+    let query = profile.normalized.as_str();
+    query.contains("today")
+        || query.contains("yesterday")
+        || query.contains("recent")
+        || query.contains("latest")
+        || query.contains("just now")
+        || query.contains("currently")
+}
+
 fn push_unique(target: &mut Vec<String>, value: &str) {
     let candidate = value.trim();
     if candidate.is_empty() {
@@ -1241,6 +1299,195 @@ fn fusion_weights(profile: &QueryProfile, has_semantic_signals: bool) -> (f32, f
     } else {
         (SEMANTIC_WEIGHT, SNIPPET_WEIGHT, LEXICAL_WEIGHT)
     }
+}
+
+fn estimate_result_signal_strength(result: &SearchResult) -> f32 {
+    let summary_weight = match result.summary_source.trim().to_ascii_lowercase().as_str() {
+        "llm" => 1.0,
+        "vlm" => 0.9,
+        "fallback" => 0.66,
+        _ => 0.58,
+    };
+    let snippet_density = (token_vec(&result.snippet).len().min(24) as f32 / 24.0).clamp(0.0, 1.0);
+    let text_density =
+        (token_vec(&candidate_text(result)).len().min(80) as f32 / 80.0).clamp(0.0, 1.0);
+
+    (result.ocr_confidence.clamp(0.0, 1.0) * 0.24
+        + (1.0 - result.noise_score.clamp(0.0, 1.0)) * 0.28
+        + summary_weight * 0.18
+        + snippet_density * 0.16
+        + text_density * 0.14)
+        .clamp(0.0, 1.0)
+}
+
+fn retention_days_for_signal(signal_strength: f32) -> f32 {
+    14.0 + signal_strength.clamp(0.0, 1.0) * 46.0
+}
+
+fn diversify_results(
+    profile: &QueryProfile,
+    mut candidates: Vec<SearchResult>,
+    limit: usize,
+) -> Vec<SearchResult> {
+    if candidates.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.timestamp.cmp(&a.timestamp))
+    });
+
+    let desired = limit.min(30);
+    let top_score = candidates
+        .first()
+        .map(|candidate| candidate.score)
+        .unwrap_or(0.0);
+    let strong_floor = STRONG_RESULT_FLOOR.min(top_score);
+    let medium_floor = MEDIUM_RESULT_FLOOR.min(top_score);
+    let preserve = DIVERSITY_PRESERVE_TOP.min(desired).min(candidates.len());
+
+    let mut selected = Vec::with_capacity(desired);
+    let mut app_counts: HashMap<String, usize> = HashMap::new();
+    let mut source_counts: HashMap<String, usize> = HashMap::new();
+    let mut time_bucket_counts: HashMap<i64, usize> = HashMap::new();
+
+    for candidate in candidates.drain(..preserve) {
+        remember_diversity_keys(
+            &candidate,
+            &mut app_counts,
+            &mut source_counts,
+            &mut time_bucket_counts,
+        );
+        selected.push(candidate);
+    }
+
+    while selected.len() < desired && !candidates.is_empty() {
+        let floor = if selected.len() < 8.min(desired) {
+            medium_floor
+        } else {
+            (medium_floor * 0.9).max(top_score * 0.42)
+        };
+
+        let best_idx = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| candidate.score >= floor)
+            .max_by(|(_, left), (_, right)| {
+                diversity_score(
+                    profile,
+                    left,
+                    &app_counts,
+                    &source_counts,
+                    &time_bucket_counts,
+                )
+                .partial_cmp(&diversity_score(
+                    profile,
+                    right,
+                    &app_counts,
+                    &source_counts,
+                    &time_bucket_counts,
+                ))
+                .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(idx, _)| idx);
+
+        let Some(best_idx) = best_idx else {
+            break;
+        };
+
+        let candidate = candidates.remove(best_idx);
+        remember_diversity_keys(
+            &candidate,
+            &mut app_counts,
+            &mut source_counts,
+            &mut time_bucket_counts,
+        );
+        selected.push(candidate);
+    }
+
+    for candidate in candidates {
+        if selected.len() >= desired {
+            break;
+        }
+        if candidate.score < strong_floor && !selected.is_empty() {
+            continue;
+        }
+        selected.push(candidate);
+    }
+
+    selected
+}
+
+fn diversity_score(
+    profile: &QueryProfile,
+    candidate: &SearchResult,
+    app_counts: &HashMap<String, usize>,
+    source_counts: &HashMap<String, usize>,
+    time_bucket_counts: &HashMap<i64, usize>,
+) -> f32 {
+    let app_key = candidate.app_name.to_ascii_lowercase();
+    let source_key = diversity_source_key(candidate);
+    let time_bucket = candidate.timestamp / (30 * 60 * 1000);
+    let app_hits = app_counts.get(&app_key).copied().unwrap_or(0);
+    let source_hits = source_counts.get(&source_key).copied().unwrap_or(0);
+    let time_hits = time_bucket_counts.get(&time_bucket).copied().unwrap_or(0);
+
+    let mut score = candidate.score;
+    score += if app_hits == 0 {
+        0.10
+    } else {
+        -(app_hits as f32) * 0.10
+    };
+    score += if source_hits == 0 {
+        0.07
+    } else {
+        -(source_hits as f32) * 0.08
+    };
+    score += if time_hits == 0 {
+        if profile.wants_recency {
+            0.02
+        } else {
+            0.04
+        }
+    } else {
+        -(time_hits as f32) * 0.03
+    };
+    score += estimate_result_signal_strength(candidate) * 0.04;
+
+    score
+}
+
+fn diversity_source_key(candidate: &SearchResult) -> String {
+    let domain = candidate
+        .url
+        .as_ref()
+        .map(|url| extract_domain(url))
+        .unwrap_or_default();
+    if domain.is_empty() {
+        session_key(candidate)
+    } else {
+        format!("{}:{}", candidate.app_name.to_ascii_lowercase(), domain)
+    }
+}
+
+fn remember_diversity_keys(
+    candidate: &SearchResult,
+    app_counts: &mut HashMap<String, usize>,
+    source_counts: &mut HashMap<String, usize>,
+    time_bucket_counts: &mut HashMap<i64, usize>,
+) {
+    *app_counts
+        .entry(candidate.app_name.to_ascii_lowercase())
+        .or_insert(0) += 1;
+    *source_counts
+        .entry(diversity_source_key(candidate))
+        .or_insert(0) += 1;
+    *time_bucket_counts
+        .entry(candidate.timestamp / (30 * 60 * 1000))
+        .or_insert(0) += 1;
 }
 
 fn token_set_matches_term(token_set: &HashSet<String>, term: &str) -> bool {
@@ -1478,6 +1725,14 @@ mod tests {
     }
 
     #[test]
+    fn keyword_variants_include_adjacent_subqueries() {
+        let profile = QueryProfile::from_query("knowledge graph display options");
+        let variants = profile.keyword_variants();
+        assert!(variants.iter().any(|variant| variant == "knowledge graph"));
+        assert!(variants.iter().any(|variant| variant == "graph display"));
+    }
+
+    #[test]
     fn rerank_penalizes_generic_chrome_noise() {
         let mut noisy = sr("1", "New Tab", "New Tab Home Trending Notifications", 0.8);
         noisy.noise_score = 0.9;
@@ -1664,13 +1919,14 @@ mod tests {
 
     #[test]
     fn recency_queries_prefer_newer_hits_when_relevance_is_close() {
+        let now = chrono::Utc::now().timestamp_millis();
         let mut older = sr(
             "1",
             "Budget model",
             "Updated budget model and revised assumptions",
             0.58,
         );
-        older.timestamp = 1_000_000;
+        older.timestamp = now - (2 * 24 * 60 * 60 * 1000);
 
         let mut newer = sr(
             "2",
@@ -1678,10 +1934,76 @@ mod tests {
             "Updated budget model and revised assumptions",
             0.55,
         );
-        newer.timestamp = 2_000_000;
+        newer.timestamp = now - (60 * 60 * 1000);
 
         let ranked = HybridSearcher::rerank("latest budget model updates", vec![older, newer], 10);
         assert_eq!(ranked.first().map(|r| r.id.as_str()), Some("2"));
+    }
+
+    #[test]
+    fn diversity_rerank_surfaces_second_app_after_top_hit() {
+        let mut chrome_primary = sr(
+            "1",
+            "Launch checklist",
+            "Reviewed launch checklist and deployment notes",
+            0.92,
+        );
+        chrome_primary.app_name = "Chrome".to_string();
+        chrome_primary.session_key = "chrome:launch".to_string();
+
+        let mut chrome_secondary = sr(
+            "2",
+            "Launch checklist",
+            "Reviewed launch checklist and rollout notes",
+            0.89,
+        );
+        chrome_secondary.app_name = "Chrome".to_string();
+        chrome_secondary.session_key = "chrome:launch".to_string();
+
+        let mut slack_hit = sr(
+            "3",
+            "Launch checklist",
+            "Shared launch checklist updates with the team in Slack",
+            0.84,
+        );
+        slack_hit.app_name = "Slack".to_string();
+        slack_hit.session_key = "slack:launch".to_string();
+
+        let ranked = HybridSearcher::rerank(
+            "launch checklist updates",
+            vec![chrome_primary, chrome_secondary, slack_hit],
+            2,
+        );
+        assert_eq!(ranked.len(), 2);
+        assert!(ranked.iter().any(|result| result.app_name == "Slack"));
+    }
+
+    #[test]
+    fn freshness_queries_drop_stale_low_signal_hits() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut stale = sr(
+            "1",
+            "Pipeline notes",
+            "Pipeline testing notes and rough draft",
+            0.95,
+        );
+        stale.timestamp = now - (55 * 24 * 60 * 60 * 1000);
+        stale.summary_source = "fallback".to_string();
+        stale.ocr_confidence = 0.35;
+        stale.noise_score = 0.55;
+
+        let mut fresh = sr(
+            "2",
+            "Pipeline notes",
+            "Pipeline testing feature implemented for developers",
+            0.74,
+        );
+        fresh.timestamp = now - (2 * 60 * 60 * 1000);
+
+        let ranked =
+            HybridSearcher::rerank("today pipeline testing feature", vec![stale, fresh], 5);
+        assert_eq!(ranked.first().map(|result| result.id.as_str()), Some("2"));
+        assert!(ranked.iter().all(|result| result.id != "1"));
     }
 
     #[test]

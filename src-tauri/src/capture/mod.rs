@@ -452,8 +452,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let snippet_embed_input = final_snippet.clone();
 
         let embedding_inputs = vec![enriched_clean_text.clone(), snippet_embed_input.clone()];
-        let embedding_vectors =
-            embed_text_inputs_with_memo(&text_embedder, &mut embedding_memo, &embedding_inputs);
+        let embedding_vectors = embed_text_inputs_with_memo(
+            &text_embedder,
+            &mut embedding_memo,
+            &app_name,
+            &window_title,
+            &embedding_inputs,
+        );
         let text_embedding = embedding_vectors
             .first()
             .cloned()
@@ -543,19 +548,24 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 fn embed_text_inputs_with_memo(
     text_embedder: &Embedder,
     memo: &mut EmbeddingMemo,
+    app_name: &str,
+    window_title: &str,
     texts: &[String],
 ) -> Vec<Vec<f32>> {
     let mut out: Vec<Option<Vec<f32>>> = vec![None; texts.len()];
     let mut missing = Vec::new();
     let mut missing_positions = Vec::new();
     let mut missing_dedup: HashMap<String, usize> = HashMap::new();
+    let app_key = app_name.trim().to_lowercase();
+    let title_key = window_title.trim().to_lowercase();
 
     for (idx, text) in texts.iter().enumerate() {
-        let key = text.trim().to_string();
-        if key.is_empty() {
+        let text_key = text.trim().to_string();
+        if text_key.is_empty() {
             out[idx] = Some(vec![0.0; EMBEDDING_DIM]);
             continue;
         }
+        let key = format!("{app_key}|||{title_key}|||{text_key}");
 
         if let Some(cached) = memo.get(&key) {
             out[idx] = Some(cached);
@@ -570,13 +580,17 @@ fn embed_text_inputs_with_memo(
         let unique_idx = missing.len();
         missing_dedup.insert(key.clone(), unique_idx);
         missing_positions.push((idx, unique_idx));
-        missing.push(key);
+        missing.push((key, text_key));
     }
 
     if !missing.is_empty() {
-        if let Ok(vectors) = text_embedder.embed_batch(&missing) {
-            for (text, vector) in missing.iter().cloned().zip(vectors.iter().cloned()) {
-                memo.insert(text, vector);
+        let contextual_inputs = missing
+            .iter()
+            .map(|(_, text)| (app_name.to_string(), window_title.to_string(), text.clone()))
+            .collect::<Vec<_>>();
+        if let Ok(vectors) = text_embedder.embed_batch_with_context(&contextual_inputs) {
+            for ((memo_key, _), vector) in missing.iter().cloned().zip(vectors.iter().cloned()) {
+                memo.insert(memo_key, vector);
             }
             for (idx, unique_idx) in missing_positions {
                 out[idx] = Some(
@@ -887,7 +901,11 @@ pub(crate) async fn merge_memory_records_with_policy(
 
     let merged_embedding = if recompute_embedding {
         text_embedder
-            .embed_batch(&[merged_clean_text.clone()])
+            .embed_batch_with_context(&[(
+                incoming.app_name.clone(),
+                incoming.window_title.clone(),
+                merged_clean_text.clone(),
+            )])
             .ok()
             .and_then(|mut vectors| vectors.drain(..).next())
             .unwrap_or_else(|| existing.embedding.clone())
@@ -896,7 +914,11 @@ pub(crate) async fn merge_memory_records_with_policy(
     };
     let merged_snippet_embedding = if recompute_embedding {
         text_embedder
-            .embed_batch(&[merged_snippet.clone()])
+            .embed_batch_with_context(&[(
+                incoming.app_name.clone(),
+                incoming.window_title.clone(),
+                merged_snippet.clone(),
+            )])
             .ok()
             .and_then(|mut vectors| vectors.drain(..).next())
             .unwrap_or_else(|| existing.snippet_embedding.clone())
