@@ -222,6 +222,7 @@ fn main() {
             api::commands::list_meetings,
             api::commands::delete_meeting,
             api::commands::get_meeting_transcript,
+            api::commands::export_meeting_pdf,
             // Voice / Speech
             api::commands::transcribe_voice_input,
             api::commands::speak_text,

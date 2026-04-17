@@ -91,6 +91,8 @@ thiserror = "2.0.18"
 regex = "1.12.3"
 tauri-plugin-autostart = "2.5.1"
 rand = "0.10.1"
+genpdf = "0.2"
+
 
 # macOS specific
 [target.'cfg(target_os = "macos")'.dependencies]

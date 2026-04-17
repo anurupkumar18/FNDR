@@ -382,6 +382,10 @@ export async function getMeetingTranscript(meetingId: string): Promise<MeetingTr
     return invoke<MeetingTranscript>("get_meeting_transcript", { meetingId });
 }
 
+export async function exportMeetingPdf(meetingId: string): Promise<string> {
+    return invoke<string>("export_meeting_pdf", { meetingId });
+}
+
 
 export async function transcribeVoiceInput(
     audioBytes: number[],

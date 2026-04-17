@@ -10,6 +10,7 @@ import {
     onMeetingStatus,
     startMeetingRecording,
     stopMeetingRecording,
+    exportMeetingPdf,
 } from "../api/tauri";
 import "./MeetingRecorderPanel.css";
 
@@ -27,6 +28,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
     const [titleInput, setTitleInput] = useState("");
     const [starting, setStarting] = useState(false);
     const [stopping, setStopping] = useState(false);
+    const [exporting, setExporting] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const selectedMeeting = useMemo(
@@ -142,6 +144,22 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
         }
     };
 
+    const handleDownloadPdf = async (meetingId: string) => {
+        if (exporting) return;
+        setExporting(true);
+        setError(null);
+        try {
+            const path = await exportMeetingPdf(meetingId);
+            // Optional: show a temporary "Success" hint instead of alert.
+            console.log("PDF exported to:", path);
+            alert(`Transcript exported successfully to:\n${path}`);
+        } catch (err) {
+            setError(String(err));
+        } finally {
+            setExporting(false);
+        }
+    };
+
     if (!isVisible) return null;
 
     return (
@@ -205,12 +223,21 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                             <span className="breakdown-meta">
                                 {new Date(selectedMeeting.start_timestamp).toLocaleDateString()} • {Math.round(selectedMeeting.duration_seconds / 60)} min
                             </span>
-                            <button
-                                className="ui-action-btn meeting-btn delete-session-btn"
-                                onClick={() => handleDelete(selectedMeeting.id)}
-                            >
-                                Delete
-                            </button>
+                            <div className="breakdown-actions">
+                                <button
+                                    className={`ui-action-btn meeting-btn download-pdf-btn ${exporting ? "loading" : ""}`}
+                                    onClick={() => handleDownloadPdf(selectedMeeting.id)}
+                                    disabled={exporting}
+                                >
+                                    {exporting ? "Exporting..." : "↓ Download PDF"}
+                                </button>
+                                <button
+                                    className="ui-action-btn meeting-btn delete-session-btn"
+                                    onClick={() => handleDelete(selectedMeeting.id)}
+                                >
+                                    Delete
+                                </button>
+                            </div>
                         </div>
 
                         {selectedMeeting.breakdown ? (

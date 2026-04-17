@@ -24,6 +24,11 @@ use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Manager, State};
 use tokio::time::{timeout, Duration, Instant};
 
+use genpdf::elements;
+use genpdf::fonts;
+use genpdf::style;
+use genpdf::Element;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureStatus {
     pub is_capturing: bool,
@@ -972,6 +977,136 @@ pub async fn delete_meeting(meeting_id: String) -> Result<bool, String> {
 #[tauri::command]
 pub async fn get_meeting_transcript(meeting_id: String) -> Result<MeetingTranscript, String> {
     meeting::get_meeting_transcript(&meeting_id).await
+}
+
+/// Export a meeting transcript, summary, and action items to a PDF in the Downloads folder
+#[tauri::command]
+pub async fn export_meeting_pdf(
+    _app: tauri::AppHandle,
+    meeting_id: String,
+) -> Result<String, String> {
+    let transcript = meeting::get_meeting_transcript(&meeting_id).await?;
+    let meeting = &transcript.meeting;
+
+    // 1. Resolve Downloads folder
+    let downloads_dir = dirs::download_dir()
+        .ok_or_else(|| "Could not find Downloads folder on this system.".to_string())?;
+
+    // 2. Prepare filename
+    let safe_title = meeting
+        .title
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ')
+        .collect::<String>()
+        .replace(' ', "_");
+
+    let date_str = chrono::DateTime::from_timestamp(meeting.start_timestamp / 1000, 0)
+        .map(|dt| dt.format("%Y%m%d_%H%M").to_string())
+        .unwrap_or_else(|| meeting.id.clone());
+
+    let filename = format!("FNDR_Meeting_{}_{}.pdf", safe_title, date_str);
+    let target_path = downloads_dir.join(filename);
+
+    // 3. Generate PDF
+    // Use a common macOS font path. Arial is standard in Supplemental.
+    let font_dir = std::path::Path::new("/System/Library/Fonts/Supplemental");
+    
+    // Load font variants manually since genpdf's from_files helper expects "Arial-Regular.ttf"
+    // but macOS uses "Arial.ttf", "Arial Bold.ttf", etc.
+    let regular = genpdf::fonts::FontData::load(font_dir.join("Arial.ttf"), None)
+        .map_err(|e| format!("Failed to load 'Arial.ttf' from {:?}: {}", font_dir, e))?;
+    let bold = genpdf::fonts::FontData::load(font_dir.join("Arial Bold.ttf"), None)
+        .map_err(|e| format!("Failed to load 'Arial Bold.ttf' from {:?}: {}", font_dir, e))?;
+    let italic = genpdf::fonts::FontData::load(font_dir.join("Arial Italic.ttf"), None)
+        .map_err(|e| format!("Failed to load 'Arial Italic.ttf' from {:?}: {}", font_dir, e))?;
+    let bold_italic = genpdf::fonts::FontData::load(font_dir.join("Arial Bold Italic.ttf"), None)
+        .map_err(|e| format!("Failed to load 'Arial Bold Italic.ttf' from {:?}: {}", font_dir, e))?;
+
+    let font_family = genpdf::fonts::FontFamily {
+        regular,
+        bold,
+        italic,
+        bold_italic,
+    };
+
+    let mut doc = genpdf::Document::new(font_family);
+    doc.set_title(format!("FNDR Meeting: {}", meeting.title));
+
+    let mut decorator = genpdf::SimplePageDecorator::new();
+    decorator.set_margins(18);
+    doc.set_page_decorator(decorator);
+
+    // Title & Header
+    doc.push(
+        elements::Text::new(&meeting.title)
+            .styled(style::Style::new().bold().with_font_size(20)),
+    );
+    let date_label = chrono::DateTime::from_timestamp(meeting.start_timestamp / 1000, 0)
+        .map(|dt| dt.format("%B %d, %Y at %H:%M").to_string())
+        .unwrap_or_else(|| "Unknown Date".to_string());
+    doc.push(elements::Text::new(format!("Date: {}", date_label)).styled(style::Style::new().with_font_size(10)));
+    doc.push(elements::Break::new(1.5));
+
+    // Breakdown Sections
+    if let Some(breakdown) = &meeting.breakdown {
+        if !breakdown.summary.is_empty() && !breakdown.summary.eq_ignore_ascii_case("none") {
+            doc.push(elements::Text::new("Summary").styled(style::Style::new().bold().with_font_size(14)));
+            doc.push(elements::Paragraph::new(&breakdown.summary));
+            doc.push(elements::Break::new(1.0));
+        }
+
+        let filtered_todos: Vec<_> = breakdown.todos.iter()
+            .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("none"))
+            .collect();
+        if !filtered_todos.is_empty() {
+            doc.push(elements::Text::new("To-dos").styled(style::Style::new().bold().with_font_size(14)));
+            let mut list = elements::UnorderedList::new();
+            for item in filtered_todos {
+                list.push(elements::Text::new(item));
+            }
+            doc.push(list);
+            doc.push(elements::Break::new(1.0));
+        }
+
+        let filtered_reminders: Vec<_> = breakdown.reminders.iter()
+            .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("none"))
+            .collect();
+        if !filtered_reminders.is_empty() {
+            doc.push(elements::Text::new("Reminders").styled(style::Style::new().bold().with_font_size(14)));
+            let mut list = elements::UnorderedList::new();
+            for item in filtered_reminders {
+                list.push(elements::Text::new(item));
+            }
+            doc.push(list);
+            doc.push(elements::Break::new(1.0));
+        }
+
+        let filtered_followups: Vec<_> = breakdown.followups.iter()
+            .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("none"))
+            .collect();
+        if !filtered_followups.is_empty() {
+            doc.push(elements::Text::new("Follow-ups").styled(style::Style::new().bold().with_font_size(14)));
+            let mut list = elements::UnorderedList::new();
+            for item in filtered_followups {
+                list.push(elements::Text::new(item));
+            }
+            doc.push(list);
+            doc.push(elements::Break::new(1.0));
+        }
+    }
+
+    // Full Transcript
+    if !transcript.full_text.is_empty() {
+        doc.push(elements::Break::new(0.5));
+        doc.push(elements::Text::new("Full Transcript").styled(style::Style::new().bold().with_font_size(14)));
+        doc.push(elements::Paragraph::new(&transcript.full_text));
+    }
+
+    // Save
+    doc.render_to_file(&target_path)
+        .map_err(|e| format!("Failed to generate PDF file: {}", e))?;
+
+    Ok(target_path.to_string_lossy().to_string())
 }
 
 /// Transcribe a short voice input clip for voice search and voice control
