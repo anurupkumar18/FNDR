@@ -178,7 +178,7 @@ export function PipelineInspectorPanel({
                     <p>Real capture → index → retrieval trace with live internals.</p>
                 </div>
                 <button className="ui-action-btn pipeline-close-btn" onClick={onClose}>
-                    ✕ Close
+                    Close
                 </button>
             </header>
 

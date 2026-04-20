@@ -74,6 +74,14 @@ pub struct AppState {
     pub proactive_tx: tokio::sync::watch::Sender<Option<ProactiveSuggestion>>,
     pub proactive_rx: tokio::sync::watch::Receiver<Option<ProactiveSuggestion>>,
 
+    // ── Focus Mode (Tier-2 drift detection) ──────────────────────────────────
+    /// Description of the task the user is trying to stay focused on.
+    pub focus_task: RwLock<Option<String>>,
+    /// Embedding of `focus_task` used to compute cosine similarity each capture.
+    pub focus_task_embedding: RwLock<Option<Vec<f32>>>,
+    /// Counter of consecutive off-task captures. Resets on an on-task capture.
+    pub focus_drift_count: std::sync::atomic::AtomicU32,
+
     // Privacy state memory
     pub pending_privacy_alerts: RwLock<Vec<PrivacyAlert>>,
     /// Key: domain_or_title, Value: snooze expiration timestamp (sec)
@@ -108,6 +116,9 @@ impl AppState {
             last_embedding: RwLock::new(Vec::new()),
             proactive_tx,
             proactive_rx,
+            focus_task: RwLock::new(None),
+            focus_task_embedding: RwLock::new(None),
+            focus_drift_count: std::sync::atomic::AtomicU32::new(0),
             pending_privacy_alerts: RwLock::new(Vec::new()),
             snoozed_privacy_alerts: RwLock::new(std::collections::HashMap::new()),
         }

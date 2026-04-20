@@ -469,6 +469,44 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
         *state.last_embedding.write() = text_embedding.clone();
 
+        // ── Focus Mode drift detection ────────────────────────────────────────
+        // Mirrors CC's context-similarity approach: embed the focus task once,
+        // then compare every incoming capture. 3 consecutive off-task captures
+        // surfaces a ProactiveSuggestion that the frontend can toast.
+        {
+            let focus_emb_opt = state.focus_task_embedding.read().clone();
+            if let Some(ref focus_emb) = focus_emb_opt {
+                let sim = cosine_similarity(&text_embedding, focus_emb);
+                const DRIFT_THRESHOLD: f32 = 0.30;
+                if sim < DRIFT_THRESHOLD {
+                    let prev = state
+                        .focus_drift_count
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if prev + 1 >= 3 {
+                        state
+                            .focus_drift_count
+                            .store(0, std::sync::atomic::Ordering::Relaxed);
+                        let task_title =
+                            state.focus_task.read().clone().unwrap_or_default();
+                        let suggestion = crate::ProactiveSuggestion {
+                            memory_id: "focus_drift".to_string(),
+                            snippet: format!(
+                                "You've been off-task for a while. Your focus: \"{}\"",
+                                task_title
+                            ),
+                            similarity: sim,
+                            task_title: Some(task_title),
+                        };
+                        let _ = state.proactive_tx.send(Some(suggestion));
+                    }
+                } else {
+                    state
+                        .focus_drift_count
+                        .store(0, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+
         let record = MemoryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: now.timestamp_millis(),

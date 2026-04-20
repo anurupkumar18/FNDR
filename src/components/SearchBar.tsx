@@ -432,7 +432,7 @@ export function SearchBar({
                             aria-label="Clear search"
                             disabled={disabled}
                         >
-                            ✕
+                            ×
                         </button>
                     )}
                 </div>

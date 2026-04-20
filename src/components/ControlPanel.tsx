@@ -451,7 +451,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                         <p className="panel-subtitle">Private, local, always in your control.</p>
                     </div>
                     <button className="ui-action-btn panel-close" onClick={() => setIsOpen(false)} aria-label="Close">
-                        ✕
+                        Close
                     </button>
                 </header>
 
@@ -747,7 +747,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         blocklist.map((app) => (
                                             <div key={app} className="blocklist-item">
                                                 <span>{app}</span>
-                                                <button onClick={() => void handleRemoveApp(app)}>✕</button>
+                                                <button onClick={() => void handleRemoveApp(app)}>x</button>
                                             </div>
                                         ))
                                     )}

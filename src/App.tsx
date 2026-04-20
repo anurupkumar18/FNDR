@@ -11,6 +11,15 @@ import { DailySummaryPanel } from "./components/DailySummaryPanel";
 import { PipelineInspectorPanel } from "./components/PipelineInspectorPanel";
 import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
+import { SearchHistoryPanel, appendToSearchHistory } from "./components/SearchHistoryPanel";
+import { QuickSkillsPanel } from "./components/QuickSkillsPanel";
+import { FocusSessionPanel } from "./components/FocusSessionPanel";
+import { CommandPalette, PanelKey } from "./components/CommandPalette";
+import { AutomationPanel, useAutomationScheduler } from "./components/AutomationPanel";
+import { ResearchPanel } from "./components/ResearchPanel";
+import { TimeTrackingPanel } from "./components/TimeTrackingPanel";
+import { FocusModePanel } from "./components/FocusModePanel";
+import "./components/FocusModePanel.css";
 
 import { useSearch } from "./hooks/useSearch";
 import {
@@ -21,10 +30,11 @@ import {
     getAppNames,
     getMeetingStatus,
     onMeetingStatus,
+    onProactiveSuggestion,
     getStatus,
     getFunGreeting,
 } from "./api/tauri";
-import { getOnboardingState, requestBiometricAuth, saveOnboardingState } from "./api/onboarding";
+import { getOnboardingState, requestBiometricAuth, saveOnboardingState, type OnboardingState } from "./api/onboarding";
 import { EVAL_UI } from "./evalUi";
 import "./styles/App.css";
 
@@ -82,7 +92,7 @@ function BiometricLockScreen({
     return (
         <div className="biometric-lock-overlay">
             <div className="biometric-lock-card">
-                <div className="biometric-lock-icon">🔐</div>
+                <div className="biometric-lock-icon">FNDR</div>
                 <h1 className="biometric-lock-title">FNDR is Locked</h1>
                 <p className="biometric-lock-subtitle">
                     Authenticate with Touch ID or your system password to access your memories.
@@ -120,13 +130,15 @@ function App() {
     const [appNames, setAppNames] = useState<string[]>([]);
     const [status, setStatus] = useState<CaptureStatus | null>(null);
     const [meetingStatus, setMeetingStatus] = useState<MeetingRecorderStatus | null>(null);
-    const [showAgentPanel, setShowAgentPanel] = useState(false);
-    const [showMeetingPanel, setShowMeetingPanel] = useState(false);
-    const [showMemoryCardsPanel, setShowMemoryCardsPanel] = useState(false);
-    const [showStatsPanel, setShowStatsPanel] = useState(false);
-    const [showTodoPanel, setShowTodoPanel] = useState(false);
-    const [showDailySummaryPanel, setShowDailySummaryPanel] = useState(false);
-    const [showPipelineInspectorPanel, setShowPipelineInspectorPanel] = useState(false);
+    // Single active-panel state — only one full-screen panel can be open at a time.
+    // CommandPalette is kept separate because it layers on top of the current panel.
+    const [activePanel, setActivePanel] = useState<PanelKey | null>(null);
+    const [researchSeedMemory, setResearchSeedMemory] = useState<MemoryCard | null>(null);
+    const [showCommandPalette, setShowCommandPalette] = useState(false);
+    const [focusDriftToast, setFocusDriftToast] = useState<string | null>(null);
+
+    // Background automation scheduler — fires Tauri calls on configured schedules
+    useAutomationScheduler();
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
     const [biometricRequired, setBiometricRequired] = useState<boolean | null>(null);
     const [biometricUnlocked, setBiometricUnlocked] = useState(false);
@@ -291,10 +303,83 @@ function App() {
             .replace(/\s+/g, " ")
             .trim();
         setQuery(normalized);
+        if (normalized) appendToSearchHistory(normalized);
         if (typeof nextValue === "string") {
             setQueryDraft(nextValue);
         }
     };
+
+    // Run a Quick Skill: set query + optional time filter, then submit
+    const handleRunSkill = (skillQuery: string, timeFilter?: string) => {
+        if (timeFilter) setTimeFilter(timeFilter);
+        setQueryDraft(skillQuery);
+        setQuery(skillQuery);
+        if (skillQuery) appendToSearchHistory(skillQuery);
+    };
+
+    // Run a search for a specific app (from Focus Session panel)
+    const handleSearchApp = (appName: string) => {
+        setAppFilter(appName);
+        setQueryDraft("");
+        setQuery(" "); // trigger search with only app filter
+    };
+
+    // Command Palette panel dispatcher — opens any panel by key
+    const handleOpenPanel = useCallback((panel: PanelKey) => {
+        setShowCommandPalette(false);
+        setActivePanel(panel);
+    }, []);
+
+    // Research trigger — opens Research panel seeded with a memory
+    const handleResearchMemory = useCallback((memory: MemoryCard) => {
+        setResearchSeedMemory(memory);
+        setActivePanel("research");
+        setShowCommandPalette(false);
+    }, []);
+
+    // Global Cmd+K / Ctrl+K listener
+    useEffect(() => {
+        const handler = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+                e.preventDefault();
+                setShowCommandPalette((prev) => !prev);
+            }
+        };
+        window.addEventListener("keydown", handler);
+        return () => window.removeEventListener("keydown", handler);
+    }, []);
+
+    // Proactive suggestion listener — surfaces focus drift alerts as a toast.
+    // Uses async inner function so the unlisten handle is guaranteed to be
+    // assigned before any cleanup can run, avoiding a listener leak.
+    useEffect(() => {
+        let unlisten: (() => void) | null = null;
+        let mounted = true;
+
+        const subscribe = async () => {
+            try {
+                const fn = await onProactiveSuggestion((suggestion) => {
+                    if (suggestion.memory_id === "focus_drift") {
+                        setFocusDriftToast(suggestion.snippet);
+                        setTimeout(() => setFocusDriftToast(null), 8_000);
+                    }
+                });
+                if (mounted) {
+                    unlisten = fn;
+                } else {
+                    fn(); // component already unmounted — immediately release
+                }
+            } catch {
+                // non-fatal; proactive surface is best-effort
+            }
+        };
+
+        void subscribe();
+        return () => {
+            mounted = false;
+            if (unlisten) unlisten();
+        };
+    }, []);
 
 
 
@@ -341,7 +426,7 @@ function App() {
     if (!onboardingDone) {
         return (
             <Onboarding
-                onComplete={(next) => {
+                onComplete={(next: OnboardingState) => {
                     setOnboardingDone(true);
                     setDisplayName(next.display_name ?? null);
                     setBiometricRequired(next.biometric_enabled === true);
@@ -371,7 +456,7 @@ function App() {
                     onClick={() => setIsSidebarOpen((prev) => !prev)}
                     aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
                 >
-                    {isSidebarOpen ? "×" : "☰"}
+                    {isSidebarOpen ? "Close" : "Menu"}
                 </button>
             )}
 
@@ -398,43 +483,53 @@ function App() {
 
             {!EVAL_UI && (
                 <aside className={`left-sidebar ${isSidebarOpen ? "open" : ""}`}>
+                    {(
+                        [
+                            { label: "Features", items: [
+                                { key: "memoryCards" as PanelKey, text: "Memory Cards" },
+                                { key: "stats" as PanelKey, text: "Stats" },
+                                { key: "todo" as PanelKey, text: "To Do" },
+                                { key: "meeting" as PanelKey, text: "Meetings" },
+                                { key: "dailySummary" as PanelKey, text: "Daily Summary" },
+                                { key: "agent" as PanelKey, text: "Agent" },
+                                { key: "pipeline" as PanelKey, text: "Pipeline Inspector" },
+                            ]},
+                            { label: "Smart", items: [
+                                { key: "focusSession" as PanelKey, text: "Focus Session" },
+                                { key: "quickSkills" as PanelKey, text: "Quick Skills" },
+                                { key: "searchHistory" as PanelKey, text: "Search History" },
+                                { key: "automation" as PanelKey, text: "Automation" },
+                                { key: "research" as PanelKey, text: "Research" },
+                                { key: "timeTracking" as PanelKey, text: "Time Tracking" },
+                                { key: "focusMode" as PanelKey, text: "Focus Mode" },
+                            ]},
+                        ] as const
+                    ).map((group) => (
+                        <div key={group.label} className="sidebar-group sidebar-actions">
+                            <div className="sidebar-label">{group.label}</div>
+                            {group.items.map(({ key, text }) => (
+                                <button
+                                    key={key}
+                                    className={`ui-action-btn ${activePanel === key ? "active" : ""}`}
+                                    onClick={() => {
+                                        if (key === "research") setResearchSeedMemory(null);
+                                        setActivePanel(activePanel === key ? null : key);
+                                        setIsSidebarOpen(false);
+                                    }}
+                                >
+                                    {text}
+                                </button>
+                            ))}
+                        </div>
+                    ))}
+
                     <div className="sidebar-group sidebar-actions">
-                        <div className="sidebar-label">Features</div>
+                        <div className="sidebar-label">Commands</div>
                         <button
-                            className={`ui-action-btn memory-cards-toggle-btn ${showMemoryCardsPanel ? "active" : ""}`}
-                            onClick={() => setShowMemoryCardsPanel((open) => !open)}
+                            className="ui-action-btn"
+                            onClick={() => { setShowCommandPalette(true); setIsSidebarOpen(false); }}
                         >
-                            Memory Cards
-                        </button>
-                        <button
-                            className={`ui-action-btn stats-toggle-btn ${showStatsPanel ? "active" : ""}`}
-                            onClick={() => setShowStatsPanel((open) => !open)}
-                        >
-                            Stats
-                        </button>
-                        <button
-                            className={`ui-action-btn todo-toggle-btn ${showTodoPanel ? "active" : ""}`}
-                            onClick={() => setShowTodoPanel((open) => !open)}
-                        >
-                            To do
-                        </button>
-                        <button
-                            className={`ui-action-btn meeting-toggle-btn ${showMeetingPanel ? "active" : ""}`}
-                            onClick={() => setShowMeetingPanel((open) => !open)}
-                        >
-                            Meetings
-                        </button>
-                        <button
-                            className={`ui-action-btn daily-summary-toggle-btn ${showDailySummaryPanel ? "active" : ""}`}
-                            onClick={() => setShowDailySummaryPanel((open) => !open)}
-                        >
-                            Daily Summary
-                        </button>
-                        <button
-                            className={`ui-action-btn pipeline-toggle-btn ${showPipelineInspectorPanel ? "active" : ""}`}
-                            onClick={() => setShowPipelineInspectorPanel((open) => !open)}
-                        >
-                            Pipeline Inspector
+                            Cmd+K Palette
                         </button>
                     </div>
                 </aside>
@@ -458,8 +553,8 @@ function App() {
                         onTimeFilterChange={setTimeFilter}
                         appFilter={appFilter}
                         onAppFilterChange={setAppFilter}
-                        onSetMeetingPanelOpen={setShowMeetingPanel}
-                        onSetMemoryCardsPanelOpen={setShowMemoryCardsPanel}
+                        onSetMeetingPanelOpen={(open) => setActivePanel(open ? "meeting" : null)}
+                        onSetMemoryCardsPanelOpen={(open) => setActivePanel(open ? "memoryCards" : null)}
                         appNames={appNames}
                         resultCount={visibleResults.length}
                         searchResults={visibleResults}
@@ -489,38 +584,108 @@ function App() {
             {!EVAL_UI && (
                 <>
                     <AgentPanel
-                        isVisible={showAgentPanel}
-                        onClose={() => setShowAgentPanel(false)}
+                        isVisible={activePanel === "agent"}
+                        onClose={() => setActivePanel(null)}
                     />
                     <MeetingRecorderPanel
-                        isVisible={showMeetingPanel}
-                        onClose={() => setShowMeetingPanel(false)}
+                        isVisible={activePanel === "meeting"}
+                        onClose={() => setActivePanel(null)}
                     />
                     <MemoryCardsPanel
-                        isVisible={showMemoryCardsPanel}
-                        onClose={() => setShowMemoryCardsPanel(false)}
+                        isVisible={activePanel === "memoryCards"}
+                        onClose={() => setActivePanel(null)}
                         appNames={appNames}
                         onMemoryDeleted={handleMemoryDeleted}
                     />
                     <StatsPanel
-                        isVisible={showStatsPanel}
-                        onClose={() => setShowStatsPanel(false)}
+                        isVisible={activePanel === "stats"}
+                        onClose={() => setActivePanel(null)}
                     />
                     <TodoPanel
-                        isVisible={showTodoPanel}
-                        onClose={() => setShowTodoPanel(false)}
+                        isVisible={activePanel === "todo"}
+                        onClose={() => setActivePanel(null)}
                     />
                     <DailySummaryPanel
-                        isVisible={showDailySummaryPanel}
-                        onClose={() => setShowDailySummaryPanel(false)}
+                        isVisible={activePanel === "dailySummary"}
+                        onClose={() => setActivePanel(null)}
                     />
                     <PipelineInspectorPanel
-                        isVisible={showPipelineInspectorPanel}
-                        onClose={() => setShowPipelineInspectorPanel(false)}
+                        isVisible={activePanel === "pipeline"}
+                        onClose={() => setActivePanel(null)}
                         currentQuery={query}
                         timeFilter={timeFilter}
                         appFilter={appFilter}
                     />
+                    <SearchHistoryPanel
+                        isVisible={activePanel === "searchHistory"}
+                        onClose={() => setActivePanel(null)}
+                        onRunQuery={handleSearchSubmit}
+                    />
+                    <QuickSkillsPanel
+                        isVisible={activePanel === "quickSkills"}
+                        onClose={() => setActivePanel(null)}
+                        onRunSkill={handleRunSkill}
+                    />
+                    <FocusSessionPanel
+                        isVisible={activePanel === "focusSession"}
+                        onClose={() => setActivePanel(null)}
+                        onSearchApp={handleSearchApp}
+                    />
+                    <AutomationPanel
+                        isVisible={activePanel === "automation"}
+                        onClose={() => setActivePanel(null)}
+                    />
+                    <ResearchPanel
+                        isVisible={activePanel === "research"}
+                        onClose={() => setActivePanel(null)}
+                        seedMemory={researchSeedMemory}
+                    />
+                    <TimeTrackingPanel
+                        isVisible={activePanel === "timeTracking"}
+                        onClose={() => setActivePanel(null)}
+                        onSearchApp={handleSearchApp}
+                    />
+                    <FocusModePanel
+                        isVisible={activePanel === "focusMode"}
+                        onClose={() => setActivePanel(null)}
+                    />
+                    <CommandPalette
+                        isOpen={showCommandPalette}
+                        onClose={() => setShowCommandPalette(false)}
+                        selectedMemory={selectedResult}
+                        context={{
+                            query,
+                            onOpenPanel: handleOpenPanel,
+                            onSearch: (q) => handleSearchSubmit(q),
+                            onSearchApp: handleSearchApp,
+                            onClearSearch: () => { setQuery(""); setQueryDraft(""); setTimeFilter(null); setAppFilter(null); },
+                            onDeleteMemory: handleMemoryDeleted,
+                            onResearch: handleResearchMemory,
+                            isCapturing: status?.is_capturing ?? false,
+                        }}
+                    />
+                    {/* Focus drift toast */}
+                    {focusDriftToast && (
+                        <div className="fm-drift-toast">
+                            <div className="fm-toast-header">
+                                <span className="fm-toast-title">Focus Drift Detected</span>
+                                <button
+                                    className="fm-toast-dismiss"
+                                    onClick={() => setFocusDriftToast(null)}
+                                >
+                                    ×
+                                </button>
+                            </div>
+                            <p className="fm-toast-body">{focusDriftToast}</p>
+                            <button
+                                className="fm-toast-dismiss"
+                                style={{ alignSelf: "flex-start", fontSize: "0.76rem", padding: "4px 8px", border: "1px solid rgba(230,150,60,0.25)", borderRadius: "6px", opacity: 1, color: "rgba(230,165,80,0.85)" }}
+                                onClick={() => { setFocusDriftToast(null); setActivePanel("focusMode"); }}
+                            >
+                                View Focus Mode
+                            </button>
+                        </div>
+                    )}
                 </>
             )}
         </div>

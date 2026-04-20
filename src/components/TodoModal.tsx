@@ -65,7 +65,7 @@ export function TodoModal({ isVisible }: TodoModalProps) {
                                     onClick={() => handleDismiss(task.id)}
                                     title="Mark done"
                                 >
-                                    ✓
+                                    Done
                                 </button>
                             </div>
                         </li>
