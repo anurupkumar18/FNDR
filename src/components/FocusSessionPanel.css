@@ -1,0 +1,260 @@
+.fs-page {
+    position: fixed;
+    inset: 0;
+    z-index: 1040;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-bg);
+    color: var(--text-primary);
+}
+
+.fs-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.fs-header h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.fs-header p {
+    margin: 4px 0 0;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
+
+.fs-close-btn {
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+.fs-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.fs-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 60px 24px;
+    color: var(--text-muted);
+    font-size: 0.88rem;
+    text-align: center;
+}
+
+.fs-error {
+    color: #f87171;
+}
+
+/* Active context banner */
+.fs-active-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    background: rgba(100, 160, 255, 0.05);
+    border: 1px solid rgba(100, 160, 255, 0.15);
+    border-radius: 12px;
+}
+
+.fs-active-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4ade80;
+    flex-shrink: 0;
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+    animation: fsPulse 2s ease-in-out infinite;
+}
+
+@keyframes fsPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.fs-active-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.fs-active-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.fs-active-app {
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.fs-active-window {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fs-search-btn {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+}
+
+/* Section label */
+.fs-section-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 0 2px;
+    margin-top: 4px;
+}
+
+/* App clusters */
+.fs-clusters {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.fs-cluster {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color 0.15s;
+}
+
+.fs-cluster.open {
+    border-color: rgba(160, 160, 255, 0.25);
+}
+
+.fs-cluster-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 14px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    color: var(--text-primary);
+    text-align: left;
+    transition: background 0.12s;
+}
+
+.fs-cluster-header:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.fs-cluster-app {
+    font-size: 0.84rem;
+    font-weight: 500;
+    flex-shrink: 0;
+}
+
+.fs-cluster-meta {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    flex: 1;
+}
+
+.fs-cluster-chevron {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.fs-cluster-body {
+    padding: 0 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+}
+
+.fs-cluster-summary {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+    margin: 0;
+    font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fs-cluster-memories {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.fs-memory-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.fs-memory-time {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.fs-memory-title {
+    font-size: 0.78rem;
+    color: rgba(220, 220, 235, 0.8);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fs-more-hint {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    padding-left: 2px;
+}
+
+.fs-cluster-search {
+    font-size: 0.74rem;
+    align-self: flex-start;
+    margin-top: 2px;
+}
+
+/* Light theme */
+[data-theme="light"] .fs-active-banner {
+    background: rgba(80, 120, 220, 0.05);
+    border-color: rgba(80, 120, 220, 0.15);
+}
+
+[data-theme="light"] .fs-cluster-header:hover {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .fs-memory-title {
+    color: rgba(30, 30, 50, 0.8);
+}

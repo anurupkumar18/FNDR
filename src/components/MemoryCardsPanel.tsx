@@ -324,7 +324,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                     <p>Newest to oldest</p>
                 </div>
                 <button className="ui-action-btn memory-cards-close-btn" onClick={onClose}>
-                    ✕ Close
+                    Close
                 </button>
             </div>
 

@@ -558,3 +558,52 @@ export async function generateDailySummaryForDate(dateStr: string): Promise<stri
 export async function exportDailySummaryPdf(dateStr: string, summaryText: string): Promise<string> {
     return invoke<string>("export_daily_summary_pdf", { dateStr, summaryText });
 }
+
+// Proactive surface
+export interface ProactiveSuggestion {
+    memory_id: string;
+    snippet: string;
+    similarity: number;
+    task_title: string | null;
+}
+
+export function onProactiveSuggestion(
+    callback: (suggestion: ProactiveSuggestion) => void
+): Promise<() => void> {
+    return listen<ProactiveSuggestion>("proactive_suggestion", (event) => {
+        callback(event.payload);
+    });
+}
+
+// Time Tracking
+export interface AppTimeEntry {
+    app_name: string;
+    duration_minutes: number;
+    capture_count: number;
+    last_seen: number;
+}
+
+export interface TimeTrackingResult {
+    date: string;
+    total_captures: number;
+    breakdown: AppTimeEntry[];
+}
+
+export async function getTimeTracking(): Promise<TimeTrackingResult> {
+    return invoke<TimeTrackingResult>("get_time_tracking");
+}
+
+// Focus Mode
+export interface FocusStatus {
+    task: string | null;
+    is_active: boolean;
+    drift_count: number;
+}
+
+export async function setFocusTask(task: string | null): Promise<FocusStatus> {
+    return invoke<FocusStatus>("set_focus_task", { task });
+}
+
+export async function getFocusStatus(): Promise<FocusStatus> {
+    return invoke<FocusStatus>("get_focus_status");
+}

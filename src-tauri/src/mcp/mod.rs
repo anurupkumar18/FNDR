@@ -165,6 +165,16 @@ struct SearchMeetingTranscriptsArgs {
     limit: usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct GetAmbientContextArgs {
+    #[serde(default = "default_ambient_limit")]
+    limit: usize,
+}
+
+fn default_ambient_limit() -> usize {
+    5
+}
+
 fn default_search_limit() -> usize {
     10
 }
@@ -663,6 +673,21 @@ fn tools_list_result() -> Value {
                     },
                     "required": ["query"]
                 }
+            },
+            {
+                "name": "get_ambient_context",
+                "description": "Return what the user is actively working on right now: frontmost app, recent memory snippets, and window context. Use this to give code editors, AI assistants, or other clients real-time awareness of the user's current task — the 'Time Machine for IDEs' feature.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 20,
+                            "description": "Number of recent memory snippets to include (default: 5)"
+                        }
+                    }
+                }
             }
         ]
     })
@@ -721,6 +746,13 @@ async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Va
                     message: format!("Invalid search_meeting_transcripts args: {err}"),
                 })?;
             run_search_meeting_transcripts(args).await
+        }
+        "get_ambient_context" => {
+            let args: GetAmbientContextArgs =
+                serde_json::from_value(params.arguments).unwrap_or_else(|_| GetAmbientContextArgs {
+                    limit: default_ambient_limit(),
+                });
+            run_get_ambient_context(app_state, args).await
         }
         unknown => Ok(tool_error(format!("Unknown tool: {unknown}"))),
     }
@@ -868,6 +900,81 @@ async fn run_search_meeting_transcripts(
         "query": args.query,
         "count": results.len(),
         "results": results
+    })))
+}
+
+async fn run_get_ambient_context(
+    app_state: Arc<AppState>,
+    args: GetAmbientContextArgs,
+) -> Result<Value, JsonRpcError> {
+    let limit = args.limit.clamp(1, 20);
+
+    // 1. What app is the user in right now?
+    let frontmost_app = crate::capture::macos_frontmost_app_name()
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    // 2. Recent memory snippets (newest first)
+    let recent = app_state
+        .store
+        .list_recent_results(limit, None)
+        .await
+        .map_err(internal_tool_error)?;
+
+    // 3. Focus mode context (if active)
+    let focus_task = app_state.focus_task.read().clone();
+    let focus_drift_count = app_state
+        .focus_drift_count
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    // 4. Build a compact prose summary suitable for injection into an IDE prompt
+    let mut summary_lines: Vec<String> = Vec::new();
+    summary_lines.push(format!("Currently in: {}", frontmost_app));
+    if let Some(ref task) = focus_task {
+        summary_lines.push(format!("Focus task: {}", task));
+        if focus_drift_count >= 2 {
+            summary_lines.push(format!(
+                "Note: user may be drifting off-task ({} off-task captures)",
+                focus_drift_count
+            ));
+        }
+    }
+    if !recent.is_empty() {
+        summary_lines.push("Recent activity:".to_string());
+        for r in recent.iter().take(limit) {
+            summary_lines.push(format!(
+                "  [{app}] {title} — {snippet}",
+                app = r.app_name,
+                title = r.window_title,
+                snippet = if r.snippet.len() > 140 {
+                    format!("{}…", &r.snippet[..140])
+                } else {
+                    r.snippet.clone()
+                }
+            ));
+        }
+    }
+
+    let structured_snippets: Vec<Value> = recent
+        .iter()
+        .take(limit)
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "timestamp": r.timestamp,
+                "app_name": r.app_name,
+                "window_title": r.window_title,
+                "snippet": r.snippet,
+                "url": r.url
+            })
+        })
+        .collect();
+
+    Ok(tool_success(json!({
+        "frontmost_app": frontmost_app,
+        "focus_task": focus_task,
+        "focus_drift_count": focus_drift_count,
+        "summary": summary_lines.join("\n"),
+        "recent_memories": structured_snippets
     })))
 }
 

@@ -1,0 +1,451 @@
+/* ── Overlay ─────────────────────────────────────────────────────────────── */
+.cp-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px) saturate(120%);
+    -webkit-backdrop-filter: blur(6px) saturate(120%);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: clamp(48px, 12vh, 120px);
+    animation: cpOverlayIn 0.15s ease-out;
+}
+
+@keyframes cpOverlayIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* ── Modal ───────────────────────────────────────────────────────────────── */
+.cp-modal {
+    width: min(620px, calc(100vw - 32px));
+    max-height: 70vh;
+    background: rgba(14, 14, 18, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.04),
+        0 32px 80px rgba(0, 0, 0, 0.7),
+        0 0 0 0.5px rgba(255, 255, 255, 0.02) inset;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: cpModalIn 0.18s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+@keyframes cpModalIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95) translateY(-8px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+/* ── Search row ──────────────────────────────────────────────────────────── */
+.cp-search-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    flex-shrink: 0;
+}
+
+.cp-search-icon {
+    font-size: 0.95rem;
+    color: rgba(255, 255, 255, 0.25);
+    flex-shrink: 0;
+    font-family: system-ui, sans-serif;
+}
+
+.cp-input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    font-size: 1rem;
+    font-family: inherit;
+    color: var(--text-primary, #f3f3f1);
+    caret-color: rgba(180, 180, 255, 0.8);
+}
+
+.cp-input::placeholder {
+    color: rgba(255, 255, 255, 0.22);
+}
+
+.cp-esc-hint {
+    flex-shrink: 0;
+    font-size: 0.68rem;
+    font-family: system-ui, sans-serif;
+    color: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 5px;
+    padding: 2px 6px;
+}
+
+/* ── Context banner ──────────────────────────────────────────────────────── */
+.cp-context-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 16px;
+    background: rgba(100, 140, 255, 0.06);
+    border-bottom: 1px solid rgba(100, 140, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.cp-context-icon {
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.cp-context-text {
+    font-size: 0.74rem;
+    color: rgba(180, 190, 255, 0.7);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── Confirm gate ────────────────────────────────────────────────────────── */
+.cp-confirm-gate {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 20px 20px 16px;
+    animation: cpConfirmIn 0.16s ease-out;
+    flex-shrink: 0;
+}
+
+@keyframes cpConfirmIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.cp-confirm-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+    line-height: 1;
+    margin-top: 2px;
+}
+
+.cp-confirm-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.cp-confirm-message {
+    margin: 0;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: rgba(240, 240, 248, 0.85);
+}
+
+.cp-confirm-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.cp-confirm-btn {
+    height: 32px;
+    padding: 0 16px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    font-family: inherit;
+    cursor: pointer;
+    border: 1px solid;
+    transition: all 0.15s;
+}
+
+.cp-confirm-cancel {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.1);
+    color: rgba(200, 200, 210, 0.8);
+}
+
+.cp-confirm-cancel:hover {
+    background: rgba(255, 255, 255, 0.09);
+    color: #fff;
+}
+
+.cp-confirm-run {
+    background: rgba(120, 140, 255, 0.18);
+    border-color: rgba(120, 140, 255, 0.3);
+    color: rgba(200, 210, 255, 0.95);
+}
+
+.cp-confirm-run:hover {
+    background: rgba(120, 140, 255, 0.3);
+}
+
+.cp-confirm-run.danger {
+    background: rgba(248, 100, 100, 0.12);
+    border-color: rgba(248, 100, 100, 0.25);
+    color: rgba(255, 160, 160, 0.95);
+}
+
+.cp-confirm-run.danger:hover {
+    background: rgba(248, 100, 100, 0.22);
+}
+
+/* ── Feedback flash ──────────────────────────────────────────────────────── */
+.cp-feedback {
+    padding: 18px 20px;
+    font-size: 0.9rem;
+    color: rgba(160, 220, 160, 0.9);
+    text-align: center;
+    animation: cpFeedbackIn 0.2s ease-out;
+    flex-shrink: 0;
+}
+
+@keyframes cpFeedbackIn {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+/* ── Results ─────────────────────────────────────────────────────────────── */
+.cp-results {
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px 0 4px;
+}
+
+.cp-results::-webkit-scrollbar {
+    width: 4px;
+}
+
+.cp-results::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+}
+
+.cp-empty {
+    padding: 28px 20px;
+    text-align: center;
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.25);
+}
+
+.cp-group {
+    padding: 4px 0 6px;
+}
+
+.cp-group + .cp-group {
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    margin-top: 2px;
+    padding-top: 6px;
+}
+
+.cp-group-label {
+    padding: 4px 16px 3px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Command item ────────────────────────────────────────────────────────── */
+.cp-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 14px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+    border-radius: 8px;
+    margin: 0 6px;
+    width: calc(100% - 12px);
+    transition: background 0.1s;
+    position: relative;
+}
+
+.cp-item.active {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.cp-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.cp-item.danger .cp-item-label {
+    color: rgba(255, 140, 140, 0.85);
+}
+
+.cp-item.running {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.cp-item-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+    width: 22px;
+    text-align: center;
+    line-height: 1;
+}
+
+.cp-item-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.cp-item-label {
+    font-size: 0.86rem;
+    font-weight: 500;
+    color: rgba(240, 240, 248, 0.9);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cp-item-desc {
+    font-size: 0.72rem;
+    color: rgba(180, 180, 200, 0.45);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cp-item-enter {
+    flex-shrink: 0;
+    font-size: 0.68rem;
+    font-family: system-ui, sans-serif;
+    color: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    padding: 2px 5px;
+}
+
+.cp-item-spinner {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.12);
+    border-top-color: rgba(180, 190, 255, 0.6);
+    border-radius: 50%;
+    animation: cpSpin 0.8s linear infinite;
+}
+
+@keyframes cpSpin {
+    to { transform: rotate(360deg); }
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+.cp-footer {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    flex-shrink: 0;
+}
+
+.cp-footer span {
+    font-size: 0.68rem;
+    color: rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.cp-footer kbd {
+    font-family: system-ui, sans-serif;
+    font-size: 0.65rem;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: rgba(255, 255, 255, 0.3);
+}
+
+/* ── Light theme ─────────────────────────────────────────────────────────── */
+[data-theme="light"] .cp-modal {
+    background: rgba(248, 248, 252, 0.97);
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.04),
+        0 32px 80px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .cp-input {
+    color: var(--text-primary);
+}
+
+[data-theme="light"] .cp-input::placeholder {
+    color: rgba(100, 100, 120, 0.4);
+}
+
+[data-theme="light"] .cp-esc-hint {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.08);
+    color: rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="light"] .cp-search-row {
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .cp-context-banner {
+    background: rgba(80, 120, 200, 0.06);
+    border-bottom-color: rgba(80, 120, 200, 0.1);
+}
+
+[data-theme="light"] .cp-context-text {
+    color: rgba(60, 90, 180, 0.7);
+}
+
+[data-theme="light"] .cp-group-label {
+    color: rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="light"] .cp-item-label {
+    color: rgba(20, 20, 30, 0.9);
+}
+
+[data-theme="light"] .cp-item-desc {
+    color: rgba(80, 80, 100, 0.5);
+}
+
+[data-theme="light"] .cp-item.active,
+[data-theme="light"] .cp-item:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .cp-footer {
+    border-top-color: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .cp-footer span,
+[data-theme="light"] .cp-footer kbd {
+    color: rgba(0, 0, 0, 0.3);
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .cp-confirm-cancel {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.1);
+    color: rgba(40, 40, 60, 0.8);
+}
+
+[data-theme="light"] .cp-confirm-message {
+    color: rgba(20, 20, 35, 0.85);
+}

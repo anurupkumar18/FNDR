@@ -79,7 +79,7 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
                 </div>
                 <div className="daily-summary-actions">
                     <button className="ui-action-btn daily-summary-close-btn" onClick={onClose}>
-                        ✕ Close
+                        Close
                     </button>
                 </div>
             </header>
@@ -155,7 +155,6 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
 
             {showToast && (
                 <div className="daily-toast">
-                    <span className="toast-icon">✓</span>
                     PDF downloaded
                 </div>
             )}

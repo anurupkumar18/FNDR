@@ -156,7 +156,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 </div>
                 <div className="todo-page-actions">
                     <button className="ui-action-btn todo-close-btn" onClick={onClose}>
-                        ✕ Close
+                        Close
                     </button>
                 </div>
             </header>

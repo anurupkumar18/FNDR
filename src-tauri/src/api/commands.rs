@@ -3438,6 +3438,161 @@ pub async fn generate_daily_summary_for_date(
     ))
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Time Tracking
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct AppTimeEntry {
+    pub app_name: String,
+    pub duration_minutes: u32,
+    pub capture_count: u32,
+    pub last_seen: i64,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct TimeTrackingResult {
+    pub date: String,
+    pub total_captures: u32,
+    pub breakdown: Vec<AppTimeEntry>,
+}
+
+/// Aggregate today's memory records into per-app time estimates.
+///
+/// Works by sorting each app's captures by timestamp and summing consecutive
+/// inter-capture gaps (capped at 5 minutes so long idle periods don't bloat the total).
+#[tauri::command]
+pub async fn get_time_tracking(
+    state: State<'_, Arc<AppState>>,
+) -> Result<TimeTrackingResult, String> {
+    use chrono::{Local, NaiveTime, TimeZone};
+    use std::collections::HashMap;
+
+    // Use a single clock snapshot so today_start_ms and now_ms are consistent.
+    // Local::now() and Utc::now() both produce epoch milliseconds (timezone-independent),
+    // but anchoring both to the same instant avoids any sub-second skew.
+    let now_local = Local::now();
+    let today = now_local.date_naive();
+    let midnight = today.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+    let today_start_ms = Local
+        .from_local_datetime(&midnight)
+        .earliest()
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(0);
+    let now_ms = now_local.timestamp_millis();
+
+    let records = state
+        .store
+        .get_memories_in_range(today_start_ms, now_ms)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Group timestamps by app_name
+    let mut app_timestamps: HashMap<String, Vec<i64>> = HashMap::new();
+    for record in &records {
+        app_timestamps
+            .entry(record.app_name.clone())
+            .or_default()
+            .push(record.timestamp);
+    }
+
+    const MAX_GAP_MS: i64 = 5 * 60_000; // Cap idle gaps at 5 minutes
+    const MIN_ACTIVITY_MS: i64 = 30_000; // Minimum 30 seconds credited per app
+
+    let mut breakdown: Vec<AppTimeEntry> = app_timestamps
+        .iter()
+        .map(|(app, timestamps)| {
+            let mut sorted = timestamps.clone();
+            sorted.sort_unstable();
+
+            let mut duration_ms: i64 = 0;
+            for window in sorted.windows(2) {
+                let gap = window[1] - window[0];
+                duration_ms += gap.min(MAX_GAP_MS);
+            }
+            // Credit at least 30s for any app that had captures
+            duration_ms = duration_ms.max(MIN_ACTIVITY_MS);
+
+            AppTimeEntry {
+                app_name: app.clone(),
+                duration_minutes: ((duration_ms as f64) / 60_000.0).round() as u32,
+                capture_count: sorted.len() as u32,
+                last_seen: *sorted.last().unwrap_or(&0),
+            }
+        })
+        .collect();
+
+    breakdown.sort_by(|a, b| b.duration_minutes.cmp(&a.duration_minutes));
+
+    Ok(TimeTrackingResult {
+        date: today.format("%Y-%m-%d").to_string(),
+        total_captures: records.len() as u32,
+        breakdown,
+    })
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Focus Mode
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct FocusStatus {
+    pub task: Option<String>,
+    pub is_active: bool,
+    pub drift_count: u32,
+}
+
+/// Set or clear the current focus task.
+///
+/// When set, the capture loop embeds the task description once and compares
+/// every incoming capture against it (cosine similarity). Three consecutive
+/// off-task captures surface a ProactiveSuggestion drift alert.
+#[tauri::command]
+pub async fn set_focus_task(
+    task: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<FocusStatus, String> {
+    use std::sync::atomic::Ordering;
+
+    // Always clear embedding first so the capture loop never sees a stale
+    // embedding paired with a new task (or vice-versa). The brief window where
+    // embedding is None means the loop skips drift detection for at most one
+    // capture cycle — an acceptable trade-off for consistency.
+    *state.focus_task_embedding.write() = None;
+    *state.focus_task.write() = task.clone();
+    state.focus_drift_count.store(0, Ordering::Relaxed);
+
+    if let Some(ref t) = task {
+        let embedder = crate::embed::Embedder::new().map_err(|e| e.to_string())?;
+        let embeddings = embedder
+            .embed_batch(&[t.clone()])
+            .map_err(|e| e.to_string())?;
+        if let Some(embedding) = embeddings.into_iter().next() {
+            *state.focus_task_embedding.write() = Some(embedding);
+        }
+    }
+
+    Ok(FocusStatus {
+        task,
+        is_active: state.focus_task.read().is_some(),
+        drift_count: 0,
+    })
+}
+
+/// Return the current focus task and drift counter.
+#[tauri::command]
+pub fn get_focus_status(state: State<'_, Arc<AppState>>) -> Result<FocusStatus, String> {
+    use std::sync::atomic::Ordering;
+    let task = state.focus_task.read().clone();
+    let is_active = task.is_some();
+    let drift_count = state.focus_drift_count.load(Ordering::Relaxed);
+    Ok(FocusStatus {
+        task,
+        is_active,
+        drift_count,
+    })
+}
+
 #[cfg(test)]
 mod daily_summary_tests {
     use super::*;
