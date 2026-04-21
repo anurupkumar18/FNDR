@@ -21,9 +21,7 @@ fn strip_list_prefix(line: &str) -> &str {
     }
 
     if let Some((prefix, rest)) = trimmed.split_once(' ') {
-        let numbered = prefix.ends_with('.')
-            || prefix.ends_with(')')
-            || prefix.ends_with(':');
+        let numbered = prefix.ends_with('.') || prefix.ends_with(')') || prefix.ends_with(':');
         let digits = prefix
             .trim_end_matches(|ch: char| matches!(ch, '.' | ')' | ':'))
             .chars()

@@ -4,7 +4,7 @@ use crate::capture::{
     continuity_anchor_for_memory, eligible_for_story_merge, merge_memory_records_with_policy,
     passes_merge_threshold, score_memory_candidate,
 };
-use crate::embed::{embedding_runtime_status, Embedder};
+use crate::embed::{embedding_runtime_status, Embedder, EmbeddingBackend};
 use crate::privacy::Blocklist;
 use crate::store::MemoryRecord;
 
@@ -15,7 +15,7 @@ use crate::search::{HybridSearcher, MemoryCard, MemoryCardSynthesizer};
 use crate::speech;
 use crate::store::{MeetingSession, SearchResult, Stats, Task, TaskType};
 use crate::AppState;
-use chrono::{Timelike, TimeZone};
+use chrono::{TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -25,7 +25,6 @@ use tauri::{AppHandle, Manager, State};
 use tokio::time::{timeout, Duration, Instant};
 
 use genpdf::elements;
-use genpdf::fonts;
 use genpdf::style;
 use genpdf::Element;
 
@@ -387,37 +386,47 @@ pub async fn search_memory_cards(
     };
 
     tracing::info!("search_memory_cards:embed:start");
-    let maybe_query_embedding = match shared_embedder() {
-        Ok(embedder) => {
-            let query_text = query.clone();
-            match timeout(
-                EMBED_TIMEOUT,
-                tokio::task::spawn_blocking(move || embedder.embed_batch(&[query_text])),
-            )
-            .await
-            {
-                Ok(Ok(Ok(vectors))) => vectors.into_iter().next(),
-                Ok(Ok(Err(err))) => {
-                    tracing::warn!("search_memory_cards:embed:failed err={}", err);
-                    None
-                }
-                Ok(Err(err)) => {
-                    tracing::warn!("search_memory_cards:embed:join_failed err={}", err);
-                    None
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        timeout_ms = EMBED_TIMEOUT.as_millis(),
-                        "search_memory_cards:embed:timeout"
-                    );
-                    None
+    let embedder = shared_embedder().ok();
+    let semantic_enabled = embedder
+        .as_ref()
+        .map(|value| matches!(value.backend(), EmbeddingBackend::Real))
+        .unwrap_or(false);
+    let maybe_query_embedding = if semantic_enabled {
+        match embedder {
+            Some(embedder) => {
+                let query_text = query.clone();
+                match timeout(
+                    EMBED_TIMEOUT,
+                    tokio::task::spawn_blocking(move || embedder.embed_batch(&[query_text])),
+                )
+                .await
+                {
+                    Ok(Ok(Ok(vectors))) => vectors.into_iter().next(),
+                    Ok(Ok(Err(err))) => {
+                        tracing::warn!("search_memory_cards:embed:failed err={}", err);
+                        None
+                    }
+                    Ok(Err(err)) => {
+                        tracing::warn!("search_memory_cards:embed:join_failed err={}", err);
+                        None
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            timeout_ms = EMBED_TIMEOUT.as_millis(),
+                            "search_memory_cards:embed:timeout"
+                        );
+                        None
+                    }
                 }
             }
+            None => {
+                tracing::warn!("search_memory_cards:embed:init_failed");
+                None
+            }
         }
-        Err(err) => {
-            tracing::warn!("search_memory_cards:embed:init_failed err={}", err);
-            None
-        }
+    } else {
+        tracing::info!("search_memory_cards:embed:skipped_degraded_backend");
+        None
     };
     tracing::info!(
         has_embedding = maybe_query_embedding.is_some(),
@@ -555,54 +564,18 @@ pub async fn list_memory_cards(
     app_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<MemoryCard>, String> {
-    let requested_limit = limit.unwrap_or(MEMORY_GRAPH_LIMIT).clamp(1, 2_000);
-    let is_all_apps = app_filter
-        .as_deref()
-        .map(|value| value.trim().is_empty())
-        .unwrap_or(true);
-    let primary_limit = if is_all_apps {
-        requested_limit.min(450)
-    } else {
-        requested_limit
-    };
+    let limit = limit.unwrap_or(MEMORY_GRAPH_LIMIT).clamp(1, 2_000);
+    let results = state
+        .inner()
+        .store
+        .list_recent_results(limit, app_filter.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let results = match timeout(Duration::from_millis(3_200), async {
-        state
-            .inner()
-            .store
-            .list_recent_results(primary_limit, app_filter.as_deref())
-            .await
-            .map_err(|e| e.to_string())
-    })
-    .await
-    {
-        Ok(Ok(results)) => results,
-        Ok(Err(err)) => return Err(err),
-        Err(_) => {
-            tracing::warn!(
-                all_apps = is_all_apps,
-                limit = primary_limit,
-                "list_memory_cards timed out, retrying with lighter limit"
-            );
-            let fallback_limit = if is_all_apps {
-                primary_limit.min(200)
-            } else {
-                primary_limit.min(120)
-            };
-            state
-                .inner()
-                .store
-                .list_recent_results(fallback_limit, app_filter.as_deref())
-                .await
-                .map_err(|e| e.to_string())?
-        }
-    };
-
-    let filtered = strip_internal_fndr_results(results);
-    // Browsing should always feel instant. Use deterministic card construction
-    // here to avoid expensive grouping/synthesis stalls on large "All Apps" sets.
-    let mut cards = MemoryCardSynthesizer::deterministic_from_results("", &filtered, primary_limit);
-    cards.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    let mut cards: Vec<MemoryCard> = strip_internal_fndr_results(results)
+        .into_iter()
+        .map(memory_card_from_result)
+        .collect();
     refine_memory_card_titles(&mut cards);
     Ok(cards)
 }
@@ -991,17 +964,27 @@ pub async fn export_meeting_pdf(
     // 3. Generate PDF
     // Use a common macOS font path. Arial is standard in Supplemental.
     let font_dir = std::path::Path::new("/System/Library/Fonts/Supplemental");
-    
+
     // Load font variants manually since genpdf's from_files helper expects "Arial-Regular.ttf"
     // but macOS uses "Arial.ttf", "Arial Bold.ttf", etc.
     let regular = genpdf::fonts::FontData::load(font_dir.join("Arial.ttf"), None)
         .map_err(|e| format!("Failed to load 'Arial.ttf' from {:?}: {}", font_dir, e))?;
     let bold = genpdf::fonts::FontData::load(font_dir.join("Arial Bold.ttf"), None)
         .map_err(|e| format!("Failed to load 'Arial Bold.ttf' from {:?}: {}", font_dir, e))?;
-    let italic = genpdf::fonts::FontData::load(font_dir.join("Arial Italic.ttf"), None)
-        .map_err(|e| format!("Failed to load 'Arial Italic.ttf' from {:?}: {}", font_dir, e))?;
+    let italic =
+        genpdf::fonts::FontData::load(font_dir.join("Arial Italic.ttf"), None).map_err(|e| {
+            format!(
+                "Failed to load 'Arial Italic.ttf' from {:?}: {}",
+                font_dir, e
+            )
+        })?;
     let bold_italic = genpdf::fonts::FontData::load(font_dir.join("Arial Bold Italic.ttf"), None)
-        .map_err(|e| format!("Failed to load 'Arial Bold Italic.ttf' from {:?}: {}", font_dir, e))?;
+        .map_err(|e| {
+        format!(
+            "Failed to load 'Arial Bold Italic.ttf' from {:?}: {}",
+            font_dir, e
+        )
+    })?;
 
     let font_family = genpdf::fonts::FontFamily {
         regular,
@@ -1019,28 +1002,37 @@ pub async fn export_meeting_pdf(
 
     // Title & Header
     doc.push(
-        elements::Text::new(&meeting.title)
-            .styled(style::Style::new().bold().with_font_size(20)),
+        elements::Text::new(&meeting.title).styled(style::Style::new().bold().with_font_size(20)),
     );
     let date_label = chrono::DateTime::from_timestamp(meeting.start_timestamp / 1000, 0)
         .map(|dt| dt.format("%B %d, %Y at %H:%M").to_string())
         .unwrap_or_else(|| "Unknown Date".to_string());
-    doc.push(elements::Text::new(format!("Date: {}", date_label)).styled(style::Style::new().with_font_size(10)));
+    doc.push(
+        elements::Text::new(format!("Date: {}", date_label))
+            .styled(style::Style::new().with_font_size(10)),
+    );
     doc.push(elements::Break::new(1.5));
 
     // Breakdown Sections
     if let Some(breakdown) = &meeting.breakdown {
         if !breakdown.summary.is_empty() && !breakdown.summary.eq_ignore_ascii_case("none") {
-            doc.push(elements::Text::new("Summary").styled(style::Style::new().bold().with_font_size(14)));
+            doc.push(
+                elements::Text::new("Summary")
+                    .styled(style::Style::new().bold().with_font_size(14)),
+            );
             doc.push(elements::Paragraph::new(&breakdown.summary));
             doc.push(elements::Break::new(1.0));
         }
 
-        let filtered_todos: Vec<_> = breakdown.todos.iter()
+        let filtered_todos: Vec<_> = breakdown
+            .todos
+            .iter()
             .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("none"))
             .collect();
         if !filtered_todos.is_empty() {
-            doc.push(elements::Text::new("To-dos").styled(style::Style::new().bold().with_font_size(14)));
+            doc.push(
+                elements::Text::new("To-dos").styled(style::Style::new().bold().with_font_size(14)),
+            );
             let mut list = elements::UnorderedList::new();
             for item in filtered_todos {
                 list.push(elements::Text::new(item));
@@ -1049,11 +1041,16 @@ pub async fn export_meeting_pdf(
             doc.push(elements::Break::new(1.0));
         }
 
-        let filtered_reminders: Vec<_> = breakdown.reminders.iter()
+        let filtered_reminders: Vec<_> = breakdown
+            .reminders
+            .iter()
             .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("none"))
             .collect();
         if !filtered_reminders.is_empty() {
-            doc.push(elements::Text::new("Reminders").styled(style::Style::new().bold().with_font_size(14)));
+            doc.push(
+                elements::Text::new("Reminders")
+                    .styled(style::Style::new().bold().with_font_size(14)),
+            );
             let mut list = elements::UnorderedList::new();
             for item in filtered_reminders {
                 list.push(elements::Text::new(item));
@@ -1062,11 +1059,16 @@ pub async fn export_meeting_pdf(
             doc.push(elements::Break::new(1.0));
         }
 
-        let filtered_followups: Vec<_> = breakdown.followups.iter()
+        let filtered_followups: Vec<_> = breakdown
+            .followups
+            .iter()
             .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("none"))
             .collect();
         if !filtered_followups.is_empty() {
-            doc.push(elements::Text::new("Follow-ups").styled(style::Style::new().bold().with_font_size(14)));
+            doc.push(
+                elements::Text::new("Follow-ups")
+                    .styled(style::Style::new().bold().with_font_size(14)),
+            );
             let mut list = elements::UnorderedList::new();
             for item in filtered_followups {
                 list.push(elements::Text::new(item));
@@ -1079,8 +1081,103 @@ pub async fn export_meeting_pdf(
     // Full Transcript
     if !transcript.full_text.is_empty() {
         doc.push(elements::Break::new(0.5));
-        doc.push(elements::Text::new("Full Transcript").styled(style::Style::new().bold().with_font_size(14)));
+        doc.push(
+            elements::Text::new("Full Transcript")
+                .styled(style::Style::new().bold().with_font_size(14)),
+        );
         doc.push(elements::Paragraph::new(&transcript.full_text));
+    }
+
+    // Save
+    doc.render_to_file(&target_path)
+        .map_err(|e| format!("Failed to generate PDF file: {}", e))?;
+
+    Ok(target_path.to_string_lossy().to_string())
+}
+
+/// Export a daily summary text to a PDF in the Downloads folder
+#[tauri::command]
+pub async fn export_daily_summary_pdf(
+    _app: tauri::AppHandle,
+    date_str: String,
+    summary_text: String,
+) -> Result<String, String> {
+    // 1. Resolve Downloads folder
+    let downloads_dir = dirs::download_dir()
+        .ok_or_else(|| "Could not find Downloads folder on this system.".to_string())?;
+
+    // 2. Prepare filename
+    let safe_date = date_str.replace('/', "-").replace(' ', "_");
+    let filename = format!("FNDR_Daily_Summary_{}.pdf", safe_date);
+    let target_path = downloads_dir.join(filename);
+
+    // 3. Generate PDF
+    // Use a common macOS font path. Arial is standard in Supplemental.
+    let font_dir = std::path::Path::new("/System/Library/Fonts/Supplemental");
+
+    let regular = genpdf::fonts::FontData::load(font_dir.join("Arial.ttf"), None)
+        .map_err(|e| format!("Failed to load 'Arial.ttf' from {:?}: {}", font_dir, e))?;
+    let bold = genpdf::fonts::FontData::load(font_dir.join("Arial Bold.ttf"), None)
+        .map_err(|e| format!("Failed to load 'Arial Bold.ttf' from {:?}: {}", font_dir, e))?;
+    let italic =
+        genpdf::fonts::FontData::load(font_dir.join("Arial Italic.ttf"), None).map_err(|e| {
+            format!(
+                "Failed to load 'Arial Italic.ttf' from {:?}: {}",
+                font_dir, e
+            )
+        })?;
+    let bold_italic = genpdf::fonts::FontData::load(font_dir.join("Arial Bold Italic.ttf"), None)
+        .map_err(|e| {
+        format!(
+            "Failed to load 'Arial Bold Italic.ttf' from {:?}: {}",
+            font_dir, e
+        )
+    })?;
+
+    let font_family = genpdf::fonts::FontFamily {
+        regular,
+        bold,
+        italic,
+        bold_italic,
+    };
+
+    let mut doc = genpdf::Document::new(font_family);
+    doc.set_title(format!("FNDR Daily Summary: {}", date_str));
+
+    let mut decorator = genpdf::SimplePageDecorator::new();
+    decorator.set_margins(18);
+    doc.set_page_decorator(decorator);
+
+    // Title & Header
+    doc.push(
+        genpdf::elements::Text::new("FNDR Daily Summary")
+            .styled(genpdf::style::Style::new().bold().with_font_size(20)),
+    );
+    doc.push(
+        genpdf::elements::Text::new(format!("Date: {}", date_str))
+            .styled(genpdf::style::Style::new().with_font_size(10)),
+    );
+    doc.push(genpdf::elements::Break::new(1.5));
+
+    if !summary_text.is_empty() {
+        let mut list = genpdf::elements::UnorderedList::new();
+        for line in summary_text.split('\n') {
+            let trim = line.trim();
+            if !trim.is_empty() {
+                // Remove existing bullet points if present as genpdf adds its own
+                let content = if trim.starts_with("- ") || trim.starts_with("* ") || trim.starts_with("• ") {
+                    trim[2..].trim()
+                } else if trim.starts_with("-") || trim.starts_with("*") || trim.starts_with("•") {
+                    trim[1..].trim()
+                } else {
+                    trim
+                };
+                list.push(genpdf::elements::Paragraph::new(content.to_string()));
+            }
+        }
+        doc.push(list);
+    } else {
+        doc.push(genpdf::elements::Paragraph::new("No activity captured for this date."));
     }
 
     // Save
@@ -1901,7 +1998,8 @@ fn parse_task_type(task_type: Option<&str>) -> TaskType {
 }
 
 fn normalize_task_text(value: &str) -> String {
-    value.to_lowercase()
+    value
+        .to_lowercase()
         .split(|ch: char| !ch.is_alphanumeric())
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>()
@@ -1946,7 +2044,9 @@ fn is_memory_task(task: &Task) -> bool {
 }
 
 fn task_has_supporting_context(task: &Task) -> bool {
-    task.source_memory_id.is_some() || !task.linked_memory_ids.is_empty() || !task.linked_urls.is_empty()
+    task.source_memory_id.is_some()
+        || !task.linked_memory_ids.is_empty()
+        || !task.linked_urls.is_empty()
 }
 
 fn is_low_signal_task_title(title: &str) -> bool {
@@ -2004,33 +2104,51 @@ fn task_priority_score(task: &Task, now_ms: i64) -> i64 {
     } else {
         6
     };
-    let context_penalty = if !task_has_supporting_context(task) && !is_manual_task(task) && !is_meeting_task(task) {
-        18
+    let context_penalty =
+        if !task_has_supporting_context(task) && !is_manual_task(task) && !is_meeting_task(task) {
+            18
+        } else {
+            0
+        };
+    let title_penalty = if is_low_signal_task_title(&task.title) {
+        24
     } else {
         0
     };
-    let title_penalty = if is_low_signal_task_title(&task.title) { 24 } else { 0 };
-    recency_bonus + memory_bonus + url_bonus + due_bonus + source_bonus - context_penalty - title_penalty
+    recency_bonus + memory_bonus + url_bonus + due_bonus + source_bonus
+        - context_penalty
+        - title_penalty
 }
 
 fn required_term_matches(terms: &[String]) -> usize {
-    if terms.len() >= 4 { 2 } else { 1 }
+    if terms.len() >= 4 {
+        2
+    } else {
+        1
+    }
 }
 
 fn update_task_links_from_memories(tasks: &mut [Task], recent_memories: &[SearchResult]) -> bool {
     let mut changed = false;
 
-    for task in tasks.iter_mut().filter(|t| !t.is_completed && !t.is_dismissed) {
+    for task in tasks
+        .iter_mut()
+        .filter(|t| !t.is_completed && !t.is_dismissed)
+    {
         let terms = task_terms(&task.title);
         if terms.is_empty() {
             continue;
         }
 
-        let mut known_memory_ids: HashSet<String> = task.linked_memory_ids.iter().cloned().collect();
+        let mut known_memory_ids: HashSet<String> =
+            task.linked_memory_ids.iter().cloned().collect();
         let mut known_urls: HashSet<String> = task.linked_urls.iter().cloned().collect();
 
         for memory in recent_memories.iter().take(TASK_LINK_SCAN_LIMIT) {
-            let blob = format!("{} {} {}", memory.snippet, memory.clean_text, memory.window_title);
+            let blob = format!(
+                "{} {} {}",
+                memory.snippet, memory.clean_text, memory.window_title
+            );
             let normalized_blob = normalize_task_text(&blob);
             let matches = terms
                 .iter()
@@ -2067,7 +2185,12 @@ fn backfill_tasks_from_meetings(tasks: &mut Vec<Task>, meetings: &[MeetingSessio
     let cutoff = now_ms - (TASK_MEETING_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
     let mut dedupe = tasks
         .iter()
-        .map(|task| (normalize_task_text(&task.title), task_type_sort_key(&task.task_type)))
+        .map(|task| {
+            (
+                normalize_task_text(&task.title),
+                task_type_sort_key(&task.task_type),
+            )
+        })
         .collect::<HashSet<_>>();
 
     let mut ordered = meetings.iter().collect::<Vec<_>>();
@@ -2296,7 +2419,12 @@ fn backfill_tasks_from_memories(tasks: &mut Vec<Task>, recent_memories: &[Search
     let mut changed = false;
     let mut dedupe = tasks
         .iter()
-        .map(|task| (normalize_task_text(&task.title), task_type_sort_key(&task.task_type)))
+        .map(|task| {
+            (
+                normalize_task_text(&task.title),
+                task_type_sort_key(&task.task_type),
+            )
+        })
         .collect::<HashSet<_>>();
 
     let mut candidates = recent_memories
@@ -2340,7 +2468,10 @@ fn backfill_tasks_from_memories(tasks: &mut Vec<Task>, recent_memories: &[Search
 fn dismiss_low_quality_auto_tasks(tasks: &mut [Task]) -> bool {
     let mut changed = false;
 
-    for task in tasks.iter_mut().filter(|task| !task.is_completed && !task.is_dismissed) {
+    for task in tasks
+        .iter_mut()
+        .filter(|task| !task.is_completed && !task.is_dismissed)
+    {
         if is_manual_task(task) || is_meeting_task(task) {
             continue;
         }
@@ -2406,7 +2537,11 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .list_recent_results(TASK_LINK_SCAN_LIMIT, None)
         .await
         .map_err(|e| e.to_string())?;
-    let meetings = state.store.list_meetings().await.map_err(|e| e.to_string())?;
+    let meetings = state
+        .store
+        .list_meetings()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let links_changed = update_task_links_from_memories(&mut tasks, &recent_memories);
     let memory_backfill_changed = backfill_tasks_from_memories(&mut tasks, &recent_memories);
@@ -2424,16 +2559,25 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .into_iter()
         .filter(|task| !task.is_completed && !task.is_dismissed)
         .filter(|task| !is_low_signal_task_title(&task.title))
-        .filter(|task| is_manual_task(task) || is_meeting_task(task) || task_has_supporting_context(task))
+        .filter(|task| {
+            is_manual_task(task) || is_meeting_task(task) || task_has_supporting_context(task)
+        })
         .collect::<Vec<_>>();
     let mut seen = HashSet::new();
-    visible.retain(|task| seen.insert((normalize_task_text(&task.title), task_type_sort_key(&task.task_type))));
+    visible.retain(|task| {
+        seen.insert((
+            normalize_task_text(&task.title),
+            task_type_sort_key(&task.task_type),
+        ))
+    });
     let now_ms = chrono::Utc::now().timestamp_millis();
     visible.sort_by(|left, right| {
         task_priority_score(right, now_ms)
             .cmp(&task_priority_score(left, now_ms))
             .then_with(|| right.created_at.cmp(&left.created_at))
-            .then_with(|| task_type_sort_key(&left.task_type).cmp(&task_type_sort_key(&right.task_type)))
+            .then_with(|| {
+                task_type_sort_key(&left.task_type).cmp(&task_type_sort_key(&right.task_type))
+            })
     });
     Ok(visible)
 }
@@ -2928,13 +3072,18 @@ pub fn get_fun_greeting(name: Option<String>) -> Result<String, String> {
 // ── Proactive Privacy Shield Commands ───────────────────────────────────────────
 
 #[tauri::command]
-pub async fn get_privacy_alerts(state: State<'_, Arc<AppState>>) -> Result<Vec<crate::PrivacyAlert>, String> {
+pub async fn get_privacy_alerts(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::PrivacyAlert>, String> {
     let pending = state.pending_privacy_alerts.read();
     Ok(pending.clone())
 }
 
 #[tauri::command]
-pub async fn dismiss_privacy_alert(site: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn dismiss_privacy_alert(
+    site: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
     {
         let mut pending = state.pending_privacy_alerts.write();
         pending.retain(|a| a.domain_or_title != site);
@@ -2959,7 +3108,11 @@ pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> 
     // 2. Add to config blocklist
     {
         let mut config = state.config.write();
-        if !config.blocklist.iter().any(|b| b.eq_ignore_ascii_case(&site)) {
+        if !config
+            .blocklist
+            .iter()
+            .any(|b| b.eq_ignore_ascii_case(&site))
+        {
             config.blocklist.push(site.clone());
         }
         if let Err(e) = config.save() {
@@ -2969,13 +3122,278 @@ pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> 
 
     // 3. Retroactively delete memories with this site if we grabbed it during the alert period
     if let Err(e) = state.store.delete_memories_by_domain(&site).await {
-        tracing::error!("Failed to retroactively delete memories for blocked site {}: {}", site, e);
+        tracing::error!(
+            "Failed to retroactively delete memories for blocked site {}: {}",
+            site,
+            e
+        );
     }
 
     Ok(())
 }
 
 // ── Daily Summary Commands ───────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+struct DailyActivityCluster {
+    app_name: String,
+    label: String,
+    first_ts: i64,
+    last_ts: i64,
+    count: usize,
+    samples: Vec<String>,
+}
+
+impl DailyActivityCluster {
+    fn add(&mut self, result: &SearchResult) {
+        self.first_ts = self.first_ts.min(result.timestamp);
+        self.last_ts = self.last_ts.max(result.timestamp);
+        self.count += 1;
+
+        let sample = daily_activity_sample(result);
+        if sample.is_empty() {
+            return;
+        }
+
+        let sample_key = sample.to_lowercase();
+        let already_seen = self
+            .samples
+            .iter()
+            .any(|existing| existing.to_lowercase() == sample_key);
+        if !already_seen && self.samples.len() < 3 {
+            self.samples.push(sample);
+        }
+    }
+}
+
+fn build_daily_activity_summary(records: &[SearchResult], day_label: &str) -> String {
+    if records.is_empty() {
+        return format!("No memories recorded for {day_label}.");
+    }
+
+    let mut sorted = records.to_vec();
+    sorted.sort_by_key(|record| record.timestamp);
+
+    let first_ts = sorted.first().map(|record| record.timestamp).unwrap_or(0);
+    let last_ts = sorted
+        .last()
+        .map(|record| record.timestamp)
+        .unwrap_or(first_ts);
+    let span_ms = (last_ts - first_ts).max(0);
+    let span_minutes = ((span_ms + 59_999) / 60_000).max(1);
+
+    let mut clusters: HashMap<String, DailyActivityCluster> = HashMap::new();
+    for result in &sorted {
+        let key = daily_activity_key(result);
+        let label = daily_activity_label(result);
+        clusters
+            .entry(key)
+            .and_modify(|cluster| cluster.add(result))
+            .or_insert_with(|| {
+                let mut cluster = DailyActivityCluster {
+                    app_name: result.app_name.clone(),
+                    label,
+                    first_ts: result.timestamp,
+                    last_ts: result.timestamp,
+                    count: 0,
+                    samples: Vec::new(),
+                };
+                cluster.add(result);
+                cluster
+            });
+    }
+
+    let mut clusters = clusters.into_values().collect::<Vec<_>>();
+    clusters.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| b.last_ts.cmp(&a.last_ts))
+            .then_with(|| a.app_name.cmp(&b.app_name))
+    });
+
+    let mut lines = Vec::new();
+    let memory_word = if sorted.len() == 1 {
+        "memory"
+    } else {
+        "memories"
+    };
+    if sorted.len() == 1 {
+        lines.push(format!(
+            "- FNDR captured 1 memory {day_label} at {}.",
+            format_local_time(first_ts)
+        ));
+    } else {
+        lines.push(format!(
+            "- FNDR captured {} {memory_word} across {} {day_label}, from {} to {}.",
+            sorted.len(),
+            human_duration_minutes(span_minutes),
+            format_local_time(first_ts),
+            format_local_time(last_ts)
+        ));
+    }
+
+    let top_limit = if span_minutes <= 45 {
+        3
+    } else if span_minutes <= 240 {
+        5
+    } else {
+        7
+    };
+
+    for cluster in clusters.iter().take(top_limit) {
+        lines.push(daily_cluster_bullet(cluster));
+    }
+
+    if clusters.len() > top_limit {
+        let mut app_counts: HashMap<String, usize> = HashMap::new();
+        for cluster in clusters.iter().skip(top_limit) {
+            *app_counts.entry(cluster.app_name.clone()).or_insert(0) += cluster.count;
+        }
+        let mut app_counts = app_counts.into_iter().collect::<Vec<_>>();
+        app_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let labels = app_counts
+            .iter()
+            .take(4)
+            .map(|(app, count)| format!("{app} ({})", capture_count(*count)))
+            .collect::<Vec<_>>();
+        if !labels.is_empty() {
+            lines.push(format!(
+                "- Lighter activity also appeared in {}.",
+                labels.join(", ")
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn daily_activity_key(result: &SearchResult) -> String {
+    let label = daily_activity_label(result).to_lowercase();
+    format!("{}|{}", result.app_name.to_lowercase(), label)
+}
+
+fn daily_activity_label(result: &SearchResult) -> String {
+    if let Some(domain) = result.url.as_deref().and_then(card_domain) {
+        return truncate_chars(&domain, 72);
+    }
+
+    let title = normalize_daily_fragment(&result.window_title);
+    if !is_low_signal_title(&title, &result.app_name) {
+        return truncate_chars(&title, 72);
+    }
+
+    let summary = card_summary(result);
+    if let Some(title) = title_from_summary(&summary, &result.app_name) {
+        return truncate_chars(&normalize_daily_fragment(&title), 72);
+    }
+
+    result.app_name.clone()
+}
+
+fn daily_activity_sample(result: &SearchResult) -> String {
+    let summary = normalize_daily_fragment(&card_summary(result));
+    if summary.is_empty() || is_low_signal_summary(&summary, &result.app_name) {
+        return String::new();
+    }
+
+    let label = daily_activity_label(result).to_lowercase();
+    if summary.to_lowercase() == label {
+        return String::new();
+    }
+
+    truncate_chars(&summary.replace('"', "'"), 110)
+}
+
+fn daily_cluster_bullet(cluster: &DailyActivityCluster) -> String {
+    let topic = if cluster.label.eq_ignore_ascii_case(&cluster.app_name) {
+        "general activity".to_string()
+    } else {
+        format!("\"{}\"", cluster.label.replace('"', "'"))
+    };
+
+    let time_window = if cluster.first_ts == cluster.last_ts {
+        format!("at {}", format_local_time(cluster.first_ts))
+    } else {
+        format!(
+            "from {} to {}",
+            format_local_time(cluster.first_ts),
+            format_local_time(cluster.last_ts)
+        )
+    };
+
+    let sample = cluster
+        .samples
+        .first()
+        .map(|value| format!(", including \"{value}\""))
+        .unwrap_or_default();
+
+    format!(
+        "- {}: {} {} around {}{}.",
+        cluster.app_name,
+        capture_count(cluster.count),
+        time_window,
+        topic,
+        sample
+    )
+}
+
+fn normalize_daily_fragment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+fn capture_count(count: usize) -> String {
+    if count == 1 {
+        "1 capture".to_string()
+    } else {
+        format!("{count} captures")
+    }
+}
+
+fn human_duration_minutes(minutes: i64) -> String {
+    if minutes <= 1 {
+        "about 1 minute".to_string()
+    } else if minutes < 60 {
+        format!("about {minutes} minutes")
+    } else {
+        let hours = minutes / 60;
+        let rest = minutes % 60;
+        if rest == 0 {
+            format!("about {hours} hour{}", if hours == 1 { "" } else { "s" })
+        } else {
+            format!(
+                "about {hours} hour{} {rest} minute{}",
+                if hours == 1 { "" } else { "s" },
+                if rest == 1 { "" } else { "s" }
+            )
+        }
+    }
+}
+
+fn format_local_time(timestamp: i64) -> String {
+    let raw = chrono::Local
+        .timestamp_millis_opt(timestamp)
+        .single()
+        .unwrap_or_else(chrono::Local::now)
+        .format("%I:%M %p")
+        .to_string();
+    raw.trim_start_matches('0').to_string()
+}
+
+fn daily_summary_day_label(target_day: chrono::NaiveDate) -> String {
+    if target_day == chrono::Local::now().date_naive() {
+        "today".to_string()
+    } else {
+        format!("on {}", target_day.format("%Y-%m-%d"))
+    }
+}
 
 #[tauri::command]
 pub async fn generate_daily_summary_for_date(
@@ -2984,8 +3402,12 @@ pub async fn generate_daily_summary_for_date(
 ) -> Result<String, String> {
     let target_day = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
         .map_err(|e| format!("Invalid date format: {}", e))?;
-    let start = target_day.and_hms_opt(0, 0, 0).ok_or("Failed to create start time")?;
-    let end = (target_day + chrono::Duration::days(1)).and_hms_opt(0, 0, 0).ok_or("Failed to create end time")?;
+    let start = target_day
+        .and_hms_opt(0, 0, 0)
+        .ok_or("Failed to create start time")?;
+    let end = (target_day + chrono::Duration::days(1))
+        .and_hms_opt(0, 0, 0)
+        .ok_or("Failed to create end time")?;
 
     let start_ms = chrono::Local
         .from_local_datetime(&start)
@@ -2996,42 +3418,255 @@ pub async fn generate_daily_summary_for_date(
         .from_local_datetime(&end)
         .earliest()
         .unwrap_or_else(|| chrono::Local.from_local_datetime(&end).latest().unwrap())
-        .timestamp_millis() - 1;
+        .timestamp_millis()
+        - 1;
 
-    let records = state.store.get_memories_in_range(start_ms, end_ms).await.map_err(|e| e.to_string())?;
+    let records = state
+        .store
+        .get_search_results_in_range(start_ms, end_ms)
+        .await
+        .map_err(|e| e.to_string())?;
+    let records = strip_internal_fndr_results(records);
 
     if records.is_empty() {
         return Ok("No memories recorded for this date.".to_string());
     }
 
-    // Cluster by app_name and title to build safe, token-efficient context.
-    let mut clustered: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut total_records = 0;
-    for record in records {
-        total_records += 1;
-        let mut context = record.app_name.clone();
-        if !record.window_title.is_empty() {
-            let title = record.window_title;
-            let clean_title = if title.len() > 30 {
-                format!("{}...", &title[..30])
-            } else {
-                title
-            };
-            context = format!("{} ({})", context, clean_title);
+    Ok(build_daily_activity_summary(
+        &records,
+        &daily_summary_day_label(target_day),
+    ))
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Time Tracking
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct AppTimeEntry {
+    pub app_name: String,
+    pub duration_minutes: u32,
+    pub capture_count: u32,
+    pub last_seen: i64,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct TimeTrackingResult {
+    pub date: String,
+    pub total_captures: u32,
+    pub breakdown: Vec<AppTimeEntry>,
+}
+
+/// Aggregate today's memory records into per-app time estimates.
+///
+/// Works by sorting each app's captures by timestamp and summing consecutive
+/// inter-capture gaps (capped at 5 minutes so long idle periods don't bloat the total).
+#[tauri::command]
+pub async fn get_time_tracking(
+    state: State<'_, Arc<AppState>>,
+) -> Result<TimeTrackingResult, String> {
+    use chrono::{Local, NaiveTime, TimeZone};
+    use std::collections::HashMap;
+
+    // Use a single clock snapshot so today_start_ms and now_ms are consistent.
+    // Local::now() and Utc::now() both produce epoch milliseconds (timezone-independent),
+    // but anchoring both to the same instant avoids any sub-second skew.
+    let now_local = Local::now();
+    let today = now_local.date_naive();
+    let midnight = today.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+    let today_start_ms = Local
+        .from_local_datetime(&midnight)
+        .earliest()
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(0);
+    let now_ms = now_local.timestamp_millis();
+
+    let records = state
+        .store
+        .get_memories_in_range(today_start_ms, now_ms)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Group timestamps by app_name
+    let mut app_timestamps: HashMap<String, Vec<i64>> = HashMap::new();
+    for record in &records {
+        app_timestamps
+            .entry(record.app_name.clone())
+            .or_default()
+            .push(record.timestamp);
+    }
+
+    const MAX_GAP_MS: i64 = 5 * 60_000; // Cap idle gaps at 5 minutes
+    const MIN_ACTIVITY_MS: i64 = 30_000; // Minimum 30 seconds credited per app
+
+    let mut breakdown: Vec<AppTimeEntry> = app_timestamps
+        .iter()
+        .map(|(app, timestamps)| {
+            let mut sorted = timestamps.clone();
+            sorted.sort_unstable();
+
+            let mut duration_ms: i64 = 0;
+            for window in sorted.windows(2) {
+                let gap = window[1] - window[0];
+                duration_ms += gap.min(MAX_GAP_MS);
+            }
+            // Credit at least 30s for any app that had captures
+            duration_ms = duration_ms.max(MIN_ACTIVITY_MS);
+
+            AppTimeEntry {
+                app_name: app.clone(),
+                duration_minutes: ((duration_ms as f64) / 60_000.0).round() as u32,
+                capture_count: sorted.len() as u32,
+                last_seen: *sorted.last().unwrap_or(&0),
+            }
+        })
+        .collect();
+
+    breakdown.sort_by(|a, b| b.duration_minutes.cmp(&a.duration_minutes));
+
+    Ok(TimeTrackingResult {
+        date: today.format("%Y-%m-%d").to_string(),
+        total_captures: records.len() as u32,
+        breakdown,
+    })
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Focus Mode
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct FocusStatus {
+    pub task: Option<String>,
+    pub is_active: bool,
+    pub drift_count: u32,
+}
+
+/// Set or clear the current focus task.
+///
+/// When set, the capture loop embeds the task description once and compares
+/// every incoming capture against it (cosine similarity). Three consecutive
+/// off-task captures surface a ProactiveSuggestion drift alert.
+#[tauri::command]
+pub async fn set_focus_task(
+    task: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<FocusStatus, String> {
+    use std::sync::atomic::Ordering;
+
+    // Always clear embedding first so the capture loop never sees a stale
+    // embedding paired with a new task (or vice-versa). The brief window where
+    // embedding is None means the loop skips drift detection for at most one
+    // capture cycle — an acceptable trade-off for consistency.
+    *state.focus_task_embedding.write() = None;
+    *state.focus_task.write() = task.clone();
+    state.focus_drift_count.store(0, Ordering::Relaxed);
+
+    if let Some(ref t) = task {
+        let embedder = crate::embed::Embedder::new().map_err(|e| e.to_string())?;
+        let embeddings = embedder
+            .embed_batch(&[t.clone()])
+            .map_err(|e| e.to_string())?;
+        if let Some(embedding) = embeddings.into_iter().next() {
+            *state.focus_task_embedding.write() = Some(embedding);
         }
-        *clustered.entry(context).or_insert(0) += 1;
     }
 
-    let mut sorted_clusters: Vec<_> = clustered.into_iter().collect();
-    sorted_clusters.sort_by(|a, b| b.1.cmp(&a.1));
+    Ok(FocusStatus {
+        task,
+        is_active: state.focus_task.read().is_some(),
+        drift_count: 0,
+    })
+}
 
-    let mut context_buffer = String::new();
-    context_buffer.push_str(&format!("Total interactions captured: {}\n", total_records));
-    for (context, count) in sorted_clusters.iter().take(20) { // Limit to 20 to avoid token overload
-        context_buffer.push_str(&format!("- {}: {} interactions\n", context, count));
+/// Return the current focus task and drift counter.
+#[tauri::command]
+pub fn get_focus_status(state: State<'_, Arc<AppState>>) -> Result<FocusStatus, String> {
+    use std::sync::atomic::Ordering;
+    let task = state.focus_task.read().clone();
+    let is_active = task.is_some();
+    let drift_count = state.focus_drift_count.load(Ordering::Relaxed);
+    Ok(FocusStatus {
+        task,
+        is_active,
+        drift_count,
+    })
+}
+
+#[cfg(test)]
+mod daily_summary_tests {
+    use super::*;
+
+    fn result(
+        id: &str,
+        timestamp: i64,
+        app_name: &str,
+        window_title: &str,
+        snippet: &str,
+        url: Option<&str>,
+    ) -> SearchResult {
+        SearchResult {
+            id: id.to_string(),
+            timestamp,
+            app_name: app_name.to_string(),
+            bundle_id: None,
+            window_title: window_title.to_string(),
+            session_id: "test-session".to_string(),
+            text: snippet.to_string(),
+            clean_text: snippet.to_string(),
+            ocr_confidence: 0.95,
+            ocr_block_count: 4,
+            snippet: snippet.to_string(),
+            summary_source: "fallback".to_string(),
+            noise_score: 0.02,
+            session_key: "test-session-key".to_string(),
+            score: 1.0,
+            screenshot_path: None,
+            url: url.map(str::to_string),
+            decay_score: 1.0,
+        }
     }
 
-    let engine = state.ensure_inference_engine().await?.ok_or("Inference engine not available")?;
-    let summary = engine.generate_daily_summary(&context_buffer).await;
-    Ok(summary)
+    #[test]
+    fn daily_summary_is_grounded_for_short_capture_span() {
+        let start = chrono::Utc::now().timestamp_millis();
+        let records = vec![
+            result(
+                "1",
+                start,
+                "VS Code",
+                "MemoryCardsPanel.tsx",
+                "Investigated why all memory cards were not loading.",
+                None,
+            ),
+            result(
+                "2",
+                start + 10 * 60_000,
+                "Discord",
+                "FNDR team chat",
+                "Checked a short team follow-up.",
+                None,
+            ),
+            result(
+                "3",
+                start + 30 * 60_000,
+                "VS Code",
+                "MemoryCardsPanel.tsx",
+                "Tested the all-app memory browse flow.",
+                None,
+            ),
+        ];
+
+        let summary = build_daily_activity_summary(&records, "today");
+        let lines = summary.lines().collect::<Vec<_>>();
+
+        assert!(summary.contains("about 30 minutes today"));
+        assert!(summary.contains("VS Code"));
+        assert!(summary.contains("Discord"));
+        assert!(!summary.contains("GitLab"));
+        assert!(
+            lines.len() <= 4,
+            "short spans should not force 6-8 bullets: {summary}"
+        );
+    }
 }

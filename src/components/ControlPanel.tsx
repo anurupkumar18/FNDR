@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Theme = "dark" | "light";
 import {
@@ -19,8 +19,6 @@ import {
     startMcpServer,
     stopMcpServer,
     runMemoryRepairBackfill,
-    getStats,
-    resetCacheAndCheckResources,
     getPrivacyAlerts,
 } from "../api/tauri";
 import {
@@ -50,8 +48,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [isOpen, setIsOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<Tab>("settings");
     const [blocklist, setBlocklistState] = useState<string[]>([]);
-    const [blocklistInput, setBlocklistInput] = useState("");
-    const [privacyPanelOpen, setPrivacyPanelOpen] = useState(false);
     const [privacyAlertCount, setPrivacyAlertCount] = useState(0);
     const [newApp, setNewApp] = useState("");
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -68,6 +64,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [repairSummary, setRepairSummary] = useState<MemoryRepairSummary | null>(null);
     const [repairError, setRepairError] = useState<string | null>(null);
     const [repairProgress, setRepairProgress] = useState<MemoryRepairProgress | null>(null);
+    const prevPrivacyAlertCountRef = useRef(0);
 
     // Theme state
     const [theme, setTheme] = useState<Theme>(() => {
@@ -146,6 +143,15 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         const interval = setInterval(checkAlerts, 3000);
         return () => clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        const previous = prevPrivacyAlertCountRef.current;
+        if (privacyAlertCount > 0 && previous === 0) {
+            setIsOpen(true);
+            setActiveTab("privacy");
+        }
+        prevPrivacyAlertCountRef.current = privacyAlertCount;
+    }, [privacyAlertCount]);
 
     useEffect(() => {
         if (isOpen && activeTab === "model") {
@@ -427,32 +433,15 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
             <button
                 className={`ui-action-btn settings-toggle ${compact ? "compact" : ""}`}
                 onClick={() => setIsOpen(!isOpen)}
-                aria-label="Open settings"
+                aria-label={privacyAlertCount > 0 ? `Open settings, ${privacyAlertCount} privacy alert${privacyAlertCount === 1 ? "" : "s"}` : "Open settings"}
+                title={privacyAlertCount > 0 ? `${privacyAlertCount} privacy alert${privacyAlertCount === 1 ? "" : "s"}` : "Open settings"}
             >
                 <svg className="settings-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                     <circle cx="12" cy="12" r="3" />
                     <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.86l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.86-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.86.34l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.86 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.86l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.86.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.86-.34l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.86v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z" />
                 </svg>
+                {privacyAlertCount > 0 && <span className="privacy-badge">{privacyAlertCount}</span>}
             </button>
-
-            {privacyAlertCount > 0 && (
-                <button
-                    className={`ui-action-btn settings-toggle privacy-shield-toggle ${compact ? "compact" : ""} ${privacyPanelOpen ? "active" : ""}`}
-                    onClick={() => setPrivacyPanelOpen(!privacyPanelOpen)}
-                    aria-label="Open privacy alerts"
-                >
-                    <svg className="settings-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                    </svg>
-                    <span className="privacy-badge">{privacyAlertCount}</span>
-                </button>
-            )}
-
-            <PrivacyPanel 
-                isVisible={privacyPanelOpen} 
-                onClose={() => setPrivacyPanelOpen(false)} 
-                onAlertsChange={setPrivacyAlertCount} 
-            />
 
             {isOpen && <div className="panel-backdrop" onClick={() => setIsOpen(false)} />}
             <aside className={`settings-panel ${isOpen ? "open" : ""}`}>
@@ -462,7 +451,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                         <p className="panel-subtitle">Private, local, always in your control.</p>
                     </div>
                     <button className="ui-action-btn panel-close" onClick={() => setIsOpen(false)} aria-label="Close">
-                        ✕
+                        Close
                     </button>
                 </header>
 
@@ -484,6 +473,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                         onClick={() => setActiveTab("privacy")}
                     >
                         Privacy
+                        {privacyAlertCount > 0 && <span className="tab-badge">{privacyAlertCount}</span>}
                     </button>
                 </nav>
 
@@ -739,6 +729,15 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                     {activeTab === "privacy" && (
                         <>
                             <section className="panel-section">
+                                <PrivacyPanel
+                                    isVisible={true}
+                                    onClose={() => undefined}
+                                    onAlertsChange={setPrivacyAlertCount}
+                                    embedded={true}
+                                />
+                            </section>
+
+                            <section className="panel-section">
                                 <h3>Blocked Apps</h3>
                                 <p className="section-hint">These apps will not be captured.</p>
                                 <div className="blocklist">
@@ -748,7 +747,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         blocklist.map((app) => (
                                             <div key={app} className="blocklist-item">
                                                 <span>{app}</span>
-                                                <button onClick={() => void handleRemoveApp(app)}>✕</button>
+                                                <button onClick={() => void handleRemoveApp(app)}>x</button>
                                             </div>
                                         ))
                                     )}

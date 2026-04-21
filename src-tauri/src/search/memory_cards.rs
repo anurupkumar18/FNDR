@@ -133,16 +133,38 @@ impl MemoryCardSynthesizer {
                 }
             }
 
-            let (title, mut summary, action, context) = match draft.as_ref().and_then(|d| {
+            let (title, mut summary, action, mut context) = match draft.as_ref().and_then(|d| {
                 validate_draft(d, query, &snippets, &anchor.app_name, &anchor.window_title)
             }) {
                 Some(valid) => valid,
                 None => deterministic_fallback(query, &anchor, &snippets),
             };
 
-            let score = aggregate_score(&group.members);
+            let match_reason = build_match_reason(query, &group.members, &anchor);
+            if !match_reason.is_empty()
+                && !context
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(&match_reason))
+            {
+                context.insert(0, match_reason);
+                context.truncate(4);
+            }
+
+            let mut score = aggregate_score(&group.members);
             let source_count = group.members.len();
             let confidence = grounding_confidence(query, &summary, score, &snippets);
+            let query_support = query_support_ratio(query, &snippets, &anchor);
+            if !query.trim().is_empty() && query_support < 0.10 && confidence < 0.32 {
+                continue;
+            }
+            if !query.trim().is_empty() {
+                if query_support < 0.20 {
+                    score *= 0.78;
+                }
+                if confidence < 0.30 && query_support < 0.12 {
+                    score *= 0.62;
+                }
+            }
             if !query.trim().is_empty()
                 && confidence < 0.42
                 && !summary.to_lowercase().starts_with("low confidence:")
@@ -256,15 +278,11 @@ fn should_group(a: &SearchResult, b: &SearchResult) -> bool {
         return domain_match || title_sim >= 0.55 || text_sim >= 0.40;
     }
 
-    if same_url {
+    if same_url && (text_sim >= 0.35 || snippet_sim >= 0.35 || title_sim >= 0.35) {
         return true;
     }
 
-    if domain_match && (text_sim >= 0.64 || snippet_sim >= 0.64) {
-        return true;
-    }
-
-    text_sim >= 0.78 && title_sim >= 0.64
+    false
 }
 
 fn merged_text(result: &SearchResult) -> String {
@@ -417,6 +435,34 @@ fn grounding_confidence(query: &str, summary: &str, base_score: f32, snippets: &
 
     (base_score.clamp(0.0, 1.0) * 0.45 + support_ratio * 0.35 + query_coverage * 0.20)
         .clamp(0.0, 1.0)
+}
+
+fn query_support_ratio(query: &str, snippets: &[String], anchor: &SearchResult) -> f32 {
+    if query.trim().is_empty() {
+        return 1.0;
+    }
+
+    let query_terms = tokenize(query)
+        .into_iter()
+        .filter(|term| !grounding_stop_words().contains(term.as_str()))
+        .collect::<HashSet<_>>();
+    if query_terms.is_empty() {
+        return 0.0;
+    }
+
+    let evidence_blob = normalize_for_dedup(&format!(
+        "{} {} {} {}",
+        snippets.join(" "),
+        anchor.window_title,
+        anchor.app_name,
+        anchor.url.clone().unwrap_or_default()
+    ));
+    let supported = query_terms
+        .iter()
+        .filter(|term| evidence_blob.contains(term.as_str()))
+        .count();
+
+    supported as f32 / query_terms.len().max(1) as f32
 }
 
 fn grounding_stop_words() -> HashSet<&'static str> {
@@ -660,6 +706,48 @@ fn build_action_summary(anchor: &SearchResult, snippets: &[String]) -> String {
     format!("Reviewed {}", truncate_words(&anchor.window_title, 5))
 }
 
+fn build_match_reason(query: &str, members: &[SearchResult], anchor: &SearchResult) -> String {
+    let query_norm = normalize_for_dedup(query);
+    if query_norm.is_empty() {
+        return String::new();
+    }
+
+    let exact_phrase = members.iter().any(|member| {
+        let text = normalize_for_dedup(&format!(
+            "{} {} {}",
+            member.window_title, member.snippet, member.clean_text
+        ));
+        !text.is_empty() && text.contains(&query_norm)
+    });
+
+    if exact_phrase {
+        return "Exact phrase match".to_string();
+    }
+
+    let overlap = members
+        .iter()
+        .map(|member| {
+            token_overlap(
+                &query_norm,
+                &normalize_for_dedup(&format!("{} {}", member.snippet, member.clean_text)),
+            )
+        })
+        .fold(0.0_f32, f32::max);
+
+    if overlap >= 0.55 {
+        return "Strong semantic match".to_string();
+    }
+
+    if let Some(domain) = extract_domain(anchor.url.as_deref()) {
+        let lowered_domain = domain.to_lowercase();
+        if query_norm.contains(&lowered_domain) {
+            return format!("Matched source {}", domain);
+        }
+    }
+
+    format!("Related to {}", truncate_words(&anchor.window_title, 4))
+}
+
 fn build_context(anchor: &SearchResult, snippets: &[String]) -> Vec<String> {
     let mut context = Vec::new();
     let mut seen = HashSet::new();
@@ -739,7 +827,8 @@ fn apply_story_continuity(cards: &mut [MemoryCard]) {
             continue;
         }
 
-        let fallback = ensure_sentence_period(&trim_trailing_fragment(&clean_story_fact(&card.summary)));
+        let fallback =
+            ensure_sentence_period(&trim_trailing_fragment(&clean_story_fact(&card.summary)));
         if fallback.split_whitespace().count() >= 4 {
             card.summary = fallback;
         }
@@ -906,8 +995,26 @@ fn trim_trailing_fragment(value: &str) -> String {
         .collect::<Vec<_>>();
 
     let dangling = [
-        "for", "with", "and", "or", "to", "of", "in", "on", "by", "at", "from", "via", "about",
-        "after", "before", "than", "then", "while", "during", "including",
+        "for",
+        "with",
+        "and",
+        "or",
+        "to",
+        "of",
+        "in",
+        "on",
+        "by",
+        "at",
+        "from",
+        "via",
+        "about",
+        "after",
+        "before",
+        "than",
+        "then",
+        "while",
+        "during",
+        "including",
     ];
 
     while let Some(last) = words.last() {
@@ -1089,5 +1196,39 @@ mod tests {
         assert!(
             summary.to_lowercase().contains("ipl") || summary.to_lowercase().contains("cricket")
         );
+    }
+
+    #[test]
+    fn does_not_group_cross_app_without_shared_url() {
+        let a = SearchResult {
+            id: "a".to_string(),
+            timestamp: 2_000_000,
+            app_name: "Codex".to_string(),
+            bundle_id: None,
+            window_title: "Daily notes".to_string(),
+            session_id: "s1".to_string(),
+            text: "Updated memory pipeline and fixed tests".to_string(),
+            clean_text: "Updated memory pipeline and fixed tests".to_string(),
+            ocr_confidence: 0.9,
+            ocr_block_count: 7,
+            snippet: "Updated memory pipeline".to_string(),
+            summary_source: "llm".to_string(),
+            noise_score: 0.1,
+            session_key: String::new(),
+            score: 0.7,
+            screenshot_path: None,
+            url: None,
+            decay_score: 1.0,
+        };
+        let mut b = a.clone();
+        b.id = "b".to_string();
+        b.app_name = "Google Chrome".to_string();
+        b.url = Some("https://example.com/startup-evaluation".to_string());
+        b.text = "Startup evaluation rubric and full points".to_string();
+        b.clean_text = b.text.clone();
+        b.snippet = "Startup evaluation rubric".to_string();
+
+        let groups = group_results(&[a, b], 6);
+        assert_eq!(groups.len(), 2);
     }
 }

@@ -191,6 +191,66 @@ if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {{
     Ok(stdout.trim() == "authenticated")
 }
 
+#[cfg(target_os = "macos")]
+async fn request_macos_native_biometric(reason: &str) -> Result<Option<bool>, String> {
+    // Prefer LocalAuthentication so users get native Touch ID/passcode UI.
+    // Exit codes:
+    // 0: authenticated, 1: denied/cancelled, 2: unavailable, 3: timeout.
+    let script = r#"
+import Foundation
+import LocalAuthentication
+
+let reason = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Unlock FNDR"
+let context = LAContext()
+var error: NSError?
+guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
+    exit(2)
+}
+
+let semaphore = DispatchSemaphore(value: 0)
+var success = false
+
+context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { ok, _ in
+    success = ok
+    semaphore.signal()
+}
+
+if semaphore.wait(timeout: .now() + .seconds(45)) == .timedOut {
+    exit(3)
+}
+
+exit(success ? 0 : 1)
+"#;
+
+    let output = match tokio::process::Command::new("swift")
+        .arg("-e")
+        .arg(script)
+        .arg("--")
+        .arg(reason)
+        .output()
+        .await
+    {
+        Ok(output) => output,
+        Err(err) => {
+            tracing::warn!("swift LocalAuthentication bridge unavailable: {}", err);
+            return Ok(None);
+        }
+    };
+
+    match output.status.code() {
+        Some(0) => Ok(Some(true)),
+        Some(1) => Ok(Some(false)),
+        Some(2) | Some(3) => Ok(None),
+        _ => {
+            tracing::warn!(
+                "swift LocalAuthentication bridge failed (status: {:?})",
+                output.status.code()
+            );
+            Ok(None)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Permission checks (macOS-specific)
 // ---------------------------------------------------------------------------

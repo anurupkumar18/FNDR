@@ -10,7 +10,6 @@ import {
     onMeetingStatus,
     startMeetingRecording,
     stopMeetingRecording,
-    exportMeetingPdf,
 } from "../api/tauri";
 import "./MeetingRecorderPanel.css";
 
@@ -28,8 +27,6 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
     const [titleInput, setTitleInput] = useState("");
     const [starting, setStarting] = useState(false);
     const [stopping, setStopping] = useState(false);
-    const [exporting, setExporting] = useState(false);
-    const [showToast, setShowToast] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const selectedMeeting = useMemo(
@@ -48,20 +45,25 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
             setStatus(meetingStatus);
             setMeetings(meetingList);
 
-            const pinnedId = selectedMeetingId && meetingList.some((m) => m.id === selectedMeetingId)
-                ? selectedMeetingId
-                : null;
+            // Determine which meeting tab to show.
+            // If the user has explicitly clicked a tab, preserve it.
+            // Only auto-switch when: first mount, or autoSelect is forced
+            // (e.g. after starting/stopping a recording).
             let nextId: string | null = null;
+
             if (userSelectedId.current) {
-                const stillExists = meetingList.some((m) => m.id === userSelectedId.current);
+                // User explicitly selected a tab — keep it if it still exists.
+                const stillExists = meetingList.some(m => m.id === userSelectedId.current);
                 nextId = stillExists ? userSelectedId.current : (meetingList[0]?.id ?? null);
                 if (!stillExists) {
                     userSelectedId.current = null;
                 }
             } else if (autoSelect) {
-                nextId = meetingStatus.current_meeting_id ?? pinnedId ?? meetingList[0]?.id ?? null;
+                // Auto-select: prefer current recording, else first in list.
+                nextId = meetingStatus.current_meeting_id ?? meetingList[0]?.id ?? null;
             } else {
-                nextId = pinnedId ?? meetingList[0]?.id ?? null;
+                // Background refresh with no user selection yet — keep current or pick first.
+                nextId = selectedMeetingId ?? meetingList[0]?.id ?? null;
             }
 
             setSelectedMeetingId(nextId);
@@ -145,24 +147,6 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
         }
     };
 
-    const handleDownloadPdf = async (meetingId: string) => {
-        if (exporting) return;
-        setExporting(true);
-        setError(null);
-        try {
-            const path = await exportMeetingPdf(meetingId);
-            console.log("PDF exported to:", path);
-            setShowToast(true);
-            setTimeout(() => {
-                setShowToast(false);
-            }, 4000);
-        } catch (err) {
-            setError(String(err));
-        } finally {
-            setExporting(false);
-        }
-    };
-
     if (!isVisible) return null;
 
     return (
@@ -173,7 +157,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                     <p>Audio recording and post-meeting analysis.</p>
                 </div>
                 <button className="ui-action-btn meeting-btn meeting-close-btn" onClick={onClose}>
-                    ✕ Close
+                    Close
                 </button>
             </header>
 
@@ -210,7 +194,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                         </div>
                     )}
 
-                    {(stopping || status?.is_analyzing) && (
+                    {stopping && (
                         <div className="meeting-analyzing-state">
                             <div className="spinner" />
                             <p>Transcribing and extracting action items...</p>
@@ -226,21 +210,12 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                             <span className="breakdown-meta">
                                 {new Date(selectedMeeting.start_timestamp).toLocaleDateString()} • {Math.round(selectedMeeting.duration_seconds / 60)} min
                             </span>
-                            <div className="breakdown-actions">
-                                <button
-                                    className={`ui-action-btn meeting-btn download-pdf-btn ${exporting ? "loading" : ""}`}
-                                    onClick={() => handleDownloadPdf(selectedMeeting.id)}
-                                    disabled={exporting}
-                                >
-                                    {exporting ? "Exporting..." : "↓ Download PDF"}
-                                </button>
-                                <button
-                                    className="ui-action-btn meeting-btn delete-session-btn"
-                                    onClick={() => handleDelete(selectedMeeting.id)}
-                                >
-                                    Delete
-                                </button>
-                            </div>
+                            <button
+                                className="ui-action-btn meeting-btn delete-session-btn"
+                                onClick={() => handleDelete(selectedMeeting.id)}
+                            >
+                                Delete
+                            </button>
                         </div>
 
                         {selectedMeeting.breakdown ? (
@@ -280,11 +255,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                         <details className="raw-transcript-details">
                             <summary>View Full Transcript</summary>
                             <div className="transcript-text">
-                                {transcript?.full_text
-                                    ? transcript.full_text
-                                    : selectedMeeting.segment_count > 0
-                                        ? `Transcript unavailable in UI right now (${selectedMeeting.segment_count} segment(s) recorded). Try switching meetings and back to reload.`
-                                        : "No transcript segments were captured for this meeting yet."}
+                                {transcript?.full_text || "Transcript not loaded."}
                             </div>
                         </details>
                     </section>
@@ -316,13 +287,6 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
             )}
 
             {error && <div className="meeting-error">{error}</div>}
-            
-            {showToast && (
-                <div className="meeting-toast">
-                    <span className="toast-icon">✓</span>
-                    PDF downloaded
-                </div>
-            )}
         </div>
     );
 }

@@ -4,8 +4,10 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use fndr_lib::{api, capture, config::Config, graph::GraphStore, store::Store, AppState, ProactiveSuggestion};
 use chrono::Timelike;
+use fndr_lib::{
+    api, capture, config::Config, graph::GraphStore, store::Store, AppState, ProactiveSuggestion,
+};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -90,6 +92,12 @@ fn main() {
             });
 
             let runtime_state = state.clone();
+
+            // Background task: Track downloads folder
+            let uploads_state = state.clone();
+            tauri::async_runtime::spawn(async move {
+                fndr_lib::downloads::run_watcher(uploads_state).await;
+            });
 
             // Background task: Ebbinghaus decay — runs every 6 hours.
             {
@@ -398,6 +406,7 @@ fn main() {
             api::commands::delete_meeting,
             api::commands::get_meeting_transcript,
             api::commands::export_meeting_pdf,
+            api::commands::export_daily_summary_pdf,
             // Voice / Speech
             api::commands::transcribe_voice_input,
             api::commands::speak_text,
@@ -432,6 +441,10 @@ fn main() {
             api::commands::link_audio_to_memories,
             api::commands::generate_daily_briefing,
             api::commands::generate_daily_summary_for_date,
+            // Time tracking & Focus Mode
+            api::commands::get_time_tracking,
+            api::commands::set_focus_task,
+            api::commands::get_focus_status,
             // Onboarding
             api::onboarding::get_onboarding_state,
             api::onboarding::save_onboarding_state,

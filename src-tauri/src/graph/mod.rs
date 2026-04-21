@@ -646,7 +646,13 @@ fn infer_task_title(record: &MemoryRecord) -> String {
 fn task_slug(s: &str) -> String {
     let slug: String = s
         .chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .split('-')
         .filter(|p| !p.is_empty())

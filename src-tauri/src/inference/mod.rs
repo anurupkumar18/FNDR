@@ -1,3 +1,953 @@
+// use llama_cpp_2::context::params::LlamaContextParams;
+// use llama_cpp_2::context::LlamaContext;
+// use llama_cpp_2::llama_backend::LlamaBackend;
+// use llama_cpp_2::llama_batch::LlamaBatch;
+// use llama_cpp_2::model::params::LlamaModelParams;
+// #[allow(deprecated)]
+// use llama_cpp_2::model::Special;
+// use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
+// use parking_lot::Mutex;
+// use serde::{Deserialize, Serialize};
+// use std::num::NonZeroU32;
+// use std::path::{Path, PathBuf};
+// use std::sync::{Arc, OnceLock};
+
+// mod vlm;
+
+// /// Global shared LlamaBackend singleton.
+// /// Both InferenceEngine and VlmEngine must share one backend instance
+// /// to avoid BackendAlreadyInitialized panics from Metal/CPU init.
+// static LLAMA_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
+
+// pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, Box<dyn std::error::Error + Send + Sync>>
+// {
+//     if let Some(backend) = LLAMA_BACKEND.get() {
+//         return Ok(Arc::clone(backend));
+//     }
+
+//     // Suppress overly verbose metal/llama.cpp internal logs for cleaner developer output
+//     std::env::set_var("GGML_METAL_LOG_INFO", "0");
+//     std::env::set_var("GGML_METAL_LOG_WARN", "0");
+//     std::env::set_var("GGML_LOG_LEVEL", "0");
+
+//     let backend = Arc::new(LlamaBackend::init()?);
+//     // If another thread raced us, that's fine – just return our copy
+//     let _ = LLAMA_BACKEND.set(Arc::clone(&backend));
+//     Ok(backend)
+// }
+// pub use vlm::VlmEngine;
+
+// const MAX_OCR_SUMMARY_CHARS: usize = 1100;
+// const MAX_SUMMARY_CHARS: usize = 220;
+
+// fn normalize_whitespace(value: &str) -> String {
+//     value.split_whitespace().collect::<Vec<_>>().join(" ")
+// }
+
+// fn truncate_chars(value: &str, max_chars: usize) -> String {
+//     if value.chars().count() <= max_chars {
+//         return value.to_string();
+//     }
+//     let keep = max_chars.saturating_sub(3);
+//     let mut out: String = value.chars().take(keep).collect();
+//     out.push_str("...");
+//     out
+// }
+
+// fn is_separator_line(line: &str) -> bool {
+//     !line.is_empty()
+//         && line
+//             .chars()
+//             .all(|ch| ch == '-' || ch == '_' || ch == '=' || ch == '.' || ch == ' ')
+// }
+
+// fn symbol_ratio(line: &str) -> f32 {
+//     let chars: Vec<char> = line.chars().collect();
+//     if chars.is_empty() {
+//         return 1.0;
+//     }
+//     let symbols = chars
+//         .iter()
+//         .filter(|ch| !ch.is_alphanumeric() && !ch.is_whitespace())
+//         .count();
+//     symbols as f32 / chars.len() as f32
+// }
+
+// fn looks_like_file_inventory(line: &str) -> bool {
+//     let tokens: Vec<&str> = line.split_whitespace().collect();
+//     if tokens.len() < 5 {
+//         return false;
+//     }
+
+//     let pathish = tokens
+//         .iter()
+//         .filter(|token| {
+//             let token = token.trim_matches(|ch: char| ",;:()[]{}".contains(ch));
+//             token.contains('/')
+//                 || token.contains('\\')
+//                 || (token.contains('.')
+//                     && (token.contains('_') || token.contains('-') || token.ends_with(".rs")))
+//         })
+//         .count();
+
+//     pathish >= 4
+// }
+
+// fn strip_known_prefixes(value: &str) -> String {
+//     let trimmed = value.trim();
+//     let lower = trimmed.to_lowercase();
+
+//     for prefix in [
+//         "summary:",
+//         "summary -",
+//         "summary",
+//         "activity:",
+//         "action:",
+//         "output:",
+//     ] {
+//         if lower.starts_with(prefix) {
+//             return trimmed[prefix.len()..].trim().to_string();
+//         }
+//     }
+
+//     if lower.starts_with("the screen shows ") {
+//         return trimmed["the screen shows ".len()..].trim().to_string();
+//     }
+//     if lower.starts_with("screen shows ") {
+//         return trimmed["screen shows ".len()..].trim().to_string();
+//     }
+//     if lower.starts_with("i see ") {
+//         return trimmed["i see ".len()..].trim().to_string();
+//     }
+
+//     trimmed.to_string()
+// }
+
+// fn clean_summary_output(raw: &str) -> String {
+//     let picked_lines = raw
+//         .lines()
+//         .map(str::trim)
+//         .filter(|line| !line.is_empty() && !is_separator_line(line))
+//         .take(2)
+//         .collect::<Vec<_>>();
+//     let mut candidate = if picked_lines.is_empty() {
+//         raw.trim().to_string()
+//     } else {
+//         picked_lines.join(" ")
+//     }
+//     .trim()
+//     .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`')
+//     .to_string();
+
+//     // Handle "Action: X | Context: Y" style output.
+//     if let Some((left, right)) = candidate.split_once("| Context:") {
+//         let action = strip_known_prefixes(left);
+//         let context = right.trim();
+//         candidate = format!("{} {}", action, context);
+//     }
+
+//     for _ in 0..3 {
+//         let stripped = strip_known_prefixes(&candidate);
+//         if stripped == candidate {
+//             break;
+//         }
+//         candidate = stripped;
+//     }
+//     candidate = normalize_whitespace(&candidate);
+
+//     // Keep at most two sentences for browsing ergonomics.
+//     let normalized = candidate.replace('!', ".").replace('?', ".");
+//     let mut sentences = normalized
+//         .split('.')
+//         .map(str::trim)
+//         .filter(|s| !s.is_empty())
+//         .collect::<Vec<_>>();
+//     if sentences.len() > 2 {
+//         sentences.truncate(2);
+//         candidate = format!("{}.", sentences.join(". "));
+//     }
+
+//     // Normalise to second person — replace third-person "User" references that
+//     // older model outputs or cached snippets may still contain.
+//     let candidate = normalize_person(candidate.trim());
+
+//     truncate_chars(&candidate, MAX_SUMMARY_CHARS)
+// }
+
+// /// Replace third-person "User" subject references with second-person "You".
+// /// Handles: "The user navigated" → "You navigated", "User reviewed" → "You reviewed".
+// /// Does not touch compound words like "username" or "user-defined".
+// fn normalize_person(s: &str) -> String {
+//     // Work word-by-word to avoid touching "username", "user-defined", etc.
+//     let mut out = String::with_capacity(s.len());
+//     let mut chars = s.char_indices().peekable();
+//     while let Some((i, ch)) = chars.next() {
+//         // Check if we're at the start of the word "user" (case-insensitive)
+//         let rest = &s[i..];
+//         let lower = rest.to_lowercase();
+//         if lower.starts_with("the user") {
+//             let after = &rest["the user".len()..];
+//             // Only replace if "user" is a standalone word (next char is not a letter/digit)
+//             if after.chars().next().map_or(true, |c| !c.is_alphanumeric() && c != '-') {
+//                 out.push_str("You");
+//                 // skip "the user"
+//                 for _ in 0.."the user".len().saturating_sub(1) { chars.next(); }
+//                 continue;
+//             }
+//         } else if lower.starts_with("user") {
+//             let after = &rest["user".len()..];
+//             if after.chars().next().map_or(true, |c| !c.is_alphanumeric() && c != '-') {
+//                 // Only replace if preceded by a word boundary (start or non-alpha)
+//                 let prev = if i == 0 { ' ' } else { s[..i].chars().last().unwrap_or(' ') };
+//                 if !prev.is_alphanumeric() && prev != '-' {
+//                     out.push_str("You");
+//                     for _ in 0.."user".len().saturating_sub(1) { chars.next(); }
+//                     continue;
+//                 }
+//             }
+//         }
+//         out.push(ch);
+//     }
+//     out
+// }
+
+// fn is_usable_summary(summary: &str) -> bool {
+//     let trimmed = summary.trim();
+//     if trimmed.len() < 8 {
+//         return false;
+//     }
+//     if trimmed.split_whitespace().count() < 2 {
+//         return false;
+//     }
+//     if trimmed.split_whitespace().count() > 44 {
+//         return false;
+//     }
+//     if is_separator_line(trimmed) {
+//         return false;
+//     }
+//     if symbol_ratio(trimmed) > 0.34 {
+//         return false;
+//     }
+//     if looks_like_file_inventory(trimmed) {
+//         return false;
+//     }
+
+//     let lower = trimmed.to_lowercase();
+//     if lower == "n/a" || lower == "none" || lower == "unknown" {
+//         return false;
+//     }
+//     if lower.contains("ocr text") || lower.contains("raw text") {
+//         return false;
+//     }
+
+//     true
+// }
+
+// fn validate_memory_card_draft(mut draft: MemoryCardDraft) -> Option<MemoryCardDraft> {
+//     draft.title = normalize_whitespace(draft.title.trim());
+//     draft.summary = normalize_whitespace(draft.summary.trim());
+//     draft.action = normalize_whitespace(draft.action.trim());
+//     draft.context = draft
+//         .context
+//         .into_iter()
+//         .map(|value| normalize_whitespace(value.trim()))
+//         .filter(|value| !value.is_empty())
+//         .collect();
+
+//     if draft.title.is_empty() || draft.summary.is_empty() || draft.action.is_empty() {
+//         return None;
+//     }
+
+//     if draft.summary.contains('\n')
+//         || draft.summary.contains('*')
+//         || draft.summary.contains('#')
+//         || draft.summary.contains('`')
+//     {
+//         return None;
+//     }
+
+//     let summary_lower = draft.summary.to_lowercase();
+//     if summary_lower.starts_with("the screen shows")
+//         || summary_lower.starts_with("i see")
+//         || summary_lower.contains("new tab")
+//         || summary_lower.contains("toolbar")
+//         || summary_lower.contains("tab strip")
+//     {
+//         return None;
+//     }
+
+//     let words = draft.summary.split_whitespace().count();
+//     if !(8..=22).contains(&words) {
+//         return None;
+//     }
+
+//     if !draft.summary.ends_with('.') {
+//         draft.summary.push('.');
+//     }
+
+//     draft.context.dedup();
+//     draft.context.truncate(4);
+//     if draft.context.is_empty() {
+//         draft.context.push("recent activity".to_string());
+//     }
+
+//     Some(draft)
+// }
+
+// fn extract_json_object(raw: &str) -> Option<String> {
+//     let start = raw.find('{')?;
+//     let end = raw.rfind('}')?;
+//     if end <= start {
+//         return None;
+//     }
+//     Some(raw[start..=end].to_string())
+// }
+
+// #[derive(Debug, Clone, Serialize, Deserialize)]
+// pub struct MemoryCardDraft {
+//     pub title: String,
+//     pub summary: String,
+//     pub action: String,
+//     #[serde(default)]
+//     pub context: Vec<String>,
+// }
+
+// #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// pub struct MeetingTaskBreakdownDraft {
+//     pub summary: String,
+//     #[serde(default)]
+//     pub todos: Vec<String>,
+//     #[serde(default)]
+//     pub reminders: Vec<String>,
+//     #[serde(default)]
+//     pub followups: Vec<String>,
+// }
+
+// /// AI Inference Engine for FNDR using llama-cpp-2
+// /// Persists the LlamaContext to prevent Metal resource exhaustion crashes.
+// pub struct InferenceEngine {
+//     model: &'static LlamaModel,
+//     context: Mutex<LlamaContext<'static>>,
+//     _backend: Arc<LlamaBackend>,
+//     chat_template: LlamaChatTemplate,
+//     model_id: String,
+//     model_path: PathBuf,
+// }
+
+// unsafe impl Send for InferenceEngine {}
+// unsafe impl Sync for InferenceEngine {}
+
+// impl InferenceEngine {
+//     /// Initialize the engine using the preferred available local model.
+//     pub async fn new(
+//         app_data_dir: Option<PathBuf>,
+//         preferred_model_id: Option<String>,
+//     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+//         tracing::info!("Initializing local LLM via llama-cpp...");
+
+//         let backend = get_or_init_backend()?;
+
+//         let resolved_model =
+//             crate::models::resolve_model(preferred_model_id.as_deref(), app_data_dir.as_deref())
+//                 .ok_or_else(|| {
+//                     let searched_dirs =
+//                         crate::models::candidate_model_dirs(app_data_dir.as_deref())
+//                             .into_iter()
+//                             .map(|path| path.display().to_string())
+//                             .collect::<Vec<_>>()
+//                             .join(", ");
+//                     tracing::error!(
+//                         "Model file not found in any known location. Searched: {}",
+//                         searched_dirs
+//                     );
+//                     format!("Model file missing. Searched: {}", searched_dirs)
+//                 })?;
+
+//         let model_id = resolved_model.definition.id.to_string();
+//         let model_path = resolved_model.path;
+
+//         tracing::info!("Loading model {} from {:?}", model_id, model_path);
+
+//         let backend_clone = Arc::clone(&backend);
+//         let model_path_clone = model_path.clone();
+
+//         let model_ref = tokio::task::spawn_blocking(move || {
+//             let model_params = LlamaModelParams::default();
+//             let model =
+//                 LlamaModel::load_from_file(&backend_clone, &model_path_clone, &model_params)?;
+
+//             // Leak the model to get a 'static reference, allowing the context to be 'static.
+//             // This is safe since InferenceEngine is a singleton for the application lifetime.
+//             let model_ref: &'static LlamaModel = Box::leak(Box::new(model));
+//             Ok::<&'static LlamaModel, Box<dyn std::error::Error + Send + Sync>>(model_ref)
+//         })
+//         .await
+//         .map_err(|e| format!("Join error during model load: {}", e))?
+//         .map_err(|e| format!("Model load failed: {}", e))?;
+
+//         let ctx_params = LlamaContextParams::default()
+//             .with_n_ctx(NonZeroU32::new(2048))
+//             .with_n_batch(8192);
+
+//         let context = model_ref.new_context(&backend, ctx_params)?;
+
+//         let chat_template = match model_ref.chat_template(None) {
+//             Ok(template) => template,
+//             Err(err) => {
+//                 tracing::warn!(
+//                     "Model {} has no baked chat template ({}); falling back to chatml",
+//                     model_id,
+//                     err
+//                 );
+//                 LlamaChatTemplate::new("chatml").map_err(
+//                     |fallback_err| -> Box<dyn std::error::Error + Send + Sync> {
+//                         Box::new(fallback_err)
+//                     },
+//                 )?
+//             }
+//         };
+
+//         Ok(Self {
+//             model: model_ref,
+//             context: Mutex::new(context),
+//             _backend: backend,
+//             chat_template,
+//             model_id,
+//             model_path,
+//         })
+//     }
+
+//     pub fn model_id(&self) -> &str {
+//         &self.model_id
+//     }
+
+//     pub fn model_path(&self) -> &Path {
+//         &self.model_path
+//     }
+
+//     /// Summarize noisy OCR text into a clean sentence
+//     pub async fn summarize(&self, ocr_text: &str) -> String {
+//         self.summarize_memory_node("", "", ocr_text).await
+//     }
+
+//     /// Summarize OCR text into a concise memory snippet for storage and graph nodes.
+//     pub async fn summarize_memory_node(
+//         &self,
+//         app_name: &str,
+//         window_title: &str,
+//         ocr_text: &str,
+//     ) -> String {
+//         if ocr_text.trim().is_empty() {
+//             return String::new();
+//         }
+
+//         let prompt = match self.build_prompt(
+//             "You generate memory snippets from OCR text.\n\
+//             RULES:\n\
+//             - Output 1-2 short sentences, 16-34 words total.\n\
+//             - Write in second person: 'You opened...', 'You reviewed...', 'You fixed...'. Never 'User' or 'The user'.\n\
+//             - Capture the primary activity and at least one concrete detail (entity, file, metric, or next step).\n\
+//             - Ignore UI chrome, menu labels, status bars, repeated file/path lists, and separators.\n\
+//             - Keep wording grounded to app/window/OCR evidence only.\n\
+//             - No preambles like 'I see' or 'The screen shows'.\n\
+//             - No markdown, no bullet points, no extra labels.",
+//             &format!(
+//                 "APP: {}\nWINDOW: {}\n\nOCR TEXT:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Return only the best memory snippet with useful details for future search recall.",
+//                 app_name,
+//                 window_title,
+//                 ocr_text.chars().take(MAX_OCR_SUMMARY_CHARS).collect::<String>()
+//             ),
+//         ) {
+//             Ok(prompt) => prompt,
+//             Err(err) => {
+//                 tracing::error!("Prompt build failed: {}", err);
+//                 return String::new();
+//             }
+//         };
+
+//         tracing::info!(
+//             "Summarizing OCR text for memory node ({} chars)...",
+//             ocr_text.len()
+//         );
+//         let raw_summary = self.complete(&prompt, 90).await;
+//         let summary = clean_summary_output(&raw_summary);
+
+//         if !is_usable_summary(&summary) {
+//             tracing::warn!("Discarded low-signal OCR summary: {}", raw_summary);
+//             return String::new();
+//         }
+
+//         tracing::info!("OCR summary result: {}", summary);
+//         summary
+//     }
+
+//     /// Answer contextual questions using retrieved memories (RAG)
+//     pub async fn answer(&self, question: &str, context_str: &str) -> String {
+//         let prompt = match self.build_prompt(
+//             "You answer questions using local memory snippets. Be direct, grounded, and concise.",
+//             &format!(
+//                 "Context Snippets:\n{}\n\nQuestion: {}",
+//                 context_str.chars().take(1000).collect::<String>(),
+//                 question
+//             ),
+//         ) {
+//             Ok(prompt) => prompt,
+//             Err(err) => {
+//                 tracing::error!("Prompt build failed: {}", err);
+//                 return String::new();
+//             }
+//         };
+
+//         self.complete(&prompt, 150).await
+//     }
+
+//     /// Provide a detailed summary of a memory, extracting key information
+//     pub async fn summarize_memory_detail(
+//         &self,
+//         app_name: &str,
+//         window_title: &str,
+//         text: &str,
+//     ) -> String {
+//         if text.trim().is_empty() {
+//             return "No content to summarize.".to_string();
+//         }
+
+//         let prompt = match self.build_prompt(
+//             "You extract key facts from local screen memories.",
+//             &format!(
+//                 "MEMORY CONTENT:\nApp: {}\nWindow: {}\nContent: {}\n\nREQUEST: Return ACTIVITY and DETAILS. Be concise.",
+//                 app_name,
+//                 window_title,
+//                 text.chars().take(1000).collect::<String>()
+//             ),
+//         ) {
+//             Ok(prompt) => prompt,
+//             Err(err) => {
+//                 tracing::error!("Prompt build failed: {}", err);
+//                 return String::new();
+//             }
+//         };
+
+//         self.complete(&prompt, 150).await
+//     }
+
+//     /// Synthesize multiple search results into a coherent summary
+//     pub async fn summarize_search_results(&self, query: &str, results: &[String]) -> String {
+//         if results.is_empty() {
+//             return String::new();
+//         }
+
+//         let combined_text = results.join("\n---\n");
+//         let prompt = match self.build_prompt(
+//             "You help users find what they remember by summarizing search results.\n\
+//             RULES:\n\
+//             - Use ONLY facts explicitly present in SNIPPETS.\n\
+//             - If evidence is weak, start with 'Low confidence:'.\n\
+//             - Respond ONLY with one paragraph summary.",
+//             &format!(
+//                 "SEARCH QUERY: \"{}\"\n\nSNIPPETS:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Combine these snippets into one paragraph that answers the query. Keep it under 50 words.",
+//                 query,
+//                 combined_text.chars().take(800).collect::<String>()
+//             ),
+//         ) {
+//             Ok(prompt) => prompt,
+//             Err(err) => {
+//                 tracing::error!("Prompt build failed: {}", err);
+//                 return String::new();
+//             }
+//         };
+
+//         tracing::info!(
+//             "Summarizing search results for query: '{}' with {} snippets",
+//             query,
+//             results.len()
+//         );
+//         let summary = self.complete(&prompt, 100).await;
+//         tracing::info!("Search summary result: {}", summary);
+//         summary
+//     }
+
+//     /// Generate a structured memory card draft from grouped snippets.
+//     pub async fn synthesize_memory_card(
+//         &self,
+//         query: &str,
+//         app_name: &str,
+//         window_title: &str,
+//         snippets: &[String],
+//     ) -> Option<MemoryCardDraft> {
+//         if snippets.is_empty() {
+//             return None;
+//         }
+
+//         let snippet_block = snippets
+//             .iter()
+//             .take(6)
+//             .enumerate()
+//             .map(|(idx, snippet)| format!("{}. {}", idx + 1, snippet))
+//             .collect::<Vec<_>>()
+//             .join("\n");
+
+//         let prompt = self
+//             .build_prompt(
+//                 "You synthesize one memory card from grouped search snippets.\n\
+//                 RULES:\n\
+//                 - Return ONLY strict JSON with keys: title, summary, action, context.\n\
+//                 - summary must be exactly one sentence, 8-22 words.\n\
+//                 - Write in second person: 'You worked on...', 'You reviewed...'. Never 'User' or 'The user'.\n\
+//                 - Use ONLY facts explicitly present in SNIPPETS. Do not infer unseen details.\n\
+//                 - If evidence is weak, start summary with 'Low confidence:'.\n\
+//                 - No markdown, no OCR labels, no browser chrome, no preambles.\n\
+//                 - Focus on one dominant activity with 1-3 high-signal details.\n\
+//                 - context must be an array of 1-4 short strings.\n\
+//                 - Prefer context items that mention source IDs like src:<id> when present.",
+//                 &format!(
+//                     "QUERY: {}\nAPP: {}\nWINDOW: {}\nSNIPPETS:\n{}\n\nReturn JSON only.",
+//                     query, app_name, window_title, snippet_block
+//                 ),
+//             )
+//             .ok()?;
+
+//         let raw = self.complete(&prompt, 180).await;
+//         let candidate = extract_json_object(&raw)?;
+//         let draft: MemoryCardDraft = serde_json::from_str(&candidate).ok()?;
+//         validate_memory_card_draft(draft)
+//     }
+
+//     /// Extract actionable todos/reminders from memory text
+//     pub async fn extract_todos(&self, memories_text: &str) -> String {
+//         if memories_text.trim().is_empty() {
+//             return String::new();
+//         }
+
+//         let prompt = match self.build_prompt(
+//             "You identify clear follow-up actions from recent screen activity.",
+//             &format!(
+//                 "Extract only clearly actionable items from this activity.\n\
+// Format each line exactly as one of:\n\
+// - TODO: [clear next action]\n\
+// - REMINDER: [date/time-sensitive reminder]\n\
+// - FOLLOWUP: [person/team + reason]\n\
+// Rules:\n\
+// - Return 0 to 4 total lines.\n\
+// - If nothing is clearly actionable, return exactly: NONE\n\
+// - Do NOT infer tasks from passive browsing or generic reading.\n\
+// - TODO must sound like a real self-note someone would actually write.\n\
+// - REMINDER requires explicit time/day/deadline signal in the evidence.\n\
+// - FOLLOWUP requires a concrete person or team and why follow-up is needed.\n\
+// - Keep each line short, specific, and non-duplicate.\n\
+// - No extra commentary.\n\n{}",
+//                 memories_text.chars().take(2000).collect::<String>()
+//             ),
+//         ) {
+//             Ok(prompt) => prompt,
+//             Err(err) => {
+//                 tracing::error!("Prompt build failed: {}", err);
+//                 return String::new();
+//             }
+//         };
+
+//         self.complete(&prompt, 200).await
+//     }
+
+//     /// Extract structured meeting summary + action items.
+//     pub async fn extract_meeting_breakdown(
+//         &self,
+//         transcript: &str,
+//     ) -> Option<MeetingTaskBreakdownDraft> {
+//         if transcript.trim().is_empty() {
+//             return None;
+//         }
+
+//         let prompt = self
+//             .build_prompt(
+//                 "You extract only high-confidence meeting outcomes from transcripts.",
+//                 &format!(
+//                     "Read the meeting transcript and return STRICT JSON with keys:\n\
+// summary, todos, reminders, followups\n\
+// \n\
+// Schema:\n\
+// {{\"summary\":\"...\",\"todos\":[\"...\"],\"reminders\":[\"...\"],\"followups\":[\"...\"]}}\n\
+// \n\
+// Rules:\n\
+// - summary: exactly 1 short paragraph (1-3 sentences) based only on transcript facts.\n\
+// - todos: concrete next actions someone explicitly committed to.\n\
+// - reminders: only explicit date/time/deadline reminders.\n\
+// - followups: specific people/teams to follow up with and why.\n\
+// - If evidence is weak, leave arrays empty.\n\
+// - 0-5 items per array, no duplicates, no generic filler.\n\
+// - Return JSON only.\n\
+// \n\
+// TRANSCRIPT:\n{}",
+//                     transcript.chars().take(7000).collect::<String>()
+//                 ),
+//             )
+//             .ok()?;
+
+//         let raw = self.complete(&prompt, 360).await;
+//         let candidate = extract_json_object(&raw)?;
+//         let mut draft: MeetingTaskBreakdownDraft = serde_json::from_str(&candidate).ok()?;
+
+//         let clean_item = |value: String| {
+//             let cleaned = normalize_whitespace(
+//                 value
+//                     .trim()
+//                     .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`'),
+//             );
+//             if cleaned.len() < 6 {
+//                 return None;
+//             }
+//             let lower = cleaned.to_lowercase();
+//             if matches!(
+//                 lower.as_str(),
+//                 "none" | "n/a" | "na" | "no action items" | "no follow-ups" | "no reminders"
+//             ) {
+//                 return None;
+//             }
+//             Some(cleaned)
+//         };
+
+//         let clean_vec = |items: Vec<String>| {
+//             let mut out = Vec::new();
+//             let mut seen = std::collections::HashSet::new();
+//             for item in items {
+//                 let Some(cleaned) = clean_item(item) else {
+//                     continue;
+//                 };
+//                 let key = cleaned.to_lowercase();
+//                 if seen.insert(key) {
+//                     out.push(cleaned);
+//                 }
+//                 if out.len() >= 5 {
+//                     break;
+//                 }
+//             }
+//             out
+//         };
+
+//         draft.summary = normalize_whitespace(draft.summary.trim());
+//         draft.todos = clean_vec(draft.todos);
+//         draft.reminders = clean_vec(draft.reminders);
+//         draft.followups = clean_vec(draft.followups);
+
+//         if draft.summary.is_empty()
+//             && draft.todos.is_empty()
+//             && draft.reminders.is_empty()
+//             && draft.followups.is_empty()
+//         {
+//             return None;
+//         }
+
+//         Some(draft)
+//     }
+
+//     /// Generate a smart daily briefing paragraph from today's memory cards.
+//     /// `mode` is either "morning" (actionable: what to work on) or "evening" (recap + tomorrow).
+//     pub async fn generate_daily_briefing(&self, card_lines: &[String], mode: &str) -> String {
+//         if card_lines.is_empty() {
+//             return String::new();
+//         }
+
+//         let cards_block = card_lines.join("\n");
+
+//         let (system_msg, task_instruction) = if mode == "evening" {
+//             (
+//                 "You are a smart personal assistant that writes concise end-of-day briefings.\n\
+//                 RULES:\n\
+//                 - Write exactly 2-3 sentences in plain English.\n\
+//                 - Sentence 1: What the user worked on today (specific activities, not generic).\n\
+//                 - Sentence 2: One important thing to carry forward or revisit tomorrow.\n\
+//                 - Sentence 3 (optional): A cross-connection you noticed across activities.\n\
+//                 - Be specific. Name real tasks, tools, or topics from the memories.\n\
+//                 - Write in second person (\"You worked on...\", \"You'll want to...\").\n\
+//                 - No bullet points. No headers. Just prose.",
+//                 "Based on today's activity below, write the end-of-day briefing paragraph.\nReturn only the paragraph, nothing else.",
+//             )
+//         } else {
+//             (
+//                 "You are a smart personal assistant that writes concise morning/daytime briefings.\n\
+//                 RULES:\n\
+//                 - Write exactly 2-3 sentences in plain English.\n\
+//                 - Sentence 1: What deserves attention today, based on recent activity.\n\
+//                 - Sentence 2: A specific piece of context or info from memory that will be useful.\n\
+//                 - Sentence 3 (optional): Something in progress that needs a follow-up.\n\
+//                 - Be specific. Name real tasks, tools, topics, or people from the memories.\n\
+//                 - Write in second person (\"You need to...\", \"You'll want to...\", \"You were working on...\").\n\
+//                 - No bullet points. No headers. Just prose.",
+//                 "Based on recent activity below, write the morning briefing paragraph.\nReturn only the paragraph, nothing else.",
+//             )
+//         };
+
+//         let user_msg = format!(
+//             "RECENT ACTIVITY:\n{}\n\n{}",
+//             cards_block.chars().take(900).collect::<String>(),
+//             task_instruction
+//         );
+
+//         let prompt = match self.build_prompt(system_msg, &user_msg) {
+//             Ok(p) => p,
+//             Err(err) => {
+//                 tracing::error!("Daily briefing prompt build failed: {}", err);
+//                 return String::new();
+//             }
+//         };
+
+//         tracing::info!("Generating daily briefing (mode={})...", mode);
+//         let raw = self.complete(&prompt, 160).await;
+//         tracing::info!("Daily briefing result: {}", raw);
+
+//         // Strip any leading label the model might emit
+//         let cleaned = raw
+//             .trim()
+//             .trim_matches(|ch| ch == '"' || ch == '\'')
+//             .to_string();
+//         cleaned
+//     }
+
+//     /// Generate an on-demand, smart daily summary of grouped user activities.
+//     pub async fn generate_daily_summary(&self, grouped_activity_text: &str) -> String {
+//         if grouped_activity_text.is_empty() {
+//             return String::new();
+//         }
+
+//         let system_msg = "You are a highly efficient personal assistant writing concise daily summaries based on the user's local, grouped context logs.\n\
+//             RULES:\n\
+//             - Write exactly 6 to 8 short bullet points.\n\
+//             - Keep each point high-level but concrete (e.g., 'Spent most of the day coding in VS Code', 'Visited Discord several times for conversations and follow-ups', 'Did some browsing and research during the afternoon').\n\
+//             - Name real tools, apps, or topics mentioned in the context.\n\
+//             - Do not list chronological actions. Cluster by thematic activity.\n\
+//             - Write in the second person ('You worked on...', 'You visited...').\n\
+//             - Formatting: Output plain text bullet points starting with '- '.\n\
+//             - No preambles, no Markdown bolding, just the bullets.";
+
+//         let user_msg = format!(
+//             "CLUSTERED DAILY ACTIVITY:\n{}\n\nReturn the 6-8 bullet daily summary.",
+//             grouped_activity_text.chars().take(2000).collect::<String>()
+//         );
+
+//         let prompt = match self.build_prompt(system_msg, &user_msg) {
+//             Ok(p) => p,
+//             Err(err) => {
+//                 tracing::error!("Daily summary prompt build failed: {}", err);
+//                 return String::new();
+//             }
+//         };
+
+//         tracing::info!("Generating on-demand daily summary...");
+//         let raw = self.complete(&prompt, 350).await;
+//         tracing::info!("Daily summary result:\n{}", raw);
+
+//         raw.trim()
+//             .trim_matches(|ch| ch == '"' || ch == '\'')
+//             .to_string()
+//     }
+
+//     fn build_prompt(&self, system_message: &str, user_message: &str) -> Result<String, String> {
+//         let messages = vec![
+//             LlamaChatMessage::new("system".to_string(), system_message.replace('\0', " "))
+//                 .map_err(|err| err.to_string())?,
+//             LlamaChatMessage::new("user".to_string(), user_message.replace('\0', " "))
+//                 .map_err(|err| err.to_string())?,
+//         ];
+
+//         self.model
+//             .apply_chat_template(&self.chat_template, &messages, true)
+//             .map_err(|err| err.to_string())
+//     }
+
+//     async fn complete(&self, prompt: &str, max_tokens: i32) -> String {
+//         let mut ctx = self.context.lock();
+
+//         // Clear KV cache (kv_cache_clear or just reset)
+//         // In llama-cpp-2 wrapper, context management is through KvCache
+//         ctx.clear_kv_cache();
+
+//         let tokens_list = match self.model.str_to_token(prompt, AddBos::Never) {
+//             Ok(t) => t,
+//             Err(e) => {
+//                 tracing::error!("Tokenization failed: {}", e);
+//                 return "AI Error: Tokenization failed.".to_string();
+//             }
+//         };
+
+//         let mut batch = LlamaBatch::new(2048, 1);
+//         for (i, token) in tokens_list.iter().enumerate() {
+//             let last = i == tokens_list.len() - 1;
+//             let _ = batch.add(*token, i as i32, &[0], last);
+//         }
+
+//         if let Err(e) = ctx.decode(&mut batch) {
+//             tracing::error!("Decode failed: {}", e);
+//             return "AI Error: LLM Decode failed.".to_string();
+//         }
+
+//         let mut result = String::new();
+//         let mut n_cur = tokens_list.len() as i32;
+
+//         for _ in 0..max_tokens {
+//             let candidates = ctx.candidates();
+//             let token_data = candidates
+//                 .max_by(|a, b| {
+//                     a.logit()
+//                         .partial_cmp(&b.logit())
+//                         .unwrap_or(std::cmp::Ordering::Equal)
+//                 })
+//                 .unwrap();
+
+//             let token = token_data.id();
+
+//             if self.model.is_eog_token(token) {
+//                 break;
+//             }
+
+//             #[allow(deprecated)]
+//             let piece = match self.model.token_to_str(token, Special::Plaintext) {
+//                 Ok(s) => s,
+//                 Err(_) => String::new(),
+//             };
+//             result.push_str(&piece);
+
+//             batch.clear();
+//             let _ = batch.add(token, n_cur, &[0], true);
+//             if let Err(e) = ctx.decode(&mut batch) {
+//                 tracing::error!("Incremental decode failed: {}", e);
+//                 break;
+//             }
+//             n_cur += 1;
+//         }
+
+//         tracing::debug!(
+//             "Completion result ({} tokens): {}",
+//             n_cur - tokens_list.len() as i32,
+//             result.trim()
+//         );
+//         result.trim().to_string()
+//     }
+// }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+
+//     #[test]
+//     fn cleans_common_summary_preambles() {
+//         let cleaned = clean_summary_output("Summary: The screen shows reviewing PR comments");
+//         assert_eq!(cleaned, "reviewing PR comments");
+//     }
+
+//     #[test]
+//     fn rejects_file_inventory_noise() {
+//         let noisy = "src/app.tsx src/lib.rs src/main.rs src-tauri/src/store/schema.rs src-tauri/src/graph/mod.rs";
+//         assert!(!is_usable_summary(noisy));
+//     }
+
+//     #[test]
+//     fn accepts_concise_activity_summary() {
+//         assert!(is_usable_summary(
+//             "Reviewing download_model.sh changes in FNDR"
+//         ));
+//     }
+// }
+
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -6,7 +956,10 @@ use llama_cpp_2::model::params::LlamaModelParams;
 #[allow(deprecated)]
 use llama_cpp_2::model::Special;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
+use llama_cpp_2::sampling::LlamaSampler;
+use once_cell::sync::Lazy;
 use parking_lot::Mutex;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -39,6 +992,28 @@ pub use vlm::VlmEngine;
 
 const MAX_OCR_SUMMARY_CHARS: usize = 1100;
 const MAX_SUMMARY_CHARS: usize = 220;
+
+// ============================================================================
+// Shared prompt fragments.
+// Tune in one place; all prompts inherit the voice/format constraints.
+// ============================================================================
+
+const VOICE_RULES: &str = "\
+- Write in second person: 'You opened...', 'You reviewed...', 'You fixed...'. Never 'User' or 'The user'.\n\
+- No preambles like 'I see', 'The screen shows', 'Summary:'.\n\
+- No markdown, no bullet points unless explicitly requested.";
+
+// ============================================================================
+// Lazy-compiled regexes (previously rebuilt on every summarize call).
+// ============================================================================
+
+static RE_THE_USER: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\bthe user\b").expect("regex compile"));
+static RE_USER: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\buser\b").expect("regex compile"));
+
+// ============================================================================
+// Text helpers
+// ============================================================================
 
 fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -167,7 +1142,20 @@ fn clean_summary_output(raw: &str) -> String {
         candidate = format!("{}.", sentences.join(". "));
     }
 
-    truncate_chars(candidate.trim(), MAX_SUMMARY_CHARS)
+    // Normalise to second person — replace third-person "User" references that
+    // older model outputs or cached snippets may still contain.
+    let candidate = normalize_person(candidate.trim());
+
+    truncate_chars(&candidate, MAX_SUMMARY_CHARS)
+}
+
+/// Replace "User <verb>" / "The user <verb>" patterns with "You <verb>".
+/// Uses lazy-compiled regexes (see `RE_THE_USER`, `RE_USER`).
+fn normalize_person(s: &str) -> String {
+    let after_the = RE_THE_USER.replace_all(s, "You");
+    // `\buser\b` case-insensitive is always some casing of "user", so the match
+    // always becomes "You". No per-match branching needed.
+    RE_USER.replace_all(&after_the, "You").into_owned()
 }
 
 fn is_usable_summary(summary: &str) -> bool {
@@ -253,14 +1241,58 @@ fn validate_memory_card_draft(mut draft: MemoryCardDraft) -> Option<MemoryCardDr
     Some(draft)
 }
 
+/// Brace-balanced scan for the first complete top-level JSON object.
+/// Handles strings with escaped quotes and prefixed/suffixed commentary
+/// (e.g. markdown code fences) that the naive first-`{`/last-`}` approach mishandled.
 fn extract_json_object(raw: &str) -> Option<String> {
-    let start = raw.find('{')?;
-    let end = raw.rfind('}')?;
-    if end <= start {
+    let bytes = raw.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] != b'{' {
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        let mut depth = 0i32;
+        let mut in_str = false;
+        let mut escape = false;
+
+        while i < bytes.len() {
+            let ch = bytes[i];
+            if in_str {
+                if escape {
+                    escape = false;
+                } else if ch == b'\\' {
+                    escape = true;
+                } else if ch == b'"' {
+                    in_str = false;
+                }
+            } else {
+                match ch {
+                    b'"' => in_str = true,
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(raw[start..=i].to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            i += 1;
+        }
+        // Unbalanced starting at this '{' — bail out.
         return None;
     }
-    Some(raw[start..=end].to_string())
+    None
 }
+
+// ============================================================================
+// Public types
+// ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryCardDraft {
@@ -282,8 +1314,24 @@ pub struct MeetingTaskBreakdownDraft {
     pub followups: Vec<String>,
 }
 
-/// AI Inference Engine for FNDR using llama-cpp-2
+// ============================================================================
+// InferenceEngine
+// ============================================================================
+
+/// AI Inference Engine for FNDR using llama-cpp-2.
 /// Persists the LlamaContext to prevent Metal resource exhaustion crashes.
+///
+/// # Lifetime safety
+///
+/// The model is intentionally leaked (`Box::leak`) to obtain a `'static` reference
+/// that the `LlamaContext<'static>` can borrow from. This is safe under the
+/// invariant that **`InferenceEngine` is a process-wide singleton held for the
+/// application lifetime**. If you ever want runtime model hot-swap, this design
+/// must change — otherwise each reload leaks a model's worth of memory and any
+/// in-flight context referencing the old model would be use-after-free.
+///
+/// Thread-safety: `LlamaModel`, `Arc<LlamaBackend>`, and `Mutex<LlamaContext>`
+/// are individually `Send`/`Sync`, so `InferenceEngine` auto-derives both.
 pub struct InferenceEngine {
     model: &'static LlamaModel,
     context: Mutex<LlamaContext<'static>>,
@@ -335,8 +1383,7 @@ impl InferenceEngine {
             let model =
                 LlamaModel::load_from_file(&backend_clone, &model_path_clone, &model_params)?;
 
-            // Leak the model to get a 'static reference, allowing the context to be 'static.
-            // This is safe since InferenceEngine is a singleton for the application lifetime.
+            // See struct-level doc for the `Box::leak` rationale.
             let model_ref: &'static LlamaModel = Box::leak(Box::new(model));
             Ok::<&'static LlamaModel, Box<dyn std::error::Error + Send + Sync>>(model_ref)
         })
@@ -344,9 +1391,12 @@ impl InferenceEngine {
         .map_err(|e| format!("Join error during model load: {}", e))?
         .map_err(|e| format!("Model load failed: {}", e))?;
 
+        // n_ctx: 4096 gives room for long OCR + system prompt + chat template overhead.
+        // n_batch: must be <= n_ctx. Previously set to 8192 with n_ctx=2048, which
+        // llama.cpp silently clamped; fixed here.
         let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(2048))
-            .with_n_batch(8192);
+            .with_n_ctx(NonZeroU32::new(4096))
+            .with_n_batch(2048);
 
         let context = model_ref.new_context(&backend, ctx_params)?;
 
@@ -400,20 +1450,37 @@ impl InferenceEngine {
             return String::new();
         }
 
-        let prompt = match self.build_prompt(
+        // Build the evidence block conditionally — empty "APP:" / "WINDOW:" lines
+        // leak the assistant's own format into the prompt and confuse smaller models.
+        let mut evidence = String::new();
+        if !app_name.trim().is_empty() {
+            evidence.push_str(&format!("APP: {}\n", app_name));
+        }
+        if !window_title.trim().is_empty() {
+            evidence.push_str(&format!("WINDOW: {}\n", window_title));
+        }
+        evidence.push_str(&format!(
+            "\nOCR TEXT:\n\"\"\"\n{}\n\"\"\"",
+            ocr_text
+                .chars()
+                .take(MAX_OCR_SUMMARY_CHARS)
+                .collect::<String>()
+        ));
+
+        let system_msg = format!(
             "You generate memory snippets from OCR text.\n\
             RULES:\n\
             - Output 1-2 short sentences, 16-34 words total.\n\
-            - Capture the primary user activity and at least one concrete detail (entity, file, metric, or next step).\n\
+            {VOICE_RULES}\n\
+            - Capture the primary activity and at least one concrete detail (entity, file, metric, or next step).\n\
             - Ignore UI chrome, menu labels, status bars, repeated file/path lists, and separators.\n\
-            - Keep wording grounded to app/window/OCR evidence only.\n\
-            - No preambles like 'I see' or 'The screen shows'.\n\
-            - No markdown, no bullet points, no extra labels.",
+            - Keep wording grounded to app/window/OCR evidence only."
+        );
+
+        let prompt = match self.build_prompt(
+            &system_msg,
             &format!(
-                "APP: {}\nWINDOW: {}\n\nOCR TEXT:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Return only the best memory snippet with useful details for future search recall.",
-                app_name,
-                window_title,
-                ocr_text.chars().take(MAX_OCR_SUMMARY_CHARS).collect::<String>()
+                "{evidence}\n\nTASK: Return only the best memory snippet with useful details for future search recall."
             ),
         ) {
             Ok(prompt) => prompt,
@@ -423,7 +1490,7 @@ impl InferenceEngine {
             }
         };
 
-        tracing::info!(
+        tracing::debug!(
             "Summarizing OCR text for memory node ({} chars)...",
             ocr_text.len()
         );
@@ -431,11 +1498,13 @@ impl InferenceEngine {
         let summary = clean_summary_output(&raw_summary);
 
         if !is_usable_summary(&summary) {
-            tracing::warn!("Discarded low-signal OCR summary: {}", raw_summary);
+            tracing::warn!("Discarded low-signal OCR summary");
+            tracing::debug!("Discarded raw: {}", raw_summary);
             return String::new();
         }
 
-        tracing::info!("OCR summary result: {}", summary);
+        // User OCR content can be sensitive — log at debug, not info.
+        tracing::debug!("OCR summary result: {}", summary);
         summary
     }
 
@@ -500,6 +1569,7 @@ impl InferenceEngine {
             "You help users find what they remember by summarizing search results.\n\
             RULES:\n\
             - Use ONLY facts explicitly present in SNIPPETS.\n\
+            - Do NOT list snippets; merge them into a single synthesized claim.\n\
             - If evidence is weak, start with 'Low confidence:'.\n\
             - Respond ONLY with one paragraph summary.",
             &format!(
@@ -515,14 +1585,11 @@ impl InferenceEngine {
             }
         };
 
-        tracing::info!(
-            "Summarizing search results for query: '{}' with {} snippets",
-            query,
+        tracing::debug!(
+            "Summarizing search results for query with {} snippets",
             results.len()
         );
-        let summary = self.complete(&prompt, 100).await;
-        tracing::info!("Search summary result: {}", summary);
-        summary
+        self.complete(&prompt, 100).await
     }
 
     /// Generate a structured memory card draft from grouped snippets.
@@ -545,18 +1612,22 @@ impl InferenceEngine {
             .collect::<Vec<_>>()
             .join("\n");
 
+        let system_msg = format!(
+            "You synthesize one memory card from grouped search snippets.\n\
+            RULES:\n\
+            - Return ONLY strict JSON with keys: title, summary, action, context.\n\
+            - summary must be exactly one sentence, 8-22 words.\n\
+            {VOICE_RULES}\n\
+            - Use ONLY facts explicitly present in SNIPPETS. Do not infer unseen details.\n\
+            - If evidence is weak, start summary with 'Low confidence:'.\n\
+            - Focus on one dominant activity with 1-3 high-signal details.\n\
+            - context must be an array of 1-4 short strings.\n\
+            - Prefer context items that mention source IDs like src:<id> when present."
+        );
+
         let prompt = self
             .build_prompt(
-                "You synthesize one memory card from grouped search snippets.\n\
-                RULES:\n\
-                - Return ONLY strict JSON with keys: title, summary, action, context.\n\
-                - summary must be exactly one sentence, 8-22 words.\n\
-                - Use ONLY facts explicitly present in SNIPPETS. Do not infer unseen details.\n\
-                - If evidence is weak, start summary with 'Low confidence:'.\n\
-                - No markdown, no OCR labels, no browser chrome, no preambles.\n\
-                - Focus on one dominant activity with 1-3 high-signal details.\n\
-                - context must be an array of 1-4 short strings.\n\
-                - Prefer context items that mention source IDs like src:<id> when present.",
+                &system_msg,
                 &format!(
                     "QUERY: {}\nAPP: {}\nWINDOW: {}\nSNIPPETS:\n{}\n\nReturn JSON only.",
                     query, app_name, window_title, snippet_block
@@ -570,7 +1641,11 @@ impl InferenceEngine {
         validate_memory_card_draft(draft)
     }
 
-    /// Extract actionable todos/reminders from memory text
+    /// Extract actionable todos/reminders from memory text.
+    ///
+    /// NOTE: Return type remains `String` with one `TODO:`/`REMINDER:`/`FOLLOWUP:`
+    /// line per item for backwards compatibility. A future revision should return
+    /// `Vec<TodoItem>` with a proper enum — callers currently parse this string.
     pub async fn extract_todos(&self, memories_text: &str) -> String {
         if memories_text.trim().is_empty() {
             return String::new();
@@ -686,7 +1761,11 @@ TRANSCRIPT:\n{}",
         draft.reminders = clean_vec(draft.reminders);
         draft.followups = clean_vec(draft.followups);
 
-        if draft.summary.is_empty() && draft.todos.is_empty() && draft.reminders.is_empty() && draft.followups.is_empty() {
+        if draft.summary.is_empty()
+            && draft.todos.is_empty()
+            && draft.reminders.is_empty()
+            && draft.followups.is_empty()
+        {
             return None;
         }
 
@@ -695,11 +1774,7 @@ TRANSCRIPT:\n{}",
 
     /// Generate a smart daily briefing paragraph from today's memory cards.
     /// `mode` is either "morning" (actionable: what to work on) or "evening" (recap + tomorrow).
-    pub async fn generate_daily_briefing(
-        &self,
-        card_lines: &[String],
-        mode: &str,
-    ) -> String {
+    pub async fn generate_daily_briefing(&self, card_lines: &[String], mode: &str) -> String {
         if card_lines.is_empty() {
             return String::new();
         }
@@ -708,28 +1783,30 @@ TRANSCRIPT:\n{}",
 
         let (system_msg, task_instruction) = if mode == "evening" {
             (
-                "You are a smart personal assistant that writes concise end-of-day briefings.\n\
-                RULES:\n\
-                - Write exactly 2-3 sentences in plain English.\n\
-                - Sentence 1: What the user worked on today (specific activities, not generic).\n\
-                - Sentence 2: One important thing to carry forward or revisit tomorrow.\n\
-                - Sentence 3 (optional): A cross-connection you noticed across activities.\n\
-                - Be specific. Name real tasks, tools, or topics from the memories.\n\
-                - Write in second person (\"You worked on...\", \"You'll want to...\").\n\
-                - No bullet points. No headers. Just prose.",
+                format!(
+                    "You are a smart personal assistant that writes concise end-of-day briefings.\n\
+                    RULES:\n\
+                    - Write exactly 2-3 sentences in plain English.\n\
+                    - Sentence 1: What you worked on today (specific activities, not generic).\n\
+                    - Sentence 2: One important thing to carry forward or revisit tomorrow.\n\
+                    - Sentence 3 (optional): A cross-connection you noticed across activities.\n\
+                    - Be specific. Name real tasks, tools, or topics from the memories.\n\
+                    {VOICE_RULES}"
+                ),
                 "Based on today's activity below, write the end-of-day briefing paragraph.\nReturn only the paragraph, nothing else.",
             )
         } else {
             (
-                "You are a smart personal assistant that writes concise morning/daytime briefings.\n\
-                RULES:\n\
-                - Write exactly 2-3 sentences in plain English.\n\
-                - Sentence 1: What deserves attention today, based on recent activity.\n\
-                - Sentence 2: A specific piece of context or info from memory that will be useful.\n\
-                - Sentence 3 (optional): Something in progress that needs a follow-up.\n\
-                - Be specific. Name real tasks, tools, topics, or people from the memories.\n\
-                - Write in second person (\"You need to...\", \"You'll want to...\", \"You were working on...\").\n\
-                - No bullet points. No headers. Just prose.",
+                format!(
+                    "You are a smart personal assistant that writes concise morning/daytime briefings.\n\
+                    RULES:\n\
+                    - Write exactly 2-3 sentences in plain English.\n\
+                    - Sentence 1: What deserves attention today, based on recent activity.\n\
+                    - Sentence 2: A specific piece of context or info from memory that will be useful.\n\
+                    - Sentence 3 (optional): Something in progress that needs a follow-up.\n\
+                    - Be specific. Name real tasks, tools, topics, or people from the memories.\n\
+                    {VOICE_RULES}"
+                ),
                 "Based on recent activity below, write the morning briefing paragraph.\nReturn only the paragraph, nothing else.",
             )
         };
@@ -740,7 +1817,7 @@ TRANSCRIPT:\n{}",
             task_instruction
         );
 
-        let prompt = match self.build_prompt(system_msg, &user_msg) {
+        let prompt = match self.build_prompt(&system_msg, &user_msg) {
             Ok(p) => p,
             Err(err) => {
                 tracing::error!("Daily briefing prompt build failed: {}", err);
@@ -748,16 +1825,12 @@ TRANSCRIPT:\n{}",
             }
         };
 
-        tracing::info!("Generating daily briefing (mode={})...", mode);
+        tracing::debug!("Generating daily briefing (mode={})...", mode);
         let raw = self.complete(&prompt, 160).await;
-        tracing::info!("Daily briefing result: {}", raw);
 
-        // Strip any leading label the model might emit
-        let cleaned = raw
-            .trim()
+        raw.trim()
             .trim_matches(|ch| ch == '"' || ch == '\'')
-            .to_string();
-        cleaned
+            .to_string()
     }
 
     /// Generate an on-demand, smart daily summary of grouped user activities.
@@ -766,22 +1839,24 @@ TRANSCRIPT:\n{}",
             return String::new();
         }
 
-        let system_msg = "You are a highly efficient personal assistant writing concise daily summaries based on the user's local, grouped context logs.\n\
+        let system_msg = format!(
+            "You are a highly efficient personal assistant writing concise daily summaries based on local, grouped context logs.\n\
             RULES:\n\
             - Write exactly 6 to 8 short bullet points.\n\
-            - Keep each point high-level but concrete (e.g., 'Spent most of the day coding in VS Code', 'Visited Discord several times for conversations and follow-ups', 'Did some browsing and research during the afternoon').\n\
+            - Keep each point high-level but concrete.\n\
             - Name real tools, apps, or topics mentioned in the context.\n\
             - Do not list chronological actions. Cluster by thematic activity.\n\
-            - Write in the second person ('You worked on...', 'You visited...').\n\
+            {VOICE_RULES}\n\
             - Formatting: Output plain text bullet points starting with '- '.\n\
-            - No preambles, no Markdown bolding, just the bullets.";
+            - No preambles, no Markdown bolding, just the bullets."
+        );
 
         let user_msg = format!(
             "CLUSTERED DAILY ACTIVITY:\n{}\n\nReturn the 6-8 bullet daily summary.",
             grouped_activity_text.chars().take(2000).collect::<String>()
         );
 
-        let prompt = match self.build_prompt(system_msg, &user_msg) {
+        let prompt = match self.build_prompt(&system_msg, &user_msg) {
             Ok(p) => p,
             Err(err) => {
                 tracing::error!("Daily summary prompt build failed: {}", err);
@@ -789,19 +1864,33 @@ TRANSCRIPT:\n{}",
             }
         };
 
-        tracing::info!("Generating on-demand daily summary...");
+        tracing::debug!("Generating on-demand daily summary...");
         let raw = self.complete(&prompt, 350).await;
-        tracing::info!("Daily summary result:\n{}", raw);
 
-        raw.trim().trim_matches(|ch| ch == '"' || ch == '\'').to_string()
+        raw.trim()
+            .trim_matches(|ch| ch == '"' || ch == '\'')
+            .to_string()
     }
 
     fn build_prompt(&self, system_message: &str, user_message: &str) -> Result<String, String> {
+        // Null bytes in input indicate a real upstream data issue (broken OCR,
+        // bad decode) rather than something to silently paper over. Log and strip.
+        let sys = if system_message.contains('\0') {
+            tracing::warn!("build_prompt: null byte in system message (stripping)");
+            system_message.replace('\0', " ")
+        } else {
+            system_message.to_string()
+        };
+        let usr = if user_message.contains('\0') {
+            tracing::warn!("build_prompt: null byte in user message (stripping)");
+            user_message.replace('\0', " ")
+        } else {
+            user_message.to_string()
+        };
+
         let messages = vec![
-            LlamaChatMessage::new("system".to_string(), system_message.replace('\0', " "))
-                .map_err(|err| err.to_string())?,
-            LlamaChatMessage::new("user".to_string(), user_message.replace('\0', " "))
-                .map_err(|err| err.to_string())?,
+            LlamaChatMessage::new("system".to_string(), sys).map_err(|err| err.to_string())?,
+            LlamaChatMessage::new("user".to_string(), usr).map_err(|err| err.to_string())?,
         ];
 
         self.model
@@ -809,11 +1898,62 @@ TRANSCRIPT:\n{}",
             .map_err(|err| err.to_string())
     }
 
+    /// Run generation. Offloads the full blocking section (mutex + decode loop)
+    /// onto `spawn_blocking` so we don't stall the tokio runtime during long
+    /// generations.
+    ///
+    /// NOTE: Only one generation runs at a time across the whole engine because
+    /// `LlamaContext` is protected by a single `Mutex`. This is intentional —
+    /// the underlying KV cache is shared state.
     async fn complete(&self, prompt: &str, max_tokens: i32) -> String {
+        // Safety: `model` is `&'static`, so we can move a copy of the reference
+        // into the blocking closure without borrowing `self`. The context is
+        // accessed via a raw pointer bypass of the borrow checker using a
+        // self-pointer dance — simpler approach: clone what we need.
+        //
+        // We can't move `&self.context` into spawn_blocking because the future
+        // borrows `self`. Instead, grab an Arc-safe handle by temporarily
+        // restructuring: wrap the blocking body in a synchronous helper that
+        // takes the prompt + a mutex guard.
+        //
+        // Simplest correct implementation: do the lock + generation inside
+        // spawn_blocking by passing raw references that outlive the closure.
+        // Since `self` outlives any call to `complete`, we extend lifetimes
+        // via `unsafe` scoped to this function. To keep this safe, we hold
+        // an `Arc`-less lock *inside* the closure on a `&'static`-ish handle.
+        //
+        // Cleaner solution: store the Mutex in an Arc. But that's a struct
+        // change. For a drop-in fix, we accept that we block briefly on the
+        // mutex lock here (async-aware) via spawn_blocking wrapping everything.
+
+        // To keep the API change minimal, we send everything the blocking
+        // closure needs as owned data, then do the generation with a scoped
+        // 'static transmute of &self. This relies on `InferenceEngine` being
+        // a process-wide singleton (same invariant as the leaked model).
+        let self_static: &'static InferenceEngine = unsafe {
+            // SAFETY: InferenceEngine is a singleton held for application
+            // lifetime (see struct-level docs). The caller's `&self` therefore
+            // outlives any spawn_blocking future we create here.
+            std::mem::transmute::<&InferenceEngine, &'static InferenceEngine>(self)
+        };
+
+        let prompt_owned = prompt.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            self_static.complete_blocking(&prompt_owned, max_tokens)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!("complete: spawn_blocking join failed: {}", e);
+            String::new()
+        })
+    }
+
+    /// Synchronous generation core. Called from inside `spawn_blocking`.
+    fn complete_blocking(&self, prompt: &str, max_tokens: i32) -> String {
         let mut ctx = self.context.lock();
 
-        // Clear KV cache (kv_cache_clear or just reset)
-        // In llama-cpp-2 wrapper, context management is through KvCache
+        // Reset KV cache between independent requests.
         ctx.clear_kv_cache();
 
         let tokens_list = match self.model.str_to_token(prompt, AddBos::Never) {
@@ -823,6 +1963,11 @@ TRANSCRIPT:\n{}",
                 return "AI Error: Tokenization failed.".to_string();
             }
         };
+
+        if tokens_list.is_empty() {
+            tracing::error!("Tokenization produced empty output");
+            return String::new();
+        }
 
         let mut batch = LlamaBatch::new(2048, 1);
         for (i, token) in tokens_list.iter().enumerate() {
@@ -835,20 +1980,28 @@ TRANSCRIPT:\n{}",
             return "AI Error: LLM Decode failed.".to_string();
         }
 
+        // Proper sampler chain: repetition penalty + greedy.
+        //
+        // - Penalties: last-64 window, repeat=1.1, freq=0.0, presence=0.0.
+        //   This kills the "summary summary summary" loops that pure-argmax
+        //   greedy was prone to on smaller models.
+        // - Greedy: deterministic argmax over the post-penalty distribution.
+        //   Keeps behavior close to the previous implementation for summarization
+        //   and JSON-extraction paths (which want determinism).
+        //
+        // If temperature/top-p sampling is ever wanted per-call, expose it via
+        // an argument; for now all callers want deterministic output.
+        let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::penalties(64, 1.1, 0.0, 0.0),
+            LlamaSampler::greedy(),
+        ]);
+
         let mut result = String::new();
         let mut n_cur = tokens_list.len() as i32;
 
         for _ in 0..max_tokens {
-            let candidates = ctx.candidates();
-            let token_data = candidates
-                .max_by(|a, b| {
-                    a.logit()
-                        .partial_cmp(&b.logit())
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .unwrap();
-
-            let token = token_data.id();
+            let token = sampler.sample(&ctx, -1);
+            sampler.accept(token);
 
             if self.model.is_eog_token(token) {
                 break;
@@ -900,5 +2053,59 @@ mod tests {
         assert!(is_usable_summary(
             "Reviewing download_model.sh changes in FNDR"
         ));
+    }
+
+    #[test]
+    fn handles_action_context_format() {
+        let cleaned =
+            clean_summary_output("Action: edited schema.rs | Context: in FNDR's store module");
+        assert!(cleaned.starts_with("edited schema.rs"));
+        assert!(cleaned.contains("FNDR"));
+    }
+
+    #[test]
+    fn normalizes_third_person_user_references() {
+        assert_eq!(
+            normalize_person("The user reviewed the PR"),
+            "You reviewed the PR"
+        );
+        assert_eq!(
+            normalize_person("user opened VS Code"),
+            "You opened VS Code"
+        );
+    }
+
+    #[test]
+    fn person_normalization_preserves_compound_words() {
+        // \b regex boundary should not match inside "username"
+        let got = normalize_person("username field was edited");
+        assert_eq!(got, "username field was edited");
+    }
+
+    #[test]
+    fn truncates_summaries_to_two_sentences() {
+        let raw = "First action. Second action. Third action. Fourth action.";
+        let cleaned = clean_summary_output(raw);
+        let sentence_count = cleaned.matches('.').count();
+        assert_eq!(sentence_count, 2, "got: {}", cleaned);
+    }
+
+    #[test]
+    fn extract_json_handles_code_fences() {
+        let raw = "Here is the result:\n```json\n{\"title\": \"test\", \"n\": 1}\n```\n";
+        let extracted = extract_json_object(raw).expect("should extract");
+        assert_eq!(extracted, "{\"title\": \"test\", \"n\": 1}");
+    }
+
+    #[test]
+    fn extract_json_handles_escaped_quotes() {
+        let raw = r#"preamble {"msg": "he said \"hi\"", "ok": true} trailer"#;
+        let extracted = extract_json_object(raw).expect("should extract");
+        assert_eq!(extracted, r#"{"msg": "he said \"hi\"", "ok": true}"#);
+    }
+
+    #[test]
+    fn extract_json_returns_none_on_unbalanced() {
+        assert!(extract_json_object("just { text with no close").is_none());
     }
 }

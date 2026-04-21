@@ -4,6 +4,7 @@
 //! Each clipboard event creates a `Clipboard` node with the copied text,
 //! linked to the most recent `MemoryChunk` via a `ClipboardCopied` edge.
 
+use crate::capture::text_cleanup;
 use crate::store::{EdgeType, GraphEdge, GraphNode, NodeType, Store};
 use serde_json::json;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ pub async fn run_clipboard_watcher(store: Arc<Store>) {
     tracing::info!("Clipboard watcher started");
 
     let mut last_change_count: isize = current_change_count();
+    let mut last_clip_fingerprint: u64 = 0;
     let mut interval = tokio::time::interval(Duration::from_millis(POLL_INTERVAL_MS));
 
     loop {
@@ -40,7 +42,9 @@ pub async fn run_clipboard_watcher(store: Arc<Store>) {
 
         // Read the current clipboard string
         let text = match read_pasteboard_string() {
-            Some(text) if text.len() >= MIN_CLIP_TEXT_LEN && text.len() <= MAX_CLIP_TEXT_LEN => text,
+            Some(text) if text.len() >= MIN_CLIP_TEXT_LEN && text.len() <= MAX_CLIP_TEXT_LEN => {
+                text
+            }
             _ => continue,
         };
 
@@ -48,11 +52,17 @@ pub async fn run_clipboard_watcher(store: Arc<Store>) {
         if trimmed.is_empty() {
             continue;
         }
+        if is_low_signal_clip(trimmed) {
+            continue;
+        }
 
-        tracing::info!(
-            "Clipboard change detected: {} chars",
-            trimmed.len()
-        );
+        let fingerprint = clipboard_fingerprint(trimmed);
+        if fingerprint == last_clip_fingerprint {
+            continue;
+        }
+        last_clip_fingerprint = fingerprint;
+
+        tracing::info!("Clipboard change detected: {} chars", trimmed.len());
 
         // Create a graph node for this clipboard event
         let now = chrono::Utc::now().timestamp_millis();
@@ -98,6 +108,43 @@ pub async fn run_clipboard_watcher(store: Arc<Store>) {
             }
         }
     }
+}
+
+fn clipboard_fingerprint(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.trim().to_lowercase().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn is_low_signal_clip(text: &str) -> bool {
+    if text.len() < MIN_CLIP_TEXT_LEN {
+        return true;
+    }
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return true;
+    }
+    if normalized.len() <= 2 {
+        return true;
+    }
+    if normalized.chars().all(|ch| ch.is_ascii_punctuation()) {
+        return true;
+    }
+    if text_cleanup::symbol_ratio(&normalized) > 0.70 {
+        return true;
+    }
+    if normalized.len() > 24
+        && normalized
+            .chars()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            <= 3
+    {
+        return true;
+    }
+
+    false
 }
 
 // ── macOS NSPasteboard via objc2 ────────────────────────────────────────────

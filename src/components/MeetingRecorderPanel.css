@@ -192,105 +192,6 @@
     border-bottom: 1px solid var(--border);
 }
 
-.breakdown-actions {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    margin-left: auto;
-}
-
-.download-pdf-btn {
-    background: rgba(180, 140, 60, 0.12);
-    border: 1px solid rgba(180, 140, 60, 0.25);
-    color: #bfa16a;
-    font-weight: 600;
-    font-size: 0.82rem;
-    padding: 6px 14px;
-}
-
-.download-pdf-btn:hover:not(:disabled) {
-    background: rgba(180, 140, 60, 0.22);
-    border-color: rgba(180, 140, 60, 0.45);
-    color: #e6c589;
-}
-
-.download-pdf-btn.loading {
-    opacity: 0.7;
-    cursor: wait;
-}
-
-/* ── Toast Notification ── */
-.meeting-toast {
-    position: fixed;
-    top: 24px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #1a1a1a;
-    border: 1px solid rgba(180, 140, 60, 0.4);
-    color: #bfa16a;
-    padding: 12px 24px;
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-weight: 600;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-    z-index: 9999;
-    animation: toast-in-out 4s ease forwards;
-}
-
-[data-theme="light"] .meeting-toast {
-    background: #ffffff;
-    border-color: rgba(180, 140, 60, 0.3);
-    color: #8c703d;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
-}
-
-.toast-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    background: #bfa16a;
-    color: #1a1a1a;
-    border-radius: 50%;
-    font-size: 12px;
-}
-
-[data-theme="light"] .toast-icon {
-    background: #8c703d;
-    color: #ffffff;
-}
-
-@keyframes toast-in-out {
-    0% {
-        opacity: 0;
-        transform: translate(-50%, -20px);
-    }
-    10% {
-        opacity: 1;
-        transform: translate(-50%, 0);
-    }
-    90% {
-        opacity: 1;
-        transform: translate(-50%, 0);
-    }
-    100% {
-        opacity: 0;
-        transform: translate(-50%, -20px);
-    }
-}
-
-[data-theme="light"] .download-pdf-btn {
-    background: rgba(180, 140, 60, 0.1);
-    color: #8c703d;
-}
-
-[data-theme="light"] .download-pdf-btn:hover:not(:disabled) {
-    background: rgba(180, 140, 60, 0.2);
-}
-
 .breakdown-header h3 {
     margin: 0;
     font-size: 22px;
@@ -430,7 +331,14 @@
 
 /* ===== Light Theme ===== */
 [data-theme="light"] .meeting-panel.simplified {
-    background: rgba(245, 245, 247, 0.98);
+    background: rgba(248, 248, 250, 0.96);
+}
+
+[data-theme="light"] .meeting-main-ctrl,
+[data-theme="light"] .breakdown-item,
+[data-theme="light"] .transcript-text,
+[data-theme="light"] .meeting-history-footer {
+    background: rgba(255, 255, 255, 0.9);
 }
 
 [data-theme="light"] .meeting-btn {
@@ -447,6 +355,10 @@
     border-color: rgba(0, 0, 0, 0.2);
     background: linear-gradient(180deg, rgba(230, 230, 235, 0.95), rgba(215, 215, 220, 0.95));
     color: var(--text-primary);
+}
+
+[data-theme="light"] .meeting-title-input {
+    background: rgba(245, 245, 247, 0.95);
 }
 
 [data-theme="light"] .meeting-title-input:focus {

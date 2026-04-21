@@ -92,7 +92,8 @@ regex = "1.12.3"
 tauri-plugin-autostart = "2.5.1"
 rand = "0.10.1"
 genpdf = "0.2"
-
+once_cell = "1.21.4"
+notify = "6.1.1"
 
 # macOS specific
 [target.'cfg(target_os = "macos")'.dependencies]

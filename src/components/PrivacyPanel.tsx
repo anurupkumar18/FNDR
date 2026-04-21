@@ -6,9 +6,10 @@ interface PrivacyPanelProps {
     isVisible: boolean;
     onClose: () => void;
     onAlertsChange?: (count: number) => void;
+    embedded?: boolean;
 }
 
-export function PrivacyPanel({ isVisible, onClose, onAlertsChange }: PrivacyPanelProps) {
+export function PrivacyPanel({ isVisible, onClose, onAlertsChange, embedded = false }: PrivacyPanelProps) {
     const [alerts, setAlerts] = useState<PrivacyAlert[]>([]);
     const [loading, setLoading] = useState(false);
 
@@ -64,12 +65,14 @@ export function PrivacyPanel({ isVisible, onClose, onAlertsChange }: PrivacyPane
     if (!isVisible) return null;
 
     return (
-        <aside className="privacy-panel open">
+        <aside className={`privacy-panel open ${embedded ? "embedded" : ""}`}>
             <header className="privacy-header">
                 <h2>Privacy Alerts</h2>
-                <button className="ui-action-btn close-btn" onClick={onClose}>
-                    ✕
-                </button>
+                {!embedded && (
+                    <button className="ui-action-btn close-btn" onClick={onClose}>
+                        Close
+                    </button>
+                )}
             </header>
 
             <div className="privacy-content">

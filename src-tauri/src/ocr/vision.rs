@@ -7,9 +7,10 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, msg_send_id};
 use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
+use regex::Regex;
 
 use std::ffi::c_void;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Errors that can occur during OCR operations
 #[derive(Debug, thiserror::Error)]
@@ -123,6 +124,14 @@ pub struct RecognizedText {
 
     /// Original text before normalization
     pub raw_text: String,
+}
+
+impl RecognizedText {
+    pub fn is_low_signal(&self, min_chars: usize) -> bool {
+        self.text.trim().len() < min_chars
+            || (self.block_count <= 1 && self.confidence < 0.40)
+            || self.confidence < 0.15
+    }
 }
 
 /// OCR Engine using Apple Vision framework
@@ -346,6 +355,8 @@ impl OcrEngine {
 
         let mut result = String::with_capacity(text.len());
         let mut last_line = String::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut kept = 0usize;
 
         for line in text.lines() {
             let trimmed = line.trim();
@@ -365,12 +376,19 @@ impl OcrEngine {
             if self.config.remove_duplicates && trimmed == last_line {
                 continue;
             }
+            if self.config.remove_duplicates && !seen.insert(trimmed.to_lowercase()) {
+                continue;
+            }
 
             if !result.is_empty() {
                 result.push('\n');
             }
             result.push_str(trimmed);
             last_line = trimmed.to_string();
+            kept += 1;
+            if kept >= 220 {
+                break;
+            }
         }
 
         result
@@ -493,11 +511,8 @@ impl NoiseFilter {
         }
 
         // Filter timestamp-like patterns (HH:MM)
-        let time_pattern = regex::Regex::new(r"^\d{1,2}:\d{2}(\s*(AM|PM))?$").ok();
-        if let Some(re) = time_pattern {
-            if re.is_match(text) {
-                return true;
-            }
+        if time_regex().is_match(text) {
+            return true;
         }
 
         // Filter percentage-only lines
@@ -511,11 +526,8 @@ impl NoiseFilter {
         }
 
         // Filter file size indicators (e.g., "123 KB")
-        let size_pattern = regex::Regex::new(r"^\d+(\.\d+)?\s*(B|KB|MB|GB|TB)$").ok();
-        if let Some(re) = size_pattern {
-            if re.is_match(text.trim()) {
-                return true;
-            }
+        if size_regex().is_match(text.trim()) {
+            return true;
         }
 
         // Filter common date patterns when alone
@@ -538,6 +550,16 @@ impl NoiseFilter {
 
         false
     }
+}
+
+fn time_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\d{1,2}:\d{2}(\s*(AM|PM))?$").expect("valid time regex"))
+}
+
+fn size_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\d+(\.\d+)?\s*(B|KB|MB|GB|TB)$").expect("valid size regex"))
 }
 
 #[cfg(test)]

@@ -1,0 +1,200 @@
+.sh-page {
+    position: fixed;
+    inset: 0;
+    z-index: 1040;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-bg);
+    color: var(--text-primary);
+}
+
+.sh-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.sh-header h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.sh-header p {
+    margin: 4px 0 0;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
+
+.sh-header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.sh-clear-btn {
+    font-size: 0.75rem;
+    opacity: 0.6;
+}
+
+.sh-clear-btn:hover {
+    opacity: 1;
+    color: #f87171;
+}
+
+.sh-filter-row {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.sh-filter-input {
+    width: 100%;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    font-family: inherit;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+
+.sh-filter-input:focus {
+    border-color: rgba(160, 160, 255, 0.35);
+}
+
+.sh-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+.sh-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 60px 24px;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.sh-empty p {
+    margin: 0;
+    font-size: 0.88rem;
+}
+
+.sh-empty-hint {
+    font-size: 0.76rem !important;
+    opacity: 0.6;
+}
+
+.sh-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.sh-item {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    transition: background 0.12s;
+}
+
+.sh-item:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.sh-item-query {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 16px 11px 14px;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    text-align: left;
+    min-width: 0;
+    transition: color 0.12s;
+}
+
+.sh-item-query:hover {
+    color: rgba(180, 190, 255, 0.9);
+}
+
+.sh-item-icon {
+    font-size: 0.78rem;
+    opacity: 0.4;
+    flex-shrink: 0;
+    transform: scaleX(-1);
+    display: inline-block;
+}
+
+.sh-item-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sh-item-time {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    margin-left: 8px;
+}
+
+.sh-item-remove {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    margin-right: 8px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1rem;
+    cursor: pointer;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.12s, color 0.12s, background 0.12s;
+}
+
+.sh-item:hover .sh-item-remove {
+    opacity: 1;
+}
+
+.sh-item-remove:hover {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.1);
+}
+
+/* Light theme */
+[data-theme="light"] .sh-item:hover {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .sh-item-query:hover {
+    color: rgba(80, 90, 200, 0.9);
+}
+
+[data-theme="light"] .sh-item {
+    border-bottom-color: rgba(0, 0, 0, 0.04);
+}
