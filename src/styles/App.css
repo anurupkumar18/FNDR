@@ -591,6 +591,8 @@
 }
 
 .home-greeting {
+    display: grid;
+    gap: 4px;
     font-size: 1.625rem;
     font-weight: 500;
     letter-spacing: -0.02em;

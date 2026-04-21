@@ -192,6 +192,18 @@ function App() {
     const homeDateLabel = useMemo(() => formatHomeDate(now), [now]);
 
     const [homeGreeting, setHomeGreeting] = useState("Loading...");
+    const homeGreetingLine1 = useMemo(() => {
+        const suffix = "Let's dive into your memories.";
+        const trimmed = homeGreeting.trim();
+        const withoutSuffix = trimmed.endsWith(suffix)
+            ? trimmed.slice(0, -suffix.length).trim()
+            : trimmed;
+        const exclamationIndex = withoutSuffix.indexOf("!");
+        if (exclamationIndex >= 0) {
+            return withoutSuffix.slice(0, exclamationIndex + 1).trim();
+        }
+        return withoutSuffix;
+    }, [homeGreeting]);
 
     // Fetch the fun animated greeting anytime they log in or the name changes
     useEffect(() => {
@@ -539,7 +551,10 @@ function App() {
                 {isFocusMode && (
                     <div className="home-focus-header">
                         <div className="home-date-context">{homeDateLabel}</div>
-                        <div className="home-greeting">{homeGreeting}</div>
+                        <div className="home-greeting">
+                            <div>{homeGreetingLine1}</div>
+                            <div>Let&apos;s dive into your memories.</div>
+                        </div>
                     </div>
                 )}
 
