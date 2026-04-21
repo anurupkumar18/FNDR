@@ -328,3 +328,39 @@
     padding: 12px 32px;
     font-size: 13px;
 }
+
+/* ===== Light Theme ===== */
+[data-theme="light"] .meeting-panel.simplified {
+    background: rgba(248, 248, 250, 0.96);
+}
+
+[data-theme="light"] .meeting-main-ctrl,
+[data-theme="light"] .breakdown-item,
+[data-theme="light"] .transcript-text,
+[data-theme="light"] .meeting-history-footer {
+    background: rgba(255, 255, 255, 0.9);
+}
+
+[data-theme="light"] .meeting-btn {
+    border-color: rgba(0, 0, 0, 0.12);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(240, 240, 242, 0.9));
+    color: var(--text-primary);
+}
+
+[data-theme="light"] .meeting-btn:hover:not(:disabled) {
+    border-color: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .history-pill.active {
+    border-color: rgba(0, 0, 0, 0.2);
+    background: linear-gradient(180deg, rgba(230, 230, 235, 0.95), rgba(215, 215, 220, 0.95));
+    color: var(--text-primary);
+}
+
+[data-theme="light"] .meeting-title-input {
+    background: rgba(245, 245, 247, 0.95);
+}
+
+[data-theme="light"] .meeting-title-input:focus {
+    border-color: rgba(0, 0, 0, 0.3);
+}

@@ -371,3 +371,76 @@
         font-size: 11px;
     }
 }
+
+/* ===== Light Theme ===== */
+[data-theme="light"] .pipeline-query-bar input {
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(245, 245, 247, 0.95));
+    color: var(--text-primary);
+}
+
+[data-theme="light"] .pipeline-query-bar input:focus {
+    border-color: rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="light"] .pipeline-chip {
+    border-color: rgba(0, 0, 0, 0.12);
+    color: rgba(46, 49, 58, 0.86);
+    background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .pipeline-diagram-card,
+[data-theme="light"] .pipeline-panel-card,
+[data-theme="light"] .pipeline-metrics-grid article,
+[data-theme="light"] .pipeline-list li {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: rgba(255, 255, 255, 0.9);
+}
+
+[data-theme="light"] .pipeline-diagram-card h3,
+[data-theme="light"] .pipeline-panel-card h3 {
+    color: rgba(72, 77, 90, 0.78);
+}
+
+[data-theme="light"] .pipeline-flow-svg rect {
+    fill: rgba(0, 0, 0, 0.03);
+    stroke: rgba(0, 0, 0, 0.14);
+}
+
+[data-theme="light"] .pipeline-flow-svg text {
+    fill: rgba(29, 33, 43, 0.9);
+}
+
+[data-theme="light"] .pipeline-meter,
+[data-theme="light"] .pipeline-app-bar div {
+    background: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .pipeline-kv span,
+[data-theme="light"] .pipeline-metrics-grid h4,
+[data-theme="light"] .pipeline-app-bar em,
+[data-theme="light"] .pipeline-list-head span,
+[data-theme="light"] .pipeline-list small,
+[data-theme="light"] .pipeline-empty,
+[data-theme="light"] .pipeline-empty-inline {
+    color: rgba(90, 96, 110, 0.82);
+}
+
+[data-theme="light"] .pipeline-app-bar label,
+[data-theme="light"] .pipeline-list-head strong,
+[data-theme="light"] .pipeline-list p,
+[data-theme="light"] .pipeline-latest-card p,
+[data-theme="light"] .pipeline-token {
+    color: rgba(30, 33, 44, 0.9);
+}
+
+[data-theme="light"] .pipeline-token {
+    border-color: rgba(0, 0, 0, 0.12);
+    background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .pipeline-loading {
+    border-color: rgba(0, 0, 0, 0.14);
+    background: rgba(255, 255, 255, 0.95);
+    color: rgba(40, 44, 54, 0.9);
+}
