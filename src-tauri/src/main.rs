@@ -93,6 +93,12 @@ fn main() {
 
             let runtime_state = state.clone();
 
+            // Background task: Track downloads folder
+            let uploads_state = state.clone();
+            tauri::async_runtime::spawn(async move {
+                fndr_lib::downloads::run_watcher(uploads_state).await;
+            });
+
             // Background task: Ebbinghaus decay — runs every 6 hours.
             {
                 let decay_store = state.store.clone();
