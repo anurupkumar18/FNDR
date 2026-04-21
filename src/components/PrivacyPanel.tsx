@@ -69,9 +69,7 @@ export function PrivacyPanel({ isVisible, onClose, onAlertsChange, embedded = fa
             <header className="privacy-header">
                 <h2>Privacy Alerts</h2>
                 {!embedded && (
-                    <button className="ui-action-btn close-btn" onClick={onClose}>
-                        Close
-                    </button>
+                    <button className="ui-action-btn close-btn" onClick={onClose}>X</button>
                 )}
             </header>
 

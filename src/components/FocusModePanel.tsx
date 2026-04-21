@@ -85,9 +85,7 @@ export function FocusModePanel({ isVisible, onClose }: FocusModePanelProps) {
                     <h2>Focus Mode</h2>
                     <p>Semantic drift detection — FNDR alerts you when your screen activity drifts from your goal</p>
                 </div>
-                <button className="ui-action-btn fm-close-btn" onClick={onClose}>
-                    Close
-                </button>
+                <button className="ui-action-btn fm-close-btn" onClick={onClose}>X</button>
             </header>
 
             <div className="fm-body">

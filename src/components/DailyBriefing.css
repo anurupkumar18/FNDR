@@ -105,7 +105,7 @@
 /* ── Popup card ── */
 .briefing-popup {
     width: min(860px, calc(100vw - 32px));
-    background: rgba(13, 13, 13, 0.96);
+    background: #0d0d0d;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 22px;
     box-shadow: 0 30px 90px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.07);
@@ -418,7 +418,7 @@
 }
 
 [data-theme="light"] .briefing-popup {
-    background: rgba(248, 248, 250, 0.98);
+    background: #f8f8fa;
     border-color: rgba(0, 0, 0, 0.1);
     box-shadow: 0 30px 90px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }

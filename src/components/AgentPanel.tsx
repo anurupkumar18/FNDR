@@ -92,9 +92,7 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
                         <span className="agent-icon">{getStatusIcon()}</span>
                         <h2>AI Agent</h2>
                     </div>
-                    <button className="btn-close" onClick={handleClose} title="Close">
-                        Close
-                    </button>
+                    <button className="btn-close" onClick={handleClose} title="Close">X</button>
                 </header>
 
                 <div className="agent-body">

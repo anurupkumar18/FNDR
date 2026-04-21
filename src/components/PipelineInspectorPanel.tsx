@@ -177,9 +177,7 @@ export function PipelineInspectorPanel({
                     <h2>Pipeline Inspector</h2>
                     <p>Real capture → index → retrieval trace with live internals.</p>
                 </div>
-                <button className="ui-action-btn pipeline-close-btn" onClick={onClose}>
-                    Close
-                </button>
+                <button className="ui-action-btn pipeline-close-btn" onClick={onClose}>X</button>
             </header>
 
             <section className="pipeline-query-bar">

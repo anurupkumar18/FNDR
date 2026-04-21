@@ -105,9 +105,7 @@ export function FocusSessionPanel({ isVisible, onClose, onSearchApp }: FocusSess
                     <h2>Focus Session</h2>
                     <p>Current work context — what you're in right now</p>
                 </div>
-                <button className="ui-action-btn fs-close-btn" onClick={onClose}>
-                    Close
-                </button>
+                <button className="ui-action-btn fs-close-btn" onClick={onClose}>X</button>
             </header>
 
             <div className="fs-body">

@@ -78,9 +78,7 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
                     <p>On-demand activity clustering and intelligence</p>
                 </div>
                 <div className="daily-summary-actions">
-                    <button className="ui-action-btn daily-summary-close-btn" onClick={onClose}>
-                        Close
-                    </button>
+                    <button className="ui-action-btn daily-summary-close-btn" onClick={onClose}>X</button>
                 </div>
             </header>
 

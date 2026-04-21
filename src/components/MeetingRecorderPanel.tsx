@@ -156,9 +156,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                     <h2>Meeting Intelligence</h2>
                     <p>Audio recording and post-meeting analysis.</p>
                 </div>
-                <button className="ui-action-btn meeting-btn meeting-close-btn" onClick={onClose}>
-                    Close
-                </button>
+                <button className="ui-action-btn meeting-btn meeting-close-btn" onClick={onClose}>X</button>
             </header>
 
             <div className="meeting-panel-content">

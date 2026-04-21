@@ -189,9 +189,7 @@ export function ResearchPanel({ isVisible, onClose, seedMemory }: ResearchPanelP
                     <h2>Research</h2>
                     <p>AI-powered deep-dive seeded from your memories</p>
                 </div>
-                <button className="ui-action-btn rp-close-btn" onClick={onClose}>
-                    Close
-                </button>
+                <button className="ui-action-btn rp-close-btn" onClick={onClose}>X</button>
             </header>
 
             <div className="rp-body">

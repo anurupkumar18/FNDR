@@ -225,7 +225,7 @@
 .btn-done {
     padding: 10px 20px;
     border: none;
-    background: var(--accent, #4169e1);
+    background: #111111;
     color: white;
     font-weight: 600;
     border-radius: 8px;
@@ -249,4 +249,15 @@
 
 [data-theme="light"] .agent-footer {
     border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .btn-done {
+    background: #f2f2f4;
+    color: #1a1a1a;
+    border: 1px solid rgba(0, 0, 0, 0.14);
+}
+
+[data-theme="light"] .btn-done:hover {
+    filter: none;
+    background: #e8e8ec;
 }

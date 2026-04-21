@@ -535,9 +535,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                     >
                         {viewMode === "stacked" ? "Lay Out All" : "Stack Cards"}
                     </button>
-                    <button className="ui-action-btn stats-close-btn" onClick={onClose}>
-                        Close
-                    </button>
+                    <button className="ui-action-btn stats-close-btn" onClick={onClose}>X</button>
                 </div>
             </header>
 

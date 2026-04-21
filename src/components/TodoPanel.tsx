@@ -155,9 +155,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                     <p>Stage through Todos, Reminders, and Follow-ups pulled from distinct memories.</p>
                 </div>
                 <div className="todo-page-actions">
-                    <button className="ui-action-btn todo-close-btn" onClick={onClose}>
-                        Close
-                    </button>
+                    <button className="ui-action-btn todo-close-btn" onClick={onClose}>X</button>
                 </div>
             </header>
 

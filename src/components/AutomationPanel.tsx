@@ -268,9 +268,7 @@ export function AutomationPanel({ isVisible, onClose }: AutomationPanelProps) {
                     <h2>Automation Center</h2>
                     <p>Scheduled tasks that run in the background — no action needed</p>
                 </div>
-                <button className="ui-action-btn auto-close-btn" onClick={onClose}>
-                    Close
-                </button>
+                <button className="ui-action-btn auto-close-btn" onClick={onClose}>X</button>
             </header>
 
             <div className="auto-body">

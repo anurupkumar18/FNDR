@@ -450,9 +450,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                         <h2>FNDR Settings</h2>
                         <p className="panel-subtitle">Private, local, always in your control.</p>
                     </div>
-                    <button className="ui-action-btn panel-close" onClick={() => setIsOpen(false)} aria-label="Close">
-                        Close
-                    </button>
+                    <button className="ui-action-btn panel-close" onClick={() => setIsOpen(false)} aria-label="Close">X</button>
                 </header>
 
                 <nav className="panel-tabs">

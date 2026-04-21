@@ -95,9 +95,7 @@ export function SearchHistoryPanel({ isVisible, onClose, onRunQuery }: SearchHis
                             Clear all
                         </button>
                     )}
-                    <button className="ui-action-btn sh-close-btn" onClick={onClose}>
-                        Close
-                    </button>
+                    <button className="ui-action-btn sh-close-btn" onClick={onClose}>X</button>
                 </div>
             </header>
 

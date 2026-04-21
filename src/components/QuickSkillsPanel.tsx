@@ -147,9 +147,7 @@ export function QuickSkillsPanel({ isVisible, onClose, onRunSkill }: QuickSkills
                     <h2>Quick Skills</h2>
                     <p>Pre-built search shortcuts — click to run instantly</p>
                 </div>
-                <button className="ui-action-btn qs-close-btn" onClick={onClose}>
-                    Close
-                </button>
+                <button className="ui-action-btn qs-close-btn" onClick={onClose}>X</button>
             </header>
 
             <div className="qs-body">

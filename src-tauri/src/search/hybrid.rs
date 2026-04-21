@@ -4,24 +4,33 @@ use crate::capture::text_cleanup;
 use crate::embed::{Embedder, EmbeddingBackend};
 use crate::store::{SearchResult, Store};
 use std::collections::{HashMap, HashSet};
+use tokio::time::{timeout, Duration, Instant};
 
 /// Legacy RRF constant kept for backwards-compatible helper usage.
 const RRF_K: f32 = 60.0;
 
-const CANDIDATE_MULTIPLIER: usize = 6;
-const MAX_KEYWORD_VARIANTS: usize = 6;
+const CANDIDATE_MULTIPLIER: usize = 4;
+const MAX_KEYWORD_VARIANTS: usize = 4;
+const MAX_KEYWORD_FALLBACK_VARIANTS: usize = 2;
 const MAX_RERANK_POOL: usize = 36;
 const DIVERSITY_PRESERVE_TOP: usize = 3;
+const MAX_SEMANTIC_BRANCH_LIMIT: usize = 64;
+const MAX_KEYWORD_BRANCH_LIMIT: usize = 48;
+const MIN_SNIPPET_QUERY_TERMS: usize = 3;
 // Text ANN + snippet ANN together = 0.70; lexical = 0.30.
-const SEMANTIC_WEIGHT: f32 = 0.40;
-const SNIPPET_WEIGHT: f32 = 0.30;
-const LEXICAL_WEIGHT: f32 = 0.30;
+const SEMANTIC_WEIGHT: f32 = 0.28;
+const SNIPPET_WEIGHT: f32 = 0.18;
+const LEXICAL_WEIGHT: f32 = 0.54;
 /// Ebbinghaus decay floor — very old unaccessed records still surface if highly relevant.
 const DECAY_FLOOR: f32 = 0.15;
-const ABSOLUTE_RELEVANCE_FLOOR: f32 = 0.31;
-const RELATIVE_RELEVANCE_FLOOR: f32 = 0.56;
+const ABSOLUTE_RELEVANCE_FLOOR: f32 = 0.24;
+const RELATIVE_RELEVANCE_FLOOR: f32 = 0.46;
 const STRONG_RESULT_FLOOR: f32 = 0.70;
 const MEDIUM_RESULT_FLOOR: f32 = 0.60;
+const SEMANTIC_BRANCH_TIMEOUT: Duration = Duration::from_millis(950);
+const SNIPPET_BRANCH_TIMEOUT: Duration = Duration::from_millis(760);
+const KEYWORD_TOTAL_TIMEOUT: Duration = Duration::from_millis(900);
+const KEYWORD_VARIANT_TIMEOUT: Duration = Duration::from_millis(320);
 
 /// Hybrid searcher combining semantic + lexical retrieval and sentence-aware reranking.
 pub struct HybridSearcher;
@@ -239,67 +248,167 @@ impl HybridSearcher {
         time_filter: Option<&str>,
         app_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        let started = Instant::now();
         let profile = QueryProfile::from_query(query);
         if profile.is_empty() {
             return Ok(Vec::new());
         }
 
-        let branch_limit = limit.max(1) * CANDIDATE_MULTIPLIER;
+        tracing::info!(
+            query = %query,
+            limit,
+            time_filter = ?time_filter,
+            app_filter = ?app_filter,
+            "hybrid_search:start"
+        );
+
+        let base_limit = limit.max(1);
+        let semantic_branch_limit =
+            (base_limit * CANDIDATE_MULTIPLIER).min(MAX_SEMANTIC_BRANCH_LIMIT);
+        let keyword_branch_limit = (base_limit * 2)
+            .min(MAX_KEYWORD_BRANCH_LIMIT)
+            .max(base_limit);
         let semantic_enabled = matches!(embedder.backend(), EmbeddingBackend::Real);
         let query_embedding = if semantic_enabled {
             let embedding_query = profile.embedding_query();
-            let vectors = embedder.embed_batch(&[embedding_query])?;
-            Some(vectors.into_iter().next().unwrap_or_default())
+            match embedder.embed_batch(&[embedding_query]) {
+                Ok(vectors) => Some(vectors.into_iter().next().unwrap_or_default()),
+                Err(err) => {
+                    tracing::warn!(err = %err, "hybrid_search:embed_failed");
+                    None
+                }
+            }
         } else {
             None
         };
 
-        let keyword_variants = profile.keyword_variants();
+        let allow_snippet_branch =
+            query_embedding.is_some() && profile.primary_terms.len() >= MIN_SNIPPET_QUERY_TERMS;
         let semantic_fut = async {
-            if let Some(query_embedding) = query_embedding.as_ref() {
-                store
-                    .vector_search(query_embedding, branch_limit, time_filter, app_filter)
-                    .await
-                    .map_err(|err| err.to_string())
+            let branch_started = Instant::now();
+            let mut timed_out = false;
+            let results = if let Some(query_embedding) = query_embedding.as_ref() {
+                match timeout(
+                    SEMANTIC_BRANCH_TIMEOUT,
+                    store.vector_search(
+                        query_embedding,
+                        semantic_branch_limit,
+                        time_filter,
+                        app_filter,
+                    ),
+                )
+                .await
+                {
+                    Ok(Ok(results)) => results,
+                    Ok(Err(err)) => {
+                        tracing::warn!(err = %err, "hybrid_search:semantic_failed");
+                        Vec::new()
+                    }
+                    Err(_) => {
+                        timed_out = true;
+                        tracing::warn!(
+                            timeout_ms = SEMANTIC_BRANCH_TIMEOUT.as_millis(),
+                            "hybrid_search:semantic_timeout"
+                        );
+                        Vec::new()
+                    }
+                }
             } else {
-                Ok::<Vec<SearchResult>, String>(Vec::new())
-            }
+                Vec::new()
+            };
+            (results, branch_started.elapsed(), timed_out)
         };
         let snippet_fut = async {
-            if let Some(query_embedding) = query_embedding.as_ref() {
-                store
-                    .snippet_vector_search(query_embedding, branch_limit, time_filter, app_filter)
+            let branch_started = Instant::now();
+            let mut timed_out = false;
+            let results = if allow_snippet_branch {
+                if let Some(query_embedding) = query_embedding.as_ref() {
+                    match timeout(
+                        SNIPPET_BRANCH_TIMEOUT,
+                        store.snippet_vector_search(
+                            query_embedding,
+                            semantic_branch_limit,
+                            time_filter,
+                            app_filter,
+                        ),
+                    )
                     .await
-                    .map_err(|err| err.to_string())
+                    {
+                        Ok(Ok(results)) => results,
+                        Ok(Err(err)) => {
+                            tracing::warn!(err = %err, "hybrid_search:snippet_failed");
+                            Vec::new()
+                        }
+                        Err(_) => {
+                            timed_out = true;
+                            tracing::warn!(
+                                timeout_ms = SNIPPET_BRANCH_TIMEOUT.as_millis(),
+                                "hybrid_search:snippet_timeout"
+                            );
+                            Vec::new()
+                        }
+                    }
+                } else {
+                    Vec::new()
+                }
             } else {
-                Ok::<Vec<SearchResult>, String>(Vec::new())
-            }
+                Vec::new()
+            };
+            (results, branch_started.elapsed(), timed_out)
         };
         let keyword_fut = async {
-            let mut keyword_results = Vec::new();
-            for (variant_idx, variant) in keyword_variants.iter().enumerate() {
-                let mut hits = store
-                    .keyword_search(variant, branch_limit, time_filter, app_filter)
-                    .await
-                    .map_err(|err| err.to_string())?;
-
-                // Earlier variants are stronger rewrites; keep a light priority decay.
-                let decay = (1.0 - (variant_idx as f32 * 0.08)).max(0.72);
-                for hit in &mut hits {
-                    hit.score *= decay;
+            let branch_started = Instant::now();
+            let mut timed_out = false;
+            let results = match timeout(
+                KEYWORD_TOTAL_TIMEOUT,
+                Self::keyword_search_with_budget(
+                    store,
+                    &profile,
+                    keyword_branch_limit,
+                    time_filter,
+                    app_filter,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(results)) => results,
+                Ok(Err(err)) => {
+                    tracing::warn!(err = %err, "hybrid_search:keyword_failed");
+                    Vec::new()
                 }
-
-                keyword_results.extend(hits);
-            }
-            Ok::<Vec<SearchResult>, String>(dedup_by_best_score(keyword_results))
+                Err(_) => {
+                    timed_out = true;
+                    tracing::warn!(
+                        timeout_ms = KEYWORD_TOTAL_TIMEOUT.as_millis(),
+                        "hybrid_search:keyword_timeout"
+                    );
+                    Vec::new()
+                }
+            };
+            (results, branch_started.elapsed(), timed_out)
         };
 
-        let (semantic_results, snippet_results, keyword_results) =
-            tokio::join!(semantic_fut, snippet_fut, keyword_fut);
+        let (
+            (semantic_results, semantic_elapsed, semantic_timed_out),
+            (snippet_results, snippet_elapsed, snippet_timed_out),
+            (keyword_results, keyword_elapsed, keyword_timed_out),
+        ) = tokio::join!(semantic_fut, snippet_fut, keyword_fut);
 
-        let semantic_results = semantic_results.map_err(boxed_error)?;
-        let snippet_results = snippet_results.unwrap_or_default();
-        let keyword_results = keyword_results.map_err(boxed_error)?;
+        tracing::info!(
+            semantic_count = semantic_results.len(),
+            snippet_count = snippet_results.len(),
+            keyword_count = keyword_results.len(),
+            semantic_ms = semantic_elapsed.as_millis(),
+            snippet_ms = snippet_elapsed.as_millis(),
+            keyword_ms = keyword_elapsed.as_millis(),
+            semantic_timed_out,
+            snippet_timed_out,
+            keyword_timed_out,
+            semantic_enabled,
+            snippet_enabled = allow_snippet_branch,
+            elapsed_ms = started.elapsed().as_millis(),
+            "hybrid_search:branches_complete"
+        );
 
         let fused = Self::hybrid_fusion(
             &profile,
@@ -308,8 +417,111 @@ impl HybridSearcher {
             &keyword_results,
         );
         let reranked = Self::rerank_with_profile(&profile, fused, limit);
+        tracing::info!(
+            results = reranked.len(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "hybrid_search:complete"
+        );
 
         Ok(reranked)
+    }
+
+    async fn keyword_search_with_budget(
+        store: &Store,
+        profile: &QueryProfile,
+        branch_limit: usize,
+        time_filter: Option<&str>,
+        app_filter: Option<&str>,
+    ) -> Result<Vec<SearchResult>, String> {
+        let variants = profile.keyword_variants();
+        if variants.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let started = Instant::now();
+        let target_hits = branch_limit.min(18).max(8);
+        let mut by_id: HashMap<String, SearchResult> = HashMap::new();
+
+        for (variant_idx, variant) in variants.iter().enumerate() {
+            if variant_idx > MAX_KEYWORD_FALLBACK_VARIANTS {
+                break;
+            }
+            if by_id.len() >= target_hits && variant_idx > 0 {
+                break;
+            }
+            if started.elapsed() >= KEYWORD_TOTAL_TIMEOUT {
+                tracing::warn!(
+                    timeout_ms = KEYWORD_TOTAL_TIMEOUT.as_millis(),
+                    "hybrid_search:keyword_budget_exhausted"
+                );
+                break;
+            }
+
+            let hits = match timeout(
+                KEYWORD_VARIANT_TIMEOUT,
+                store.keyword_search(variant, branch_limit, time_filter, app_filter),
+            )
+            .await
+            {
+                Ok(Ok(hits)) => hits,
+                Ok(Err(err)) => {
+                    tracing::warn!(
+                        variant_idx,
+                        variant = %variant,
+                        err = %err,
+                        "hybrid_search:keyword_variant_failed"
+                    );
+                    continue;
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        variant_idx,
+                        variant = %variant,
+                        timeout_ms = KEYWORD_VARIANT_TIMEOUT.as_millis(),
+                        "hybrid_search:keyword_variant_timeout"
+                    );
+                    continue;
+                }
+            };
+
+            let decay = if variant_idx == 0 {
+                1.0
+            } else {
+                (1.0 - (variant_idx as f32 * 0.07)).max(0.84)
+            };
+
+            for mut hit in hits {
+                hit.score *= decay;
+                by_id
+                    .entry(hit.id.clone())
+                    .and_modify(|existing| {
+                        if hit.score > existing.score
+                            || (hit.score == existing.score && hit.timestamp > existing.timestamp)
+                        {
+                            *existing = hit.clone();
+                        }
+                    })
+                    .or_insert(hit);
+            }
+
+            tracing::info!(
+                variant_idx,
+                variant = %variant,
+                dedup_hits = by_id.len(),
+                elapsed_ms = started.elapsed().as_millis(),
+                "hybrid_search:keyword_variant_complete"
+            );
+        }
+
+        let mut deduped = by_id.into_values().collect::<Vec<_>>();
+        deduped.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.timestamp.cmp(&a.timestamp))
+        });
+        deduped.truncate(branch_limit.max(1));
+        Ok(deduped)
     }
 
     /// Merge semantic + keyword candidates, then rerank with the standard policy.
@@ -527,6 +739,15 @@ impl HybridSearcher {
                 + lexical_norm * lexical_weight;
             score += signal.coverage * 0.12;
             score += signal.phrase_score * 0.08;
+
+            // Guardrail: pure semantic neighbors with weak lexical grounding
+            // should not outrank anchored matches for vague/similar queries.
+            if signal.keyword_score.is_none()
+                && signal.coverage < 0.16
+                && signal.phrase_score < 0.10
+            {
+                score *= 0.72;
+            }
 
             if signal.semantic_score.is_some() && signal.keyword_score.is_some() {
                 score += 0.05;
@@ -807,15 +1028,15 @@ fn apply_relevance_gate(
     let effective_absolute_floor = absolute_floor.min((top_score * 0.90).max(0.01));
     let relative_floor = top_score * RELATIVE_RELEVANCE_FLOOR;
     let min_coverage = if profile.primary_terms.len() >= 4 {
-        0.34
+        0.30
     } else if profile.primary_terms.len() >= 3 {
-        0.28
+        0.24
     } else if profile.primary_terms.len() >= 2 {
-        0.20
+        0.17
     } else if profile.primary_terms.len() == 1 {
-        0.22
-    } else if profile.intent == QueryIntent::Definition && !profile.primary_terms.is_empty() {
         0.18
+    } else if profile.intent == QueryIntent::Definition && !profile.primary_terms.is_empty() {
+        0.15
     } else {
         0.0
     };
@@ -886,25 +1107,6 @@ fn merged_candidate_text(result: &SearchResult) -> String {
         result.snippet,
         result.url.clone().unwrap_or_default()
     )
-}
-
-fn dedup_by_best_score(results: Vec<SearchResult>) -> Vec<SearchResult> {
-    let mut by_id: HashMap<String, SearchResult> = HashMap::new();
-
-    for result in results {
-        by_id
-            .entry(result.id.clone())
-            .and_modify(|existing| {
-                if result.score > existing.score
-                    || (result.score == existing.score && result.timestamp > existing.timestamp)
-                {
-                    *existing = result.clone();
-                }
-            })
-            .or_insert(result);
-    }
-
-    by_id.into_values().collect()
 }
 
 fn session_key(result: &SearchResult) -> String {
@@ -1295,7 +1497,7 @@ fn fusion_weights(profile: &QueryProfile, has_semantic_signals: bool) -> (f32, f
 
     if profile.is_short_intent_query() {
         // For short noun-like queries, lexical evidence should dominate.
-        (0.34, 0.22, 0.44)
+        (0.24, 0.14, 0.62)
     } else {
         (SEMANTIC_WEIGHT, SNIPPET_WEIGHT, LEXICAL_WEIGHT)
     }
@@ -1672,10 +1874,6 @@ fn is_code_query(query: &str) -> bool {
         || lower.contains("error")
         || lower.contains("file")
         || lower.contains("terminal")
-}
-
-fn boxed_error(message: String) -> Box<dyn std::error::Error> {
-    Box::new(std::io::Error::other(message))
 }
 
 #[cfg(test)]

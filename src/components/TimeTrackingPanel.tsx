@@ -137,9 +137,7 @@ export function TimeTrackingPanel({ isVisible, onClose, onSearchApp }: TimeTrack
                     <h2>Time Tracking</h2>
                     <p>Today's screen time, derived from memory captures</p>
                 </div>
-                <button className="ui-action-btn tt-close-btn" onClick={onClose}>
-                    Close
-                </button>
+                <button className="ui-action-btn tt-close-btn" onClick={onClose}>X</button>
             </header>
 
             <div className="tt-body">
