@@ -55,9 +55,6 @@ const IMAGE_EMBED_DIM: i32 = 512;
 const VECTOR_QUERY_MULTIPLIER: usize = 3;
 const KEYWORD_QUERY_MULTIPLIER: usize = 8;
 const MAX_KEYWORD_SCAN: usize = 600;
-const MAX_KEYWORD_QUERY_CHARS: usize = 420;
-const MAX_KEYWORD_PHRASE_WORDS: usize = 14;
-const MAX_KEYWORD_TERM_CHARS: usize = 48;
 const INDEX_NOISE_HOSTS: &[&str] = &[
     "accounts.google.com",
     "auth.openai.com",
@@ -2476,40 +2473,20 @@ fn keyword_terms(query: &str) -> Vec<String> {
     if normalized.is_empty() {
         return Vec::new();
     }
-    let normalized = normalized
-        .chars()
-        .take(MAX_KEYWORD_QUERY_CHARS)
-        .collect::<String>()
-        .trim()
-        .to_string();
-    if normalized.is_empty() {
-        return Vec::new();
-    }
 
     let mut terms = Vec::new();
     // Keep the normalized query as a phrase candidate first.
-    let phrase = normalized
-        .split_whitespace()
-        .take(MAX_KEYWORD_PHRASE_WORDS)
-        .collect::<Vec<_>>()
-        .join(" ");
-    if !phrase.is_empty() {
-        terms.push(phrase);
-    }
+    terms.push(normalized.clone());
 
     for token in normalized.split_whitespace() {
-        let token = token
-            .chars()
-            .take(MAX_KEYWORD_TERM_CHARS)
-            .collect::<String>();
         if token.len() <= 1 {
             continue;
         }
-        if is_keyword_stop_word(&token) && !token.chars().any(|ch| ch.is_ascii_digit()) {
+        if is_keyword_stop_word(token) && !token.chars().any(|ch| ch.is_ascii_digit()) {
             continue;
         }
-        if !terms.iter().any(|existing| existing == &token) {
-            terms.push(token);
+        if !terms.iter().any(|existing| existing == token) {
+            terms.push(token.to_string());
         }
     }
 
