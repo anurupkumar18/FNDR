@@ -57,10 +57,6 @@ npm run tauri dev
 
 Then complete onboarding in-app (permissions + model download).
 
-### Reclaim Dev Build Storage
-
-Rust/Tauri debug builds can grow very large under `src-tauri/target`, especially after repeated local builds. That folder is generated build cache and is separate from FNDR runtime data in `~/Library/Application Support/com.fndr.app`.
-
 Preview what can be cleaned:
 
 ```bash
@@ -72,8 +68,6 @@ Clean the build cache:
 ```bash
 npm run clean:dev-cache
 ```
-
-This runs `cargo clean --manifest-path src-tauri/Cargo.toml`. It does not delete memory cards, summaries, LanceDB, screenshots, app settings, or downloaded app models. The next Rust/Tauri build will take longer because dependencies need to rebuild.
 
 
 ## Repository Layout
