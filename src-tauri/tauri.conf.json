@@ -34,6 +34,7 @@
             "app"
         ],
         "resources": {
+            "target/hermes-agent-bundle/": "hermes-agent/",
             "sidecar/parakeet_runner.py": "sidecar/parakeet_runner.py",
             "sidecar/fastvlm_runner.py": "sidecar/fastvlm_runner.py",
             "sidecar/whisper_gguf_runner.py": "sidecar/whisper_gguf_runner.py",

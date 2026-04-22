@@ -5,6 +5,7 @@ use fndr_lib::store::{MemoryRecord, Store};
 
 #[test]
 fn keyword_search_finds_seeded_content() {
+    std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
     let dir = tempfile::tempdir().expect("tempdir");
     let store = Store::new(dir.path()).expect("store");
     let embedder = Embedder::new().expect("embedder");

@@ -6,7 +6,7 @@
 
 pub mod clipboard;
 mod dedupe;
-mod macos;
+pub(crate) mod macos;
 pub mod permissions;
 mod sampling;
 pub mod text_cleanup;
@@ -185,7 +185,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
     let mut hasher = PerceptualHasher::new();
     let sampler = AdaptiveSampler::new();
     let ocr = OcrEngine::new()?;
-    let text_embedder = Embedder::new()?;
+    let text_embedder = match Embedder::new() {
+        Ok(embedder) => Some(embedder),
+        Err(err) => {
+            tracing::warn!("Semantic embeddings unavailable in capture loop: {}", err);
+            None
+        }
+    };
     let image_embedder = ClipEmbedder::new();
 
     // Batch buffer
@@ -215,6 +221,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 tracing::error!("Failed to flush batch: {}", e);
             } else {
                 purge_capture_artifacts(state.store.frames_dir());
+                state.invalidate_memory_derived_caches();
                 tracing::info!(
                     "Flushed {} records in {:?}",
                     batch.len(),
@@ -475,8 +482,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         let mut embedding_inputs = vec![enriched_clean_text.clone(), snippet_embed_input.clone()];
         embedding_inputs.extend(support_texts.iter().cloned());
+        let semantic_embeddings_available = semantic_embeddings_enabled(text_embedder.as_ref());
         let embedding_vectors = embed_text_inputs_with_memo(
-            &text_embedder,
+            text_embedder.as_ref(),
             &mut embedding_memo,
             &app_name,
             &window_title,
@@ -495,13 +503,17 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         } else {
             vec![0.0; EMBEDDING_DIM]
         };
-        *state.last_embedding.write() = text_embedding.clone();
+        *state.last_embedding.write() = if semantic_embeddings_available {
+            text_embedding.clone()
+        } else {
+            Vec::new()
+        };
 
         // ── Focus Mode drift detection ────────────────────────────────────────
         // Mirrors CC's context-similarity approach: embed the focus task once,
         // then compare every incoming capture. 3 consecutive off-task captures
         // surfaces a ProactiveSuggestion that the frontend can toast.
-        {
+        if semantic_embeddings_available {
             let focus_emb_opt = state.focus_task_embedding.read().clone();
             if let Some(ref focus_emb) = focus_emb_opt {
                 let sim = cosine_similarity(&text_embedding, focus_emb);
@@ -532,6 +544,10 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         .store(0, std::sync::atomic::Ordering::Relaxed);
                 }
             }
+        } else {
+            state
+                .focus_drift_count
+                .store(0, std::sync::atomic::Ordering::Relaxed);
         }
 
         let record = MemoryRecord {
@@ -572,7 +588,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &mut batch,
             &mut continuity_index,
             record.clone(),
-            &text_embedder,
+            text_embedder.as_ref(),
             engine.as_ref(),
         )
         .await
@@ -585,14 +601,16 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             }
         };
         // Fire-and-forget: auto-link to a task cluster based on embedding similarity.
-        let record_clone = merged_or_new.clone();
-        let cluster_store = state.store.clone();
-        tauri::async_runtime::spawn(async move {
-            let graph = crate::graph::GraphStore::new(cluster_store);
-            if let Err(e) = graph.auto_link_to_task(&record_clone).await {
-                tracing::debug!("Auto task link: {e}");
-            }
-        });
+        if semantic_embeddings_available {
+            let record_clone = merged_or_new.clone();
+            let cluster_store = state.store.clone();
+            tauri::async_runtime::spawn(async move {
+                let graph = crate::graph::GraphStore::new(cluster_store);
+                if let Err(e) = graph.auto_link_to_task(&record_clone).await {
+                    tracing::debug!("Auto task link: {e}");
+                }
+            });
+        }
 
         if let Err(err) =
             maybe_create_tasks_from_memory(state.as_ref(), &merged_or_new, engine.as_ref()).await
@@ -613,12 +631,20 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 }
 
 fn embed_text_inputs_with_memo(
-    text_embedder: &Embedder,
+    text_embedder: Option<&Embedder>,
     memo: &mut EmbeddingMemo,
     app_name: &str,
     window_title: &str,
     texts: &[String],
 ) -> Vec<Vec<f32>> {
+    if !semantic_embeddings_enabled(text_embedder) {
+        return vec![vec![0.0; EMBEDDING_DIM]; texts.len()];
+    }
+
+    let Some(text_embedder) = text_embedder else {
+        return vec![vec![0.0; EMBEDDING_DIM]; texts.len()];
+    };
+
     let mut out: Vec<Option<Vec<f32>>> = vec![None; texts.len()];
     let mut missing = Vec::new();
     let mut missing_positions = Vec::new();
@@ -688,7 +714,7 @@ async fn merge_or_append_memory_record(
     batch: &mut Vec<MemoryRecord>,
     continuity_index: &mut HashMap<String, String>,
     incoming: MemoryRecord,
-    text_embedder: &Embedder,
+    text_embedder: Option<&Embedder>,
     engine: Option<&Arc<crate::inference::InferenceEngine>>,
 ) -> Result<MemoryRecord, String> {
     if !eligible_for_story_merge(&incoming) {
@@ -701,7 +727,7 @@ async fn merge_or_append_memory_record(
 
     let incoming_anchor = continuity_anchor_for_memory(&incoming);
     let incoming_id = incoming.id.clone();
-    let semantic_merge_enabled = matches!(text_embedder.backend(), EmbeddingBackend::Real);
+    let semantic_merge_enabled = semantic_embeddings_enabled(text_embedder);
 
     if let Some(anchor) = incoming_anchor.as_ref() {
         if let Some(anchor_id) = continuity_index.get(anchor).cloned() {
@@ -747,11 +773,13 @@ async fn merge_or_append_memory_record(
                     .delete_memory_by_id(&existing.id)
                     .await
                     .map_err(|e| e.to_string())?;
+                state.invalidate_memory_derived_caches();
                 state
                     .store
                     .add_batch(&[merged.clone()])
                     .await
                     .map_err(|e| e.to_string())?;
+                state.invalidate_memory_derived_caches();
                 if merged.screenshot_path != incoming.screenshot_path {
                     cleanup_screenshot_path(incoming.screenshot_path.clone());
                 }
@@ -799,11 +827,13 @@ async fn merge_or_append_memory_record(
                 .delete_memory_by_id(&existing.id)
                 .await
                 .map_err(|e| e.to_string())?;
+            state.invalidate_memory_derived_caches();
             state
                 .store
                 .add_batch(&[merged.clone()])
                 .await
                 .map_err(|e| e.to_string())?;
+            state.invalidate_memory_derived_caches();
             if merged.screenshot_path != incoming.screenshot_path {
                 cleanup_screenshot_path(incoming.screenshot_path.clone());
             }
@@ -1036,7 +1066,7 @@ async fn best_persisted_lexical_merge_target(
 pub(crate) async fn merge_memory_records(
     existing: MemoryRecord,
     incoming: MemoryRecord,
-    text_embedder: &Embedder,
+    text_embedder: Option<&Embedder>,
     engine: Option<&Arc<crate::inference::InferenceEngine>>,
 ) -> MemoryRecord {
     merge_memory_records_with_policy(existing, incoming, text_embedder, engine, true, true).await
@@ -1045,7 +1075,7 @@ pub(crate) async fn merge_memory_records(
 pub(crate) async fn merge_memory_records_with_policy(
     existing: MemoryRecord,
     incoming: MemoryRecord,
-    text_embedder: &Embedder,
+    text_embedder: Option<&Embedder>,
     engine: Option<&Arc<crate::inference::InferenceEngine>>,
     recompute_embedding: bool,
     allow_llm_summary: bool,
@@ -1105,33 +1135,41 @@ pub(crate) async fn merge_memory_records_with_policy(
         &merged_lexical_shadow,
     );
 
-    let merged_embedding = if recompute_embedding {
+    let merged_embedding = if recompute_embedding && semantic_embeddings_enabled(text_embedder) {
         text_embedder
-            .embed_batch_with_context(&[(
-                incoming.app_name.clone(),
-                merged_window_title.clone(),
-                merged_clean_text.clone(),
-            )])
-            .ok()
-            .and_then(|mut vectors| vectors.drain(..).next())
+            .and_then(|embedder| {
+                embedder
+                    .embed_batch_with_context(&[(
+                        incoming.app_name.clone(),
+                        merged_window_title.clone(),
+                        merged_clean_text.clone(),
+                    )])
+                    .ok()
+                    .and_then(|mut vectors| vectors.drain(..).next())
+            })
             .unwrap_or_else(|| existing.embedding.clone())
     } else {
         existing.embedding.clone()
     };
-    let merged_snippet_embedding = if recompute_embedding {
+
+    let merged_snippet_embedding = if recompute_embedding && semantic_embeddings_enabled(text_embedder) {
         text_embedder
-            .embed_batch_with_context(&[(
-                incoming.app_name.clone(),
-                merged_window_title.clone(),
-                compact_snippet_text.clone(),
-            )])
-            .ok()
-            .and_then(|mut vectors| vectors.drain(..).next())
+            .and_then(|embedder| {
+                embedder
+                    .embed_batch_with_context(&[(
+                        incoming.app_name.clone(),
+                        merged_window_title.clone(),
+                        compact_snippet_text.clone(),
+                    )])
+                    .ok()
+                    .and_then(|mut vectors| vectors.drain(..).next())
+            })
             .unwrap_or_else(|| existing.snippet_embedding.clone())
     } else {
         existing.snippet_embedding.clone()
     };
-    let merged_support_embedding = if recompute_embedding && !support_texts.is_empty() {
+
+    let merged_support_embedding = if recompute_embedding && semantic_embeddings_enabled(text_embedder) && !support_texts.is_empty() {
         let contexts = support_texts
             .iter()
             .map(|text| {
@@ -1143,9 +1181,12 @@ pub(crate) async fn merge_memory_records_with_policy(
             })
             .collect::<Vec<_>>();
         text_embedder
-            .embed_batch_with_context(&contexts)
-            .ok()
-            .map(|vectors| mean_pool_embeddings(&vectors))
+            .and_then(|embedder| {
+                embedder
+                    .embed_batch_with_context(&contexts)
+                    .ok()
+                    .map(|vectors| mean_pool_embeddings(&vectors))
+            })
             .unwrap_or_else(|| existing.support_embedding.clone())
     } else {
         existing.support_embedding.clone()
@@ -1180,6 +1221,13 @@ pub(crate) async fn merge_memory_records_with_policy(
         decay_score: existing.decay_score.max(incoming.decay_score),
         last_accessed_at: existing.last_accessed_at.max(incoming.last_accessed_at),
     }
+}
+
+fn semantic_embeddings_enabled(text_embedder: Option<&Embedder>) -> bool {
+    matches!(
+        text_embedder.map(|embedder| embedder.backend()),
+        Some(EmbeddingBackend::Real)
+    )
 }
 
 fn choose_story_title(existing: &str, incoming: &str) -> String {

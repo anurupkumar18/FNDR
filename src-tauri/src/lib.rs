@@ -2,6 +2,7 @@
 //!
 //! Core functionality for the FNDR memory search application.
 
+pub mod accessibility;
 pub mod api;
 pub mod capture;
 pub mod config;
@@ -71,6 +72,8 @@ pub struct AppState {
     /// Cached stats: (result, computed_at_ms). Invalidated by stats_dirty.
     pub stats_cache: RwLock<Option<(Stats, i64)>>,
     pub stats_dirty: AtomicBool,
+    /// Cached app-name list: (result, computed_at_ms).
+    pub app_names_cache: RwLock<Option<(Vec<String>, i64)>>,
     /// Most recent text embedding from the capture loop — used by proactive surface.
     pub last_embedding: RwLock<Vec<f32>>,
     pub proactive_tx: tokio::sync::watch::Sender<Option<ProactiveSuggestion>>,
@@ -115,6 +118,7 @@ impl AppState {
             inference_init: AsyncMutex::new(()),
             stats_cache: RwLock::new(None),
             stats_dirty: AtomicBool::new(false),
+            app_names_cache: RwLock::new(None),
             last_embedding: RwLock::new(Vec::new()),
             proactive_tx,
             proactive_rx,
@@ -179,6 +183,12 @@ impl AppState {
     ) {
         *self.inference.write() = inference;
         *self.vlm.write() = vlm;
+    }
+
+    pub fn invalidate_memory_derived_caches(&self) {
+        self.stats_dirty.store(true, Ordering::SeqCst);
+        *self.stats_cache.write() = None;
+        *self.app_names_cache.write() = None;
     }
 
     pub async fn ensure_inference_engine(&self) -> Result<Option<Arc<InferenceEngine>>, String> {

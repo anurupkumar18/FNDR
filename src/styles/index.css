@@ -17,10 +17,10 @@
     --danger-light: rgba(100, 100, 100, 0.1);
     --success: #cccccc;
     --success-light: rgba(200, 200, 200, 0.1);
-    --radius-sm: 12px;
-    --radius-md: 16px;
-    --radius-lg: 18px;
-    --radius-full: 100px;
+    --radius-sm: 16px;
+    --radius-md: 22px;
+    --radius-lg: 28px;
+    --radius-full: 999px;
     --shadow-soft: 0 2px 6px rgba(0, 0, 0, 0.2);
     --shadow-medium: 0 8px 22px rgba(0, 0, 0, 0.3);
     --shadow-strong: 0 14px 32px rgba(0, 0, 0, 0.35);

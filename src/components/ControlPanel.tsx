@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 type Theme = "dark" | "light";
 import {
+    AutofillSettings,
     CaptureStatus,
     MemoryRepairProgress,
     MemoryRepairSummary,
@@ -17,9 +18,11 @@ import {
     getStorageReclaimProgress,
     getMcpServerStatus,
     getRetentionDays,
+    getAutofillSettings,
     pauseCapture,
     resumeCapture,
     setBlocklist,
+    setAutofillSettings,
     setRetentionDays,
     startMcpServer,
     stopMcpServer,
@@ -50,6 +53,15 @@ interface ControlPanelProps {
 
 type Tab = "settings" | "model" | "privacy";
 
+const DEFAULT_AUTOFILL_SETTINGS: AutofillSettings = {
+    enabled: true,
+    shortcut: "Alt+F",
+    lookback_days: 90,
+    auto_inject_threshold: 0.9,
+    prefer_typed_injection: true,
+    max_candidates: 4,
+};
+
 export function ControlPanel({ status, compact = false, evalUi = false }: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<Tab>("settings");
@@ -75,6 +87,12 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [reclaimProgress, setReclaimProgress] = useState<StorageReclaimProgress | null>(null);
     const [reclaimError, setReclaimError] = useState<string | null>(null);
     const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null);
+    const [autofillSettings, setAutofillSettingsState] =
+        useState<AutofillSettings>(DEFAULT_AUTOFILL_SETTINGS);
+    const [savedAutofillSettings, setSavedAutofillSettingsState] =
+        useState<AutofillSettings>(DEFAULT_AUTOFILL_SETTINGS);
+    const [autofillBusy, setAutofillBusy] = useState(false);
+    const [autofillMsg, setAutofillMsg] = useState<string | null>(null);
     const prevPrivacyAlertCountRef = useRef(0);
 
     // Theme state
@@ -94,11 +112,12 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const loadData = useCallback(async () => {
         try {
             if (evalUi) {
-                const [bl, ret, onboarding, health] = await Promise.all([
+                const [bl, ret, onboarding, health, autofill] = await Promise.all([
                     getBlocklist(),
                     getRetentionDays(),
                     getOnboardingState(),
                     getStorageHealth(),
+                    getAutofillSettings(),
                 ]);
                 setBlocklistState(bl);
                 setRetentionDaysState(ret);
@@ -106,13 +125,16 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 const name = onboarding.display_name ?? "";
                 setProfileName(name);
                 setProfileDraft(name);
+                setAutofillSettingsState(autofill);
+                setSavedAutofillSettingsState(autofill);
             } else {
-                const [bl, ret, mcp, onboarding, health] = await Promise.all([
+                const [bl, ret, mcp, onboarding, health, autofill] = await Promise.all([
                     getBlocklist(),
                     getRetentionDays(),
                     getMcpServerStatus(),
                     getOnboardingState(),
                     getStorageHealth(),
+                    getAutofillSettings(),
                 ]);
                 setBlocklistState(bl);
                 setRetentionDaysState(ret);
@@ -121,6 +143,8 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 const name = onboarding.display_name ?? "";
                 setProfileName(name);
                 setProfileDraft(name);
+                setAutofillSettingsState(autofill);
+                setSavedAutofillSettingsState(autofill);
             }
         } catch (err) {
             console.error("Failed to load settings data:", err);
@@ -540,12 +564,34 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         }
     };
 
+    const handleSaveAutofill = async () => {
+        setAutofillBusy(true);
+        setAutofillMsg(null);
+        try {
+            const saved = await setAutofillSettings({
+                ...autofillSettings,
+                shortcut: autofillSettings.shortcut.trim() || DEFAULT_AUTOFILL_SETTINGS.shortcut,
+            });
+            setAutofillSettingsState(saved);
+            setSavedAutofillSettingsState(saved);
+            setAutofillMsg("Saved");
+        } catch (err) {
+            setAutofillMsg(`Failed to save: ${String(err)}`);
+        } finally {
+            setAutofillBusy(false);
+            window.setTimeout(() => setAutofillMsg(null), 1800);
+        }
+    };
+
     function fmtBytes(b: number) {
         if (b < 1024) return `${b} B`;
         if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
         if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(0)} MB`;
         return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
     }
+
+    const autofillDirty =
+        JSON.stringify(autofillSettings) !== JSON.stringify(savedAutofillSettings);
 
     return (
         <div className="control-panel-container">
@@ -697,6 +743,121 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         <span>Dev cache {fmtBytes(storageHealth.dev_build_cache_bytes)}</span>
                                     </div>
                                 )}
+                            </section>
+
+                            <section className="panel-section">
+                                <h3>Screen Auto-Fill</h3>
+                                <p className="section-hint">
+                                    Use FNDR&apos;s local memory to fill the active field with <strong>⌥F</strong> (Option+F).
+                                </p>
+                                <div className="autofill-grid">
+                                    <label className="autofill-field">
+                                        <span className="autofill-label">Mode</span>
+                                        <select
+                                            value={autofillSettings.enabled ? "enabled" : "disabled"}
+                                            onChange={(event) =>
+                                                setAutofillSettingsState((current) => ({
+                                                    ...current,
+                                                    enabled: event.target.value === "enabled",
+                                                }))
+                                            }
+                                            className="retention-select"
+                                        >
+                                            <option value="enabled">Enabled</option>
+                                            <option value="disabled">Disabled</option>
+                                        </select>
+                                    </label>
+                                    <label className="autofill-field">
+                                        <span className="autofill-label">Shortcut</span>
+                                        <input
+                                            type="text"
+                                            value={autofillSettings.shortcut}
+                                            onChange={(event) =>
+                                                setAutofillSettingsState((current) => ({
+                                                    ...current,
+                                                    shortcut: event.target.value,
+                                                }))
+                                            }
+                                            className="profile-input"
+                                            placeholder="Alt+F"
+                                        />
+                                    </label>
+                                    <label className="autofill-field">
+                                        <span className="autofill-label">Lookback</span>
+                                        <select
+                                            value={autofillSettings.lookback_days}
+                                            onChange={(event) =>
+                                                setAutofillSettingsState((current) => ({
+                                                    ...current,
+                                                    lookback_days: Number(event.target.value),
+                                                }))
+                                            }
+                                            className="retention-select"
+                                        >
+                                            <option value={30}>30 days</option>
+                                            <option value={60}>60 days</option>
+                                            <option value={90}>90 days</option>
+                                            <option value={180}>180 days</option>
+                                        </select>
+                                    </label>
+                                    <label className="autofill-field">
+                                        <span className="autofill-label">Auto-fill threshold</span>
+                                        <select
+                                            value={autofillSettings.auto_inject_threshold}
+                                            onChange={(event) =>
+                                                setAutofillSettingsState((current) => ({
+                                                    ...current,
+                                                    auto_inject_threshold: Number(event.target.value),
+                                                }))
+                                            }
+                                            className="retention-select"
+                                        >
+                                            <option value={0.85}>85%</option>
+                                            <option value={0.9}>90%</option>
+                                            <option value={0.95}>95%</option>
+                                            <option value={0.98}>98%</option>
+                                        </select>
+                                    </label>
+                                </div>
+                                <label className="autofill-check">
+                                    <input
+                                        type="checkbox"
+                                        checked={autofillSettings.prefer_typed_injection}
+                                        onChange={(event) =>
+                                            setAutofillSettingsState((current) => ({
+                                                ...current,
+                                                prefer_typed_injection: event.target.checked,
+                                            }))
+                                        }
+                                    />
+                                    Prefer system typing when the target app stays active
+                                </label>
+                                <label className="autofill-check">
+                                    <input
+                                        type="checkbox"
+                                        checked={autofillSettings.max_candidates > 1}
+                                        onChange={(event) =>
+                                            setAutofillSettingsState((current) => ({
+                                                ...current,
+                                                max_candidates: event.target.checked ? 4 : 1,
+                                            }))
+                                        }
+                                    />
+                                    Offer quick-pick choices when FNDR finds multiple strong matches
+                                </label>
+                                <p className="autofill-help">
+                                    Shortcut uses the Tauri format: <code>Alt+F</code> = ⌥F, <code>Shift+Alt+F</code> = ⇧⌥F, <code>Super+Shift+F</code> = ⌘⇧F.
+                                </p>
+                                <div className="profile-row">
+                                    <button
+                                        className="ui-action-btn btn-secondary"
+                                        onClick={() => void handleSaveAutofill()}
+                                        disabled={autofillBusy || !autofillDirty}
+                                    >
+                                        {autofillBusy ? "..." : "Save auto-fill"}
+                                    </button>
+                                    {autofillMsg && <p className="profile-msg">{autofillMsg}</p>}
+                                </div>
                             </section>
 
                             {!evalUi && (

@@ -193,6 +193,7 @@ fn reciprocal_rank(hit_ids: &[String], relevant: &HashSet<String>) -> f32 {
 
 #[test]
 fn hybrid_search_relevance_eval_suite() {
+    std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
     let cases: Vec<EvalCase> =
         serde_json::from_str(include_str!("fixtures/search_eval_cases.json"))
             .expect("valid search eval fixture");

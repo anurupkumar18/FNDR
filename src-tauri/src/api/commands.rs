@@ -4,6 +4,7 @@ use crate::capture::{
     continuity_anchor_for_memory, eligible_for_story_merge, merge_memory_records_with_policy,
     passes_merge_threshold, score_memory_candidate,
 };
+use crate::config::AutofillConfig;
 use crate::embed::{embedding_runtime_status, Embedder, EmbeddingBackend};
 use crate::memory_compaction::{
     best_embedding_text, best_snippet_embedding_text, best_support_embedding_texts,
@@ -25,7 +26,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tokio::time::{timeout, Duration, Instant};
 
 use genpdf::elements;
@@ -90,6 +92,7 @@ const MEMORY_REPAIR_CHECKPOINT_MS: u64 = 12_000;
 const STORAGE_RECLAIM_HEARTBEAT_ITEM_STEP: usize = 72;
 const STORAGE_RECLAIM_HEARTBEAT_MS: u64 = 850;
 const STORAGE_RECLAIM_EMBED_BATCH: usize = 48;
+const MEMORY_DERIVED_CACHE_TTL_MS: i64 = 30_000;
 static MEMORY_REPAIR_RUNNING: AtomicBool = AtomicBool::new(false);
 static STORAGE_RECLAIM_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -117,6 +120,70 @@ fn shared_real_embedder() -> Result<&'static Embedder, String> {
             format!(" - {}", status.detail)
         }
     ))
+}
+
+async fn run_search_query(
+    state: &AppState,
+    query: &str,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+    limit: usize,
+) -> Result<Vec<SearchResult>, String> {
+    let limit = limit.clamp(1, 50);
+
+    if !state
+        .store
+        .has_memories()
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(Vec::new());
+    }
+
+    let results = match shared_embedder() {
+        Ok(embedder) => match HybridSearcher::search(
+            &state.store,
+            embedder,
+            query,
+            limit,
+            time_filter,
+            app_filter,
+        )
+        .await
+        .map_err(|err| err.to_string())
+        {
+            Ok(results) => results,
+            Err(err) => {
+                tracing::warn!(
+                    "Hybrid search failed; falling back to keyword-only search: {}",
+                    err
+                );
+                state
+                    .store
+                    .keyword_search(query, limit, time_filter, app_filter)
+                    .await
+                    .map_err(|e| e.to_string())?
+            }
+        },
+        Err(err) => {
+            tracing::warn!(
+                "Semantic embedder unavailable for raw search; falling back to keyword-only: {}",
+                err
+            );
+            state
+                .store
+                .keyword_search(query, limit, time_filter, app_filter)
+                .await
+                .map_err(|e| e.to_string())?
+        }
+    };
+
+    Ok(strip_internal_fndr_results(results))
+}
+
+fn cache_is_fresh(computed_at_ms: i64) -> bool {
+    let age_ms = chrono::Utc::now().timestamp_millis() - computed_at_ms;
+    age_ms >= 0 && age_ms <= MEMORY_DERIVED_CACHE_TTL_MS
 }
 
 fn is_internal_fndr_result(result: &SearchResult) -> bool {
@@ -347,31 +414,14 @@ pub async fn search(
     app_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<SearchResult>, String> {
-    let limit = limit.unwrap_or(20).clamp(1, 50);
-
-    // Guard: LanceDB vector_search panics/errors on an empty table.
-    // Return empty results immediately so the UI shows "No memories found"
-    // instead of a "Search failed" error banner.
-    let stats = state.store.get_stats().await.map_err(|e| e.to_string())?;
-
-    if stats.total_records == 0 {
-        return Ok(Vec::new());
-    }
-
-    let embedder = shared_embedder()?;
-
-    let results = HybridSearcher::search(
-        &state.inner().store,
-        &embedder,
+    run_search_query(
+        state.inner(),
         &query,
-        limit,
         time_filter.as_deref(),
         app_filter.as_deref(),
+        limit.unwrap_or(20),
     )
     .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(strip_internal_fndr_results(results))
 }
 
 /// Search and return synthesized memory cards for UI rendering
@@ -393,8 +443,12 @@ pub async fn search_memory_cards(
         "search_memory_cards:start"
     );
 
-    let stats = state.store.get_stats().await.map_err(|e| e.to_string())?;
-    if stats.total_records == 0 {
+    if !state
+        .store
+        .has_memories()
+        .await
+        .map_err(|e| e.to_string())?
+    {
         tracing::info!("search_memory_cards:complete total_ms=0 cards=0");
         return Ok(Vec::new());
     }
@@ -624,6 +678,8 @@ pub async fn delete_memory(
     if deleted == 0 {
         return Ok(false);
     }
+
+    state.invalidate_memory_derived_caches();
 
     if let Some(record) = existing {
         if let Some(path) = record.screenshot_path {
@@ -953,6 +1009,12 @@ pub async fn delete_meeting(meeting_id: String) -> Result<bool, String> {
 #[tauri::command]
 pub async fn get_meeting_transcript(meeting_id: String) -> Result<MeetingTranscript, String> {
     meeting::get_meeting_transcript(&meeting_id).await
+}
+
+/// Re-run transcription on an existing meeting (useful after STT backend changes)
+#[tauri::command]
+pub async fn retranscribe_meeting(meeting_id: String) -> Result<(), String> {
+    meeting::retranscribe_meeting(&meeting_id).await
 }
 
 /// Export a meeting transcript, summary, and action items to a PDF in the Downloads folder
@@ -1294,6 +1356,7 @@ pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), Stri
         .delete_all()
         .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    state.invalidate_memory_derived_caches();
 
     // 2. Clear knowledge graph
     if let Err(e) = state.inner().graph.clear_all().await {
@@ -1317,12 +1380,23 @@ pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), Stri
 /// Get statistics
 #[tauri::command]
 pub async fn get_stats(state: State<'_, Arc<AppState>>) -> Result<Stats, String> {
-    state
-        .inner()
+    let app_state = state.inner();
+    if !app_state.stats_dirty.load(Ordering::Relaxed) {
+        if let Some((stats, computed_at_ms)) = app_state.stats_cache.read().clone() {
+            if cache_is_fresh(computed_at_ms) {
+                return Ok(stats);
+            }
+        }
+    }
+
+    let stats = app_state
         .store
         .get_stats()
         .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    *app_state.stats_cache.write() = Some((stats.clone(), chrono::Utc::now().timestamp_millis()));
+    app_state.stats_dirty.store(false, Ordering::Relaxed);
+    Ok(stats)
 }
 
 /// Get retention days (0 = keep forever)
@@ -1345,13 +1419,21 @@ pub async fn set_retention_days(state: State<'_, Arc<AppState>>, days: u32) -> R
 /// Get unique app names for filter dropdown
 #[tauri::command]
 pub async fn get_app_names(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
-    let mut apps = state
-        .inner()
+    let app_state = state.inner();
+    if let Some((apps, computed_at_ms)) = app_state.app_names_cache.read().clone() {
+        if cache_is_fresh(computed_at_ms) {
+            return Ok(apps);
+        }
+    }
+
+    let mut apps = app_state
         .store
         .get_app_names()
         .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
     apps.retain(|name| !Blocklist::is_internal_app(name, None));
+    *app_state.app_names_cache.write() =
+        Some((apps.clone(), chrono::Utc::now().timestamp_millis()));
     Ok(apps)
 }
 
@@ -1361,12 +1443,16 @@ pub async fn delete_older_than(
     state: State<'_, Arc<AppState>>,
     days: u32,
 ) -> Result<usize, String> {
-    state
+    let deleted = state
         .inner()
         .store
         .delete_older_than(days)
         .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    if deleted > 0 {
+        state.invalidate_memory_derived_caches();
+    }
+    Ok(deleted)
 }
 
 fn merge_bucket_for_anchor(anchor: Option<&str>, app_name: &str) -> &'static str {
@@ -1661,7 +1747,7 @@ async fn run_memory_repair_backfill_for_state(
             let merged = merge_memory_records_with_policy(
                 merged_memories[target_index].clone(),
                 incoming.clone(),
-                embedder,
+                Some(embedder),
                 backfill_engine,
                 true,
                 false,
@@ -1929,6 +2015,7 @@ async fn run_memory_repair_backfill_for_state(
         );
         return Err(err.to_string());
     }
+    state.invalidate_memory_derived_caches();
     if let Err(err) = state.store.add_batch_preserving_ids(&merged_memories).await {
         persist_memory_repair_progress(
             &progress_path,
@@ -1966,6 +2053,7 @@ async fn run_memory_repair_backfill_for_state(
         );
         return Err(err.to_string());
     }
+    state.invalidate_memory_derived_caches();
 
     let after_screenshots: HashSet<String> = merged_memories
         .iter()
@@ -2771,6 +2859,7 @@ pub async fn update_todo(
 use parking_lot::Mutex as AgentMutex;
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock as AgentOnceLock;
+use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentStatus {
@@ -2778,6 +2867,80 @@ pub struct AgentStatus {
     pub task_title: Option<String>,
     pub last_message: Option<String>,
     pub status: String, // "idle" | "running" | "completed" | "error"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HermesAppContext {
+    pub app_name: String,
+    pub memory_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HermesMemoryDigest {
+    pub title: String,
+    pub app_name: String,
+    pub summary: String,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HermesBridgeStatus {
+    pub installed: bool,
+    pub configured: bool,
+    pub setup_complete: bool,
+    pub gateway_running: bool,
+    pub api_server_ready: bool,
+    pub version: Option<String>,
+    pub bundled_repo_available: bool,
+    pub runtime_source: Option<String>,
+    pub provider_kind: Option<String>,
+    pub model_name: Option<String>,
+    pub base_url: Option<String>,
+    pub api_url: String,
+    pub gateway_dir: String,
+    pub home_dir: String,
+    pub context_path: String,
+    pub context_ready: bool,
+    pub last_synced_at: Option<i64>,
+    pub fndr_local_model_id: Option<String>,
+    pub ollama_installed: bool,
+    pub ollama_reachable: bool,
+    pub ollama_models: Vec<String>,
+    pub ollama_base_url: String,
+    pub codex_cli_installed: bool,
+    pub codex_logged_in: bool,
+    pub codex_auth_path: String,
+    pub profile_name: Option<String>,
+    pub focus_task: Option<String>,
+    pub recent_memory_count: u32,
+    pub open_task_count: u32,
+    /// True when Ollama is reachable and configured — chat works without Hermes CLI.
+    pub direct_ollama_ready: bool,
+    pub top_apps: Vec<HermesAppContext>,
+    pub recent_memories: Vec<HermesMemoryDigest>,
+    pub last_error: Option<String>,
+    pub install_command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HermesSetupPayload {
+    pub provider_kind: String,
+    pub model_name: String,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HermesChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HermesChatReply {
+    pub response_id: String,
+    pub conversation_id: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3593,6 +3756,1385 @@ fn get_agent_status_store() -> &'static AgentMutex<AgentStatus> {
     })
 }
 
+#[derive(Debug, Deserialize)]
+struct HermesOnboardingProfile {
+    display_name: Option<String>,
+    model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HermesSetupRecord {
+    provider_kind: String,
+    model_name: String,
+    #[serde(default)]
+    base_url: Option<String>,
+}
+
+static HERMES_GATEWAY_PROCESS: AgentOnceLock<AgentMutex<Option<Child>>> = AgentOnceLock::new();
+static HERMES_GATEWAY_ERROR: AgentOnceLock<AgentMutex<Option<String>>> = AgentOnceLock::new();
+const HERMES_API_HOST: &str = "127.0.0.1";
+const HERMES_API_PORT: u16 = 8742;
+const OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434/v1";
+
+fn hermes_gateway_dir(state: &AppState) -> PathBuf {
+    state.app_data_dir.join("hermes-gateway")
+}
+
+fn hermes_home_dir(state: &AppState) -> PathBuf {
+    state.app_data_dir.join("hermes-home")
+}
+
+fn hermes_context_path(state: &AppState) -> PathBuf {
+    hermes_gateway_dir(state).join("FNDR_CONTEXT.md")
+}
+
+fn hermes_project_context_path(state: &AppState) -> PathBuf {
+    hermes_gateway_dir(state).join(".hermes.md")
+}
+
+fn hermes_gateway_readme_path(state: &AppState) -> PathBuf {
+    hermes_gateway_dir(state).join("README.md")
+}
+
+fn hermes_env_path(state: &AppState) -> PathBuf {
+    hermes_home_dir(state).join(".env")
+}
+
+fn hermes_config_path(state: &AppState) -> PathBuf {
+    hermes_home_dir(state).join("config.yaml")
+}
+
+fn hermes_setup_record_path(state: &AppState) -> PathBuf {
+    hermes_home_dir(state).join("fndr_setup.json")
+}
+
+fn hermes_soul_path(state: &AppState) -> PathBuf {
+    hermes_home_dir(state).join("SOUL.md")
+}
+
+fn hermes_api_url() -> String {
+    format!("http://{HERMES_API_HOST}:{HERMES_API_PORT}")
+}
+
+fn get_hermes_gateway_process() -> &'static AgentMutex<Option<Child>> {
+    HERMES_GATEWAY_PROCESS.get_or_init(|| AgentMutex::new(None))
+}
+
+fn get_hermes_gateway_error_store() -> &'static AgentMutex<Option<String>> {
+    HERMES_GATEWAY_ERROR.get_or_init(|| AgentMutex::new(None))
+}
+
+fn read_hermes_profile_name(state: &AppState) -> Option<String> {
+    let path = state.app_data_dir.join("onboarding.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<HermesOnboardingProfile>(&raw)
+        .ok()?
+        .display_name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+fn read_fndr_local_model_id(state: &AppState) -> Option<String> {
+    let path = state.app_data_dir.join("onboarding.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<HermesOnboardingProfile>(&raw)
+        .ok()?
+        .model_id
+        .map(|model_id| model_id.trim().to_string())
+        .filter(|model_id| !model_id.is_empty())
+}
+
+#[derive(Debug, Clone)]
+enum HermesLauncher {
+    Bundled { python: PathBuf, script: PathBuf },
+    System { executable: PathBuf },
+}
+
+impl HermesLauncher {
+    fn command(&self) -> Command {
+        match self {
+            Self::Bundled { python, script } => {
+                let mut command = Command::new(python);
+                command.arg(script);
+                command
+            }
+            Self::System { executable } => Command::new(executable),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HermesRuntimeStatus {
+    installed: bool,
+    version: Option<String>,
+    launcher: Option<HermesLauncher>,
+    bundled_repo_path: Option<PathBuf>,
+    runtime_source: Option<String>,
+}
+
+impl HermesRuntimeStatus {
+    fn bundled_repo_available(&self) -> bool {
+        self.bundled_repo_path.is_some()
+    }
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn hermes_runtime_root(state: &AppState) -> PathBuf {
+    state.app_data_dir.join("hermes-runtime")
+}
+
+fn hermes_runtime_bin_dir(state: &AppState) -> PathBuf {
+    hermes_runtime_root(state).join("bin")
+}
+
+fn hermes_runtime_python_dir(state: &AppState) -> PathBuf {
+    hermes_runtime_root(state).join("python")
+}
+
+fn hermes_runtime_venv_dir(state: &AppState) -> PathBuf {
+    hermes_runtime_root(state).join("venv")
+}
+
+fn hermes_runtime_python_path(state: &AppState) -> PathBuf {
+    hermes_runtime_venv_dir(state).join("bin").join("python3")
+}
+
+fn hermes_uv_path(state: &AppState) -> PathBuf {
+    hermes_runtime_bin_dir(state).join("uv")
+}
+
+fn is_hermes_repo(path: &Path) -> bool {
+    path.join("pyproject.toml").exists() && path.join("hermes").exists()
+}
+
+fn resolve_bundled_hermes_repo() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(value) = std::env::var_os("FNDR_HERMES_REPO") {
+        candidates.push(PathBuf::from(value));
+    }
+
+    let manifest_candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("hermes-agent");
+    candidates.push(manifest_candidate);
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("hermes-agent"));
+    }
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("../Resources/hermes-agent"));
+            for ancestor in exe_dir.ancestors().take(6) {
+                candidates.push(ancestor.join("hermes-agent"));
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| is_hermes_repo(candidate))
+}
+
+fn read_hermes_repo_version(repo_root: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(repo_root.join("pyproject.toml")).ok()?;
+    let value = raw.parse::<toml::Value>().ok()?;
+    value
+        .get("project")
+        .and_then(|project| project.get("version"))
+        .and_then(|version| version.as_str())
+        .map(str::to_string)
+}
+
+fn existing_executable_path(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn find_existing_executable(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+fn common_executable_candidates(name: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(home) = user_home_dir() {
+        candidates.push(home.join(".local/bin").join(name));
+        candidates.push(home.join(".cargo/bin").join(name));
+        candidates.push(home.join(".npm-global/bin").join(name));
+    }
+
+    candidates.push(PathBuf::from("/opt/homebrew/bin").join(name));
+    candidates.push(PathBuf::from("/usr/local/bin").join(name));
+    candidates
+}
+
+fn detect_system_hermes_executable() -> Option<PathBuf> {
+    existing_executable_path("hermes")
+        .or_else(|| find_existing_executable(common_executable_candidates("hermes")))
+}
+
+fn detect_uv_executable(state: &AppState) -> Option<PathBuf> {
+    let bundled_uv = hermes_uv_path(state);
+    if bundled_uv.exists() {
+        return Some(bundled_uv);
+    }
+
+    existing_executable_path("uv")
+        .or_else(|| find_existing_executable(common_executable_candidates("uv")))
+}
+
+fn detect_ollama_executable() -> Option<PathBuf> {
+    let mut candidates = common_executable_candidates("ollama");
+    candidates.push(PathBuf::from(
+        "/Applications/Ollama.app/Contents/Resources/ollama",
+    ));
+    existing_executable_path("ollama").or_else(|| find_existing_executable(candidates))
+}
+
+fn detect_codex_executable() -> Option<PathBuf> {
+    existing_executable_path("codex")
+        .or_else(|| find_existing_executable(common_executable_candidates("codex")))
+}
+
+fn version_from_output(output: &std::process::Output) -> Option<String> {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stdout.is_empty() {
+        stderr.lines().next().map(str::to_string)
+    } else {
+        stdout.lines().next().map(str::to_string)
+    }
+}
+
+fn command_failure_detail(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "No diagnostic output was returned.".to_string()
+    }
+}
+
+fn configure_uv_command(command: &mut Command, state: &AppState) -> Result<(), String> {
+    let runtime_root = hermes_runtime_root(state);
+    let xdg_cache_home = runtime_root.join("xdg-cache");
+    let xdg_data_home = runtime_root.join("xdg-data");
+    let xdg_config_home = runtime_root.join("xdg-config");
+    let tool_dir = runtime_root.join("tools");
+    let tool_bin_dir = hermes_runtime_bin_dir(state);
+    let python_dir = hermes_runtime_python_dir(state);
+    let project_env = hermes_runtime_venv_dir(state);
+
+    for dir in [
+        &runtime_root,
+        &xdg_cache_home,
+        &xdg_data_home,
+        &xdg_config_home,
+        &tool_dir,
+        &tool_bin_dir,
+        &python_dir,
+    ] {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+
+    command
+        .env("XDG_CACHE_HOME", xdg_cache_home)
+        .env("XDG_DATA_HOME", xdg_data_home)
+        .env("XDG_CONFIG_HOME", xdg_config_home)
+        .env("UV_TOOL_DIR", tool_dir)
+        .env("UV_TOOL_BIN_DIR", tool_bin_dir)
+        .env("UV_PYTHON_INSTALL_DIR", python_dir)
+        .env("UV_PROJECT_ENVIRONMENT", project_env)
+        .env("UV_NO_PROGRESS", "1");
+
+    Ok(())
+}
+
+fn ensure_uv_available(state: &AppState) -> Result<PathBuf, String> {
+    if let Some(path) = detect_uv_executable(state) {
+        return Ok(path);
+    }
+
+    let install_dir = hermes_runtime_bin_dir(state);
+    std::fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
+
+    let output = Command::new("sh")
+        .arg("-lc")
+        .arg("curl -LsSf https://astral.sh/uv/install.sh | sh")
+        .env("UV_UNMANAGED_INSTALL", &install_dir)
+        .env("UV_NO_MODIFY_PATH", "1")
+        .output()
+        .map_err(|e| format!("Failed to install uv for the bundled Hermes runtime: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "FNDR could not prepare its private Hermes runtime because uv failed to install. {}",
+            command_failure_detail(&output)
+        ));
+    }
+
+    detect_uv_executable(state).ok_or_else(|| {
+        "uv installed successfully, but FNDR could not locate the resulting binary.".to_string()
+    })
+}
+
+fn prepare_vendored_hermes_runtime(state: &AppState) -> Result<(), String> {
+    let repo_root = resolve_bundled_hermes_repo().ok_or_else(|| {
+        "FNDR could not find the vendored hermes-agent clone. Expected a bundled `hermes-agent/` directory."
+            .to_string()
+    })?;
+    let uv = ensure_uv_available(state)?;
+    let venv_dir = hermes_runtime_venv_dir(state);
+
+    let mut venv_command = Command::new(&uv);
+    venv_command
+        .arg("venv")
+        .arg(&venv_dir)
+        .arg("--python")
+        .arg("3.11");
+    configure_uv_command(&mut venv_command, state)?;
+    let venv_output = venv_command
+        .current_dir(&repo_root)
+        .output()
+        .map_err(|e| format!("Failed to create the FNDR Hermes environment: {e}"))?;
+    if !venv_output.status.success() {
+        return Err(format!(
+            "FNDR could not create the bundled Hermes environment. {}",
+            command_failure_detail(&venv_output)
+        ));
+    }
+
+    let mut sync_command = Command::new(&uv);
+    sync_command.arg("sync").arg("--locked");
+    for extra in ["messaging", "pty", "honcho", "mcp", "acp"] {
+        sync_command.arg("--extra").arg(extra);
+    }
+    configure_uv_command(&mut sync_command, state)?;
+    let sync_output = sync_command
+        .current_dir(&repo_root)
+        .output()
+        .map_err(|e| format!("Failed to install Hermes dependencies for FNDR: {e}"))?;
+    if !sync_output.status.success() {
+        return Err(format!(
+            "FNDR could not finish installing Hermes dependencies. {}",
+            command_failure_detail(&sync_output)
+        ));
+    }
+
+    if !hermes_runtime_python_path(state).exists() {
+        return Err(
+            "FNDR prepared the Hermes runtime, but the private Python interpreter is missing."
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn detect_hermes_runtime(state: &AppState) -> HermesRuntimeStatus {
+    let bundled_repo_path = resolve_bundled_hermes_repo();
+    let bundled_version = bundled_repo_path
+        .as_deref()
+        .and_then(read_hermes_repo_version);
+
+    if let Some(repo_root) = bundled_repo_path.clone() {
+        let python = hermes_runtime_python_path(state);
+        let script = repo_root.join("hermes");
+        if python.exists() && script.exists() {
+            return HermesRuntimeStatus {
+                installed: true,
+                version: bundled_version.clone(),
+                launcher: Some(HermesLauncher::Bundled { python, script }),
+                bundled_repo_path: Some(repo_root),
+                runtime_source: Some("bundled".to_string()),
+            };
+        }
+    }
+
+    if let Some(executable) = detect_system_hermes_executable() {
+        let mut command = Command::new(&executable);
+        let output = command.arg("--version").output();
+        if let Ok(output) = output {
+            if output.status.success() {
+                return HermesRuntimeStatus {
+                    installed: true,
+                    version: version_from_output(&output).or(bundled_version.clone()),
+                    launcher: Some(HermesLauncher::System { executable }),
+                    bundled_repo_path,
+                    runtime_source: Some("system".to_string()),
+                };
+            }
+        }
+    }
+
+    HermesRuntimeStatus {
+        installed: false,
+        version: bundled_version,
+        launcher: None,
+        bundled_repo_path,
+        runtime_source: None,
+    }
+}
+
+fn detect_ollama_installation() -> bool {
+    detect_ollama_executable()
+        .and_then(|executable| {
+            Command::new(executable)
+                .arg("--version")
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+        })
+        .is_some()
+}
+
+fn parse_ollama_list_output(output: &str) -> Vec<String> {
+    let mut models = output
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            trimmed
+                .split_whitespace()
+                .next()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.eq_ignore_ascii_case("name"))
+        })
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    models
+}
+
+async fn detect_ollama_state() -> (bool, bool, Vec<String>) {
+    let installed = detect_ollama_installation();
+    let mut reachable = false;
+    let mut models: Vec<String> = Vec::new();
+
+    if let Ok(response) = reqwest::Client::new()
+        .get("http://127.0.0.1:11434/api/tags")
+        .send()
+        .await
+    {
+        if response.status().is_success() {
+            reachable = true;
+            if let Ok(json) = response.json::<serde_json::Value>().await {
+                models = json
+                    .get("models")
+                    .and_then(|value| value.as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|item| item.get("name").and_then(|value| value.as_str()))
+                    .map(str::to_string)
+                    .collect();
+            }
+        }
+    }
+
+    if models.is_empty() && installed {
+        if let Some(ollama) = detect_ollama_executable() {
+            if let Ok(output) = Command::new(ollama).arg("list").output() {
+                if output.status.success() {
+                    reachable = true;
+                    models = parse_ollama_list_output(&String::from_utf8_lossy(&output.stdout));
+                }
+            }
+        }
+    }
+
+    models.sort();
+    models.dedup();
+    (installed, reachable, models)
+}
+
+fn codex_home_dir() -> PathBuf {
+    if let Some(value) = std::env::var_os("CODEX_HOME") {
+        return PathBuf::from(value);
+    }
+
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".codex")
+}
+
+fn codex_auth_path() -> PathBuf {
+    codex_home_dir().join("auth.json")
+}
+
+fn detect_codex_state() -> (bool, bool, PathBuf) {
+    let auth_path = codex_auth_path();
+    let cli_installed = detect_codex_executable()
+        .and_then(|executable| {
+            Command::new(executable)
+                .arg("--help")
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+        })
+        .is_some();
+
+    let logged_in = std::fs::read_to_string(&auth_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .map(|json| {
+            json.get("OPENAI_API_KEY")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| !value.trim().is_empty())
+                || json
+                    .get("tokens")
+                    .and_then(|value| value.as_object())
+                    .is_some_and(|tokens| !tokens.is_empty())
+                || json
+                    .get("tokens")
+                    .and_then(|value| value.as_array())
+                    .is_some_and(|tokens| !tokens.is_empty())
+        })
+        .unwrap_or(false);
+
+    (cli_installed, logged_in, auth_path)
+}
+
+fn read_hermes_setup_record(state: &AppState) -> Option<HermesSetupRecord> {
+    let raw = std::fs::read_to_string(hermes_setup_record_path(state)).ok()?;
+    serde_json::from_str::<HermesSetupRecord>(&raw).ok()
+}
+
+fn persist_hermes_setup_files(state: &AppState, setup: &HermesSetupPayload) -> Result<(), String> {
+    let home_dir = hermes_home_dir(state);
+    std::fs::create_dir_all(&home_dir).map_err(|e| e.to_string())?;
+    let api_key = setup
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let record = HermesSetupRecord {
+        provider_kind: setup.provider_kind.trim().to_string(),
+        model_name: setup.model_name.trim().to_string(),
+        base_url: setup
+            .base_url
+            .as_ref()
+            .map(|value| value.trim().to_string()),
+    };
+
+    let config_yaml = match record.provider_kind.as_str() {
+        "ollama" => {
+            let base_url = record
+                .base_url
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| OLLAMA_BASE_URL.to_string());
+            format!(
+                "model:\n  provider: custom\n  default: {}\n  base_url: {}\n  context_length: 32768\n",
+                toml::to_string(&record.model_name)
+                    .map_err(|e| e.to_string())?
+                    .trim(),
+                toml::to_string(&base_url)
+                    .map_err(|e| e.to_string())?
+                    .trim(),
+            )
+        }
+        "codex" => format!(
+            "model:\n  provider: codex\n  default: {}\n",
+            toml::to_string(&record.model_name)
+                .map_err(|e| e.to_string())?
+                .trim(),
+        ),
+        "custom" => {
+            let base_url = record
+                .base_url
+                .clone()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "A base URL is required for a custom endpoint.".to_string())?;
+            format!(
+                "model:\n  provider: custom\n  default: {}\n  base_url: {}\n",
+                toml::to_string(&record.model_name)
+                    .map_err(|e| e.to_string())?
+                    .trim(),
+                toml::to_string(&base_url)
+                    .map_err(|e| e.to_string())?
+                    .trim(),
+            )
+        }
+        _ => format!(
+            "model:\n  provider: {}\n  default: {}\n",
+            record.provider_kind,
+            toml::to_string(&record.model_name)
+                .map_err(|e| e.to_string())?
+                .trim(),
+        ),
+    };
+
+    let mut env_lines = vec![
+        "API_SERVER_ENABLED=true".to_string(),
+        format!("API_SERVER_HOST={HERMES_API_HOST}"),
+        format!("API_SERVER_PORT={HERMES_API_PORT}"),
+        format!("API_SERVER_KEY={}", uuid::Uuid::new_v4()),
+        "API_SERVER_MODEL_NAME=hermes-agent".to_string(),
+    ];
+
+    match record.provider_kind.as_str() {
+        "custom" | "ollama" => {
+            if let Some(api_key) = api_key {
+                env_lines.push(format!("OPENAI_API_KEY={api_key}"));
+            }
+        }
+        "openrouter" => {
+            if let Some(api_key) = api_key {
+                env_lines.push(format!("OPENROUTER_API_KEY={api_key}"));
+            }
+        }
+        _ => {}
+    }
+
+    let soul_md = r#"# FNDR Agent Identity
+
+You are the native FNDR agent experience, powered by Hermes under the hood.
+
+- Present yourself as FNDR's built-in agent unless the user asks how you are implemented.
+- FNDR is the user's trusted interface and source of truth for personal context.
+- Treat FNDR-provided memory, tasks, and focus context as private and read-only.
+- Ask before destructive actions, external sends, purchases, or credential changes.
+- Prefer helping with recall, planning, drafting, research, and safe computer-use assistance.
+"#;
+
+    let record_json = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
+    std::fs::write(hermes_config_path(state), config_yaml).map_err(|e| e.to_string())?;
+    std::fs::write(hermes_env_path(state), env_lines.join("\n") + "\n")
+        .map_err(|e| e.to_string())?;
+    std::fs::write(hermes_soul_path(state), soul_md).map_err(|e| e.to_string())?;
+    std::fs::write(hermes_setup_record_path(state), record_json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn read_hermes_api_key(state: &AppState) -> Option<String> {
+    let env_contents = std::fs::read_to_string(hermes_env_path(state)).ok()?;
+    env_contents.lines().find_map(|line| {
+        let value = line.strip_prefix("API_SERVER_KEY=")?;
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn update_hermes_gateway_runtime() -> (bool, Option<String>) {
+    let mut process_guard = get_hermes_gateway_process().lock();
+    if let Some(child) = process_guard.as_mut() {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let message = if status.success() {
+                    "Hermes gateway exited.".to_string()
+                } else {
+                    format!("Hermes gateway exited with status {status}.")
+                };
+                *get_hermes_gateway_error_store().lock() = Some(message.clone());
+                *process_guard = None;
+                (false, Some(message))
+            }
+            Ok(None) => (true, get_hermes_gateway_error_store().lock().clone()),
+            Err(err) => {
+                let message = format!("Failed to inspect Hermes gateway: {err}");
+                *get_hermes_gateway_error_store().lock() = Some(message.clone());
+                *process_guard = None;
+                (false, Some(message))
+            }
+        }
+    } else {
+        (false, get_hermes_gateway_error_store().lock().clone())
+    }
+}
+
+async fn hermes_api_ready() -> bool {
+    match reqwest::Client::new()
+        .get(format!("{}/health", hermes_api_url()))
+        .send()
+        .await
+    {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+fn file_modified_at_ms(path: &PathBuf) -> Option<i64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let duration = modified.duration_since(UNIX_EPOCH).ok()?;
+    Some(duration.as_millis().min(i64::MAX as u128) as i64)
+}
+
+fn format_hermes_timestamp(timestamp_ms: i64) -> String {
+    chrono::Local
+        .timestamp_millis_opt(timestamp_ms)
+        .single()
+        .map(|dt| dt.format("%b %d, %Y at %I:%M %p").to_string())
+        .unwrap_or_else(|| "Unknown time".to_string())
+}
+
+async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStatus, String> {
+    let context_path = hermes_context_path(state);
+    let home_dir = hermes_home_dir(state);
+    let recent_results = state
+        .store
+        .list_recent_results(18, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut recent_memories: Vec<MemoryCard> = strip_internal_fndr_results(recent_results)
+        .into_iter()
+        .map(memory_card_from_result)
+        .collect();
+    refine_memory_card_titles(&mut recent_memories);
+
+    let mut app_counts: HashMap<String, usize> = HashMap::new();
+    for memory in &recent_memories {
+        *app_counts.entry(memory.app_name.clone()).or_insert(0) += 1;
+    }
+
+    let mut top_apps: Vec<HermesAppContext> = app_counts
+        .into_iter()
+        .map(|(app_name, memory_count)| HermesAppContext {
+            app_name,
+            memory_count: memory_count as u32,
+        })
+        .collect();
+    top_apps.sort_by(|left, right| {
+        right
+            .memory_count
+            .cmp(&left.memory_count)
+            .then_with(|| left.app_name.cmp(&right.app_name))
+    });
+    top_apps.truncate(6);
+
+    let recent_memories = recent_memories
+        .into_iter()
+        .take(6)
+        .map(|memory| HermesMemoryDigest {
+            title: memory.title,
+            app_name: memory.app_name,
+            summary: truncate_chars(&memory.summary, 180),
+            timestamp: memory.timestamp,
+        })
+        .collect::<Vec<_>>();
+
+    let open_task_count = state
+        .store
+        .list_tasks()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|task| !task.is_completed && !task.is_dismissed)
+        .count() as u32;
+
+    let runtime = detect_hermes_runtime(state);
+    let (ollama_installed, ollama_reachable, ollama_models) = detect_ollama_state().await;
+    let (codex_cli_installed, codex_logged_in, codex_auth_path) = detect_codex_state();
+    let setup = read_hermes_setup_record(state);
+    let configured = setup.is_some();
+    let (gateway_running, last_error) = update_hermes_gateway_runtime();
+    let api_server_ready = if gateway_running {
+        hermes_api_ready().await
+    } else {
+        false
+    };
+
+    // Direct Ollama mode: provider configured as ollama + Ollama reachable + has models.
+    // This works without the Hermes CLI being installed at all.
+    let direct_ollama_ready = setup
+        .as_ref()
+        .map(|s| s.provider_kind == "ollama")
+        .unwrap_or(false)
+        && ollama_reachable
+        && !ollama_models.is_empty();
+
+    let bundled_repo_available = runtime.bundled_repo_available();
+    let runtime_source = runtime.runtime_source.clone();
+    let version = runtime.version.clone();
+
+    Ok(HermesBridgeStatus {
+        installed: runtime.installed,
+        configured,
+        setup_complete: configured && (runtime.installed || direct_ollama_ready),
+        gateway_running,
+        api_server_ready,
+        direct_ollama_ready,
+        version,
+        bundled_repo_available,
+        runtime_source,
+        provider_kind: setup.as_ref().map(|value| value.provider_kind.clone()),
+        model_name: setup.as_ref().map(|value| value.model_name.clone()),
+        base_url: setup.as_ref().and_then(|value| {
+            if value.provider_kind == "ollama" {
+                Some(
+                    value
+                        .base_url
+                        .clone()
+                        .unwrap_or_else(|| OLLAMA_BASE_URL.to_string()),
+                )
+            } else {
+                value.base_url.clone()
+            }
+        }),
+        api_url: hermes_api_url(),
+        gateway_dir: hermes_gateway_dir(state).display().to_string(),
+        home_dir: home_dir.display().to_string(),
+        context_path: context_path.display().to_string(),
+        context_ready: context_path.exists(),
+        last_synced_at: file_modified_at_ms(&context_path),
+        fndr_local_model_id: read_fndr_local_model_id(state),
+        ollama_installed,
+        ollama_reachable,
+        ollama_models,
+        ollama_base_url: OLLAMA_BASE_URL.to_string(),
+        codex_cli_installed,
+        codex_logged_in,
+        codex_auth_path: codex_auth_path.display().to_string(),
+        profile_name: read_hermes_profile_name(state),
+        focus_task: state.focus_task.read().clone(),
+        recent_memory_count: recent_memories.len() as u32,
+        open_task_count,
+        top_apps,
+        recent_memories,
+        last_error,
+        install_command: if bundled_repo_available {
+            "Prepare the bundled Hermes runtime inside FNDR.".to_string()
+        } else {
+            "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash".to_string()
+        },
+    })
+}
+
+fn render_hermes_context_markdown(status: &HermesBridgeStatus) -> String {
+    let profile_line = status
+        .profile_name
+        .as_deref()
+        .map(|name| format!("- Preferred name: {name}"))
+        .unwrap_or_else(|| "- Preferred name: not set in FNDR onboarding".to_string());
+    let focus_line = status
+        .focus_task
+        .as_deref()
+        .map(|task| format!("- Focus task: {task}"))
+        .unwrap_or_else(|| "- Focus task: none currently pinned in FNDR".to_string());
+
+    let app_lines = if status.top_apps.is_empty() {
+        "- No recent app clusters captured yet.".to_string()
+    } else {
+        status
+            .top_apps
+            .iter()
+            .map(|app| format!("- {} ({})", app.app_name, app.memory_count))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let memory_lines = if status.recent_memories.is_empty() {
+        "- No recent memories are available yet.".to_string()
+    } else {
+        status
+            .recent_memories
+            .iter()
+            .map(|memory| {
+                format!(
+                    "- {} [{}] {}\n  {}\n  {}",
+                    memory.title,
+                    memory.app_name,
+                    format_hermes_timestamp(memory.timestamp),
+                    memory.summary,
+                    "Treat this as private user context from FNDR."
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        "# FNDR Hermes Gateway\n\n\
+This workspace is generated by FNDR and should feel like part of FNDR, not a separate product.\n\n\
+## Operating mode\n\n\
+- FNDR is the source of truth for personal context.\n\
+- Use the FNDR snapshot below to help the user with recall, planning, drafting, research, and safe computer-use support.\n\
+- Be grounded: if the FNDR snapshot is missing or stale, ask the user to refresh it in FNDR instead of guessing.\n\
+- Operate as FNDR's built-in agent experience unless the user asks about implementation details.\n\
+- Ask for approval before sending messages, making purchases, changing credentials, or doing irreversible actions.\n\
+- Treat FNDR context as read-only and privacy-sensitive.\n\n\
+## FNDR snapshot\n\n\
+{profile_line}\n\
+{focus_line}\n\
+- Open FNDR tasks: {}\n\
+- Recent memory cards included: {}\n\n\
+## Recent apps from FNDR\n\n\
+{app_lines}\n\n\
+## Recent memories from FNDR\n\n\
+{memory_lines}\n",
+        status.open_task_count, status.recent_memory_count
+    )
+}
+
+fn render_hermes_gateway_readme(status: &HermesBridgeStatus) -> String {
+    format!(
+        "# FNDR Hermes Gateway\n\n\
+FNDR generated this workspace so Hermes can operate with FNDR-curated context.\n\n\
+Files:\n\
+- `.hermes.md` keeps the FNDR-native operating instructions and latest snapshot.\n\
+- `FNDR_CONTEXT.md` mirrors the same snapshot in a user-readable file.\n\n\
+If the snapshot feels stale, refresh it from FNDR's Agent page.\n\n\
+Gateway directory: {}\n",
+        status.gateway_dir
+    )
+}
+
+async fn sync_hermes_bridge_files(state: &AppState) -> Result<HermesBridgeStatus, String> {
+    let mut status = build_hermes_bridge_status(state).await?;
+    let gateway_dir = hermes_gateway_dir(state);
+    std::fs::create_dir_all(&gateway_dir).map_err(|e| e.to_string())?;
+
+    let context_markdown = render_hermes_context_markdown(&status);
+    std::fs::write(hermes_project_context_path(state), &context_markdown)
+        .map_err(|e| e.to_string())?;
+    std::fs::write(hermes_context_path(state), &context_markdown).map_err(|e| e.to_string())?;
+    std::fs::write(
+        hermes_gateway_readme_path(state),
+        render_hermes_gateway_readme(&status),
+    )
+    .map_err(|e| e.to_string())?;
+
+    status.context_ready = true;
+    status.last_synced_at = file_modified_at_ms(&hermes_context_path(state));
+    Ok(status)
+}
+
+async fn wait_for_hermes_api(timeout_ms: u64) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    while Instant::now() < deadline {
+        if hermes_api_ready().await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    false
+}
+
+fn validate_hermes_gateway_prerequisites(status: &HermesBridgeStatus) -> Result<(), String> {
+    if !status.installed {
+        return Err(if status.bundled_repo_available {
+            "FNDR has a bundled Hermes clone, but the private runtime is not prepared yet. Click Enable Agent in the FNDR Agent panel first."
+                .to_string()
+        } else {
+            "Hermes is not installed yet.".to_string()
+        });
+    }
+    if !status.configured {
+        return Err("Finish FNDR Agent setup before starting the runtime.".to_string());
+    }
+    if status.provider_kind.as_deref() == Some("ollama") {
+        if !status.ollama_installed {
+            return Err(
+                "Install Ollama on this Mac before starting the FNDR agent in Ollama mode."
+                    .to_string(),
+            );
+        }
+        if !status.ollama_reachable {
+            return Err(
+                "FNDR could not reach Ollama at http://127.0.0.1:11434. Open Ollama or run `ollama serve`, then try again."
+                    .to_string(),
+            );
+        }
+    }
+    if status.provider_kind.as_deref() == Some("codex") && !status.codex_logged_in {
+        return Err(
+            "FNDR could not find an active Codex login for the agent runtime. Sign in to Codex on this Mac first."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+async fn ensure_hermes_gateway_ready(
+    state: &AppState,
+    timeout_ms: u64,
+) -> Result<HermesBridgeStatus, String> {
+    let status = sync_hermes_bridge_files(state).await?;
+    validate_hermes_gateway_prerequisites(&status)?;
+
+    if status.api_server_ready {
+        return Ok(status);
+    }
+
+    let (running, _) = update_hermes_gateway_runtime();
+    if !running {
+        let launcher = detect_hermes_runtime(state)
+            .launcher
+            .ok_or_else(|| "FNDR could not resolve a Hermes runtime to launch.".to_string())?;
+        let mut command = launcher.command();
+        command
+            .arg("gateway")
+            .env("HERMES_HOME", hermes_home_dir(state))
+            .current_dir(hermes_gateway_dir(state))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        if status.codex_logged_in {
+            command.env("CODEX_HOME", codex_home_dir());
+        }
+
+        let child = command
+            .spawn()
+            .map_err(|e| format!("Failed to start Hermes gateway: {e}"))?;
+
+        *get_hermes_gateway_process().lock() = Some(child);
+        *get_hermes_gateway_error_store().lock() = None;
+    }
+
+    if !wait_for_hermes_api(timeout_ms).await {
+        let message =
+            "Hermes gateway started, but the local API server did not come online in time."
+                .to_string();
+        *get_hermes_gateway_error_store().lock() = Some(message.clone());
+        return Err(message);
+    }
+
+    let ready_status = build_hermes_bridge_status(state).await?;
+    if ready_status.api_server_ready {
+        Ok(ready_status)
+    } else {
+        Err(ready_status
+            .last_error
+            .clone()
+            .unwrap_or_else(|| "Hermes gateway is still unavailable.".to_string()))
+    }
+}
+
+#[tauri::command]
+pub async fn get_hermes_bridge_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<HermesBridgeStatus, String> {
+    build_hermes_bridge_status(state.inner()).await
+}
+
+#[tauri::command]
+pub async fn sync_hermes_bridge_context(
+    state: State<'_, Arc<AppState>>,
+) -> Result<HermesBridgeStatus, String> {
+    sync_hermes_bridge_files(state.inner()).await
+}
+
+#[tauri::command]
+pub async fn install_hermes_bridge(
+    state: State<'_, Arc<AppState>>,
+) -> Result<HermesBridgeStatus, String> {
+    let runtime = detect_hermes_runtime(state.inner());
+    if runtime.installed {
+        return build_hermes_bridge_status(state.inner()).await;
+    }
+
+    if runtime.bundled_repo_available() {
+        prepare_vendored_hermes_runtime(state.inner())?;
+    } else {
+        let install_command = "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
+        let output = Command::new("sh")
+            .arg("-lc")
+            .arg(install_command)
+            .output()
+            .map_err(|e| format!("Failed to run Hermes installer: {e}"))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "Hermes install failed. {}",
+                command_failure_detail(&output)
+            ));
+        }
+    }
+
+    build_hermes_bridge_status(state.inner()).await
+}
+
+#[tauri::command]
+pub async fn save_hermes_setup(
+    state: State<'_, Arc<AppState>>,
+    payload: HermesSetupPayload,
+) -> Result<HermesBridgeStatus, String> {
+    let provider_kind = payload.provider_kind.trim();
+    let model_name = payload.model_name.trim();
+    if model_name.is_empty() {
+        return Err("Choose a model name for the FNDR agent.".to_string());
+    }
+
+    let api_key = payload
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match provider_kind {
+        "openrouter" => {
+            if api_key.is_none() {
+                return Err(
+                    "An OpenRouter API key is required to finish FNDR Agent setup.".to_string(),
+                );
+            }
+        }
+        "custom" => {
+            let has_base_url = payload
+                .base_url
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+            if !has_base_url {
+                return Err("A base URL is required for a custom endpoint.".to_string());
+            }
+        }
+        "ollama" => {
+            let (ollama_installed, _, _) = detect_ollama_state().await;
+            if !ollama_installed {
+                return Err(
+                    "FNDR could not find Ollama on this Mac. Install Ollama first, then return to the Agent page."
+                        .to_string(),
+                );
+            }
+        }
+        "codex" => {
+            let (_, codex_logged_in, _) = detect_codex_state();
+            if !codex_logged_in {
+                return Err(
+                    "FNDR could not find a local Codex login yet. Sign in to Codex on this Mac first, then choose Codex again."
+                        .to_string(),
+                );
+            }
+        }
+        _ => {
+            return Err(
+                "FNDR currently supports agent setup via Ollama, Codex OAuth, OpenRouter, or a custom endpoint."
+                    .to_string(),
+            );
+        }
+    }
+
+    persist_hermes_setup_files(state.inner(), &payload)?;
+    {
+        let mut process_guard = get_hermes_gateway_process().lock();
+        if let Some(child) = process_guard.as_mut() {
+            let _ = child.kill();
+        }
+        *process_guard = None;
+    }
+    *get_hermes_gateway_error_store().lock() = None;
+    sync_hermes_bridge_files(state.inner()).await
+}
+
+#[tauri::command]
+pub async fn start_hermes_gateway(
+    state: State<'_, Arc<AppState>>,
+) -> Result<HermesBridgeStatus, String> {
+    ensure_hermes_gateway_ready(state.inner(), 12_000).await
+}
+
+#[tauri::command]
+pub async fn stop_hermes_gateway(
+    state: State<'_, Arc<AppState>>,
+) -> Result<HermesBridgeStatus, String> {
+    // Drop guards before the .await — parking_lot MutexGuard is !Send.
+    {
+        let mut process_guard = get_hermes_gateway_process().lock();
+        if let Some(child) = process_guard.as_mut() {
+            let _ = child.kill();
+        }
+        *process_guard = None;
+        *get_hermes_gateway_error_store().lock() = None;
+    }
+    build_hermes_bridge_status(state.inner()).await
+}
+
+/// Direct chat with an Ollama model — no Hermes CLI required.
+/// Works with any OpenAI-compatible base URL (Ollama's /v1 endpoint).
+#[tauri::command]
+pub async fn send_direct_chat(
+    state: State<'_, Arc<AppState>>,
+    messages: Vec<serde_json::Value>,
+    input: String,
+) -> Result<String, String> {
+    let _ = sync_hermes_bridge_files(state.inner()).await?;
+    let setup = read_hermes_setup_record(state.inner())
+        .ok_or_else(|| "Configure a provider in FNDR's Agent page first.".to_string())?;
+
+    let base_url = if setup.provider_kind == "ollama" {
+        setup
+            .base_url
+            .clone()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or_else(|| OLLAMA_BASE_URL.to_string())
+    } else {
+        return Err(
+            "Direct chat is only available for Ollama. Use the Hermes gateway for other providers."
+                .to_string(),
+        );
+    };
+
+    // Build a system message with FNDR context
+    let context_path = hermes_context_path(state.inner());
+    let system_content = if context_path.exists() {
+        std::fs::read_to_string(&context_path)
+            .unwrap_or_else(|_| "You are a helpful assistant embedded in FNDR.".to_string())
+    } else {
+        "You are a helpful assistant embedded in FNDR, a privacy-first local memory app. Help the user with recall, planning, drafting, and research using context they provide.".to_string()
+    };
+
+    let mut all_messages: Vec<serde_json::Value> =
+        vec![serde_json::json!({ "role": "system", "content": system_content })];
+    all_messages.extend(messages);
+    all_messages.push(serde_json::json!({ "role": "user", "content": input.trim() }));
+
+    let request = serde_json::json!({
+        "model": setup.model_name,
+        "messages": all_messages,
+        "stream": false,
+    });
+
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/chat/completions",
+            base_url.trim_end_matches('/')
+        ))
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach Ollama at {base_url}: {e}"))?;
+
+    let status_code = response.status();
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Ollama returned an unreadable response: {e}"))?;
+
+    if !status_code.is_success() {
+        return Err(json
+            .get("error")
+            .and_then(|v| v.get("message").or(Some(v)))
+            .and_then(|v| v.as_str())
+            .unwrap_or("Ollama request failed.")
+            .to_string());
+    }
+
+    let content = json
+        .get("choices")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|msg| msg.get("content"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Ok(content)
+}
+
+#[tauri::command]
+pub async fn send_hermes_message(
+    state: State<'_, Arc<AppState>>,
+    conversation_id: String,
+    input: String,
+) -> Result<HermesChatReply, String> {
+    let status = ensure_hermes_gateway_ready(state.inner(), 12_000).await?;
+
+    let api_key = read_hermes_api_key(state.inner())
+        .ok_or_else(|| "FNDR could not read the Hermes API server key.".to_string())?;
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("Message cannot be empty.".to_string());
+    }
+
+    let instructions = "You are the native FNDR agent experience, powered by Hermes under the hood. Use FNDR's context files and private snapshot to help with planning, recall, drafting, research, and safe computer-use support. Ask before destructive actions, external messages, purchases, or credential changes.";
+    let request_body = serde_json::json!({
+        "model": "hermes-agent",
+        "input": input,
+        "conversation": conversation_id,
+        "store": true,
+        "instructions": instructions
+    });
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/responses", status.api_url))
+        .bearer_auth(api_key)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach the Hermes API server: {e}"))?;
+
+    let status_code = response.status();
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Hermes returned an unreadable response: {e}"))?;
+
+    if !status_code.is_success() {
+        return Err(json
+            .get("error")
+            .and_then(|value| value.get("message"))
+            .and_then(|value| value.as_str())
+            .or_else(|| json.get("detail").and_then(|value| value.as_str()))
+            .unwrap_or("Hermes API request failed.")
+            .to_string());
+    }
+
+    let response_id = json
+        .get("id")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let content = json
+        .get("output")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    if item.get("type").and_then(|value| value.as_str()) == Some("message") {
+                        item.get("content")
+                            .and_then(|value| value.as_array())
+                            .map(|parts| {
+                                parts
+                                    .iter()
+                                    .filter_map(|part| {
+                                        part.get("text").and_then(|value| value.as_str())
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                    } else {
+                        None
+                    }
+                })
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        })
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| {
+            "Hermes completed the turn, but no assistant text was returned.".to_string()
+        });
+
+    Ok(HermesChatReply {
+        response_id,
+        conversation_id,
+        content,
+    })
+}
+
 /// Start the agent to execute a task
 #[tauri::command]
 pub async fn start_agent_task(
@@ -3905,6 +5447,8 @@ pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> 
             site,
             e
         );
+    } else {
+        state.invalidate_memory_derived_caches();
     }
 
     Ok(())
@@ -4330,8 +5874,6 @@ pub async fn set_focus_task(
     task: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<FocusStatus, String> {
-    use std::sync::atomic::Ordering;
-
     // Always clear embedding first so the capture loop never sees a stale
     // embedding paired with a new task (or vice-versa). The brief window where
     // embedding is None means the loop skips drift detection for at most one
@@ -4341,12 +5883,17 @@ pub async fn set_focus_task(
     state.focus_drift_count.store(0, Ordering::Relaxed);
 
     if let Some(ref t) = task {
-        let embedder = crate::embed::Embedder::new().map_err(|e| e.to_string())?;
-        let embeddings = embedder
-            .embed_batch(&[t.clone()])
-            .map_err(|e| e.to_string())?;
-        if let Some(embedding) = embeddings.into_iter().next() {
+        let embedder = shared_embedder().ok();
+        if let Some(embedding) = build_focus_task_embedding(t, embedder)? {
             *state.focus_task_embedding.write() = Some(embedding);
+        } else {
+            let status = embedding_runtime_status();
+            tracing::info!(
+                backend = %status.backend,
+                degraded = status.degraded,
+                detail = %status.detail,
+                "Focus drift detection disabled because semantic embeddings are unavailable"
+            );
         }
     }
 
@@ -4357,10 +5904,27 @@ pub async fn set_focus_task(
     })
 }
 
+fn build_focus_task_embedding(
+    task: &str,
+    embedder: Option<&Embedder>,
+) -> Result<Option<Vec<f32>>, String> {
+    if !matches!(
+        embedder.map(|value| value.backend()),
+        Some(EmbeddingBackend::Real)
+    ) {
+        return Ok(None);
+    }
+
+    embedder
+        .and_then(|value| value.embed_batch(&[task.to_string()]).ok())
+        .and_then(|mut embeddings| embeddings.drain(..).next())
+        .map(Some)
+        .ok_or_else(|| "Failed to build focus task embedding".to_string())
+}
+
 /// Return the current focus task and drift counter.
 #[tauri::command]
 pub fn get_focus_status(state: State<'_, Arc<AppState>>) -> Result<FocusStatus, String> {
-    use std::sync::atomic::Ordering;
     let task = state.focus_task.read().clone();
     let is_active = task.is_some();
     let drift_count = state.focus_drift_count.load(Ordering::Relaxed);
@@ -4369,6 +5933,1150 @@ pub fn get_focus_status(state: State<'_, Arc<AppState>>) -> Result<FocusStatus, 
         is_active,
         drift_count,
     })
+}
+
+// ── Auto-fill commands ────────────────────────────────────────────────────────
+
+const AUTOFILL_OVERLAY_LABEL: &str = "autofill-overlay";
+const AUTOFILL_OVERLAY_WIDTH: f64 = 500.0;
+const AUTOFILL_OVERLAY_HEIGHT: f64 = 430.0;
+static AUTOFILL_OVERLAY_READY: once_cell::sync::Lazy<parking_lot::Mutex<bool>> =
+    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(false));
+static PENDING_AUTOFILL_PAYLOAD: once_cell::sync::Lazy<
+    parking_lot::Mutex<Option<serde_json::Value>>,
+> = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
+
+/// Return the logical (x, y) bottom-right position for the autofill overlay on
+/// the monitor the mouse cursor currently occupies. Falls back to primary monitor.
+fn find_cursor_monitor<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<(f64, f64)> {
+    use enigo::{Enigo, Mouse, Settings};
+
+    let cursor_pos = Enigo::new(&Settings::default())
+        .ok()
+        .and_then(|e| e.location().ok());
+
+    let monitors = app.available_monitors().ok()?;
+
+    let active = if let Some((cx, cy)) = cursor_pos {
+        monitors
+            .iter()
+            .find(|m| {
+                let pos = m.position();
+                let size = m.size();
+                cx >= pos.x
+                    && cy >= pos.y
+                    && cx < pos.x + size.width as i32
+                    && cy < pos.y + size.height as i32
+            })
+            .or_else(|| monitors.first())
+    } else {
+        monitors.first()
+    }?;
+
+    let scale = active.scale_factor();
+    let size = active.size();
+    let pos = active.position();
+    let w = size.width as f64 / scale;
+    let h = size.height as f64 / scale;
+    let lx = pos.x as f64 / scale;
+    let ly = pos.y as f64 / scale;
+    Some((
+        lx + w - AUTOFILL_OVERLAY_WIDTH - 24.0,
+        ly + h - AUTOFILL_OVERLAY_HEIGHT - 40.0,
+    ))
+}
+
+/// Pre-create the autofill overlay window at startup (hidden) so it is fully
+/// loaded and the React event listener is mounted before the first hotkey press.
+/// Called once from main.rs setup.
+pub fn create_autofill_overlay_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let url = tauri::WebviewUrl::App("autofill.html".into());
+
+    let (x, y) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            let size = m.size();
+            let pos = m.position();
+            let scale = m.scale_factor();
+            // Both size and position are in physical pixels; divide by scale for logical coords.
+            let w = size.width as f64 / scale;
+            let h = size.height as f64 / scale;
+            let lx = pos.x as f64 / scale;
+            let ly = pos.y as f64 / scale;
+            let x = lx + w - AUTOFILL_OVERLAY_WIDTH - 24.0;
+            let y = ly + h - AUTOFILL_OVERLAY_HEIGHT - 40.0;
+            tracing::info!(
+                "autofill overlay: monitor {w}×{h} logical, scale={scale}, placing at ({x},{y})"
+            );
+            (x, y)
+        })
+        .unwrap_or((800.0, 400.0));
+
+    match tauri::WebviewWindowBuilder::new(app, AUTOFILL_OVERLAY_LABEL, url)
+        .title("FNDR Autofill")
+        .inner_size(AUTOFILL_OVERLAY_WIDTH, AUTOFILL_OVERLAY_HEIGHT)
+        .position(x, y)
+        .decorations(false)
+        .always_on_top(true)
+        .resizable(false)
+        .skip_taskbar(true)
+        .shadow(false)
+        .visible(false)
+        .build()
+    {
+        Ok(_) => tracing::info!("autofill overlay window pre-created (hidden)"),
+        Err(err) => tracing::warn!("failed to pre-create autofill overlay window: {err}"),
+    }
+}
+
+#[tauri::command]
+pub async fn set_autofill_overlay_ready(ready: bool) -> Option<serde_json::Value> {
+    *AUTOFILL_OVERLAY_READY.lock() = ready;
+    if ready {
+        PENDING_AUTOFILL_PAYLOAD.lock().take()
+    } else {
+        None
+    }
+}
+
+#[tauri::command]
+pub async fn take_pending_autofill_payload() -> Option<serde_json::Value> {
+    PENDING_AUTOFILL_PAYLOAD.lock().take()
+}
+
+#[tauri::command]
+pub async fn show_autofill_overlay_window(app: AppHandle) -> Result<(), String> {
+    let Some(win) = app.get_webview_window(AUTOFILL_OVERLAY_LABEL) else {
+        return Err("Autofill overlay window is unavailable".to_string());
+    };
+
+    win.show().map_err(|err| err.to_string())?;
+    win.set_focus().map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+pub fn register_autofill_shortcut<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    config: &AutofillConfig,
+) -> Result<(), String> {
+    if let Err(err) = app.global_shortcut().unregister_all() {
+        tracing::debug!("autofill: failed clearing existing shortcuts: {err}");
+    }
+
+    if !config.enabled {
+        tracing::info!("autofill: shortcut disabled in settings");
+        return Ok(());
+    }
+
+    let shortcut: Shortcut = config
+        .shortcut
+        .parse()
+        .map_err(|err| format!("Invalid auto-fill shortcut '{}': {err}", config.shortcut))?;
+
+    let handle = app.clone();
+    app.global_shortcut()
+        .on_shortcut(shortcut, move |_app, _shortcut, event| {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+
+            tracing::info!("Auto-fill hotkey fired");
+            let handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                // Capture the focused field before FNDR steals focus, otherwise we may
+                // end up describing the overlay window instead of the target form input.
+                let payload = match crate::accessibility::capture_focused_context() {
+                    Ok(ctx) => {
+                        tracing::info!(
+                            "Auto-fill field context captured: label='{}' app='{}' window='{}'",
+                            ctx.label,
+                            ctx.app_name,
+                            ctx.window_title
+                        );
+                        serde_json::to_value(&ctx).unwrap_or_default()
+                    }
+                    Err(err) => {
+                        tracing::info!("Auto-fill context capture failed: {err}");
+                        serde_json::json!({ "error": err })
+                    }
+                };
+
+                *PENDING_AUTOFILL_PAYLOAD.lock() = Some(payload);
+
+                // Reposition to the monitor the cursor is currently on before showing,
+                // so the overlay appears near the user's active working context.
+                let cursor_monitor = find_cursor_monitor(&handle);
+
+                let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+                let h1 = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    if let Some(win) = h1.get_webview_window(AUTOFILL_OVERLAY_LABEL) {
+                        // Reposition to the active monitor's bottom-right corner.
+                        if let Some((x, y)) = cursor_monitor {
+                            let _ = win.set_position(tauri::LogicalPosition::new(x, y));
+                        }
+                        tracing::info!("autofill: showing overlay window");
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    } else {
+                        tracing::warn!("autofill: overlay window not found at hotkey time");
+                    }
+                    let _ = tx.send(());
+                });
+
+                // Wait for show() to complete, then give WKWebView a beat to resume
+                // before delivering the payload. Emit the actual captured payload so
+                // the frontend can start resolution immediately without polling.
+                let _ = rx.await;
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                if *AUTOFILL_OVERLAY_READY.lock() {
+                    // Emit the real payload directly — frontend handles FieldContext,
+                    // error objects, and { scanning } objects the same way.
+                    let payload_to_emit = PENDING_AUTOFILL_PAYLOAD.lock().clone();
+                    if let Some(payload) = payload_to_emit {
+                        let _ = handle.emit("autofill-triggered", payload);
+                    } else {
+                        let _ = handle.emit(
+                            "autofill-triggered",
+                            serde_json::json!({ "scanning": true, "message": "Preparing autofill" }),
+                        );
+                    }
+                }
+            });
+        })
+        .map_err(|err| err.to_string())
+}
+
+/// A single candidate memory value FNDR can inject into the active field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutofillCandidate {
+    pub value: String,
+    pub confidence: f32,
+    pub match_reason: String,
+    pub source_snippet: String,
+    pub source_app: String,
+    pub source_window_title: String,
+    pub timestamp: i64,
+    pub memory_id: String,
+}
+
+/// Result of resolving the active field against FNDR's memory store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutofillResolution {
+    pub query: String,
+    pub query_source: String,
+    pub context_hint: String,
+    pub candidates: Vec<AutofillCandidate>,
+    pub auto_inject_threshold: f32,
+    pub requires_confirmation: bool,
+    pub used_ocr_fallback: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AutofillCandidateDraft {
+    value: String,
+    extraction_score: f32,
+    match_reason: String,
+    source_snippet: String,
+    source_app: String,
+    source_window_title: String,
+    timestamp: i64,
+    memory_id: String,
+    search_score: f32,
+    ocr_confidence: f32,
+    noise_score: f32,
+    context_alignment: f32,
+}
+
+fn normalize_autofill_phrase(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '#' {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalized_tokens(input: &str) -> Vec<String> {
+    normalize_autofill_phrase(input)
+        .split_whitespace()
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn push_unique_case_insensitive(values: &mut Vec<String>, value: impl Into<String>) {
+    let value = value.into();
+    let normalized = normalize_autofill_phrase(&value);
+    if normalized.is_empty() {
+        return;
+    }
+    if values
+        .iter()
+        .any(|existing| normalize_autofill_phrase(existing) == normalized)
+    {
+        return;
+    }
+    values.push(value);
+}
+
+fn field_aliases(query: &str) -> Vec<String> {
+    const GROUPS: &[&[&str]] = &[
+        &[
+            "tax id",
+            "tax identification number",
+            "employer identification number",
+            "employer id number",
+            "ein",
+            "tin",
+            "federal tax id",
+        ],
+        &["policy number", "policy no", "policy #"],
+        &[
+            "member id",
+            "member number",
+            "member #",
+            "subscriber id",
+            "subscriber number",
+        ],
+        &["group number", "group no", "group #"],
+        &["claim number", "claim no", "claim #"],
+        &["phone", "phone number", "telephone", "mobile"],
+        &["email", "email address"],
+        &["date of birth", "birth date", "dob"],
+        &["zip", "zip code", "postal code"],
+        &["routing number", "routing #", "aba routing number"],
+        &["account number", "account #"],
+    ];
+
+    let normalized = normalize_autofill_phrase(query);
+    let mut aliases = Vec::new();
+    push_unique_case_insensitive(&mut aliases, query.trim());
+
+    for group in GROUPS {
+        let matches_group = group.iter().any(|alias| {
+            let alias_normalized = normalize_autofill_phrase(alias);
+            normalized == alias_normalized
+                || normalized.contains(&alias_normalized)
+                || alias_normalized.contains(&normalized)
+        });
+        if matches_group {
+            for alias in *group {
+                push_unique_case_insensitive(&mut aliases, *alias);
+            }
+        }
+    }
+
+    if normalized.ends_with(" number") {
+        let stem = normalized.trim_end_matches(" number").trim();
+        if !stem.is_empty() {
+            push_unique_case_insensitive(&mut aliases, format!("{stem} no"));
+            push_unique_case_insensitive(&mut aliases, format!("{stem} #"));
+        }
+    }
+
+    aliases.truncate(6);
+    aliases
+}
+
+fn is_generic_context_token(token: &str) -> bool {
+    matches!(
+        token,
+        "the"
+            | "and"
+            | "for"
+            | "with"
+            | "from"
+            | "into"
+            | "your"
+            | "this"
+            | "that"
+            | "form"
+            | "field"
+            | "portal"
+            | "screen"
+            | "window"
+            | "page"
+            | "submit"
+            | "cancel"
+            | "save"
+            | "continue"
+            | "next"
+            | "back"
+            | "required"
+            | "optional"
+            | "section"
+            | "information"
+            | "details"
+            | "value"
+            | "google"
+            | "chrome"
+            | "safari"
+            | "browser"
+            | "preview"
+            | "acrobat"
+            | "adobe"
+            | "microsoft"
+            | "edge"
+            | "firefox"
+            | "brave"
+    )
+}
+
+fn collect_context_terms(context: &crate::accessibility::FieldContext, query: &str) -> Vec<String> {
+    let query_tokens = normalized_tokens(query).into_iter().collect::<HashSet<_>>();
+    let mut counts: HashMap<String, usize> = HashMap::new();
+
+    for text in [
+        &context.window_title,
+        &context.screen_context,
+        &context.app_name,
+    ] {
+        for token in normalized_tokens(text) {
+            if token.len() < 3 || query_tokens.contains(&token) || is_generic_context_token(&token)
+            {
+                continue;
+            }
+            *counts.entry(token).or_insert(0) += 1;
+        }
+    }
+
+    let mut ranked = counts.into_iter().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    ranked.into_iter().map(|(term, _)| term).take(6).collect()
+}
+
+fn build_autofill_search_query(
+    context: &crate::accessibility::FieldContext,
+    query: &str,
+) -> String {
+    let context_terms = collect_context_terms(context, query);
+    let normalized = normalize_autofill_phrase(query);
+    let token_count = normalized.split_whitespace().count();
+
+    if token_count <= 2 && !context_terms.is_empty() {
+        let anchor = context_terms
+            .iter()
+            .take(2)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        return format!("{query} {anchor}");
+    }
+
+    query.trim().to_string()
+}
+
+fn build_autofill_query(
+    context: &crate::accessibility::FieldContext,
+    query_override: Option<&str>,
+) -> (String, String) {
+    if let Some(query) = query_override
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+    {
+        return (query.to_string(), "manual".to_string());
+    }
+
+    if !context.label.trim().is_empty() {
+        return (context.label.trim().to_string(), "label".to_string());
+    }
+
+    if !context.placeholder.trim().is_empty() {
+        return (
+            context.placeholder.trim().to_string(),
+            "placeholder".to_string(),
+        );
+    }
+
+    if !context.inferred_label.trim().is_empty() {
+        return (context.inferred_label.trim().to_string(), "ocr".to_string());
+    }
+
+    (String::new(), "unknown".to_string())
+}
+
+fn context_hint(context: &crate::accessibility::FieldContext) -> String {
+    if !context.screen_context.trim().is_empty() {
+        return context.screen_context.clone();
+    }
+
+    if !context.window_title.trim().is_empty() {
+        return context.window_title.trim().to_string();
+    }
+
+    context.app_name.trim().to_string()
+}
+
+fn split_tableish(line: &str) -> Vec<String> {
+    let Some(regex) = regex::Regex::new(r"\s*\|\s*|\t+|\s{2,}").ok() else {
+        return vec![line.trim().to_string()];
+    };
+    regex
+        .split(line)
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn sanitize_autofill_value(raw: &str) -> String {
+    let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let compact = compact
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, ':' | ';' | ',' | '|' | '"' | '\'' | ' '))
+        .to_string();
+
+    if compact.contains("  ") {
+        return compact
+            .split("  ")
+            .next()
+            .unwrap_or(&compact)
+            .trim()
+            .to_string();
+    }
+
+    compact
+}
+
+fn looks_like_field_value(query: &str, raw: &str) -> bool {
+    let value = sanitize_autofill_value(raw);
+    let normalized_value = normalize_autofill_phrase(&value);
+    let normalized_query = normalize_autofill_phrase(query);
+
+    if value.is_empty() || value.len() > 160 || normalized_value == normalized_query {
+        return false;
+    }
+
+    if value.starts_with("http://") || value.starts_with("https://") {
+        return false;
+    }
+
+    let word_count = value.split_whitespace().count();
+    let has_digits = value.chars().any(|ch| ch.is_ascii_digit());
+    let has_letters = value.chars().any(|ch| ch.is_ascii_alphabetic());
+
+    if normalized_query.contains("address") {
+        return word_count <= 12;
+    }
+
+    if normalized_query.contains("email") {
+        return value.contains('@') && value.contains('.');
+    }
+
+    if normalized_query.contains("phone") {
+        return has_digits && value.len() <= 32;
+    }
+
+    if normalized_query.contains("date") || normalized_query.contains("dob") {
+        return has_digits && value.len() <= 24;
+    }
+
+    if normalized_query.contains("number")
+        || normalized_query.ends_with(" id")
+        || normalized_query.contains("ein")
+        || normalized_query.contains("routing")
+        || normalized_query.contains("account")
+    {
+        return has_digits || value.contains('-');
+    }
+
+    word_count <= 8 && (has_digits || has_letters)
+}
+
+fn alias_matches(label_cell: &str, aliases: &[String]) -> bool {
+    let normalized = normalize_autofill_phrase(label_cell);
+    if normalized.is_empty() {
+        return false;
+    }
+
+    let normalized_tokens = normalized.split_whitespace().collect::<HashSet<_>>();
+    aliases.iter().any(|alias| {
+        let alias_normalized = normalize_autofill_phrase(alias);
+        if alias_normalized.is_empty() {
+            return false;
+        }
+
+        if normalized == alias_normalized
+            || normalized.contains(&alias_normalized)
+            || alias_normalized.contains(&normalized)
+        {
+            return true;
+        }
+
+        let alias_tokens = alias_normalized.split_whitespace().collect::<Vec<_>>();
+        if alias_tokens.is_empty() {
+            return false;
+        }
+
+        let matched = alias_tokens
+            .iter()
+            .filter(|token| normalized_tokens.contains(**token))
+            .count();
+
+        if alias_tokens.len() == 1 {
+            matched == 1
+        } else {
+            matched == alias_tokens.len()
+        }
+    })
+}
+
+fn extract_inline_value(line: &str, alias: &str) -> Option<String> {
+    let pattern = format!(
+        r"(?i)\b{}\b\s*(?:[:=#-]\s*|\s+)([^\n\r]{{1,160}})",
+        regex::escape(alias)
+    );
+    let regex = regex::Regex::new(&pattern).ok()?;
+    let captures = regex.captures(line)?;
+    let raw = captures.get(1)?.as_str();
+    let cells = split_tableish(raw);
+    let value = if cells.len() > 1 { &cells[0] } else { raw };
+    Some(sanitize_autofill_value(value))
+}
+
+fn extract_candidates_from_result(
+    query: &str,
+    aliases: &[String],
+    result: &SearchResult,
+    context_alignment: f32,
+) -> Vec<AutofillCandidateDraft> {
+    let text = if !result.clean_text.trim().is_empty() {
+        result.clean_text.as_str()
+    } else {
+        result.text.as_str()
+    };
+
+    let lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    let mut drafts = Vec::new();
+    let mut seen = HashSet::new();
+
+    let mut push_draft =
+        |value: String, extraction_score: f32, reason: &str, source_snippet: String| {
+            let normalized = normalize_autofill_phrase(&value);
+            if normalized.is_empty() || !seen.insert(normalized) {
+                return;
+            }
+            drafts.push(AutofillCandidateDraft {
+                value,
+                extraction_score,
+                match_reason: reason.to_string(),
+                source_snippet,
+                source_app: result.app_name.clone(),
+                source_window_title: result.window_title.clone(),
+                timestamp: result.timestamp,
+                memory_id: result.id.clone(),
+                search_score: result.score,
+                ocr_confidence: result.ocr_confidence,
+                noise_score: result.noise_score,
+                context_alignment,
+            });
+        };
+
+    for (index, line) in lines.iter().enumerate() {
+        if let Some((lhs, rhs)) = line.split_once(':').or_else(|| line.split_once('=')) {
+            if alias_matches(lhs, aliases) && looks_like_field_value(query, rhs) {
+                push_draft(
+                    sanitize_autofill_value(rhs),
+                    0.97,
+                    "Matched a labeled value in a remembered document",
+                    line.clone(),
+                );
+            }
+        }
+
+        let cells = split_tableish(line);
+        if cells.len() >= 2 {
+            for window in cells.windows(2) {
+                if alias_matches(&window[0], aliases) && looks_like_field_value(query, &window[1]) {
+                    push_draft(
+                        sanitize_autofill_value(&window[1]),
+                        0.95,
+                        "Matched a label-value pair in a remembered document",
+                        line.clone(),
+                    );
+                }
+            }
+        }
+
+        for alias in aliases {
+            if let Some(value) = extract_inline_value(line, alias) {
+                if looks_like_field_value(query, &value) {
+                    push_draft(
+                        value,
+                        0.93,
+                        "Matched an inline field label in OCR text",
+                        line.clone(),
+                    );
+                }
+            }
+
+            if alias_matches(line, std::slice::from_ref(alias)) {
+                if let Some(next_line) = lines.iter().skip(index + 1).find(|next| !next.is_empty())
+                {
+                    if looks_like_field_value(query, next_line) {
+                        push_draft(
+                            sanitize_autofill_value(next_line),
+                            0.88,
+                            "Matched a stacked field label and value",
+                            format!("{line} / {next_line}"),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    for pair in lines.windows(2) {
+        let headers = split_tableish(&pair[0]);
+        let values = split_tableish(&pair[1]);
+        if headers.len() >= 2 && headers.len() == values.len() {
+            for (idx, header) in headers.iter().enumerate() {
+                if alias_matches(header, aliases) && looks_like_field_value(query, &values[idx]) {
+                    push_draft(
+                        sanitize_autofill_value(&values[idx]),
+                        0.86,
+                        "Matched a value from a remembered table",
+                        format!("{} / {}", pair[0], pair[1]),
+                    );
+                }
+            }
+        }
+    }
+
+    // Prose / free-form fallback: structured patterns missed the value.
+    // Look for any alias term appearing in a line and extract the trailing value,
+    // or take short standalone lines that look like the right type (e.g. bare IDs).
+    drop(push_draft);
+    if drafts.is_empty() {
+        let mut fallback: Vec<AutofillCandidateDraft> = Vec::new();
+        let mut fb_seen: HashSet<String> = HashSet::new();
+        let mut push_fb =
+            |value: String, extraction_score: f32, reason: &str, source_snippet: String| {
+                let normalized = normalize_autofill_phrase(&value);
+                if normalized.is_empty() || !fb_seen.insert(normalized) {
+                    return;
+                }
+                fallback.push(AutofillCandidateDraft {
+                    value,
+                    extraction_score,
+                    match_reason: reason.to_string(),
+                    source_snippet,
+                    source_app: result.app_name.clone(),
+                    source_window_title: result.window_title.clone(),
+                    timestamp: result.timestamp,
+                    memory_id: result.id.clone(),
+                    search_score: result.score,
+                    ocr_confidence: result.ocr_confidence,
+                    noise_score: result.noise_score,
+                    context_alignment,
+                });
+            };
+        for line in &lines {
+            let lower = line.to_ascii_lowercase();
+            for alias in aliases {
+                let alias_lower = alias.to_ascii_lowercase();
+                if lower.contains(&alias_lower) {
+                    let after_alias =
+                        &line[lower.find(&alias_lower).unwrap_or(0) + alias_lower.len()..];
+                    let value: String = after_alias
+                        .trim_start_matches(|c: char| matches!(c, ':' | '=' | ' ' | '\t'))
+                        .split_whitespace()
+                        .take(10)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if looks_like_field_value(query, &value) {
+                        push_fb(
+                            sanitize_autofill_value(&value),
+                            0.65,
+                            "Found value near label in memory text",
+                            line.clone(),
+                        );
+                    }
+                }
+            }
+
+            // Bare structured value on its own line — e.g. "POL-88291-X" or "012-34-5678".
+            let cells = split_tableish(line);
+            if cells.len() == 1 && line.len() <= 64 && looks_like_field_value(query, line) {
+                push_fb(
+                    sanitize_autofill_value(line),
+                    0.58,
+                    "Remembered value matching this field type",
+                    line.clone(),
+                );
+            }
+        }
+        drop(push_fb);
+        drafts.extend(fallback);
+    }
+
+    drafts
+}
+
+fn context_alignment_score(
+    context: &crate::accessibility::FieldContext,
+    result: &SearchResult,
+    query: &str,
+) -> f32 {
+    let context_terms = collect_context_terms(context, query);
+    if context_terms.is_empty() {
+        return 0.0;
+    }
+
+    let title_tokens = normalized_tokens(&format!(
+        "{} {} {}",
+        result.app_name,
+        result.window_title,
+        result.url.clone().unwrap_or_default()
+    ))
+    .into_iter()
+    .collect::<HashSet<_>>();
+    let body_tokens = normalized_tokens(&format!(
+        "{} {}",
+        truncate_chars(&result.clean_text, 500),
+        truncate_chars(&result.snippet, 220)
+    ))
+    .into_iter()
+    .collect::<HashSet<_>>();
+
+    let title_hits = context_terms
+        .iter()
+        .filter(|term| title_tokens.contains(*term))
+        .count() as f32;
+    let body_hits = context_terms
+        .iter()
+        .filter(|term| body_tokens.contains(*term))
+        .count() as f32;
+    let total = context_terms.len() as f32;
+
+    ((title_hits / total) * 0.68 + (body_hits / total) * 0.32).clamp(0.0, 1.0)
+}
+
+fn document_affinity(app_name: &str, window_title: &str) -> f32 {
+    let app = app_name.to_ascii_lowercase();
+    let window = window_title.to_ascii_lowercase();
+
+    let mut score: f32 = 0.2;
+    if [
+        "preview", "acrobat", "excel", "numbers", "sheets", "word", "pages",
+    ]
+    .iter()
+    .any(|needle| app.contains(needle))
+    {
+        score += 0.45;
+    }
+    if [
+        ".pdf",
+        ".xlsx",
+        ".xls",
+        ".csv",
+        "statement",
+        "invoice",
+        "policy",
+        "claim",
+        "onboarding",
+        "application",
+        "tax",
+        "form",
+        "record",
+        "spreadsheet",
+        "sheet",
+    ]
+    .iter()
+    .any(|needle| window.contains(needle))
+    {
+        score += 0.3;
+    }
+    score.clamp(0.0, 1.0)
+}
+
+fn value_shape_bonus(query: &str, value: &str) -> f32 {
+    let normalized_query = normalize_autofill_phrase(query);
+    if !(normalized_query.contains("number")
+        || normalized_query.ends_with(" id")
+        || normalized_query.contains("ein")
+        || normalized_query.contains("routing")
+        || normalized_query.contains("policy"))
+    {
+        return 0.0;
+    }
+
+    if value.chars().any(|ch| ch.is_ascii_digit())
+        && value
+            .chars()
+            .any(|ch| ch.is_ascii_uppercase() || matches!(ch, '-' | '/'))
+    {
+        0.08
+    } else if value.chars().any(|ch| ch.is_ascii_digit()) {
+        0.04
+    } else {
+        0.0
+    }
+}
+
+fn recency_score(timestamp: i64, lookback_days: u32) -> f32 {
+    let age_ms = (chrono::Utc::now().timestamp_millis() - timestamp).max(0);
+    let lookback_ms = (lookback_days.max(1) as i64) * 86_400_000;
+    (1.0 - (age_ms as f32 / lookback_ms as f32)).clamp(0.0, 1.0)
+}
+
+fn rank_autofill_candidates(
+    query: &str,
+    drafts: Vec<AutofillCandidateDraft>,
+    lookback_days: u32,
+    max_candidates: usize,
+) -> Vec<AutofillCandidate> {
+    let mut best_by_value: HashMap<String, AutofillCandidate> = HashMap::new();
+
+    for draft in drafts {
+        let doc_score = document_affinity(&draft.source_app, &draft.source_window_title);
+        let recency = recency_score(draft.timestamp, lookback_days);
+        let shape_bonus = value_shape_bonus(query, &draft.value);
+        let mut confidence = draft.search_score * 0.28
+            + draft.extraction_score * 0.28
+            + draft.context_alignment * 0.20
+            + draft.ocr_confidence.clamp(0.0, 1.0) * 0.10
+            + doc_score * 0.08
+            + recency * 0.06
+            + shape_bonus;
+        confidence -= draft.noise_score.clamp(0.0, 1.0) * 0.08;
+        confidence = confidence.clamp(0.0, 0.995);
+
+        let candidate = AutofillCandidate {
+            value: draft.value.clone(),
+            confidence,
+            match_reason: draft.match_reason,
+            source_snippet: draft.source_snippet,
+            source_app: draft.source_app,
+            source_window_title: draft.source_window_title,
+            timestamp: draft.timestamp,
+            memory_id: draft.memory_id,
+        };
+
+        let key = normalize_autofill_phrase(&candidate.value);
+        let should_replace = best_by_value
+            .get(&key)
+            .map(|existing| candidate.confidence > existing.confidence)
+            .unwrap_or(true);
+        if should_replace {
+            best_by_value.insert(key, candidate);
+        }
+    }
+
+    let mut candidates = best_by_value.into_values().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        right
+            .confidence
+            .partial_cmp(&left.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.timestamp.cmp(&left.timestamp))
+    });
+    candidates.truncate(max_candidates.max(1));
+    candidates
+}
+
+fn needs_autofill_confirmation(candidates: &[AutofillCandidate], auto_threshold: f32) -> bool {
+    let Some(top) = candidates.first() else {
+        return false;
+    };
+
+    if top.confidence < auto_threshold {
+        return true;
+    }
+
+    candidates.get(1).is_some_and(|next| {
+        next.confidence >= auto_threshold - 0.03 || (top.confidence - next.confidence) <= 0.05
+    })
+}
+
+#[tauri::command]
+pub async fn get_autofill_settings(
+    state: State<'_, Arc<AppState>>,
+) -> Result<AutofillConfig, String> {
+    Ok(state.inner().config.read().autofill.clone().normalized())
+}
+
+#[tauri::command]
+pub async fn set_autofill_settings(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    settings: AutofillConfig,
+) -> Result<AutofillConfig, String> {
+    let mut normalized = settings.normalized();
+    let shortcut: Shortcut = normalized.shortcut.parse().map_err(|err| {
+        format!(
+            "Invalid auto-fill shortcut '{}': {err}",
+            normalized.shortcut
+        )
+    })?;
+    normalized.shortcut = shortcut.into_string();
+
+    {
+        let mut config = state.inner().config.write();
+        config.autofill = normalized.clone();
+        config
+            .save()
+            .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    }
+
+    register_autofill_shortcut(&app, &normalized)?;
+    Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn resolve_autofill(
+    state: State<'_, Arc<AppState>>,
+    context: crate::accessibility::FieldContext,
+    query_override: Option<String>,
+) -> Result<AutofillResolution, String> {
+    let settings = state.inner().config.read().autofill.clone().normalized();
+    let (query, query_source) = build_autofill_query(&context, query_override.as_deref());
+
+    let mut resolution = AutofillResolution {
+        query: query.clone(),
+        query_source: query_source.clone(),
+        context_hint: context_hint(&context),
+        candidates: Vec::new(),
+        auto_inject_threshold: settings.auto_inject_threshold,
+        requires_confirmation: false,
+        used_ocr_fallback: query_source == "ocr",
+    };
+
+    if query.trim().is_empty() {
+        return Ok(resolution);
+    }
+
+    let time_filter = format!("{}d", settings.lookback_days);
+    let aliases = field_aliases(&query);
+    let search_query = build_autofill_search_query(&context, &query);
+    let results = run_search_query(
+        state.inner(),
+        &search_query,
+        Some(time_filter.as_str()),
+        None,
+        settings.max_candidates.max(4) * 3,
+    )
+    .await?;
+
+    let mut drafts = Vec::new();
+    for result in &results {
+        let alignment = context_alignment_score(&context, result, &query);
+        drafts.extend(extract_candidates_from_result(
+            &query, &aliases, result, alignment,
+        ));
+    }
+
+    resolution.candidates = rank_autofill_candidates(
+        &query,
+        drafts,
+        settings.lookback_days,
+        settings.max_candidates,
+    );
+    resolution.requires_confirmation =
+        needs_autofill_confirmation(&resolution.candidates, settings.auto_inject_threshold);
+
+    Ok(resolution)
+}
+
+#[tauri::command]
+pub async fn inject_text(
+    _app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    text: String,
+) -> Result<(), String> {
+    // Do NOT hide the overlay here. The frontend shows "injecting" → "done" / "error"
+    // toast states that are only visible if the window stays open during injection.
+    // The frontend calls dismissAutofill() after the SUCCESS_TOAST_MS / ERROR_TOAST_MS delay.
+    //
+    // Move all blocking work (osascript activation, enigo CGEvent posting) off the Tokio thread.
+    // CGEvent APIs on macOS can crash or silently fail when called from async runtime threads.
+    let prefer_typed = state.inner().config.read().autofill.prefer_typed_injection;
+    tokio::task::spawn_blocking(move || {
+        crate::accessibility::restore_target_app_focus();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        crate::accessibility::inject_text_into_field(&text, prefer_typed)
+    })
+    .await
+    .map_err(|e| format!("Injection task failed to join: {e}"))?
+}
+
+/// Hide the autofill overlay window.
+#[tauri::command]
+pub async fn dismiss_autofill(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(AUTOFILL_OVERLAY_LABEL) {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    PENDING_AUTOFILL_PAYLOAD.lock().take();
+    crate::accessibility::restore_target_app_focus();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn quick_setup_ollama(
+    state: State<'_, Arc<AppState>>,
+) -> Result<HermesBridgeStatus, String> {
+    let (installed, reachable, models) = detect_ollama_state().await;
+    if !installed {
+        return Err("Ollama is not installed on this Mac.".to_string());
+    }
+    if !reachable {
+        return Err(
+            "FNDR could not reach Ollama. Make sure Ollama is running (`ollama serve`)."
+                .to_string(),
+        );
+    }
+    if models.is_empty() {
+        return Err(
+            "No Ollama models found. Pull a model first: `ollama pull llama3.2` or `ollama pull qwen2.5-coder`.".to_string(),
+        );
+    }
+
+    let best_model = models
+        .iter()
+        .find(|m| {
+            let l = m.to_lowercase();
+            l.contains("llama3")
+                || l.contains("llama-3")
+                || l.contains("qwen2.5")
+                || l.contains("mistral")
+                || l.contains("gemma")
+        })
+        .or_else(|| models.first())
+        .cloned()
+        .unwrap_or_else(|| models[0].clone());
+
+    let payload = HermesSetupPayload {
+        provider_kind: "ollama".to_string(),
+        model_name: best_model,
+        api_key: None,
+        base_url: Some(OLLAMA_BASE_URL.to_string()),
+    };
+
+    persist_hermes_setup_files(state.inner(), &payload)?;
+    {
+        let mut process_guard = get_hermes_gateway_process().lock();
+        if let Some(child) = process_guard.as_mut() {
+            let _ = child.kill();
+        }
+        *process_guard = None;
+    }
+    *get_hermes_gateway_error_store().lock() = None;
+    sync_hermes_bridge_files(state.inner()).await
 }
 
 #[cfg(test)]
@@ -4447,5 +7155,106 @@ mod daily_summary_tests {
             lines.len() <= 4,
             "short spans should not force 6-8 bullets: {summary}"
         );
+    }
+
+    #[test]
+    fn autofill_aliases_expand_common_synonyms() {
+        let aliases = field_aliases("Tax ID");
+
+        assert!(aliases
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case("ein")));
+        assert!(aliases
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case("employer identification number")));
+    }
+
+    #[test]
+    fn autofill_extracts_inline_and_table_values() {
+        let record = result(
+            "autofill-1",
+            chrono::Utc::now().timestamp_millis(),
+            "Preview",
+            "StateFarm_Statement.pdf",
+            "Policy Number: POL-88291-X\nGroup Number  8821\nMember Name  Jane Doe",
+            None,
+        );
+
+        let inline = extract_candidates_from_result(
+            "Policy Number",
+            &field_aliases("Policy Number"),
+            &record,
+            1.0,
+        );
+        assert!(
+            inline
+                .iter()
+                .any(|candidate| candidate.value == "POL-88291-X"),
+            "expected inline label-value extraction, got: {inline:?}"
+        );
+
+        let table = extract_candidates_from_result(
+            "Group Number",
+            &field_aliases("Group Number"),
+            &record,
+            1.0,
+        );
+        assert!(
+            table.iter().any(|candidate| candidate.value == "8821"),
+            "expected table-style extraction, got: {table:?}"
+        );
+    }
+
+    #[test]
+    fn autofill_requires_confirmation_when_candidates_are_close() {
+        let candidates = vec![
+            AutofillCandidate {
+                value: "POL-111".to_string(),
+                confidence: 0.94,
+                match_reason: "Top".to_string(),
+                source_snippet: "".to_string(),
+                source_app: "Preview".to_string(),
+                source_window_title: "A.pdf".to_string(),
+                timestamp: 1,
+                memory_id: "1".to_string(),
+            },
+            AutofillCandidate {
+                value: "POL-222".to_string(),
+                confidence: 0.91,
+                match_reason: "Close".to_string(),
+                source_snippet: "".to_string(),
+                source_app: "Preview".to_string(),
+                source_window_title: "B.pdf".to_string(),
+                timestamp: 2,
+                memory_id: "2".to_string(),
+            },
+        ];
+
+        assert!(needs_autofill_confirmation(&candidates, 0.90));
+    }
+
+    #[test]
+    fn focus_task_embedding_is_disabled_without_semantic_backend() {
+        assert_eq!(
+            build_focus_task_embedding("Finish quarterly planning", None).expect("focus embedding"),
+            None
+        );
+    }
+
+    #[test]
+    fn focus_task_embedding_is_present_for_real_backend_when_available() {
+        let Ok(embedder) = Embedder::new() else {
+            return;
+        };
+        if !matches!(embedder.backend(), EmbeddingBackend::Real) {
+            return;
+        }
+
+        let embedding = build_focus_task_embedding("Finish quarterly planning", Some(&embedder))
+            .expect("focus embedding");
+        assert!(embedding.is_some());
+        assert!(embedding
+            .as_ref()
+            .is_some_and(|vector| vector.iter().any(|value| *value != 0.0)));
     }
 }

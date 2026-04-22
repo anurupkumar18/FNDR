@@ -274,6 +274,25 @@
     gap: 8px;
 }
 
+.autofill-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.autofill-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.autofill-label {
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+}
+
 .profile-input {
     flex: 1;
     background: #0d0d0d;
@@ -390,6 +409,28 @@
 
 .retention-select:focus {
     border-color: #3a3a40;
+}
+
+.autofill-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
+.autofill-check input {
+    margin-top: 2px;
+    accent-color: #ffb55c;
+}
+
+.autofill-help {
+    margin: 10px 0 0 0;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    color: var(--text-muted);
 }
 
 .stats-grid {

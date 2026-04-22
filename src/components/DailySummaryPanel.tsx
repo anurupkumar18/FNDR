@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { generateDailySummaryForDate, exportDailySummaryPdf } from "../api/tauri";
 import "./DailySummaryPanel.css";
 
@@ -14,6 +15,7 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
     const [error, setError] = useState<string | null>(null);
     const [exporting, setExporting] = useState(false);
     const [showToast, setShowToast] = useState(false);
+    const [exportedPdfPath, setExportedPdfPath] = useState<string | null>(null);
     const [cache, setCache] = useState<Map<string, string>>(new Map());
 
     // Initialize to today's date in local YYYY-MM-DD
@@ -55,14 +57,28 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
         try {
             const path = await exportDailySummaryPdf(dateStr, summary);
             console.log("Daily Summary PDF exported to:", path);
+            setExportedPdfPath(path);
             setShowToast(true);
             setTimeout(() => {
                 setShowToast(false);
-            }, 4000);
+            }, 6000);
         } catch (err) {
             setError(String(err));
         } finally {
             setExporting(false);
+        }
+    };
+
+    const handleOpenPdf = async () => {
+        if (!exportedPdfPath) {
+            return;
+        }
+
+        try {
+            await shellOpen(exportedPdfPath);
+            setShowToast(false);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
         }
     };
 
@@ -152,8 +168,19 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
             </div>
 
             {showToast && (
-                <div className="daily-toast">
-                    PDF downloaded
+                <div className="daily-toast" role="status" aria-live="polite">
+                    <div className="daily-toast-copy">
+                        <strong>PDF downloaded</strong>
+                        <span>Open the exported daily summary from FNDR.</span>
+                    </div>
+                    <div className="daily-toast-actions">
+                        <button className="daily-toast-btn primary" onClick={() => void handleOpenPdf()}>
+                            Open PDF
+                        </button>
+                        <button className="daily-toast-btn" onClick={() => setShowToast(false)}>
+                            Dismiss
+                        </button>
+                    </div>
                 </div>
             )}
         </div>

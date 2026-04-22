@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /Applications/Codex.app/Contents/Resources/node /usr/local/lib/node_modules/npm/bin/npm-cli.js "$@"

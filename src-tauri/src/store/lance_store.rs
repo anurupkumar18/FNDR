@@ -221,24 +221,86 @@ impl Store {
         Ok(results)
     }
 
+    pub async fn get_nodes_by_ids(
+        &self,
+        node_ids: &[String],
+    ) -> Result<Vec<GraphNode>, Box<dyn std::error::Error>> {
+        let filter = match build_string_match_filter("id", node_ids) {
+            Some(filter) => filter,
+            None => return Ok(Vec::new()),
+        };
+        let batches = self
+            .nodes_table
+            .query()
+            .only_if(filter)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut results = Vec::new();
+        for batch in batches {
+            results.extend(batch_to_nodes(&batch));
+        }
+        Ok(results)
+    }
+
+    pub async fn get_task_reference_edges_for_targets(
+        &self,
+        target_node_ids: &[String],
+    ) -> Result<Vec<GraphEdge>, Box<dyn std::error::Error>> {
+        let target_filter = match build_string_match_filter("target", target_node_ids) {
+            Some(filter) => filter,
+            None => return Ok(Vec::new()),
+        };
+        let filter = format!(
+            "edge_type = '{}' AND ({})",
+            edge_type_literal(EdgeType::ReferenceForTask),
+            target_filter
+        );
+        let batches = self
+            .edges_table
+            .query()
+            .only_if(filter)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut results = Vec::new();
+        for batch in batches {
+            results.extend(batch_to_edges(&batch));
+        }
+        Ok(results)
+    }
+
     pub async fn upsert_nodes(
         &self,
         nodes: &[GraphNode],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Read existing nodes, merge by id (new wins), write back everything.
-        let mut existing = self.get_all_nodes().await.unwrap_or_default();
-        let mut by_id: std::collections::HashMap<String, GraphNode> =
-            existing.drain(..).map(|n| (n.id.clone(), n)).collect();
-        for n in nodes {
-            by_id.insert(n.id.clone(), n.clone());
+        if nodes.is_empty() {
+            return Ok(());
         }
-        let all: Vec<GraphNode> = by_id.into_values().collect();
-        let batch = nodes_to_batch(&all)?;
+
+        let mut by_id: HashMap<String, GraphNode> = HashMap::with_capacity(nodes.len());
+        for node in nodes {
+            by_id.insert(node.id.clone(), node.clone());
+        }
+        let deduped = by_id.into_values().collect::<Vec<_>>();
+        if let Some(filter) = build_string_match_filter(
+            "id",
+            &deduped
+                .iter()
+                .map(|node| node.id.clone())
+                .collect::<Vec<_>>(),
+        ) {
+            self.nodes_table.delete(&filter).await?;
+        }
+
+        let batch = nodes_to_batch(&deduped)?;
         let schema = Arc::new(node_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
         self.nodes_table
             .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
-            .mode(AddDataMode::Overwrite)
+            .mode(AddDataMode::Append)
             .execute()
             .await?;
         Ok(())
@@ -297,40 +359,36 @@ impl Store {
         &self,
         edges: &[GraphEdge],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Read existing edges, deduplicate by (source, target, edge_type) to avoid
-        // accumulating redundant edges, then write back the full set.
-        let mut existing = self.get_all_edges().await.unwrap_or_default();
-
-        // Dedup key: (source, target, edge_type string). New edges win (they replace
-        // an old edge with the same relationship).
-        let mut by_rel: std::collections::HashMap<(String, String, String), GraphEdge> = existing
-            .drain(..)
-            .map(|e| {
-                let key = (
-                    e.source.clone(),
-                    e.target.clone(),
-                    format!("{:?}", e.edge_type),
-                );
-                (key, e)
-            })
-            .collect();
-
-        for e in edges {
-            let key = (
-                e.source.clone(),
-                e.target.clone(),
-                format!("{:?}", e.edge_type),
-            );
-            by_rel.insert(key, e.clone());
+        if edges.is_empty() {
+            return Ok(());
         }
 
-        let all: Vec<GraphEdge> = by_rel.into_values().collect();
-        let batch = edges_to_batch(&all)?;
+        let mut by_rel: HashMap<(String, String, &'static str), GraphEdge> =
+            HashMap::with_capacity(edges.len());
+        for edge in edges {
+            by_rel.insert(
+                (
+                    edge.source.clone(),
+                    edge.target.clone(),
+                    edge_type_literal(edge.edge_type),
+                ),
+                edge.clone(),
+            );
+        }
+        let deduped = by_rel.into_values().collect::<Vec<_>>();
+
+        for chunk in deduped.chunks(128) {
+            if let Some(filter) = build_edge_identity_filter(chunk) {
+                self.edges_table.delete(&filter).await?;
+            }
+        }
+
+        let batch = edges_to_batch(&deduped)?;
         let schema = Arc::new(edge_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
         self.edges_table
             .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
-            .mode(AddDataMode::Overwrite)
+            .mode(AddDataMode::Append)
             .execute()
             .await?;
         Ok(())
@@ -696,6 +754,20 @@ impl Store {
                 .then_with(|| b.timestamp.cmp(&a.timestamp))
         });
         Ok(dedup_search_results(results, limit))
+    }
+
+    /// Return comprehensive statistics and usage insights about stored data.
+    pub async fn has_memories(&self) -> Result<bool, Box<dyn std::error::Error>> {
+        let batches: Vec<RecordBatch> = self
+            .table
+            .query()
+            .select(Select::columns(&["id"]))
+            .limit(1)
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
+        Ok(batches.iter().any(|batch| batch.num_rows() > 0))
     }
 
     /// Return comprehensive statistics and usage insights about stored data.
@@ -1469,6 +1541,47 @@ fn edge_schema() -> Schema {
     ])
 }
 
+fn edge_type_literal(edge_type: EdgeType) -> &'static str {
+    match edge_type {
+        EdgeType::PartOfSession => "PART_OF_SESSION",
+        EdgeType::ReferenceForTask => "REFERENCE_FOR_TASK",
+        EdgeType::OccurredAt => "OCCURRED_AT",
+        EdgeType::ClipboardCopied => "CLIPBOARD_COPIED",
+        EdgeType::OccurredDuringAudio => "OCCURRED_DURING_AUDIO",
+    }
+}
+
+fn build_string_match_filter(column: &str, values: &[String]) -> Option<String> {
+    let clauses = values
+        .iter()
+        .map(|value| format!("{column} = '{}'", sql_escape(value)))
+        .collect::<Vec<_>>();
+    if clauses.is_empty() {
+        None
+    } else {
+        Some(clauses.join(" OR "))
+    }
+}
+
+fn build_edge_identity_filter(edges: &[GraphEdge]) -> Option<String> {
+    let clauses = edges
+        .iter()
+        .map(|edge| {
+            format!(
+                "(source = '{}' AND target = '{}' AND edge_type = '{}')",
+                sql_escape(&edge.source),
+                sql_escape(&edge.target),
+                edge_type_literal(edge.edge_type)
+            )
+        })
+        .collect::<Vec<_>>();
+    if clauses.is_empty() {
+        None
+    } else {
+        Some(clauses.join(" OR "))
+    }
+}
+
 // ── Arrow ↔ MemoryRecord conversion ─────────────────────────────────────────
 
 fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError> {
@@ -2009,11 +2122,7 @@ fn edges_to_batch(edges: &[GraphEdge]) -> Result<RecordBatch, Box<dyn std::error
         sources.append_value(&e.source);
         targets.append_value(&e.target);
         types.append_value(match e.edge_type {
-            EdgeType::PartOfSession => "PART_OF_SESSION",
-            EdgeType::ReferenceForTask => "REFERENCE_FOR_TASK",
-            EdgeType::OccurredAt => "OCCURRED_AT",
-            EdgeType::ClipboardCopied => "CLIPBOARD_COPIED",
-            EdgeType::OccurredDuringAudio => "OCCURRED_DURING_AUDIO",
+            edge_type => edge_type_literal(edge_type),
         });
         timestamps.append_value(e.timestamp);
         metadata.append_value(serde_json::to_string(&e.metadata).unwrap_or_default());

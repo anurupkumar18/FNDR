@@ -268,6 +268,72 @@ fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Probe for a usable Python 3 interpreter, preferring versions ≤ 3.13
+/// (whisper-cpp-python has no 3.14+ wheels). Checks Homebrew paths first
+/// because macOS Dock-launched apps don't inherit the user's shell PATH.
+fn find_python3() -> Option<PathBuf> {
+    // Ordered list of (binary name, full path to try)
+    let candidates: &[&str] = &[
+        "/opt/homebrew/bin/python3.13",
+        "/opt/homebrew/bin/python3.12",
+        "/opt/homebrew/bin/python3.11",
+        "/opt/homebrew/bin/python3.10",
+        "/usr/local/bin/python3.13",
+        "/usr/local/bin/python3.12",
+        "/usr/local/bin/python3.11",
+        "/usr/local/bin/python3.10",
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+        "/usr/bin/python3",
+        "python3",
+    ];
+    for &path in candidates {
+        let candidate = PathBuf::from(path);
+        if Command::new(&candidate)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Try to run whisper via the `whisper-cli` binary (from `brew install whisper-cpp`).
+/// Returns the transcript on success, or None if the binary is unavailable / fails.
+fn try_whisper_cli_binary(model_path: &Path, audio_path: &Path) -> Option<String> {
+    // whisper-cpp installs as `whisper-cli` on Homebrew
+    let cli_paths: &[&str] = &[
+        "/opt/homebrew/bin/whisper-cli",
+        "/usr/local/bin/whisper-cli",
+        "whisper-cli",
+    ];
+    for &cli in cli_paths {
+        let output = Command::new(cli)
+            .args([
+                "-m", &model_path.to_string_lossy(),
+                "-f", &audio_path.to_string_lossy(),
+                "-l", "en",
+                "--no-timestamps",
+                "-nt",
+            ])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !text.is_empty() {
+                    return Some(text);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn python_imports_ok(python: &Path, imports: &str) -> bool {
     Command::new(python)
         .args(["-c", imports])
@@ -300,15 +366,15 @@ fn ensure_venv_ready() -> Result<PathBuf, String> {
         return Err("Could not determine Documents directory for FNDR Speech".to_string());
     };
 
-    if !command_exists("python3") {
-        return Err("python3 is required for speech features".to_string());
-    }
+    let python3 = find_python3().ok_or_else(|| {
+        "python3 (≤3.13) is required for speech features. Install it with: brew install python@3.13".to_string()
+    })?;
 
     if !venv_dir.exists() {
         if let Some(parent) = venv_dir.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let status = Command::new("python3")
+        let status = Command::new(&python3)
             .args(["-m", "venv", &venv_dir.to_string_lossy()])
             .status()
             .map_err(|e| format!("Failed creating FNDR Speech venv: {}", e))?;
@@ -538,6 +604,21 @@ async fn transcribe_audio_file_with_hint(
     hint: TranscriptionHint,
 ) -> Result<String, String> {
     let model_path = ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperBaseEn).await?;
+
+    // Fast path: use the whisper-cli binary (brew install whisper-cpp) — no Python needed.
+    {
+        let model = model_path.clone();
+        let audio = audio_path.to_path_buf();
+        if let Some(text) = tokio::task::spawn_blocking(move || {
+            try_whisper_cli_binary(&model, &audio)
+        }).await.ok().flatten() {
+            let cleaned = normalize_transcript_text(&text);
+            if !cleaned.is_empty() {
+                return Ok(cleaned);
+            }
+        }
+    }
+
     ensure_whisper_backend().await?;
 
     if let Ok(custom_cmd) = std::env::var("FNDR_WHISPER_GGUF_COMMAND") {
@@ -571,7 +652,9 @@ async fn transcribe_audio_file_with_hint(
 
     let sidecar = resolve_sidecar("whisper_gguf_runner.py")
         .ok_or_else(|| "Could not locate whisper_gguf_runner.py".to_string())?;
-    let python = python_for_sidecar().unwrap_or_else(|| PathBuf::from("python3"));
+    let python = python_for_sidecar()
+        .or_else(find_python3)
+        .ok_or_else(|| "No usable python3 found for Whisper transcription. Install with: brew install python@3.13".to_string())?;
     let audio = audio_path.to_path_buf();
     let model = model_path.clone();
     let sidecar_flag = hint.sidecar_flag().map(str::to_string);

@@ -157,7 +157,7 @@ export function SearchBar({
     
     useEffect(() => {
         if (inputRef.current && value.length > 0) {
-            inputRef.current.scrollLeft = inputRef.current.scrollWidth;
+            inputRef.current.scrollLeft = 0;
         }
     }, [value]);
 

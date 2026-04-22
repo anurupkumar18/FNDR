@@ -572,6 +572,17 @@ pub async fn get_meeting_transcript(meeting_id: &str) -> Result<MeetingTranscrip
     store.get_transcript(meeting_id).await
 }
 
+pub async fn retranscribe_meeting(meeting_id: &str) -> Result<(), String> {
+    let store = get_store()?;
+    let model = FORCED_MODEL;
+
+    // Re-ingest any WAV files not yet in the store, then transcribe all pending segments.
+    if let Err(err) = ingest_discovered_segments(store.as_ref(), meeting_id, model).await {
+        tracing::warn!("retranscribe_meeting: ingest failed for {}: {}", meeting_id, err);
+    }
+    transcribe_meeting_postprocess(store.as_ref(), meeting_id, model).await
+}
+
 pub async fn search_meeting_transcripts(
     query: &str,
     limit: usize,
@@ -2150,6 +2161,7 @@ async fn ingest_transcript_into_fndr_memory(
         .add_batch(&[record.clone()])
         .await
         .map_err(|e| format!("Store add failed: {e}"))?;
+    app_state.invalidate_memory_derived_caches();
 
     if let Err(err) = app_state.graph.ingest_memory(&record).await {
         tracing::warn!("Graph ingest failed for meeting transcript: {}", err);
@@ -2426,5 +2438,40 @@ Carlos must test the meeting feature in three scenarios and send results by Frid
             .expect("spawn short sleep");
         let exited = wait_for_process_exit(&mut child, Duration::from_secs(2));
         assert!(exited);
+    }
+
+    #[test]
+    fn transcript_embeddings_stay_zero_without_semantic_backend() {
+        let (embedding, snippet_embedding) = transcript_embeddings_for_embedder(
+            None,
+            "FNDR Meetings",
+            "Weekly sync",
+            "Reviewed roadmap updates and owners.",
+            "Reviewed roadmap updates",
+        );
+
+        assert!(embedding.iter().all(|value| *value == 0.0));
+        assert!(snippet_embedding.iter().all(|value| *value == 0.0));
+    }
+
+    #[test]
+    fn transcript_embeddings_are_non_zero_for_real_backend_when_available() {
+        let Ok(embedder) = Embedder::new() else {
+            return;
+        };
+        if !matches!(embedder.backend(), EmbeddingBackend::Real) {
+            return;
+        }
+
+        let (embedding, snippet_embedding) = transcript_embeddings_for_embedder(
+            Some(&embedder),
+            "FNDR Meetings",
+            "Weekly sync",
+            "Reviewed roadmap updates and owners.",
+            "Reviewed roadmap updates",
+        );
+
+        assert!(embedding.iter().any(|value| *value != 0.0));
+        assert!(snippet_embedding.iter().any(|value| *value != 0.0));
     }
 }

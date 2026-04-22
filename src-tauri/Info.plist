@@ -21,7 +21,7 @@
     
     <!-- Accessibility Permission -->
     <key>NSAccessibilityUsageDescription</key>
-    <string>FNDR needs accessibility access to detect active applications and window titles.</string>
+    <string>FNDR needs accessibility access to detect focused fields and type local auto-fill results into apps you use.</string>
 
     <!-- Microphone Permission -->
     <key>NSMicrophoneUsageDescription</key>

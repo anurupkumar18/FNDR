@@ -30,7 +30,20 @@ fn main() {
 
     tracing::info!("Starting FNDR...");
 
+    // Build a tokio runtime with 8 MB per worker thread (default is 2 MB).
+    // Deep async chains through LanceDB, whisper transcription, and embedding
+    // can overflow the default stack size, causing SIGABRT on tokio-rt-worker threads.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(8 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("Failed to build tokio runtime");
+    // Leak so it lives for the process lifetime; tauri holds the handle only.
+    let rt_ref: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
+    tauri::async_runtime::set(rt_ref.handle().clone());
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -404,12 +417,28 @@ fn main() {
                 });
             }
 
-            app.manage(state);
+            app.manage(state.clone());
 
             if let Err(err) =
                 fndr_lib::meeting::bind_runtime(app.handle().clone(), runtime_state.clone())
             {
                 tracing::warn!("Meeting runtime initialization failed: {}", err);
+            }
+
+            // Pre-create the autofill overlay window so it's loaded and ready
+            // by the time the user first presses the hotkey.
+            api::commands::create_autofill_overlay_window(&app.handle());
+
+            if let Err(err) = api::commands::register_autofill_shortcut(
+                &app.handle(),
+                &state.config.read().autofill.clone(),
+            ) {
+                tracing::warn!("Auto-fill shortcut registration failed: {err}");
+            } else {
+                tracing::info!(
+                    "Auto-fill global shortcut registered: {}",
+                    state.config.read().autofill.shortcut
+                );
             }
 
             Ok(())
@@ -433,6 +462,7 @@ fn main() {
             api::commands::list_meetings,
             api::commands::delete_meeting,
             api::commands::get_meeting_transcript,
+            api::commands::retranscribe_meeting,
             api::commands::export_meeting_pdf,
             api::commands::export_daily_summary_pdf,
             // Voice / Speech
@@ -469,6 +499,15 @@ fn main() {
             api::commands::start_agent_task,
             api::commands::get_agent_status,
             api::commands::stop_agent,
+            api::commands::get_hermes_bridge_status,
+            api::commands::install_hermes_bridge,
+            api::commands::save_hermes_setup,
+            api::commands::sync_hermes_bridge_context,
+            api::commands::start_hermes_gateway,
+            api::commands::stop_hermes_gateway,
+            api::commands::send_hermes_message,
+            api::commands::send_direct_chat,
+            api::commands::quick_setup_ollama,
             api::commands::link_audio_to_memories,
             api::commands::generate_daily_briefing,
             api::commands::generate_daily_summary_for_date,
@@ -476,6 +515,15 @@ fn main() {
             api::commands::get_time_tracking,
             api::commands::set_focus_task,
             api::commands::get_focus_status,
+            // Auto-fill
+            api::commands::get_autofill_settings,
+            api::commands::set_autofill_settings,
+            api::commands::set_autofill_overlay_ready,
+            api::commands::take_pending_autofill_payload,
+            api::commands::show_autofill_overlay_window,
+            api::commands::resolve_autofill,
+            api::commands::inject_text,
+            api::commands::dismiss_autofill,
             // Onboarding
             api::onboarding::get_onboarding_state,
             api::onboarding::save_onboarding_state,

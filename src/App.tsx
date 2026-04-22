@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { SearchBar } from "./components/SearchBar";
 import { Timeline } from "./components/Timeline";
 import { ControlPanel } from "./components/ControlPanel";
@@ -24,12 +24,14 @@ import "./components/FocusModePanel.css";
 import { useSearch } from "./hooks/useSearch";
 import {
     CaptureStatus,
+    type FndrNotificationPayload,
     MeetingRecorderStatus,
     MemoryCard,
     deleteMemory,
     getAppNames,
     getMeetingStatus,
     onMeetingStatus,
+    onFndrNotification,
     onProactiveSuggestion,
     getStatus,
     getFunGreeting,
@@ -122,6 +124,56 @@ function BiometricLockScreen({
     );
 }
 
+class PanelErrorBoundary extends Component<
+    { panelName: string; children: ReactNode },
+    { error: Error | null }
+> {
+    state = { error: null as Error | null };
+
+    static getDerivedStateFromError(error: Error) {
+        return { error };
+    }
+
+    componentDidCatch(error: Error, info: ErrorInfo) {
+        console.error(`Panel "${this.props.panelName}" crashed:`, error, info);
+    }
+
+    componentDidUpdate(prevProps: { panelName: string; children: ReactNode }) {
+        if (prevProps.children !== this.props.children && this.state.error) {
+            this.setState({ error: null });
+        }
+    }
+
+    render() {
+        if (this.state.error) {
+            return (
+                <div className="panel-error-fallback">
+                    <h2>{this.props.panelName} hit a runtime error</h2>
+                    <p>{this.state.error.message}</p>
+                </div>
+            );
+        }
+
+        return this.props.children;
+    }
+}
+
+interface AppToast {
+    id: string;
+    title: string;
+    body: string;
+    kind: string;
+    actionLabel?: string;
+    targetPanel?: PanelKey;
+}
+
+function nextToastId(): string {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+        return crypto.randomUUID();
+    }
+    return `fndr-toast-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function App() {
     const [queryDraft, setQueryDraft] = useState("");
     const [query, setQuery] = useState("");
@@ -135,7 +187,8 @@ function App() {
     const [activePanel, setActivePanel] = useState<PanelKey | null>(null);
     const [researchSeedMemory, setResearchSeedMemory] = useState<MemoryCard | null>(null);
     const [showCommandPalette, setShowCommandPalette] = useState(false);
-    const [focusDriftToast, setFocusDriftToast] = useState<string | null>(null);
+    const [appToasts, setAppToasts] = useState<AppToast[]>([]);
+    const toastTimersRef = useRef<Map<string, number>>(new Map());
 
     // Background automation scheduler — fires Tauri calls on configured schedules
     useAutomationScheduler();
@@ -349,10 +402,47 @@ function App() {
         setShowCommandPalette(false);
     }, []);
 
+    const dismissToast = useCallback((toastId: string) => {
+        const timer = toastTimersRef.current.get(toastId);
+        if (timer !== undefined) {
+            window.clearTimeout(timer);
+            toastTimersRef.current.delete(toastId);
+        }
+        setAppToasts((previous) => previous.filter((toast) => toast.id !== toastId));
+    }, []);
+
+    const enqueueToast = useCallback(
+        (toast: Omit<AppToast, "id">, durationMs = 8_000) => {
+            const id = nextToastId();
+            const nextToast: AppToast = { id, ...toast };
+            setAppToasts((previous) => [nextToast, ...previous].slice(0, 4));
+            const timer = window.setTimeout(() => {
+                dismissToast(id);
+            }, durationMs);
+            toastTimersRef.current.set(id, timer);
+        },
+        [dismissToast]
+    );
+
+    const handleToastAction = useCallback(
+        (toast: AppToast) => {
+            dismissToast(toast.id);
+            setShowCommandPalette(false);
+            setIsSidebarOpen(false);
+            if (toast.targetPanel !== "research") {
+                setResearchSeedMemory(null);
+            }
+            if (toast.targetPanel) {
+                setActivePanel(toast.targetPanel);
+            }
+        },
+        [dismissToast]
+    );
+
     // Global Cmd+K / Ctrl+K listener
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+            if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
                 e.preventDefault();
                 setShowCommandPalette((prev) => !prev);
             }
@@ -372,8 +462,13 @@ function App() {
             try {
                 const fn = await onProactiveSuggestion((suggestion) => {
                     if (suggestion.memory_id === "focus_drift") {
-                        setFocusDriftToast(suggestion.snippet);
-                        setTimeout(() => setFocusDriftToast(null), 8_000);
+                        enqueueToast({
+                            title: "Focus Drift Detected",
+                            body: suggestion.snippet,
+                            kind: "focus_drift",
+                            actionLabel: "View Focus Mode",
+                            targetPanel: "focusMode",
+                        });
                     }
                 });
                 if (mounted) {
@@ -390,6 +485,63 @@ function App() {
         return () => {
             mounted = false;
             if (unlisten) unlisten();
+        };
+    }, [enqueueToast]);
+
+    useEffect(() => {
+        let unlisten: (() => void) | null = null;
+        let mounted = true;
+
+        const actionForNotification = (
+            notification: FndrNotificationPayload
+        ): Pick<AppToast, "actionLabel" | "targetPanel"> => {
+            switch (notification.kind) {
+                case "briefing":
+                    return { actionLabel: "Open Daily Summary", targetPanel: "dailySummary" };
+                case "stale_tasks":
+                    return { actionLabel: "Review Tasks", targetPanel: "todo" };
+                case "context_switch":
+                    return { actionLabel: "Open Focus Mode", targetPanel: "focusMode" };
+                default:
+                    return {};
+            }
+        };
+
+        const subscribe = async () => {
+            try {
+                const fn = await onFndrNotification((notification) => {
+                    const action = actionForNotification(notification);
+                    enqueueToast({
+                        title: notification.title,
+                        body: notification.body,
+                        kind: notification.kind,
+                        actionLabel: action.actionLabel,
+                        targetPanel: action.targetPanel,
+                    });
+                });
+                if (mounted) {
+                    unlisten = fn;
+                } else {
+                    fn();
+                }
+            } catch (error) {
+                console.error("Failed to subscribe to FNDR notifications:", error);
+            }
+        };
+
+        void subscribe();
+        return () => {
+            mounted = false;
+            if (unlisten) unlisten();
+        };
+    }, [enqueueToast]);
+
+    useEffect(() => {
+        return () => {
+            for (const timer of toastTimersRef.current.values()) {
+                window.clearTimeout(timer);
+            }
+            toastTimersRef.current.clear();
         };
     }, []);
 
@@ -598,10 +750,12 @@ function App() {
 
             {!EVAL_UI && (
                 <>
-                    <AgentPanel
-                        isVisible={activePanel === "agent"}
-                        onClose={() => setActivePanel(null)}
-                    />
+                    <PanelErrorBoundary panelName="Agent">
+                        <AgentPanel
+                            isVisible={activePanel === "agent"}
+                            onClose={() => setActivePanel(null)}
+                        />
+                    </PanelErrorBoundary>
                     <MeetingRecorderPanel
                         isVisible={activePanel === "meeting"}
                         onClose={() => setActivePanel(null)}
@@ -679,26 +833,46 @@ function App() {
                             isCapturing: status?.is_capturing ?? false,
                         }}
                     />
-                    {/* Focus drift toast */}
-                    {focusDriftToast && (
-                        <div className="fm-drift-toast">
-                            <div className="fm-toast-header">
-                                <span className="fm-toast-title">Focus Drift Detected</span>
-                                <button
-                                    className="fm-toast-dismiss"
-                                    onClick={() => setFocusDriftToast(null)}
+                    {appToasts.length > 0 && (
+                        <div className="app-toast-stack" aria-live="polite" aria-atomic="false">
+                            {appToasts.map((toast) => (
+                                <div
+                                    key={toast.id}
+                                    className={`app-toast app-toast-${toast.kind.replace(/[^a-z0-9_-]/gi, "-")}`}
+                                    role="status"
                                 >
-                                    ×
-                                </button>
-                            </div>
-                            <p className="fm-toast-body">{focusDriftToast}</p>
-                            <button
-                                className="fm-toast-dismiss"
-                                style={{ alignSelf: "flex-start", fontSize: "0.76rem", padding: "4px 8px", border: "1px solid rgba(230,150,60,0.25)", borderRadius: "6px", opacity: 1, color: "rgba(230,165,80,0.85)" }}
-                                onClick={() => { setFocusDriftToast(null); setActivePanel("focusMode"); }}
-                            >
-                                View Focus Mode
-                            </button>
+                                    <button
+                                        className={`app-toast-card ${toast.targetPanel ? "is-clickable" : ""}`}
+                                        type="button"
+                                        onClick={() => handleToastAction(toast)}
+                                        disabled={!toast.targetPanel}
+                                    >
+                                        <div className="app-toast-copy">
+                                            <span className="app-toast-title">{toast.title}</span>
+                                            <p className="app-toast-body">{toast.body}</p>
+                                        </div>
+                                    </button>
+                                    <div className="app-toast-actions">
+                                        {toast.actionLabel && toast.targetPanel && (
+                                            <button
+                                                className="app-toast-action"
+                                                type="button"
+                                                onClick={() => handleToastAction(toast)}
+                                            >
+                                                {toast.actionLabel}
+                                            </button>
+                                        )}
+                                        <button
+                                            className="app-toast-close"
+                                            type="button"
+                                            onClick={() => dismissToast(toast.id)}
+                                            aria-label={`Dismiss ${toast.title}`}
+                                        >
+                                            Close
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
                         </div>
                     )}
                 </>

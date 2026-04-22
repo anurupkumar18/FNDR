@@ -7,7 +7,7 @@
 
 .summary-bubble {
   padding: 11px 14px;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   background: linear-gradient(180deg, rgba(21, 21, 24, 0.95), rgba(9, 9, 11, 0.95));
   border: 1px solid rgba(255, 255, 255, 0.09);
   color: var(--text-secondary);
@@ -47,7 +47,7 @@
   backdrop-filter: blur(18px) saturate(120%);
   -webkit-backdrop-filter: blur(18px) saturate(120%);
   padding: 8px 10px;
-  border-radius: 18px;
+  border-radius: var(--radius-lg);
   border: 1px solid rgba(255, 255, 255, 0.12);
   width: 100%;
   min-height: 56px;
@@ -204,7 +204,7 @@
 
 .voice-btn {
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   background: linear-gradient(180deg, rgba(39, 43, 49, 0.82), rgba(22, 24, 28, 0.86));
   color: #d7dbe2;
   padding: 7px 14px;
@@ -266,7 +266,7 @@
 .filter-select {
   background: rgba(11, 11, 13, 0.86);
   border: 1px solid rgba(255, 255, 255, 0.11);
-  border-radius: 11px;
+  border-radius: var(--radius-sm);
   padding: 7px 30px 7px 32px;
   font-size: 0.8rem;
   font-weight: 500;
@@ -312,7 +312,7 @@
   max-width: 100%;
   width: 100%;
   padding: 12px 16px;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);

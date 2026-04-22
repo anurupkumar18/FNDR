@@ -8,6 +8,7 @@ import {
     getMeetingTranscript,
     listMeetings,
     onMeetingStatus,
+    retranscribeMeeting,
     startMeetingRecording,
     stopMeetingRecording,
 } from "../api/tauri";
@@ -27,6 +28,7 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
     const [titleInput, setTitleInput] = useState("");
     const [starting, setStarting] = useState(false);
     const [stopping, setStopping] = useState(false);
+    const [retranscribing, setRetranscribing] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const selectedMeeting = useMemo(
@@ -99,8 +101,12 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
             }
         });
 
+        // Poll every 5 seconds while panel is open to catch async transcription updates.
+        const pollInterval = setInterval(() => void refresh(false), 5000);
+
         return () => {
-             unlistenPromise.then(unlisten => unlisten());
+            unlistenPromise.then(unlisten => unlisten());
+            clearInterval(pollInterval);
         };
     }, [isVisible]);
 
@@ -151,6 +157,19 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
             await refresh(false);
         } catch (err) {
             setError(String(err));
+        }
+    };
+
+    const handleRetranscribe = async (meetingId: string) => {
+        setRetranscribing(true);
+        setError(null);
+        try {
+            await retranscribeMeeting(meetingId);
+            await refresh(true);
+        } catch (err) {
+            setError(String(err));
+        } finally {
+            setRetranscribing(false);
         }
     };
 
@@ -216,6 +235,14 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                                 {new Date(selectedMeeting.start_timestamp).toLocaleDateString()} • {Math.round(selectedMeeting.duration_seconds / 60)} min
                             </span>
                             <button
+                                className="ui-action-btn meeting-btn"
+                                onClick={() => handleRetranscribe(selectedMeeting.id)}
+                                disabled={retranscribing}
+                                title="Re-run Whisper transcription on this meeting"
+                            >
+                                {retranscribing ? "Transcribing..." : "Re-transcribe"}
+                            </button>
+                            <button
                                 className="ui-action-btn meeting-btn delete-session-btn"
                                 onClick={() => handleDelete(selectedMeeting.id)}
                             >
@@ -223,7 +250,14 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                             </button>
                         </div>
 
-                        {activeBreakdown ? (
+                        {retranscribing && (
+                            <div className="meeting-analyzing-state">
+                                <div className="spinner" />
+                                <p>Running Whisper transcription...</p>
+                            </div>
+                        )}
+
+                        {!retranscribing && activeBreakdown ? (
                             <div className="breakdown-grids">
                                 {activeBreakdown.summary && (
                                     <div className="breakdown-item summary-box">
@@ -253,14 +287,14 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                                     </div>
                                 </div>
                             </div>
-                        ) : (
-                            <p className="empty-results">No analysis results yet. Process transcript if needed.</p>
-                        )}
+                        ) : !retranscribing ? (
+                            <p className="empty-results">No transcript yet. Click "Re-transcribe" to run Whisper on this recording.</p>
+                        ) : null}
 
                         <details className="raw-transcript-details">
                             <summary>View Full Transcript</summary>
                             <div className="transcript-text">
-                                {transcript?.full_text || "Transcript not loaded."}
+                                {transcript?.full_text || "No transcript available. Click \"Re-transcribe\" above to run Whisper on this recording."}
                             </div>
                         </details>
                     </section>

@@ -429,6 +429,10 @@ export async function exportMeetingPdf(meetingId: string): Promise<string> {
     return invoke<string>("export_meeting_pdf", { meetingId });
 }
 
+export async function retranscribeMeeting(meetingId: string): Promise<void> {
+    return invoke<void>("retranscribe_meeting", { meetingId });
+}
+
 
 export async function transcribeVoiceInput(
     audioBytes: number[],
@@ -553,6 +557,69 @@ export interface AgentStatus {
     status: "idle" | "running" | "completed" | "error";
 }
 
+export interface HermesAppContext {
+    app_name: string;
+    memory_count: number;
+}
+
+export interface HermesMemoryDigest {
+    title: string;
+    app_name: string;
+    summary: string;
+    timestamp: number;
+}
+
+export interface HermesBridgeStatus {
+    installed: boolean;
+    configured: boolean;
+    setup_complete: boolean;
+    gateway_running: boolean;
+    api_server_ready: boolean;
+    version: string | null;
+    bundled_repo_available: boolean;
+    runtime_source: string | null;
+    provider_kind: string | null;
+    model_name: string | null;
+    base_url: string | null;
+    api_url: string;
+    gateway_dir: string;
+    home_dir: string;
+    context_path: string;
+    context_ready: boolean;
+    last_synced_at: number | null;
+    fndr_local_model_id: string | null;
+    ollama_installed: boolean;
+    ollama_reachable: boolean;
+    ollama_models: string[];
+    ollama_base_url: string;
+    codex_cli_installed: boolean;
+    codex_logged_in: boolean;
+    codex_auth_path: string;
+    profile_name: string | null;
+    focus_task: string | null;
+    recent_memory_count: number;
+    open_task_count: number;
+    /** True when Ollama is configured and reachable — chat works without the Hermes CLI. */
+    direct_ollama_ready: boolean;
+    top_apps: HermesAppContext[];
+    recent_memories: HermesMemoryDigest[];
+    last_error: string | null;
+    install_command: string;
+}
+
+export interface HermesSetupPayload {
+    provider_kind: string;
+    model_name: string;
+    api_key?: string | null;
+    base_url?: string | null;
+}
+
+export interface HermesChatReply {
+    response_id: string;
+    conversation_id: string;
+    content: string;
+}
+
 export async function startAgentTask(
     taskTitle: string,
     contextUrls?: string[],
@@ -567,6 +634,52 @@ export async function getAgentStatus(): Promise<AgentStatus> {
 
 export async function stopAgent(): Promise<AgentStatus> {
     return invoke<AgentStatus>("stop_agent");
+}
+
+export async function getHermesBridgeStatus(): Promise<HermesBridgeStatus> {
+    return invoke<HermesBridgeStatus>("get_hermes_bridge_status");
+}
+
+export async function installHermesBridge(): Promise<HermesBridgeStatus> {
+    return invoke<HermesBridgeStatus>("install_hermes_bridge");
+}
+
+export async function saveHermesSetup(payload: HermesSetupPayload): Promise<HermesBridgeStatus> {
+    return invoke<HermesBridgeStatus>("save_hermes_setup", { payload });
+}
+
+export async function syncHermesBridgeContext(): Promise<HermesBridgeStatus> {
+    return invoke<HermesBridgeStatus>("sync_hermes_bridge_context");
+}
+
+export async function startHermesGateway(): Promise<HermesBridgeStatus> {
+    return invoke<HermesBridgeStatus>("start_hermes_gateway");
+}
+
+export async function stopHermesGateway(): Promise<HermesBridgeStatus> {
+    return invoke<HermesBridgeStatus>("stop_hermes_gateway");
+}
+
+export async function sendHermesMessage(
+    conversationId: string,
+    input: string
+): Promise<HermesChatReply> {
+    return invoke<HermesChatReply>("send_hermes_message", { conversationId, input });
+}
+
+export async function quickSetupOllama(): Promise<HermesBridgeStatus> {
+    return invoke<HermesBridgeStatus>("quick_setup_ollama");
+}
+
+/**
+ * Send a message directly to Ollama — no Hermes CLI required.
+ * messages is the prior conversation in OpenAI format: [{role, content}].
+ */
+export async function sendDirectChat(
+    messages: Array<{ role: string; content: string }>,
+    input: string
+): Promise<string> {
+    return invoke<string>("send_direct_chat", { messages, input });
 }
 
 export async function summarizeSearch(query: string, snippets: string[]): Promise<string> {
@@ -622,10 +735,24 @@ export interface ProactiveSuggestion {
     task_title: string | null;
 }
 
+export interface FndrNotificationPayload {
+    title: string;
+    body: string;
+    kind: string;
+}
+
 export function onProactiveSuggestion(
     callback: (suggestion: ProactiveSuggestion) => void
 ): Promise<() => void> {
     return listen<ProactiveSuggestion>("proactive_suggestion", (event) => {
+        callback(event.payload);
+    });
+}
+
+export function onFndrNotification(
+    callback: (notification: FndrNotificationPayload) => void
+): Promise<() => void> {
+    return listen<FndrNotificationPayload>("fndr_notification", (event) => {
         callback(event.payload);
     });
 }
@@ -661,4 +788,93 @@ export async function setFocusTask(task: string | null): Promise<FocusStatus> {
 
 export async function getFocusStatus(): Promise<FocusStatus> {
     return invoke<FocusStatus>("get_focus_status");
+}
+
+// Auto-fill
+export interface FieldContext {
+    label: string;
+    placeholder: string;
+    app_name: string;
+    bundle_id?: string | null;
+    window_title: string;
+    current_value: string;
+    screen_context: string;
+    inferred_label: string;
+}
+
+export interface AutofillSettings {
+    enabled: boolean;
+    shortcut: string;
+    lookback_days: number;
+    auto_inject_threshold: number;
+    prefer_typed_injection: boolean;
+    max_candidates: number;
+}
+
+export interface AutofillCandidate {
+    value: string;
+    confidence: number;
+    match_reason: string;
+    source_snippet: string;
+    source_app: string;
+    source_window_title: string;
+    timestamp: number;
+    memory_id: string;
+}
+
+export interface AutofillResolution {
+    query: string;
+    query_source: string;
+    context_hint: string;
+    candidates: AutofillCandidate[];
+    auto_inject_threshold: number;
+    requires_confirmation: boolean;
+    used_ocr_fallback: boolean;
+}
+
+export interface AutofillScanningState {
+    scanning: true;
+    message?: string;
+}
+
+export type AutofillOverlayPayload =
+    | FieldContext
+    | { error: string }
+    | AutofillScanningState;
+
+export async function getAutofillSettings(): Promise<AutofillSettings> {
+    return invoke<AutofillSettings>("get_autofill_settings");
+}
+
+export async function setAutofillSettings(settings: AutofillSettings): Promise<AutofillSettings> {
+    return invoke<AutofillSettings>("set_autofill_settings", { settings });
+}
+
+export async function resolveAutofill(
+    context: FieldContext,
+    queryOverride?: string | null,
+): Promise<AutofillResolution> {
+    return invoke<AutofillResolution>("resolve_autofill", { context, queryOverride });
+}
+
+export async function injectText(text: string): Promise<void> {
+    return invoke("inject_text", { text });
+}
+
+export async function dismissAutofill(): Promise<void> {
+    return invoke("dismiss_autofill");
+}
+
+export async function showAutofillOverlayWindow(): Promise<void> {
+    return invoke("show_autofill_overlay_window");
+}
+
+export async function setAutofillOverlayReady(
+    ready: boolean,
+): Promise<AutofillOverlayPayload | null> {
+    return invoke("set_autofill_overlay_ready", { ready });
+}
+
+export async function takePendingAutofillPayload(): Promise<AutofillOverlayPayload | null> {
+    return invoke("take_pending_autofill_payload");
 }

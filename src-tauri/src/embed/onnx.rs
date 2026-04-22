@@ -616,7 +616,7 @@ fn allow_mock_embedder() -> bool {
         }
     }
 
-    true
+    false
 }
 
 fn parse_env_bool(value: &str) -> bool {
@@ -727,6 +727,7 @@ mod tests {
 
     #[test]
     fn similar_phrases_score_higher_than_unrelated() {
+        std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
         let embedder = Embedder::new().expect("embedder should initialize in tests");
         let phrases = vec![
             "schedule project kickoff meeting with alice".to_string(),

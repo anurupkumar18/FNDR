@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { MemoryCard, SearchResult, search, searchMemoryCards } from "../api/tauri";
+import { MemoryCard, searchMemoryCards } from "../api/tauri";
 
 const BASE_SEARCH_TIMEOUT_MS = 6_000;
 const SEARCH_RESULT_LIMIT = 12;
@@ -17,45 +17,6 @@ function getAdaptiveTimeoutMs(query: string, attempt: number): number {
     const extraForWords = Math.min(6000, words * 450);
     const retryBonus = attempt > 0 ? 4000 : 0;
     return BASE_SEARCH_TIMEOUT_MS + extraForLength + extraForWords + retryBonus;
-}
-
-function parseHost(rawUrl: string): string {
-    try {
-        const normalized = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
-        return new URL(normalized).host;
-    } catch {
-        return rawUrl.replace(/^https?:\/\//i, "").split("/")[0].trim();
-    }
-}
-
-function mapRawResultToCard(result: SearchResult): MemoryCard {
-    const title = result.window_title?.trim() || `${result.app_name} memory`;
-    const summary = (result.snippet || "").trim() || `Captured activity in ${result.app_name}.`;
-    const context: string[] = [];
-    if (result.url) {
-        const host = parseHost(result.url);
-        if (host) {
-            context.push(`Site: ${host}`);
-        }
-    }
-
-    return {
-        id: result.id,
-        title,
-        summary,
-        action: result.url ? "Open source" : "Revisit context",
-        context,
-        timestamp: result.timestamp,
-        app_name: result.app_name,
-        window_title: result.window_title,
-        url: result.url,
-        score: result.score,
-        source_count: 1,
-        continuity: summary.includes(" • "),
-        raw_snippets: [summary],
-        evidence_ids: [result.id],
-        confidence: Math.max(0, Math.min(1, result.score)),
-    };
 }
 
 export function useSearch(
@@ -109,30 +70,13 @@ export function useSearch(
                 if (cancelled || requestId !== requestIdRef.current) {
                     return;
                 }
-                try {
-                    const rawFallback = await search(
-                        trimmedQuery,
-                        timeFilter ?? undefined,
-                        appFilter ?? undefined,
-                        SEARCH_RESULT_LIMIT
-                    );
-                    if (cancelled || requestId !== requestIdRef.current) {
-                        return;
-                    }
-                    setResults(rawFallback.slice(0, SEARCH_RESULT_LIMIT).map(mapRawResultToCard));
-                    setError(null);
-                } catch (fallbackError) {
-                    if (cancelled || requestId !== requestIdRef.current) {
-                        return;
-                    }
-                    const errorMessage = fallbackError instanceof Error ? fallbackError.message : "Search failed";
-                    setError(
-                        errorMessage.toLowerCase().includes("timed out")
-                            ? "Search timed out. Try a shorter query or remove filters."
-                            : errorMessage
-                    );
-                    setResults([]);
-                }
+                const errorMessage = e instanceof Error ? e.message : "Search failed";
+                setError(
+                    errorMessage.toLowerCase().includes("timed out")
+                        ? "Search timed out. Try a shorter query or remove filters."
+                        : errorMessage
+                );
+                setResults([]);
             } finally {
                 if (!cancelled && requestId === requestIdRef.current) {
                     setIsLoading(false);

@@ -2,4 +2,4 @@
 
 mod vision;
 
-pub use vision::{OcrEngine, RecognizedText};
+pub use vision::{OcrConfig, OcrEngine, RecognizedText};

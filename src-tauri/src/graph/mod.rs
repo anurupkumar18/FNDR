@@ -251,6 +251,10 @@ impl GraphStore {
         const MIN_CLUSTER_PEERS: usize = 2; // + current record = 3 total
         const SEARCH_K: usize = 10;
 
+        if record.embedding.is_empty() || record.embedding.iter().all(|value| *value == 0.0) {
+            return Ok(());
+        }
+
         let nearby = self
             .store
             .vector_search(&record.embedding, SEARCH_K, Some("7d"), None)
@@ -265,22 +269,32 @@ impl GraphStore {
             return Ok(());
         }
 
-        let nodes = self.store.get_all_nodes().await?;
-        let edges = self.store.get_all_edges().await?;
-
-        let node_map: HashMap<&str, &GraphNode> =
-            nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        let similar_memory_node_ids = similar
+            .iter()
+            .map(|result| memory_node_id(&result.id))
+            .collect::<Vec<_>>();
+        let edges = self
+            .store
+            .get_task_reference_edges_for_targets(&similar_memory_node_ids)
+            .await?;
+        let task_node_ids = edges
+            .iter()
+            .map(|edge| edge.source.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let task_nodes = self.store.get_nodes_by_ids(&task_node_ids).await?;
+        let task_node_ids = task_nodes
+            .iter()
+            .filter(|node| node.node_type == NodeType::Task)
+            .map(|node| node.id.clone())
+            .collect::<HashSet<_>>();
 
         // memory_node_id → task_node_id for all ReferenceForTask edges
         let mut memory_to_task: HashMap<String, String> = HashMap::new();
-        for edge in &edges {
-            if edge.edge_type != EdgeType::ReferenceForTask {
-                continue;
-            }
-            if let Some(src) = node_map.get(edge.source.as_str()) {
-                if src.node_type == NodeType::Task {
-                    memory_to_task.insert(edge.target.clone(), edge.source.clone());
-                }
+        for edge in edges {
+            if task_node_ids.contains(&edge.source) {
+                memory_to_task.insert(edge.target.clone(), edge.source.clone());
             }
         }
 

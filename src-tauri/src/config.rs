@@ -3,6 +3,55 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Auto-fill configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutofillConfig {
+    /// Whether global screen auto-fill is enabled.
+    #[serde(default = "default_autofill_enabled")]
+    pub enabled: bool,
+    /// Global shortcut in tauri/global-hotkey format, e.g. `Alt+F`.
+    #[serde(default = "default_autofill_shortcut")]
+    pub shortcut: String,
+    /// How far back semantic retrieval should search.
+    #[serde(default = "default_autofill_lookback_days")]
+    pub lookback_days: u32,
+    /// Confidence threshold above which FNDR injects without confirmation.
+    #[serde(default = "default_autofill_auto_inject_threshold")]
+    pub auto_inject_threshold: f32,
+    /// Whether FNDR should prefer system-style typing when the target app remains frontmost.
+    #[serde(default = "default_autofill_prefer_typed_injection")]
+    pub prefer_typed_injection: bool,
+    /// Maximum number of candidates to return for quick-pick conflict resolution.
+    #[serde(default = "default_autofill_max_candidates")]
+    pub max_candidates: usize,
+}
+
+impl Default for AutofillConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_autofill_enabled(),
+            shortcut: default_autofill_shortcut(),
+            lookback_days: default_autofill_lookback_days(),
+            auto_inject_threshold: default_autofill_auto_inject_threshold(),
+            prefer_typed_injection: default_autofill_prefer_typed_injection(),
+            max_candidates: default_autofill_max_candidates(),
+        }
+    }
+}
+
+impl AutofillConfig {
+    pub fn normalized(mut self) -> Self {
+        self.shortcut = self.shortcut.trim().to_string();
+        if self.shortcut.is_empty() {
+            self.shortcut = default_autofill_shortcut();
+        }
+        self.lookback_days = self.lookback_days.clamp(7, 365);
+        self.auto_inject_threshold = self.auto_inject_threshold.clamp(0.55, 0.995);
+        self.max_candidates = self.max_candidates.clamp(1, 6);
+        self
+    }
+}
+
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -39,6 +88,9 @@ pub struct Config {
     /// Half-life for Ebbinghaus memory decay in days. Records decay toward 0.15 floor over time.
     #[serde(default = "default_decay_half_life_days")]
     pub decay_half_life_days: u32,
+    /// Intelligent Screen Auto-Fill configuration.
+    #[serde(default)]
+    pub autofill: AutofillConfig,
 }
 
 fn default_use_vlm() -> bool {
@@ -59,6 +111,30 @@ fn default_proactive_surface_enabled() -> bool {
 
 fn default_decay_half_life_days() -> u32 {
     21
+}
+
+fn default_autofill_enabled() -> bool {
+    true
+}
+
+fn default_autofill_shortcut() -> String {
+    "Alt+F".to_string()
+}
+
+fn default_autofill_lookback_days() -> u32 {
+    90
+}
+
+fn default_autofill_auto_inject_threshold() -> f32 {
+    0.90
+}
+
+fn default_autofill_prefer_typed_injection() -> bool {
+    true
+}
+
+fn default_autofill_max_candidates() -> usize {
+    4
 }
 
 impl Default for Config {
@@ -83,11 +159,17 @@ impl Default for Config {
             screenshot_retention_days: 30,
             proactive_surface_enabled: true,
             decay_half_life_days: 21,
+            autofill: AutofillConfig::default(),
         }
     }
 }
 
 impl Config {
+    pub fn normalized(mut self) -> Self {
+        self.autofill = self.autofill.normalized();
+        self
+    }
+
     /// Load configuration from file or create default
     pub fn load_or_create() -> Result<Self, Box<dyn std::error::Error>> {
         let config_path = Self::config_path()?;
@@ -95,9 +177,9 @@ impl Config {
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
             let config: Config = toml::from_str(&content)?;
-            Ok(config)
+            Ok(config.normalized())
         } else {
-            let config = Config::default();
+            let config = Config::default().normalized();
             config.save()?;
             Ok(config)
         }

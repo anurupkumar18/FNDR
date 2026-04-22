@@ -183,15 +183,56 @@
     background: #1a1a1a;
     border: 1px solid rgba(180, 140, 60, 0.4);
     color: #bfa16a;
-    padding: 12px 24px;
+    padding: 14px 16px;
     border-radius: 12px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    font-weight: 600;
+    justify-content: space-between;
+    gap: 16px;
+    min-width: min(420px, calc(100vw - 24px));
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
     z-index: 9999;
-    animation: toast-in-out 4s ease forwards;
+    animation: toast-in-out 6s ease forwards;
+}
+
+.daily-toast-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.daily-toast-copy strong {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #f0d59d;
+}
+
+.daily-toast-copy span {
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: rgba(235, 224, 198, 0.82);
+}
+
+.daily-toast-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.daily-toast-btn {
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(245, 240, 224, 0.92);
+    padding: 7px 11px;
+    font: inherit;
+    font-size: 0.74rem;
+    cursor: pointer;
+}
+
+.daily-toast-btn.primary {
+    border-color: rgba(191, 161, 106, 0.45);
+    color: #f0d59d;
 }
 
 [data-theme="light"] .daily-toast {
@@ -199,6 +240,20 @@
     border-color: rgba(180, 140, 60, 0.3);
     color: #8c703d;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .daily-toast-copy strong {
+    color: #8c703d;
+}
+
+[data-theme="light"] .daily-toast-copy span {
+    color: rgba(90, 76, 46, 0.8);
+}
+
+[data-theme="light"] .daily-toast-btn {
+    background: rgba(245, 247, 251, 0.96);
+    border-color: rgba(80, 60, 20, 0.12);
+    color: rgba(70, 58, 34, 0.9);
 }
 
 .toast-icon {
@@ -234,5 +289,20 @@
     100% {
         opacity: 0;
         transform: translate(-50%, -20px);
+    }
+}
+
+@media (max-width: 640px) {
+    .daily-toast {
+        min-width: auto;
+        width: calc(100vw - 24px);
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .daily-toast-actions {
+        width: 100%;
+        justify-content: flex-start;
+        flex-wrap: wrap;
     }
 }
