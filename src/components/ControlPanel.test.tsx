@@ -7,6 +7,15 @@ vi.mock("../api/tauri", () => ({
     deleteOlderThan: vi.fn(),
     getBlocklist: vi.fn().mockResolvedValue([]),
     getMemoryRepairProgress: vi.fn(),
+    getStorageHealth: vi.fn().mockResolvedValue({
+        memory_db_bytes: 1024,
+        frames_bytes: 0,
+        models_bytes: 2048,
+        dev_build_cache_bytes: 0,
+        runtime_total_bytes: 3072,
+        measured_at_ms: 0,
+    }),
+    getStorageReclaimProgress: vi.fn(),
     getMcpServerStatus: vi.fn().mockResolvedValue({
         running: false,
         host: "127.0.0.1",
@@ -18,6 +27,7 @@ vi.mock("../api/tauri", () => ({
     getRetentionDays: vi.fn().mockResolvedValue(7),
     pauseCapture: vi.fn(),
     resumeCapture: vi.fn(),
+    reclaimMemoryStorage: vi.fn(),
     runMemoryRepairBackfill: vi.fn(),
     setBlocklist: vi.fn(),
     setRetentionDays: vi.fn(),

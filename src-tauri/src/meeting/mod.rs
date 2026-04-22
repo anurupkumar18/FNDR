@@ -4,6 +4,7 @@
 //! capture and local transcription.
 
 use crate::{
+    embed::Embedder,
     speech,
     store::{
         MeetingBreakdown, MeetingSegment, MeetingSession, MemoryRecord, Store, Task, TaskType,
@@ -30,6 +31,17 @@ const STATUS_EVENT: &str = "meeting://status";
 const SEGMENT_EVENT: &str = "meeting://segment";
 const FORCED_MODEL: &str = "whisper-large-v3-turbo-gguf";
 const CONSENT_LOOKBACK_SEGMENTS: usize = 120;
+static MEETING_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
+
+fn shared_meeting_embedder() -> Option<&'static Embedder> {
+    match MEETING_EMBEDDER.get_or_init(Embedder::new) {
+        Ok(embedder) => Some(embedder),
+        Err(err) => {
+            tracing::debug!("Meeting embedder unavailable: {}", err);
+            None
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeetingRecorderStatus {
@@ -1823,40 +1835,6 @@ fn should_retry_segment_text(text: &str) -> bool {
         || trimmed.contains("Custom meeting transcription command returned empty output")
 }
 
-fn build_meeting_markdown(transcript: &MeetingTranscript) -> String {
-    let participants = if transcript.meeting.participants.is_empty() {
-        "n/a".to_string()
-    } else {
-        transcript.meeting.participants.join(", ")
-    };
-
-    [
-        format!("# {}", transcript.meeting.title),
-        "".to_string(),
-        format!("- Session ID: {}", transcript.meeting.id),
-        format!("- Model: {}", transcript.meeting.model),
-        format!(
-            "- Started: {}",
-            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
-                transcript.meeting.start_timestamp
-            )
-            .unwrap_or_else(chrono::Utc::now)
-            .to_rfc3339()
-        ),
-        format!("- Participants: {}", participants),
-        "".to_string(),
-        "## Transcript".to_string(),
-        "".to_string(),
-        if transcript.full_text.is_empty() {
-            "(No transcript generated)".to_string()
-        } else {
-            transcript.full_text.clone()
-        },
-        "".to_string(),
-    ]
-    .join("\n")
-}
-
 async fn ingest_transcript_into_fndr_memory(
     app_state: Arc<AppState>,
     transcript: &MeetingTranscript,
@@ -1865,6 +1843,35 @@ async fn ingest_transcript_into_fndr_memory(
     let now = transcript.meeting.end_timestamp.unwrap_or_else(now_ms);
 
     let snippet: String = transcript.full_text.chars().take(260).collect::<String>();
+    let full_text_for_embedding = transcript.full_text.chars().take(2200).collect::<String>();
+    let snippet_for_embedding = if snippet.is_empty() {
+        transcript.meeting.title.clone()
+    } else {
+        snippet.clone()
+    };
+    let (embedding, snippet_embedding) = if let Some(embedder) = shared_meeting_embedder() {
+        match embedder.embed_batch_with_context(&[
+            (
+                "FNDR Meetings".to_string(),
+                transcript.meeting.title.clone(),
+                full_text_for_embedding,
+            ),
+            (
+                "FNDR Meetings".to_string(),
+                transcript.meeting.title.clone(),
+                snippet_for_embedding,
+            ),
+        ]) {
+            Ok(mut vectors) => {
+                let snippet_vec = vectors.pop().unwrap_or_else(|| vec![0.0; 384]);
+                let text_vec = vectors.pop().unwrap_or_else(|| vec![0.0; 384]);
+                (text_vec, snippet_vec)
+            }
+            Err(_) => (vec![0.0; 384], vec![0.0; 384]),
+        }
+    } else {
+        (vec![0.0; 384], vec![0.0; 384])
+    };
 
     let record = MemoryRecord {
         id: Uuid::new_v4().to_string(),
@@ -1874,7 +1881,7 @@ async fn ingest_transcript_into_fndr_memory(
         bundle_id: Some("com.fndr.meetings".to_string()),
         window_title: transcript.meeting.title.clone(),
         session_id: format!("meeting-{}", transcript.meeting.id),
-        text: build_meeting_markdown(transcript),
+        text: String::new(),
         clean_text: transcript.full_text.clone(),
         ocr_confidence: 1.0,
         ocr_block_count: transcript.segments.len() as u32,
@@ -1886,11 +1893,11 @@ async fn ingest_transcript_into_fndr_memory(
         summary_source: "fallback".to_string(),
         noise_score: 0.0,
         session_key: format!("meeting:{}", transcript.meeting.id),
-        embedding: vec![0.0; 384],
+        embedding,
         image_embedding: vec![0.0; 512],
         screenshot_path: None,
         url: transcript_path.map(|p| p.to_string()),
-        snippet_embedding: vec![0.0; 384],
+        snippet_embedding,
         decay_score: 1.0,
         last_accessed_at: 0,
     };
@@ -1906,25 +1913,6 @@ async fn ingest_transcript_into_fndr_memory(
     }
 
     Ok(())
-}
-
-fn sanitize_filename(input: &str) -> String {
-    let mut out = input
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    out = out.trim_matches('_').to_string();
-    if out.is_empty() {
-        "meeting".to_string()
-    } else {
-        out
-    }
 }
 
 fn collect_segment_files(audio_dir: &Path) -> Vec<PathBuf> {

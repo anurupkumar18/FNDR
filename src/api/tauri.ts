@@ -68,6 +68,10 @@ export interface MemoryRepairSummary {
     anchor_merges: number;
     task_reference_updates: number;
     screenshots_cleaned: number;
+    embeddings_refreshed: number;
+    chars_before: number;
+    chars_after: number;
+    chars_reclaimed: number;
     spotify_merges: number;
     youtube_merges: number;
     codex_merges: number;
@@ -75,6 +79,43 @@ export interface MemoryRepairSummary {
     gitlab_merges: number;
     antigravity_merges: number;
     app_merges: AppMergeCount[];
+}
+
+export interface StorageReclaimSummary {
+    records_scanned: number;
+    records_rewritten: number;
+    screenshot_paths_cleared: number;
+    screenshot_files_deleted: number;
+    embeddings_refreshed: number;
+    snippet_embeddings_refreshed: number;
+    chars_before: number;
+    chars_after: number;
+    chars_reclaimed: number;
+    bytes_before: number;
+    bytes_after: number;
+    bytes_reclaimed: number;
+}
+
+export interface StorageReclaimProgress {
+    is_running: boolean;
+    phase: string;
+    processed: number;
+    total: number;
+    records_rewritten: number;
+    screenshot_paths_cleared: number;
+    screenshot_files_deleted: number;
+    embeddings_refreshed: number;
+    snippet_embeddings_refreshed: number;
+    timestamp_ms: number;
+}
+
+export interface StorageHealth {
+    memory_db_bytes: number;
+    frames_bytes: number;
+    models_bytes: number;
+    dev_build_cache_bytes: number;
+    runtime_total_bytes: number;
+    measured_at_ms: number;
 }
 
 export interface MemoryRepairProgress {
@@ -536,6 +577,18 @@ export async function runMemoryRepairBackfill(): Promise<MemoryRepairSummary> {
 
 export async function getMemoryRepairProgress(): Promise<MemoryRepairProgress> {
     return invoke<MemoryRepairProgress>("get_memory_repair_progress");
+}
+
+export async function getStorageReclaimProgress(): Promise<StorageReclaimProgress> {
+    return invoke<StorageReclaimProgress>("get_storage_reclaim_progress");
+}
+
+export async function getStorageHealth(): Promise<StorageHealth> {
+    return invoke<StorageHealth>("get_storage_health");
+}
+
+export async function reclaimMemoryStorage(): Promise<StorageReclaimSummary> {
+    return invoke<StorageReclaimSummary>("reclaim_memory_storage");
 }
 
 export interface ChatMessage {

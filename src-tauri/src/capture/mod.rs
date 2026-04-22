@@ -210,6 +210,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             if let Err(e) = state.store.add_batch(&batch).await {
                 tracing::error!("Failed to flush batch: {}", e);
             } else {
+                purge_capture_artifacts(state.store.frames_dir());
                 tracing::info!(
                     "Flushed {} records in {:?}",
                     batch.len(),
@@ -486,8 +487,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         state
                             .focus_drift_count
                             .store(0, std::sync::atomic::Ordering::Relaxed);
-                        let task_title =
-                            state.focus_task.read().clone().unwrap_or_default();
+                        let task_title = state.focus_task.read().clone().unwrap_or_default();
                         let suggestion = crate::ProactiveSuggestion {
                             memory_id: "focus_drift".to_string(),
                             snippet: format!(
@@ -522,7 +522,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     .clone()
                     .unwrap_or_else(|| app_name.to_lowercase().replace(' ', "_"))
             ),
-            text: text.clone(),
+            text: String::new(),
             clean_text: enriched_clean_text,
             ocr_confidence: ocr_result.confidence,
             ocr_block_count: ocr_result.block_count as u32,
@@ -750,8 +750,8 @@ async fn merge_or_append_memory_record(
                 cleanup_screenshot_path(incoming.screenshot_path.clone());
             }
             batch[batch_idx] = merged.clone();
-            if let Some(anchor) = incoming_anchor {
-                continuity_index.insert(anchor, merged.id.clone());
+            if let Some(anchor) = incoming_anchor.as_ref() {
+                continuity_index.insert(anchor.clone(), merged.id.clone());
             }
             return Ok(merged);
         }
@@ -762,6 +762,57 @@ async fn merge_or_append_memory_record(
                     .await;
             tracing::info!(
                 "Merged memory {} into persisted continuity card {} via similarity score",
+                incoming.id,
+                merged.id
+            );
+            state
+                .store
+                .delete_memory_by_id(&existing.id)
+                .await
+                .map_err(|e| e.to_string())?;
+            state
+                .store
+                .add_batch(&[merged.clone()])
+                .await
+                .map_err(|e| e.to_string())?;
+            if merged.screenshot_path != incoming.screenshot_path {
+                cleanup_screenshot_path(incoming.screenshot_path.clone());
+            }
+            if let Some(anchor) = continuity_anchor_for_memory(&merged) {
+                continuity_index.insert(anchor, merged.id.clone());
+            }
+            return Ok(merged);
+        }
+    } else {
+        if let Some(batch_idx) = best_batch_lexical_merge_target(batch, &incoming) {
+            let merged = merge_memory_records(
+                batch[batch_idx].clone(),
+                incoming.clone(),
+                text_embedder,
+                engine,
+            )
+            .await;
+            tracing::info!(
+                "Merged memory {} into in-flight continuity card {} via lexical fallback",
+                incoming.id,
+                merged.id
+            );
+            if merged.screenshot_path != incoming.screenshot_path {
+                cleanup_screenshot_path(incoming.screenshot_path.clone());
+            }
+            batch[batch_idx] = merged.clone();
+            if let Some(anchor) = incoming_anchor.as_ref() {
+                continuity_index.insert(anchor.clone(), merged.id.clone());
+            }
+            return Ok(merged);
+        }
+
+        if let Some(existing) = best_persisted_lexical_merge_target(state, &incoming).await? {
+            let merged =
+                merge_memory_records(existing.clone(), incoming.clone(), text_embedder, engine)
+                    .await;
+            tracing::info!(
+                "Merged memory {} into persisted continuity card {} via lexical fallback",
                 incoming.id,
                 merged.id
             );
@@ -806,6 +857,34 @@ fn best_batch_merge_target(batch: &[MemoryRecord], incoming: &MemoryRecord) -> O
             continue;
         }
         if !passes_merge_threshold(scored) {
+            continue;
+        }
+        if best
+            .as_ref()
+            .map(|(_, prev)| scored.score > prev.score)
+            .unwrap_or(true)
+        {
+            best = Some((index, scored));
+        }
+    }
+
+    best.map(|(index, _)| index)
+}
+
+fn best_batch_lexical_merge_target(
+    batch: &[MemoryRecord],
+    incoming: &MemoryRecord,
+) -> Option<usize> {
+    let mut best: Option<(usize, MergeScore)> = None;
+    for (index, candidate) in batch.iter().enumerate() {
+        if incoming.app_name != candidate.app_name {
+            continue;
+        }
+        if !is_cross_app_merge_window(incoming.timestamp, candidate.timestamp) {
+            continue;
+        }
+        let scored = score_memory_candidate_lexical(incoming, candidate);
+        if !passes_lexical_merge_threshold(scored) {
             continue;
         }
         if best
@@ -887,6 +966,44 @@ async fn best_persisted_merge_target(
     Ok(None)
 }
 
+async fn best_persisted_lexical_merge_target(
+    state: &AppState,
+    incoming: &MemoryRecord,
+) -> Result<Option<MemoryRecord>, String> {
+    let query = lexical_merge_query(incoming);
+    if query.is_empty() {
+        return Ok(None);
+    }
+
+    let candidates = state
+        .store
+        .keyword_search(&query, 36, Some("24h"), Some(&incoming.app_name))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let best = candidates
+        .iter()
+        .filter(|candidate| candidate.id != incoming.id)
+        .filter_map(|candidate| {
+            let scored = score_search_candidate_lexical(incoming, candidate);
+            if !passes_lexical_merge_threshold(scored) {
+                return None;
+            }
+            Some((candidate.id.clone(), scored.score))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1));
+
+    if let Some((best_id, _)) = best {
+        state
+            .store
+            .get_memory_by_id(&best_id)
+            .await
+            .map_err(|e| e.to_string())
+    } else {
+        Ok(None)
+    }
+}
+
 pub(crate) async fn merge_memory_records(
     existing: MemoryRecord,
     incoming: MemoryRecord,
@@ -905,7 +1022,6 @@ pub(crate) async fn merge_memory_records_with_policy(
     allow_llm_summary: bool,
 ) -> MemoryRecord {
     let merged_clean_text = merge_story_text(&existing.clean_text, &incoming.clean_text, 6400);
-    let merged_text = merge_story_text(&existing.text, &incoming.text, 7000);
     let snippet_fallback = merge_story_text(&existing.snippet, &incoming.snippet, 260);
     let llm_snippet = if allow_llm_summary {
         if let Some(model) = engine {
@@ -972,7 +1088,7 @@ pub(crate) async fn merge_memory_records_with_policy(
         bundle_id: incoming.bundle_id.clone().or(existing.bundle_id.clone()),
         window_title: choose_story_title(&existing.window_title, &incoming.window_title),
         session_id: existing.session_id.clone(),
-        text: merged_text,
+        text: String::new(),
         clean_text: merged_clean_text,
         ocr_confidence: existing.ocr_confidence.max(incoming.ocr_confidence),
         ocr_block_count: existing.ocr_block_count.max(incoming.ocr_block_count),
@@ -1131,11 +1247,82 @@ pub(crate) fn score_memory_candidate(
     }
 }
 
+fn score_search_candidate_lexical(incoming: &MemoryRecord, candidate: &SearchResult) -> MergeScore {
+    let base = score_search_candidate(incoming, candidate);
+    let same_url = matching_effective_url(incoming.url.as_deref(), candidate.url.as_deref());
+    let same_domain = same_domain(incoming.url.as_deref(), candidate.url.as_deref());
+
+    let mut score = base.lexical * 0.9;
+    if same_domain {
+        score += 0.08;
+    }
+    if same_url {
+        score += 0.14;
+    }
+    if base.anchor_match {
+        score += 0.24;
+    }
+
+    MergeScore {
+        score,
+        lexical: base.lexical,
+        vector: base.vector,
+        anchor_match: base.anchor_match,
+    }
+}
+
+fn score_memory_candidate_lexical(incoming: &MemoryRecord, candidate: &MemoryRecord) -> MergeScore {
+    let base = score_memory_candidate(incoming, candidate);
+    let same_url = matching_effective_url(incoming.url.as_deref(), candidate.url.as_deref());
+    let same_domain = same_domain(incoming.url.as_deref(), candidate.url.as_deref());
+
+    let mut score = base.lexical * 0.9;
+    if same_domain {
+        score += 0.08;
+    }
+    if same_url {
+        score += 0.14;
+    }
+    if base.anchor_match {
+        score += 0.24;
+    }
+
+    MergeScore {
+        score,
+        lexical: base.lexical,
+        vector: base.vector,
+        anchor_match: base.anchor_match,
+    }
+}
+
 pub(crate) fn passes_merge_threshold(score: MergeScore) -> bool {
     if score.anchor_match {
-        return score.score >= 0.62 && score.lexical >= 0.18;
+        return score.score >= 0.58 && score.lexical >= 0.18;
+    }
+    if score.lexical >= 0.72 && score.score >= 0.80 {
+        return true;
     }
     score.score >= 0.86 && score.vector >= 0.82 && score.lexical >= 0.28
+}
+
+fn passes_lexical_merge_threshold(score: MergeScore) -> bool {
+    if score.anchor_match {
+        return score.lexical >= 0.24 && score.score >= 0.46;
+    }
+    score.lexical >= 0.66 && score.score >= 0.74
+}
+
+fn lexical_merge_query(record: &MemoryRecord) -> String {
+    let text = format!(
+        "{} {} {}",
+        record.window_title,
+        record.snippet,
+        trim_chars(&record.clean_text, 500)
+    );
+    text.split_whitespace()
+        .take(48)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn allows_cross_app_merge_from_memory(
@@ -1412,6 +1599,16 @@ fn cleanup_screenshot_path(path: Option<String>) {
         return;
     };
     let _ = std::fs::remove_file(path);
+}
+
+fn purge_capture_artifacts(frames_dir: PathBuf) {
+    if frames_dir.exists() {
+        if let Err(err) = std::fs::remove_dir_all(&frames_dir) {
+            tracing::debug!("Capture artifact purge skipped: {}", err);
+            return;
+        }
+    }
+    let _ = std::fs::create_dir_all(frames_dir);
 }
 
 async fn maybe_create_tasks_from_memory(

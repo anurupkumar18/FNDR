@@ -8,6 +8,7 @@ use super::schema::{
     MeetingSegment, MeetingSession, MemoryRecord, NodeType, SearchResult, Stats, Task, TaskType,
     WeekdayCount,
 };
+use crate::memory_compaction::compact_memory_record_payload;
 use arrow_array::{
     builder::{Int64Builder, StringBuilder},
     Array, BooleanArray, FixedSizeListArray, Float32Array, Int64Array, RecordBatch,
@@ -357,12 +358,44 @@ impl Store {
         if compacted.is_empty() {
             return Ok(());
         }
+        self.insert_memory_batch(&compacted).await
+    }
 
-        let batch = records_to_batch(&compacted)?;
+    /// Insert a batch without content-based deduping, preserving caller-provided ids.
+    pub async fn add_batch_preserving_ids(
+        &self,
+        records: &[MemoryRecord],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let normalized = records
+            .iter()
+            .map(normalize_record_for_index)
+            .collect::<Vec<_>>();
+        self.insert_memory_batch(&normalized).await
+    }
+
+    /// Replace the entire memories table in one write, preserving caller ids.
+    pub async fn replace_all_memories_preserving_ids(
+        &self,
+        records: &[MemoryRecord],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if records.is_empty() {
+            self.delete_all().await?;
+            return Ok(());
+        }
+
+        let normalized = records
+            .iter()
+            .map(normalize_record_for_index)
+            .collect::<Vec<_>>();
+        let batch = records_to_batch(&normalized)?;
         let schema = Arc::new(memory_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
         self.table
             .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Overwrite)
             .execute()
             .await?;
         Ok(())
@@ -436,6 +469,23 @@ impl Store {
             results.extend(batch_to_search_results(batch));
         }
         Ok(dedup_search_results(results, limit))
+    }
+
+    async fn insert_memory_batch(
+        &self,
+        records: &[MemoryRecord],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let batch = records_to_batch(records)?;
+        let schema = Arc::new(memory_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .execute()
+            .await?;
+        Ok(())
     }
 
     /// Asynchronously update snippet + summary_source for a single record (post-LLM).
@@ -2490,7 +2540,7 @@ fn estimate_record_signal_strength(record: &MemoryRecord) -> f32 {
 }
 
 fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
-    let mut normalized = record.clone();
+    let mut normalized = compact_memory_record_payload(record);
     normalized.url = sanitize_index_url(
         normalized.url.as_deref(),
         &normalized.window_title,
@@ -3075,5 +3125,22 @@ mod tests {
             normalized.session_key,
             "chrome:docs.example.com:projects/fndr"
         );
+    }
+
+    #[test]
+    fn normalize_record_for_index_compacts_payload_fields() {
+        let mut source = record(
+            Some("https://example.com/research"),
+            "Research notes",
+            "Summarized the research notes for memory card storage.",
+        );
+        source.text = "raw noisy ocr block".to_string();
+        source.clean_text = "raw noisy ocr block with repeated lines".to_string();
+        source.screenshot_path = Some("/tmp/frame.png".to_string());
+
+        let normalized = normalize_record_for_index(&source);
+        assert!(normalized.text.is_empty());
+        assert!(normalized.screenshot_path.is_none());
+        assert_eq!(normalized.clean_text, source.snippet);
     }
 }

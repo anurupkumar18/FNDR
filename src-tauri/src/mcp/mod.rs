@@ -748,8 +748,8 @@ async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Va
             run_search_meeting_transcripts(args).await
         }
         "get_ambient_context" => {
-            let args: GetAmbientContextArgs =
-                serde_json::from_value(params.arguments).unwrap_or_else(|_| GetAmbientContextArgs {
+            let args: GetAmbientContextArgs = serde_json::from_value(params.arguments)
+                .unwrap_or_else(|_| GetAmbientContextArgs {
                     limit: default_ambient_limit(),
                 });
             run_get_ambient_context(app_state, args).await
@@ -910,8 +910,8 @@ async fn run_get_ambient_context(
     let limit = args.limit.clamp(1, 20);
 
     // 1. What app is the user in right now?
-    let frontmost_app = crate::capture::macos_frontmost_app_name()
-        .unwrap_or_else(|| "Unknown".to_string());
+    let frontmost_app =
+        crate::capture::macos_frontmost_app_name().unwrap_or_else(|| "Unknown".to_string());
 
     // 2. Recent memory snippets (newest first)
     let recent = app_state

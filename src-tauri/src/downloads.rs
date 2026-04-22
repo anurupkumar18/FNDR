@@ -1,5 +1,5 @@
 //! Downloads folder watcher.
-//! 
+//!
 //! Monitors the user's Downloads folder for new, completed files
 //! and injects synthetic memory records so they become searchable.
 
@@ -11,10 +11,10 @@ use notify::{
     event::{ModifyKind, RenameMode},
     EventKind, RecursiveMode, Watcher,
 };
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Instant};
+use std::time::Instant;
 
 const DEBOUNCE_SECONDS: u64 = 10;
 
@@ -52,7 +52,7 @@ async fn run_watch_loop(state: Arc<AppState>, watch_path: PathBuf) {
         tracing::error!("Failed to watch downloads dir: {}", e);
         return;
     }
-    
+
     tracing::info!("Downloads tracker watching: {}", watch_path.display());
 
     let mut text_embedder = match Embedder::new() {
@@ -126,7 +126,10 @@ fn is_temp_file(path: &Path) -> bool {
     };
 
     let ext = ext.to_lowercase();
-    matches!(ext.as_str(), "crdownload" | "download" | "part" | "tmp" | "temp")
+    matches!(
+        ext.as_str(),
+        "crdownload" | "download" | "part" | "tmp" | "temp"
+    )
 }
 
 async fn inject_download_memory(
@@ -136,16 +139,30 @@ async fn inject_download_memory(
     filename: &str,
 ) {
     let now = Local::now();
-    let text = format!("File downloaded locally to file system Tracker: {}", file_path.display());
+    let text = format!(
+        "File downloaded locally to file system Tracker: {}",
+        file_path.display()
+    );
     let snippet = format!("Downloaded: {}", filename);
-    
-    let embedding = if let Some(emb) = embedder {
-        emb.embed_batch(&[text.clone()])
-            .ok()
-            .and_then(|mut vectors| vectors.drain(..).next())
-            .unwrap_or_else(|| vec![0.0; 384])
+
+    let (embedding, snippet_embedding) = if let Some(emb) = embedder {
+        match emb.embed_batch_with_context(&[
+            ("Finder".to_string(), "Downloads".to_string(), text.clone()),
+            (
+                "Finder".to_string(),
+                "Downloads".to_string(),
+                snippet.clone(),
+            ),
+        ]) {
+            Ok(mut vectors) => {
+                let snippet_vec = vectors.pop().unwrap_or_else(|| vec![0.0; 384]);
+                let text_vec = vectors.pop().unwrap_or_else(|| vec![0.0; 384]);
+                (text_vec, snippet_vec)
+            }
+            Err(_) => (vec![0.0; 384], vec![0.0; 384]),
+        }
     } else {
-        vec![0.0; 384]
+        (vec![0.0; 384], vec![0.0; 384])
     };
 
     let record = MemoryRecord {
@@ -156,7 +173,7 @@ async fn inject_download_memory(
         bundle_id: Some("com.apple.finder".to_string()),
         window_title: "Downloads".to_string(),
         session_id: format!("{}-downloads", now.format("%Y%m%d")),
-        text: text.clone(),
+        text: String::new(),
         clean_text: text.clone(),
         ocr_confidence: 1.0,
         ocr_block_count: 1,
@@ -168,7 +185,7 @@ async fn inject_download_memory(
         image_embedding: vec![0.0; 512],
         screenshot_path: None,
         url: None,
-        snippet_embedding: vec![0.0; 384],
+        snippet_embedding,
         decay_score: 1.0,
         last_accessed_at: now.timestamp_millis(),
     };

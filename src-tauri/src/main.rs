@@ -91,6 +91,34 @@ fn main() {
                 });
             });
 
+            // Background task: compact legacy capture payloads and purge stray artifacts.
+            {
+                let maintenance_state = state.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    loop {
+                        match api::commands::reclaim_memory_storage_silent(maintenance_state.clone()).await {
+                            Ok(summary)
+                                if summary.bytes_reclaimed > 0
+                                    || summary.chars_reclaimed > 0
+                                    || summary.screenshot_files_deleted > 0 =>
+                            {
+                                tracing::info!(
+                                    "Automatic storage reclaim: rewrote {} / {} cards, removed {} files, reclaimed {} bytes",
+                                    summary.records_rewritten,
+                                    summary.records_scanned,
+                                    summary.screenshot_files_deleted,
+                                    summary.bytes_reclaimed
+                                );
+                            }
+                            Ok(_) => tracing::debug!("Automatic storage reclaim found nothing to trim"),
+                            Err(err) => tracing::debug!("Automatic storage reclaim skipped: {}", err),
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+                    }
+                });
+            }
+
             let runtime_state = state.clone();
 
             // Background task: Track downloads folder
@@ -423,8 +451,11 @@ fn main() {
             api::commands::set_retention_days,
             api::commands::delete_older_than,
             api::commands::get_app_names,
+            api::commands::get_storage_health,
             api::commands::run_memory_repair_backfill,
             api::commands::get_memory_repair_progress,
+            api::commands::get_storage_reclaim_progress,
+            api::commands::reclaim_memory_storage,
             api::commands::get_privacy_alerts,
             api::commands::dismiss_privacy_alert,
             api::commands::add_to_blocklist,

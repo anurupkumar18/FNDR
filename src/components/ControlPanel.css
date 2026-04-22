@@ -256,6 +256,19 @@
     gap: 8px;
 }
 
+.storage-health-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    margin-top: 10px;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
+
+.storage-health-line span {
+    white-space: nowrap;
+}
+
 .profile-row {
     display: flex;
     gap: 8px;
@@ -804,6 +817,28 @@
 .model-dl-pct {
     font-size: 0.75rem;
     color: var(--text-muted);
+}
+
+.reclaim-progress-wrap {
+    margin-top: 8px;
+}
+
+.reclaim-progress-bar-wrap {
+    height: 7px;
+    border-radius: 999px;
+    background: rgba(62, 39, 35, 0.16);
+    overflow: hidden;
+}
+
+.reclaim-progress-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(110, 171, 255, 0.8), rgba(105, 224, 193, 0.85));
+    transition: width 0.22s ease;
+}
+
+.reclaim-progress-text {
+    margin-top: 7px;
 }
 
 .model-error {

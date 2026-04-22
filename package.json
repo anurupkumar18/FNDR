@@ -10,6 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
+    "clean:dev-cache": "scripts/clean-dev-build-cache.sh --yes",
+    "clean:dev-cache:dry-run": "scripts/clean-dev-build-cache.sh --dry-run",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -5,11 +5,16 @@ import {
     CaptureStatus,
     MemoryRepairProgress,
     MemoryRepairSummary,
+    StorageHealth,
+    StorageReclaimProgress,
+    StorageReclaimSummary,
     McpServerStatus,
     deleteAllData,
     deleteOlderThan,
     getBlocklist,
     getMemoryRepairProgress,
+    getStorageHealth,
+    getStorageReclaimProgress,
     getMcpServerStatus,
     getRetentionDays,
     pauseCapture,
@@ -19,6 +24,7 @@ import {
     startMcpServer,
     stopMcpServer,
     runMemoryRepairBackfill,
+    reclaimMemoryStorage,
     getPrivacyAlerts,
 } from "../api/tauri";
 import {
@@ -64,6 +70,11 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [repairSummary, setRepairSummary] = useState<MemoryRepairSummary | null>(null);
     const [repairError, setRepairError] = useState<string | null>(null);
     const [repairProgress, setRepairProgress] = useState<MemoryRepairProgress | null>(null);
+    const [reclaimBusy, setReclaimBusy] = useState(false);
+    const [reclaimSummary, setReclaimSummary] = useState<StorageReclaimSummary | null>(null);
+    const [reclaimProgress, setReclaimProgress] = useState<StorageReclaimProgress | null>(null);
+    const [reclaimError, setReclaimError] = useState<string | null>(null);
+    const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null);
     const prevPrivacyAlertCountRef = useRef(0);
 
     // Theme state
@@ -83,26 +94,30 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const loadData = useCallback(async () => {
         try {
             if (evalUi) {
-                const [bl, ret, onboarding] = await Promise.all([
+                const [bl, ret, onboarding, health] = await Promise.all([
                     getBlocklist(),
                     getRetentionDays(),
                     getOnboardingState(),
+                    getStorageHealth(),
                 ]);
                 setBlocklistState(bl);
                 setRetentionDaysState(ret);
+                setStorageHealth(health);
                 const name = onboarding.display_name ?? "";
                 setProfileName(name);
                 setProfileDraft(name);
             } else {
-                const [bl, ret, mcp, onboarding] = await Promise.all([
+                const [bl, ret, mcp, onboarding, health] = await Promise.all([
                     getBlocklist(),
                     getRetentionDays(),
                     getMcpServerStatus(),
                     getOnboardingState(),
+                    getStorageHealth(),
                 ]);
                 setBlocklistState(bl);
                 setRetentionDaysState(ret);
                 setMcpStatus(mcp);
+                setStorageHealth(health);
                 const name = onboarding.display_name ?? "";
                 setProfileName(name);
                 setProfileDraft(name);
@@ -117,6 +132,34 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
             void loadData();
         }
     }, [isOpen, loadData]);
+
+    useEffect(() => {
+        if (!isOpen || activeTab !== "settings") {
+            return;
+        }
+
+        let mounted = true;
+        const refreshStorage = async () => {
+            try {
+                const health = await getStorageHealth();
+                if (mounted) {
+                    setStorageHealth(health);
+                }
+            } catch {
+                // Storage health is informational; keep the previous value on transient failures.
+            }
+        };
+
+        void refreshStorage();
+        const timer = window.setInterval(() => {
+            void refreshStorage();
+        }, 15000);
+
+        return () => {
+            mounted = false;
+            window.clearInterval(timer);
+        };
+    }, [isOpen, activeTab]);
 
     const loadModels = useCallback(async () => {
         setModelsLoading(true);
@@ -347,6 +390,49 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         }
     };
 
+    const handleReclaimStorage = async () => {
+        setReclaimBusy(true);
+        setReclaimError(null);
+        setReclaimSummary(null);
+        setReclaimProgress({
+            is_running: true,
+            phase: "starting",
+            processed: 0,
+            total: 0,
+            records_rewritten: 0,
+            screenshot_paths_cleared: 0,
+            screenshot_files_deleted: 0,
+            embeddings_refreshed: 0,
+            snippet_embeddings_refreshed: 0,
+            timestamp_ms: Date.now(),
+        });
+        try {
+            const summary = await reclaimMemoryStorage();
+            setReclaimSummary(summary);
+            try {
+                setStorageHealth(await getStorageHealth());
+            } catch {
+                // Keep the reclaim result visible even if the health refresh fails.
+            }
+            setReclaimProgress({
+                is_running: false,
+                phase: "complete",
+                processed: summary.records_scanned,
+                total: summary.records_scanned,
+                records_rewritten: summary.records_rewritten,
+                screenshot_paths_cleared: summary.screenshot_paths_cleared,
+                screenshot_files_deleted: summary.screenshot_files_deleted,
+                embeddings_refreshed: summary.embeddings_refreshed,
+                snippet_embeddings_refreshed: summary.snippet_embeddings_refreshed,
+                timestamp_ms: Date.now(),
+            });
+        } catch (e) {
+            setReclaimError(String(e));
+        } finally {
+            setReclaimBusy(false);
+        }
+    };
+
     useEffect(() => {
         if (!repairBusy) {
             return;
@@ -374,6 +460,34 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
             window.clearInterval(timer);
         };
     }, [repairBusy]);
+
+    useEffect(() => {
+        if (!reclaimBusy) {
+            return;
+        }
+
+        let mounted = true;
+        const pollProgress = async () => {
+            try {
+                const progress = await getStorageReclaimProgress();
+                if (mounted) {
+                    setReclaimProgress(progress);
+                }
+            } catch {
+                // Ignore transient polling errors while reclaim is running.
+            }
+        };
+
+        void pollProgress();
+        const timer = window.setInterval(() => {
+            void pollProgress();
+        }, 850);
+
+        return () => {
+            mounted = false;
+            window.clearInterval(timer);
+        };
+    }, [reclaimBusy]);
 
     const handleToggleMcpServer = async () => {
         setMcpBusy(true);
@@ -425,7 +539,10 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     };
 
     function fmtBytes(b: number) {
-        return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
+        if (b < 1024) return `${b} B`;
+        if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+        if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(0)} MB`;
+        return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
     }
 
     return (
@@ -570,6 +687,14 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         </button>
                                     )}
                                 </div>
+                                {storageHealth && (
+                                    <div className="storage-health-line" aria-label="Storage health">
+                                        <span>Memory DB {fmtBytes(storageHealth.memory_db_bytes)}</span>
+                                        <span>Frames {fmtBytes(storageHealth.frames_bytes)}</span>
+                                        <span>Models {fmtBytes(storageHealth.models_bytes)}</span>
+                                        <span>Dev cache {fmtBytes(storageHealth.dev_build_cache_bytes)}</span>
+                                    </div>
+                                )}
                             </section>
 
                             {!evalUi && (
@@ -785,13 +910,53 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                 {repairSummary && (
                                     <p className="section-hint" style={{ marginTop: 8 }}>
                                         Merged {repairSummary.merged_count} duplicates ({repairSummary.total_before} → {repairSummary.total_after} cards),
-                                        updated {repairSummary.task_reference_updates} task references.
+                                        updated {repairSummary.task_reference_updates} task references,
+                                        refreshed {repairSummary.embeddings_refreshed} embeddings,
+                                        reclaimed {(repairSummary.chars_reclaimed / 1024).toFixed(1)} KB of raw OCR payload.
                                         Spotify {repairSummary.spotify_merges}, YouTube {repairSummary.youtube_merges},
                                         Codex {repairSummary.codex_merges}, Discord {repairSummary.discord_merges},
                                         GitLab {repairSummary.gitlab_merges}, Antigravity {repairSummary.antigravity_merges}.
                                     </p>
                                 )}
                                 {repairError && <p className="section-hint" style={{ marginTop: 8 }}>{repairError}</p>}
+                                <button
+                                    className="ui-action-btn btn-secondary"
+                                    onClick={() => void handleReclaimStorage()}
+                                    disabled={reclaimBusy}
+                                    style={{ marginTop: 8 }}
+                                >
+                                    {reclaimBusy ? "Reclaiming..." : "Reclaim storage from old captures"}
+                                </button>
+                                {reclaimBusy && reclaimProgress && (
+                                    <div className="reclaim-progress-wrap">
+                                        <div className="reclaim-progress-bar-wrap">
+                                            <div
+                                                className="reclaim-progress-bar-fill"
+                                                style={{
+                                                    width: `${
+                                                        reclaimProgress.total > 0
+                                                            ? ((reclaimProgress.processed / reclaimProgress.total) * 100).toFixed(1)
+                                                            : "0.0"
+                                                    }%`,
+                                                }}
+                                            />
+                                        </div>
+                                        <p className="section-hint reclaim-progress-text">
+                                            {reclaimProgress.phase} · {reclaimProgress.processed.toLocaleString()} / {reclaimProgress.total.toLocaleString()} ·
+                                            rewrote {reclaimProgress.records_rewritten.toLocaleString()} ·
+                                            removed {reclaimProgress.screenshot_files_deleted.toLocaleString()} files
+                                        </p>
+                                    </div>
+                                )}
+                                {reclaimSummary && (
+                                    <p className="section-hint" style={{ marginTop: 8 }}>
+                                        Rewrote {reclaimSummary.records_rewritten} / {reclaimSummary.records_scanned} cards,
+                                        refreshed {reclaimSummary.embeddings_refreshed + reclaimSummary.snippet_embeddings_refreshed} embeddings,
+                                        removed {reclaimSummary.screenshot_files_deleted} screenshot files,
+                                        reclaimed {(reclaimSummary.bytes_reclaimed / (1024 * 1024)).toFixed(1)} MB ({(reclaimSummary.chars_reclaimed / 1024).toFixed(1)} KB text).
+                                    </p>
+                                )}
+                                {reclaimError && <p className="section-hint" style={{ marginTop: 8 }}>{reclaimError}</p>}
                                 <button
                                     className={`ui-action-btn btn-danger ${confirmDelete ? "confirm" : ""}`}
                                     onClick={() => void handleDeleteAll()}
