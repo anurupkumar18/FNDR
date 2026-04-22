@@ -30,6 +30,7 @@ interface SearchBarProps {
 const PLACEHOLDER_DISPLAY_DURATION = 3000;
 const PLACEHOLDER_FADE_DURATION = 400;
 const DEFAULT_PLACEHOLDER = "Recall a specific meeting, note, or idea...";
+const MAX_VOICE_QUERY_CHARS = 220;
 
 export function SearchBar({
     value,
@@ -194,9 +195,10 @@ export function SearchBar({
             setVoiceStatus("I didn't catch that.");
             return;
         }
+        const safeQuery = clampVoiceQuery(cleaned);
 
-        const normalized = cleaned.toLowerCase();
-        setVoiceStatus(`Heard: ${cleaned}`);
+        const normalized = safeQuery.toLowerCase();
+        setVoiceStatus(`Heard: ${safeQuery}`);
 
         if (normalized === "clear" || normalized === "clear search" || normalized === "reset search") {
             onChange("");
@@ -206,7 +208,7 @@ export function SearchBar({
         }
 
         if (normalized.startsWith("search for ")) {
-            const nextQuery = cleaned.slice("search for ".length).trim();
+            const nextQuery = clampVoiceQuery(safeQuery.slice("search for ".length).trim());
             onChange(nextQuery);
             onSubmit(nextQuery);
             setVoiceStatus(`Searching for: ${nextQuery}`);
@@ -214,7 +216,7 @@ export function SearchBar({
         }
 
         if (normalized.startsWith("find ")) {
-            const nextQuery = cleaned.slice("find ".length).trim();
+            const nextQuery = clampVoiceQuery(safeQuery.slice("find ".length).trim());
             onChange(nextQuery);
             onSubmit(nextQuery);
             setVoiceStatus(`Searching for: ${nextQuery}`);
@@ -222,7 +224,7 @@ export function SearchBar({
         }
 
         if (normalized.startsWith("look for ")) {
-            const nextQuery = cleaned.slice("look for ".length).trim();
+            const nextQuery = clampVoiceQuery(safeQuery.slice("look for ".length).trim());
             onChange(nextQuery);
             onSubmit(nextQuery);
             setVoiceStatus(`Searching for: ${nextQuery}`);
@@ -265,9 +267,9 @@ export function SearchBar({
             return;
         }
 
-        onChange(cleaned);
-        onSubmit(cleaned);
-        setVoiceStatus(`Searching for: ${cleaned}`);
+        onChange(safeQuery);
+        onSubmit(safeQuery);
+        setVoiceStatus(`Searching for: ${safeQuery}`);
         setTimeout(() => setVoiceStatus(null), 2000);
     }
 
@@ -542,4 +544,8 @@ function chooseRecorderOptions(): MediaRecorderOptions | undefined {
 
 function stopMediaStream(stream: MediaStream | null) {
     stream?.getTracks().forEach((track) => track.stop());
+}
+
+function clampVoiceQuery(query: string): string {
+    return query.replace(/\s+/g, " ").trim().slice(0, MAX_VOICE_QUERY_CHARS);
 }

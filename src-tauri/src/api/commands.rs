@@ -79,6 +79,8 @@ const VECTOR_TIMEOUT: Duration = Duration::from_millis(1800);
 const KEYWORD_TIMEOUT: Duration = Duration::from_millis(1200);
 const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
 const LLM_SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(1500);
+const MAX_SEARCH_QUERY_CHARS: usize = 420;
+const MAX_SEARCH_QUERY_WORDS: usize = 72;
 const MEMORY_GRAPH_LIMIT: usize = 1_500;
 const TASK_LINK_SCAN_LIMIT: usize = 260;
 const TASK_MEETING_LOOKBACK_DAYS: i64 = 14;
@@ -136,6 +138,17 @@ fn truncate_chars(input: &str, max_chars: usize) -> String {
     } else {
         head
     }
+}
+
+fn sanitize_search_query(raw: &str) -> String {
+    let words = raw.split_whitespace().take(MAX_SEARCH_QUERY_WORDS);
+    let compact = words.collect::<Vec<_>>().join(" ");
+    compact
+        .chars()
+        .take(MAX_SEARCH_QUERY_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 fn card_domain(url: &str) -> Option<String> {
@@ -347,6 +360,10 @@ pub async fn search(
     app_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<SearchResult>, String> {
+    let query = sanitize_search_query(&query);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
     let limit = limit.unwrap_or(20).clamp(1, 50);
 
     // Guard: LanceDB vector_search panics/errors on an empty table.
@@ -383,6 +400,10 @@ pub async fn search_memory_cards(
     app_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<MemoryCard>, String> {
+    let query = sanitize_search_query(&query);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
     let limit = limit.unwrap_or(20).clamp(1, 50);
     let started = Instant::now();
     tracing::info!(
