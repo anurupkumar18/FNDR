@@ -322,7 +322,7 @@ impl MeetingStore {
     }
 
     async fn get_transcript(&self, meeting_id: &str) -> Result<MeetingTranscript, String> {
-        let meeting = self
+        let mut meeting = self
             .get_meeting(meeting_id)
             .await
             .ok_or_else(|| "Meeting not found".to_string())?;
@@ -333,6 +333,10 @@ impl MeetingStore {
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
+
+        if breakdown_needs_repair(meeting.breakdown.as_ref()) && !full_text.trim().is_empty() {
+            meeting.breakdown = Some(build_quick_breakdown(&full_text, meeting.breakdown.as_ref()));
+        }
 
         Ok(MeetingTranscript {
             meeting,
@@ -1036,7 +1040,7 @@ async fn finalize_meeting_analysis(
         {
             tracing::info!("Running bounded AI meeting breakdown for {}", meeting_id);
             let structured = tokio::time::timeout(
-                Duration::from_secs(6),
+                Duration::from_secs(12),
                 engine.extract_meeting_breakdown(&full_text),
             )
             .await
@@ -1051,25 +1055,48 @@ async fn finalize_meeting_analysis(
                     followups: structured.followups,
                 })
             } else {
-                let raw =
-                    tokio::time::timeout(Duration::from_secs(4), engine.extract_todos(&full_text))
-                        .await
-                        .ok();
-                raw.map(|raw| {
-                    let parsed = crate::tasks::parse_tasks_from_llm_response(
-                        &raw,
-                        &format!("Meeting:{meeting_id}"),
-                    );
-                    let mut fallback = MeetingBreakdown::default();
-                    for task in parsed {
-                        match task.task_type {
-                            TaskType::Todo => fallback.todos.push(task.title),
-                            TaskType::Reminder => fallback.reminders.push(task.title),
-                            TaskType::Followup => fallback.followups.push(task.title),
+                let legacy_prompt = build_legacy_breakdown_prompt(&full_text);
+                let legacy_raw = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    engine.extract_todos(&legacy_prompt),
+                )
+                .await
+                .ok();
+
+                if let Some(parsed) =
+                    legacy_raw.and_then(|raw| parse_legacy_breakdown_response(&raw))
+                {
+                    Some(parsed)
+                } else {
+                    let raw = tokio::time::timeout(
+                        Duration::from_secs(6),
+                        engine.extract_todos(&full_text),
+                    )
+                    .await
+                    .ok();
+                    raw.and_then(|raw| {
+                        let parsed = crate::tasks::parse_tasks_from_llm_response(
+                            &raw,
+                            &format!("Meeting:{meeting_id}"),
+                        );
+                        let mut fallback = MeetingBreakdown::default();
+                        for task in parsed {
+                            match task.task_type {
+                                TaskType::Todo => fallback.todos.push(task.title),
+                                TaskType::Reminder => fallback.reminders.push(task.title),
+                                TaskType::Followup => fallback.followups.push(task.title),
+                            }
                         }
-                    }
-                    fallback
-                })
+                        if fallback.todos.is_empty()
+                            && fallback.reminders.is_empty()
+                            && fallback.followups.is_empty()
+                        {
+                            None
+                        } else {
+                            Some(fallback)
+                        }
+                    })
+                }
             };
 
             if let Some(ai_breakdown) = ai_breakdown {
@@ -1100,15 +1127,49 @@ async fn finalize_meeting_analysis(
 }
 
 fn summarize_transcript_fallback(transcript: &str) -> String {
-    let normalized = transcript
-        .split_whitespace()
-        .take(48)
-        .collect::<Vec<_>>()
-        .join(" ");
-    if normalized.is_empty() {
+    let sentences = split_transcript_sentences(transcript);
+    if sentences.is_empty() {
         "Meeting captured with limited transcript detail.".to_string()
     } else {
-        format!("Discussion summary: {normalized}")
+        let mut prioritized = Vec::new();
+        for sentence in &sentences {
+            let lowered = sentence.to_lowercase();
+            if has_any_keyword(
+                &lowered,
+                &[
+                    "action item",
+                    "follow up",
+                    "followup",
+                    "deadline",
+                    "by ",
+                    "must",
+                    "need to",
+                    "should",
+                    "review",
+                    "send",
+                    "finish",
+                    "complete",
+                    "test",
+                    "confirm",
+                ],
+            ) {
+                prioritized.push(trim_words(sentence, 26));
+            }
+            if prioritized.len() >= 2 {
+                break;
+            }
+        }
+
+        if prioritized.is_empty() {
+            prioritized.extend(
+                sentences
+                    .iter()
+                    .take(2)
+                    .map(|sentence| trim_words(sentence, 24)),
+            );
+        }
+
+        format!("Discussion summary: {}", prioritized.join(" "))
     }
 }
 
@@ -1170,16 +1231,135 @@ fn build_quick_breakdown(full_text: &str, existing: Option<&MeetingBreakdown>) -
 }
 
 fn split_transcript_sentences(full_text: &str) -> Vec<String> {
-    full_text
-        .split(['\n', '.', '?', '!'])
-        .map(str::trim)
-        .filter(|sentence| sentence.len() >= 10 && sentence.len() <= 220)
-        .map(|sentence| sentence.to_string())
-        .collect()
+    let normalized = full_text.replace('\r', "\n");
+    let mut sentences = Vec::new();
+
+    for chunk in normalized.split(['\n', '.', '?', '!', ';']) {
+        let trimmed = chunk.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.len() <= 220 {
+            if trimmed.len() >= 10 {
+                sentences.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        let mut current = String::new();
+        for fragment in trimmed.split(',') {
+            let fragment = fragment.trim();
+            if fragment.is_empty() {
+                continue;
+            }
+
+            let candidate = if current.is_empty() {
+                fragment.to_string()
+            } else {
+                format!("{current}, {fragment}")
+            };
+
+            if candidate.len() > 220 && !current.is_empty() {
+                if current.len() >= 10 {
+                    sentences.push(current.trim().to_string());
+                }
+                current = fragment.to_string();
+            } else {
+                current = candidate;
+            }
+        }
+
+        if current.len() >= 10 {
+            sentences.push(current.trim().to_string());
+        }
+    }
+
+    sentences
 }
 
 fn has_any_keyword(text: &str, keywords: &[&str]) -> bool {
     keywords.iter().any(|keyword| text.contains(keyword))
+}
+
+fn trim_words(value: &str, limit: usize) -> String {
+    value
+        .split_whitespace()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn build_legacy_breakdown_prompt(full_text: &str) -> String {
+    format!(
+        "Review this meeting transcript and provide a structured breakdown.\n\nTRANSCRIPT:\n{}\n\n\
+        Format your response exactly as:\n\
+        SUMMARY: [one paragraph summary]\n\
+        TODOS:\n- [task]\n\
+        REMINDERS:\n- [reminder]\n\
+        FOLLOWUPS:\n- [followup]",
+        full_text.chars().take(4000).collect::<String>()
+    )
+}
+
+fn parse_legacy_breakdown_response(raw: &str) -> Option<MeetingBreakdown> {
+    let mut breakdown = MeetingBreakdown::default();
+    let mut section = "";
+
+    for line in raw.lines() {
+        let line = line.trim().trim_matches('|');
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("SUMMARY:") {
+            breakdown.summary = rest.trim().to_string();
+            section = "summary";
+            continue;
+        }
+        if line.eq_ignore_ascii_case("TODOS:") {
+            section = "todos";
+            continue;
+        }
+        if line.eq_ignore_ascii_case("REMINDERS:") {
+            section = "reminders";
+            continue;
+        }
+        if line.eq_ignore_ascii_case("FOLLOWUPS:")
+            || line.eq_ignore_ascii_case("FOLLOW-UPS:")
+            || line.eq_ignore_ascii_case("FOLLOW UPS:")
+        {
+            section = "followups";
+            continue;
+        }
+
+        let item = line
+            .strip_prefix("- ")
+            .or_else(|| line.strip_prefix("* "))
+            .map(str::trim)
+            .unwrap_or(line);
+        if item.len() < 4 {
+            continue;
+        }
+
+        match section {
+            "summary" if breakdown.summary.is_empty() => breakdown.summary = item.to_string(),
+            "todos" => breakdown.todos.push(item.to_string()),
+            "reminders" => breakdown.reminders.push(item.to_string()),
+            "followups" => breakdown.followups.push(item.to_string()),
+            _ => {}
+        }
+    }
+
+    if breakdown.summary.trim().is_empty()
+        && breakdown.todos.is_empty()
+        && breakdown.reminders.is_empty()
+        && breakdown.followups.is_empty()
+    {
+        None
+    } else {
+        Some(breakdown)
+    }
 }
 
 fn merge_string_lists(existing: &[String], incoming: &[String], limit: usize) -> Vec<String> {
@@ -1222,6 +1402,17 @@ fn merge_breakdowns(
     } else {
         incoming
     }
+}
+
+fn breakdown_needs_repair(breakdown: Option<&MeetingBreakdown>) -> bool {
+    breakdown
+        .map(|breakdown| {
+            breakdown.summary.trim().is_empty()
+                && breakdown.todos.is_empty()
+                && breakdown.reminders.is_empty()
+                && breakdown.followups.is_empty()
+        })
+        .unwrap_or(true)
 }
 
 async fn persist_breakdown_tasks(
@@ -2130,6 +2321,52 @@ mod tests {
         assert_eq!(names, vec!["segment_00002.wav", "segment_00010.wav"]);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parses_legacy_breakdown_response_sections() {
+        let raw = "\
+SUMMARY: Felipe owns homepage copy and Carlos owns meeting testing with clear deadlines.\n\
+TODOS:\n\
+- Finalize homepage copy and follow-up invite.\n\
+REMINDERS:\n\
+- Anna needs to send five UX issues by 2pm tomorrow.\n\
+FOLLOWUPS:\n\
+- Follow up with Carlos about the documented meeting test results.\n";
+
+        let breakdown =
+            parse_legacy_breakdown_response(raw).expect("legacy breakdown should parse");
+
+        assert!(breakdown.summary.contains("Felipe owns homepage copy"));
+        assert_eq!(breakdown.todos.len(), 1);
+        assert_eq!(breakdown.reminders.len(), 1);
+        assert_eq!(breakdown.followups.len(), 1);
+    }
+
+    #[test]
+    fn quick_breakdown_extracts_summary_and_action_buckets() {
+        let transcript = "\
+Alright everyone, let's go through action items clearly so we can track to-dos, reminders, and follow-ups. \
+Felipe must finalize homepage copy and the follow-up invite by 2pm tomorrow. \
+Follow up with Anna to confirm the copy wording and review the onboarding screens. \
+Anna needs to send five UX issues by 2pm tomorrow. \
+Carlos must test the meeting feature in three scenarios and send results by Friday end of day.";
+
+        let breakdown = build_quick_breakdown(transcript, None);
+
+        assert!(breakdown.summary.contains("Discussion summary:"));
+        assert!(breakdown
+            .todos
+            .iter()
+            .any(|item| item.to_lowercase().contains("finalize homepage copy")));
+        assert!(breakdown.reminders.iter().any(|item| {
+            let lowered = item.to_lowercase();
+            lowered.contains("tomorrow") || lowered.contains("friday")
+        }));
+        assert!(breakdown
+            .followups
+            .iter()
+            .any(|item| item.to_lowercase().contains("follow up with anna")));
     }
 
     #[cfg(target_os = "macos")]

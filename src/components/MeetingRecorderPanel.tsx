@@ -33,6 +33,13 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
         () => meetings.find((m) => m.id === selectedMeetingId) ?? null,
         [meetings, selectedMeetingId]
     );
+    const activeBreakdown = useMemo(() => {
+        if (!selectedMeeting) return null;
+        if (transcript?.meeting.id === selectedMeeting.id && transcript.meeting.breakdown) {
+            return transcript.meeting.breakdown;
+        }
+        return selectedMeeting.breakdown ?? null;
+    }, [selectedMeeting, transcript]);
 
     const refresh = async (autoSelect = false) => {
         if (!isVisible) return;
@@ -216,32 +223,32 @@ export function MeetingRecorderPanel({ isVisible, onClose }: MeetingRecorderPane
                             </button>
                         </div>
 
-                        {selectedMeeting.breakdown ? (
+                        {activeBreakdown ? (
                             <div className="breakdown-grids">
-                                {selectedMeeting.breakdown.summary && (
+                                {activeBreakdown.summary && (
                                     <div className="breakdown-item summary-box">
                                         <h4>Summary</h4>
-                                        <p>{selectedMeeting.breakdown.summary}</p>
+                                        <p>{activeBreakdown.summary}</p>
                                     </div>
                                 )}
                                 
                                 <div className="breakdown-grid-row">
                                     <div className="breakdown-item todo-box">
                                         <h4>To-dos</h4>
-                                        {selectedMeeting.breakdown.todos.length > 0 ? (
-                                            <ul>{selectedMeeting.breakdown.todos.map((item, i) => <li key={i}>{item}</li>)}</ul>
+                                        {activeBreakdown.todos.length > 0 ? (
+                                            <ul>{activeBreakdown.todos.map((item, i) => <li key={i}>{item}</li>)}</ul>
                                         ) : <p className="empty-sub">No tasks detected.</p>}
                                     </div>
                                     <div className="breakdown-item reminder-box">
                                         <h4>Reminders</h4>
-                                        {selectedMeeting.breakdown.reminders.length > 0 ? (
-                                            <ul>{selectedMeeting.breakdown.reminders.map((item, i) => <li key={i}>{item}</li>)}</ul>
+                                        {activeBreakdown.reminders.length > 0 ? (
+                                            <ul>{activeBreakdown.reminders.map((item, i) => <li key={i}>{item}</li>)}</ul>
                                         ) : <p className="empty-sub">No reminders detected.</p>}
                                     </div>
                                     <div className="breakdown-item followup-box">
                                         <h4>Follow-ups</h4>
-                                        {selectedMeeting.breakdown.followups.length > 0 ? (
-                                            <ul>{selectedMeeting.breakdown.followups.map((item, i) => <li key={i}>{item}</li>)}</ul>
+                                        {activeBreakdown.followups.length > 0 ? (
+                                            <ul>{activeBreakdown.followups.map((item, i) => <li key={i}>{item}</li>)}</ul>
                                         ) : <p className="empty-sub">No follow-ups detected.</p>}
                                     </div>
                                 </div>
