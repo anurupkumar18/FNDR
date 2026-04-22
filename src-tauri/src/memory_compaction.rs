@@ -1,10 +1,15 @@
 //! Helpers for compacting persisted memory payloads.
 
+use crate::embed::{TextChunker, EMBEDDING_DIM};
 use crate::store::MemoryRecord;
 
 const SUMMARY_CLEAN_TEXT_CHARS: usize = 360;
 const FALLBACK_CLEAN_TEXT_CHARS: usize = 560;
 const GENERIC_CLEAN_TEXT_CHARS: usize = 420;
+const LEXICAL_SHADOW_CHARS: usize = 320;
+const SUPPORT_CHUNK_CHARS: usize = 720;
+const SUPPORT_CHUNK_COUNT: usize = 4;
+const COMPACT_EMBED_CHARS: usize = 720;
 const EMBEDDING_MIN_NORM: f32 = 1e-6;
 
 pub fn compact_clean_text(summary_source: &str, snippet: &str, clean_text: &str) -> String {
@@ -33,6 +38,17 @@ pub fn compact_clean_text(summary_source: &str, snippet: &str, clean_text: &str)
 
 pub fn compact_memory_record_payload(record: &MemoryRecord) -> MemoryRecord {
     let mut compacted = record.clone();
+    let lexical_shadow_source = if record.lexical_shadow.trim().is_empty() {
+        build_lexical_shadow(
+            &record.window_title,
+            &record.snippet,
+            &record.clean_text,
+            record.url.as_deref(),
+        )
+    } else {
+        record.lexical_shadow.clone()
+    };
+    compacted.lexical_shadow = compact_lexical_shadow(&lexical_shadow_source);
     compacted.text = String::new();
     compacted.clean_text =
         compact_clean_text(&record.summary_source, &record.snippet, &record.clean_text);
@@ -42,26 +58,205 @@ pub fn compact_memory_record_payload(record: &MemoryRecord) -> MemoryRecord {
 
 pub fn best_embedding_text(record: &MemoryRecord) -> String {
     let clean = normalize_memory_text(&record.clean_text);
+    let shadow = compact_lexical_shadow(&record.lexical_shadow);
     if !clean.is_empty() {
-        return clean;
+        if shadow.is_empty() {
+            return clean;
+        }
+        return trim_chars(&format!("{clean} {shadow}"), COMPACT_EMBED_CHARS);
     }
     let snippet = normalize_memory_text(&record.snippet);
     if !snippet.is_empty() {
-        return snippet;
+        if shadow.is_empty() {
+            return snippet;
+        }
+        return trim_chars(&format!("{snippet} {shadow}"), COMPACT_EMBED_CHARS);
     }
-    normalize_memory_text(&record.window_title)
+    if shadow.is_empty() {
+        normalize_memory_text(&record.window_title)
+    } else {
+        trim_chars(
+            &format!("{} {}", normalize_memory_text(&record.window_title), shadow),
+            COMPACT_EMBED_CHARS,
+        )
+    }
 }
 
 pub fn best_snippet_embedding_text(record: &MemoryRecord) -> String {
-    let snippet = normalize_memory_text(&record.snippet);
-    if !snippet.is_empty() {
-        return snippet;
+    compact_summary_embedding_text(
+        &record.summary_source,
+        &record.snippet,
+        &record.clean_text,
+        &record.lexical_shadow,
+    )
+}
+
+pub fn best_support_embedding_texts(record: &MemoryRecord) -> Vec<String> {
+    support_embedding_texts(
+        &record.app_name,
+        &record.window_title,
+        &record.clean_text,
+        &record.lexical_shadow,
+    )
+}
+
+pub fn compact_summary_embedding_text(
+    summary_source: &str,
+    snippet: &str,
+    clean_text: &str,
+    lexical_shadow: &str,
+) -> String {
+    let base = compact_clean_text(summary_source, snippet, clean_text);
+    let shadow = compact_lexical_shadow(lexical_shadow);
+    if shadow.is_empty() {
+        return trim_chars(&base, COMPACT_EMBED_CHARS);
     }
-    let clean = normalize_memory_text(&record.clean_text);
-    if !clean.is_empty() {
-        return trim_chars(&clean, SUMMARY_CLEAN_TEXT_CHARS);
+    if base.is_empty() {
+        return trim_chars(&shadow, COMPACT_EMBED_CHARS);
     }
-    normalize_memory_text(&record.window_title)
+
+    let base_norm = normalize_memory_text(&base).to_lowercase();
+    let shadow_terms = shadow
+        .split_whitespace()
+        .filter(|term| term.len() >= 3)
+        .filter(|term| !base_norm.contains(&term.to_ascii_lowercase()))
+        .collect::<Vec<_>>();
+
+    if shadow_terms.is_empty() {
+        trim_chars(&base, COMPACT_EMBED_CHARS)
+    } else {
+        trim_chars(
+            &format!("{base} support {}", shadow_terms.join(" ")),
+            COMPACT_EMBED_CHARS,
+        )
+    }
+}
+
+pub fn support_embedding_texts(
+    app_name: &str,
+    window_title: &str,
+    clean_text: &str,
+    lexical_shadow: &str,
+) -> Vec<String> {
+    let chunker = TextChunker::new();
+    let chunks = chunker.chunk_ocr_text(app_name, window_title, clean_text);
+    let mut selected = Vec::new();
+
+    if let Some(first) = chunks.first() {
+        selected.push(trim_chars(
+            &normalize_memory_text(first),
+            SUPPORT_CHUNK_CHARS,
+        ));
+    }
+    if let Some(longest) = chunks.iter().max_by_key(|chunk| chunk.len()) {
+        selected.push(trim_chars(
+            &normalize_memory_text(longest),
+            SUPPORT_CHUNK_CHARS,
+        ));
+    }
+    if let Some(last) = chunks.last() {
+        selected.push(trim_chars(
+            &normalize_memory_text(last),
+            SUPPORT_CHUNK_CHARS,
+        ));
+    }
+
+    if selected.is_empty() {
+        let clean = normalize_memory_text(clean_text);
+        if !clean.is_empty() {
+            selected.push(trim_chars(&clean, SUPPORT_CHUNK_CHARS));
+        }
+    }
+
+    let shadow = compact_lexical_shadow(lexical_shadow);
+    if !shadow.is_empty() {
+        selected.push(shadow);
+    }
+
+    let mut deduped = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for text in selected {
+        let normalized = normalize_memory_text(&text);
+        if normalized.is_empty() {
+            continue;
+        }
+        let key = normalized.to_lowercase();
+        if seen.insert(key) {
+            deduped.push(normalized);
+        }
+        if deduped.len() >= SUPPORT_CHUNK_COUNT {
+            break;
+        }
+    }
+    deduped
+}
+
+pub fn mean_pool_embeddings(vectors: &[Vec<f32>]) -> Vec<f32> {
+    if vectors.is_empty() {
+        return vec![0.0; EMBEDDING_DIM];
+    }
+
+    let dim = vectors
+        .iter()
+        .find(|vector| !vector.is_empty())
+        .map(|vector| vector.len())
+        .unwrap_or(EMBEDDING_DIM);
+    let mut pooled = vec![0.0; dim];
+    let mut count = 0usize;
+
+    for vector in vectors {
+        if vector.len() != dim {
+            continue;
+        }
+        for (index, value) in vector.iter().enumerate() {
+            pooled[index] += *value;
+        }
+        count += 1;
+    }
+
+    if count == 0 {
+        return vec![0.0; dim];
+    }
+
+    for value in &mut pooled {
+        *value /= count as f32;
+    }
+    pooled
+}
+
+pub fn build_lexical_shadow(
+    window_title: &str,
+    snippet: &str,
+    clean_text: &str,
+    url: Option<&str>,
+) -> String {
+    let mut parts = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    if let Some(url) = url {
+        let normalized = normalize_memory_text(url);
+        for token in normalized.split_whitespace() {
+            push_shadow_token(&mut parts, &mut seen, token);
+            if parts.join(" ").chars().count() >= LEXICAL_SHADOW_CHARS {
+                return compact_lexical_shadow(&parts.join(" "));
+            }
+        }
+    }
+
+    for source in [window_title, snippet, clean_text] {
+        for token in shadow_candidates(source) {
+            push_shadow_token(&mut parts, &mut seen, &token);
+            if parts.join(" ").chars().count() >= LEXICAL_SHADOW_CHARS {
+                return compact_lexical_shadow(&parts.join(" "));
+            }
+        }
+    }
+
+    compact_lexical_shadow(&parts.join(" "))
+}
+
+fn compact_lexical_shadow(raw: &str) -> String {
+    trim_chars(&normalize_memory_text(raw), LEXICAL_SHADOW_CHARS)
 }
 
 pub fn is_low_signal_embedding(vector: &[f32]) -> bool {
@@ -93,6 +288,110 @@ fn trim_chars(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect::<String>()
 }
 
+fn shadow_candidates(source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+
+    for segment in source.split('`').skip(1).step_by(2) {
+        let normalized = normalize_memory_text(segment);
+        if normalized.len() >= 3 {
+            out.push(normalized);
+        }
+    }
+
+    for token in source.split_whitespace() {
+        let trimmed = token.trim_matches(|ch: char| {
+            ch.is_ascii_punctuation()
+                && ch != '.'
+                && ch != '/'
+                && ch != '_'
+                && ch != '-'
+                && ch != ':'
+        });
+        if !looks_like_shadow_token(trimmed) {
+            continue;
+        }
+        out.push(trimmed.to_string());
+    }
+
+    out
+}
+
+fn looks_like_shadow_token(token: &str) -> bool {
+    let trimmed = token.trim();
+    if trimmed.len() < 3 || trimmed.len() > 96 {
+        return false;
+    }
+    if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        return false;
+    }
+    if trimmed.contains("://") || trimmed.starts_with("www.") {
+        return true;
+    }
+    if trimmed.contains("::") || trimmed.contains("->") || trimmed.ends_with("()") {
+        return true;
+    }
+    if trimmed.contains('/') && trimmed.chars().any(|ch| ch.is_ascii_alphabetic()) {
+        return true;
+    }
+    if trimmed.contains('_') || trimmed.contains('-') {
+        return true;
+    }
+    if trimmed.contains('.') {
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.ends_with(".rs")
+            || lower.ends_with(".ts")
+            || lower.ends_with(".tsx")
+            || lower.ends_with(".js")
+            || lower.ends_with(".jsx")
+            || lower.ends_with(".json")
+            || lower.ends_with(".toml")
+            || lower.ends_with(".md")
+            || lower.ends_with(".py")
+            || lower.ends_with(".yml")
+            || lower.ends_with(".yaml")
+            || lower.ends_with(".csv")
+            || lower.ends_with(".pdf")
+        {
+            return true;
+        }
+        let parts = lower.split('.').collect::<Vec<_>>();
+        if parts.len() >= 2 && parts.iter().all(|part| !part.is_empty()) {
+            return true;
+        }
+    }
+    let has_upper = trimmed.chars().any(|ch| ch.is_ascii_uppercase());
+    let has_lower = trimmed.chars().any(|ch| ch.is_ascii_lowercase());
+    let has_digit = trimmed.chars().any(|ch| ch.is_ascii_digit());
+    if (has_upper && has_lower) || (has_digit && (has_upper || has_lower)) {
+        return true;
+    }
+    if has_upper
+        && trimmed
+            .chars()
+            .next()
+            .unwrap_or_default()
+            .is_ascii_uppercase()
+    {
+        return true;
+    }
+    false
+}
+
+fn push_shadow_token(
+    parts: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+    raw: &str,
+) {
+    let normalized = normalize_memory_text(raw);
+    if normalized.is_empty() {
+        return;
+    }
+    let key = normalized.to_ascii_lowercase();
+    if seen.insert(key) {
+        parts.push(normalized);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,11 +413,13 @@ mod tests {
             summary_source: "llm".to_string(),
             noise_score: 0.1,
             session_key: "session-key".to_string(),
+            lexical_shadow: String::new(),
             embedding: vec![0.1; 384],
             image_embedding: vec![0.0; 512],
             screenshot_path: Some("/tmp/screenshot.png".to_string()),
             url: None,
             snippet_embedding: vec![0.2; 384],
+            support_embedding: vec![0.0; 384],
             decay_score: 1.0,
             last_accessed_at: 0,
         }

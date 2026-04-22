@@ -14,12 +14,20 @@ fn default_snippet_embedding() -> Vec<f32> {
     vec![0.0; 384]
 }
 
+fn default_support_embedding() -> Vec<f32> {
+    vec![0.0; 384]
+}
+
 fn default_decay_score() -> f32 {
     1.0
 }
 
 fn default_summary_source() -> String {
     "fallback".to_string()
+}
+
+fn default_lexical_shadow() -> String {
+    String::new()
 }
 
 /// A single memory record stored in the database
@@ -64,6 +72,9 @@ pub struct MemoryRecord {
     /// Session-level grouping key for downstream synthesis
     #[serde(default)]
     pub session_key: String,
+    /// Compact lexical hints preserved from dropped raw text for keyword recall
+    #[serde(default = "default_lexical_shadow")]
+    pub lexical_shadow: String,
     /// Text embedding vector
     #[serde(default = "default_text_embedding")]
     pub embedding: Vec<f32>,
@@ -79,6 +90,9 @@ pub struct MemoryRecord {
     /// Embedding of the LLM/VLM snippet text (second semantic tower for search)
     #[serde(default = "default_snippet_embedding")]
     pub snippet_embedding: Vec<f32>,
+    /// Centroid of representative high-signal chunks from the full text before compaction
+    #[serde(default = "default_support_embedding")]
+    pub support_embedding: Vec<f32>,
     /// Ebbinghaus decay score: starts at 1.0, decays toward 0.15 floor when not accessed
     #[serde(default = "default_decay_score")]
     pub decay_score: f32,
@@ -112,6 +126,8 @@ pub struct SearchResult {
     pub noise_score: f32,
     #[serde(default)]
     pub session_key: String,
+    #[serde(default = "default_lexical_shadow")]
+    pub lexical_shadow: String,
     pub score: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_path: Option<String>,

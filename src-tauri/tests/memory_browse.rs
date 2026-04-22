@@ -23,11 +23,13 @@ fn record(index: usize, now_ms: i64) -> MemoryRecord {
         summary_source: "fallback".to_string(),
         noise_score: 0.02,
         session_key: format!("memory-browse-{}", index / 10),
+        lexical_shadow: String::new(),
         embedding: vec![0.0; 384],
         image_embedding: vec![0.0; 512],
         screenshot_path: None,
         url: None,
         snippet_embedding: vec![0.0; 384],
+        support_embedding: vec![0.0; 384],
         decay_score: 1.0,
         last_accessed_at: 0,
     }

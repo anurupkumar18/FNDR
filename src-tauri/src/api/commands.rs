@@ -6,8 +6,8 @@ use crate::capture::{
 };
 use crate::embed::{embedding_runtime_status, Embedder, EmbeddingBackend};
 use crate::memory_compaction::{
-    best_embedding_text, best_snippet_embedding_text, compact_memory_record_payload,
-    is_low_signal_embedding,
+    best_embedding_text, best_snippet_embedding_text, best_support_embedding_texts,
+    compact_memory_record_payload, is_low_signal_embedding, mean_pool_embeddings,
 };
 use crate::privacy::Blocklist;
 use crate::store::MemoryRecord;
@@ -83,7 +83,7 @@ const MEMORY_GRAPH_LIMIT: usize = 1_500;
 const TASK_LINK_SCAN_LIMIT: usize = 260;
 const TASK_MEETING_LOOKBACK_DAYS: i64 = 14;
 const TASK_MEMORY_BACKFILL_LIMIT: usize = 6;
-const MEMORY_REPAIR_CHECKPOINT_VERSION: u32 = 3;
+const MEMORY_REPAIR_CHECKPOINT_VERSION: u32 = 4;
 const MEMORY_REPAIR_SIMILARITY_SCAN_LIMIT: usize = 96;
 const MEMORY_REPAIR_CHECKPOINT_ITEM_STEP: usize = 300;
 const MEMORY_REPAIR_CHECKPOINT_MS: u64 = 12_000;
@@ -98,6 +98,25 @@ fn shared_embedder() -> Result<&'static Embedder, String> {
         Ok(embedder) => Ok(embedder),
         Err(err) => Err(err.clone()),
     }
+}
+
+fn shared_real_embedder() -> Result<&'static Embedder, String> {
+    let embedder = shared_embedder()?;
+    if matches!(embedder.backend(), EmbeddingBackend::Real) {
+        return Ok(embedder);
+    }
+
+    let status = embedding_runtime_status();
+    Err(format!(
+        "Real embeddings are required before running continuity repair or storage reclaim. Current backend: {}{}{}",
+        status.backend,
+        if status.degraded { " (degraded)" } else { "" },
+        if status.detail.is_empty() {
+            String::new()
+        } else {
+            format!(" - {}", status.detail)
+        }
+    ))
 }
 
 fn is_internal_fndr_result(result: &SearchResult) -> bool {
@@ -1399,6 +1418,13 @@ fn merge_bucket_for_anchor(anchor: Option<&str>, app_name: &str) -> &'static str
 pub async fn run_memory_repair_backfill(
     state: State<'_, Arc<AppState>>,
 ) -> Result<MemoryRepairSummary, String> {
+    run_memory_repair_backfill_for_state(state.inner().clone()).await
+}
+
+async fn run_memory_repair_backfill_for_state(
+    state: Arc<AppState>,
+) -> Result<MemoryRepairSummary, String> {
+    let embedder = shared_real_embedder()?;
     if MEMORY_REPAIR_RUNNING.swap(true, Ordering::AcqRel) {
         return Err("Memory continuity repair is already running".to_string());
     }
@@ -1410,9 +1436,9 @@ pub async fn run_memory_repair_backfill(
     }
     let _run_guard = MemoryRepairRunGuard;
 
-    let should_resume_capture = !state.inner().is_paused.load(Ordering::SeqCst);
+    let should_resume_capture = !state.is_paused.load(Ordering::SeqCst);
     if should_resume_capture {
-        state.inner().pause();
+        state.pause();
     }
     struct CaptureResumeGuard {
         state: Arc<AppState>,
@@ -1426,14 +1452,13 @@ pub async fn run_memory_repair_backfill(
         }
     }
     let _capture_resume_guard = CaptureResumeGuard {
-        state: state.inner().clone(),
+        state: state.clone(),
         should_resume: should_resume_capture,
     };
 
-    let progress_path = memory_repair_progress_path(state.inner());
-    let checkpoint_path = memory_repair_checkpoint_path(state.inner());
+    let progress_path = memory_repair_progress_path(state.as_ref());
+    let checkpoint_path = memory_repair_checkpoint_path(state.as_ref());
     let mut all_memories = state
-        .inner()
         .store
         .list_all_memories()
         .await
@@ -1495,7 +1520,6 @@ pub async fn run_memory_repair_backfill(
         .filter_map(|memory| memory.screenshot_path.clone())
         .collect();
 
-    let embedder = shared_embedder()?;
     let backfill_engine: Option<&Arc<crate::inference::InferenceEngine>> = None;
 
     let mut merged_memories: Vec<MemoryRecord> = Vec::with_capacity(before_count);
@@ -1811,6 +1835,20 @@ pub async fn run_memory_repair_backfill(
                 }
             }
         }
+
+        if is_low_signal_embedding(&memory.support_embedding) {
+            let support_inputs = best_support_embedding_texts(memory);
+            if !support_inputs.is_empty() {
+                let contexts = support_inputs
+                    .into_iter()
+                    .map(|text| (memory.app_name.clone(), memory.window_title.clone(), text))
+                    .collect::<Vec<_>>();
+                if let Ok(vectors) = embedder.embed_batch_with_context(&contexts) {
+                    memory.support_embedding = mean_pool_embeddings(&vectors);
+                    embeddings_refreshed += 1;
+                }
+            }
+        }
     }
 
     let chars_after = merged_memories
@@ -1854,7 +1892,7 @@ pub async fn run_memory_repair_backfill(
         },
     );
 
-    if let Err(err) = state.inner().store.delete_all().await {
+    if let Err(err) = state.store.delete_all().await {
         persist_memory_repair_progress(
             &progress_path,
             &MemoryRepairProgress {
@@ -1891,12 +1929,7 @@ pub async fn run_memory_repair_backfill(
         );
         return Err(err.to_string());
     }
-    if let Err(err) = state
-        .inner()
-        .store
-        .add_batch_preserving_ids(&merged_memories)
-        .await
-    {
+    if let Err(err) = state.store.add_batch_preserving_ids(&merged_memories).await {
         persist_memory_repair_progress(
             &progress_path,
             &MemoryRepairProgress {
@@ -1945,12 +1978,7 @@ pub async fn run_memory_repair_backfill(
         .count();
 
     let mut task_reference_updates = 0usize;
-    let mut tasks = state
-        .inner()
-        .store
-        .list_tasks()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
     for task in &mut tasks {
         if let Some(source_id) = task.source_memory_id.clone() {
             if let Some(new_id) = id_redirect.get(&source_id) {
@@ -1987,7 +2015,7 @@ pub async fn run_memory_repair_backfill(
     }
 
     if task_reference_updates > 0 {
-        if let Err(err) = state.inner().store.upsert_tasks(&tasks).await {
+        if let Err(err) = state.store.upsert_tasks(&tasks).await {
             persist_memory_repair_progress(
                 &progress_path,
                 &MemoryRepairProgress {
@@ -2781,6 +2809,8 @@ pub struct StorageReclaimSummary {
     pub screenshot_files_deleted: usize,
     pub embeddings_refreshed: usize,
     pub snippet_embeddings_refreshed: usize,
+    #[serde(default)]
+    pub support_embeddings_refreshed: usize,
     pub chars_before: usize,
     pub chars_after: usize,
     pub chars_reclaimed: usize,
@@ -2827,6 +2857,8 @@ pub struct StorageReclaimProgress {
     pub screenshot_files_deleted: usize,
     pub embeddings_refreshed: usize,
     pub snippet_embeddings_refreshed: usize,
+    #[serde(default)]
+    pub support_embeddings_refreshed: usize,
     pub timestamp_ms: i64,
 }
 
@@ -3043,6 +3075,7 @@ pub async fn get_storage_reclaim_progress(
             screenshot_files_deleted: 0,
             embeddings_refreshed: 0,
             snippet_embeddings_refreshed: 0,
+            support_embeddings_refreshed: 0,
             timestamp_ms: chrono::Utc::now().timestamp_millis(),
         });
     }
@@ -3081,6 +3114,7 @@ async fn reclaim_memory_storage_for_state(
     state: Arc<AppState>,
     publish_progress: bool,
 ) -> Result<StorageReclaimSummary, String> {
+    shared_real_embedder()?;
     if STORAGE_RECLAIM_RUNNING.swap(true, Ordering::AcqRel) {
         return Err("Storage reclaim is already running".to_string());
     }
@@ -3103,10 +3137,26 @@ async fn reclaim_memory_storage_for_state(
         screenshot_files_deleted: 0,
         embeddings_refreshed: 0,
         snippet_embeddings_refreshed: 0,
+        support_embeddings_refreshed: 0,
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
     };
     if publish_progress {
         persist_storage_reclaim_progress(&progress_path, &progress);
+    }
+
+    progress.phase = "repairing_prerequisite".to_string();
+    progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
+    if publish_progress {
+        persist_storage_reclaim_progress(&progress_path, &progress);
+    }
+    if let Err(err) = run_memory_repair_backfill_for_state(state.clone()).await {
+        progress.is_running = false;
+        progress.phase = "error".to_string();
+        progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
+        if publish_progress {
+            persist_storage_reclaim_progress(&progress_path, &progress);
+        }
+        return Err(err);
     }
 
     let should_resume_capture = !state.is_paused.load(Ordering::SeqCst);
@@ -3138,7 +3188,7 @@ async fn reclaim_memory_storage_for_state(
 
     let reclaim_started = Instant::now();
     let bytes_before = memory_payload_bytes(state.as_ref());
-    let embedder = shared_embedder().ok();
+    let embedder = shared_real_embedder()?;
     let memories = match state.store.list_all_memories().await {
         Ok(memories) => memories,
         Err(err) => {
@@ -3159,10 +3209,12 @@ async fn reclaim_memory_storage_for_state(
     let mut screenshot_files_deleted = 0usize;
     let mut embeddings_refreshed = 0usize;
     let mut snippet_embeddings_refreshed = 0usize;
+    let mut support_embeddings_refreshed = 0usize;
     let mut chars_before = 0usize;
     let mut chars_after = 0usize;
     let mut text_embedding_jobs: Vec<(usize, (String, String, String))> = Vec::new();
     let mut snippet_embedding_jobs: Vec<(usize, (String, String, String))> = Vec::new();
+    let mut support_embedding_jobs: Vec<(usize, String, String, Vec<String>)> = Vec::new();
 
     let frames_dir = state.store.frames_dir();
     let mut external_screenshot_paths: HashSet<PathBuf> = HashSet::new();
@@ -3195,33 +3247,41 @@ async fn reclaim_memory_storage_for_state(
             changed = true;
         }
 
-        if embedder.is_some() {
-            if is_low_signal_embedding(&compacted.embedding) {
-                let embedding_text = best_embedding_text(&memory);
-                if !embedding_text.is_empty() {
-                    text_embedding_jobs.push((
-                        rewritten_memories.len(),
-                        (
-                            memory.app_name.clone(),
-                            memory.window_title.clone(),
-                            embedding_text,
-                        ),
-                    ));
-                }
+        if is_low_signal_embedding(&compacted.embedding) {
+            let embedding_text = best_embedding_text(&memory);
+            if !embedding_text.is_empty() {
+                text_embedding_jobs.push((
+                    rewritten_memories.len(),
+                    (
+                        memory.app_name.clone(),
+                        memory.window_title.clone(),
+                        embedding_text,
+                    ),
+                ));
             }
+        }
 
-            if is_low_signal_embedding(&compacted.snippet_embedding) {
-                let snippet_input = best_snippet_embedding_text(&memory);
-                if !snippet_input.is_empty() {
-                    snippet_embedding_jobs.push((
-                        rewritten_memories.len(),
-                        (
-                            memory.app_name.clone(),
-                            memory.window_title.clone(),
-                            snippet_input,
-                        ),
-                    ));
-                }
+        let snippet_input = best_snippet_embedding_text(&compacted);
+        if !snippet_input.is_empty() {
+            snippet_embedding_jobs.push((
+                rewritten_memories.len(),
+                (
+                    compacted.app_name.clone(),
+                    compacted.window_title.clone(),
+                    snippet_input,
+                ),
+            ));
+        }
+
+        if is_low_signal_embedding(&compacted.support_embedding) {
+            let support_inputs = best_support_embedding_texts(&compacted);
+            if !support_inputs.is_empty() {
+                support_embedding_jobs.push((
+                    rewritten_memories.len(),
+                    compacted.app_name.clone(),
+                    compacted.window_title.clone(),
+                    support_inputs,
+                ));
             }
         }
 
@@ -3249,112 +3309,146 @@ async fn reclaim_memory_storage_for_state(
     }
 
     tracing::info!(
-        "storage_reclaim:compacted records={} rewritten={} text_jobs={} snippet_jobs={} elapsed_ms={}",
+        "storage_reclaim:compacted records={} rewritten={} text_jobs={} snippet_jobs={} support_jobs={} elapsed_ms={}",
         rewritten_memories.len(),
         records_rewritten,
         text_embedding_jobs.len(),
         snippet_embedding_jobs.len(),
+        support_embedding_jobs.len(),
         reclaim_started.elapsed().as_millis()
     );
 
-    if let Some(embedder) = embedder {
-        let total_embedding_jobs = text_embedding_jobs.len() + snippet_embedding_jobs.len();
-        if total_embedding_jobs > 0 {
-            progress.phase = "embedding".to_string();
-            progress.total = total_embedding_jobs;
-            progress.processed = 0;
+    let total_embedding_jobs =
+        text_embedding_jobs.len() + snippet_embedding_jobs.len() + support_embedding_jobs.len();
+    if total_embedding_jobs > 0 {
+        progress.phase = "embedding".to_string();
+        progress.total = total_embedding_jobs;
+        progress.processed = 0;
+        progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
+        if publish_progress {
+            persist_storage_reclaim_progress(&progress_path, &progress);
+        }
+
+        let mut embedded_jobs = 0usize;
+
+        for chunk in text_embedding_jobs.chunks(STORAGE_RECLAIM_EMBED_BATCH) {
+            let contexts = chunk
+                .iter()
+                .map(|(_, context)| context.clone())
+                .collect::<Vec<_>>();
+            match embedder.embed_batch_with_context(&contexts) {
+                Ok(vectors) => {
+                    let vector_count = vectors.len();
+                    for ((record_index, _), vector) in chunk.iter().zip(vectors.into_iter()) {
+                        rewritten_memories[*record_index].embedding = vector;
+                        if !changed_flags[*record_index] {
+                            changed_flags[*record_index] = true;
+                            records_rewritten = records_rewritten.saturating_add(1);
+                        }
+                        embeddings_refreshed = embeddings_refreshed.saturating_add(1);
+                    }
+                    if vector_count != chunk.len() {
+                        tracing::warn!(
+                            "storage_reclaim:text embedding chunk mismatch vectors={} chunk={}",
+                            vector_count,
+                            chunk.len()
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "storage_reclaim:text embedding chunk failed ({} items): {}",
+                        chunk.len(),
+                        err
+                    );
+                }
+            }
+
+            embedded_jobs = embedded_jobs.saturating_add(chunk.len());
+            progress.processed = embedded_jobs;
+            progress.records_rewritten = records_rewritten;
+            progress.embeddings_refreshed = embeddings_refreshed;
             progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
             if publish_progress {
                 persist_storage_reclaim_progress(&progress_path, &progress);
             }
+        }
 
-            let mut embedded_jobs = 0usize;
-
-            for chunk in text_embedding_jobs.chunks(STORAGE_RECLAIM_EMBED_BATCH) {
-                let contexts = chunk
-                    .iter()
-                    .map(|(_, context)| context.clone())
-                    .collect::<Vec<_>>();
-                match embedder.embed_batch_with_context(&contexts) {
-                    Ok(vectors) => {
-                        let vector_count = vectors.len();
-                        for ((record_index, _), vector) in chunk.iter().zip(vectors.into_iter()) {
-                            rewritten_memories[*record_index].embedding = vector;
-                            if !changed_flags[*record_index] {
-                                changed_flags[*record_index] = true;
-                                records_rewritten = records_rewritten.saturating_add(1);
-                            }
-                            embeddings_refreshed = embeddings_refreshed.saturating_add(1);
+        for chunk in snippet_embedding_jobs.chunks(STORAGE_RECLAIM_EMBED_BATCH) {
+            let contexts = chunk
+                .iter()
+                .map(|(_, context)| context.clone())
+                .collect::<Vec<_>>();
+            match embedder.embed_batch_with_context(&contexts) {
+                Ok(vectors) => {
+                    let vector_count = vectors.len();
+                    for ((record_index, _), vector) in chunk.iter().zip(vectors.into_iter()) {
+                        rewritten_memories[*record_index].snippet_embedding = vector;
+                        if !changed_flags[*record_index] {
+                            changed_flags[*record_index] = true;
+                            records_rewritten = records_rewritten.saturating_add(1);
                         }
-                        if vector_count != chunk.len() {
-                            tracing::warn!(
-                                "storage_reclaim:text embedding chunk mismatch vectors={} chunk={}",
-                                vector_count,
-                                chunk.len()
-                            );
-                        }
+                        snippet_embeddings_refreshed =
+                            snippet_embeddings_refreshed.saturating_add(1);
                     }
-                    Err(err) => {
+                    if vector_count != chunk.len() {
                         tracing::warn!(
-                            "storage_reclaim:text embedding chunk failed ({} items): {}",
-                            chunk.len(),
-                            err
+                            "storage_reclaim:snippet embedding chunk mismatch vectors={} chunk={}",
+                            vector_count,
+                            chunk.len()
                         );
                     }
                 }
-
-                embedded_jobs = embedded_jobs.saturating_add(chunk.len());
-                progress.processed = embedded_jobs;
-                progress.records_rewritten = records_rewritten;
-                progress.embeddings_refreshed = embeddings_refreshed;
-                progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
-                if publish_progress {
-                    persist_storage_reclaim_progress(&progress_path, &progress);
+                Err(err) => {
+                    tracing::warn!(
+                        "storage_reclaim:snippet embedding chunk failed ({} items): {}",
+                        chunk.len(),
+                        err
+                    );
                 }
             }
 
-            for chunk in snippet_embedding_jobs.chunks(STORAGE_RECLAIM_EMBED_BATCH) {
-                let contexts = chunk
-                    .iter()
-                    .map(|(_, context)| context.clone())
-                    .collect::<Vec<_>>();
-                match embedder.embed_batch_with_context(&contexts) {
-                    Ok(vectors) => {
-                        let vector_count = vectors.len();
-                        for ((record_index, _), vector) in chunk.iter().zip(vectors.into_iter()) {
-                            rewritten_memories[*record_index].snippet_embedding = vector;
-                            if !changed_flags[*record_index] {
-                                changed_flags[*record_index] = true;
-                                records_rewritten = records_rewritten.saturating_add(1);
-                            }
-                            snippet_embeddings_refreshed =
-                                snippet_embeddings_refreshed.saturating_add(1);
-                        }
-                        if vector_count != chunk.len() {
-                            tracing::warn!(
-                                "storage_reclaim:snippet embedding chunk mismatch vectors={} chunk={}",
-                                vector_count,
-                                chunk.len()
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            "storage_reclaim:snippet embedding chunk failed ({} items): {}",
-                            chunk.len(),
-                            err
-                        );
-                    }
-                }
+            embedded_jobs = embedded_jobs.saturating_add(chunk.len());
+            progress.processed = embedded_jobs;
+            progress.records_rewritten = records_rewritten;
+            progress.snippet_embeddings_refreshed = snippet_embeddings_refreshed;
+            progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
+            if publish_progress {
+                persist_storage_reclaim_progress(&progress_path, &progress);
+            }
+        }
 
-                embedded_jobs = embedded_jobs.saturating_add(chunk.len());
-                progress.processed = embedded_jobs;
-                progress.records_rewritten = records_rewritten;
-                progress.snippet_embeddings_refreshed = snippet_embeddings_refreshed;
-                progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
-                if publish_progress {
-                    persist_storage_reclaim_progress(&progress_path, &progress);
+        for (record_index, app_name, window_title, support_inputs) in support_embedding_jobs {
+            let contexts = support_inputs
+                .into_iter()
+                .map(|text| (app_name.clone(), window_title.clone(), text))
+                .collect::<Vec<_>>();
+            match embedder.embed_batch_with_context(&contexts) {
+                Ok(vectors) => {
+                    rewritten_memories[record_index].support_embedding =
+                        mean_pool_embeddings(&vectors);
+                    if !changed_flags[record_index] {
+                        changed_flags[record_index] = true;
+                        records_rewritten = records_rewritten.saturating_add(1);
+                    }
+                    support_embeddings_refreshed = support_embeddings_refreshed.saturating_add(1);
                 }
+                Err(err) => {
+                    tracing::warn!(
+                        "storage_reclaim:support embedding failed for {} inputs: {}",
+                        contexts.len(),
+                        err
+                    );
+                }
+            }
+
+            embedded_jobs = embedded_jobs.saturating_add(1);
+            progress.processed = embedded_jobs;
+            progress.records_rewritten = records_rewritten;
+            progress.support_embeddings_refreshed = support_embeddings_refreshed;
+            progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
+            if publish_progress {
+                persist_storage_reclaim_progress(&progress_path, &progress);
             }
         }
     }
@@ -3387,6 +3481,7 @@ async fn reclaim_memory_storage_for_state(
     progress.records_rewritten = records_rewritten;
     progress.embeddings_refreshed = embeddings_refreshed;
     progress.snippet_embeddings_refreshed = snippet_embeddings_refreshed;
+    progress.support_embeddings_refreshed = support_embeddings_refreshed;
     progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
     if publish_progress {
         persist_storage_reclaim_progress(&progress_path, &progress);
@@ -3457,6 +3552,7 @@ async fn reclaim_memory_storage_for_state(
     progress.screenshot_files_deleted = screenshot_files_deleted;
     progress.embeddings_refreshed = embeddings_refreshed;
     progress.snippet_embeddings_refreshed = snippet_embeddings_refreshed;
+    progress.support_embeddings_refreshed = support_embeddings_refreshed;
     progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
     if publish_progress {
         persist_storage_reclaim_progress(&progress_path, &progress);
@@ -3469,6 +3565,7 @@ async fn reclaim_memory_storage_for_state(
         screenshot_files_deleted,
         embeddings_refreshed,
         snippet_embeddings_refreshed,
+        support_embeddings_refreshed,
         chars_before,
         chars_after,
         chars_reclaimed: chars_before.saturating_sub(chars_after),
@@ -4301,6 +4398,7 @@ mod daily_summary_tests {
             summary_source: "fallback".to_string(),
             noise_score: 0.02,
             session_key: "test-session-key".to_string(),
+            lexical_shadow: String::new(),
             score: 1.0,
             screenshot_path: None,
             url: url.map(str::to_string),

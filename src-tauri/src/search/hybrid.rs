@@ -17,10 +17,11 @@ const DIVERSITY_PRESERVE_TOP: usize = 3;
 const MAX_SEMANTIC_BRANCH_LIMIT: usize = 64;
 const MAX_KEYWORD_BRANCH_LIMIT: usize = 48;
 const MIN_SNIPPET_QUERY_TERMS: usize = 3;
-// Text ANN + snippet ANN together = 0.70; lexical = 0.30.
-const SEMANTIC_WEIGHT: f32 = 0.28;
-const SNIPPET_WEIGHT: f32 = 0.18;
-const LEXICAL_WEIGHT: f32 = 0.54;
+// Full-text ANN + support centroid ANN + compact-summary ANN + lexical fusion.
+const SEMANTIC_WEIGHT: f32 = 0.24;
+const SUPPORT_WEIGHT: f32 = 0.12;
+const SNIPPET_WEIGHT: f32 = 0.16;
+const LEXICAL_WEIGHT: f32 = 0.48;
 /// Ebbinghaus decay floor — very old unaccessed records still surface if highly relevant.
 const DECAY_FLOOR: f32 = 0.15;
 const ABSOLUTE_RELEVANCE_FLOOR: f32 = 0.24;
@@ -28,6 +29,7 @@ const RELATIVE_RELEVANCE_FLOOR: f32 = 0.46;
 const STRONG_RESULT_FLOOR: f32 = 0.70;
 const MEDIUM_RESULT_FLOOR: f32 = 0.60;
 const SEMANTIC_BRANCH_TIMEOUT: Duration = Duration::from_millis(950);
+const SUPPORT_BRANCH_TIMEOUT: Duration = Duration::from_millis(760);
 const SNIPPET_BRANCH_TIMEOUT: Duration = Duration::from_millis(760);
 const KEYWORD_TOTAL_TIMEOUT: Duration = Duration::from_millis(900);
 const KEYWORD_VARIANT_TIMEOUT: Duration = Duration::from_millis(320);
@@ -58,6 +60,7 @@ struct QueryProfile {
 #[derive(Debug, Clone, Default)]
 struct FusionSignals {
     semantic_score: Option<f32>,
+    support_score: Option<f32>,
     snippet_score: Option<f32>,
     keyword_score: Option<f32>,
     lexical_score: f32,
@@ -318,6 +321,40 @@ impl HybridSearcher {
             };
             (results, branch_started.elapsed(), timed_out)
         };
+        let support_fut = async {
+            let branch_started = Instant::now();
+            let mut timed_out = false;
+            let results = if let Some(query_embedding) = query_embedding.as_ref() {
+                match timeout(
+                    SUPPORT_BRANCH_TIMEOUT,
+                    store.support_vector_search(
+                        query_embedding,
+                        semantic_branch_limit,
+                        time_filter,
+                        app_filter,
+                    ),
+                )
+                .await
+                {
+                    Ok(Ok(results)) => results,
+                    Ok(Err(err)) => {
+                        tracing::warn!(err = %err, "hybrid_search:support_failed");
+                        Vec::new()
+                    }
+                    Err(_) => {
+                        timed_out = true;
+                        tracing::warn!(
+                            timeout_ms = SUPPORT_BRANCH_TIMEOUT.as_millis(),
+                            "hybrid_search:support_timeout"
+                        );
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+            (results, branch_started.elapsed(), timed_out)
+        };
         let snippet_fut = async {
             let branch_started = Instant::now();
             let mut timed_out = false;
@@ -390,18 +427,22 @@ impl HybridSearcher {
 
         let (
             (semantic_results, semantic_elapsed, semantic_timed_out),
+            (support_results, support_elapsed, support_timed_out),
             (snippet_results, snippet_elapsed, snippet_timed_out),
             (keyword_results, keyword_elapsed, keyword_timed_out),
-        ) = tokio::join!(semantic_fut, snippet_fut, keyword_fut);
+        ) = tokio::join!(semantic_fut, support_fut, snippet_fut, keyword_fut);
 
         tracing::info!(
             semantic_count = semantic_results.len(),
+            support_count = support_results.len(),
             snippet_count = snippet_results.len(),
             keyword_count = keyword_results.len(),
             semantic_ms = semantic_elapsed.as_millis(),
+            support_ms = support_elapsed.as_millis(),
             snippet_ms = snippet_elapsed.as_millis(),
             keyword_ms = keyword_elapsed.as_millis(),
             semantic_timed_out,
+            support_timed_out,
             snippet_timed_out,
             keyword_timed_out,
             semantic_enabled,
@@ -413,6 +454,7 @@ impl HybridSearcher {
         let fused = Self::hybrid_fusion(
             &profile,
             &semantic_results,
+            &support_results,
             &snippet_results,
             &keyword_results,
         );
@@ -532,7 +574,7 @@ impl HybridSearcher {
         limit: usize,
     ) -> Vec<SearchResult> {
         let profile = QueryProfile::from_query(query);
-        let fused = Self::hybrid_fusion(&profile, semantic, &[], keyword);
+        let fused = Self::hybrid_fusion(&profile, semantic, &[], &[], keyword);
         Self::rerank_with_profile(&profile, fused, limit)
     }
 
@@ -587,6 +629,7 @@ impl HybridSearcher {
     fn hybrid_fusion(
         profile: &QueryProfile,
         semantic: &[SearchResult],
+        support: &[SearchResult],
         snippet: &[SearchResult],
         keyword: &[SearchResult],
     ) -> Vec<SearchResult> {
@@ -615,6 +658,32 @@ impl HybridSearcher {
                 })
                 .or_insert_with(|| FusionSignals {
                     semantic_score: Some(result.score),
+                    ..FusionSignals::default()
+                });
+        }
+
+        for result in support {
+            candidates
+                .entry(result.id.clone())
+                .and_modify(|existing| {
+                    if result.score > existing.score {
+                        *existing = result.clone();
+                    }
+                })
+                .or_insert_with(|| result.clone());
+
+            signals
+                .entry(result.id.clone())
+                .and_modify(|signal| {
+                    signal.support_score = Some(
+                        signal
+                            .support_score
+                            .map(|current| current.max(result.score))
+                            .unwrap_or(result.score),
+                    );
+                })
+                .or_insert_with(|| FusionSignals {
+                    support_score: Some(result.score),
                     ..FusionSignals::default()
                 });
         }
@@ -704,11 +773,16 @@ impl HybridSearcher {
             }
         }
 
-        let has_semantic_signals = !semantic.is_empty() || !snippet.is_empty();
+        let has_semantic_signals =
+            !semantic.is_empty() || !support.is_empty() || !snippet.is_empty();
 
         let semantic_values = signals
             .values()
             .map(|s| s.semantic_score.unwrap_or(0.0))
+            .collect::<Vec<_>>();
+        let support_values = signals
+            .values()
+            .map(|s| s.support_score.unwrap_or(0.0))
             .collect::<Vec<_>>();
         let snippet_values = signals
             .values()
@@ -720,6 +794,7 @@ impl HybridSearcher {
             .collect::<Vec<_>>();
 
         let semantic_range = value_range(&semantic_values);
+        let support_range = value_range(&support_values);
         let snippet_range = value_range(&snippet_values);
         let lexical_range = value_range(&lexical_values);
 
@@ -729,12 +804,14 @@ impl HybridSearcher {
 
             let semantic_norm =
                 normalize_range(signal.semantic_score.unwrap_or(0.0), semantic_range);
+            let support_norm = normalize_range(signal.support_score.unwrap_or(0.0), support_range);
             let snippet_norm = normalize_range(signal.snippet_score.unwrap_or(0.0), snippet_range);
             let lexical_norm = normalize_range(signal.lexical_score, lexical_range);
 
-            let (semantic_weight, snippet_weight, lexical_weight) =
+            let (semantic_weight, support_weight, snippet_weight, lexical_weight) =
                 fusion_weights(profile, has_semantic_signals);
             let mut score = semantic_norm * semantic_weight
+                + support_norm * support_weight
                 + snippet_norm * snippet_weight
                 + lexical_norm * lexical_weight;
             score += signal.coverage * 0.12;
@@ -749,7 +826,11 @@ impl HybridSearcher {
                 score *= 0.72;
             }
 
-            if signal.semantic_score.is_some() && signal.keyword_score.is_some() {
+            if (signal.semantic_score.is_some()
+                || signal.support_score.is_some()
+                || signal.snippet_score.is_some())
+                && signal.keyword_score.is_some()
+            {
                 score += 0.05;
             }
 
@@ -825,7 +906,11 @@ impl HybridSearcher {
             let text_norm = normalize_text(&text);
             let title_norm = normalize_text(&candidate.window_title);
             let snippet_norm = normalize_text(&candidate.snippet);
-            let merged_norm = format!("{} {} {}", title_norm, text_norm, snippet_norm);
+            let lexical_shadow_norm = normalize_text(&candidate.lexical_shadow);
+            let merged_norm = format!(
+                "{} {} {} {}",
+                title_norm, text_norm, snippet_norm, lexical_shadow_norm
+            );
 
             // Query-aware sentence reranker feature.
             let sentence_relevance = sentence_level_relevance(profile, &merged_norm);
@@ -891,6 +976,7 @@ impl HybridSearcher {
                 candidate.url.as_deref(),
                 &text_norm,
                 &snippet_norm,
+                &lexical_shadow_norm,
             );
             score *= 0.72 + source_alignment * 0.48;
 
@@ -1094,6 +1180,8 @@ fn apply_relevance_gate(
 fn candidate_text(result: &SearchResult) -> String {
     if !result.clean_text.trim().is_empty() {
         result.clean_text.clone()
+    } else if !result.lexical_shadow.trim().is_empty() {
+        result.lexical_shadow.clone()
     } else {
         result.text.clone()
     }
@@ -1101,10 +1189,11 @@ fn candidate_text(result: &SearchResult) -> String {
 
 fn merged_candidate_text(result: &SearchResult) -> String {
     format!(
-        "{} {} {} {}",
+        "{} {} {} {} {}",
         result.window_title,
         candidate_text(result),
         result.snippet,
+        result.lexical_shadow,
         result.url.clone().unwrap_or_default()
     )
 }
@@ -1490,16 +1579,21 @@ fn mentions_query_entities(profile: &QueryProfile, text: &str) -> bool {
         .any(|term| token_set_matches_term(&token_set, term))
 }
 
-fn fusion_weights(profile: &QueryProfile, has_semantic_signals: bool) -> (f32, f32, f32) {
+fn fusion_weights(profile: &QueryProfile, has_semantic_signals: bool) -> (f32, f32, f32, f32) {
     if !has_semantic_signals {
-        return (0.0, 0.0, 1.0);
+        return (0.0, 0.0, 0.0, 1.0);
     }
 
     if profile.is_short_intent_query() {
         // For short noun-like queries, lexical evidence should dominate.
-        (0.24, 0.14, 0.62)
+        (0.2, 0.1, 0.12, 0.58)
     } else {
-        (SEMANTIC_WEIGHT, SNIPPET_WEIGHT, LEXICAL_WEIGHT)
+        (
+            SEMANTIC_WEIGHT,
+            SUPPORT_WEIGHT,
+            SNIPPET_WEIGHT,
+            LEXICAL_WEIGHT,
+        )
     }
 }
 
@@ -1774,6 +1868,7 @@ fn query_source_alignment(
     url: Option<&str>,
     text_norm: &str,
     snippet_norm: &str,
+    lexical_shadow_norm: &str,
 ) -> f32 {
     let candidates = profile
         .primary_terms
@@ -1786,7 +1881,8 @@ fn query_source_alignment(
 
     let title_tokens = token_set_with_stems(title_norm);
     let app_tokens = token_set_with_stems(app_name);
-    let source_tokens = token_set_with_stems(&format!("{text_norm} {snippet_norm}"));
+    let source_tokens =
+        token_set_with_stems(&format!("{text_norm} {snippet_norm} {lexical_shadow_norm}"));
     let domain = url.map(extract_domain).unwrap_or_default();
     let domain_tokens = token_set_with_stems(&domain);
     let url_tokens = token_set_with_stems(url.unwrap_or_default());
@@ -1896,6 +1992,7 @@ mod tests {
             summary_source: "llm".to_string(),
             noise_score: 0.1,
             session_key: "chrome:test".to_string(),
+            lexical_shadow: String::new(),
             score,
             screenshot_path: None,
             url: Some("https://example.com".to_string()),

@@ -4,7 +4,11 @@
 //! capture and local transcription.
 
 use crate::{
-    embed::Embedder,
+    embed::{Embedder, EMBEDDING_DIM},
+    memory_compaction::{
+        build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
+        support_embedding_texts,
+    },
     speech,
     store::{
         MeetingBreakdown, MeetingSegment, MeetingSession, MemoryRecord, Store, Task, TaskType,
@@ -1849,29 +1853,75 @@ async fn ingest_transcript_into_fndr_memory(
     } else {
         snippet.clone()
     };
-    let (embedding, snippet_embedding) = if let Some(embedder) = shared_meeting_embedder() {
-        match embedder.embed_batch_with_context(&[
-            (
-                "FNDR Meetings".to_string(),
-                transcript.meeting.title.clone(),
-                full_text_for_embedding,
-            ),
-            (
-                "FNDR Meetings".to_string(),
-                transcript.meeting.title.clone(),
-                snippet_for_embedding,
-            ),
-        ]) {
-            Ok(mut vectors) => {
-                let snippet_vec = vectors.pop().unwrap_or_else(|| vec![0.0; 384]);
-                let text_vec = vectors.pop().unwrap_or_else(|| vec![0.0; 384]);
-                (text_vec, snippet_vec)
+    let lexical_shadow = build_lexical_shadow(
+        &transcript.meeting.title,
+        &snippet_for_embedding,
+        &full_text_for_embedding,
+        transcript_path,
+    );
+    let compact_summary_text = compact_summary_embedding_text(
+        "fallback",
+        &snippet_for_embedding,
+        &full_text_for_embedding,
+        &lexical_shadow,
+    );
+    let support_texts = support_embedding_texts(
+        "FNDR Meetings",
+        &transcript.meeting.title,
+        &full_text_for_embedding,
+        &lexical_shadow,
+    );
+    let (embedding, snippet_embedding, support_embedding) =
+        if let Some(embedder) = shared_meeting_embedder() {
+            let mut contexts = vec![
+                (
+                    "FNDR Meetings".to_string(),
+                    transcript.meeting.title.clone(),
+                    full_text_for_embedding,
+                ),
+                (
+                    "FNDR Meetings".to_string(),
+                    transcript.meeting.title.clone(),
+                    compact_summary_text,
+                ),
+            ];
+            contexts.extend(support_texts.iter().cloned().map(|value| {
+                (
+                    "FNDR Meetings".to_string(),
+                    transcript.meeting.title.clone(),
+                    value,
+                )
+            }));
+            match embedder.embed_batch_with_context(&contexts) {
+                Ok(vectors) => {
+                    let text_vec = vectors
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
+                    let snippet_vec = vectors
+                        .get(1)
+                        .cloned()
+                        .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
+                    let support_vec = if vectors.len() > 2 {
+                        mean_pool_embeddings(&vectors[2..])
+                    } else {
+                        vec![0.0; EMBEDDING_DIM]
+                    };
+                    (text_vec, snippet_vec, support_vec)
+                }
+                Err(_) => (
+                    vec![0.0; EMBEDDING_DIM],
+                    vec![0.0; EMBEDDING_DIM],
+                    vec![0.0; EMBEDDING_DIM],
+                ),
             }
-            Err(_) => (vec![0.0; 384], vec![0.0; 384]),
-        }
-    } else {
-        (vec![0.0; 384], vec![0.0; 384])
-    };
+        } else {
+            (
+                vec![0.0; EMBEDDING_DIM],
+                vec![0.0; EMBEDDING_DIM],
+                vec![0.0; EMBEDDING_DIM],
+            )
+        };
 
     let record = MemoryRecord {
         id: Uuid::new_v4().to_string(),
@@ -1893,11 +1943,13 @@ async fn ingest_transcript_into_fndr_memory(
         summary_source: "fallback".to_string(),
         noise_score: 0.0,
         session_key: format!("meeting:{}", transcript.meeting.id),
+        lexical_shadow,
         embedding,
         image_embedding: vec![0.0; 512],
         screenshot_path: None,
         url: transcript_path.map(|p| p.to_string()),
         snippet_embedding,
+        support_embedding,
         decay_score: 1.0,
         last_accessed_at: 0,
     };

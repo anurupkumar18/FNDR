@@ -157,11 +157,13 @@ fn build_records(embedder: &Embedder) -> Vec<MemoryRecord> {
             summary_source: "llm".to_string(),
             noise_score: 0.06,
             session_key: format!("{}:{}", app.to_lowercase(), id),
+            lexical_shadow: String::new(),
             embedding: embeddings[idx].clone(),
             image_embedding: vec![0.0; 512],
             screenshot_path: None,
             url: url.map(|value| value.to_string()),
             snippet_embedding: vec![0.0; 384],
+            support_embedding: vec![0.0; 384],
             decay_score: 1.0,
             last_accessed_at: 0,
         })

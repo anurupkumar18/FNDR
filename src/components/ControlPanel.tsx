@@ -404,6 +404,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
             screenshot_files_deleted: 0,
             embeddings_refreshed: 0,
             snippet_embeddings_refreshed: 0,
+            support_embeddings_refreshed: 0,
             timestamp_ms: Date.now(),
         });
         try {
@@ -424,6 +425,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 screenshot_files_deleted: summary.screenshot_files_deleted,
                 embeddings_refreshed: summary.embeddings_refreshed,
                 snippet_embeddings_refreshed: summary.snippet_embeddings_refreshed,
+                support_embeddings_refreshed: summary.support_embeddings_refreshed,
                 timestamp_ms: Date.now(),
             });
         } catch (e) {
@@ -927,6 +929,9 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                 >
                                     {reclaimBusy ? "Reclaiming..." : "Reclaim storage from old captures"}
                                 </button>
+                                <p className="section-hint" style={{ marginTop: 8 }}>
+                                    Storage reclaim now runs continuity repair first and only proceeds when real embeddings are available.
+                                </p>
                                 {reclaimBusy && reclaimProgress && (
                                     <div className="reclaim-progress-wrap">
                                         <div className="reclaim-progress-bar-wrap">
@@ -951,7 +956,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                 {reclaimSummary && (
                                     <p className="section-hint" style={{ marginTop: 8 }}>
                                         Rewrote {reclaimSummary.records_rewritten} / {reclaimSummary.records_scanned} cards,
-                                        refreshed {reclaimSummary.embeddings_refreshed + reclaimSummary.snippet_embeddings_refreshed} embeddings,
+                                        refreshed {reclaimSummary.embeddings_refreshed + reclaimSummary.snippet_embeddings_refreshed + reclaimSummary.support_embeddings_refreshed} embeddings,
                                         removed {reclaimSummary.screenshot_files_deleted} screenshot files,
                                         reclaimed {(reclaimSummary.bytes_reclaimed / (1024 * 1024)).toFixed(1)} MB ({(reclaimSummary.chars_reclaimed / 1024).toFixed(1)} KB text).
                                     </p>

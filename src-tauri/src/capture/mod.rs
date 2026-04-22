@@ -26,6 +26,10 @@ pub fn macos_frontmost_app_name() -> Option<String> {
 }
 
 use crate::embed::{ClipEmbedder, Embedder, EmbeddingBackend, EMBEDDING_DIM};
+use crate::memory_compaction::{
+    build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
+    support_embedding_texts,
+};
 use crate::ocr::OcrEngine;
 use crate::privacy::Blocklist;
 use crate::store::{MemoryRecord, SearchResult, Task, TaskType};
@@ -450,9 +454,27 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         } else {
             text.clone()
         };
-        let snippet_embed_input = final_snippet.clone();
+        let lexical_shadow = build_lexical_shadow(
+            &window_title,
+            &final_snippet,
+            &enriched_clean_text,
+            url.as_deref(),
+        );
+        let snippet_embed_input = compact_summary_embedding_text(
+            &summary_source,
+            &final_snippet,
+            &enriched_clean_text,
+            &lexical_shadow,
+        );
+        let support_texts = support_embedding_texts(
+            &app_name,
+            &window_title,
+            &enriched_clean_text,
+            &lexical_shadow,
+        );
 
-        let embedding_inputs = vec![enriched_clean_text.clone(), snippet_embed_input.clone()];
+        let mut embedding_inputs = vec![enriched_clean_text.clone(), snippet_embed_input.clone()];
+        embedding_inputs.extend(support_texts.iter().cloned());
         let embedding_vectors = embed_text_inputs_with_memo(
             &text_embedder,
             &mut embedding_memo,
@@ -468,6 +490,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             .get(1)
             .cloned()
             .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
+        let support_embedding = if embedding_vectors.len() > 2 {
+            mean_pool_embeddings(&embedding_vectors[2..])
+        } else {
+            vec![0.0; EMBEDDING_DIM]
+        };
         *state.last_embedding.write() = text_embedding.clone();
 
         // ── Focus Mode drift detection ────────────────────────────────────────
@@ -530,11 +557,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             summary_source,
             noise_score,
             session_key,
+            lexical_shadow,
             embedding: text_embedding,
             image_embedding: image_embedder.embed_image(&image_data),
             screenshot_path: None,
             url,
             snippet_embedding,
+            support_embedding,
             decay_score: 1.0,
             last_accessed_at: 0,
         };
@@ -1052,12 +1081,35 @@ pub(crate) async fn merge_memory_records_with_policy(
     } else {
         "llm".to_string()
     };
+    let merged_window_title = choose_story_title(&existing.window_title, &incoming.window_title);
+    let merged_url = incoming.url.clone().or(existing.url.clone());
+    let merged_lexical_shadow = build_lexical_shadow(
+        &merged_window_title,
+        &merged_snippet,
+        &format!(
+            "{}\n{}\n{}",
+            merged_clean_text, existing.lexical_shadow, incoming.lexical_shadow
+        ),
+        merged_url.as_deref(),
+    );
+    let compact_snippet_text = compact_summary_embedding_text(
+        &merged_summary_source,
+        &merged_snippet,
+        &merged_clean_text,
+        &merged_lexical_shadow,
+    );
+    let support_texts = support_embedding_texts(
+        &incoming.app_name,
+        &merged_window_title,
+        &merged_clean_text,
+        &merged_lexical_shadow,
+    );
 
     let merged_embedding = if recompute_embedding {
         text_embedder
             .embed_batch_with_context(&[(
                 incoming.app_name.clone(),
-                incoming.window_title.clone(),
+                merged_window_title.clone(),
                 merged_clean_text.clone(),
             )])
             .ok()
@@ -1070,14 +1122,33 @@ pub(crate) async fn merge_memory_records_with_policy(
         text_embedder
             .embed_batch_with_context(&[(
                 incoming.app_name.clone(),
-                incoming.window_title.clone(),
-                merged_snippet.clone(),
+                merged_window_title.clone(),
+                compact_snippet_text.clone(),
             )])
             .ok()
             .and_then(|mut vectors| vectors.drain(..).next())
             .unwrap_or_else(|| existing.snippet_embedding.clone())
     } else {
         existing.snippet_embedding.clone()
+    };
+    let merged_support_embedding = if recompute_embedding && !support_texts.is_empty() {
+        let contexts = support_texts
+            .iter()
+            .map(|text| {
+                (
+                    incoming.app_name.clone(),
+                    merged_window_title.clone(),
+                    text.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        text_embedder
+            .embed_batch_with_context(&contexts)
+            .ok()
+            .map(|vectors| mean_pool_embeddings(&vectors))
+            .unwrap_or_else(|| existing.support_embedding.clone())
+    } else {
+        existing.support_embedding.clone()
     };
 
     MemoryRecord {
@@ -1086,7 +1157,7 @@ pub(crate) async fn merge_memory_records_with_policy(
         day_bucket: incoming.day_bucket.clone(),
         app_name: incoming.app_name.clone(),
         bundle_id: incoming.bundle_id.clone().or(existing.bundle_id.clone()),
-        window_title: choose_story_title(&existing.window_title, &incoming.window_title),
+        window_title: merged_window_title,
         session_id: existing.session_id.clone(),
         text: String::new(),
         clean_text: merged_clean_text,
@@ -1096,14 +1167,16 @@ pub(crate) async fn merge_memory_records_with_policy(
         summary_source: merged_summary_source,
         noise_score: ((existing.noise_score + incoming.noise_score) / 2.0).clamp(0.0, 1.0),
         session_key: choose_story_title(&existing.session_key, &incoming.session_key),
+        lexical_shadow: merged_lexical_shadow,
         embedding: merged_embedding,
         image_embedding: incoming.image_embedding.clone(),
         screenshot_path: existing
             .screenshot_path
             .clone()
             .or(incoming.screenshot_path.clone()),
-        url: incoming.url.clone().or(existing.url.clone()),
+        url: merged_url,
         snippet_embedding: merged_snippet_embedding,
+        support_embedding: merged_support_embedding,
         decay_score: existing.decay_score.max(incoming.decay_score),
         last_accessed_at: existing.last_accessed_at.max(incoming.last_accessed_at),
     }
@@ -1173,7 +1246,11 @@ fn score_search_candidate(incoming: &MemoryRecord, candidate: &SearchResult) -> 
         &trim_chars(&incoming.clean_text, 1000),
         &trim_chars(&candidate.clean_text, 1000),
     );
-    let lexical = snippet_similarity * 0.5 + title_similarity * 0.3 + text_similarity * 0.2;
+    let shadow_similarity = token_overlap(&incoming.lexical_shadow, &candidate.lexical_shadow);
+    let lexical = snippet_similarity * 0.42
+        + title_similarity * 0.26
+        + text_similarity * 0.2
+        + shadow_similarity * 0.12;
     let vector = candidate.score.clamp(0.0, 1.0);
 
     let anchor_match = continuity_anchor_for_memory(incoming)
@@ -1215,7 +1292,11 @@ pub(crate) fn score_memory_candidate(
         &trim_chars(&incoming.clean_text, 1000),
         &trim_chars(&candidate.clean_text, 1000),
     );
-    let lexical = snippet_similarity * 0.5 + title_similarity * 0.3 + text_similarity * 0.2;
+    let shadow_similarity = token_overlap(&incoming.lexical_shadow, &candidate.lexical_shadow);
+    let lexical = snippet_similarity * 0.42
+        + title_similarity * 0.26
+        + text_similarity * 0.2
+        + shadow_similarity * 0.12;
     let vector = cosine_similarity(&incoming.embedding, &candidate.embedding).clamp(0.0, 1.0);
 
     let anchor_match = continuity_anchor_for_memory(incoming)
@@ -1314,10 +1395,11 @@ fn passes_lexical_merge_threshold(score: MergeScore) -> bool {
 
 fn lexical_merge_query(record: &MemoryRecord) -> String {
     let text = format!(
-        "{} {} {}",
+        "{} {} {} {}",
         record.window_title,
         record.snippet,
-        trim_chars(&record.clean_text, 500)
+        trim_chars(&record.clean_text, 500),
+        record.lexical_shadow
     );
     text.split_whitespace()
         .take(48)

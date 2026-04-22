@@ -3,7 +3,11 @@
 //! Monitors the user's Downloads folder for new, completed files
 //! and injects synthetic memory records so they become searchable.
 
-use crate::embed::Embedder;
+use crate::embed::{Embedder, EMBEDDING_DIM};
+use crate::memory_compaction::{
+    build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
+    support_embedding_texts,
+};
 use crate::store::MemoryRecord;
 use crate::AppState;
 use chrono::Local;
@@ -145,24 +149,55 @@ async fn inject_download_memory(
     );
     let snippet = format!("Downloaded: {}", filename);
 
-    let (embedding, snippet_embedding) = if let Some(emb) = embedder {
-        match emb.embed_batch_with_context(&[
+    let lexical_shadow = build_lexical_shadow("Downloads", &snippet, &text, None);
+    let compact_summary_text =
+        compact_summary_embedding_text("tracker", &snippet, &text, &lexical_shadow);
+    let support_texts = support_embedding_texts("Finder", "Downloads", &text, &lexical_shadow);
+
+    let (embedding, snippet_embedding, support_embedding) = if let Some(emb) = embedder {
+        let mut contexts = vec![
             ("Finder".to_string(), "Downloads".to_string(), text.clone()),
             (
                 "Finder".to_string(),
                 "Downloads".to_string(),
-                snippet.clone(),
+                compact_summary_text,
             ),
-        ]) {
-            Ok(mut vectors) => {
-                let snippet_vec = vectors.pop().unwrap_or_else(|| vec![0.0; 384]);
-                let text_vec = vectors.pop().unwrap_or_else(|| vec![0.0; 384]);
-                (text_vec, snippet_vec)
+        ];
+        contexts.extend(
+            support_texts
+                .iter()
+                .cloned()
+                .map(|value| ("Finder".to_string(), "Downloads".to_string(), value)),
+        );
+        match emb.embed_batch_with_context(&contexts) {
+            Ok(vectors) => {
+                let text_vec = vectors
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
+                let snippet_vec = vectors
+                    .get(1)
+                    .cloned()
+                    .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
+                let support_vec = if vectors.len() > 2 {
+                    mean_pool_embeddings(&vectors[2..])
+                } else {
+                    vec![0.0; EMBEDDING_DIM]
+                };
+                (text_vec, snippet_vec, support_vec)
             }
-            Err(_) => (vec![0.0; 384], vec![0.0; 384]),
+            Err(_) => (
+                vec![0.0; EMBEDDING_DIM],
+                vec![0.0; EMBEDDING_DIM],
+                vec![0.0; EMBEDDING_DIM],
+            ),
         }
     } else {
-        (vec![0.0; 384], vec![0.0; 384])
+        (
+            vec![0.0; EMBEDDING_DIM],
+            vec![0.0; EMBEDDING_DIM],
+            vec![0.0; EMBEDDING_DIM],
+        )
     };
 
     let record = MemoryRecord {
@@ -181,11 +216,13 @@ async fn inject_download_memory(
         summary_source: "tracker".to_string(),
         noise_score: 0.0,
         session_key: "filesystem:downloads".to_string(),
+        lexical_shadow,
         embedding,
         image_embedding: vec![0.0; 512],
         screenshot_path: None,
         url: None,
         snippet_embedding,
+        support_embedding,
         decay_score: 1.0,
         last_accessed_at: now.timestamp_millis(),
     };

@@ -88,6 +88,7 @@ export interface StorageReclaimSummary {
     screenshot_files_deleted: number;
     embeddings_refreshed: number;
     snippet_embeddings_refreshed: number;
+    support_embeddings_refreshed: number;
     chars_before: number;
     chars_after: number;
     chars_reclaimed: number;
@@ -106,6 +107,7 @@ export interface StorageReclaimProgress {
     screenshot_files_deleted: number;
     embeddings_refreshed: number;
     snippet_embeddings_refreshed: number;
+    support_embeddings_refreshed: number;
     timestamp_ms: number;
 }
 

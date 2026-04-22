@@ -8,7 +8,7 @@ use super::schema::{
     MeetingSegment, MeetingSession, MemoryRecord, NodeType, SearchResult, Stats, Task, TaskType,
     WeekdayCount,
 };
-use crate::memory_compaction::compact_memory_record_payload;
+use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
 use arrow_array::{
     builder::{Int64Builder, StringBuilder},
     Array, BooleanArray, FixedSizeListArray, Float32Array, Int64Array, RecordBatch,
@@ -45,6 +45,7 @@ const SEARCH_RESULT_COLUMNS: &[&str] = &[
     "summary_source",
     "noise_score",
     "session_key",
+    "lexical_shadow",
     "screenshot_path",
     "url",
     "decay_score",
@@ -54,8 +55,6 @@ const IMAGE_EMBED_DIM: i32 = 512;
 const VECTOR_QUERY_MULTIPLIER: usize = 3;
 const KEYWORD_QUERY_MULTIPLIER: usize = 8;
 const MAX_KEYWORD_SCAN: usize = 600;
-const RECENT_RESULTS_MULTIPLIER: usize = 8;
-const MAX_RECENT_SCAN: usize = 1200;
 const INDEX_NOISE_HOSTS: &[&str] = &[
     "accounts.google.com",
     "auth.openai.com",
@@ -471,6 +470,41 @@ impl Store {
         Ok(dedup_search_results(results, limit))
     }
 
+    /// ANN search over the `support_embedding` column (representative chunk centroid tower).
+    pub async fn support_vector_search(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        time_filter: Option<&str>,
+        app_filter: Option<&str>,
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        let filter = build_filter(time_filter, app_filter);
+        let query_vec: Vec<f32> = query_embedding.to_vec();
+        let base_limit = limit.max(1);
+        let retrieval_limit = if base_limit >= 300 {
+            base_limit
+        } else {
+            base_limit.saturating_mul(VECTOR_QUERY_MULTIPLIER).min(300)
+        };
+
+        let mut vq = self
+            .table
+            .vector_search(query_vec)?
+            .column("support_embedding")
+            .limit(retrieval_limit);
+
+        if let Some(f) = filter {
+            vq = vq.only_if(f);
+        }
+
+        let batches: Vec<RecordBatch> = vq.execute().await?.try_collect().await?;
+        let mut results = Vec::new();
+        for batch in &batches {
+            results.extend(batch_to_search_results(batch));
+        }
+        Ok(dedup_search_results(results, limit))
+    }
+
     async fn insert_memory_batch(
         &self,
         records: &[MemoryRecord],
@@ -621,6 +655,7 @@ impl Store {
             clauses.push(format!("LOWER(text) LIKE '%{escaped}%'"));
             clauses.push(format!("LOWER(clean_text) LIKE '%{escaped}%'"));
             clauses.push(format!("LOWER(snippet) LIKE '%{escaped}%'"));
+            clauses.push(format!("LOWER(lexical_shadow) LIKE '%{escaped}%'"));
             clauses.push(format!("LOWER(window_title) LIKE '%{escaped}%'"));
             clauses.push(format!("LOWER(app_name) LIKE '%{escaped}%'"));
             clauses.push(format!("LOWER(url) LIKE '%{escaped}%'"));
@@ -1242,15 +1277,12 @@ impl Store {
         app_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
         let base_limit = limit.max(1);
-        let retrieval_limit = if base_limit >= MAX_RECENT_SCAN {
-            base_limit
-        } else {
-            base_limit
-                .saturating_mul(RECENT_RESULTS_MULTIPLIER)
-                .min(MAX_RECENT_SCAN)
-        };
-
-        let mut query = self.table.query().limit(retrieval_limit);
+        // Lance's plain table query does not guarantee timestamp ordering, so
+        // we need to sort after scanning matching rows rather than limit first.
+        let mut query = self
+            .table
+            .query()
+            .select(Select::columns(SEARCH_RESULT_COLUMNS));
         if let Some(filter) = build_filter(None, app_filter) {
             query = query.only_if(filter);
         }
@@ -1313,6 +1345,7 @@ fn memory_schema() -> Schema {
         Field::new("summary_source", DataType::Utf8, false),
         Field::new("noise_score", DataType::Float32, false),
         Field::new("session_key", DataType::Utf8, false),
+        Field::new("lexical_shadow", DataType::Utf8, false),
         Field::new(
             "embedding",
             DataType::FixedSizeList(
@@ -1333,6 +1366,14 @@ fn memory_schema() -> Schema {
         Field::new("url", DataType::Utf8, true),
         Field::new(
             "snippet_embedding",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                TEXT_EMBED_DIM,
+            ),
+            false,
+        ),
+        Field::new(
+            "support_embedding",
             DataType::FixedSizeList(
                 Arc::new(Field::new("item", DataType::Float32, true)),
                 TEXT_EMBED_DIM,
@@ -1449,6 +1490,7 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
     let summary_sources: Vec<&str> = records.iter().map(|r| r.summary_source.as_str()).collect();
     let noise_scores: Vec<f32> = records.iter().map(|r| r.noise_score).collect();
     let session_keys: Vec<&str> = records.iter().map(|r| r.session_key.as_str()).collect();
+    let lexical_shadows: Vec<&str> = records.iter().map(|r| r.lexical_shadow.as_str()).collect();
     let screenshot_paths: Vec<Option<&str>> = records
         .iter()
         .map(|r| r.screenshot_path.as_deref())
@@ -1494,6 +1536,18 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
         None,
     )?;
 
+    let flat_support: Vec<f32> = records
+        .iter()
+        .flat_map(|r| r.support_embedding.iter().copied())
+        .collect();
+    let support_values = Arc::new(Float32Array::from(flat_support)) as Arc<dyn Array>;
+    let support_embedding_array = FixedSizeListArray::try_new(
+        Arc::new(Field::new("item", DataType::Float32, true)),
+        TEXT_EMBED_DIM,
+        support_values,
+        None,
+    )?;
+
     let decay_scores: Vec<f32> = records.iter().map(|r| r.decay_score).collect();
     let last_accessed: Vec<i64> = records.iter().map(|r| r.last_accessed_at).collect();
 
@@ -1515,11 +1569,13 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
             Arc::new(StringArray::from(summary_sources)),
             Arc::new(Float32Array::from(noise_scores)),
             Arc::new(StringArray::from(session_keys)),
+            Arc::new(StringArray::from(lexical_shadows)),
             Arc::new(embedding_array),
             Arc::new(image_embedding_array),
             Arc::new(StringArray::from(screenshot_paths)),
             Arc::new(StringArray::from(urls)),
             Arc::new(snippet_embedding_array),
+            Arc::new(support_embedding_array),
             Arc::new(Float32Array::from(decay_scores)),
             Arc::new(Int64Array::from(last_accessed)),
         ],
@@ -1543,6 +1599,7 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
     let summary_sources = str_col(batch, "summary_source");
     let noise_scores = f32_col(batch, "noise_score");
     let session_keys = str_col(batch, "session_key");
+    let lexical_shadows = str_col(batch, "lexical_shadow");
     let screenshot_paths = str_col(batch, "screenshot_path");
     let urls = str_col(batch, "url");
 
@@ -1555,6 +1612,9 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
     let snip_embed_col = batch
         .column_by_name("snippet_embedding")
         .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>().cloned());
+    let support_embed_col = batch
+        .column_by_name("support_embedding")
+        .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>().cloned());
     let decay_scores = f32_col(batch, "decay_score");
     let last_accessed = i64_col(batch, "last_accessed_at");
 
@@ -1563,6 +1623,8 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
             let embedding = extract_f32_list(&embed_col, i, TEXT_EMBED_DIM as usize);
             let image_embedding = extract_f32_list(&img_col, i, IMAGE_EMBED_DIM as usize);
             let snippet_embedding = extract_f32_list(&snip_embed_col, i, TEXT_EMBED_DIM as usize);
+            let support_embedding =
+                extract_f32_list(&support_embed_col, i, TEXT_EMBED_DIM as usize);
             MemoryRecord {
                 id: get_str(&ids, i),
                 timestamp: timestamps.as_ref().map(|c| c.value(i)).unwrap_or(0),
@@ -1579,11 +1641,13 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
                 summary_source: get_str(&summary_sources, i),
                 noise_score: get_f32(&noise_scores, i),
                 session_key: get_str(&session_keys, i),
+                lexical_shadow: get_str(&lexical_shadows, i),
                 embedding,
                 image_embedding,
                 screenshot_path: get_opt_str(&screenshot_paths, i),
                 url: get_opt_str(&urls, i),
                 snippet_embedding,
+                support_embedding,
                 decay_score: get_f32(&decay_scores, i).max(0.01),
                 last_accessed_at: get_i64(&last_accessed, i),
             }
@@ -1607,6 +1671,7 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
     let summary_sources = str_col(batch, "summary_source");
     let noise_scores = f32_col(batch, "noise_score");
     let session_keys = str_col(batch, "session_key");
+    let lexical_shadows = str_col(batch, "lexical_shadow");
     let screenshot_paths = str_col(batch, "screenshot_path");
     let urls = str_col(batch, "url");
 
@@ -1642,6 +1707,7 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
                 summary_source: get_str(&summary_sources, i),
                 noise_score: get_f32(&noise_scores, i),
                 session_key: get_str(&session_keys, i),
+                lexical_shadow: get_str(&lexical_shadows, i),
                 score,
                 screenshot_path: get_opt_str(&screenshot_paths, i),
                 url: get_opt_str(&urls, i),
@@ -2435,6 +2501,7 @@ fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
 
     let title = normalize_keyword_text(&result.window_title);
     let snippet = normalize_keyword_text(&result.snippet);
+    let lexical_shadow = normalize_keyword_text(&result.lexical_shadow);
     let clean = normalize_keyword_text(if !result.clean_text.trim().is_empty() {
         &result.clean_text
     } else {
@@ -2446,7 +2513,7 @@ fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
         .as_ref()
         .map(|value| normalize_keyword_text(value))
         .unwrap_or_default();
-    let merged = format!("{} {} {} {}", title, snippet, clean, url);
+    let merged = format!("{} {} {} {} {}", title, snippet, clean, lexical_shadow, url);
 
     let mut matched_terms = 0usize;
     let mut weighted = 0.0f32;
@@ -2463,6 +2530,10 @@ fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
         }
         if clean.contains(term) {
             weighted += 1.1;
+            matched = true;
+        }
+        if lexical_shadow.contains(term) {
+            weighted += 1.05;
             matched = true;
         }
         if app.contains(term) {
@@ -2540,6 +2611,16 @@ fn estimate_record_signal_strength(record: &MemoryRecord) -> f32 {
 }
 
 fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
+    let lexical_shadow = if record.lexical_shadow.trim().is_empty() {
+        build_lexical_shadow(
+            &record.window_title,
+            &record.snippet,
+            &record.clean_text,
+            record.url.as_deref(),
+        )
+    } else {
+        record.lexical_shadow.clone()
+    };
     let mut normalized = compact_memory_record_payload(record);
     normalized.url = sanitize_index_url(
         normalized.url.as_deref(),
@@ -2547,6 +2628,7 @@ fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
         &normalized.snippet,
     );
     normalized.session_key = build_index_session_key(&normalized);
+    normalized.lexical_shadow = lexical_shadow;
     normalized
 }
 
@@ -2878,9 +2960,15 @@ async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Erro
     if !existing.contains("session_key") {
         transforms.push(("session_key".to_string(), "''".to_string()));
     }
+    if !existing.contains("lexical_shadow") {
+        transforms.push(("lexical_shadow".to_string(), "''".to_string()));
+    }
     if !existing.contains("snippet_embedding") {
         // Placeholder zeros — will be computed properly for new captures.
         transforms.push(("snippet_embedding".to_string(), "embedding".to_string()));
+    }
+    if !existing.contains("support_embedding") {
+        transforms.push(("support_embedding".to_string(), "embedding".to_string()));
     }
     if !existing.contains("decay_score") {
         transforms.push(("decay_score".to_string(), "CAST(1.0 AS FLOAT)".to_string()));
@@ -3089,11 +3177,13 @@ mod tests {
             summary_source: "llm".to_string(),
             noise_score: 0.1,
             session_key: String::new(),
+            lexical_shadow: String::new(),
             embedding: vec![0.0; 384],
             image_embedding: vec![0.0; 512],
             screenshot_path: None,
             url: url.map(|value| value.to_string()),
             snippet_embedding: vec![0.0; 384],
+            support_embedding: vec![0.0; 384],
             decay_score: 1.0,
             last_accessed_at: 0,
         }
