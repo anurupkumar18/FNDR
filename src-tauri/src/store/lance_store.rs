@@ -706,46 +706,47 @@ impl Store {
                 .saturating_mul(KEYWORD_QUERY_MULTIPLIER)
                 .min(MAX_KEYWORD_SCAN)
         };
-
-        let mut clauses = Vec::new();
-        for term in &terms {
-            let escaped = sql_escape(&term.to_lowercase());
-            clauses.push(format!("LOWER(text) LIKE '%{escaped}%'"));
-            clauses.push(format!("LOWER(clean_text) LIKE '%{escaped}%'"));
-            clauses.push(format!("LOWER(snippet) LIKE '%{escaped}%'"));
-            clauses.push(format!("LOWER(lexical_shadow) LIKE '%{escaped}%'"));
-            clauses.push(format!("LOWER(window_title) LIKE '%{escaped}%'"));
-            clauses.push(format!("LOWER(app_name) LIKE '%{escaped}%'"));
-            clauses.push(format!("LOWER(url) LIKE '%{escaped}%'"));
-        }
-        let keyword_pred = format!("({})", clauses.join(" OR "));
-
-        let filter = match build_filter(time_filter, app_filter) {
-            Some(f) => format!("{keyword_pred} AND {f}"),
-            None => keyword_pred,
-        };
-
-        let batches: Vec<RecordBatch> = self
-            .table
-            .query()
-            .only_if(filter)
-            .limit(retrieval_limit)
-            .execute()
-            .await?
-            .try_collect()
-            .await?;
-
         let mut results = Vec::new();
         let now_ms = chrono::Utc::now().timestamp_millis();
-        for batch in &batches {
-            let mut batch_results = batch_to_search_results(batch);
-            // Keyword branch gets a lexical relevance score before hybrid fusion.
-            for r in &mut batch_results {
-                let lexical = lexical_keyword_score(&terms, r);
-                let recency = recency_score(now_ms, r.timestamp);
-                r.score = (lexical * 0.86 + recency * 0.14).clamp(0.0, 1.0);
+        let per_term_limit = (retrieval_limit / terms.len().max(1)).max(base_limit).min(retrieval_limit);
+
+        for term in &terms {
+            let escaped = sql_escape(&term.to_lowercase());
+            let term_clauses = [
+                format!("LOWER(text) LIKE '%{escaped}%'"),
+                format!("LOWER(clean_text) LIKE '%{escaped}%'"),
+                format!("LOWER(snippet) LIKE '%{escaped}%'"),
+                format!("LOWER(lexical_shadow) LIKE '%{escaped}%'"),
+                format!("LOWER(window_title) LIKE '%{escaped}%'"),
+                format!("LOWER(app_name) LIKE '%{escaped}%'"),
+                format!("LOWER(url) LIKE '%{escaped}%'"),
+            ];
+            let keyword_pred = format!("({})", term_clauses.join(" OR "));
+            let filter = match build_filter(time_filter, app_filter) {
+                Some(f) => format!("{keyword_pred} AND {f}"),
+                None => keyword_pred,
+            };
+
+            let batches: Vec<RecordBatch> = self
+                .table
+                .query()
+                .only_if(filter)
+                .limit(per_term_limit)
+                .execute()
+                .await?
+                .try_collect()
+                .await?;
+
+            for batch in &batches {
+                let mut batch_results = batch_to_search_results(batch);
+                // Keyword branch gets a lexical relevance score before hybrid fusion.
+                for r in &mut batch_results {
+                    let lexical = lexical_keyword_score(&terms, r);
+                    let recency = recency_score(now_ms, r.timestamp);
+                    r.score = (lexical * 0.86 + recency * 0.14).clamp(0.0, 1.0);
+                }
+                results.extend(batch_results);
             }
-            results.extend(batch_results);
         }
         results.sort_by(|a, b| {
             b.score
