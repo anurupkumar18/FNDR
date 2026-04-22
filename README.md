@@ -57,18 +57,6 @@ npm run tauri dev
 
 Then complete onboarding in-app (permissions + model download).
 
-Preview what can be cleaned:
-
-```bash
-npm run clean:dev-cache:dry-run
-```
-
-Clean the build cache:
-
-```bash
-npm run clean:dev-cache
-```
-
 
 ## Repository Layout
 
