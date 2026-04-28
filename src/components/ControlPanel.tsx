@@ -1019,16 +1019,17 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                     isVisible={true}
                                     onClose={() => undefined}
                                     onAlertsChange={setPrivacyAlertCount}
+                                    onBlocklistChange={setBlocklistState}
                                     embedded={true}
                                 />
                             </section>
 
                             <section className="panel-section">
-                                <h3>Blocked Apps</h3>
-                                <p className="section-hint">These apps will not be captured.</p>
+                                <h3>Blocked Apps & Sites</h3>
+                                <p className="section-hint">These apps and websites will not be captured.</p>
                                 <div className="blocklist">
                                     {blocklist.length === 0 ? (
-                                        <p className="blocklist-empty">No apps blocked</p>
+                                        <p className="blocklist-empty">No apps or sites blocked</p>
                                     ) : (
                                         blocklist.map((app) => (
                                             <div key={app} className="blocklist-item">
@@ -1041,7 +1042,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                 <div className="add-app-row">
                                     <input
                                         type="text"
-                                        placeholder="Add app name..."
+                                        placeholder="Add app name or site..."
                                         value={newApp}
                                         onChange={(e) => setNewApp(e.target.value)}
                                         onKeyDown={(e) => e.key === "Enter" && void handleAddApp()}

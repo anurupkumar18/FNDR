@@ -23,7 +23,8 @@
 
     /* visionOS-style ambient color wash (subtle, not neon) */
     --ambient-wash:
-        radial-gradient(ellipse 80% 60% at 20% 0%, rgba(120, 140, 220, 0.06), transparent 60%),
+        radial-gradient(ellipse 62% 42% at 10% -2%, rgba(255, 255, 255, 0.065) 0%, rgba(255, 255, 255, 0.02) 22%, transparent 44%),
+        radial-gradient(ellipse 92% 72% at 18% 0%, rgba(150, 170, 245, 0.16) 0%, rgba(120, 140, 220, 0.08) 34%, transparent 66%),
         radial-gradient(ellipse 60% 50% at 100% 100%, rgba(200, 140, 200, 0.05), transparent 55%);
 
     /* Spring easing */
@@ -652,7 +653,11 @@
 
 .app-main.search-centered .search-shell {
     margin: 0 0 16px;
-    width: min(820px, calc(100vw - 260px));
+    width: min(760px, 100%);
+}
+
+.app-main.search-centered .search-panel {
+    width: 100%;
 }
 
 /* ===== Home focus / greeting ===== */
@@ -930,8 +935,9 @@
 /* ===== Light theme — app shell ===== */
 [data-theme="light"] .app {
     background-image:
-        radial-gradient(ellipse 80% 60% at 20% 0%, rgba(140, 160, 230, 0.08), transparent 60%),
-        radial-gradient(ellipse 60% 50% at 100% 100%, rgba(220, 160, 220, 0.06), transparent 55%);
+        radial-gradient(ellipse 64% 42% at 10% -2%, rgba(66, 84, 134, 0.14) 0%, rgba(66, 84, 134, 0.06) 22%, transparent 44%),
+        radial-gradient(ellipse 95% 72% at 18% 0%, rgba(122, 142, 206, 0.24) 0%, rgba(140, 160, 230, 0.12) 34%, transparent 66%),
+        radial-gradient(ellipse 64% 50% at 100% 100%, rgba(176, 122, 176, 0.10), transparent 55%);
 }
 
 [data-theme="light"] .left-sidebar {

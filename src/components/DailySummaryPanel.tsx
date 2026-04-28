@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
-import { generateDailySummaryForDate, exportDailySummaryPdf } from "../api/tauri";
+import { generateDailySummaryForDate, exportDailySummaryPdf, openExportedPdf } from "../api/tauri";
 import "./DailySummaryPanel.css";
 
 interface DailySummaryPanelProps {
@@ -75,7 +74,7 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
         }
 
         try {
-            await shellOpen(exportedPdfPath);
+            await openExportedPdf(exportedPdfPath);
             setShowToast(false);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));

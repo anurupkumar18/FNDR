@@ -216,6 +216,20 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         // Flush batch if needed
         let should_flush = batch.len() >= max_batch_size || last_flush.elapsed() >= flush_interval;
         if should_flush && !batch.is_empty() {
+            batch.retain(|record| {
+                !Blocklist::is_blocked(&record.app_name, &config.blocklist)
+                    && !Blocklist::is_context_blocked(
+                        record.url.as_deref(),
+                        Some(&record.window_title),
+                        &config.blocklist,
+                    )
+            });
+            if batch.is_empty() {
+                purge_capture_artifacts(state.store.frames_dir());
+                last_flush = Instant::now();
+                continue;
+            }
+
             let flush_start = Instant::now();
             if let Err(e) = state.store.add_batch(&batch).await {
                 tracing::error!("Failed to flush batch: {}", e);
@@ -256,8 +270,21 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
+        let url = macos::get_browser_url(&app_name);
+        if let Some(ref u) = url {
+            tracing::info!("Frontmost browser URL: {}", u);
+        }
+
         // Check blocklist
-        if Blocklist::is_blocked(&app_name, &config.blocklist) {
+        if Blocklist::is_blocked(&app_name, &config.blocklist)
+            || Blocklist::is_context_blocked(url.as_deref(), Some(&window_title), &config.blocklist)
+        {
+            tracing::debug!(
+                "Skipping capture for blocklisted context: app='{}' title='{}' url={:?}",
+                app_name,
+                window_title,
+                url
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -407,45 +434,31 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         let now = Local::now();
 
-        let url = macos::get_browser_url(&app_name);
-        if let Some(ref u) = url {
-            tracing::info!("Captured URL: {}", u);
-        }
-
         // --- Proactive Privacy Check ---
         if Blocklist::is_sensitive_context(url.as_deref(), Some(&window_title)) {
-            let domain_or_title = url.clone().unwrap_or_else(|| window_title.clone());
+            let alert_key = Blocklist::context_key(url.as_deref(), Some(&window_title))
+                .unwrap_or_else(|| window_title.clone());
 
-            // Extract a cleaner domain from URL if possible, otherwise use the full string
-            let clean_domain = if domain_or_title.starts_with("http") {
-                let without_schema = domain_or_title
-                    .split("://")
-                    .nth(1)
-                    .unwrap_or(&domain_or_title);
-                without_schema
-                    .split('/')
-                    .next()
-                    .unwrap_or(without_schema)
-                    .to_string()
-            } else {
-                domain_or_title
-            };
-
+            let is_dismissed = Blocklist::is_context_blocked(
+                url.as_deref(),
+                Some(&window_title),
+                &config.dismissed_privacy_alerts,
+            );
             let is_snoozed = {
                 let snoozed = state.snoozed_privacy_alerts.read();
-                if let Some(&expire_time) = snoozed.get(&clean_domain) {
+                if let Some(&expire_time) = snoozed.get(&alert_key) {
                     now.timestamp() < expire_time
                 } else {
                     false
                 }
             };
 
-            if !is_snoozed {
+            if !is_dismissed && !is_snoozed {
                 let mut pending = state.pending_privacy_alerts.write();
-                if !pending.iter().any(|a| a.domain_or_title == clean_domain) {
+                if !pending.iter().any(|a| a.domain_or_title == alert_key) {
                     pending.push(crate::PrivacyAlert {
                         id: uuid::Uuid::new_v4().to_string(),
-                        domain_or_title: clean_domain,
+                        domain_or_title: alert_key,
                         detected_at: now.timestamp_millis(),
                     });
                     tracing::info!("Surfaced proactive privacy alert for sensitive context");

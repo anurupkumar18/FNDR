@@ -21,7 +21,21 @@
 
 /* ── Card shell ───────────────────────────────────────────── */
 .ob-card {
-    background: #fff;
+    --ob-card-bg: #fffdf9;
+    --ob-surface-muted: #f5efe5;
+    --ob-surface-strong: #e7ddcf;
+    --ob-border: #d7cbbb;
+    --ob-text-primary: #231c13;
+    --ob-text-secondary: #514636;
+    --ob-text-muted: #746957;
+    --ob-accent: #231c13;
+    --ob-accent-light: #f0e6d8;
+    --ob-success: #3f6f4d;
+    --ob-success-light: #edf5ee;
+    --ob-danger: #9b4737;
+    --ob-danger-light: #fcefe9;
+    background: var(--ob-card-bg);
+    color: var(--ob-text-primary);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-strong);
     padding: 40px 48px;
@@ -34,7 +48,7 @@
     animation: ob-slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1);
     /* Custom scrollbar for the card */
     scrollbar-width: thin;
-    scrollbar-color: var(--text-muted) transparent;
+    scrollbar-color: var(--ob-text-muted) transparent;
 }
 
 .ob-card::-webkit-scrollbar {
@@ -42,7 +56,7 @@
 }
 
 .ob-card::-webkit-scrollbar-thumb {
-    background: var(--text-muted);
+    background: var(--ob-text-muted);
     border-radius: 10px;
 }
 
@@ -62,18 +76,18 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--bg-tertiary);
+    background: var(--ob-surface-strong);
     transition: background 0.25s, width 0.25s;
 }
 
 .ob-step-dot.active {
-    background: var(--accent);
+    background: var(--ob-accent);
     width: 24px;
     border-radius: 100px;
 }
 
 .ob-step-dot.done {
-    background: var(--accent);
+    background: var(--ob-accent);
     opacity: 0.35;
 }
 
@@ -101,7 +115,7 @@
 .ob-title {
     font-size: 26px;
     font-weight: 700;
-    color: var(--text-primary);
+    color: var(--ob-text-primary);
     text-align: center;
     margin-bottom: 12px;
     line-height: 1.25;
@@ -110,7 +124,7 @@
 
 .ob-subtitle {
     font-size: 15px;
-    color: var(--text-muted);
+    color: var(--ob-text-muted);
     text-align: center;
     line-height: 1.6;
     margin-bottom: 32px;
@@ -121,23 +135,28 @@
     margin-bottom: 8px;
     font-size: 13px;
     font-weight: 600;
-    color: var(--text-secondary);
+    color: var(--ob-text-secondary);
 }
 
 .ob-name-input {
     width: 100%;
     margin-bottom: 16px;
     border-radius: 14px;
-    border: 1px solid var(--border);
-    background: #0d0d0d;
-    color: var(--text-primary);
+    border: 1px solid var(--ob-border);
+    background: var(--ob-surface-muted);
+    color: var(--ob-text-primary);
     padding: 12px 14px;
     font-size: 16px;
     outline: none;
 }
 
+.ob-name-input::placeholder {
+    color: var(--ob-text-muted);
+}
+
 .ob-name-input:focus {
-    border-color: rgba(255, 255, 255, 0.32);
+    border-color: var(--ob-accent);
+    box-shadow: 0 0 0 3px rgba(35, 28, 19, 0.08);
 }
 
 /* ── Buttons ──────────────────────────────────────────────── */
@@ -183,9 +202,9 @@
     justify-content: center;
     width: 100%;
     padding: 12px 24px;
-    background: rgba(255, 255, 255, 0.04);
-    color: var(--text-secondary);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--ob-surface-muted);
+    color: var(--ob-text-secondary);
+    border: 1px solid var(--ob-border);
     border-radius: 20px;
     font-size: 14px;
     font-weight: 500;
@@ -196,9 +215,9 @@
 }
 
 .ob-btn-secondary:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.2);
-    color: var(--text-primary);
+    background: var(--ob-surface-strong);
+    border-color: var(--ob-text-secondary);
+    color: var(--ob-text-primary);
     transform: translateY(-1px);
 }
 
@@ -207,7 +226,7 @@
     width: 100%;
     padding: 10px;
     background: transparent;
-    color: var(--text-muted);
+    color: var(--ob-text-secondary);
     border: none;
     font-size: 13px;
     cursor: pointer;
@@ -219,8 +238,8 @@
 }
 
 .ob-btn-ghost:hover {
-    color: var(--text-secondary);
-    text-decoration-color: var(--text-muted);
+    color: var(--ob-text-primary);
+    text-decoration-color: var(--ob-text-muted);
 }
 
 .ob-btn-row {
@@ -260,13 +279,13 @@
     display: block;
     font-size: 14px;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--ob-text-primary);
     margin-bottom: 2px;
 }
 
 .ob-privacy-text span {
     font-size: 13px;
-    color: var(--text-muted);
+    color: var(--ob-text-muted);
     line-height: 1.5;
 }
 
@@ -277,14 +296,14 @@
     justify-content: space-between;
     padding: 14px 16px;
     border-radius: var(--radius-sm);
-    border: 1.5px solid var(--bg-tertiary);
+    border: 1.5px solid var(--ob-border);
     margin-bottom: 10px;
     transition: border-color 0.2s;
 }
 
 .ob-permission-row.granted {
-    border-color: var(--success);
-    background: var(--success-light);
+    border-color: var(--ob-success);
+    background: var(--ob-success-light);
 }
 
 .ob-permission-left {
@@ -300,12 +319,12 @@
 .ob-permission-label {
     font-size: 14px;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--ob-text-primary);
 }
 
 .ob-permission-desc {
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--ob-text-muted);
 }
 
 .ob-permission-badge {
@@ -314,9 +333,9 @@
 
 .ob-permission-btn {
     padding: 6px 14px;
-    background: var(--accent-light);
-    color: var(--accent);
-    border: 1.5px solid var(--accent);
+    background: var(--ob-accent-light);
+    color: var(--ob-accent);
+    border: 1.5px solid var(--ob-accent);
     border-radius: var(--radius-full);
     font-size: 12px;
     font-weight: 600;
@@ -326,7 +345,7 @@
 }
 
 .ob-permission-btn:hover {
-    background: var(--accent);
+    background: var(--ob-accent);
     color: #fff;
 }
 
@@ -339,7 +358,7 @@
 }
 
 .ob-model-card {
-    border: 1.5px solid var(--bg-tertiary);
+    border: 1.5px solid var(--ob-border);
     border-radius: var(--radius-md);
     padding: 14px 16px;
     cursor: pointer;
@@ -347,23 +366,23 @@
     position: relative;
     text-align: left;
     width: 100%;
-    background: #fff;
+    background: var(--ob-card-bg);
     flex-shrink: 0;
 }
 
 .ob-model-card:hover {
-    border-color: var(--accent);
-    background: var(--accent-light);
+    border-color: var(--ob-accent);
+    background: var(--ob-accent-light);
 }
 
 .ob-model-card.selected {
-    border-color: var(--accent);
-    background: var(--accent-light);
+    border-color: var(--ob-accent);
+    background: var(--ob-accent-light);
 }
 
 .ob-model-card.already-downloaded {
-    border-color: var(--success);
-    background: var(--success-light);
+    border-color: var(--ob-success);
+    background: var(--ob-success-light);
 }
 
 .ob-model-badge {
@@ -372,7 +391,7 @@
     right: 12px;
     font-size: 11px;
     font-weight: 700;
-    background: var(--accent);
+    background: var(--ob-accent);
     color: #fff;
     padding: 3px 9px;
     border-radius: var(--radius-full);
@@ -381,19 +400,19 @@
 }
 
 .ob-model-badge.downloaded {
-    background: var(--success);
+    background: var(--ob-success);
 }
 
 .ob-model-name {
     font-size: 15px;
     font-weight: 700;
-    color: var(--text-primary);
+    color: var(--ob-text-primary);
     margin-bottom: 2px;
 }
 
 .ob-model-desc {
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--ob-text-muted);
     margin-bottom: 10px;
 }
 
@@ -401,7 +420,7 @@
     display: flex;
     gap: 16px;
     font-size: 12px;
-    color: var(--text-secondary);
+    color: var(--ob-text-secondary);
 }
 
 .ob-model-meta span {
@@ -419,17 +438,17 @@
 .ob-download-title {
     font-size: 16px;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--ob-text-primary);
     margin-bottom: 6px;
 }
 
 .ob-download-subtitle {
     font-size: 13px;
-    color: var(--text-muted);
+    color: var(--ob-text-muted);
 }
 
 .ob-progress-bar-wrap {
-    background: var(--bg-tertiary);
+    background: var(--ob-surface-strong);
     border-radius: var(--radius-full);
     height: 10px;
     overflow: hidden;
@@ -438,15 +457,15 @@
 
 .ob-progress-bar-fill {
     height: 100%;
-    background: var(--accent);
+    background: var(--ob-accent);
     border-radius: var(--radius-full);
     transition: width 0.3s ease;
     animation: ob-shimmer 1.5s infinite;
     background-size: 200% 100%;
     background-image: linear-gradient(90deg,
-        var(--accent) 0%,
+        var(--ob-accent) 0%,
         #888888 50%,
-        var(--accent) 100%
+        var(--ob-accent) 100%
     );
 }
 
@@ -457,17 +476,17 @@
 
 .ob-progress-label {
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--ob-text-muted);
     text-align: center;
 }
 
 .ob-error-box {
-    background: var(--danger-light);
-    border: 1.5px solid var(--danger);
+    background: var(--ob-danger-light);
+    border: 1.5px solid var(--ob-danger);
     border-radius: var(--radius-sm);
     padding: 12px 16px;
     font-size: 13px;
-    color: var(--danger);
+    color: var(--ob-danger);
     margin-bottom: 16px;
 }
 
@@ -483,7 +502,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    background: var(--bg-secondary);
+    background: var(--ob-surface-muted);
     border-radius: var(--radius-md);
     padding: 16px 22px;
     min-width: 100px;
@@ -493,14 +512,14 @@
 .ob-live-stat-num {
     font-size: 28px;
     font-weight: 800;
-    color: var(--accent);
+    color: var(--ob-accent);
     line-height: 1;
     font-variant-numeric: tabular-nums;
 }
 
 .ob-live-stat-label {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--ob-text-muted);
     font-weight: 500;
     margin-top: 4px;
     text-transform: uppercase;
@@ -512,7 +531,7 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: var(--success);
+    background: var(--ob-success);
     margin-right: 6px;
     animation: ob-pulse 1.5s infinite;
     vertical-align: middle;
@@ -525,12 +544,12 @@
 
 /* ── Search prompt teaser ─────────────────────────────────── */
 .ob-search-teaser {
-    background: var(--bg-secondary);
-    border: 1.5px solid var(--bg-tertiary);
+    background: var(--ob-surface-muted);
+    border: 1.5px solid var(--ob-border);
     border-radius: var(--radius-md);
     padding: 14px 18px;
     margin-bottom: 24px;
-    color: var(--text-muted);
+    color: var(--ob-text-muted);
     font-size: 14px;
     font-style: italic;
     text-align: center;

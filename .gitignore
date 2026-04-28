@@ -12,6 +12,8 @@ src-tauri/models/*.gguf
 # User Data & Storage (CRITICAL: MUST NOT BE COMMITTED)
 *.json
 *.json.migrated
+!src-tauri/capabilities/
+!src-tauri/capabilities/*.json
 *.lancedb/
 *.db/
 *.lance/
