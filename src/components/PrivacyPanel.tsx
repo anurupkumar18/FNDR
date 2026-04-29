@@ -1,15 +1,28 @@
 import { useEffect, useState } from "react";
-import { PrivacyAlert, getPrivacyAlerts, addSiteToBlocklist, dismissPrivacyAlert } from "../api/tauri";
+import {
+    PrivacyAlert,
+    getBlocklist,
+    getPrivacyAlerts,
+    addSiteToBlocklist,
+    dismissPrivacyAlert,
+} from "../api/tauri";
 import "./PrivacyPanel.css";
 
 interface PrivacyPanelProps {
     isVisible: boolean;
     onClose: () => void;
     onAlertsChange?: (count: number) => void;
+    onBlocklistChange?: (blocklist: string[]) => void;
     embedded?: boolean;
 }
 
-export function PrivacyPanel({ isVisible, onClose, onAlertsChange, embedded = false }: PrivacyPanelProps) {
+export function PrivacyPanel({
+    isVisible,
+    onClose,
+    onAlertsChange,
+    onBlocklistChange,
+    embedded = false,
+}: PrivacyPanelProps) {
     const [alerts, setAlerts] = useState<PrivacyAlert[]>([]);
     const [loading, setLoading] = useState(false);
 
@@ -36,7 +49,11 @@ export function PrivacyPanel({ isVisible, onClose, onAlertsChange, embedded = fa
         setLoading(true);
         try {
             await addSiteToBlocklist(site);
-            await refreshAlerts();
+            const [nextBlocklist] = await Promise.all([
+                getBlocklist(),
+                refreshAlerts(),
+            ]);
+            onBlocklistChange?.(nextBlocklist);
             if (alerts.length <= 1) {
                 onClose(); // auto close if it was the last one
             }

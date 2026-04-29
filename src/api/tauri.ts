@@ -733,6 +733,10 @@ export async function exportDailySummaryPdf(dateStr: string, summaryText: string
     return invoke<string>("export_daily_summary_pdf", { dateStr, summaryText });
 }
 
+export async function openExportedPdf(path: string): Promise<void> {
+    return invoke<void>("open_exported_pdf", { path });
+}
+
 // Proactive surface
 export interface ProactiveSuggestion {
     memory_id: string;

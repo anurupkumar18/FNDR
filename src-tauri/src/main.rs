@@ -465,6 +465,7 @@ fn main() {
             api::commands::retranscribe_meeting,
             api::commands::export_meeting_pdf,
             api::commands::export_daily_summary_pdf,
+            api::commands::open_exported_pdf,
             // Voice / Speech
             api::commands::transcribe_voice_input,
             api::commands::speak_text,

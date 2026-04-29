@@ -1167,6 +1167,64 @@ pub async fn export_daily_summary_pdf(
     Ok(target_path.to_string_lossy().to_string())
 }
 
+/// Open a PDF exported by FNDR from the user's Downloads folder.
+#[tauri::command]
+pub async fn open_exported_pdf(path: String) -> Result<(), String> {
+    let downloads_dir = dirs::download_dir()
+        .ok_or_else(|| "Could not find Downloads folder on this system.".to_string())?;
+    let downloads_dir = downloads_dir
+        .canonicalize()
+        .map_err(|e| format!("Could not resolve Downloads folder: {}", e))?;
+    let target_path = PathBuf::from(path);
+    let target_path = target_path
+        .canonicalize()
+        .map_err(|e| format!("Could not find exported PDF: {}", e))?;
+
+    if !target_path.starts_with(&downloads_dir) {
+        return Err("FNDR can only open exported PDFs from your Downloads folder.".to_string());
+    }
+
+    let is_pdf = target_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"));
+    if !is_pdf {
+        return Err("FNDR can only open exported PDF files.".to_string());
+    }
+
+    open_path_with_system(&target_path)
+}
+
+#[cfg(target_os = "macos")]
+fn open_path_with_system(path: &Path) -> Result<(), String> {
+    Command::new("open")
+        .arg(path)
+        .spawn()
+        .map_err(|e| format!("Failed to open exported PDF: {}", e))?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn open_path_with_system(path: &Path) -> Result<(), String> {
+    Command::new("cmd")
+        .arg("/C")
+        .arg("start")
+        .arg("")
+        .arg(path)
+        .spawn()
+        .map_err(|e| format!("Failed to open exported PDF: {}", e))?;
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_path_with_system(path: &Path) -> Result<(), String> {
+    Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map_err(|e| format!("Failed to open exported PDF: {}", e))?;
+    Ok(())
+}
+
 /// Transcribe a short voice input clip for voice search and voice control
 #[tauri::command]
 pub async fn transcribe_voice_input(
@@ -1230,6 +1288,20 @@ pub async fn set_blocklist(
 ) -> Result<(), String> {
     let mut config = state.inner().config.write();
     config.blocklist = apps;
+    config.blocklist = config
+        .blocklist
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .fold(Vec::new(), |mut acc, value| {
+            if !acc
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
+            {
+                acc.push(value);
+            }
+            acc
+        });
     config
         .save()
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
@@ -5333,25 +5405,33 @@ pub async fn dismiss_privacy_alert(
     site: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    let site_key = privacy_site_key(&site);
     {
         let mut pending = state.pending_privacy_alerts.write();
-        pending.retain(|a| a.domain_or_title != site);
+        pending.retain(|a| !privacy_site_matches(&a.domain_or_title, &site_key));
     }
     {
         let mut snoozed = state.snoozed_privacy_alerts.write();
-        // snooze for 30 days
+        // Keep the in-memory cache aligned until the persisted dismissal is reloaded.
         let expire = chrono::Local::now().timestamp() + (30 * 24 * 60 * 60);
-        snoozed.insert(site, expire);
+        snoozed.insert(site_key.clone(), expire);
+    }
+    {
+        let mut config = state.config.write();
+        push_unique_case_insensitive(&mut config.dismissed_privacy_alerts, site_key);
+        config.save().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 #[tauri::command]
 pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let site_key = privacy_site_key(&site);
+
     // 1. Remove from pending alerts
     {
         let mut pending = state.pending_privacy_alerts.write();
-        pending.retain(|a| a.domain_or_title != site);
+        pending.retain(|a| !privacy_site_matches(&a.domain_or_title, &site_key));
     }
 
     // 2. Add to config blocklist
@@ -5360,20 +5440,21 @@ pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> 
         if !config
             .blocklist
             .iter()
-            .any(|b| b.eq_ignore_ascii_case(&site))
+            .any(|b| b.eq_ignore_ascii_case(&site_key))
         {
-            config.blocklist.push(site.clone());
+            config.blocklist.push(site_key.clone());
         }
-        if let Err(e) = config.save() {
-            tracing::error!("Failed to save config: {}", e);
-        }
+        config
+            .dismissed_privacy_alerts
+            .retain(|value| !privacy_site_matches(value, &site_key));
+        config.save().map_err(|e| e.to_string())?;
     }
 
     // 3. Retroactively delete memories with this site if we grabbed it during the alert period
-    if let Err(e) = state.store.delete_memories_by_domain(&site).await {
+    if let Err(e) = state.store.delete_memories_by_domain(&site_key).await {
         tracing::error!(
             "Failed to retroactively delete memories for blocked site {}: {}",
-            site,
+            site_key,
             e
         );
     } else {
@@ -5381,6 +5462,20 @@ pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> 
     }
 
     Ok(())
+}
+
+fn privacy_site_key(site: &str) -> String {
+    Blocklist::context_key(Some(site), Some(site)).unwrap_or_else(|| site.trim().to_string())
+}
+
+fn privacy_site_matches(value: &str, site_key: &str) -> bool {
+    if value.eq_ignore_ascii_case(site_key) {
+        return true;
+    }
+    let site_values = vec![site_key.to_string()];
+    let value_values = vec![value.to_string()];
+    Blocklist::is_context_blocked(Some(value), Some(value), &site_values)
+        || Blocklist::is_context_blocked(Some(site_key), Some(site_key), &value_values)
 }
 
 // ── Daily Summary Commands ───────────────────────────────────────────

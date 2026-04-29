@@ -240,8 +240,11 @@ pub struct Config {
     pub forced_capture_interval: u64,
     /// Days to retain records
     pub retention_days: u32,
-    /// Blocked application names
+    /// Blocked application names and website/title patterns
     pub blocklist: Vec<String>,
+    /// Sensitive sites/titles the user dismissed and does not want alerted about again.
+    #[serde(default)]
+    pub dismissed_privacy_alerts: Vec<String>,
     /// Enable pattern redaction (emails, credit cards)
     pub redact_mode: bool,
     /// Minimum text length to store
@@ -414,6 +417,7 @@ impl Default for Config {
                 "System Preferences".to_string(),
                 "System Settings".to_string(),
             ],
+            dismissed_privacy_alerts: Vec::new(),
             redact_mode: false,
             min_text_length: 20,
             use_vlm: true,
@@ -431,6 +435,8 @@ impl Default for Config {
 
 impl Config {
     pub fn normalized(mut self) -> Self {
+        self.blocklist = dedupe_trimmed(self.blocklist);
+        self.dismissed_privacy_alerts = dedupe_trimmed(self.dismissed_privacy_alerts);
         self.autofill = self.autofill.normalized();
         self.embedding = self.embedding.normalized();
         self.chunking = self.chunking.normalized();
@@ -515,6 +521,24 @@ impl Config {
             .ok_or("Could not determine config directory")?;
         Ok(dirs.config_dir().join("config.toml"))
     }
+}
+
+fn dedupe_trimmed(values: Vec<String>) -> Vec<String> {
+    let mut deduped = Vec::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if deduped
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(trimmed))
+        {
+            continue;
+        }
+        deduped.push(trimmed.to_string());
+    }
+    deduped
 }
 
 #[cfg(test)]
