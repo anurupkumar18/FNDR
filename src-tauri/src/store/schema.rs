@@ -1,21 +1,22 @@
 //! Database schema for memory records
 
+use crate::config::{DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_TEXT_EMBEDDING_DIM};
 use serde::{Deserialize, Serialize};
 
 fn default_text_embedding() -> Vec<f32> {
-    vec![0.0; 384]
+    vec![0.0; DEFAULT_TEXT_EMBEDDING_DIM]
 }
 
 fn default_image_embedding() -> Vec<f32> {
-    vec![0.0; 512]
+    vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM]
 }
 
 fn default_snippet_embedding() -> Vec<f32> {
-    vec![0.0; 384]
+    vec![0.0; DEFAULT_TEXT_EMBEDDING_DIM]
 }
 
 fn default_support_embedding() -> Vec<f32> {
-    vec![0.0; 384]
+    vec![0.0; DEFAULT_TEXT_EMBEDDING_DIM]
 }
 
 fn default_decay_score() -> f32 {

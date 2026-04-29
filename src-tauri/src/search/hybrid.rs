@@ -1,6 +1,12 @@
 //! Hybrid search combining semantic and keyword retrieval with query understanding.
 
 use crate::capture::text_cleanup;
+use crate::config::{
+    DEFAULT_SEARCH_CANDIDATE_MULTIPLIER, DEFAULT_SEARCH_KEYWORD_TIMEOUT_MS,
+    DEFAULT_SEARCH_KEYWORD_VARIANT_TIMEOUT_MS, DEFAULT_SEARCH_KEYWORD_WEIGHT,
+    DEFAULT_SEARCH_MAX_RERANK_POOL, DEFAULT_SEARCH_SEMANTIC_TIMEOUT_MS,
+    DEFAULT_SEARCH_SNIPPET_TIMEOUT_MS, DEFAULT_SEARCH_SNIPPET_WEIGHT, DEFAULT_SEARCH_VECTOR_WEIGHT,
+};
 use crate::embed::{Embedder, EmbeddingBackend};
 use crate::store::{SearchResult, Store};
 use std::collections::{HashMap, HashSet};
@@ -9,28 +15,28 @@ use tokio::time::{timeout, Duration, Instant};
 /// Legacy RRF constant kept for backwards-compatible helper usage.
 const RRF_K: f32 = 60.0;
 
-const CANDIDATE_MULTIPLIER: usize = 4;
+const CANDIDATE_MULTIPLIER: usize = DEFAULT_SEARCH_CANDIDATE_MULTIPLIER;
 const MAX_KEYWORD_VARIANTS: usize = 4;
 const MAX_KEYWORD_FALLBACK_VARIANTS: usize = 2;
-const MAX_RERANK_POOL: usize = 36;
+const MAX_RERANK_POOL: usize = DEFAULT_SEARCH_MAX_RERANK_POOL;
 const DIVERSITY_PRESERVE_TOP: usize = 3;
 const MAX_SEMANTIC_BRANCH_LIMIT: usize = 64;
 const MAX_KEYWORD_BRANCH_LIMIT: usize = 48;
 const MIN_SNIPPET_QUERY_TERMS: usize = 3;
-// Text ANN + snippet ANN together = 0.70; lexical = 0.30.
-const SEMANTIC_WEIGHT: f32 = 0.28;
-const SNIPPET_WEIGHT: f32 = 0.18;
-const LEXICAL_WEIGHT: f32 = 0.54;
+const SEMANTIC_WEIGHT: f32 = DEFAULT_SEARCH_VECTOR_WEIGHT;
+const SNIPPET_WEIGHT: f32 = DEFAULT_SEARCH_SNIPPET_WEIGHT;
+const LEXICAL_WEIGHT: f32 = DEFAULT_SEARCH_KEYWORD_WEIGHT;
 /// Ebbinghaus decay floor — very old unaccessed records still surface if highly relevant.
 const DECAY_FLOOR: f32 = 0.15;
 const ABSOLUTE_RELEVANCE_FLOOR: f32 = 0.24;
 const RELATIVE_RELEVANCE_FLOOR: f32 = 0.46;
 const STRONG_RESULT_FLOOR: f32 = 0.70;
 const MEDIUM_RESULT_FLOOR: f32 = 0.60;
-const SEMANTIC_BRANCH_TIMEOUT: Duration = Duration::from_millis(950);
-const SNIPPET_BRANCH_TIMEOUT: Duration = Duration::from_millis(760);
-const KEYWORD_TOTAL_TIMEOUT: Duration = Duration::from_millis(900);
-const KEYWORD_VARIANT_TIMEOUT: Duration = Duration::from_millis(320);
+const SEMANTIC_BRANCH_TIMEOUT: Duration = Duration::from_millis(DEFAULT_SEARCH_SEMANTIC_TIMEOUT_MS);
+const SNIPPET_BRANCH_TIMEOUT: Duration = Duration::from_millis(DEFAULT_SEARCH_SNIPPET_TIMEOUT_MS);
+const KEYWORD_TOTAL_TIMEOUT: Duration = Duration::from_millis(DEFAULT_SEARCH_KEYWORD_TIMEOUT_MS);
+const KEYWORD_VARIANT_TIMEOUT: Duration =
+    Duration::from_millis(DEFAULT_SEARCH_KEYWORD_VARIANT_TIMEOUT_MS);
 
 /// Hybrid searcher combining semantic + lexical retrieval and sentence-aware reranking.
 pub struct HybridSearcher;
@@ -1896,6 +1902,7 @@ mod tests {
             summary_source: "llm".to_string(),
             noise_score: 0.1,
             session_key: "chrome:test".to_string(),
+            lexical_shadow: text.to_string(),
             score,
             screenshot_path: None,
             url: Some("https://example.com".to_string()),

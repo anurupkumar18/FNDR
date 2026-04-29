@@ -1,3 +1,5 @@
+use fndr_lib::config::DEFAULT_IMAGE_EMBEDDING_DIM;
+use fndr_lib::embed::EMBEDDING_DIM;
 use fndr_lib::graph::GraphStore;
 use fndr_lib::store::{
     EdgeType, GraphEdge, GraphNode, MemoryRecord, NodeType, Store, Task, TaskType,
@@ -6,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 fn embedding(value: f32) -> Vec<f32> {
-    let mut vector = vec![0.0; 384];
+    let mut vector = vec![0.0; EMBEDDING_DIM];
     vector[0] = value;
     vector
 }
@@ -28,11 +30,13 @@ fn record(id: &str, snippet: &str, embedding_value: f32) -> MemoryRecord {
         summary_source: "fallback".to_string(),
         noise_score: 0.0,
         session_key: "codex:regression".to_string(),
+        lexical_shadow: snippet.to_string(),
         embedding: embedding(embedding_value),
-        image_embedding: vec![0.0; 512],
+        image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
         screenshot_path: None,
         url: None,
         snippet_embedding: embedding(embedding_value),
+        support_embedding: embedding(embedding_value),
         decay_score: 1.0,
         last_accessed_at: 0,
     }

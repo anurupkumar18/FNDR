@@ -29,6 +29,7 @@ import {
     runMemoryRepairBackfill,
     reclaimMemoryStorage,
     getPrivacyAlerts,
+    cleanDevBuildCache,
 } from "../api/tauri";
 import {
     ModelInfo,
@@ -87,6 +88,8 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [reclaimProgress, setReclaimProgress] = useState<StorageReclaimProgress | null>(null);
     const [reclaimError, setReclaimError] = useState<string | null>(null);
     const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null);
+    const [devCacheBusy, setDevCacheBusy] = useState(false);
+    const [devCacheError, setDevCacheError] = useState<string | null>(null);
     const [autofillSettings, setAutofillSettingsState] =
         useState<AutofillSettings>(DEFAULT_AUTOFILL_SETTINGS);
     const [savedAutofillSettings, setSavedAutofillSettingsState] =
@@ -459,6 +462,19 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         }
     };
 
+    const handleCleanDevCache = async () => {
+        setDevCacheBusy(true);
+        setDevCacheError(null);
+        try {
+            const health = await cleanDevBuildCache();
+            setStorageHealth(health);
+        } catch (e) {
+            setDevCacheError(String(e));
+        } finally {
+            setDevCacheBusy(false);
+        }
+    };
+
     useEffect(() => {
         if (!repairBusy) {
             return;
@@ -736,12 +752,26 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                     )}
                                 </div>
                                 {storageHealth && (
-                                    <div className="storage-health-line" aria-label="Storage health">
-                                        <span>Memory DB {fmtBytes(storageHealth.memory_db_bytes)}</span>
-                                        <span>Frames {fmtBytes(storageHealth.frames_bytes)}</span>
-                                        <span>Models {fmtBytes(storageHealth.models_bytes)}</span>
-                                        <span>Dev cache {fmtBytes(storageHealth.dev_build_cache_bytes)}</span>
-                                    </div>
+                                    <>
+                                        <div className="storage-health-line" aria-label="Storage health">
+                                            <span>Memory DB {fmtBytes(storageHealth.memory_db_bytes)}</span>
+                                            <span>Frames {fmtBytes(storageHealth.frames_bytes)}</span>
+                                            <span>Models {fmtBytes(storageHealth.models_bytes)}</span>
+                                            <span>Dev cache {fmtBytes(storageHealth.dev_build_cache_bytes)}</span>
+                                        </div>
+                                        {storageHealth.dev_build_cache_bytes > 1024 * 1024 * 1024 && (
+                                            <button
+                                                className="ui-action-btn btn-secondary"
+                                                onClick={() => void handleCleanDevCache()}
+                                                disabled={devCacheBusy}
+                                            >
+                                                {devCacheBusy ? "Cleaning..." : "Clean dev cache"}
+                                            </button>
+                                        )}
+                                        {devCacheError && (
+                                            <p className="settings-error">{devCacheError}</p>
+                                        )}
+                                    </>
                                 )}
                             </section>
 

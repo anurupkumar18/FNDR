@@ -112,6 +112,13 @@ export function Timeline({
                     const primaryText = cleanSummary || displayTitle || "Captured memory";
                     const storyMode = isStoryStyleApp(result);
                     const story = storyMode ? buildStorySummary(result) : "";
+                    const matchReason = preferredMatchReason(result, query);
+                    const domain = domainFromUrl(result.url);
+                    const confidence = result.confidence ?? result.score;
+                    const evidence = (result.raw_snippets ?? [])
+                        .map((snippet) => stripLegacySources(snippet).trim())
+                        .filter(Boolean)
+                        .slice(0, 3);
                     return (
                         <article
                             key={result.id}
@@ -158,6 +165,11 @@ export function Timeline({
                                     )}
                                 </div>
                             </div>
+                            {displayTitle && (
+                                <h3 className="result-title">
+                                    {displayTitle}
+                                </h3>
+                            )}
                             {storyMode ? (
                                 <p className="result-primary">
                                     {story}
@@ -168,6 +180,27 @@ export function Timeline({
                                         ? primaryText
                                         : (displayTitle || "Untitled memory")}
                                 </p>
+                            )}
+                            <div className="result-context-chips" aria-label="Match details">
+                                {matchReason && <span className="result-chip">{matchReason}</span>}
+                                <span className="result-chip">{qualityLabel(confidence)}</span>
+                                {domain && <span className="result-chip">{domain}</span>}
+                                {result.source_count > 1 && (
+                                    <span className="result-chip">{result.source_count} sources</span>
+                                )}
+                            </div>
+                            {evidence.length > 0 && (
+                                <details
+                                    className="source-details"
+                                    onClick={(event) => event.stopPropagation()}
+                                >
+                                    <summary>Evidence snippets</summary>
+                                    <ul>
+                                        {evidence.map((snippet, index) => (
+                                            <li key={`${result.id}-evidence-${index}`}>{snippet}</li>
+                                        ))}
+                                    </ul>
+                                </details>
                             )}
                         </article>
                     );
@@ -229,6 +262,46 @@ function isStoryStyleApp(result: MemoryCard): boolean {
 
 function includesAny(haystack: string, needles: string[]): boolean {
     return needles.some((needle) => haystack.includes(needle));
+}
+
+function domainFromUrl(url: string | undefined): string {
+    if (!url) {
+        return "";
+    }
+    try {
+        return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+        return url
+            .replace(/^https?:\/\//i, "")
+            .split("/")[0]
+            .replace(/^www\./, "");
+    }
+}
+
+function preferredMatchReason(result: MemoryCard, query: string): string {
+    const explicit = (result.context ?? [])
+        .map((value) => value.trim())
+        .find((value) => value.length > 0);
+    if (explicit) {
+        return explicit;
+    }
+    if (!query.trim()) {
+        return "Recent memory";
+    }
+    if ((result.confidence ?? result.score) < 0.42) {
+        return "Low-confidence match";
+    }
+    return "Semantic + keyword match";
+}
+
+function qualityLabel(confidence: number): string {
+    if (confidence >= 0.72) {
+        return "Strong match";
+    }
+    if (confidence >= 0.45) {
+        return "Moderate match";
+    }
+    return "Weak match";
 }
 
 function normalizeStoryText(value: string | undefined | null): string {

@@ -482,6 +482,7 @@ fn main() {
             api::commands::delete_older_than,
             api::commands::get_app_names,
             api::commands::get_storage_health,
+            api::commands::clean_dev_build_cache,
             api::commands::run_memory_repair_backfill,
             api::commands::get_memory_repair_progress,
             api::commands::get_storage_reclaim_progress,

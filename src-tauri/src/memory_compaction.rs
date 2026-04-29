@@ -221,7 +221,18 @@ pub fn mean_pool_embeddings(vectors: &[Vec<f32>]) -> Vec<f32> {
     for value in &mut pooled {
         *value /= count as f32;
     }
+    normalize_vector(&mut pooled);
     pooled
+}
+
+fn normalize_vector(vector: &mut [f32]) {
+    let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if norm <= EMBEDDING_MIN_NORM {
+        return;
+    }
+    for value in vector {
+        *value /= norm;
+    }
 }
 
 pub fn build_lexical_shadow(
@@ -414,12 +425,12 @@ mod tests {
             noise_score: 0.1,
             session_key: "session-key".to_string(),
             lexical_shadow: String::new(),
-            embedding: vec![0.1; 384],
-            image_embedding: vec![0.0; 512],
+            embedding: vec![0.1; EMBEDDING_DIM],
+            image_embedding: vec![0.0; crate::config::DEFAULT_IMAGE_EMBEDDING_DIM],
             screenshot_path: Some("/tmp/screenshot.png".to_string()),
             url: None,
-            snippet_embedding: vec![0.2; 384],
-            support_embedding: vec![0.0; 384],
+            snippet_embedding: vec![0.2; EMBEDDING_DIM],
+            support_embedding: vec![0.0; EMBEDDING_DIM],
             decay_score: 1.0,
             last_accessed_at: 0,
         }
@@ -440,7 +451,7 @@ mod tests {
 
     #[test]
     fn low_signal_embedding_detects_zero_vectors() {
-        assert!(is_low_signal_embedding(&[0.0; 384]));
-        assert!(!is_low_signal_embedding(&[0.01; 384]));
+        assert!(is_low_signal_embedding(&vec![0.0; EMBEDDING_DIM]));
+        assert!(!is_low_signal_embedding(&vec![0.01; EMBEDDING_DIM]));
     }
 }

@@ -46,6 +46,8 @@ export interface CaptureStatus {
     embedding_backend: string;
     embedding_degraded: boolean;
     embedding_detail: string;
+    embedding_model_name: string;
+    embedding_dimension: number;
 }
 
 export interface McpServerStatus {
@@ -700,6 +702,10 @@ export async function getStorageReclaimProgress(): Promise<StorageReclaimProgres
 
 export async function getStorageHealth(): Promise<StorageHealth> {
     return invoke<StorageHealth>("get_storage_health");
+}
+
+export async function cleanDevBuildCache(): Promise<StorageHealth> {
+    return invoke<StorageHealth>("clean_dev_build_cache");
 }
 
 export async function reclaimMemoryStorage(): Promise<StorageReclaimSummary> {

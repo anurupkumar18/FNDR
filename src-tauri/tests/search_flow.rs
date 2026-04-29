@@ -1,6 +1,7 @@
 //! Integration smoke: LanceDB + keyword search over seeded rows.
 
-use fndr_lib::embed::Embedder;
+use fndr_lib::config::DEFAULT_IMAGE_EMBEDDING_DIM;
+use fndr_lib::embed::{Embedder, EMBEDDING_DIM};
 use fndr_lib::store::{MemoryRecord, Store};
 
 #[test]
@@ -36,11 +37,11 @@ fn keyword_search_finds_seeded_content() {
         session_key: "terminal:oauth".to_string(),
         lexical_shadow: String::new(),
         embedding,
-        image_embedding: vec![0.0; 512],
+        image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
         screenshot_path: None,
         url: None,
-        snippet_embedding: vec![0.0; 384],
-        support_embedding: vec![0.0; 384],
+        snippet_embedding: vec![0.0; EMBEDDING_DIM],
+        support_embedding: vec![0.0; EMBEDDING_DIM],
         decay_score: 1.0,
         last_accessed_at: 0,
     };

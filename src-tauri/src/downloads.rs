@@ -3,6 +3,7 @@
 //! Monitors the user's Downloads folder for new, completed files
 //! and injects synthetic memory records so they become searchable.
 
+use crate::config::DEFAULT_IMAGE_EMBEDDING_DIM;
 use crate::embed::{Embedder, EMBEDDING_DIM};
 use crate::memory_compaction::{
     build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
@@ -218,7 +219,7 @@ async fn inject_download_memory(
         session_key: "filesystem:downloads".to_string(),
         lexical_shadow,
         embedding,
-        image_embedding: vec![0.0; 512],
+        image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
         screenshot_path: None,
         url: None,
         snippet_embedding,

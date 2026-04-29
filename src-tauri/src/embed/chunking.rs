@@ -1,15 +1,15 @@
 //! OCR-aware text chunking for embedding.
 
 use crate::capture::text_cleanup;
+use crate::config::{
+    DEFAULT_CHARS_PER_TOKEN, DEFAULT_CHUNK_MAX_TOKENS, DEFAULT_CHUNK_MIN_TOKENS,
+    DEFAULT_CHUNK_OVERLAP_TOKENS,
+};
 
-/// Maximum tokens per chunk (MiniLM limit is 512, use 450 for safety)
-const MAX_CHUNK_TOKENS: usize = 450;
-/// Overlap between chunks in tokens
-const CHUNK_OVERLAP: usize = 96;
-/// Drop or merge tiny chunks to keep embeddings signal-rich.
-const MIN_CHUNK_TOKENS: usize = 15;
-/// Approximate chars per token for English
-const CHARS_PER_TOKEN: usize = 4;
+const MAX_CHUNK_TOKENS: usize = DEFAULT_CHUNK_MAX_TOKENS;
+const CHUNK_OVERLAP: usize = DEFAULT_CHUNK_OVERLAP_TOKENS;
+const MIN_CHUNK_TOKENS: usize = DEFAULT_CHUNK_MIN_TOKENS;
+const CHARS_PER_TOKEN: usize = DEFAULT_CHARS_PER_TOKEN;
 
 const OCR_TARGET_MIN: usize = 300;
 const OCR_TARGET_MAX: usize = 900;

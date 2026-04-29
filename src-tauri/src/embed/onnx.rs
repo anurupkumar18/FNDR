@@ -1,22 +1,28 @@
-//! Local text embedding backend for all-MiniLM-L6-v2 via native ONNX Runtime.
+//! Local text embedding backend via native ONNX Runtime.
 
 use super::TextChunker;
+use crate::config::{
+    DEFAULT_EMBEDDING_CACHE_CAPACITY, DEFAULT_EMBEDDING_MAX_BATCH, DEFAULT_EMBEDDING_MAX_SEQ_LEN,
+    DEFAULT_EMBEDDING_MODEL_FILENAME, DEFAULT_EMBEDDING_MODEL_NAME,
+    DEFAULT_EMBEDDING_TOKENIZER_FILENAME, DEFAULT_TEXT_EMBEDDING_DIM,
+};
 use ndarray::Array2;
 use ort::session::Session;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-/// Embedding dimension for all-MiniLM-L6-v2.
-pub const EMBEDDING_DIM: usize = 384;
-/// Maximum token sequence length (matches model training config).
-const MAX_SEQ_LEN: usize = 128;
-const MODEL_FILENAME: &str = "all-MiniLM-L6-v2.onnx";
-const TOKENIZER_FILENAME: &str = "tokenizer.json";
-const EMBEDDING_CACHE_CAPACITY: usize = 1024;
-const MAX_BACKEND_BATCH: usize = 32;
+/// Authoritative text embedding dimension for the primary semantic index.
+pub const EMBEDDING_DIM: usize = DEFAULT_TEXT_EMBEDDING_DIM;
+const MAX_SEQ_LEN: usize = DEFAULT_EMBEDDING_MAX_SEQ_LEN;
+const MODEL_FILENAME: &str = DEFAULT_EMBEDDING_MODEL_FILENAME;
+const TOKENIZER_FILENAME: &str = DEFAULT_EMBEDDING_TOKENIZER_FILENAME;
+const MODEL_NAME: &str = DEFAULT_EMBEDDING_MODEL_NAME;
+const EMBEDDING_CACHE_CAPACITY: usize = DEFAULT_EMBEDDING_CACHE_CAPACITY;
+const MAX_BACKEND_BATCH: usize = DEFAULT_EMBEDDING_MAX_BATCH;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingBackend {
@@ -29,6 +35,8 @@ pub struct EmbeddingRuntimeStatus {
     pub backend: String,
     pub degraded: bool,
     pub detail: String,
+    pub model_name: String,
+    pub dimension: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +44,8 @@ struct EmbeddingRuntimeState {
     backend: String,
     degraded: bool,
     detail: String,
+    model_name: String,
+    dimension: usize,
 }
 
 static EMBEDDING_RUNTIME_STATE: OnceLock<Mutex<EmbeddingRuntimeState>> = OnceLock::new();
@@ -46,6 +56,8 @@ fn runtime_state() -> &'static Mutex<EmbeddingRuntimeState> {
             backend: "unknown".to_string(),
             degraded: false,
             detail: "Embedder not initialized yet".to_string(),
+            model_name: MODEL_NAME.to_string(),
+            dimension: EMBEDDING_DIM,
         })
     })
 }
@@ -55,6 +67,8 @@ fn set_runtime_state(backend: &str, degraded: bool, detail: impl Into<String>) {
         guard.backend = backend.to_string();
         guard.degraded = degraded;
         guard.detail = detail.into();
+        guard.model_name = MODEL_NAME.to_string();
+        guard.dimension = EMBEDDING_DIM;
     }
 }
 
@@ -64,12 +78,16 @@ pub fn embedding_runtime_status() -> EmbeddingRuntimeStatus {
             backend: guard.backend.clone(),
             degraded: guard.degraded,
             detail: guard.detail.clone(),
+            model_name: guard.model_name.clone(),
+            dimension: guard.dimension,
         }
     } else {
         EmbeddingRuntimeStatus {
             backend: "unknown".to_string(),
             degraded: true,
             detail: "Embedding runtime state lock poisoned".to_string(),
+            model_name: MODEL_NAME.to_string(),
+            dimension: EMBEDDING_DIM,
         }
     }
 }
@@ -129,7 +147,7 @@ impl Embedder {
 
         match RealEmbedder::new() {
             Ok(real) => {
-                set_runtime_state("real", false, "MiniLM embedder ready");
+                set_runtime_state("real", false, format!("{MODEL_NAME} embedder ready"));
                 Ok(Self {
                     chunker,
                     backend: Backend::Real(real),
@@ -142,7 +160,7 @@ impl Embedder {
                     let reason =
                         format!("Semantic embeddings degraded to mock mode. Reason: {}", err);
                     tracing::warn!(
-                        "MiniLM embedder fallback active: using MOCK embeddings. {}",
+                        "{MODEL_NAME} embedder fallback active: using MOCK embeddings. {}",
                         reason
                     );
                     set_runtime_state("mock", true, reason);
@@ -157,12 +175,12 @@ impl Embedder {
                         "unavailable",
                         true,
                         format!(
-                            "MiniLM embedder failed and mock fallback is disabled: {}",
+                            "{MODEL_NAME} embedder failed and mock fallback is disabled: {}",
                             err
                         ),
                     );
                     Err(format!(
-                        "Failed to initialize real all-MiniLM-L6-v2 embedder and mock fallback is disabled: {err}"
+                        "Failed to initialize real {MODEL_NAME} embedder and mock fallback is disabled: {err}"
                     ))
                 }
             }
@@ -416,6 +434,8 @@ impl Default for Embedder {
 struct RealEmbedder {
     session: Mutex<Session>,
     tokenizer: tokenizers::Tokenizer,
+    input_names: Vec<String>,
+    output_name: String,
 }
 
 impl RealEmbedder {
@@ -453,6 +473,40 @@ impl RealEmbedder {
                 )
             })?;
 
+        let input_names = session
+            .inputs()
+            .iter()
+            .map(|input| input.name().to_string())
+            .collect::<Vec<_>>();
+        for required in ["input_ids", "attention_mask"] {
+            if !input_names.iter().any(|name| name == required) {
+                return Err(format!(
+                    "Embedding model {} is missing required ONNX input '{}'. Found inputs: {:?}",
+                    onnx_path.display(),
+                    required,
+                    input_names
+                ));
+            }
+        }
+        let output_name = session
+            .outputs()
+            .iter()
+            .find(|output| output.name() == "last_hidden_state")
+            .or_else(|| {
+                session
+                    .outputs()
+                    .iter()
+                    .find(|output| output.name() == "token_embeddings")
+            })
+            .or_else(|| session.outputs().first())
+            .map(|output| output.name().to_string())
+            .ok_or_else(|| {
+                format!(
+                    "Embedding model {} exposes no ONNX outputs",
+                    onnx_path.display()
+                )
+            })?;
+
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|e| {
             format!(
                 "Failed to load tokenizer from {}: {e}",
@@ -462,12 +516,32 @@ impl RealEmbedder {
 
         tracing::info!(
             model = %onnx_path.display(),
+            output = %output_name,
+            inputs = ?input_names,
             "Native ort text embedder initialized"
         );
-        Ok(Self {
+        let embedder = Self {
             session: Mutex::new(session),
             tokenizer,
-        })
+            input_names,
+            output_name,
+        };
+
+        let probe = embedder.embed_batch(&["FNDR embedding dimension probe".to_string()])?;
+        let actual_dim = probe.first().map(|vector| vector.len()).unwrap_or(0);
+        if actual_dim != EMBEDDING_DIM {
+            return Err(format!(
+                "Embedding dimension mismatch for {MODEL_NAME}: model returned {actual_dim}, configured schema expects {EMBEDDING_DIM}. Use the 1024-dimensional model from download_embedding_model.sh or reset the embedding configuration and LanceDB schema together."
+            ));
+        }
+        if probe
+            .first()
+            .map(|vector| vector.iter().all(|value| *value == 0.0))
+            .unwrap_or(true)
+        {
+            return Err("Embedding probe returned an all-zero vector".to_string());
+        }
+        Ok(embedder)
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
@@ -519,22 +593,44 @@ impl RealEmbedder {
             .session
             .lock()
             .map_err(|e| format!("Session mutex poisoned: {e}"))?;
+        let mut inputs = ort::inputs![
+            "input_ids" => ids_t,
+            "attention_mask" => mask_t,
+        ];
+        if self.input_names.iter().any(|name| name == "token_type_ids") {
+            inputs.push((Cow::from("token_type_ids"), types_t.into()));
+        }
+
         let outputs = session_guard
-            .run(ort::inputs![
-                "input_ids" => ids_t,
-                "attention_mask" => mask_t,
-                "token_type_ids" => types_t,
-            ])
+            .run(inputs)
             .map_err(|e| format!("ONNX inference failed: {e}"))?;
 
+        let output = outputs
+            .get(&self.output_name)
+            .or_else(|| outputs.get("last_hidden_state"))
+            .or_else(|| outputs.get("token_embeddings"))
+            .or_else(|| {
+                let first_key = outputs.keys().next()?;
+                outputs.get(first_key)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "ONNX inference produced no usable embedding output. Expected '{}'",
+                    self.output_name
+                )
+            })?;
+
         // ort 2.x RC: try_extract_tensor returns (Shape, &[T]).
-        let (shape, data) = outputs["last_hidden_state"]
+        let (shape, data) = output
             .try_extract_tensor::<f32>()
             .map_err(|e| format!("Failed to extract hidden state tensor: {e}"))?;
 
-        // shape: [batch, seq_len, EMBEDDING_DIM]
-        let actual_seq = shape.get(1).copied().unwrap_or(seq_len as i64) as usize;
-        let actual_dim = shape.get(2).copied().unwrap_or(EMBEDDING_DIM as i64) as usize;
+        let shape_dims = shape.iter().map(|dim| *dim as usize).collect::<Vec<_>>();
+        let actual_dim = match shape_dims.as_slice() {
+            [_, dim] => *dim,
+            [_, _, dim] => *dim,
+            _ => 0,
+        };
         if actual_dim != EMBEDDING_DIM {
             return Err(format!(
                 "Unexpected hidden state dim {actual_dim}, expected {EMBEDDING_DIM}"
@@ -542,26 +638,52 @@ impl RealEmbedder {
         }
 
         let mut embeddings = Vec::with_capacity(batch_size);
-        for i in 0..batch_size {
-            let mut sum = vec![0.0f32; EMBEDDING_DIM];
-            let mut count = 0.0f32;
-            for j in 0..actual_seq {
-                let mask_j = j.min(seq_len - 1);
-                if attention_mask_pooling[[i, mask_j]] > 0 {
-                    let offset = (i * actual_seq + j) * EMBEDDING_DIM;
-                    for k in 0..EMBEDDING_DIM {
-                        sum[k] += data[offset + k];
+        match shape_dims.as_slice() {
+            [actual_batch, actual_dim] if *actual_dim == EMBEDDING_DIM => {
+                for i in 0..batch_size.min(*actual_batch) {
+                    let offset = i * EMBEDDING_DIM;
+                    let mut embedding = data[offset..offset + EMBEDDING_DIM].to_vec();
+                    normalize(&mut embedding);
+                    embeddings.push(embedding);
+                }
+            }
+            [actual_batch, actual_seq, actual_dim] if *actual_dim == EMBEDDING_DIM => {
+                for i in 0..batch_size.min(*actual_batch) {
+                    let mut sum = vec![0.0f32; EMBEDDING_DIM];
+                    let mut count = 0.0f32;
+                    for j in 0..*actual_seq {
+                        let mask_j = j.min(seq_len - 1);
+                        if attention_mask_pooling[[i, mask_j]] > 0 {
+                            let offset = (i * *actual_seq + j) * EMBEDDING_DIM;
+                            for k in 0..EMBEDDING_DIM {
+                                sum[k] += data[offset + k];
+                            }
+                            count += 1.0;
+                        }
                     }
-                    count += 1.0;
+                    if count > 0.0 {
+                        for v in &mut sum {
+                            *v /= count;
+                        }
+                    }
+                    normalize(&mut sum);
+                    embeddings.push(sum);
                 }
             }
-            if count > 0.0 {
-                for v in &mut sum {
-                    *v /= count;
-                }
+            _ => {
+                return Err(format!(
+                    "Unexpected embedding output shape {:?}; expected [batch, {EMBEDDING_DIM}] or [batch, seq, {EMBEDDING_DIM}]",
+                    shape_dims
+                ));
             }
-            normalize(&mut sum);
-            embeddings.push(sum);
+        }
+
+        if embeddings.len() != batch_size {
+            return Err(format!(
+                "ONNX inference returned {} embeddings for batch size {}",
+                embeddings.len(),
+                batch_size
+            ));
         }
         Ok(embeddings)
     }

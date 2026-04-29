@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// Common CLIP embedding dimension.
-pub const CLIP_EMBEDDING_DIM: usize = 512;
+pub const CLIP_EMBEDDING_DIM: usize = crate::config::DEFAULT_IMAGE_EMBEDDING_DIM;
 
 // CLIP / MobileCLIP-S0 image preprocessing constants.
 const CLIP_IMAGE_SIZE: u32 = 224;

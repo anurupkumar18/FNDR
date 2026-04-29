@@ -483,6 +483,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let mut embedding_inputs = vec![enriched_clean_text.clone(), snippet_embed_input.clone()];
         embedding_inputs.extend(support_texts.iter().cloned());
         let semantic_embeddings_available = semantic_embeddings_enabled(text_embedder.as_ref());
+        let embed_start = Instant::now();
         let embedding_vectors = embed_text_inputs_with_memo(
             text_embedder.as_ref(),
             &mut embedding_memo,
@@ -490,6 +491,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &window_title,
             &embedding_inputs,
         );
+        let embed_latency = embed_start.elapsed();
         let text_embedding = embedding_vectors
             .first()
             .cloned()
@@ -508,6 +510,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         } else {
             Vec::new()
         };
+        tracing::info!(
+            app = %app_name,
+            ocr_ms = ocr_latency.as_millis(),
+            embed_ms = embed_latency.as_millis(),
+            support_chunks = support_texts.len(),
+            semantic_embeddings_available,
+            "capture_pipeline:distilled_frame"
+        );
 
         // ── Focus Mode drift detection ────────────────────────────────────────
         // Mirrors CC's context-similarity approach: embed the focus task once,
@@ -1152,24 +1162,28 @@ pub(crate) async fn merge_memory_records_with_policy(
         existing.embedding.clone()
     };
 
-    let merged_snippet_embedding = if recompute_embedding && semantic_embeddings_enabled(text_embedder) {
-        text_embedder
-            .and_then(|embedder| {
-                embedder
-                    .embed_batch_with_context(&[(
-                        incoming.app_name.clone(),
-                        merged_window_title.clone(),
-                        compact_snippet_text.clone(),
-                    )])
-                    .ok()
-                    .and_then(|mut vectors| vectors.drain(..).next())
-            })
-            .unwrap_or_else(|| existing.snippet_embedding.clone())
-    } else {
-        existing.snippet_embedding.clone()
-    };
+    let merged_snippet_embedding =
+        if recompute_embedding && semantic_embeddings_enabled(text_embedder) {
+            text_embedder
+                .and_then(|embedder| {
+                    embedder
+                        .embed_batch_with_context(&[(
+                            incoming.app_name.clone(),
+                            merged_window_title.clone(),
+                            compact_snippet_text.clone(),
+                        )])
+                        .ok()
+                        .and_then(|mut vectors| vectors.drain(..).next())
+                })
+                .unwrap_or_else(|| existing.snippet_embedding.clone())
+        } else {
+            existing.snippet_embedding.clone()
+        };
 
-    let merged_support_embedding = if recompute_embedding && semantic_embeddings_enabled(text_embedder) && !support_texts.is_empty() {
+    let merged_support_embedding = if recompute_embedding
+        && semantic_embeddings_enabled(text_embedder)
+        && !support_texts.is_empty()
+    {
         let contexts = support_texts
             .iter()
             .map(|text| {

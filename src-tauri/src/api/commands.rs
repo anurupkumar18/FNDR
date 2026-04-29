@@ -48,6 +48,8 @@ pub struct CaptureStatus {
     pub embedding_backend: String,
     pub embedding_degraded: bool,
     pub embedding_detail: String,
+    pub embedding_model_name: String,
+    pub embedding_dimension: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,14 +73,9 @@ pub struct SpeechSynthesisResult {
 }
 
 static SHARED_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
-const BRANCH_LIMIT: usize = 28;
-const RERANK_LIMIT: usize = 18;
 const GROUP_LIMIT: usize = 6;
-const LLM_GROUP_LIMIT: usize = 2;
+const LLM_GROUP_LIMIT: usize = 0;
 
-const EMBED_TIMEOUT: Duration = Duration::from_millis(2200);
-const VECTOR_TIMEOUT: Duration = Duration::from_millis(1800);
-const KEYWORD_TIMEOUT: Duration = Duration::from_millis(1200);
 const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
 const LLM_SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(1500);
 const MEMORY_GRAPH_LIMIT: usize = 1_500;
@@ -461,125 +458,16 @@ pub async fn search_memory_cards(
         )
     };
 
-    tracing::info!("search_memory_cards:embed:start");
-    let embedder = shared_embedder().ok();
-    let semantic_enabled = embedder
-        .as_ref()
-        .map(|value| matches!(value.backend(), EmbeddingBackend::Real))
-        .unwrap_or(false);
-    let maybe_query_embedding = if semantic_enabled {
-        match embedder {
-            Some(embedder) => {
-                let query_text = query.clone();
-                match timeout(
-                    EMBED_TIMEOUT,
-                    tokio::task::spawn_blocking(move || embedder.embed_batch(&[query_text])),
-                )
-                .await
-                {
-                    Ok(Ok(Ok(vectors))) => vectors.into_iter().next(),
-                    Ok(Ok(Err(err))) => {
-                        tracing::warn!("search_memory_cards:embed:failed err={}", err);
-                        None
-                    }
-                    Ok(Err(err)) => {
-                        tracing::warn!("search_memory_cards:embed:join_failed err={}", err);
-                        None
-                    }
-                    Err(_) => {
-                        tracing::warn!(
-                            timeout_ms = EMBED_TIMEOUT.as_millis(),
-                            "search_memory_cards:embed:timeout"
-                        );
-                        None
-                    }
-                }
-            }
-            None => {
-                tracing::warn!("search_memory_cards:embed:init_failed");
-                None
-            }
-        }
-    } else {
-        tracing::info!("search_memory_cards:embed:skipped_degraded_backend");
-        None
-    };
-    tracing::info!(
-        has_embedding = maybe_query_embedding.is_some(),
-        "search_memory_cards:embed:done"
-    );
-
-    let semantic_results: Vec<SearchResult> = if let Some(query_embedding) = maybe_query_embedding {
-        match timeout(
-            VECTOR_TIMEOUT,
-            state.store.vector_search(
-                &query_embedding,
-                BRANCH_LIMIT,
-                time_filter.as_deref(),
-                app_filter.as_deref(),
-            ),
-        )
-        .await
-        {
-            Ok(Ok(results)) => {
-                tracing::info!(
-                    count = results.len(),
-                    "search_memory_cards:semantic_search:done"
-                );
-                results
-            }
-            Ok(Err(err)) => {
-                tracing::warn!("search_memory_cards:semantic_search:failed err={}", err);
-                Vec::new()
-            }
-            Err(_) => {
-                tracing::warn!(
-                    timeout_ms = VECTOR_TIMEOUT.as_millis(),
-                    "search_memory_cards:semantic_search:timeout"
-                );
-                Vec::new()
-            }
-        }
-    } else {
-        tracing::info!("search_memory_cards:semantic_search:skipped");
-        Vec::new()
-    };
-
-    let keyword_results = match timeout(
-        KEYWORD_TIMEOUT,
-        state.store.keyword_search(
-            &query,
-            BRANCH_LIMIT,
-            time_filter.as_deref(),
-            app_filter.as_deref(),
-        ),
+    let raw_limit = limit.max(18).min(50);
+    let mut raw_results = run_search_query(
+        state.inner(),
+        &query,
+        time_filter.as_deref(),
+        app_filter.as_deref(),
+        raw_limit,
     )
-    .await
-    {
-        Ok(Ok(results)) => {
-            tracing::info!(
-                count = results.len(),
-                "search_memory_cards:keyword_search:done"
-            );
-            results
-        }
-        Ok(Err(err)) => {
-            tracing::warn!("search_memory_cards:keyword_search:failed err={}", err);
-            Vec::new()
-        }
-        Err(_) => {
-            tracing::warn!(
-                timeout_ms = KEYWORD_TIMEOUT.as_millis(),
-                "search_memory_cards:keyword_search:timeout"
-            );
-            Vec::new()
-        }
-    };
-
-    let mut raw_results =
-        HybridSearcher::fuse_and_rerank(&query, &semantic_results, &keyword_results, RERANK_LIMIT);
-    raw_results = strip_internal_fndr_results(raw_results);
-    raw_results.truncate(RERANK_LIMIT);
+    .await?;
+    raw_results.truncate(raw_limit);
     tracing::info!(count = raw_results.len(), "search_memory_cards:rerank:done");
     if raw_results.is_empty() {
         tracing::info!(
@@ -946,6 +834,8 @@ pub async fn get_status(state: State<'_, Arc<AppState>>) -> Result<CaptureStatus
         embedding_backend: embed_status.backend,
         embedding_degraded: embed_status.degraded,
         embedding_detail: embed_status.detail,
+        embedding_model_name: embed_status.model_name,
+        embedding_dimension: embed_status.dimension,
     })
 }
 
@@ -3166,25 +3056,64 @@ fn memory_payload_bytes(state: &AppState) -> u64 {
     .saturating_add(recursive_size(&state.store.frames_dir()))
 }
 
-#[tauri::command]
-pub async fn get_storage_health(state: State<'_, Arc<AppState>>) -> Result<StorageHealth, String> {
+fn dev_build_cache_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target")
+}
+
+fn storage_health_for_state(state: &AppState) -> StorageHealth {
     let data_dir = state.store.data_dir();
     let memory_db_bytes = recursive_size(&data_dir.join("lancedb"));
     let frames_bytes = recursive_size(&state.store.frames_dir());
     let models_bytes = recursive_size(&data_dir.join("models"))
         .saturating_add(recursive_size(&data_dir.join("speech_models")));
     let runtime_total_bytes = recursive_size(&data_dir);
-    let dev_build_cache_bytes =
-        recursive_size(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+    let dev_build_cache_bytes = recursive_size(&dev_build_cache_dir());
 
-    Ok(StorageHealth {
+    StorageHealth {
         memory_db_bytes,
         frames_bytes,
         models_bytes,
         dev_build_cache_bytes,
         runtime_total_bytes,
         measured_at_ms: chrono::Utc::now().timestamp_millis(),
+    }
+}
+
+#[tauri::command]
+pub async fn get_storage_health(state: State<'_, Arc<AppState>>) -> Result<StorageHealth, String> {
+    Ok(storage_health_for_state(state.inner()))
+}
+
+#[tauri::command]
+pub async fn clean_dev_build_cache(
+    state: State<'_, Arc<AppState>>,
+) -> Result<StorageHealth, String> {
+    let target_dir = dev_build_cache_dir();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if !target_dir.starts_with(&manifest_dir) || target_dir == manifest_dir {
+        return Err("Refusing to clean an unexpected dev cache path.".to_string());
+    }
+
+    let before = recursive_size(&target_dir);
+    let target_for_task = target_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        if target_for_task.exists() {
+            std::fs::remove_dir_all(&target_for_task)
+        } else {
+            Ok(())
+        }
     })
+    .await
+    .map_err(|err| format!("Dev cache cleanup task failed: {err}"))?
+    .map_err(|err| format!("Failed to remove dev build cache: {err}"))?;
+
+    tracing::info!(
+        bytes_before = before,
+        path = %target_dir.display(),
+        "dev_build_cache:cleaned"
+    );
+
+    Ok(storage_health_for_state(state.inner()))
 }
 
 #[tauri::command]

@@ -12,6 +12,7 @@ interface MemoryCardsPanelProps {
 const APP_FILTER_ALL = "__all__";
 const TIME_FILTER_ALL = "__time_all__";
 const PERSPECTIVE_FILTER_ALL = "__perspective_all__";
+const MAX_RENDERED_CARDS = 300;
 
 type TimeFilter =
     | typeof TIME_FILTER_ALL
@@ -417,7 +418,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
 
                 {filteredCards.length > 0 && (
                     <div className="memory-cards-stream">
-                        {filteredCards.map((card) => {
+                        {filteredCards.slice(0, MAX_RENDERED_CARDS).map((card) => {
                             const { summary, storyMode, story } = cardCopy(card);
 
                             return (

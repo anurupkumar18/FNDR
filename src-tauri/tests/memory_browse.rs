@@ -1,5 +1,7 @@
 //! Integration coverage for browsing many memories without vector/LLM work.
 
+use fndr_lib::config::DEFAULT_IMAGE_EMBEDDING_DIM;
+use fndr_lib::embed::EMBEDDING_DIM;
 use fndr_lib::store::{MemoryRecord, Store};
 
 fn record(index: usize, now_ms: i64) -> MemoryRecord {
@@ -24,12 +26,12 @@ fn record(index: usize, now_ms: i64) -> MemoryRecord {
         noise_score: 0.02,
         session_key: format!("memory-browse-{}", index / 10),
         lexical_shadow: String::new(),
-        embedding: vec![0.0; 384],
-        image_embedding: vec![0.0; 512],
+        embedding: vec![0.0; EMBEDDING_DIM],
+        image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
         screenshot_path: None,
         url: None,
-        snippet_embedding: vec![0.0; 384],
-        support_embedding: vec![0.0; 384],
+        snippet_embedding: vec![0.0; EMBEDDING_DIM],
+        support_embedding: vec![0.0; EMBEDDING_DIM],
         decay_score: 1.0,
         last_accessed_at: 0,
     }

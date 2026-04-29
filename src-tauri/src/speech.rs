@@ -315,9 +315,12 @@ fn try_whisper_cli_binary(model_path: &Path, audio_path: &Path) -> Option<String
     for &cli in cli_paths {
         let output = Command::new(cli)
             .args([
-                "-m", &model_path.to_string_lossy(),
-                "-f", &audio_path.to_string_lossy(),
-                "-l", "en",
+                "-m",
+                &model_path.to_string_lossy(),
+                "-f",
+                &audio_path.to_string_lossy(),
+                "-l",
+                "en",
                 "--no-timestamps",
                 "-nt",
             ])
@@ -609,9 +612,12 @@ async fn transcribe_audio_file_with_hint(
     {
         let model = model_path.clone();
         let audio = audio_path.to_path_buf();
-        if let Some(text) = tokio::task::spawn_blocking(move || {
-            try_whisper_cli_binary(&model, &audio)
-        }).await.ok().flatten() {
+        if let Some(text) =
+            tokio::task::spawn_blocking(move || try_whisper_cli_binary(&model, &audio))
+                .await
+                .ok()
+                .flatten()
+        {
             let cleaned = normalize_transcript_text(&text);
             if !cleaned.is_empty() {
                 return Ok(cleaned);

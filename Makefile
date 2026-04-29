@@ -1,4 +1,4 @@
-.PHONY: demo install dev test rust-test clean-dev-cache clean-dev-cache-dry-run
+.PHONY: demo install dev test rust-test diagnostic reset-lancedb clean-dev-cache clean-all-generated clean-dev-cache-dry-run
 
 install:
 	npm install
@@ -14,8 +14,17 @@ test:
 rust-test:
 	cd src-tauri && cargo fmt --check && cargo clippy --all-targets && cargo test
 
+diagnostic:
+	./scripts/run_embedding_search_diagnostic.sh
+
+reset-lancedb:
+	./scripts/reset_lancedb_for_1024_embeddings.sh
+
 clean-dev-cache:
 	./scripts/clean-dev-build-cache.sh --yes
+
+clean-all-generated:
+	./scripts/clean-dev-build-cache.sh --yes --all
 
 clean-dev-cache-dry-run:
 	./scripts/clean-dev-build-cache.sh --dry-run

@@ -8,6 +8,7 @@ use super::schema::{
     MeetingSegment, MeetingSession, MemoryRecord, NodeType, SearchResult, Stats, Task, TaskType,
     WeekdayCount,
 };
+use crate::config::{DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_TEXT_EMBEDDING_DIM};
 use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
 use arrow_array::{
     builder::{Int64Builder, StringBuilder},
@@ -50,8 +51,8 @@ const SEARCH_RESULT_COLUMNS: &[&str] = &[
     "url",
     "decay_score",
 ];
-const TEXT_EMBED_DIM: i32 = 384;
-const IMAGE_EMBED_DIM: i32 = 512;
+const TEXT_EMBED_DIM: i32 = DEFAULT_TEXT_EMBEDDING_DIM as i32;
+const IMAGE_EMBED_DIM: i32 = DEFAULT_IMAGE_EMBEDDING_DIM as i32;
 const VECTOR_QUERY_MULTIPLIER: usize = 3;
 const KEYWORD_QUERY_MULTIPLIER: usize = 8;
 const MAX_KEYWORD_SCAN: usize = 600;
@@ -407,11 +408,22 @@ impl Store {
         if records.is_empty() {
             return Ok(());
         }
+        let incoming_count = records.len();
         let normalized = records
             .iter()
             .map(normalize_record_for_index)
+            .filter(is_indexable_memory_record)
             .collect::<Vec<_>>();
         let compacted = dedup_records_for_insert(&normalized);
+        let skipped_count = incoming_count.saturating_sub(normalized.len());
+        let deduped_count = normalized.len().saturating_sub(compacted.len());
+        tracing::info!(
+            incoming_count,
+            inserted_count = compacted.len(),
+            skipped_count,
+            deduped_count,
+            "lancedb:add_batch"
+        );
         if compacted.is_empty() {
             return Ok(());
         }
@@ -708,7 +720,9 @@ impl Store {
         };
         let mut results = Vec::new();
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let per_term_limit = (retrieval_limit / terms.len().max(1)).max(base_limit).min(retrieval_limit);
+        let per_term_limit = (retrieval_limit / terms.len().max(1))
+            .max(base_limit)
+            .min(retrieval_limit);
 
         for term in &terms {
             let escaped = sql_escape(&term.to_lowercase());
@@ -1799,12 +1813,7 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
         .map(|i| {
             let score = dist_col
                 .as_ref()
-                .map(|c| {
-                    let d = c.value(i);
-                    // Standard L2 distance → similarity mapping.
-                    // Using a gentle decay handles both normalized and un-normalized distance scales.
-                    1.0 / (1.0 + d * 0.01)
-                })
+                .map(|c| vector_distance_to_similarity(c.value(i)))
                 .unwrap_or(1.0);
             SearchResult {
                 id: get_str(&ids, i),
@@ -2018,6 +2027,22 @@ fn extract_f32_list(col: &Option<FixedSizeListArray>, i: usize, dim: usize) -> V
         }
     }
     vec![0.0; dim]
+}
+
+fn vector_distance_to_similarity(distance: f32) -> f32 {
+    if !distance.is_finite() {
+        return 0.0;
+    }
+
+    // Stored/query text vectors are L2-normalized. Lance returns a lower-is-better
+    // L2-family distance, so compressing it with `0.01` made unrelated neighbors
+    // look almost identical. This mapping preserves useful separation for both
+    // squared-L2 and L2 distances in the normalized 0..4 range.
+    if distance <= 4.0 {
+        (1.0 - distance / 2.0).clamp(0.0, 1.0)
+    } else {
+        (1.0 / (1.0 + distance)).clamp(0.0, 1.0)
+    }
 }
 
 // ── Arrow ↔ Task conversion ──────────────────────────────────────────────────
@@ -2739,7 +2764,73 @@ fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     );
     normalized.session_key = build_index_session_key(&normalized);
     normalized.lexical_shadow = lexical_shadow;
+    normalized.embedding = normalize_vector_dim(
+        &normalized.id,
+        "embedding",
+        &normalized.embedding,
+        TEXT_EMBED_DIM as usize,
+    );
+    normalized.snippet_embedding = normalize_vector_dim(
+        &normalized.id,
+        "snippet_embedding",
+        &normalized.snippet_embedding,
+        TEXT_EMBED_DIM as usize,
+    );
+    normalized.support_embedding = normalize_vector_dim(
+        &normalized.id,
+        "support_embedding",
+        &normalized.support_embedding,
+        TEXT_EMBED_DIM as usize,
+    );
+    normalized.image_embedding = normalize_vector_dim(
+        &normalized.id,
+        "image_embedding",
+        &normalized.image_embedding,
+        IMAGE_EMBED_DIM as usize,
+    );
     normalized
+}
+
+fn is_indexable_memory_record(record: &MemoryRecord) -> bool {
+    let text_signal = format!(
+        "{} {} {}",
+        record.clean_text, record.snippet, record.lexical_shadow
+    );
+    let alnum = text_signal
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .count();
+    if alnum < 6 {
+        tracing::debug!(
+            memory_id = %record.id,
+            "memory_record:skip_low_signal_text"
+        );
+        return false;
+    }
+    true
+}
+
+fn normalize_vector_dim(id: &str, field: &str, vector: &[f32], expected_dim: usize) -> Vec<f32> {
+    if vector.len() == expected_dim {
+        return vector.to_vec();
+    }
+
+    tracing::warn!(
+        memory_id = %id,
+        field,
+        actual_dim = vector.len(),
+        expected_dim,
+        "memory_record:vector_dimension_mismatch"
+    );
+
+    if vector.is_empty() || vector.iter().all(|value| *value == 0.0) {
+        return vec![0.0; expected_dim];
+    }
+
+    let mut repaired = vec![0.0; expected_dim];
+    let copy_len = vector.len().min(expected_dim);
+    repaired[..copy_len].copy_from_slice(&vector[..copy_len]);
+    repaired
 }
 
 fn sanitize_index_url(url: Option<&str>, title: &str, snippet: &str) -> Option<String> {
@@ -3097,7 +3188,43 @@ async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Erro
             .await?;
     }
 
+    validate_memory_vector_schema(table).await?;
+
     Ok(())
+}
+
+async fn validate_memory_vector_schema(table: &Table) -> Result<(), lancedb::Error> {
+    let schema = table.schema().await?;
+    for (column, expected_dim) in [
+        ("embedding", TEXT_EMBED_DIM),
+        ("snippet_embedding", TEXT_EMBED_DIM),
+        ("support_embedding", TEXT_EMBED_DIM),
+        ("image_embedding", IMAGE_EMBED_DIM),
+    ] {
+        let Some(field) = schema.field_with_name(column).ok() else {
+            continue;
+        };
+        let actual_dim = fixed_size_list_dim(field.data_type());
+        if actual_dim != Some(expected_dim) {
+            return Err(lancedb::Error::Schema {
+                message: format!(
+                    "LanceDB table '{}' column '{}' has vector dimension {:?}, but FNDR is configured for {}. Existing 384-dimensional tables must be migrated or reset before using the 1024-dimensional embedding path. To reset local prototype data, stop FNDR and remove the app data LanceDB directory.",
+                    MEMORIES_TABLE,
+                    column,
+                    actual_dim,
+                    expected_dim
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn fixed_size_list_dim(data_type: &DataType) -> Option<i32> {
+    match data_type {
+        DataType::FixedSizeList(_, dim) => Some(*dim),
+        _ => None,
+    }
 }
 
 // ── Migration from legacy JSON store ─────────────────────────────────────────
@@ -3288,12 +3415,12 @@ mod tests {
             noise_score: 0.1,
             session_key: String::new(),
             lexical_shadow: String::new(),
-            embedding: vec![0.0; 384],
-            image_embedding: vec![0.0; 512],
+            embedding: vec![0.0; DEFAULT_TEXT_EMBEDDING_DIM],
+            image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
             screenshot_path: None,
             url: url.map(|value| value.to_string()),
-            snippet_embedding: vec![0.0; 384],
-            support_embedding: vec![0.0; 384],
+            snippet_embedding: vec![0.0; DEFAULT_TEXT_EMBEDDING_DIM],
+            support_embedding: vec![0.0; DEFAULT_TEXT_EMBEDDING_DIM],
             decay_score: 1.0,
             last_accessed_at: 0,
         }

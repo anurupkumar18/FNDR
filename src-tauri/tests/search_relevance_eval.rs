@@ -1,4 +1,5 @@
-use fndr_lib::embed::Embedder;
+use fndr_lib::config::DEFAULT_IMAGE_EMBEDDING_DIM;
+use fndr_lib::embed::{Embedder, EMBEDDING_DIM};
 use fndr_lib::search::HybridSearcher;
 use fndr_lib::store::{MemoryRecord, Store};
 use serde::Deserialize;
@@ -159,11 +160,11 @@ fn build_records(embedder: &Embedder) -> Vec<MemoryRecord> {
             session_key: format!("{}:{}", app.to_lowercase(), id),
             lexical_shadow: String::new(),
             embedding: embeddings[idx].clone(),
-            image_embedding: vec![0.0; 512],
+            image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
             screenshot_path: None,
             url: url.map(|value| value.to_string()),
-            snippet_embedding: vec![0.0; 384],
-            support_embedding: vec![0.0; 384],
+            snippet_embedding: vec![0.0; EMBEDDING_DIM],
+            support_embedding: vec![0.0; EMBEDDING_DIM],
             decay_score: 1.0,
             last_accessed_at: 0,
         })

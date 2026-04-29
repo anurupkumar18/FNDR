@@ -125,7 +125,33 @@ The onboarding and settings flows read the model catalog from `src-tauri/src/mod
 | `llama-3.2-1b` | Llama 3.2 · 1B | 770 MB | 2.0 GB | Minimal text model for basic summaries and search |
 | `smolvlm-500m` | SmolVLM · 500M | 440 MB | 1.5 GB | Lightweight vision model for lower-RAM Macs |
 
-The embedding bootstrap script downloads `all-MiniLM-L6-v2.onnx` and `tokenizer.json` into the default app-support models directory unless a custom target directory is supplied.
+The embedding bootstrap script downloads the local 1024-dimensional `bge-large-en-v1.5-quantized.onnx` embedding model and `tokenizer.json` into the default app-support models directory unless a custom target directory is supplied.
+
+Validate the local embedding and LanceDB path with:
+
+```bash
+make diagnostic
+```
+
+If an older prototype database was created with a different vector dimension, back it up and let FNDR recreate the 1024-dimensional schema with:
+
+```bash
+make reset-lancedb
+```
+
+Generated Rust/Tauri artifacts can become large during repeated local builds. Clear only
+build outputs with:
+
+```bash
+make clean-dev-cache
+```
+
+For a full local reset of generated build outputs, runtime memory data, backups, and
+downloaded model blobs:
+
+```bash
+make clean-all-generated
+```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

@@ -4,6 +4,7 @@
 //! capture and local transcription.
 
 use crate::{
+    config::DEFAULT_IMAGE_EMBEDDING_DIM,
     embed::{Embedder, EMBEDDING_DIM},
     memory_compaction::{
         build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
@@ -335,7 +336,10 @@ impl MeetingStore {
             .join("\n");
 
         if breakdown_needs_repair(meeting.breakdown.as_ref()) && !full_text.trim().is_empty() {
-            meeting.breakdown = Some(build_quick_breakdown(&full_text, meeting.breakdown.as_ref()));
+            meeting.breakdown = Some(build_quick_breakdown(
+                &full_text,
+                meeting.breakdown.as_ref(),
+            ));
         }
 
         Ok(MeetingTranscript {
@@ -578,7 +582,11 @@ pub async fn retranscribe_meeting(meeting_id: &str) -> Result<(), String> {
 
     // Re-ingest any WAV files not yet in the store, then transcribe all pending segments.
     if let Err(err) = ingest_discovered_segments(store.as_ref(), meeting_id, model).await {
-        tracing::warn!("retranscribe_meeting: ingest failed for {}: {}", meeting_id, err);
+        tracing::warn!(
+            "retranscribe_meeting: ingest failed for {}: {}",
+            meeting_id,
+            err
+        );
     }
     transcribe_meeting_postprocess(store.as_ref(), meeting_id, model).await
 }
@@ -2032,6 +2040,69 @@ fn transcript_match_score(text: &str, normalized_query: &str, terms: &[String]) 
     matched as f32 / terms.len() as f32
 }
 
+fn transcript_embeddings_for_embedder(
+    embedder: Option<&Embedder>,
+    app_name: &str,
+    title: &str,
+    full_text: &str,
+    compact_summary_text: &str,
+    support_texts: &[String],
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let Some(embedder) = embedder else {
+        return zero_transcript_embeddings();
+    };
+
+    let mut contexts = vec![
+        (
+            app_name.to_string(),
+            title.to_string(),
+            full_text.to_string(),
+        ),
+        (
+            app_name.to_string(),
+            title.to_string(),
+            compact_summary_text.to_string(),
+        ),
+    ];
+    contexts.extend(
+        support_texts
+            .iter()
+            .cloned()
+            .map(|value| (app_name.to_string(), title.to_string(), value)),
+    );
+
+    match embedder.embed_batch_with_context(&contexts) {
+        Ok(vectors) => {
+            let text_vec = vectors
+                .first()
+                .cloned()
+                .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
+            let snippet_vec = vectors
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
+            let support_vec = if vectors.len() > 2 {
+                mean_pool_embeddings(&vectors[2..])
+            } else {
+                vec![0.0; EMBEDDING_DIM]
+            };
+            (text_vec, snippet_vec, support_vec)
+        }
+        Err(err) => {
+            tracing::warn!("Meeting transcript embedding failed: {}", err);
+            zero_transcript_embeddings()
+        }
+    }
+}
+
+fn zero_transcript_embeddings() -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    (
+        vec![0.0; EMBEDDING_DIM],
+        vec![0.0; EMBEDDING_DIM],
+        vec![0.0; EMBEDDING_DIM],
+    )
+}
+
 fn should_retry_segment_text(text: &str) -> bool {
     let trimmed = text.trim();
     trimmed.is_empty()
@@ -2073,57 +2144,14 @@ async fn ingest_transcript_into_fndr_memory(
         &full_text_for_embedding,
         &lexical_shadow,
     );
-    let (embedding, snippet_embedding, support_embedding) =
-        if let Some(embedder) = shared_meeting_embedder() {
-            let mut contexts = vec![
-                (
-                    "FNDR Meetings".to_string(),
-                    transcript.meeting.title.clone(),
-                    full_text_for_embedding,
-                ),
-                (
-                    "FNDR Meetings".to_string(),
-                    transcript.meeting.title.clone(),
-                    compact_summary_text,
-                ),
-            ];
-            contexts.extend(support_texts.iter().cloned().map(|value| {
-                (
-                    "FNDR Meetings".to_string(),
-                    transcript.meeting.title.clone(),
-                    value,
-                )
-            }));
-            match embedder.embed_batch_with_context(&contexts) {
-                Ok(vectors) => {
-                    let text_vec = vectors
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
-                    let snippet_vec = vectors
-                        .get(1)
-                        .cloned()
-                        .unwrap_or_else(|| vec![0.0; EMBEDDING_DIM]);
-                    let support_vec = if vectors.len() > 2 {
-                        mean_pool_embeddings(&vectors[2..])
-                    } else {
-                        vec![0.0; EMBEDDING_DIM]
-                    };
-                    (text_vec, snippet_vec, support_vec)
-                }
-                Err(_) => (
-                    vec![0.0; EMBEDDING_DIM],
-                    vec![0.0; EMBEDDING_DIM],
-                    vec![0.0; EMBEDDING_DIM],
-                ),
-            }
-        } else {
-            (
-                vec![0.0; EMBEDDING_DIM],
-                vec![0.0; EMBEDDING_DIM],
-                vec![0.0; EMBEDDING_DIM],
-            )
-        };
+    let (embedding, snippet_embedding, support_embedding) = transcript_embeddings_for_embedder(
+        shared_meeting_embedder(),
+        "FNDR Meetings",
+        &transcript.meeting.title,
+        &full_text_for_embedding,
+        &compact_summary_text,
+        &support_texts,
+    );
 
     let record = MemoryRecord {
         id: Uuid::new_v4().to_string(),
@@ -2147,7 +2175,7 @@ async fn ingest_transcript_into_fndr_memory(
         session_key: format!("meeting:{}", transcript.meeting.id),
         lexical_shadow,
         embedding,
-        image_embedding: vec![0.0; 512],
+        image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
         screenshot_path: None,
         url: transcript_path.map(|p| p.to_string()),
         snippet_embedding,
@@ -2304,6 +2332,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::embed::EmbeddingBackend;
     use std::io::Write;
 
     #[test]
@@ -2442,16 +2471,24 @@ Carlos must test the meeting feature in three scenarios and send results by Frid
 
     #[test]
     fn transcript_embeddings_stay_zero_without_semantic_backend() {
-        let (embedding, snippet_embedding) = transcript_embeddings_for_embedder(
-            None,
+        let support_texts = support_embedding_texts(
             "FNDR Meetings",
             "Weekly sync",
             "Reviewed roadmap updates and owners.",
             "Reviewed roadmap updates",
         );
+        let (embedding, snippet_embedding, support_embedding) = transcript_embeddings_for_embedder(
+            None,
+            "FNDR Meetings",
+            "Weekly sync",
+            "Reviewed roadmap updates and owners.",
+            "Reviewed roadmap updates",
+            &support_texts,
+        );
 
         assert!(embedding.iter().all(|value| *value == 0.0));
         assert!(snippet_embedding.iter().all(|value| *value == 0.0));
+        assert!(support_embedding.iter().all(|value| *value == 0.0));
     }
 
     #[test]
@@ -2463,15 +2500,23 @@ Carlos must test the meeting feature in three scenarios and send results by Frid
             return;
         }
 
-        let (embedding, snippet_embedding) = transcript_embeddings_for_embedder(
-            Some(&embedder),
+        let support_texts = support_embedding_texts(
             "FNDR Meetings",
             "Weekly sync",
             "Reviewed roadmap updates and owners.",
             "Reviewed roadmap updates",
         );
+        let (embedding, snippet_embedding, support_embedding) = transcript_embeddings_for_embedder(
+            Some(&embedder),
+            "FNDR Meetings",
+            "Weekly sync",
+            "Reviewed roadmap updates and owners.",
+            "Reviewed roadmap updates",
+            &support_texts,
+        );
 
         assert!(embedding.iter().any(|value| *value != 0.0));
         assert!(snippet_embedding.iter().any(|value| *value != 0.0));
+        assert!(support_embedding.iter().any(|value| *value != 0.0));
     }
 }

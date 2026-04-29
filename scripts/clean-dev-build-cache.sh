@@ -9,18 +9,23 @@ RUNTIME_DIR="${HOME}/Library/Application Support/com.fndr.app"
 
 DRY_RUN=0
 ASSUME_YES=0
+CLEAN_RUNTIME=0
+CLEAN_MODELS=0
 
 usage() {
     cat <<USAGE
-Usage: scripts/clean-dev-build-cache.sh [--dry-run] [--yes]
+Usage: scripts/clean-dev-build-cache.sh [--dry-run] [--yes] [--runtime] [--models] [--all]
 
 Safely removes Rust/Tauri developer build artifacts with cargo clean.
-This does not delete FNDR runtime data, memory cards, LanceDB, summaries, models,
-screenshots, or app settings.
+By default this does not delete FNDR runtime data, memory cards, LanceDB,
+summaries, models, screenshots, or app settings.
 
 Options:
   --dry-run   Show what would be cleaned without deleting anything.
   --yes       Run without prompting.
+  --runtime   Also delete local runtime memory data, LanceDB, backups, frames, meetings, and voice cache.
+  --models    Also delete downloaded local model blobs.
+  --all       Delete build cache, runtime data, and downloaded local models.
   --help      Show this help.
 USAGE
 }
@@ -33,6 +38,19 @@ while [[ $# -gt 0 ]]; do
             ;;
         --yes|-y)
             ASSUME_YES=1
+            shift
+            ;;
+        --runtime)
+            CLEAN_RUNTIME=1
+            shift
+            ;;
+        --models)
+            CLEAN_MODELS=1
+            shift
+            ;;
+        --all)
+            CLEAN_RUNTIME=1
+            CLEAN_MODELS=1
             shift
             ;;
         --help|-h)
@@ -56,17 +74,31 @@ size_of() {
     fi
 }
 
+size_of_glob() {
+    local total
+    total="$(du -sch "$@" 2>/dev/null | awk '/total$/ {print $1}' || true)"
+    if [[ -n "$total" ]]; then
+        echo "$total"
+    else
+        echo "0B"
+    fi
+}
+
 echo "FNDR developer build cache cleanup"
 echo
 echo "Build cache target:"
 echo "  src-tauri/target: $(size_of "$TARGET_DIR")"
 echo "  debug:            $(size_of "$TARGET_DIR/debug")"
 echo "  release:          $(size_of "$TARGET_DIR/release")"
+echo "  frontend dist:    $(size_of "$REPO_ROOT/dist")"
 echo
-echo "Protected runtime data, not touched:"
+echo "Runtime data:"
 echo "  app data:         $(size_of "$RUNTIME_DIR")"
 echo "  memory DB:        $(size_of "$RUNTIME_DIR/lancedb")"
 echo "  frames:           $(size_of "$RUNTIME_DIR/frames")"
+echo "  DB backups:       $(size_of_glob "$RUNTIME_DIR"/lancedb.backup.*)"
+echo "  models:           $(size_of "$RUNTIME_DIR/models")"
+echo "  speech models:    $(size_of "$RUNTIME_DIR/speech_models")"
 echo
 
 if [[ ! -f "$MANIFEST_PATH" ]]; then
@@ -75,17 +107,13 @@ if [[ ! -f "$MANIFEST_PATH" ]]; then
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "Dry run only. To clean: npm run clean:dev-cache"
-    exit 0
-fi
-
-if [[ ! -e "$TARGET_DIR" ]]; then
-    echo "Nothing to clean; src-tauri/target does not exist."
+    echo "Dry run only. To clean build cache: npm run clean:dev-cache"
+    echo "To remove runtime data and downloaded models too: scripts/clean-dev-build-cache.sh --yes --all"
     exit 0
 fi
 
 if [[ "$ASSUME_YES" -ne 1 ]]; then
-    printf "Remove Rust/Tauri build artifacts now? This will make the next Rust build slower. [y/N] "
+    printf "Remove selected FNDR generated artifacts now? This will make the next build/model launch slower. [y/N] "
     read -r reply
     case "$reply" in
         y|Y|yes|YES)
@@ -97,10 +125,41 @@ if [[ "$ASSUME_YES" -ne 1 ]]; then
     esac
 fi
 
-cargo clean --manifest-path "$MANIFEST_PATH"
+if [[ -e "$TARGET_DIR" ]]; then
+    cargo clean --manifest-path "$MANIFEST_PATH"
+else
+    echo "No Rust/Tauri target directory to clean."
+fi
+
+rm -rf "$REPO_ROOT/dist"
+
+if [[ "${CLEAN_RUNTIME:-0}" -eq 1 ]]; then
+    rm -rf \
+        "$RUNTIME_DIR/lancedb" \
+        "$RUNTIME_DIR"/lancedb.backup.* \
+        "$RUNTIME_DIR/frames" \
+        "$RUNTIME_DIR/meetings" \
+        "$RUNTIME_DIR/voice" \
+        "$RUNTIME_DIR/memory_graph.json.migrated" \
+        "$RUNTIME_DIR/tasks.json.migrated" \
+        "$RUNTIME_DIR/memory_repair_progress.json" \
+        "$RUNTIME_DIR/memory_repair_checkpoint.json" \
+        "$RUNTIME_DIR/storage_reclaim_progress.json"
+fi
+
+if [[ "${CLEAN_MODELS:-0}" -eq 1 ]]; then
+    rm -rf \
+        "$RUNTIME_DIR/models" \
+        "$RUNTIME_DIR/speech_models" \
+        "$REPO_ROOT/src-tauri/models" \
+        "${HOME}/Library/Application Support/com.fndr.FNDR/models"
+fi
+
+rm -rf "${HOME}/Library/Caches/com.fndr.app" "${HOME}/Library/Caches/fndr"
 
 echo
 echo "Cleanup complete."
 echo "  repo:             $(size_of "$REPO_ROOT")"
 echo "  src-tauri/target: $(size_of "$TARGET_DIR")"
 echo "  memory DB:        $(size_of "$RUNTIME_DIR/lancedb")"
+echo "  app data:         $(size_of "$RUNTIME_DIR")"
