@@ -16,16 +16,45 @@ pub const DEFAULT_CHUNK_MAX_TOKENS: usize = 450;
 pub const DEFAULT_CHUNK_OVERLAP_TOKENS: usize = 96;
 pub const DEFAULT_CHUNK_MIN_TOKENS: usize = 15;
 pub const DEFAULT_CHARS_PER_TOKEN: usize = 4;
+pub const DEFAULT_CHUNK_OCR_TARGET_MIN_CHARS: usize = 300;
+pub const DEFAULT_CHUNK_OCR_TARGET_MAX_CHARS: usize = 900;
 
 pub const DEFAULT_SEARCH_CANDIDATE_MULTIPLIER: usize = 4;
 pub const DEFAULT_SEARCH_MAX_RERANK_POOL: usize = 36;
+pub const DEFAULT_SEARCH_MAX_KEYWORD_VARIANTS: usize = 4;
+pub const DEFAULT_SEARCH_MAX_KEYWORD_FALLBACK_VARIANTS: usize = 2;
+pub const DEFAULT_SEARCH_DIVERSITY_PRESERVE_TOP: usize = 3;
+pub const DEFAULT_SEARCH_MAX_SEMANTIC_BRANCH_LIMIT: usize = 64;
+pub const DEFAULT_SEARCH_MAX_KEYWORD_BRANCH_LIMIT: usize = 48;
+pub const DEFAULT_SEARCH_MIN_SNIPPET_QUERY_TERMS: usize = 3;
 pub const DEFAULT_SEARCH_VECTOR_WEIGHT: f32 = 0.44;
 pub const DEFAULT_SEARCH_SNIPPET_WEIGHT: f32 = 0.18;
 pub const DEFAULT_SEARCH_KEYWORD_WEIGHT: f32 = 0.38;
+pub const DEFAULT_SEARCH_DECAY_FLOOR: f32 = 0.15;
+pub const DEFAULT_SEARCH_ABSOLUTE_RELEVANCE_FLOOR: f32 = 0.24;
+pub const DEFAULT_SEARCH_RELATIVE_RELEVANCE_FLOOR: f32 = 0.32;
+pub const DEFAULT_SEARCH_STRONG_RESULT_FLOOR: f32 = 0.70;
+pub const DEFAULT_SEARCH_MEDIUM_RESULT_FLOOR: f32 = 0.60;
 pub const DEFAULT_SEARCH_SEMANTIC_TIMEOUT_MS: u64 = 950;
 pub const DEFAULT_SEARCH_SNIPPET_TIMEOUT_MS: u64 = 760;
 pub const DEFAULT_SEARCH_KEYWORD_TIMEOUT_MS: u64 = 900;
 pub const DEFAULT_SEARCH_KEYWORD_VARIANT_TIMEOUT_MS: u64 = 320;
+
+pub const DEFAULT_CAPTURE_FLUSH_INTERVAL_SECS: u64 = 30;
+pub const DEFAULT_CAPTURE_MAX_BATCH_SIZE: usize = 100;
+pub const DEFAULT_CAPTURE_EMBEDDING_CACHE_SIZE: usize = 256;
+pub const DEFAULT_CAPTURE_SEMANTIC_DEDUP_WINDOW_MS: i64 = 90_000;
+pub const DEFAULT_CAPTURE_NOISE_SKIP_THRESHOLD: f32 = 0.97;
+pub const DEFAULT_CAPTURE_DEEP_IDLE_SECONDS: f64 = 300.0;
+pub const DEFAULT_CAPTURE_IDLE_BLEND_SECONDS: f64 = 30.0;
+pub const DEFAULT_FOCUS_DRIFT_SIMILARITY_THRESHOLD: f32 = 0.30;
+pub const DEFAULT_FOCUS_DRIFT_CAPTURE_COUNT: u32 = 3;
+
+pub const DEFAULT_MEMORY_CARD_MAX_GROUPS: usize = 6;
+pub const DEFAULT_MEMORY_CARD_MAX_LLM_GROUPS: usize = 0;
+pub const DEFAULT_MEMORY_CARD_MAX_GROUP_SNIPPETS: usize = 6;
+pub const DEFAULT_MEMORY_CARD_GROUPING_TIMEOUT_MS: u64 = 350;
+pub const DEFAULT_MEMORY_CARD_LLM_TIMEOUT_MS: u64 = 1_500;
 
 /// Local text embedding configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -93,6 +122,10 @@ pub struct ChunkingConfig {
     pub min_tokens: usize,
     #[serde(default = "default_chars_per_token")]
     pub chars_per_token: usize,
+    #[serde(default = "default_chunk_ocr_target_min_chars")]
+    pub ocr_target_min_chars: usize,
+    #[serde(default = "default_chunk_ocr_target_max_chars")]
+    pub ocr_target_max_chars: usize,
 }
 
 impl Default for ChunkingConfig {
@@ -102,6 +135,8 @@ impl Default for ChunkingConfig {
             overlap_tokens: default_chunk_overlap_tokens(),
             min_tokens: default_chunk_min_tokens(),
             chars_per_token: default_chars_per_token(),
+            ocr_target_min_chars: default_chunk_ocr_target_min_chars(),
+            ocr_target_max_chars: default_chunk_ocr_target_max_chars(),
         }
     }
 }
@@ -112,6 +147,10 @@ impl ChunkingConfig {
         self.max_tokens = self.max_tokens.clamp(64, 1024);
         self.min_tokens = self.min_tokens.clamp(1, self.max_tokens / 2);
         self.overlap_tokens = self.overlap_tokens.min(self.max_tokens / 2);
+        self.ocr_target_min_chars = self.ocr_target_min_chars.clamp(80, 4_000);
+        self.ocr_target_max_chars = self
+            .ocr_target_max_chars
+            .clamp(self.ocr_target_min_chars, 8_000);
         self
     }
 }
@@ -123,12 +162,34 @@ pub struct SearchConfig {
     pub candidate_multiplier: usize,
     #[serde(default = "default_search_max_rerank_pool")]
     pub max_rerank_pool: usize,
+    #[serde(default = "default_search_max_keyword_variants")]
+    pub max_keyword_variants: usize,
+    #[serde(default = "default_search_max_keyword_fallback_variants")]
+    pub max_keyword_fallback_variants: usize,
+    #[serde(default = "default_search_diversity_preserve_top")]
+    pub diversity_preserve_top: usize,
+    #[serde(default = "default_search_max_semantic_branch_limit")]
+    pub max_semantic_branch_limit: usize,
+    #[serde(default = "default_search_max_keyword_branch_limit")]
+    pub max_keyword_branch_limit: usize,
+    #[serde(default = "default_search_min_snippet_query_terms")]
+    pub min_snippet_query_terms: usize,
     #[serde(default = "default_search_vector_weight")]
     pub vector_weight: f32,
     #[serde(default = "default_search_snippet_weight")]
     pub snippet_weight: f32,
     #[serde(default = "default_search_keyword_weight")]
     pub keyword_weight: f32,
+    #[serde(default = "default_search_decay_floor")]
+    pub decay_floor: f32,
+    #[serde(default = "default_search_absolute_relevance_floor")]
+    pub absolute_relevance_floor: f32,
+    #[serde(default = "default_search_relative_relevance_floor")]
+    pub relative_relevance_floor: f32,
+    #[serde(default = "default_search_strong_result_floor")]
+    pub strong_result_floor: f32,
+    #[serde(default = "default_search_medium_result_floor")]
+    pub medium_result_floor: f32,
     #[serde(default = "default_search_semantic_timeout_ms")]
     pub semantic_timeout_ms: u64,
     #[serde(default = "default_search_snippet_timeout_ms")]
@@ -144,9 +205,20 @@ impl Default for SearchConfig {
         Self {
             candidate_multiplier: default_search_candidate_multiplier(),
             max_rerank_pool: default_search_max_rerank_pool(),
+            max_keyword_variants: default_search_max_keyword_variants(),
+            max_keyword_fallback_variants: default_search_max_keyword_fallback_variants(),
+            diversity_preserve_top: default_search_diversity_preserve_top(),
+            max_semantic_branch_limit: default_search_max_semantic_branch_limit(),
+            max_keyword_branch_limit: default_search_max_keyword_branch_limit(),
+            min_snippet_query_terms: default_search_min_snippet_query_terms(),
             vector_weight: default_search_vector_weight(),
             snippet_weight: default_search_snippet_weight(),
             keyword_weight: default_search_keyword_weight(),
+            decay_floor: default_search_decay_floor(),
+            absolute_relevance_floor: default_search_absolute_relevance_floor(),
+            relative_relevance_floor: default_search_relative_relevance_floor(),
+            strong_result_floor: default_search_strong_result_floor(),
+            medium_result_floor: default_search_medium_result_floor(),
             semantic_timeout_ms: default_search_semantic_timeout_ms(),
             snippet_timeout_ms: default_search_snippet_timeout_ms(),
             keyword_timeout_ms: default_search_keyword_timeout_ms(),
@@ -159,9 +231,20 @@ impl SearchConfig {
     pub fn normalized(mut self) -> Self {
         self.candidate_multiplier = self.candidate_multiplier.clamp(1, 12);
         self.max_rerank_pool = self.max_rerank_pool.clamp(4, 200);
+        self.max_keyword_variants = self.max_keyword_variants.clamp(1, 16);
+        self.max_keyword_fallback_variants = self.max_keyword_fallback_variants.clamp(1, 8);
+        self.diversity_preserve_top = self.diversity_preserve_top.clamp(0, 12);
+        self.max_semantic_branch_limit = self.max_semantic_branch_limit.clamp(1, 500);
+        self.max_keyword_branch_limit = self.max_keyword_branch_limit.clamp(1, 500);
+        self.min_snippet_query_terms = self.min_snippet_query_terms.clamp(1, 12);
         self.vector_weight = self.vector_weight.clamp(0.0, 1.0);
         self.snippet_weight = self.snippet_weight.clamp(0.0, 1.0);
         self.keyword_weight = self.keyword_weight.clamp(0.0, 1.0);
+        self.decay_floor = self.decay_floor.clamp(0.0, 1.0);
+        self.absolute_relevance_floor = self.absolute_relevance_floor.clamp(0.0, 1.0);
+        self.relative_relevance_floor = self.relative_relevance_floor.clamp(0.0, 1.0);
+        self.strong_result_floor = self.strong_result_floor.clamp(0.0, 1.0);
+        self.medium_result_floor = self.medium_result_floor.clamp(0.0, 1.0);
         let total = self.vector_weight + self.snippet_weight + self.keyword_weight;
         if total > f32::EPSILON {
             self.vector_weight /= total;
@@ -172,6 +255,99 @@ impl SearchConfig {
         self.snippet_timeout_ms = self.snippet_timeout_ms.clamp(100, 10_000);
         self.keyword_timeout_ms = self.keyword_timeout_ms.clamp(100, 10_000);
         self.keyword_variant_timeout_ms = self.keyword_variant_timeout_ms.clamp(50, 5_000);
+        self
+    }
+}
+
+/// Capture-loop batching, dedupe, and focus-drift knobs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CapturePipelineConfig {
+    #[serde(default = "default_capture_flush_interval_secs")]
+    pub flush_interval_secs: u64,
+    #[serde(default = "default_capture_max_batch_size")]
+    pub max_batch_size: usize,
+    #[serde(default = "default_capture_embedding_cache_size")]
+    pub embedding_cache_size: usize,
+    #[serde(default = "default_capture_semantic_dedup_window_ms")]
+    pub semantic_dedup_window_ms: i64,
+    #[serde(default = "default_capture_noise_skip_threshold")]
+    pub noise_skip_threshold: f32,
+    #[serde(default = "default_capture_deep_idle_seconds")]
+    pub deep_idle_seconds: f64,
+    #[serde(default = "default_capture_idle_blend_seconds")]
+    pub idle_blend_seconds: f64,
+    #[serde(default = "default_focus_drift_similarity_threshold")]
+    pub focus_drift_similarity_threshold: f32,
+    #[serde(default = "default_focus_drift_capture_count")]
+    pub focus_drift_capture_count: u32,
+}
+
+impl Default for CapturePipelineConfig {
+    fn default() -> Self {
+        Self {
+            flush_interval_secs: default_capture_flush_interval_secs(),
+            max_batch_size: default_capture_max_batch_size(),
+            embedding_cache_size: default_capture_embedding_cache_size(),
+            semantic_dedup_window_ms: default_capture_semantic_dedup_window_ms(),
+            noise_skip_threshold: default_capture_noise_skip_threshold(),
+            deep_idle_seconds: default_capture_deep_idle_seconds(),
+            idle_blend_seconds: default_capture_idle_blend_seconds(),
+            focus_drift_similarity_threshold: default_focus_drift_similarity_threshold(),
+            focus_drift_capture_count: default_focus_drift_capture_count(),
+        }
+    }
+}
+
+impl CapturePipelineConfig {
+    pub fn normalized(mut self) -> Self {
+        self.flush_interval_secs = self.flush_interval_secs.clamp(1, 300);
+        self.max_batch_size = self.max_batch_size.clamp(1, 1_000);
+        self.embedding_cache_size = self.embedding_cache_size.clamp(16, 16_384);
+        self.semantic_dedup_window_ms = self.semantic_dedup_window_ms.clamp(1_000, 3_600_000);
+        self.noise_skip_threshold = self.noise_skip_threshold.clamp(0.0, 1.0);
+        self.deep_idle_seconds = self.deep_idle_seconds.clamp(30.0, 86_400.0);
+        self.idle_blend_seconds = self.idle_blend_seconds.clamp(1.0, 3_600.0);
+        self.focus_drift_similarity_threshold =
+            self.focus_drift_similarity_threshold.clamp(0.0, 1.0);
+        self.focus_drift_capture_count = self.focus_drift_capture_count.clamp(1, 60);
+        self
+    }
+}
+
+/// MemoryCard grouping and synthesis knobs used by search surfaces.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryCardConfig {
+    #[serde(default = "default_memory_card_max_groups")]
+    pub max_groups: usize,
+    #[serde(default = "default_memory_card_max_llm_groups")]
+    pub max_llm_groups: usize,
+    #[serde(default = "default_memory_card_max_group_snippets")]
+    pub max_group_snippets: usize,
+    #[serde(default = "default_memory_card_grouping_timeout_ms")]
+    pub grouping_timeout_ms: u64,
+    #[serde(default = "default_memory_card_llm_timeout_ms")]
+    pub llm_timeout_ms: u64,
+}
+
+impl Default for MemoryCardConfig {
+    fn default() -> Self {
+        Self {
+            max_groups: default_memory_card_max_groups(),
+            max_llm_groups: default_memory_card_max_llm_groups(),
+            max_group_snippets: default_memory_card_max_group_snippets(),
+            grouping_timeout_ms: default_memory_card_grouping_timeout_ms(),
+            llm_timeout_ms: default_memory_card_llm_timeout_ms(),
+        }
+    }
+}
+
+impl MemoryCardConfig {
+    pub fn normalized(mut self) -> Self {
+        self.max_groups = self.max_groups.clamp(1, 24);
+        self.max_llm_groups = self.max_llm_groups.min(self.max_groups);
+        self.max_group_snippets = self.max_group_snippets.clamp(1, 24);
+        self.grouping_timeout_ms = self.grouping_timeout_ms.clamp(50, 5_000);
+        self.llm_timeout_ms = self.llm_timeout_ms.clamp(100, 30_000);
         self
     }
 }
@@ -276,6 +452,12 @@ pub struct Config {
     /// Hybrid search weights, limits, and timeouts.
     #[serde(default)]
     pub search: SearchConfig,
+    /// Capture-loop batching, dedupe, and focus-drift settings.
+    #[serde(default)]
+    pub capture_pipeline: CapturePipelineConfig,
+    /// MemoryCard grouping and synthesis settings.
+    #[serde(default)]
+    pub memory_cards: MemoryCardConfig,
 }
 
 fn default_embedding_model_name() -> String {
@@ -322,12 +504,44 @@ fn default_chars_per_token() -> usize {
     DEFAULT_CHARS_PER_TOKEN
 }
 
+fn default_chunk_ocr_target_min_chars() -> usize {
+    DEFAULT_CHUNK_OCR_TARGET_MIN_CHARS
+}
+
+fn default_chunk_ocr_target_max_chars() -> usize {
+    DEFAULT_CHUNK_OCR_TARGET_MAX_CHARS
+}
+
 fn default_search_candidate_multiplier() -> usize {
     DEFAULT_SEARCH_CANDIDATE_MULTIPLIER
 }
 
 fn default_search_max_rerank_pool() -> usize {
     DEFAULT_SEARCH_MAX_RERANK_POOL
+}
+
+fn default_search_max_keyword_variants() -> usize {
+    DEFAULT_SEARCH_MAX_KEYWORD_VARIANTS
+}
+
+fn default_search_max_keyword_fallback_variants() -> usize {
+    DEFAULT_SEARCH_MAX_KEYWORD_FALLBACK_VARIANTS
+}
+
+fn default_search_diversity_preserve_top() -> usize {
+    DEFAULT_SEARCH_DIVERSITY_PRESERVE_TOP
+}
+
+fn default_search_max_semantic_branch_limit() -> usize {
+    DEFAULT_SEARCH_MAX_SEMANTIC_BRANCH_LIMIT
+}
+
+fn default_search_max_keyword_branch_limit() -> usize {
+    DEFAULT_SEARCH_MAX_KEYWORD_BRANCH_LIMIT
+}
+
+fn default_search_min_snippet_query_terms() -> usize {
+    DEFAULT_SEARCH_MIN_SNIPPET_QUERY_TERMS
 }
 
 fn default_search_vector_weight() -> f32 {
@@ -340,6 +554,26 @@ fn default_search_snippet_weight() -> f32 {
 
 fn default_search_keyword_weight() -> f32 {
     DEFAULT_SEARCH_KEYWORD_WEIGHT
+}
+
+fn default_search_decay_floor() -> f32 {
+    DEFAULT_SEARCH_DECAY_FLOOR
+}
+
+fn default_search_absolute_relevance_floor() -> f32 {
+    DEFAULT_SEARCH_ABSOLUTE_RELEVANCE_FLOOR
+}
+
+fn default_search_relative_relevance_floor() -> f32 {
+    DEFAULT_SEARCH_RELATIVE_RELEVANCE_FLOOR
+}
+
+fn default_search_strong_result_floor() -> f32 {
+    DEFAULT_SEARCH_STRONG_RESULT_FLOOR
+}
+
+fn default_search_medium_result_floor() -> f32 {
+    DEFAULT_SEARCH_MEDIUM_RESULT_FLOOR
 }
 
 fn default_search_semantic_timeout_ms() -> u64 {
@@ -356,6 +590,62 @@ fn default_search_keyword_timeout_ms() -> u64 {
 
 fn default_search_keyword_variant_timeout_ms() -> u64 {
     DEFAULT_SEARCH_KEYWORD_VARIANT_TIMEOUT_MS
+}
+
+fn default_capture_flush_interval_secs() -> u64 {
+    DEFAULT_CAPTURE_FLUSH_INTERVAL_SECS
+}
+
+fn default_capture_max_batch_size() -> usize {
+    DEFAULT_CAPTURE_MAX_BATCH_SIZE
+}
+
+fn default_capture_embedding_cache_size() -> usize {
+    DEFAULT_CAPTURE_EMBEDDING_CACHE_SIZE
+}
+
+fn default_capture_semantic_dedup_window_ms() -> i64 {
+    DEFAULT_CAPTURE_SEMANTIC_DEDUP_WINDOW_MS
+}
+
+fn default_capture_noise_skip_threshold() -> f32 {
+    DEFAULT_CAPTURE_NOISE_SKIP_THRESHOLD
+}
+
+fn default_capture_deep_idle_seconds() -> f64 {
+    DEFAULT_CAPTURE_DEEP_IDLE_SECONDS
+}
+
+fn default_capture_idle_blend_seconds() -> f64 {
+    DEFAULT_CAPTURE_IDLE_BLEND_SECONDS
+}
+
+fn default_focus_drift_similarity_threshold() -> f32 {
+    DEFAULT_FOCUS_DRIFT_SIMILARITY_THRESHOLD
+}
+
+fn default_focus_drift_capture_count() -> u32 {
+    DEFAULT_FOCUS_DRIFT_CAPTURE_COUNT
+}
+
+fn default_memory_card_max_groups() -> usize {
+    DEFAULT_MEMORY_CARD_MAX_GROUPS
+}
+
+fn default_memory_card_max_llm_groups() -> usize {
+    DEFAULT_MEMORY_CARD_MAX_LLM_GROUPS
+}
+
+fn default_memory_card_max_group_snippets() -> usize {
+    DEFAULT_MEMORY_CARD_MAX_GROUP_SNIPPETS
+}
+
+fn default_memory_card_grouping_timeout_ms() -> u64 {
+    DEFAULT_MEMORY_CARD_GROUPING_TIMEOUT_MS
+}
+
+fn default_memory_card_llm_timeout_ms() -> u64 {
+    DEFAULT_MEMORY_CARD_LLM_TIMEOUT_MS
 }
 
 fn default_use_vlm() -> bool {
@@ -429,6 +719,8 @@ impl Default for Config {
             embedding: EmbeddingConfig::default(),
             chunking: ChunkingConfig::default(),
             search: SearchConfig::default(),
+            capture_pipeline: CapturePipelineConfig::default(),
+            memory_cards: MemoryCardConfig::default(),
         }
     }
 }
@@ -441,6 +733,8 @@ impl Config {
         self.embedding = self.embedding.normalized();
         self.chunking = self.chunking.normalized();
         self.search = self.search.normalized();
+        self.capture_pipeline = self.capture_pipeline.normalized();
+        self.memory_cards = self.memory_cards.normalized();
         self.fps_base = self.fps_base.clamp(0.05, 4.0);
         self.idle_fps = self.idle_fps.clamp(0.02, self.fps_base.max(0.02));
         self.idle_pause_seconds = self.idle_pause_seconds.clamp(1, 3600);

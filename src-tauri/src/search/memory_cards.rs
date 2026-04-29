@@ -1,11 +1,21 @@
+//! MemoryCard synthesis for search results.
+//!
+//! Groups hybrid search hits into human-readable cards, validates any local LLM
+//! drafts against grounded snippets, and falls back to deterministic summaries.
+
+use crate::config::{
+    DEFAULT_MEMORY_CARD_GROUPING_TIMEOUT_MS, DEFAULT_MEMORY_CARD_LLM_TIMEOUT_MS,
+    DEFAULT_MEMORY_CARD_MAX_GROUPS, DEFAULT_MEMORY_CARD_MAX_GROUP_SNIPPETS,
+    DEFAULT_MEMORY_CARD_MAX_LLM_GROUPS,
+};
 use crate::inference::{InferenceEngine, MemoryCardDraft};
 use crate::store::SearchResult;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use tokio::time::{timeout, Duration};
 
-const MAX_GROUP_SNIPPETS: usize = 6;
-const GROUPING_TIMEOUT: Duration = Duration::from_millis(350);
+const MAX_GROUP_SNIPPETS: usize = DEFAULT_MEMORY_CARD_MAX_GROUP_SNIPPETS;
+const GROUPING_TIMEOUT: Duration = Duration::from_millis(DEFAULT_MEMORY_CARD_GROUPING_TIMEOUT_MS);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryCard {
@@ -42,8 +52,15 @@ impl MemoryCardSynthesizer {
         query: &str,
         results: &[SearchResult],
     ) -> Vec<MemoryCard> {
-        Self::from_results_with_policy(inference, query, results, 6, 3, Duration::from_millis(1500))
-            .await
+        Self::from_results_with_policy(
+            inference,
+            query,
+            results,
+            DEFAULT_MEMORY_CARD_MAX_GROUPS,
+            DEFAULT_MEMORY_CARD_MAX_LLM_GROUPS,
+            Duration::from_millis(DEFAULT_MEMORY_CARD_LLM_TIMEOUT_MS),
+        )
+        .await
     }
 
     pub async fn from_results_with_policy(

@@ -221,6 +221,7 @@ fn hybrid_search_relevance_eval_suite() {
             })
             .expect("search query");
         let hit_ids = hits.into_iter().map(|item| item.id).collect::<Vec<_>>();
+        println!("case {:?} -> {:?}", case.query, hit_ids);
 
         if case.expect_empty {
             if !hit_ids.is_empty() {

@@ -1,8 +1,8 @@
 //! Capture pipeline
 //!
-//! Handles screen capture, deduplication, and frame processing.
-//! Qwen handles the core local summarization path, while optional accelerators
-//! like FastVLM stay off the hot path until a dedicated feature needs them.
+//! Samples the foreground screen, blocks private contexts before OCR, extracts
+//! Apple Vision text, embeds cleaned chunks, and batches memory records into
+//! LanceDB.
 
 pub mod clipboard;
 mod dedupe;
@@ -25,12 +25,13 @@ pub fn macos_frontmost_app_name() -> Option<String> {
     }
 }
 
-use crate::embed::{ClipEmbedder, Embedder, EmbeddingBackend, EMBEDDING_DIM};
+use crate::config::{DEFAULT_CAPTURE_EMBEDDING_CACHE_SIZE, DEFAULT_IMAGE_EMBEDDING_DIM};
+use crate::embed::{Embedder, EmbeddingBackend, EMBEDDING_DIM};
 use crate::memory_compaction::{
     build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
     support_embedding_texts,
 };
-use crate::ocr::OcrEngine;
+use crate::ocr::{OcrEngine, RecognizedText};
 use crate::privacy::Blocklist;
 use crate::store::{MemoryRecord, SearchResult, Task, TaskType};
 use crate::tasks::parse_tasks_from_llm_response;
@@ -44,21 +45,18 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const EMBEDDING_CACHE_SIZE: usize = 256;
-const SEMANTIC_DEDUP_WINDOW_MS: i64 = 90_000;
-
 #[derive(Default)]
 struct SemanticDedupWindow {
     seen_at_ms: HashMap<u64, i64>,
 }
 
 impl SemanticDedupWindow {
-    fn should_skip(&mut self, signature: u64, now_ms: i64) -> bool {
+    fn should_skip(&mut self, signature: u64, now_ms: i64, window_ms: i64) -> bool {
         self.seen_at_ms
-            .retain(|_, seen_at| now_ms.saturating_sub(*seen_at) <= SEMANTIC_DEDUP_WINDOW_MS);
+            .retain(|_, seen_at| now_ms.saturating_sub(*seen_at) <= window_ms);
 
         if let Some(last_seen) = self.seen_at_ms.get(&signature).copied() {
-            if now_ms.saturating_sub(last_seen) <= SEMANTIC_DEDUP_WINDOW_MS {
+            if now_ms.saturating_sub(last_seen) <= window_ms {
                 self.seen_at_ms.insert(signature, now_ms);
                 return true;
             }
@@ -69,13 +67,21 @@ impl SemanticDedupWindow {
     }
 }
 
-#[derive(Default)]
 struct EmbeddingMemo {
+    capacity: usize,
     order: VecDeque<String>,
     values: HashMap<String, Vec<f32>>,
 }
 
 impl EmbeddingMemo {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::with_capacity(capacity),
+            values: HashMap::with_capacity(capacity),
+        }
+    }
+
     fn get(&self, key: &str) -> Option<Vec<f32>> {
         self.values.get(key).cloned()
     }
@@ -84,7 +90,7 @@ impl EmbeddingMemo {
         if self.values.contains_key(&key) {
             return;
         }
-        if self.order.len() >= EMBEDDING_CACHE_SIZE {
+        if self.order.len() >= self.capacity.max(1) {
             if let Some(evicted) = self.order.pop_front() {
                 self.values.remove(&evicted);
             }
@@ -94,87 +100,20 @@ impl EmbeddingMemo {
     }
 }
 
-/// Resolve the FastVLM sidecar Python script path.
-/// Checks both the packaged app bundle and the dev-time source tree.
-#[allow(dead_code)]
-fn resolve_fastvlm_sidecar() -> Option<PathBuf> {
-    // Packaged: <exe>/../Resources/sidecar/fastvlm_runner.py
-    let packaged = std::env::current_exe().ok().and_then(|p| {
-        p.parent()
-            .map(|d| d.join("../Resources/sidecar/fastvlm_runner.py"))
-    });
-    if let Some(ref p) = packaged {
-        if p.exists() {
-            return Some(p.clone());
-        }
-    }
-
-    // Dev: relative to Cargo manifest root
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sidecar/fastvlm_runner.py");
-    if dev.exists() {
-        return Some(dev);
-    }
-
-    None
+pub(crate) fn should_skip_capture_context(
+    app_name: &str,
+    bundle_id: Option<&str>,
+    window_title: &str,
+    url: Option<&str>,
+    blocklist: &[String],
+) -> bool {
+    Blocklist::is_internal_app(app_name, bundle_id)
+        || Blocklist::is_blocked(app_name, blocklist)
+        || Blocklist::is_context_blocked(url, Some(window_title), blocklist)
 }
 
-/// Find the best Python executable (prefer venv, fall back to system python3).
-fn python_cmd_for_sidecar() -> PathBuf {
-    if let Some(docs) = dirs::document_dir() {
-        let venv_py = docs.join("FNDR Meetings/venv/bin/python3");
-        if venv_py.exists() {
-            return venv_py;
-        }
-    }
-    PathBuf::from("python3")
-}
-
-/// Call the FastVLM sidecar with a screenshot path.
-/// Returns the visual description on success, or None if the sidecar is
-/// unavailable / times out / returns a sentinel error string.
-#[allow(dead_code)]
-async fn call_fastvlm(screenshot_path: &str) -> Option<String> {
-    let sidecar = resolve_fastvlm_sidecar()?;
-    let python = python_cmd_for_sidecar();
-
-    let result = tokio::time::timeout(
-        Duration::from_secs(15),
-        tokio::process::Command::new(&python)
-            .arg(&sidecar)
-            .arg(screenshot_path)
-            .output(),
-    )
-    .await;
-
-    let output = match result {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => {
-            tracing::debug!("FastVLM sidecar launch failed: {}", e);
-            return None;
-        }
-        Err(_) => {
-            tracing::debug!("FastVLM sidecar timed out");
-            return None;
-        }
-    };
-
-    if !output.status.success() {
-        tracing::debug!(
-            "FastVLM sidecar non-zero exit: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-        return None;
-    }
-
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
-    // Discard sentinel error strings written by the sidecar
-    if text.is_empty() || text.starts_with("[fastvlm") {
-        return None;
-    }
-
-    tracing::info!("FastVLM visual description: {}", text);
-    Some(text)
+fn extract_ocr_text(app_name: &str, ocr_result: &RecognizedText) -> String {
+    text_cleanup::reduce_chrome_noise_for_app(app_name, &ocr_result.text)
 }
 
 /// Run the main capture loop
@@ -192,26 +131,30 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             None
         }
     };
-    let image_embedder = ClipEmbedder::new();
+    let initial_capture_config = state.config.read().capture_pipeline.clone();
 
     // Batch buffer
     let mut batch: Vec<MemoryRecord> = Vec::new();
     let mut continuity_index: HashMap<String, String> = HashMap::new();
     let mut last_flush = Instant::now();
-    let flush_interval = Duration::from_secs(30);
-    let max_batch_size = 100;
 
     // Force capture timer
     let mut last_forced_capture = Instant::now();
 
     // Semantic dedup window suppresses repeated unchanged content bursts.
     let mut semantic_window = SemanticDedupWindow::default();
-    let mut embedding_memo = EmbeddingMemo::default();
+    let mut embedding_memo = EmbeddingMemo::new(
+        initial_capture_config
+            .embedding_cache_size
+            .max(DEFAULT_CAPTURE_EMBEDDING_CACHE_SIZE),
+    );
 
     tracing::info!("Capture loop started");
 
     loop {
         let config = state.config.read().clone();
+        let flush_interval = Duration::from_secs(config.capture_pipeline.flush_interval_secs);
+        let max_batch_size = config.capture_pipeline.max_batch_size;
 
         // Flush batch if needed
         let should_flush = batch.len() >= max_batch_size || last_flush.elapsed() >= flush_interval;
@@ -265,20 +208,18 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let app_name = app_context.app_name.clone();
         let window_title = app_context.window_title.clone();
 
-        if Blocklist::is_internal_app(&app_name, app_context.bundle_id.as_deref()) {
-            tokio::time::sleep(sleep_duration).await;
-            continue;
-        }
-
         let url = macos::get_browser_url(&app_name);
         if let Some(ref u) = url {
             tracing::info!("Frontmost browser URL: {}", u);
         }
 
-        // Check blocklist
-        if Blocklist::is_blocked(&app_name, &config.blocklist)
-            || Blocklist::is_context_blocked(url.as_deref(), Some(&window_title), &config.blocklist)
-        {
+        if should_skip_capture_context(
+            &app_name,
+            app_context.bundle_id.as_deref(),
+            &window_title,
+            url.as_deref(),
+            &config.blocklist,
+        ) {
             tracing::debug!(
                 "Skipping capture for blocklisted context: app='{}' title='{}' url={:?}",
                 app_name,
@@ -327,7 +268,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 continue;
             }
         };
-        let text = text_cleanup::reduce_chrome_noise_for_app(&app_name, &ocr_result.text);
+        let text = extract_ocr_text(&app_name, &ocr_result);
         let ocr_latency = ocr_start.elapsed();
         tracing::info!(
             "OCR result: {} chars in {:?} (confidence {:.2}, blocks {})",
@@ -347,7 +288,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
         let noise_score = text_cleanup::estimate_noise_score(&app_name, &text);
-        if noise_score > 0.97 {
+        if noise_score > config.capture_pipeline.noise_skip_threshold {
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -364,7 +305,12 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             text.hash(&mut h);
             let semantic_hash = h.finish();
             let now_ms = chrono::Utc::now().timestamp_millis();
-            if semantic_window.should_skip(semantic_hash, now_ms) && !force_capture {
+            if semantic_window.should_skip(
+                semantic_hash,
+                now_ms,
+                config.capture_pipeline.semantic_dedup_window_ms,
+            ) && !force_capture
+            {
                 tracing::debug!("Semantic dedup: identical content, skipping pipeline");
                 state.frames_dropped.fetch_add(1, Ordering::Relaxed);
                 tokio::time::sleep(sleep_duration).await;
@@ -540,12 +486,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             let focus_emb_opt = state.focus_task_embedding.read().clone();
             if let Some(ref focus_emb) = focus_emb_opt {
                 let sim = cosine_similarity(&text_embedding, focus_emb);
-                const DRIFT_THRESHOLD: f32 = 0.30;
-                if sim < DRIFT_THRESHOLD {
+                if sim < config.capture_pipeline.focus_drift_similarity_threshold {
                     let prev = state
                         .focus_drift_count
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if prev + 1 >= 3 {
+                    if prev + 1 >= config.capture_pipeline.focus_drift_capture_count {
                         state
                             .focus_drift_count
                             .store(0, std::sync::atomic::Ordering::Relaxed);
@@ -598,7 +543,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             session_key,
             lexical_shadow,
             embedding: text_embedding,
-            image_embedding: image_embedder.embed_image(&image_data),
+            image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
             screenshot_path: None,
             url,
             snippet_embedding,
@@ -1920,5 +1865,37 @@ fn extract_domain(url: &str) -> Option<String> {
         None
     } else {
         Some(host.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn privacy_exclusion_blocks_capture_before_ocr() {
+        let blocklist = vec!["1Password".to_string(), "bank.example.com".to_string()];
+
+        assert!(should_skip_capture_context(
+            "1Password",
+            Some("com.1password.1password"),
+            "Vault",
+            None,
+            &blocklist,
+        ));
+        assert!(should_skip_capture_context(
+            "Chrome",
+            Some("com.google.Chrome"),
+            "Account overview",
+            Some("https://bank.example.com/accounts"),
+            &blocklist,
+        ));
+        assert!(!should_skip_capture_context(
+            "Chrome",
+            Some("com.google.Chrome"),
+            "FNDR architecture notes",
+            Some("https://docs.example.com/fndr"),
+            &blocklist,
+        ));
     }
 }

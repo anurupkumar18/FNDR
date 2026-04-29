@@ -189,8 +189,6 @@ struct AutofillTarget {
     pid: PidT,
     /// AXRole of the captured element, for identity verification at inject time.
     element_role: String,
-    /// Title/label of the captured element — used to detect if focus drifted.
-    element_label: String,
 }
 
 static AUTOFILL_TARGET: Lazy<Mutex<Option<AutofillTarget>>> = Lazy::new(|| Mutex::new(None));
@@ -593,7 +591,6 @@ pub fn capture_focused_context() -> Result<FieldContext, String> {
         *AUTOFILL_TARGET.lock() = pid_opt.map(|p| AutofillTarget {
             pid: p,
             element_role: element_role.clone(),
-            element_label: label.clone(),
         });
 
         // Only run OCR when AX metadata is absent — it costs 3-5 seconds.

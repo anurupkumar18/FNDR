@@ -258,16 +258,6 @@ fn speech_venv_dir() -> Option<PathBuf> {
     dirs::document_dir().map(|root| root.join("FNDR Speech").join("venv"))
 }
 
-fn command_exists(cmd: &str) -> bool {
-    Command::new(cmd)
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
 /// Probe for a usable Python 3 interpreter, preferring versions ≤ 3.13
 /// (whisper-cpp-python has no 3.14+ wheels). Checks Homebrew paths first
 /// because macOS Dock-launched apps don't inherit the user's shell PATH.

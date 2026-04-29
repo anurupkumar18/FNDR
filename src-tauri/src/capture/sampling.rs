@@ -39,17 +39,15 @@ impl AdaptiveSampler {
     /// Returns 0.0 if the system is in deep idle (e.g. > 5 minutes).
     pub fn get_current_fps(&self, config: &Config) -> f64 {
         let idle_secs = macos_idle::get_idle_seconds();
-        let deep_idle_seconds = 300.0; // 5 minutes completely untouched
-
         let active_fps = config.fps_base.max(0.05);
         let idle_fps = config.idle_fps.clamp(0.05, active_fps);
 
-        if idle_secs >= deep_idle_seconds {
+        if idle_secs >= config.capture_pipeline.deep_idle_seconds {
             0.0 // Pause completely
         } else if idle_secs >= config.idle_pause_seconds as f64 {
-            // Smooth transition into idle mode over ~30s to avoid abrupt capture rate jumps.
+            // Smooth transition into idle mode to avoid abrupt capture rate jumps.
             let idle_excess = (idle_secs - config.idle_pause_seconds as f64).max(0.0);
-            let blend = (idle_excess / 30.0).clamp(0.0, 1.0);
+            let blend = (idle_excess / config.capture_pipeline.idle_blend_seconds).clamp(0.0, 1.0);
             active_fps - (active_fps - idle_fps) * blend
         } else {
             active_fps

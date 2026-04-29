@@ -8,16 +8,15 @@ This document reflects the live local-first implementation in this repository.
 - macOS adapter: `src-tauri/src/capture/macos.rs`
 - OCR: `src-tauri/src/ocr/vision.rs`
 - OCR cleanup/noise filtering: `src-tauri/src/capture/text_cleanup.rs`
-- Text embedding sidecar integration: `src-tauri/src/embed/onnx.rs`
-- Image embedding: `src-tauri/src/embed/clip.rs`
+- Text chunking and embedding: `src-tauri/src/embed/chunking.rs`, `src-tauri/src/embed/onnx.rs`
 
 Per memory event, FNDR stores:
 - app/window/session metadata
 - cleaned OCR text
 - snippet summary
 - URL/session key
-- text and image embeddings
-- screenshot path (when available)
+- text embeddings for memory, snippet, and support text
+- screenshot/image fields retained for schema compatibility, but current capture does not persist raw screenshots
 
 Schema: `src-tauri/src/store/schema.rs`
 

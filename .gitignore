@@ -4,6 +4,8 @@ target/
 src-tauri/target/
 dist/
 .venv/
+__pycache__/
+*.pyc
 
 # AI Models (large binaries)
 *.gguf

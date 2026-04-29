@@ -21,6 +21,7 @@ FNDR is a macOS desktop app for building a searchable local memory from screen c
 | [Configuration](#configuration) | Environment variables and runtime settings |
 | [Local Models](#local-models) | Model catalog used by onboarding and settings |
 | [Privacy Controls](#privacy-controls) | Verified capture and data controls present in source |
+| [Known Limitations](#known-limitations) | Current stable-pipeline boundaries |
 | [Development](#development) | Test and verification commands |
 | [Links](#links) | Repository remotes |
 
@@ -28,7 +29,7 @@ FNDR is a macOS desktop app for building a searchable local memory from screen c
 
 ## About
 
-FNDR captures macOS screen context, extracts text and visual signals, stores memory records, and exposes search and reconstruction workflows in the desktop UI. The current codebase includes the following product areas:
+FNDR captures macOS screen context, extracts OCR text, stores compact memory records, and exposes search and reconstruction workflows in the desktop UI. The current codebase includes the following product areas:
 
 | Area | Current implementation |
 | --- | --- |
@@ -51,8 +52,8 @@ fndr/
 ├── src/                 # React + TypeScript frontend
 ├── src-tauri/           # Rust backend for capture, search, storage, meetings, MCP, and Tauri commands
 │   ├── src/
-│   └── sidecar/         # Python sidecars for agent, embedding, transcription, VLM, and TTS workflows
-├── docs/                # Design and intelligence-engine documentation
+│   └── sidecar/         # Python sidecars for agent, transcription, graph, and TTS workflows
+├── docs/                # Architecture, decisions, design, and intelligence-engine documentation
 ├── scripts/             # Local maintenance scripts
 ├── download_embedding_model.sh
 ├── Makefile
@@ -71,6 +72,8 @@ fndr/
 | Runtime config | `src-tauri/src/config.rs` |
 | Privacy controls | `src-tauri/src/privacy/` |
 | Meeting recorder | `src-tauri/src/meeting/`, `src-tauri/sidecar/whisper_gguf_runner.py` |
+
+See `docs/ARCHITECTURE.md` for the capture -> OCR -> chunking -> embedding -> LanceDB -> hybrid search -> MemoryCards -> UI pipeline map.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -170,6 +173,15 @@ The controls below are implemented in source and exposed through Tauri commands 
 | Delete older memories | `delete_older_than` removes memory records older than the requested day count |
 | Delete all data | `delete_all_data` clears memory records, graph data, frames, screenshots, and meetings under the app data store |
 | Retention | `retention_days` defaults to `7`; `screenshot_retention_days` defaults to `30` |
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Known Limitations
+
+- Visual semantic search is planned but not part of the current stable pipeline.
+- Meeting diarization is experimental.
+- Search quality depends on OCR and embedding quality.
+- Old LanceDB schemas may need migration after embedding dimension changes.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

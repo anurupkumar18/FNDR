@@ -1,6 +1,6 @@
 //! Local text embedding backend via native ONNX Runtime.
 
-use super::TextChunker;
+use super::{chunk_screen_text, TextChunker};
 use crate::config::{
     DEFAULT_EMBEDDING_CACHE_CAPACITY, DEFAULT_EMBEDDING_MAX_BATCH, DEFAULT_EMBEDDING_MAX_SEQ_LEN,
     DEFAULT_EMBEDDING_MODEL_FILENAME, DEFAULT_EMBEDDING_MODEL_NAME,
@@ -213,7 +213,7 @@ impl Embedder {
         if app_name.trim().is_empty() && window_title.trim().is_empty() {
             self.chunk_text(text)
         } else {
-            self.chunker.chunk_ocr_text(app_name, window_title, text)
+            chunk_screen_text(&self.chunker, app_name, window_title, text)
         }
     }
 
@@ -867,5 +867,12 @@ mod tests {
             similar > unrelated,
             "expected similar phrases ({similar}) to outrank unrelated ({unrelated})"
         );
+    }
+
+    #[test]
+    fn mock_embedding_vectors_match_schema_dimension() {
+        let vectors = MockEmbedder.embed_batch(&["dimension probe".to_string()]);
+        assert_eq!(vectors.len(), 1);
+        assert_eq!(vectors[0].len(), EMBEDDING_DIM);
     }
 }

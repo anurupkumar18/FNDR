@@ -55,7 +55,6 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
         setError(null);
         try {
             const path = await exportDailySummaryPdf(dateStr, summary);
-            console.log("Daily Summary PDF exported to:", path);
             setExportedPdfPath(path);
             setShowToast(true);
             setTimeout(() => {

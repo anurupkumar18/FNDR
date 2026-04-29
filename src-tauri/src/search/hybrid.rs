@@ -1,42 +1,11 @@
 //! Hybrid search combining semantic and keyword retrieval with query understanding.
 
 use crate::capture::text_cleanup;
-use crate::config::{
-    DEFAULT_SEARCH_CANDIDATE_MULTIPLIER, DEFAULT_SEARCH_KEYWORD_TIMEOUT_MS,
-    DEFAULT_SEARCH_KEYWORD_VARIANT_TIMEOUT_MS, DEFAULT_SEARCH_KEYWORD_WEIGHT,
-    DEFAULT_SEARCH_MAX_RERANK_POOL, DEFAULT_SEARCH_SEMANTIC_TIMEOUT_MS,
-    DEFAULT_SEARCH_SNIPPET_TIMEOUT_MS, DEFAULT_SEARCH_SNIPPET_WEIGHT, DEFAULT_SEARCH_VECTOR_WEIGHT,
-};
+use crate::config::SearchConfig;
 use crate::embed::{Embedder, EmbeddingBackend};
 use crate::store::{SearchResult, Store};
 use std::collections::{HashMap, HashSet};
 use tokio::time::{timeout, Duration, Instant};
-
-/// Legacy RRF constant kept for backwards-compatible helper usage.
-const RRF_K: f32 = 60.0;
-
-const CANDIDATE_MULTIPLIER: usize = DEFAULT_SEARCH_CANDIDATE_MULTIPLIER;
-const MAX_KEYWORD_VARIANTS: usize = 4;
-const MAX_KEYWORD_FALLBACK_VARIANTS: usize = 2;
-const MAX_RERANK_POOL: usize = DEFAULT_SEARCH_MAX_RERANK_POOL;
-const DIVERSITY_PRESERVE_TOP: usize = 3;
-const MAX_SEMANTIC_BRANCH_LIMIT: usize = 64;
-const MAX_KEYWORD_BRANCH_LIMIT: usize = 48;
-const MIN_SNIPPET_QUERY_TERMS: usize = 3;
-const SEMANTIC_WEIGHT: f32 = DEFAULT_SEARCH_VECTOR_WEIGHT;
-const SNIPPET_WEIGHT: f32 = DEFAULT_SEARCH_SNIPPET_WEIGHT;
-const LEXICAL_WEIGHT: f32 = DEFAULT_SEARCH_KEYWORD_WEIGHT;
-/// Ebbinghaus decay floor — very old unaccessed records still surface if highly relevant.
-const DECAY_FLOOR: f32 = 0.15;
-const ABSOLUTE_RELEVANCE_FLOOR: f32 = 0.24;
-const RELATIVE_RELEVANCE_FLOOR: f32 = 0.46;
-const STRONG_RESULT_FLOOR: f32 = 0.70;
-const MEDIUM_RESULT_FLOOR: f32 = 0.60;
-const SEMANTIC_BRANCH_TIMEOUT: Duration = Duration::from_millis(DEFAULT_SEARCH_SEMANTIC_TIMEOUT_MS);
-const SNIPPET_BRANCH_TIMEOUT: Duration = Duration::from_millis(DEFAULT_SEARCH_SNIPPET_TIMEOUT_MS);
-const KEYWORD_TOTAL_TIMEOUT: Duration = Duration::from_millis(DEFAULT_SEARCH_KEYWORD_TIMEOUT_MS);
-const KEYWORD_VARIANT_TIMEOUT: Duration =
-    Duration::from_millis(DEFAULT_SEARCH_KEYWORD_VARIANT_TIMEOUT_MS);
 
 /// Hybrid searcher combining semantic + lexical retrieval and sentence-aware reranking.
 pub struct HybridSearcher;
@@ -154,7 +123,7 @@ impl QueryProfile {
         self.normalized.is_empty()
     }
 
-    fn keyword_variants(&self) -> Vec<String> {
+    fn keyword_variants(&self, max_variants: usize) -> Vec<String> {
         let mut variants = Vec::new();
 
         if let Some(phrase) = self.phrase.as_ref() {
@@ -204,7 +173,7 @@ impl QueryProfile {
             variants.push(self.raw.trim().to_string());
         }
 
-        variants.truncate(MAX_KEYWORD_VARIANTS);
+        variants.truncate(max_variants.max(1));
         variants
     }
 
@@ -254,11 +223,40 @@ impl HybridSearcher {
         time_filter: Option<&str>,
         app_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        let search_config = SearchConfig::default();
+        Self::search_with_config(
+            store,
+            embedder,
+            query,
+            limit,
+            time_filter,
+            app_filter,
+            &search_config,
+        )
+        .await
+    }
+
+    /// Perform hybrid search with explicit runtime tuning.
+    pub async fn search_with_config(
+        store: &Store,
+        embedder: &Embedder,
+        query: &str,
+        limit: usize,
+        time_filter: Option<&str>,
+        app_filter: Option<&str>,
+        search_config: &SearchConfig,
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
         let started = Instant::now();
         let profile = QueryProfile::from_query(query);
         if profile.is_empty() {
             return Ok(Vec::new());
         }
+        let search_config = search_config.clone().normalized();
+        let semantic_branch_timeout = Duration::from_millis(search_config.semantic_timeout_ms);
+        let snippet_branch_timeout = Duration::from_millis(search_config.snippet_timeout_ms);
+        let keyword_total_timeout = Duration::from_millis(search_config.keyword_timeout_ms);
+        let keyword_variant_timeout =
+            Duration::from_millis(search_config.keyword_variant_timeout_ms);
 
         tracing::info!(
             query = %query,
@@ -269,10 +267,10 @@ impl HybridSearcher {
         );
 
         let base_limit = limit.max(1);
-        let semantic_branch_limit =
-            (base_limit * CANDIDATE_MULTIPLIER).min(MAX_SEMANTIC_BRANCH_LIMIT);
+        let semantic_branch_limit = (base_limit * search_config.candidate_multiplier)
+            .min(search_config.max_semantic_branch_limit);
         let keyword_branch_limit = (base_limit * 2)
-            .min(MAX_KEYWORD_BRANCH_LIMIT)
+            .min(search_config.max_keyword_branch_limit)
             .max(base_limit);
         let semantic_enabled = matches!(embedder.backend(), EmbeddingBackend::Real);
         let query_embedding = if semantic_enabled {
@@ -288,14 +286,14 @@ impl HybridSearcher {
             None
         };
 
-        let allow_snippet_branch =
-            query_embedding.is_some() && profile.primary_terms.len() >= MIN_SNIPPET_QUERY_TERMS;
+        let allow_snippet_branch = query_embedding.is_some()
+            && profile.primary_terms.len() >= search_config.min_snippet_query_terms;
         let semantic_fut = async {
             let branch_started = Instant::now();
             let mut timed_out = false;
             let results = if let Some(query_embedding) = query_embedding.as_ref() {
                 match timeout(
-                    SEMANTIC_BRANCH_TIMEOUT,
+                    semantic_branch_timeout,
                     store.vector_search(
                         query_embedding,
                         semantic_branch_limit,
@@ -313,7 +311,7 @@ impl HybridSearcher {
                     Err(_) => {
                         timed_out = true;
                         tracing::warn!(
-                            timeout_ms = SEMANTIC_BRANCH_TIMEOUT.as_millis(),
+                            timeout_ms = semantic_branch_timeout.as_millis(),
                             "hybrid_search:semantic_timeout"
                         );
                         Vec::new()
@@ -330,7 +328,7 @@ impl HybridSearcher {
             let results = if allow_snippet_branch {
                 if let Some(query_embedding) = query_embedding.as_ref() {
                     match timeout(
-                        SNIPPET_BRANCH_TIMEOUT,
+                        snippet_branch_timeout,
                         store.snippet_vector_search(
                             query_embedding,
                             semantic_branch_limit,
@@ -348,7 +346,7 @@ impl HybridSearcher {
                         Err(_) => {
                             timed_out = true;
                             tracing::warn!(
-                                timeout_ms = SNIPPET_BRANCH_TIMEOUT.as_millis(),
+                                timeout_ms = snippet_branch_timeout.as_millis(),
                                 "hybrid_search:snippet_timeout"
                             );
                             Vec::new()
@@ -366,13 +364,16 @@ impl HybridSearcher {
             let branch_started = Instant::now();
             let mut timed_out = false;
             let results = match timeout(
-                KEYWORD_TOTAL_TIMEOUT,
+                keyword_total_timeout,
                 Self::keyword_search_with_budget(
                     store,
                     &profile,
                     keyword_branch_limit,
                     time_filter,
                     app_filter,
+                    &search_config,
+                    keyword_total_timeout,
+                    keyword_variant_timeout,
                 ),
             )
             .await
@@ -385,7 +386,7 @@ impl HybridSearcher {
                 Err(_) => {
                     timed_out = true;
                     tracing::warn!(
-                        timeout_ms = KEYWORD_TOTAL_TIMEOUT.as_millis(),
+                        timeout_ms = keyword_total_timeout.as_millis(),
                         "hybrid_search:keyword_timeout"
                     );
                     Vec::new()
@@ -421,8 +422,9 @@ impl HybridSearcher {
             &semantic_results,
             &snippet_results,
             &keyword_results,
+            &search_config,
         );
-        let reranked = Self::rerank_with_profile(&profile, fused, limit);
+        let reranked = Self::rerank_with_profile(&profile, fused, limit, &search_config);
         tracing::info!(
             results = reranked.len(),
             elapsed_ms = started.elapsed().as_millis(),
@@ -438,8 +440,11 @@ impl HybridSearcher {
         branch_limit: usize,
         time_filter: Option<&str>,
         app_filter: Option<&str>,
+        search_config: &SearchConfig,
+        keyword_total_timeout: Duration,
+        keyword_variant_timeout: Duration,
     ) -> Result<Vec<SearchResult>, String> {
-        let variants = profile.keyword_variants();
+        let variants = profile.keyword_variants(search_config.max_keyword_variants);
         if variants.is_empty() {
             return Ok(Vec::new());
         }
@@ -449,22 +454,22 @@ impl HybridSearcher {
         let mut by_id: HashMap<String, SearchResult> = HashMap::new();
 
         for (variant_idx, variant) in variants.iter().enumerate() {
-            if variant_idx > MAX_KEYWORD_FALLBACK_VARIANTS {
+            if variant_idx > search_config.max_keyword_fallback_variants {
                 break;
             }
             if by_id.len() >= target_hits && variant_idx > 0 {
                 break;
             }
-            if started.elapsed() >= KEYWORD_TOTAL_TIMEOUT {
+            if started.elapsed() >= keyword_total_timeout {
                 tracing::warn!(
-                    timeout_ms = KEYWORD_TOTAL_TIMEOUT.as_millis(),
+                    timeout_ms = keyword_total_timeout.as_millis(),
                     "hybrid_search:keyword_budget_exhausted"
                 );
                 break;
             }
 
             let hits = match timeout(
-                KEYWORD_VARIANT_TIMEOUT,
+                keyword_variant_timeout,
                 store.keyword_search(variant, branch_limit, time_filter, app_filter),
             )
             .await
@@ -483,7 +488,7 @@ impl HybridSearcher {
                     tracing::warn!(
                         variant_idx,
                         variant = %variant,
-                        timeout_ms = KEYWORD_VARIANT_TIMEOUT.as_millis(),
+                        timeout_ms = keyword_variant_timeout.as_millis(),
                         "hybrid_search:keyword_variant_timeout"
                     );
                     continue;
@@ -538,56 +543,9 @@ impl HybridSearcher {
         limit: usize,
     ) -> Vec<SearchResult> {
         let profile = QueryProfile::from_query(query);
-        let fused = Self::hybrid_fusion(&profile, semantic, &[], keyword);
-        Self::rerank_with_profile(&profile, fused, limit)
-    }
-
-    /// Backwards-compatible legacy RRF fusion helper.
-    pub fn rrf_fusion(semantic: &[SearchResult], keyword: &[SearchResult]) -> Vec<SearchResult> {
-        let mut scores: HashMap<String, (f32, SearchResult)> = HashMap::new();
-
-        for (rank, result) in semantic.iter().enumerate() {
-            let rrf_score = 1.0 / (RRF_K + rank as f32 + 1.0);
-            scores
-                .entry(result.id.clone())
-                .and_modify(|(s, existing)| {
-                    *s += rrf_score;
-                    if result.score > existing.score {
-                        *existing = result.clone();
-                    }
-                })
-                .or_insert((rrf_score, result.clone()));
-        }
-
-        for (rank, result) in keyword.iter().enumerate() {
-            let rrf_score = 1.0 / (RRF_K + rank as f32 + 1.0);
-            let keyword_boost = 1.15;
-            scores
-                .entry(result.id.clone())
-                .and_modify(|(s, existing)| {
-                    *s += rrf_score * keyword_boost;
-                    if result.score > existing.score {
-                        *existing = result.clone();
-                    }
-                })
-                .or_insert((rrf_score * keyword_boost, result.clone()));
-        }
-
-        let mut results: Vec<SearchResult> = scores
-            .into_iter()
-            .map(|(_, (score, mut result))| {
-                result.score = score;
-                result
-            })
-            .collect();
-
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        results
+        let config = SearchConfig::default();
+        let fused = Self::hybrid_fusion(&profile, semantic, &[], keyword, &config);
+        Self::rerank_with_profile(&profile, fused, limit, &config)
     }
 
     fn hybrid_fusion(
@@ -595,6 +553,7 @@ impl HybridSearcher {
         semantic: &[SearchResult],
         snippet: &[SearchResult],
         keyword: &[SearchResult],
+        search_config: &SearchConfig,
     ) -> Vec<SearchResult> {
         let mut signals: HashMap<String, FusionSignals> = HashMap::new();
         let mut candidates: HashMap<String, SearchResult> = HashMap::new();
@@ -739,7 +698,7 @@ impl HybridSearcher {
             let lexical_norm = normalize_range(signal.lexical_score, lexical_range);
 
             let (semantic_weight, snippet_weight, lexical_weight) =
-                fusion_weights(profile, has_semantic_signals);
+                fusion_weights(profile, has_semantic_signals, search_config);
             let mut score = semantic_norm * semantic_weight
                 + snippet_norm * snippet_weight
                 + lexical_norm * lexical_weight;
@@ -781,13 +740,14 @@ impl HybridSearcher {
 
     pub fn rerank(query: &str, candidates: Vec<SearchResult>, limit: usize) -> Vec<SearchResult> {
         let profile = QueryProfile::from_query(query);
-        Self::rerank_with_profile(&profile, candidates, limit)
+        Self::rerank_with_profile(&profile, candidates, limit, &SearchConfig::default())
     }
 
     fn rerank_with_profile(
         profile: &QueryProfile,
         mut candidates: Vec<SearchResult>,
         limit: usize,
+        search_config: &SearchConfig,
     ) -> Vec<SearchResult> {
         if candidates.is_empty() {
             return Vec::new();
@@ -799,7 +759,7 @@ impl HybridSearcher {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| b.timestamp.cmp(&a.timestamp))
         });
-        candidates.truncate(MAX_RERANK_POOL.max(limit * 3));
+        candidates.truncate(search_config.max_rerank_pool.max(limit * 3));
 
         let query_lower = profile.normalized.clone();
         let code_query = is_code_query(&profile.raw);
@@ -958,7 +918,7 @@ impl HybridSearcher {
             }
 
             // Ebbinghaus decay: recent + accessed records score higher.
-            score *= candidate.decay_score.max(DECAY_FLOOR);
+            score *= candidate.decay_score.max(search_config.decay_floor);
 
             candidate.score = score;
         }
@@ -1005,8 +965,9 @@ impl HybridSearcher {
 
         diversify_results(
             profile,
-            apply_relevance_gate(profile, deduped),
+            apply_relevance_gate(profile, deduped, search_config),
             limit.min(30),
+            search_config,
         )
     }
 }
@@ -1014,13 +975,14 @@ impl HybridSearcher {
 fn apply_relevance_gate(
     profile: &QueryProfile,
     candidates: Vec<SearchResult>,
+    search_config: &SearchConfig,
 ) -> Vec<SearchResult> {
     if candidates.is_empty() {
         return Vec::new();
     }
 
     let top_score = candidates[0].score;
-    let absolute_floor = ABSOLUTE_RELEVANCE_FLOOR
+    let absolute_floor = search_config.absolute_relevance_floor
         + if profile.primary_terms.len() >= 4 {
             0.04
         } else {
@@ -1032,7 +994,7 @@ fn apply_relevance_gate(
             0.0
         };
     let effective_absolute_floor = absolute_floor.min((top_score * 0.90).max(0.01));
-    let relative_floor = top_score * RELATIVE_RELEVANCE_FLOOR;
+    let relative_floor = top_score * search_config.relative_relevance_floor;
     let min_coverage = if profile.primary_terms.len() >= 4 {
         0.30
     } else if profile.primary_terms.len() >= 3 {
@@ -1496,7 +1458,11 @@ fn mentions_query_entities(profile: &QueryProfile, text: &str) -> bool {
         .any(|term| token_set_matches_term(&token_set, term))
 }
 
-fn fusion_weights(profile: &QueryProfile, has_semantic_signals: bool) -> (f32, f32, f32) {
+fn fusion_weights(
+    profile: &QueryProfile,
+    has_semantic_signals: bool,
+    search_config: &SearchConfig,
+) -> (f32, f32, f32) {
     if !has_semantic_signals {
         return (0.0, 0.0, 1.0);
     }
@@ -1505,7 +1471,11 @@ fn fusion_weights(profile: &QueryProfile, has_semantic_signals: bool) -> (f32, f
         // For short noun-like queries, lexical evidence should dominate.
         (0.24, 0.14, 0.62)
     } else {
-        (SEMANTIC_WEIGHT, SNIPPET_WEIGHT, LEXICAL_WEIGHT)
+        (
+            search_config.vector_weight,
+            search_config.snippet_weight,
+            search_config.keyword_weight,
+        )
     }
 }
 
@@ -1536,6 +1506,7 @@ fn diversify_results(
     profile: &QueryProfile,
     mut candidates: Vec<SearchResult>,
     limit: usize,
+    search_config: &SearchConfig,
 ) -> Vec<SearchResult> {
     if candidates.is_empty() || limit == 0 {
         return Vec::new();
@@ -1553,9 +1524,12 @@ fn diversify_results(
         .first()
         .map(|candidate| candidate.score)
         .unwrap_or(0.0);
-    let strong_floor = STRONG_RESULT_FLOOR.min(top_score);
-    let medium_floor = MEDIUM_RESULT_FLOOR.min(top_score);
-    let preserve = DIVERSITY_PRESERVE_TOP.min(desired).min(candidates.len());
+    let strong_floor = search_config.strong_result_floor.min(top_score);
+    let medium_floor = search_config.medium_result_floor.min(top_score);
+    let preserve = search_config
+        .diversity_preserve_top
+        .min(desired)
+        .min(candidates.len());
 
     let mut selected = Vec::with_capacity(desired);
     let mut app_counts: HashMap<String, usize> = HashMap::new();
@@ -1932,9 +1906,80 @@ mod tests {
     #[test]
     fn keyword_variants_include_adjacent_subqueries() {
         let profile = QueryProfile::from_query("knowledge graph display options");
-        let variants = profile.keyword_variants();
+        let variants = profile.keyword_variants(SearchConfig::default().max_keyword_variants);
         assert!(variants.iter().any(|variant| variant == "knowledge graph"));
         assert!(variants.iter().any(|variant| variant == "graph display"));
+    }
+
+    #[test]
+    fn hybrid_fusion_merges_vector_and_keyword_hits() {
+        let semantic = vec![
+            sr(
+                "semantic-only",
+                "Vector note",
+                "Semantic memory about the hybrid search ranking plan",
+                0.82,
+            ),
+            sr(
+                "shared",
+                "Hybrid note",
+                "Hybrid search ranking with keyword and vector evidence",
+                0.74,
+            ),
+        ];
+        let keyword = vec![
+            sr(
+                "keyword-only",
+                "Keyword note",
+                "Keyword exact match for hybrid search ranking",
+                0.78,
+            ),
+            sr(
+                "shared",
+                "Hybrid note",
+                "Hybrid search ranking with keyword and vector evidence",
+                0.69,
+            ),
+        ];
+
+        let profile = QueryProfile::from_query("hybrid search ranking");
+        let fused = HybridSearcher::hybrid_fusion(
+            &profile,
+            &semantic,
+            &[],
+            &keyword,
+            &SearchConfig::default(),
+        );
+        let ids = fused
+            .iter()
+            .map(|result| result.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(ids.contains(&"semantic-only"));
+        assert!(ids.contains(&"keyword-only"));
+        assert_eq!(ids.iter().filter(|id| **id == "shared").count(), 1);
+    }
+
+    #[test]
+    fn rerank_respects_score_order_for_equivalent_hits() {
+        let lower = sr(
+            "lower",
+            "Ranking note",
+            "Hybrid ranking notes mention vector keyword merge",
+            0.62,
+        );
+        let higher = sr(
+            "higher",
+            "Ranking note",
+            "Hybrid ranking notes mention vector keyword merge",
+            0.78,
+        );
+
+        let ranked = HybridSearcher::rerank("hybrid ranking", vec![lower, higher], 2);
+        assert_eq!(
+            ranked.first().map(|result| result.id.as_str()),
+            Some("higher")
+        );
     }
 
     #[test]

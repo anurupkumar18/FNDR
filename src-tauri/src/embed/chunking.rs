@@ -3,6 +3,7 @@
 use crate::capture::text_cleanup;
 use crate::config::{
     DEFAULT_CHARS_PER_TOKEN, DEFAULT_CHUNK_MAX_TOKENS, DEFAULT_CHUNK_MIN_TOKENS,
+    DEFAULT_CHUNK_OCR_TARGET_MAX_CHARS, DEFAULT_CHUNK_OCR_TARGET_MIN_CHARS,
     DEFAULT_CHUNK_OVERLAP_TOKENS,
 };
 
@@ -11,8 +12,8 @@ const CHUNK_OVERLAP: usize = DEFAULT_CHUNK_OVERLAP_TOKENS;
 const MIN_CHUNK_TOKENS: usize = DEFAULT_CHUNK_MIN_TOKENS;
 const CHARS_PER_TOKEN: usize = DEFAULT_CHARS_PER_TOKEN;
 
-const OCR_TARGET_MIN: usize = 300;
-const OCR_TARGET_MAX: usize = 900;
+const OCR_TARGET_MIN: usize = DEFAULT_CHUNK_OCR_TARGET_MIN_CHARS;
+const OCR_TARGET_MAX: usize = DEFAULT_CHUNK_OCR_TARGET_MAX_CHARS;
 
 /// Text chunker for splitting long texts.
 pub struct TextChunker {
@@ -53,6 +54,11 @@ impl TextChunker {
 
     /// OCR-aware chunking that preserves semantic boundaries and drops low-signal lines.
     pub fn chunk_ocr_text(&self, app_name: &str, window_title: &str, text: &str) -> Vec<String> {
+        chunk_screen_text(self, app_name, window_title, text)
+    }
+
+    /// Product-named wrapper for the capture -> OCR -> embedding pipeline.
+    pub fn chunk_screen_text(&self, app_name: &str, window_title: &str, text: &str) -> Vec<String> {
         self.chunk_ocr_text_with_metadata(app_name, window_title, text)
             .into_iter()
             .map(|chunk| chunk.text)
@@ -73,9 +79,14 @@ impl TextChunker {
             lines.push((title, LineKind::Title));
         }
 
+        let mut seen_lines = std::collections::HashSet::new();
         for raw_line in cleaned_text.lines() {
             let line = normalize_line(raw_line);
             if line.is_empty() || self.is_low_signal_line(&line) {
+                continue;
+            }
+            let dedup_key = line.to_lowercase();
+            if !seen_lines.insert(dedup_key) {
                 continue;
             }
             lines.push((line.clone(), classify_line(&line)));
@@ -244,6 +255,10 @@ impl TextChunker {
     }
 
     fn chunk_by_chars(&self, text: &str) -> Vec<String> {
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+
         if text.len() <= self.max_chars {
             return vec![text.to_string()];
         }
@@ -284,6 +299,19 @@ impl TextChunker {
 
         chunks
     }
+}
+
+pub fn chunk_screen_text(
+    chunker: &TextChunker,
+    app_name: &str,
+    window_title: &str,
+    text: &str,
+) -> Vec<String> {
+    chunker
+        .chunk_ocr_text_with_metadata(app_name, window_title, text)
+        .into_iter()
+        .map(|chunk| chunk.text)
+        .collect()
 }
 
 fn line_kind_label(kind: LineKind) -> &'static str {
@@ -433,6 +461,25 @@ mod tests {
         let chunks = chunker.chunk(text);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0], "Hello world");
+    }
+
+    #[test]
+    fn test_empty_ocr_text_produces_no_chunks() {
+        let chunker = TextChunker::new();
+        assert!(chunker
+            .chunk_ocr_text("Chrome", "New Tab", "   \n\t")
+            .is_empty());
+    }
+
+    #[test]
+    fn test_ocr_chunking_removes_repeated_garbage_lines() {
+        let chunker = TextChunker::new();
+        let repeated = "syncing status syncing status\n".repeat(12);
+        let text = format!("{repeated}\nPlanning launch checklist for FNDR search pipeline");
+        let chunks = chunker.chunk_ocr_text("Chrome", "Launch Plan", &text);
+        let merged = chunks.join("\n").to_lowercase();
+        assert_eq!(merged.matches("syncing status syncing status").count(), 1);
+        assert!(merged.contains("planning launch checklist"));
     }
 
     #[test]

@@ -33,9 +33,7 @@ use uuid::Uuid;
 const MEETINGS_DIR: &str = "meetings";
 const SEGMENT_SECONDS: i64 = 20;
 const STATUS_EVENT: &str = "meeting://status";
-const SEGMENT_EVENT: &str = "meeting://segment";
 const FORCED_MODEL: &str = "whisper-large-v3-turbo-gguf";
-const CONSENT_LOOKBACK_SEGMENTS: usize = 120;
 static MEETING_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
 
 fn shared_meeting_embedder() -> Option<&'static Embedder> {

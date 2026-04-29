@@ -540,41 +540,6 @@ impl Store {
         Ok(dedup_search_results(results, limit))
     }
 
-    /// ANN search over the `support_embedding` column (representative chunk centroid tower).
-    pub async fn support_vector_search(
-        &self,
-        query_embedding: &[f32],
-        limit: usize,
-        time_filter: Option<&str>,
-        app_filter: Option<&str>,
-    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
-        let filter = build_filter(time_filter, app_filter);
-        let query_vec: Vec<f32> = query_embedding.to_vec();
-        let base_limit = limit.max(1);
-        let retrieval_limit = if base_limit >= 300 {
-            base_limit
-        } else {
-            base_limit.saturating_mul(VECTOR_QUERY_MULTIPLIER).min(300)
-        };
-
-        let mut vq = self
-            .table
-            .vector_search(query_vec)?
-            .column("support_embedding")
-            .limit(retrieval_limit);
-
-        if let Some(f) = filter {
-            vq = vq.only_if(f);
-        }
-
-        let batches: Vec<RecordBatch> = vq.execute().await?.try_collect().await?;
-        let mut results = Vec::new();
-        for batch in &batches {
-            results.extend(batch_to_search_results(batch));
-        }
-        Ok(dedup_search_results(results, limit))
-    }
-
     async fn insert_memory_batch(
         &self,
         records: &[MemoryRecord],
@@ -587,26 +552,6 @@ impl Store {
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
         self.table
             .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
-            .execute()
-            .await?;
-        Ok(())
-    }
-
-    /// Asynchronously update snippet + summary_source for a single record (post-LLM).
-    pub async fn update_snippet(
-        &self,
-        id: &str,
-        snippet: &str,
-        source: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let escaped_id = sql_escape(id);
-        let escaped_snippet = sql_escape(snippet);
-        let escaped_source = sql_escape(source);
-        self.table
-            .update()
-            .only_if(format!("id = '{escaped_id}'"))
-            .column("snippet", format!("'{escaped_snippet}'"))
-            .column("summary_source", format!("'{escaped_source}'"))
             .execute()
             .await?;
         Ok(())
@@ -1223,18 +1168,6 @@ impl Store {
             .await?;
         let after = self.table.count_rows(None).await?;
 
-        Ok(before.saturating_sub(after))
-    }
-
-    /// Delete rows whose id starts with `prefix` (SQL LIKE `prefix%`).
-    pub async fn delete_id_prefix(
-        &self,
-        prefix: &str,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
-        let before = self.table.count_rows(None).await?;
-        let p = sql_escape(prefix);
-        self.table.delete(&format!("id LIKE '{p}%'")).await?;
-        let after = self.table.count_rows(None).await?;
         Ok(before.saturating_sub(after))
     }
 
@@ -3469,5 +3402,39 @@ mod tests {
         assert!(normalized.text.is_empty());
         assert!(normalized.screenshot_path.is_none());
         assert_eq!(normalized.clean_text, source.snippet);
+    }
+
+    #[test]
+    fn normalize_record_for_index_repairs_vector_dimensions() {
+        let mut source = record(
+            Some("https://example.com/research"),
+            "Research notes",
+            "Summarized the research notes for memory card storage.",
+        );
+        source.embedding = vec![0.25; 384];
+        source.snippet_embedding = Vec::new();
+        source.support_embedding = vec![0.5; DEFAULT_TEXT_EMBEDDING_DIM + 8];
+        source.image_embedding = vec![0.0; 12];
+
+        let normalized = normalize_record_for_index(&source);
+
+        assert_eq!(normalized.embedding.len(), DEFAULT_TEXT_EMBEDDING_DIM);
+        assert_eq!(
+            normalized.snippet_embedding.len(),
+            DEFAULT_TEXT_EMBEDDING_DIM
+        );
+        assert_eq!(
+            normalized.support_embedding.len(),
+            DEFAULT_TEXT_EMBEDDING_DIM
+        );
+        assert_eq!(
+            normalized.image_embedding.len(),
+            DEFAULT_IMAGE_EMBEDDING_DIM
+        );
+        assert_eq!(normalized.embedding[0], 0.25);
+        assert!(normalized
+            .snippet_embedding
+            .iter()
+            .all(|value| *value == 0.0));
     }
 }

@@ -65,10 +65,10 @@ arrow-array = "57"
 arrow-schema = "57"
 futures = "0.3"
 
-# ONNX Runtime for native in-process text + image embeddings
+# ONNX Runtime for native in-process text embeddings
 ort = { version = "2.0.0-rc.12", features = ["download-binaries", "ndarray"] }
 
-# HuggingFace tokenizers for all-MiniLM-L6-v2
+# HuggingFace tokenizers for the local text embedding model
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 
 # N-dimensional arrays for tensor operations in embedder

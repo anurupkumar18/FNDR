@@ -73,11 +73,8 @@ pub struct SpeechSynthesisResult {
 }
 
 static SHARED_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
-const GROUP_LIMIT: usize = 6;
-const LLM_GROUP_LIMIT: usize = 0;
 
 const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
-const LLM_SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(1500);
 const MEMORY_GRAPH_LIMIT: usize = 1_500;
 const TASK_LINK_SCAN_LIMIT: usize = 260;
 const TASK_MEETING_LOOKBACK_DAYS: i64 = 14;
@@ -137,14 +134,20 @@ async fn run_search_query(
         return Ok(Vec::new());
     }
 
+    let search_config = {
+        let config = state.config.read();
+        config.search.clone()
+    };
+
     let results = match shared_embedder() {
-        Ok(embedder) => match HybridSearcher::search(
+        Ok(embedder) => match HybridSearcher::search_with_config(
             &state.store,
             embedder,
             query,
             limit,
             time_filter,
             app_filter,
+            &search_config,
         )
         .await
         .map_err(|err| err.to_string())
@@ -450,11 +453,15 @@ pub async fn search_memory_cards(
         return Ok(Vec::new());
     }
 
+    let memory_card_config = {
+        let config = state.config.read();
+        config.memory_cards.clone()
+    };
     let fallback_cards = |raw_results: &[SearchResult]| {
         MemoryCardSynthesizer::deterministic_from_results(
             &query,
             raw_results,
-            limit.min(GROUP_LIMIT),
+            limit.min(memory_card_config.max_groups),
         )
     };
 
@@ -486,9 +493,9 @@ pub async fn search_memory_cards(
         inference.as_deref(),
         &query,
         &raw_results,
-        GROUP_LIMIT,
-        LLM_GROUP_LIMIT,
-        LLM_SYNTHESIS_TIMEOUT,
+        memory_card_config.max_groups,
+        memory_card_config.max_llm_groups,
+        Duration::from_millis(memory_card_config.llm_timeout_ms),
     );
     let mut cards = match timeout(SYNTHESIS_TIMEOUT, synthesis_future).await {
         Ok(generated) => {
@@ -611,17 +618,13 @@ pub async fn summarize_search(
 
 #[derive(Debug, Clone)]
 struct SummaryEvidence {
-    id: String,
     score: f32,
     text: String,
 }
 
 fn parse_summary_evidence(snippets: &[String]) -> Vec<SummaryEvidence> {
     let mut evidence = Vec::new();
-    for (index, raw) in snippets.iter().enumerate() {
-        let id = extract_bracket_value(raw, "id")
-            .or_else(|| extract_bracket_value(raw, "memory"))
-            .unwrap_or_else(|| format!("result-{}", index + 1));
+    for raw in snippets {
         let score = extract_bracket_value(raw, "score")
             .and_then(|value| value.parse::<f32>().ok())
             .unwrap_or(0.5);
@@ -629,7 +632,7 @@ fn parse_summary_evidence(snippets: &[String]) -> Vec<SummaryEvidence> {
         if text.is_empty() {
             continue;
         }
-        evidence.push(SummaryEvidence { id, score, text });
+        evidence.push(SummaryEvidence { score, text });
     }
     evidence
 }
@@ -6968,7 +6971,10 @@ pub async fn resolve_autofill(
     context: crate::accessibility::FieldContext,
     query_override: Option<String>,
 ) -> Result<AutofillResolution, String> {
-    let settings = state.inner().config.read().autofill.clone().normalized();
+    let settings = {
+        let config = state.inner().config.read();
+        config.autofill.clone().normalized()
+    };
     let (query, query_source) = build_autofill_query(&context, query_override.as_deref());
 
     let mut resolution = AutofillResolution {
