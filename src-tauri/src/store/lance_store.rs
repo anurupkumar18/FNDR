@@ -1244,52 +1244,6 @@ impl Store {
         Ok(None)
     }
 
-    /// Return recently captured URLs (newest first, deduplicated).
-    pub async fn get_recent_urls(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let batches: Vec<RecordBatch> = self
-            .table
-            .query()
-            .only_if("url IS NOT NULL")
-            .execute()
-            .await?
-            .try_collect()
-            .await?;
-
-        let mut pairs: Vec<(i64, String)> = Vec::new();
-        for batch in &batches {
-            let ts_col = batch
-                .column_by_name("timestamp")
-                .and_then(|c| c.as_any().downcast_ref::<Int64Array>().cloned());
-            let url_col = batch
-                .column_by_name("url")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
-            if let (Some(ts), Some(url)) = (ts_col, url_col) {
-                for i in 0..batch.num_rows() {
-                    if !url.is_null(i) {
-                        pairs.push((ts.value(i), url.value(i).to_string()));
-                    }
-                }
-            }
-        }
-
-        pairs.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
-
-        let mut unique = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for (_, url) in pairs {
-            if seen.insert(url.clone()) {
-                unique.push(url);
-            }
-            if unique.len() >= limit {
-                break;
-            }
-        }
-        Ok(unique)
-    }
-
     /// List newest memories as raw search-style rows (optionally filtered by app).
     pub async fn list_recent_results(
         &self,

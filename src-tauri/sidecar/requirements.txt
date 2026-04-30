@@ -1,6 +1,4 @@
-graphiti-core[falkordb,anthropic]
 anthropic>=0.40.0
 faster-whisper>=1.0.0
 nemo_toolkit[asr]>=2.0.0
 openai-whisper
-sentence-transformers>=3.0.0

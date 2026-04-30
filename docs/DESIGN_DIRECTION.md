@@ -32,8 +32,8 @@ FNDR is a **local-first, privacy-focused memory assistant** for macOS. It contin
 │  └──────────┘ └──────────┘ └─────────────┘ │
 ├─────────────────────────────────────────────┤
 │          Python Sidecars (Optional)         │
-│  agent_runner.py │ graphiti_service.py      │
-│  cua_runner.py                              │
+│  whisper_gguf_runner.py │ orpheus_tts.py    │
+│  agent_runner.py                            │
 └─────────────────────────────────────────────┘
 ```
 
@@ -45,7 +45,7 @@ FNDR is a **local-first, privacy-focused memory assistant** for macOS. It contin
 | LLM runtime | llama-cpp-2 | Best macOS Metal performance for local inference |
 | LLM model | Llama 3.2 1B Q4 | Balance of quality and speed on consumer hardware |
 | VLM model | SmolVLM-500M/256M | Tiny footprint for on-device screen understanding |
-| Search | Hybrid (semantic + keyword + RRF) | Better recall than either approach alone |
+| Search | Hybrid semantic + keyword ranking | Better recall than either approach alone |
 | Graph storage | LanceDB + local graph tables | Fast local retrieval with structured node/edge persistence |
 | Agent SDK | Anthropic Messages API | Standard tool-use patterns, streaming support |
 | Frontend | React + Vanilla CSS | Minimal dependencies, full control over design |
@@ -89,7 +89,7 @@ Screen Capture → Deduplication → OCR → VLM Analysis → LLM Summary
 
 ---
 
-## Graphiti Integration Strategy
+## Graph Integration Strategy
 
 ### Current State (v1)
 - Local Rust `GraphStore` persisted through LanceDB-backed tables
@@ -97,24 +97,22 @@ Screen Capture → Deduplication → OCR → VLM Analysis → LLM Summary
 - Edges: PartOfSession, ReferenceForTask, OccurredAt
 
 ### Future State (v2 — Optional)
-- Python sidecar running `graphiti-core` with FalkorDB
 - Richer entity extraction and temporal graph analytics
 - Temporal knowledge decay and community detection
-- Graph-enhanced search (traverse relationships for better context)
+- Graph-enhanced search that traverses relationships for better context
 
 ### Migration Path
 1. Local LanceDB graph remains the primary, always-available store
-2. Graphiti sidecar is optional—starts only if its runtime is present
-3. Both systems can coexist; sidecar enrichments remain additive
+2. Any future graph enrichment runtime must remain optional and additive.
 
 ---
 
 ## Agent System
 
 ### Architecture
-- **agent_runner.py**: Uses Anthropic Messages API with tool-use loop
-- **cua_runner.py**: Computer-use agent for GUI automation
-- **Communication**: JSON over stdin/stdout from Tauri subprocess
+- **Hermes runtime**: Primary native agent path surfaced in the FNDR Agent panel.
+- **agent_runner.py**: Legacy Anthropic subprocess fallback for local tool-use experiments.
+- **Communication**: JSON over stdin/stdout from Tauri subprocess where the fallback is used.
 
 ### Available Tools
 | Tool | Purpose | Risk |

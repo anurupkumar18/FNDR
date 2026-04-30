@@ -613,40 +613,6 @@ impl InferenceEngine {
         self.complete(&prompt, 150).await
     }
 
-    /// Synthesize multiple search results into a coherent summary
-    pub async fn summarize_search_results(&self, query: &str, results: &[String]) -> String {
-        if results.is_empty() {
-            return String::new();
-        }
-
-        let combined_text = results.join("\n---\n");
-        let prompt = match self.build_prompt(
-            "You help users find what they remember by summarizing search results.\n\
-            RULES:\n\
-            - Use ONLY facts explicitly present in SNIPPETS.\n\
-            - Do NOT list snippets; merge them into a single synthesized claim.\n\
-            - If evidence is weak, start with 'Low confidence:'.\n\
-            - Respond ONLY with one paragraph summary.",
-            &format!(
-                "SEARCH QUERY: \"{}\"\n\nSNIPPETS:\n\"\"\"\n{}\n\"\"\"\n\nTASK: Combine these snippets into one paragraph that answers the query. Keep it under 50 words.",
-                query,
-                combined_text.chars().take(800).collect::<String>()
-            ),
-        ) {
-            Ok(prompt) => prompt,
-            Err(err) => {
-                tracing::error!("Prompt build failed: {}", err);
-                return String::new();
-            }
-        };
-
-        tracing::debug!(
-            "Summarizing search results for query with {} snippets",
-            results.len()
-        );
-        self.complete(&prompt, 100).await
-    }
-
     /// Generate a structured memory card draft from grouped snippets.
     pub async fn synthesize_memory_card(
         &self,
