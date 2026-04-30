@@ -6,6 +6,7 @@ import {
     refreshAiModels,
 } from "../api/onboarding";
 import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
+import { formatBytes } from "../lib/format";
 import "./ModelDownloadBanner.css";
 
 export function ModelDownloadBanner() {
@@ -106,10 +107,6 @@ export function ModelDownloadBanner() {
         }
     }
 
-    function fmtBytes(b: number) {
-        return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
-    }
-
     const activeDownloadStatus =
         pendingModelId && downloadStatus.model_id === pendingModelId ? downloadStatus : null;
     const isDownloading =
@@ -138,7 +135,7 @@ export function ModelDownloadBanner() {
                     <div className="banner-progress-details">
                         <span>Downloading {activeModelName}...</span>
                         <span>
-                            {fmtBytes(activeDownloadStatus.bytes_downloaded)} / {fmtBytes(activeDownloadStatus.total_bytes)} ({activeDownloadStatus.percent.toFixed(0)}%)
+                            {formatBytes(activeDownloadStatus.bytes_downloaded)} / {formatBytes(activeDownloadStatus.total_bytes)} ({activeDownloadStatus.percent.toFixed(0)}%)
                         </span>
                     </div>
                     <div className="banner-progress-bar">

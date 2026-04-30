@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { setFocusTask, getFocusStatus, FocusStatus } from "../api/tauri";
+import { usePolling } from "../hooks/usePolling";
 import "./FocusModePanel.css";
 
 interface FocusModePanelProps {
@@ -14,33 +15,23 @@ export function FocusModePanel({ isVisible, onClose }: FocusModePanelProps) {
     const [error, setError] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    // Load current status when panel opens
-    useEffect(() => {
-        if (!isVisible) return;
-        let mounted = true;
-
-        const load = async () => {
-            try {
-                const s = await getFocusStatus();
-                if (mounted) {
-                    setStatus(s);
-                    setDraft(s.task ?? "");
-                }
-            } catch {
-                // non-fatal
+    const loadFocusStatus = useCallback(async (isMounted: () => boolean) => {
+        try {
+            const s = await getFocusStatus();
+            if (isMounted()) {
+                setStatus(s);
+                setDraft(s.task ?? "");
             }
-        };
+        } catch {
+            // non-fatal
+        }
+    }, []);
+    usePolling(loadFocusStatus, 5_000, isVisible);
 
-        void load();
-        const interval = window.setInterval(() => void load(), 5_000);
-
-        // Auto-focus input
-        setTimeout(() => inputRef.current?.focus(), 80);
-
-        return () => {
-            mounted = false;
-            window.clearInterval(interval);
-        };
+    useEffect(() => {
+        if (isVisible) {
+            window.setTimeout(() => inputRef.current?.focus(), 80);
+        }
     }, [isVisible]);
 
     if (!isVisible) return null;

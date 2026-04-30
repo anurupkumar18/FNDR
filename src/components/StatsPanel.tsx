@@ -1,5 +1,6 @@
-import { CSSProperties, useEffect, useMemo, useState } from "react";
+import { CSSProperties, useCallback, useMemo, useRef, useState } from "react";
 import { Stats, getStats } from "../api/tauri";
+import { usePolling } from "../hooks/usePolling";
 import "./StatsPanel.css";
 
 interface StatsPanelProps {
@@ -162,35 +163,34 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
     const [stats, setStats] = useState<Stats | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const hasLoadedStatsRef = useRef(false);
 
     const [viewMode, setViewMode] = useState<"stacked" | "grid">("grid");
     const [deckOrder, setDeckOrder] = useState<CardId[]>(ALL_CARDS);
 
-    const loadStats = async (showLoading = false) => {
+    const loadStats = useCallback(async (isMounted: () => boolean) => {
+        const showLoading = !hasLoadedStatsRef.current;
         if (showLoading) {
             setLoading(true);
         }
         setError(null);
         try {
             const snapshot = await getStats();
-            setStats(snapshot);
+            if (isMounted()) {
+                hasLoadedStatsRef.current = true;
+                setStats(snapshot);
+            }
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Unable to load stats.");
+            if (isMounted()) {
+                setError(err instanceof Error ? err.message : "Unable to load stats.");
+            }
         } finally {
-            setLoading(false);
+            if (isMounted()) {
+                setLoading(false);
+            }
         }
-    };
-
-    useEffect(() => {
-        if (!isVisible) {
-            return;
-        }
-        void loadStats(true);
-        const interval = window.setInterval(() => {
-            void loadStats(false);
-        }, 15_000);
-        return () => window.clearInterval(interval);
-    }, [isVisible]);
+    }, []);
+    usePolling(loadStats, 15_000, isVisible);
 
     const hourlySeries = useMemo(
         () => normalizeHourlyDistribution(stats?.hourly_distribution ?? []),

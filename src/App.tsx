@@ -22,6 +22,8 @@ import { FocusModePanel } from "./components/FocusModePanel";
 import "./components/FocusModePanel.css";
 
 import { useSearch } from "./hooks/useSearch";
+import { usePolling } from "./hooks/usePolling";
+import { createClientId } from "./lib/id";
 import {
     CaptureStatus,
     type FndrNotificationPayload,
@@ -168,10 +170,7 @@ interface AppToast {
 }
 
 function nextToastId(): string {
-    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-        return crypto.randomUUID();
-    }
-    return `fndr-toast-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return createClientId("fndr-toast");
 }
 
 function App() {
@@ -265,40 +264,31 @@ function App() {
         });
     }, [displayName]);
 
-    useEffect(() => {
-        const loadAppNames = async () => {
-            try {
-                setAppNames(await getAppNames());
-            } catch {
+    const loadAppNames = useCallback(async (isMounted: () => boolean) => {
+        try {
+            const names = await getAppNames();
+            if (isMounted()) {
+                setAppNames(names);
+            }
+        } catch {
+            if (isMounted()) {
                 setAppNames([]);
             }
-        };
-
-        void loadAppNames();
-        const id = window.setInterval(() => {
-            void loadAppNames();
-        }, 30_000);
-
-        return () => window.clearInterval(id);
+        }
     }, []);
+    usePolling(loadAppNames, 30_000);
 
-    useEffect(() => {
-        const fetchStatus = async () => {
-            try {
-                const nextStatus = await getStatus();
+    const fetchStatus = useCallback(async (isMounted: () => boolean) => {
+        try {
+            const nextStatus = await getStatus();
+            if (isMounted()) {
                 setStatus(nextStatus);
-            } catch (e) {
-                console.error("Failed to get status:", e);
             }
-        };
-
-        void fetchStatus();
-        const interval = window.setInterval(() => {
-            void fetchStatus();
-        }, 2000);
-
-        return () => window.clearInterval(interval);
+        } catch (e) {
+            console.error("Failed to get status:", e);
+        }
     }, []);
+    usePolling(fetchStatus, 2000);
 
     useEffect(() => {
         let mounted = true;
@@ -336,12 +326,8 @@ function App() {
         };
     }, []);
 
-    useEffect(() => {
-        const timer = window.setInterval(() => {
-            setNow(new Date());
-        }, 60_000);
-        return () => window.clearInterval(timer);
-    }, []);
+    const refreshNow = useCallback(() => setNow(new Date()), []);
+    usePolling(refreshNow, 60_000);
 
     useEffect(() => {
         const handleProfileUpdated = (event: Event) => {

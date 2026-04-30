@@ -42,6 +42,8 @@ import {
     saveOnboardingState,
 } from "../api/onboarding";
 import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
+import { usePolling } from "../hooks/usePolling";
+import { formatBytes } from "../lib/format";
 import "./ControlPanel.css";
 import { PrivacyPanel } from "./PrivacyPanel";
 
@@ -160,33 +162,17 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         }
     }, [isOpen, loadData]);
 
-    useEffect(() => {
-        if (!isOpen || activeTab !== "settings") {
-            return;
-        }
-
-        let mounted = true;
-        const refreshStorage = async () => {
-            try {
-                const health = await getStorageHealth();
-                if (mounted) {
-                    setStorageHealth(health);
-                }
-            } catch {
-                // Storage health is informational; keep the previous value on transient failures.
+    const refreshStorage = useCallback(async (isMounted: () => boolean) => {
+        try {
+            const health = await getStorageHealth();
+            if (isMounted()) {
+                setStorageHealth(health);
             }
-        };
-
-        void refreshStorage();
-        const timer = window.setInterval(() => {
-            void refreshStorage();
-        }, 15000);
-
-        return () => {
-            mounted = false;
-            window.clearInterval(timer);
-        };
-    }, [isOpen, activeTab]);
+        } catch {
+            // Storage health is informational; keep the previous value on transient failures.
+        }
+    }, []);
+    usePolling(refreshStorage, 15000, isOpen && activeTab === "settings");
 
     const loadModels = useCallback(async () => {
         setModelsLoading(true);
@@ -200,19 +186,17 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         }
     }, []);
 
-    useEffect(() => {
-        const checkAlerts = async () => {
-            try {
-                const alerts = await getPrivacyAlerts();
+    const checkAlerts = useCallback(async (isMounted: () => boolean) => {
+        try {
+            const alerts = await getPrivacyAlerts();
+            if (isMounted()) {
                 setPrivacyAlertCount(alerts.length);
-            } catch (err) {
-                console.error("Failed fetching alerts:", err);
             }
-        };
-        checkAlerts();
-        const interval = setInterval(checkAlerts, 3000);
-        return () => clearInterval(interval);
+        } catch (err) {
+            console.error("Failed fetching alerts:", err);
+        }
     }, []);
+    usePolling(checkAlerts, 3000);
 
     useEffect(() => {
         const previous = prevPrivacyAlertCountRef.current;
@@ -475,61 +459,29 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         }
     };
 
-    useEffect(() => {
-        if (!repairBusy) {
-            return;
-        }
-
-        let mounted = true;
-        const pollProgress = async () => {
-            try {
-                const progress = await getMemoryRepairProgress();
-                if (mounted) {
-                    setRepairProgress(progress);
-                }
-            } catch {
-                // Ignore transient polling failures while repair is running.
+    const pollRepairProgress = useCallback(async (isMounted: () => boolean) => {
+        try {
+            const progress = await getMemoryRepairProgress();
+            if (isMounted()) {
+                setRepairProgress(progress);
             }
-        };
-
-        void pollProgress();
-        const timer = window.setInterval(() => {
-            void pollProgress();
-        }, 1000);
-
-        return () => {
-            mounted = false;
-            window.clearInterval(timer);
-        };
-    }, [repairBusy]);
-
-    useEffect(() => {
-        if (!reclaimBusy) {
-            return;
+        } catch {
+            // Ignore transient polling failures while repair is running.
         }
+    }, []);
+    usePolling(pollRepairProgress, 1000, repairBusy);
 
-        let mounted = true;
-        const pollProgress = async () => {
-            try {
-                const progress = await getStorageReclaimProgress();
-                if (mounted) {
-                    setReclaimProgress(progress);
-                }
-            } catch {
-                // Ignore transient polling errors while reclaim is running.
+    const pollReclaimProgress = useCallback(async (isMounted: () => boolean) => {
+        try {
+            const progress = await getStorageReclaimProgress();
+            if (isMounted()) {
+                setReclaimProgress(progress);
             }
-        };
-
-        void pollProgress();
-        const timer = window.setInterval(() => {
-            void pollProgress();
-        }, 850);
-
-        return () => {
-            mounted = false;
-            window.clearInterval(timer);
-        };
-    }, [reclaimBusy]);
+        } catch {
+            // Ignore transient polling errors while reclaim is running.
+        }
+    }, []);
+    usePolling(pollReclaimProgress, 850, reclaimBusy);
 
     const handleToggleMcpServer = async () => {
         setMcpBusy(true);
@@ -598,13 +550,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
             window.setTimeout(() => setAutofillMsg(null), 1800);
         }
     };
-
-    function fmtBytes(b: number) {
-        if (b < 1024) return `${b} B`;
-        if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
-        if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(0)} MB`;
-        return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-    }
 
     const autofillDirty =
         JSON.stringify(autofillSettings) !== JSON.stringify(savedAutofillSettings);
@@ -754,10 +699,10 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                 {storageHealth && (
                                     <>
                                         <div className="storage-health-line" aria-label="Storage health">
-                                            <span>Memory DB {fmtBytes(storageHealth.memory_db_bytes)}</span>
-                                            <span>Frames {fmtBytes(storageHealth.frames_bytes)}</span>
-                                            <span>Models {fmtBytes(storageHealth.models_bytes)}</span>
-                                            <span>Dev cache {fmtBytes(storageHealth.dev_build_cache_bytes)}</span>
+                                            <span>Memory DB {formatBytes(storageHealth.memory_db_bytes)}</span>
+                                            <span>Frames {formatBytes(storageHealth.frames_bytes)}</span>
+                                            <span>Models {formatBytes(storageHealth.models_bytes)}</span>
+                                            <span>Dev cache {formatBytes(storageHealth.dev_build_cache_bytes)}</span>
                                         </div>
                                         {storageHealth.dev_build_cache_bytes > 1024 * 1024 * 1024 && (
                                             <button
@@ -974,7 +919,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                                             <div className="model-dl-bar-fill" style={{ width: `${downloadStatus.percent.toFixed(1)}%` }} />
                                                         </div>
                                                         <span className="model-dl-pct">
-                                                            {fmtBytes(downloadStatus.bytes_downloaded)} / {fmtBytes(downloadStatus.total_bytes)} ({downloadStatus.percent.toFixed(0)}%)
+                                                            {formatBytes(downloadStatus.bytes_downloaded)} / {formatBytes(downloadStatus.total_bytes)} ({downloadStatus.percent.toFixed(0)}%)
                                                         </span>
                                                     </>
                                                 ) : (

@@ -1,8 +1,9 @@
 // Inspired by Claude Code's context.ts — tracks your "active context" (git status,
 // current project) and surfaces it. Here we surface the active screen context:
 // what app/window you're currently working in and recent activity clusters.
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { MemoryCard, listMemoryCards } from "../api/tauri";
+import { usePolling } from "../hooks/usePolling";
 import "./FocusSessionPanel.css";
 
 interface FocusSessionPanelProps {
@@ -65,33 +66,20 @@ export function FocusSessionPanel({ isVisible, onClose, onSearchApp }: FocusSess
     const [error, setError] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
 
-    useEffect(() => {
-        if (!isVisible) return;
-        let mounted = true;
-
-        const load = async () => {
+    const load = useCallback(async (isMounted: () => boolean) => {
             setLoading(true);
             setError(null);
             try {
                 // Get the 60 most recent memories — mirrors CC's context snapshot approach
                 const data = await listMemoryCards(60);
-                if (mounted) setCards(data);
+                if (isMounted()) setCards(data);
             } catch (err) {
-                if (mounted) setError(err instanceof Error ? err.message : "Failed to load activity.");
+                if (isMounted()) setError(err instanceof Error ? err.message : "Failed to load activity.");
             } finally {
-                if (mounted) setLoading(false);
+                if (isMounted()) setLoading(false);
             }
-        };
-
-        void load();
-
-        // Refresh every 30s to keep context current
-        const interval = window.setInterval(() => void load(), 30_000);
-        return () => {
-            mounted = false;
-            window.clearInterval(interval);
-        };
-    }, [isVisible]);
+    }, []);
+    usePolling(load, 30_000, isVisible);
 
     if (!isVisible) return null;
 

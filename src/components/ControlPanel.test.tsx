@@ -6,6 +6,14 @@ vi.mock("../api/tauri", () => ({
     deleteAllData: vi.fn(),
     deleteOlderThan: vi.fn(),
     getBlocklist: vi.fn().mockResolvedValue([]),
+    getAutofillSettings: vi.fn().mockResolvedValue({
+        enabled: true,
+        shortcut: "Alt+F",
+        lookback_days: 90,
+        auto_inject_threshold: 0.9,
+        prefer_typed_injection: true,
+        max_candidates: 4,
+    }),
     getMemoryRepairProgress: vi.fn(),
     getStorageHealth: vi.fn().mockResolvedValue({
         memory_db_bytes: 1024,
@@ -30,6 +38,7 @@ vi.mock("../api/tauri", () => ({
     reclaimMemoryStorage: vi.fn(),
     runMemoryRepairBackfill: vi.fn(),
     setBlocklist: vi.fn(),
+    setAutofillSettings: vi.fn(),
     setRetentionDays: vi.fn(),
     startMcpServer: vi.fn(),
     stopMcpServer: vi.fn(),

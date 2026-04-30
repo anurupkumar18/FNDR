@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { getTimeTracking, AppTimeEntry, TimeTrackingResult } from "../api/tauri";
+import { usePolling } from "../hooks/usePolling";
 import "./TimeTrackingPanel.css";
 
 interface TimeTrackingPanelProps {
@@ -98,32 +99,19 @@ export function TimeTrackingPanel({ isVisible, onClose, onSearchApp }: TimeTrack
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    useEffect(() => {
-        if (!isVisible) return;
-        let mounted = true;
-
-        const load = async () => {
+    const load = useCallback(async (isMounted: () => boolean) => {
             setLoading(true);
             setError(null);
             try {
                 const data = await getTimeTracking();
-                if (mounted) setResult(data);
+                if (isMounted()) setResult(data);
             } catch (err) {
-                if (mounted) setError(err instanceof Error ? err.message : "Failed to load time tracking.");
+                if (isMounted()) setError(err instanceof Error ? err.message : "Failed to load time tracking.");
             } finally {
-                if (mounted) setLoading(false);
+                if (isMounted()) setLoading(false);
             }
-        };
-
-        void load();
-
-        // Refresh every 5 minutes
-        const interval = window.setInterval(() => void load(), 5 * 60_000);
-        return () => {
-            mounted = false;
-            window.clearInterval(interval);
-        };
-    }, [isVisible]);
+    }, []);
+    usePolling(load, 5 * 60_000, isVisible);
 
     if (!isVisible) return null;
 

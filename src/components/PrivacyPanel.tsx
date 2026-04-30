@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
     PrivacyAlert,
     getBlocklist,
@@ -6,6 +6,7 @@ import {
     addSiteToBlocklist,
     dismissPrivacyAlert,
 } from "../api/tauri";
+import { usePolling } from "../hooks/usePolling";
 import "./PrivacyPanel.css";
 
 interface PrivacyPanelProps {
@@ -26,9 +27,12 @@ export function PrivacyPanel({
     const [alerts, setAlerts] = useState<PrivacyAlert[]>([]);
     const [loading, setLoading] = useState(false);
 
-    const refreshAlerts = async () => {
+    const refreshAlerts = useCallback(async (isMounted: () => boolean = () => true) => {
         try {
             const data = await getPrivacyAlerts();
+            if (!isMounted()) {
+                return;
+            }
             setAlerts(data);
             if (onAlertsChange) {
                 onAlertsChange(data.length);
@@ -36,14 +40,9 @@ export function PrivacyPanel({
         } catch (err) {
             console.error("Failed to load privacy alerts:", err);
         }
-    };
+    }, [onAlertsChange]);
 
-    useEffect(() => {
-        refreshAlerts();
-        // Periodically refresh alerts
-        const interval = setInterval(refreshAlerts, 2000);
-        return () => clearInterval(interval);
-    }, []);
+    usePolling(refreshAlerts, 2000);
 
     const handleAddBlocklist = async (site: string) => {
         setLoading(true);

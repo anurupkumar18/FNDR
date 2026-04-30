@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { usePolling } from "../hooks/usePolling";
+import { createClientId } from "../lib/id";
 import {
     type AgentStatus,
     type HermesBridgeStatus,
@@ -35,10 +37,7 @@ const OLLAMA_DOWNLOAD_URL = "https://ollama.com/download";
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 
 function nextConversationId(): string {
-    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-        return crypto.randomUUID();
-    }
-    return `fndr-hermes-${Date.now()}`;
+    return createClientId("fndr-hermes");
 }
 
 function isProviderKind(value: string | null | undefined): value is HermesProviderKind {
@@ -134,34 +133,21 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
     const chatBottomRef = useRef<HTMLDivElement>(null);
     const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
-    useEffect(() => {
-        if (!isVisible) return;
-
-        let cancelled = false;
-        let intervalId: number | null = null;
-
-        const load = async () => {
-            try {
-                const [agentStatus, hermesStatus] = await Promise.all([
-                    getAgentStatus(),
-                    getHermesBridgeStatus(),
-                ]);
-                if (cancelled) return;
+    const loadAgentWorkspace = useCallback(async (isMounted: () => boolean) => {
+        try {
+            const [agentStatus, hermesStatus] = await Promise.all([
+                getAgentStatus(),
+                getHermesBridgeStatus(),
+            ]);
+            if (isMounted()) {
                 setStatus(agentStatus);
                 setHermes(hermesStatus);
-            } catch (err) {
-                if (!cancelled) console.error("Failed to load agent workspace:", err);
             }
-        };
-
-        void load();
-        intervalId = window.setInterval(() => void load(), 4000);
-
-        return () => {
-            cancelled = true;
-            if (intervalId !== null) window.clearInterval(intervalId);
-        };
-    }, [isVisible]);
+        } catch (err) {
+            console.error("Failed to load agent workspace:", err);
+        }
+    }, []);
+    usePolling(loadAgentWorkspace, 4000, isVisible);
 
     useEffect(() => {
         if (!hermes || hasSeededForm) return;

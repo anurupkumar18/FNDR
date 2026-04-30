@@ -13,6 +13,8 @@ import {
     refreshAiModels,
 } from "../api/onboarding";
 import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
+import { usePolling } from "../hooks/usePolling";
+import { formatBytes } from "../lib/format";
 import "./Onboarding.css";
 
 // ── Helper: step index for progress dots ─────────────────────────────────
@@ -218,11 +220,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
         } catch {/* ignore */}
     }, []);
 
-    useEffect(() => {
-        refresh();
-        const id = setInterval(refresh, 2500);
-        return () => clearInterval(id);
-    }, [refresh]);
+    usePolling(refresh, 2500);
 
     async function openSettings(pane: Parameters<typeof openSystemSettings>[0]) {
         await openSystemSettings(pane);
@@ -428,10 +426,6 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     const activeModelName =
         models.find((model) => model.id === activeDownloadStatus?.model_id)?.name ?? selected?.name;
 
-    function fmtBytes(b: number) {
-        return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
-    }
-
     return (
         <>
             <span className="ob-icon">🧠</span>
@@ -503,7 +497,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                     <div className="ob-download-info">
                         <div className="ob-download-title">Downloading {activeModelName}…</div>
                         <div className="ob-download-subtitle">
-                            {fmtBytes(activeDownloadStatus.bytes_downloaded)} / {fmtBytes(activeDownloadStatus.total_bytes)}
+                            {formatBytes(activeDownloadStatus.bytes_downloaded)} / {formatBytes(activeDownloadStatus.total_bytes)}
                         </div>
                     </div>
                     <div className="ob-progress-bar-wrap">
