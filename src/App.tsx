@@ -1,24 +1,16 @@
-import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { AppPanels } from "./app/AppPanels";
+import { AppSidebar } from "./app/AppSidebar";
+import { BiometricLockScreen } from "./app/BiometricLockScreen";
+import type { AppToast } from "./app/types";
 import { SearchBar } from "./components/SearchBar";
 import { Timeline } from "./components/Timeline";
 import { ControlPanel } from "./components/ControlPanel";
-import { TodoPanel } from "./components/TodoPanel";
-import { AgentPanel } from "./components/AgentPanel";
-import { MeetingRecorderPanel } from "./components/MeetingRecorderPanel";
-import { MemoryCardsPanel } from "./components/MemoryCardsPanel";
-import { StatsPanel } from "./components/StatsPanel";
-import { DailySummaryPanel } from "./components/DailySummaryPanel";
-import { PipelineInspectorPanel } from "./components/PipelineInspectorPanel";
 import { ModelDownloadBanner } from "./components/ModelDownloadBanner";
 import { Onboarding } from "./components/Onboarding";
-import { SearchHistoryPanel, appendToSearchHistory } from "./components/SearchHistoryPanel";
-import { QuickSkillsPanel } from "./components/QuickSkillsPanel";
-import { FocusSessionPanel } from "./components/FocusSessionPanel";
-import { CommandPalette, PanelKey } from "./components/CommandPalette";
-import { AutomationPanel, useAutomationScheduler } from "./components/AutomationPanel";
-import { ResearchPanel } from "./components/ResearchPanel";
-import { TimeTrackingPanel } from "./components/TimeTrackingPanel";
-import { FocusModePanel } from "./components/FocusModePanel";
+import { appendToSearchHistory } from "./components/SearchHistoryPanel";
+import { type PanelKey } from "./components/CommandPalette";
+import { useAutomationScheduler } from "./components/AutomationPanel";
 import "./components/FocusModePanel.css";
 
 import { useSearch } from "./hooks/useSearch";
@@ -38,7 +30,7 @@ import {
     getStatus,
     getFunGreeting,
 } from "./api/tauri";
-import { getOnboardingState, requestBiometricAuth, saveOnboardingState, type OnboardingState } from "./api/onboarding";
+import { getOnboardingState, saveOnboardingState, type OnboardingState } from "./api/onboarding";
 import { EVAL_UI } from "./evalUi";
 import "./styles/App.css";
 
@@ -47,126 +39,6 @@ function formatHomeDate(now: Date): string {
     const month = now.toLocaleDateString(undefined, { month: "long" }).toUpperCase();
     const day = now.toLocaleDateString(undefined, { day: "numeric" });
     return `${weekday} · ${month} ${day}`;
-}
-
-// ── Biometric Lock Screen ─────────────────────────────────────────────────
-function BiometricLockScreen({
-    onUnlock,
-    onDisableBiometricLock,
-}: {
-    onUnlock: () => void;
-    onDisableBiometricLock: () => Promise<void>;
-}) {
-    const [error, setError] = useState<string | null>(null);
-    const [loading, setLoading] = useState(false);
-    const [disabling, setDisabling] = useState(false);
-    const [attemptCount, setAttemptCount] = useState(0);
-    const autoPromptedRef = useRef(false);
-
-    const authenticate = useCallback(async () => {
-        setLoading(true);
-        setError(null);
-        try {
-            const ok = await requestBiometricAuth("Unlock FNDR — your private screen history");
-            if (ok) {
-                onUnlock();
-            } else {
-                setError("Authentication failed. Tap to try again.");
-                setAttemptCount((count) => count + 1);
-            }
-        } catch {
-            setError("Touch ID is unavailable right now. You can retry or continue without lock.");
-            setAttemptCount((count) => count + 1);
-        } finally {
-            setLoading(false);
-        }
-    }, [onUnlock]);
-
-    // Auto-trigger on mount
-    useEffect(() => {
-        // React Strict Mode intentionally mounts effects twice in development.
-        // Gate auto-auth so users do not get duplicate biometric prompts.
-        if (autoPromptedRef.current) {
-            return;
-        }
-        autoPromptedRef.current = true;
-        void authenticate();
-    }, [authenticate]);
-
-    return (
-        <div className="biometric-lock-overlay">
-            <div className="biometric-lock-card">
-                <div className="biometric-lock-icon">FNDR</div>
-                <h1 className="biometric-lock-title">FNDR is Locked</h1>
-                <p className="biometric-lock-subtitle">
-                    Authenticate with Touch ID or your system password to access your memories.
-                </p>
-                {error && <div className="biometric-lock-error">{error}</div>}
-                <button
-                    className="biometric-lock-btn"
-                    onClick={() => void authenticate()}
-                    disabled={loading}
-                >
-                    {loading ? "Authenticating…" : "Unlock with Touch ID"}
-                </button>
-                {attemptCount > 0 && (
-                    <button
-                        className="biometric-lock-btn"
-                        onClick={() => {
-                            setDisabling(true);
-                            void onDisableBiometricLock().finally(() => setDisabling(false));
-                        }}
-                        disabled={loading || disabling}
-                    >
-                        {disabling ? "Unlocking…" : "Continue without biometric lock"}
-                    </button>
-                )}
-            </div>
-        </div>
-    );
-}
-
-class PanelErrorBoundary extends Component<
-    { panelName: string; children: ReactNode },
-    { error: Error | null }
-> {
-    state = { error: null as Error | null };
-
-    static getDerivedStateFromError(error: Error) {
-        return { error };
-    }
-
-    componentDidCatch(error: Error, info: ErrorInfo) {
-        console.error(`Panel "${this.props.panelName}" crashed:`, error, info);
-    }
-
-    componentDidUpdate(prevProps: { panelName: string; children: ReactNode }) {
-        if (prevProps.children !== this.props.children && this.state.error) {
-            this.setState({ error: null });
-        }
-    }
-
-    render() {
-        if (this.state.error) {
-            return (
-                <div className="panel-error-fallback">
-                    <h2>{this.props.panelName} hit a runtime error</h2>
-                    <p>{this.state.error.message}</p>
-                </div>
-            );
-        }
-
-        return this.props.children;
-    }
-}
-
-interface AppToast {
-    id: string;
-    title: string;
-    body: string;
-    kind: string;
-    actionLabel?: string;
-    targetPanel?: PanelKey;
 }
 
 function nextToastId(): string {
@@ -632,57 +504,19 @@ function App() {
             )}
 
             {!EVAL_UI && (
-                <aside className={`left-sidebar ${isSidebarOpen ? "open" : ""}`}>
-                    {(
-                        [
-                            { label: "Features", items: [
-                                { key: "memoryCards" as PanelKey, text: "Memory Cards" },
-                                { key: "stats" as PanelKey, text: "Stats" },
-                                { key: "todo" as PanelKey, text: "To Do" },
-                                { key: "meeting" as PanelKey, text: "Meetings" },
-                                { key: "dailySummary" as PanelKey, text: "Daily Summary" },
-                                { key: "agent" as PanelKey, text: "Agent" },
-                                { key: "pipeline" as PanelKey, text: "Pipeline Inspector" },
-                            ]},
-                            { label: "Smart", items: [
-                                { key: "focusSession" as PanelKey, text: "Focus Session" },
-                                { key: "quickSkills" as PanelKey, text: "Quick Skills" },
-                                { key: "searchHistory" as PanelKey, text: "Search History" },
-                                { key: "automation" as PanelKey, text: "Automation" },
-                                { key: "research" as PanelKey, text: "Research" },
-                                { key: "timeTracking" as PanelKey, text: "Time Tracking" },
-                                { key: "focusMode" as PanelKey, text: "Focus Mode" },
-                            ]},
-                        ] as const
-                    ).map((group) => (
-                        <div key={group.label} className="sidebar-group sidebar-actions">
-                            <div className="sidebar-label">{group.label}</div>
-                            {group.items.map(({ key, text }) => (
-                                <button
-                                    key={key}
-                                    className={`ui-action-btn ${activePanel === key ? "active" : ""}`}
-                                    onClick={() => {
-                                        if (key === "research") setResearchSeedMemory(null);
-                                        setActivePanel(activePanel === key ? null : key);
-                                        setIsSidebarOpen(false);
-                                    }}
-                                >
-                                    {text}
-                                </button>
-                            ))}
-                        </div>
-                    ))}
-
-                    <div className="sidebar-group sidebar-actions">
-                        <div className="sidebar-label">Commands</div>
-                        <button
-                            className="ui-action-btn"
-                            onClick={() => { setShowCommandPalette(true); setIsSidebarOpen(false); }}
-                        >
-                            Cmd+K Palette
-                        </button>
-                    </div>
-                </aside>
+                <AppSidebar
+                    activePanel={activePanel}
+                    isOpen={isSidebarOpen}
+                    onTogglePanel={(key) => {
+                        if (key === "research") setResearchSeedMemory(null);
+                        setActivePanel(activePanel === key ? null : key);
+                        setIsSidebarOpen(false);
+                    }}
+                    onOpenCommandPalette={() => {
+                        setShowCommandPalette(true);
+                        setIsSidebarOpen(false);
+                    }}
+                />
             )}
 
             <main className={`app-main ${isFocusMode ? "search-centered" : ""}`}>
@@ -735,133 +569,35 @@ function App() {
             </main>
 
             {!EVAL_UI && (
-                <>
-                    <PanelErrorBoundary panelName="Agent">
-                        <AgentPanel
-                            isVisible={activePanel === "agent"}
-                            onClose={() => setActivePanel(null)}
-                        />
-                    </PanelErrorBoundary>
-                    <MeetingRecorderPanel
-                        isVisible={activePanel === "meeting"}
-                        onClose={() => setActivePanel(null)}
-                    />
-                    <MemoryCardsPanel
-                        isVisible={activePanel === "memoryCards"}
-                        onClose={() => setActivePanel(null)}
-                        appNames={appNames}
-                        onMemoryDeleted={handleMemoryDeleted}
-                    />
-                    <StatsPanel
-                        isVisible={activePanel === "stats"}
-                        onClose={() => setActivePanel(null)}
-                    />
-                    <TodoPanel
-                        isVisible={activePanel === "todo"}
-                        onClose={() => setActivePanel(null)}
-                    />
-                    <DailySummaryPanel
-                        isVisible={activePanel === "dailySummary"}
-                        onClose={() => setActivePanel(null)}
-                    />
-                    <PipelineInspectorPanel
-                        isVisible={activePanel === "pipeline"}
-                        onClose={() => setActivePanel(null)}
-                        currentQuery={query}
-                        timeFilter={timeFilter}
-                        appFilter={appFilter}
-                    />
-                    <SearchHistoryPanel
-                        isVisible={activePanel === "searchHistory"}
-                        onClose={() => setActivePanel(null)}
-                        onRunQuery={handleSearchSubmit}
-                    />
-                    <QuickSkillsPanel
-                        isVisible={activePanel === "quickSkills"}
-                        onClose={() => setActivePanel(null)}
-                        onRunSkill={handleRunSkill}
-                    />
-                    <FocusSessionPanel
-                        isVisible={activePanel === "focusSession"}
-                        onClose={() => setActivePanel(null)}
-                        onSearchApp={handleSearchApp}
-                    />
-                    <AutomationPanel
-                        isVisible={activePanel === "automation"}
-                        onClose={() => setActivePanel(null)}
-                    />
-                    <ResearchPanel
-                        isVisible={activePanel === "research"}
-                        onClose={() => setActivePanel(null)}
-                        seedMemory={researchSeedMemory}
-                    />
-                    <TimeTrackingPanel
-                        isVisible={activePanel === "timeTracking"}
-                        onClose={() => setActivePanel(null)}
-                        onSearchApp={handleSearchApp}
-                    />
-                    <FocusModePanel
-                        isVisible={activePanel === "focusMode"}
-                        onClose={() => setActivePanel(null)}
-                    />
-                    <CommandPalette
-                        isOpen={showCommandPalette}
-                        onClose={() => setShowCommandPalette(false)}
-                        selectedMemory={selectedResult}
-                        context={{
-                            query,
-                            onOpenPanel: handleOpenPanel,
-                            onSearch: (q) => handleSearchSubmit(q),
-                            onSearchApp: handleSearchApp,
-                            onClearSearch: () => { setQuery(""); setQueryDraft(""); setTimeFilter(null); setAppFilter(null); },
-                            onDeleteMemory: handleMemoryDeleted,
-                            onResearch: handleResearchMemory,
-                            isCapturing: status?.is_capturing ?? false,
-                        }}
-                    />
-                    {appToasts.length > 0 && (
-                        <div className="app-toast-stack" aria-live="polite" aria-atomic="false">
-                            {appToasts.map((toast) => (
-                                <div
-                                    key={toast.id}
-                                    className={`app-toast app-toast-${toast.kind.replace(/[^a-z0-9_-]/gi, "-")}`}
-                                    role="status"
-                                >
-                                    <button
-                                        className={`app-toast-card ${toast.targetPanel ? "is-clickable" : ""}`}
-                                        type="button"
-                                        onClick={() => handleToastAction(toast)}
-                                        disabled={!toast.targetPanel}
-                                    >
-                                        <div className="app-toast-copy">
-                                            <span className="app-toast-title">{toast.title}</span>
-                                            <p className="app-toast-body">{toast.body}</p>
-                                        </div>
-                                    </button>
-                                    <div className="app-toast-actions">
-                                        {toast.actionLabel && toast.targetPanel && (
-                                            <button
-                                                className="app-toast-action"
-                                                type="button"
-                                                onClick={() => handleToastAction(toast)}
-                                            >
-                                                {toast.actionLabel}
-                                            </button>
-                                        )}
-                                        <button
-                                            className="app-toast-close"
-                                            type="button"
-                                            onClick={() => dismissToast(toast.id)}
-                                            aria-label={`Dismiss ${toast.title}`}
-                                        >
-                                            Close
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </>
+                <AppPanels
+                    activePanel={activePanel}
+                    appFilter={appFilter}
+                    appNames={appNames}
+                    appToasts={appToasts}
+                    isCapturing={status?.is_capturing ?? false}
+                    query={query}
+                    researchSeedMemory={researchSeedMemory}
+                    selectedResult={selectedResult}
+                    showCommandPalette={showCommandPalette}
+                    timeFilter={timeFilter}
+                    onClearSearch={() => {
+                        setQuery("");
+                        setQueryDraft("");
+                        setTimeFilter(null);
+                        setAppFilter(null);
+                    }}
+                    onCloseCommandPalette={() => setShowCommandPalette(false)}
+                    onClosePanel={() => setActivePanel(null)}
+                    onDeleteMemory={handleMemoryDeleted}
+                    onDismissToast={dismissToast}
+                    onMemoryDeleted={handleMemoryDeleted}
+                    onOpenPanel={handleOpenPanel}
+                    onResearchMemory={handleResearchMemory}
+                    onRunQuery={handleSearchSubmit}
+                    onRunSkill={handleRunSkill}
+                    onSearchApp={handleSearchApp}
+                    onToastAction={handleToastAction}
+                />
             )}
         </div>
     );

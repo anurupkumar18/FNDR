@@ -44,6 +44,13 @@ import {
 import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
 import { usePolling } from "../hooks/usePolling";
 import { formatBytes } from "../lib/format";
+import {
+    PALETTES,
+    applyPalette,
+    isPaletteKey,
+    listPalettes,
+    type PaletteKey,
+} from "../theme/cinematic-palettes";
 import "./ControlPanel.css";
 import { PrivacyPanel } from "./PrivacyPanel";
 
@@ -103,6 +110,10 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     // Theme state
     const [theme, setTheme] = useState<Theme>(() => {
         return (localStorage.getItem("fndr-theme") as Theme) || "dark";
+    });
+    const [paletteKey, setPaletteKey] = useState<PaletteKey>(() => {
+        const stored = localStorage.getItem("fndr-palette");
+        return isPaletteKey(stored) ? stored : "matrix";
     });
 
     // Model tab state
@@ -228,7 +239,14 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     useEffect(() => {
         document.documentElement.setAttribute("data-theme", theme);
         localStorage.setItem("fndr-theme", theme);
-    }, [theme]);
+        localStorage.setItem("fndr-palette", paletteKey);
+        applyPalette(paletteKey, theme);
+    }, [paletteKey, theme]);
+
+    const selectAppearance = (nextPalette: PaletteKey, nextTheme: Theme) => {
+        setPaletteKey(nextPalette);
+        setTheme(nextTheme);
+    };
 
     useEffect(() => {
         if (!downloadingId || downloadStatus.model_id !== downloadingId) {
@@ -635,7 +653,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
 
                             <section className="panel-section">
                                 <h3>Appearance</h3>
-                                <p className="section-hint">Choose your interface theme.</p>
+                                <p className="section-hint">Choose a mode and cinematic palette.</p>
                                 <div className="theme-choice-row" role="radiogroup" aria-label="Theme selection">
                                     <button
                                         className={`ui-action-btn theme-choice ${theme === "dark" ? "active" : ""}`}
@@ -653,6 +671,45 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         <span className="theme-choice-icon" aria-hidden="true">☀️</span>
                                         Light
                                     </button>
+                                </div>
+                                <div className="palette-choice-grid" role="listbox" aria-label="Cinematic palette">
+                                    {listPalettes().map((key) => {
+                                        const palette = PALETTES[key];
+                                        const active = paletteKey === key;
+                                        return (
+                                            <button
+                                                key={key}
+                                                type="button"
+                                                className={`palette-choice ${active ? "active" : ""}`}
+                                                onClick={() => {
+                                                    if (key === "fndrDark") {
+                                                        selectAppearance(key, "dark");
+                                                        return;
+                                                    }
+                                                    if (key === "fndrLight") {
+                                                        selectAppearance(key, "light");
+                                                        return;
+                                                    }
+                                                    setPaletteKey(key);
+                                                }}
+                                                aria-selected={active}
+                                            >
+                                                <span className="palette-choice-copy">
+                                                    <strong>{palette.name}</strong>
+                                                    <span>{palette.year} · {palette.director}</span>
+                                                </span>
+                                                <span className="palette-swatches" aria-hidden="true">
+                                                    {palette.shades.map((shade, index) => (
+                                                        <span
+                                                            key={`${key}-${shade}-${index}`}
+                                                            className="palette-swatch"
+                                                            style={{ backgroundColor: shade }}
+                                                        />
+                                                    ))}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </section>
 
