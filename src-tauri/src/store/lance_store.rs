@@ -8,7 +8,11 @@ use super::schema::{
     MeetingSegment, MeetingSession, MemoryRecord, NodeType, SearchResult, Stats, Task, TaskType,
     WeekdayCount,
 };
-use crate::config::{DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_TEXT_EMBEDDING_DIM};
+use crate::config::{
+    DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_STORE_KEYWORD_QUERY_MULTIPLIER,
+    DEFAULT_STORE_MAX_KEYWORD_SCAN, DEFAULT_STORE_VECTOR_QUERY_MULTIPLIER,
+    DEFAULT_TEXT_EMBEDDING_DIM,
+};
 use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
 use arrow_array::{
     builder::{Int64Builder, StringBuilder},
@@ -53,9 +57,9 @@ const SEARCH_RESULT_COLUMNS: &[&str] = &[
 ];
 const TEXT_EMBED_DIM: i32 = DEFAULT_TEXT_EMBEDDING_DIM as i32;
 const IMAGE_EMBED_DIM: i32 = DEFAULT_IMAGE_EMBEDDING_DIM as i32;
-const VECTOR_QUERY_MULTIPLIER: usize = 3;
-const KEYWORD_QUERY_MULTIPLIER: usize = 8;
-const MAX_KEYWORD_SCAN: usize = 600;
+const VECTOR_QUERY_MULTIPLIER: usize = DEFAULT_STORE_VECTOR_QUERY_MULTIPLIER;
+const KEYWORD_QUERY_MULTIPLIER: usize = DEFAULT_STORE_KEYWORD_QUERY_MULTIPLIER;
+const MAX_KEYWORD_SCAN: usize = DEFAULT_STORE_MAX_KEYWORD_SCAN;
 const INDEX_NOISE_HOSTS: &[&str] = &[
     "accounts.google.com",
     "auth.openai.com",
@@ -428,6 +432,14 @@ impl Store {
             return Ok(());
         }
         self.insert_memory_batch(&compacted).await
+    }
+
+    /// Product-named wrapper for writing one memory chunk to the stable index.
+    pub async fn insert_memory_chunk(
+        &self,
+        record: &MemoryRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.add_batch(std::slice::from_ref(record)).await
     }
 
     /// Insert a batch without content-based deduping, preserving caller-provided ids.

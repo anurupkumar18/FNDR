@@ -47,6 +47,15 @@ struct SessionGroup {
 pub struct MemoryCardSynthesizer;
 
 impl MemoryCardSynthesizer {
+    /// Product-named wrapper for the search-results -> MemoryCards boundary.
+    pub async fn build_memory_cards(
+        inference: Option<&InferenceEngine>,
+        query: &str,
+        results: &[SearchResult],
+    ) -> Vec<MemoryCard> {
+        Self::from_results(inference, query, results).await
+    }
+
     pub async fn from_results(
         inference: Option<&InferenceEngine>,
         query: &str,

@@ -214,6 +214,28 @@ impl QueryProfile {
 }
 
 impl HybridSearcher {
+    /// Product-named wrapper for the core retrieval boundary.
+    pub async fn search_hybrid_memories(
+        store: &Store,
+        embedder: &Embedder,
+        query: &str,
+        limit: usize,
+        time_filter: Option<&str>,
+        app_filter: Option<&str>,
+        search_config: &SearchConfig,
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        Self::search_with_config(
+            store,
+            embedder,
+            query,
+            limit,
+            time_filter,
+            app_filter,
+            search_config,
+        )
+        .await
+    }
+
     /// Perform hybrid search with query understanding, weighted fusion, and reranking.
     pub async fn search(
         store: &Store,

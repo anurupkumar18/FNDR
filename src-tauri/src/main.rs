@@ -187,15 +187,20 @@ fn main() {
                 let proactive_state = state.clone();
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    let mut interval =
-                        tokio::time::interval(std::time::Duration::from_secs(30));
+                    let proactive_config = proactive_state.config.read().proactive.clone();
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                        proactive_config.interval_secs,
+                    ));
                     let mut seen_ring: std::collections::VecDeque<String> =
-                        std::collections::VecDeque::with_capacity(20);
+                        std::collections::VecDeque::with_capacity(
+                            proactive_config.seen_ring_capacity,
+                        );
                     interval.tick().await; // skip first tick
                     loop {
                         interval.tick().await;
 
-                        if !proactive_state.config.read().proactive_surface_enabled {
+                        let config = proactive_state.config.read().clone();
+                        if !config.proactive_surface_enabled {
                             continue;
                         }
 
@@ -206,7 +211,12 @@ fn main() {
 
                         let hits = match proactive_state
                             .store
-                            .vector_search(&embedding, 5, Some("7d"), None)
+                            .vector_search(
+                                &embedding,
+                                config.proactive.search_limit,
+                                Some(&config.proactive.lookback_filter),
+                                None,
+                            )
                             .await
                         {
                             Ok(h) => h,
@@ -217,7 +227,8 @@ fn main() {
                         };
 
                         let suggestion = hits.into_iter().find(|r| {
-                            r.score > 0.82 && !seen_ring.contains(&r.id)
+                            r.score > config.proactive.similarity_threshold
+                                && !seen_ring.contains(&r.id)
                         });
 
                         if let Some(hit) = suggestion {
@@ -231,7 +242,7 @@ fn main() {
                                 task_title,
                             };
 
-                            if seen_ring.len() >= 20 {
+                            if seen_ring.len() >= config.proactive.seen_ring_capacity {
                                 seen_ring.pop_front();
                             }
                             seen_ring.push_back(hit.id.clone());

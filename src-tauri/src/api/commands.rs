@@ -140,7 +140,7 @@ async fn run_search_query(
     };
 
     let results = match shared_embedder() {
-        Ok(embedder) => match HybridSearcher::search_with_config(
+        Ok(embedder) => match HybridSearcher::search_hybrid_memories(
             &state.store,
             embedder,
             query,

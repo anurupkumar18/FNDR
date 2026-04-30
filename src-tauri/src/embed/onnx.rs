@@ -252,6 +252,23 @@ impl Embedder {
         self.embed_chunk_groups(chunk_groups)
     }
 
+    /// Product-named wrapper for the capture -> chunking -> embedding boundary.
+    pub fn embed_memory_chunk(
+        &self,
+        app_name: &str,
+        window_title: &str,
+        text: &str,
+    ) -> Result<Vec<f32>, String> {
+        self.embed_batch_with_context(&[(
+            app_name.to_string(),
+            window_title.to_string(),
+            text.to_string(),
+        )])?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Embedder returned no vector for memory chunk".to_string())
+    }
+
     fn embed_chunks_cached(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         if texts.is_empty() {
             return Ok(Vec::new());

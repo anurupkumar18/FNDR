@@ -56,6 +56,16 @@ pub const DEFAULT_MEMORY_CARD_MAX_GROUP_SNIPPETS: usize = 6;
 pub const DEFAULT_MEMORY_CARD_GROUPING_TIMEOUT_MS: u64 = 350;
 pub const DEFAULT_MEMORY_CARD_LLM_TIMEOUT_MS: u64 = 1_500;
 
+pub const DEFAULT_STORE_VECTOR_QUERY_MULTIPLIER: usize = 3;
+pub const DEFAULT_STORE_KEYWORD_QUERY_MULTIPLIER: usize = 8;
+pub const DEFAULT_STORE_MAX_KEYWORD_SCAN: usize = 600;
+
+pub const DEFAULT_PROACTIVE_INTERVAL_SECS: u64 = 30;
+pub const DEFAULT_PROACTIVE_SEEN_RING_CAPACITY: usize = 20;
+pub const DEFAULT_PROACTIVE_SEARCH_LIMIT: usize = 5;
+pub const DEFAULT_PROACTIVE_LOOKBACK_FILTER: &str = "7d";
+pub const DEFAULT_PROACTIVE_SIMILARITY_THRESHOLD: f32 = 0.82;
+
 /// Local text embedding configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EmbeddingConfig {
@@ -352,6 +362,77 @@ impl MemoryCardConfig {
     }
 }
 
+/// LanceDB retrieval expansion knobs used before application-level reranking.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StoreConfig {
+    #[serde(default = "default_store_vector_query_multiplier")]
+    pub vector_query_multiplier: usize,
+    #[serde(default = "default_store_keyword_query_multiplier")]
+    pub keyword_query_multiplier: usize,
+    #[serde(default = "default_store_max_keyword_scan")]
+    pub max_keyword_scan: usize,
+}
+
+impl Default for StoreConfig {
+    fn default() -> Self {
+        Self {
+            vector_query_multiplier: default_store_vector_query_multiplier(),
+            keyword_query_multiplier: default_store_keyword_query_multiplier(),
+            max_keyword_scan: default_store_max_keyword_scan(),
+        }
+    }
+}
+
+impl StoreConfig {
+    pub fn normalized(mut self) -> Self {
+        self.vector_query_multiplier = self.vector_query_multiplier.clamp(1, 12);
+        self.keyword_query_multiplier = self.keyword_query_multiplier.clamp(1, 32);
+        self.max_keyword_scan = self.max_keyword_scan.clamp(50, 10_000);
+        self
+    }
+}
+
+/// Proactive recall surface knobs for background similarity suggestions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProactiveConfig {
+    #[serde(default = "default_proactive_interval_secs")]
+    pub interval_secs: u64,
+    #[serde(default = "default_proactive_seen_ring_capacity")]
+    pub seen_ring_capacity: usize,
+    #[serde(default = "default_proactive_search_limit")]
+    pub search_limit: usize,
+    #[serde(default = "default_proactive_lookback_filter")]
+    pub lookback_filter: String,
+    #[serde(default = "default_proactive_similarity_threshold")]
+    pub similarity_threshold: f32,
+}
+
+impl Default for ProactiveConfig {
+    fn default() -> Self {
+        Self {
+            interval_secs: default_proactive_interval_secs(),
+            seen_ring_capacity: default_proactive_seen_ring_capacity(),
+            search_limit: default_proactive_search_limit(),
+            lookback_filter: default_proactive_lookback_filter(),
+            similarity_threshold: default_proactive_similarity_threshold(),
+        }
+    }
+}
+
+impl ProactiveConfig {
+    pub fn normalized(mut self) -> Self {
+        self.interval_secs = self.interval_secs.clamp(5, 3_600);
+        self.seen_ring_capacity = self.seen_ring_capacity.clamp(1, 200);
+        self.search_limit = self.search_limit.clamp(1, 50);
+        self.lookback_filter = self.lookback_filter.trim().to_string();
+        if self.lookback_filter.is_empty() {
+            self.lookback_filter = default_proactive_lookback_filter();
+        }
+        self.similarity_threshold = self.similarity_threshold.clamp(0.0, 1.0);
+        self
+    }
+}
+
 /// Auto-fill configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutofillConfig {
@@ -458,6 +539,12 @@ pub struct Config {
     /// MemoryCard grouping and synthesis settings.
     #[serde(default)]
     pub memory_cards: MemoryCardConfig,
+    /// LanceDB retrieval expansion settings.
+    #[serde(default)]
+    pub store: StoreConfig,
+    /// Proactive recall surface settings.
+    #[serde(default)]
+    pub proactive: ProactiveConfig,
 }
 
 fn default_embedding_model_name() -> String {
@@ -648,6 +735,38 @@ fn default_memory_card_llm_timeout_ms() -> u64 {
     DEFAULT_MEMORY_CARD_LLM_TIMEOUT_MS
 }
 
+fn default_store_vector_query_multiplier() -> usize {
+    DEFAULT_STORE_VECTOR_QUERY_MULTIPLIER
+}
+
+fn default_store_keyword_query_multiplier() -> usize {
+    DEFAULT_STORE_KEYWORD_QUERY_MULTIPLIER
+}
+
+fn default_store_max_keyword_scan() -> usize {
+    DEFAULT_STORE_MAX_KEYWORD_SCAN
+}
+
+fn default_proactive_interval_secs() -> u64 {
+    DEFAULT_PROACTIVE_INTERVAL_SECS
+}
+
+fn default_proactive_seen_ring_capacity() -> usize {
+    DEFAULT_PROACTIVE_SEEN_RING_CAPACITY
+}
+
+fn default_proactive_search_limit() -> usize {
+    DEFAULT_PROACTIVE_SEARCH_LIMIT
+}
+
+fn default_proactive_lookback_filter() -> String {
+    DEFAULT_PROACTIVE_LOOKBACK_FILTER.to_string()
+}
+
+fn default_proactive_similarity_threshold() -> f32 {
+    DEFAULT_PROACTIVE_SIMILARITY_THRESHOLD
+}
+
 fn default_use_vlm() -> bool {
     true
 }
@@ -721,6 +840,8 @@ impl Default for Config {
             search: SearchConfig::default(),
             capture_pipeline: CapturePipelineConfig::default(),
             memory_cards: MemoryCardConfig::default(),
+            store: StoreConfig::default(),
+            proactive: ProactiveConfig::default(),
         }
     }
 }
@@ -735,6 +856,8 @@ impl Config {
         self.search = self.search.normalized();
         self.capture_pipeline = self.capture_pipeline.normalized();
         self.memory_cards = self.memory_cards.normalized();
+        self.store = self.store.normalized();
+        self.proactive = self.proactive.normalized();
         self.fps_base = self.fps_base.clamp(0.05, 4.0);
         self.idle_fps = self.idle_fps.clamp(0.02, self.fps_base.max(0.02));
         self.idle_pause_seconds = self.idle_pause_seconds.clamp(1, 3600);
