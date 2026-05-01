@@ -150,15 +150,6 @@ impl RecognizedText {
             || (self.block_count <= 1 && self.confidence < 0.40)
             || self.confidence < 0.15
     }
-
-    /// Preprocess OCR for Qwen3-VL structured extraction.
-    ///
-    /// Returns (cleaned_text_for_qwen, aggregate_stats).
-    /// The cleaned text is transient — it must be discarded after Qwen extraction.
-    /// Only aggregate_stats should be persisted.
-    pub fn preprocess_for_qwen(&self, per_line_confidences: &[(String, f32)]) -> (String, OcrAggregateStats) {
-        preprocess_ocr_for_qwen(per_line_confidences)
-    }
 }
 
 /// OCR Engine using Apple Vision framework
@@ -208,12 +199,12 @@ impl OcrEngine {
 
     /// Recognize text from image data (PNG format)
     pub fn recognize(&self, image_data: &[u8]) -> Result<String, OcrError> {
-        let result = self.recognize_with_metadata(image_data)?;
+        let (result, _) = self.recognize_with_metadata(image_data)?;
         Ok(result.text)
     }
 
-    /// Recognize text with full metadata
-    pub fn recognize_with_metadata(&self, image_data: &[u8]) -> Result<RecognizedText, OcrError> {
+    /// Recognize text with full metadata and transient Qwen cleaned text
+    pub fn recognize_with_metadata(&self, image_data: &[u8]) -> Result<(RecognizedText, String), OcrError> {
         unsafe {
             let ns_data =
                 NSData::dataWithBytes_length(image_data.as_ptr() as *mut c_void, image_data.len());
@@ -241,12 +232,12 @@ impl OcrEngine {
             let block_count = ocr_stats_from_all.lines_used;
 
             // raw_lines is dropped here — not stored.
-            Ok(RecognizedText {
+            Ok((RecognizedText {
                 text: normalized,
                 confidence: avg_confidence_all,
                 block_count,
                 ocr_stats: ocr_stats_from_all,
-            })
+            }, cleaned_text))
         }
     }
 

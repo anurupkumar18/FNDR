@@ -2180,6 +2180,7 @@ async fn ingest_transcript_into_fndr_memory(
         support_embedding,
         decay_score: 1.0,
         last_accessed_at: 0,
+        ..Default::default()
     };
 
     app_state

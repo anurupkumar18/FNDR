@@ -1,7 +1,7 @@
 //! Storage module
 
 mod lance_store;
-mod schema;
+pub mod schema;
 mod state_store;
 
 pub use lance_store::{

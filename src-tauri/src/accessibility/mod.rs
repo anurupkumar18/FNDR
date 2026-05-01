@@ -341,7 +341,7 @@ fn capture_screen_context() -> String {
     };
 
     match engine.recognize_with_metadata(&image) {
-        Ok(text) => normalize_context_excerpt(&text.text),
+        Ok(text) => normalize_context_excerpt(&text.0.text),
         Err(err) => {
             tracing::debug!("autofill: OCR inference failed: {err}");
             String::new()

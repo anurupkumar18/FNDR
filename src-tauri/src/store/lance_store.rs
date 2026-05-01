@@ -15,9 +15,9 @@ use crate::config::{
 };
 use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
 use arrow_array::{
-    builder::{Int64Builder, StringBuilder},
+    builder::{Int64Builder, StringBuilder, ListBuilder},
     Array, BooleanArray, FixedSizeListArray, Float32Array, Int64Array, RecordBatch,
-    RecordBatchIterator, RecordBatchReader, StringArray, UInt32Array,
+    RecordBatchIterator, RecordBatchReader, StringArray, UInt32Array, ListArray,
 };
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
@@ -72,6 +72,7 @@ const INDEX_NOISE_HOSTS: &[&str] = &[
 pub struct Store {
     data_dir: PathBuf,
     table: Table,
+    legacy_table: Option<Table>,
     tasks_table: Table,
     meetings_table: Table,
     segments_table: Table,
@@ -95,7 +96,7 @@ impl Store {
             .enable_all()
             .build()?;
 
-        let (table, tasks_table, meetings_table, segments_table, nodes_table, edges_table) =
+        let (table, legacy_table, tasks_table, meetings_table, segments_table, nodes_table, edges_table) =
             rt.block_on(open_all_tables(&db_path))?;
 
         // Migrate legacy storages if present.
@@ -131,6 +132,7 @@ impl Store {
         Ok(Self {
             data_dir,
             table,
+            legacy_table,
             tasks_table,
             meetings_table,
             segments_table,
@@ -1368,6 +1370,29 @@ fn memory_schema() -> Schema {
         ),
         Field::new("decay_score", DataType::Float32, false),
         Field::new("last_accessed_at", DataType::Int64, false),
+        Field::new("schema_version", DataType::UInt32, false),
+        Field::new("activity_type", DataType::Utf8, false),
+        Field::new("files_touched", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new("symbols_changed", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new("session_duration_mins", DataType::UInt32, false),
+        Field::new("project", DataType::Utf8, false),
+        Field::new("tags", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new("entities", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new("decisions", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new("errors", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new("next_steps", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new("git_stats", DataType::Utf8, true),
+        Field::new("outcome", DataType::Utf8, false),
+        Field::new("extraction_confidence", DataType::Float32, false),
+        Field::new("dedup_fingerprint", DataType::Utf8, false),
+        Field::new("embedding_text", DataType::Utf8, false),
+        Field::new("embedding_model", DataType::Utf8, false),
+        Field::new("embedding_dim", DataType::UInt32, false),
+        Field::new("is_consolidated", DataType::Boolean, false),
+        Field::new("is_soft_deleted", DataType::Boolean, false),
+        Field::new("parent_id", DataType::Utf8, true),
+        Field::new("related_ids", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new("consolidated_from", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
     ])
 }
 
@@ -1578,6 +1603,45 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
     let decay_scores: Vec<f32> = records.iter().map(|r| r.decay_score).collect();
     let last_accessed: Vec<i64> = records.iter().map(|r| r.last_accessed_at).collect();
 
+    // V2 Fields
+    let schema_versions: Vec<u32> = records.iter().map(|r| r.schema_version).collect();
+    let activity_types: Vec<&str> = records.iter().map(|r| r.activity_type.as_str()).collect();
+    let session_duration_mins: Vec<u32> = records.iter().map(|r| r.session_duration_mins).collect();
+    let projects: Vec<&str> = records.iter().map(|r| r.project.as_str()).collect();
+    let outcomes: Vec<&str> = records.iter().map(|r| r.outcome.as_str()).collect();
+    let extraction_confidences: Vec<f32> = records.iter().map(|r| r.extraction_confidence).collect();
+    let dedup_fingerprints: Vec<&str> = records.iter().map(|r| r.dedup_fingerprint.as_str()).collect();
+    let embedding_texts: Vec<&str> = records.iter().map(|r| r.embedding_text.as_str()).collect();
+    let embedding_models: Vec<&str> = records.iter().map(|r| r.embedding_model.as_str()).collect();
+    let embedding_dims: Vec<u32> = records.iter().map(|r| r.embedding_dim).collect();
+    let is_consolidated_flags: Vec<bool> = records.iter().map(|r| r.is_consolidated).collect();
+    let is_soft_deleted_flags: Vec<bool> = records.iter().map(|r| r.is_soft_deleted).collect();
+    let parent_ids: Vec<Option<&str>> = records.iter().map(|r| r.parent_id.as_deref()).collect();
+    let git_stats_json: Vec<Option<String>> = records.iter().map(|r| r.git_stats.as_ref().and_then(|g| serde_json::to_string(g).ok())).collect();
+    let git_stats_refs: Vec<Option<&str>> = git_stats_json.iter().map(|o| o.as_deref()).collect();
+
+    let mut build_str_list = |extractor: &dyn Fn(&MemoryRecord) -> &Vec<String>| {
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        for record in records {
+            let list = extractor(record);
+            for item in list {
+                builder.values().append_value(item);
+            }
+            builder.append(true);
+        }
+        builder.finish()
+    };
+
+    let files_touched_array = build_str_list(&|r| &r.files_touched);
+    let symbols_changed_array = build_str_list(&|r| &r.symbols_changed);
+    let tags_array = build_str_list(&|r| &r.tags);
+    let entities_array = build_str_list(&|r| &r.entities);
+    let decisions_array = build_str_list(&|r| &r.decisions);
+    let errors_array = build_str_list(&|r| &r.errors);
+    let next_steps_array = build_str_list(&|r| &r.next_steps);
+    let related_ids_array = build_str_list(&|r| &r.related_ids);
+    let consolidated_from_array = build_str_list(&|r| &r.consolidated_from);
+
     RecordBatch::try_new(
         schema,
         vec![
@@ -1605,6 +1669,29 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
             Arc::new(support_embedding_array),
             Arc::new(Float32Array::from(decay_scores)),
             Arc::new(Int64Array::from(last_accessed)),
+            Arc::new(UInt32Array::from(schema_versions)),
+            Arc::new(StringArray::from(activity_types)),
+            Arc::new(files_touched_array),
+            Arc::new(symbols_changed_array),
+            Arc::new(UInt32Array::from(session_duration_mins)),
+            Arc::new(StringArray::from(projects)),
+            Arc::new(tags_array),
+            Arc::new(entities_array),
+            Arc::new(decisions_array),
+            Arc::new(errors_array),
+            Arc::new(next_steps_array),
+            Arc::new(StringArray::from(git_stats_refs)),
+            Arc::new(StringArray::from(outcomes)),
+            Arc::new(Float32Array::from(extraction_confidences)),
+            Arc::new(StringArray::from(dedup_fingerprints)),
+            Arc::new(StringArray::from(embedding_texts)),
+            Arc::new(StringArray::from(embedding_models)),
+            Arc::new(UInt32Array::from(embedding_dims)),
+            Arc::new(BooleanArray::from(is_consolidated_flags)),
+            Arc::new(BooleanArray::from(is_soft_deleted_flags)),
+            Arc::new(StringArray::from(parent_ids)),
+            Arc::new(related_ids_array),
+            Arc::new(consolidated_from_array),
         ],
     )
 }
@@ -1645,6 +1732,31 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
     let decay_scores = f32_col(batch, "decay_score");
     let last_accessed = i64_col(batch, "last_accessed_at");
 
+    // V2 columns
+    let schema_versions = u32_col(batch, "schema_version");
+    let activity_types = str_col(batch, "activity_type");
+    let files_touched = list_str_col(batch, "files_touched");
+    let symbols_changed = list_str_col(batch, "symbols_changed");
+    let session_duration_mins = u32_col(batch, "session_duration_mins");
+    let projects = str_col(batch, "project");
+    let tags = list_str_col(batch, "tags");
+    let entities = list_str_col(batch, "entities");
+    let decisions = list_str_col(batch, "decisions");
+    let errors = list_str_col(batch, "errors");
+    let next_steps = list_str_col(batch, "next_steps");
+    let git_stats_json = str_col(batch, "git_stats");
+    let outcomes = str_col(batch, "outcome");
+    let extraction_confidences = f32_col(batch, "extraction_confidence");
+    let dedup_fingerprints = str_col(batch, "dedup_fingerprint");
+    let embedding_texts = str_col(batch, "embedding_text");
+    let embedding_models = str_col(batch, "embedding_model");
+    let embedding_dims = u32_col(batch, "embedding_dim");
+    let is_consolidated_flags = bool_col(batch, "is_consolidated");
+    let is_soft_deleted_flags = bool_col(batch, "is_soft_deleted");
+    let parent_ids = str_col(batch, "parent_id");
+    let related_ids = list_str_col(batch, "related_ids");
+    let consolidated_from = list_str_col(batch, "consolidated_from");
+
     (0..n)
         .map(|i| {
             let embedding = extract_f32_list(&embed_col, i, TEXT_EMBED_DIM as usize);
@@ -1677,6 +1789,29 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
                 support_embedding,
                 decay_score: get_f32(&decay_scores, i).max(0.01),
                 last_accessed_at: get_i64(&last_accessed, i),
+                schema_version: get_u32(&schema_versions, i),
+                activity_type: get_str(&activity_types, i),
+                files_touched: extract_str_list(&files_touched, i),
+                symbols_changed: extract_str_list(&symbols_changed, i),
+                session_duration_mins: get_u32(&session_duration_mins, i),
+                project: get_str(&projects, i),
+                tags: extract_str_list(&tags, i),
+                entities: extract_str_list(&entities, i),
+                decisions: extract_str_list(&decisions, i),
+                errors: extract_str_list(&errors, i),
+                next_steps: extract_str_list(&next_steps, i),
+                git_stats: get_opt_str(&git_stats_json, i).and_then(|j| serde_json::from_str(&j).ok()),
+                outcome: get_str(&outcomes, i),
+                extraction_confidence: get_f32(&extraction_confidences, i),
+                dedup_fingerprint: get_str(&dedup_fingerprints, i),
+                embedding_text: get_str(&embedding_texts, i),
+                embedding_model: get_str(&embedding_models, i),
+                embedding_dim: get_u32(&embedding_dims, i),
+                is_consolidated: get_bool(&is_consolidated_flags, i),
+                is_soft_deleted: get_bool(&is_soft_deleted_flags, i),
+                parent_id: get_opt_str(&parent_ids, i),
+                related_ids: extract_str_list(&related_ids, i),
+                consolidated_from: extract_str_list(&consolidated_from, i),
             }
         })
         .collect()
@@ -1708,6 +1843,19 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
         .and_then(|c| c.as_any().downcast_ref::<Float32Array>().cloned());
     let decay_scores = f32_col(batch, "decay_score");
 
+    // V2 columns
+    let schema_versions = u32_col(batch, "schema_version");
+    let activity_types = str_col(batch, "activity_type");
+    let files_touched = list_str_col(batch, "files_touched");
+    let session_duration_mins = u32_col(batch, "session_duration_mins");
+    let projects = str_col(batch, "project");
+    let tags = list_str_col(batch, "tags");
+    let outcomes = str_col(batch, "outcome");
+    let extraction_confidences = f32_col(batch, "extraction_confidence");
+    let dedup_fingerprints = str_col(batch, "dedup_fingerprint");
+    let is_consolidated_flags = bool_col(batch, "is_consolidated");
+    let is_soft_deleted_flags = bool_col(batch, "is_soft_deleted");
+
     (0..n)
         .map(|i| {
             let score = dist_col
@@ -1734,6 +1882,17 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
                 screenshot_path: get_opt_str(&screenshot_paths, i),
                 url: get_opt_str(&urls, i),
                 decay_score: get_f32(&decay_scores, i).max(0.15),
+                schema_version: get_u32(&schema_versions, i),
+                activity_type: get_str(&activity_types, i),
+                files_touched: extract_str_list(&files_touched, i),
+                session_duration_mins: get_u32(&session_duration_mins, i),
+                project: get_str(&projects, i),
+                tags: extract_str_list(&tags, i),
+                outcome: get_str(&outcomes, i),
+                extraction_confidence: get_f32(&extraction_confidences, i),
+                dedup_fingerprint: get_str(&dedup_fingerprints, i),
+                is_consolidated: get_bool(&is_consolidated_flags, i),
+                is_soft_deleted: get_bool(&is_soft_deleted_flags, i),
             }
         })
         .collect()
@@ -1778,6 +1937,14 @@ fn u32_col(batch: &RecordBatch, name: &str) -> Option<UInt32Array> {
         .column_by_name(name)?
         .as_any()
         .downcast_ref::<UInt32Array>()
+        .cloned()
+}
+
+fn list_str_col(batch: &RecordBatch, name: &str) -> Option<ListArray> {
+    batch
+        .column_by_name(name)?
+        .as_any()
+        .downcast_ref::<ListArray>()
         .cloned()
 }
 
@@ -2982,14 +3149,44 @@ fn sql_escape(s: &str) -> String {
 
 async fn open_all_tables(
     db_path: &Path,
-) -> Result<(Table, Table, Table, Table, Table, Table), lancedb::Error> {
+) -> Result<(Table, Option<Table>, Table, Table, Table, Table, Table), lancedb::Error> {
     let uri = db_path.to_string_lossy();
     let conn: Connection = lancedb::connect(&uri).execute().await?;
     let names = conn.table_names().execute().await?;
 
-    let table =
-        open_or_create_named_table(&conn, &names, MEMORIES_TABLE, Arc::new(memory_schema()))
-            .await?;
+    let mut legacy_table = None;
+    let mut table = None;
+
+    // Check if memories_v2_1024 already exists
+    if names.contains(&"memories_v2_1024".to_string()) {
+        table = Some(conn.open_table("memories_v2_1024").execute().await?);
+        if names.contains(&MEMORIES_TABLE.to_string()) {
+            legacy_table = Some(conn.open_table(MEMORIES_TABLE).execute().await?);
+        }
+    } else if names.contains(&MEMORIES_TABLE.to_string()) {
+        let existing = conn.open_table(MEMORIES_TABLE).execute().await?;
+        let schema = existing.schema().await?;
+        let is_384 = schema.fields().iter().any(|f| {
+            if f.name() == "embedding" {
+                if let DataType::FixedSizeList(_, dim) = f.data_type() {
+                    return *dim == 384;
+                }
+            }
+            false
+        });
+
+        if is_384 && TEXT_EMBED_DIM == 1024 {
+            legacy_table = Some(existing);
+            // Create the new 1024d table
+            table = Some(open_or_create_named_table(&conn, &names, "memories_v2_1024", Arc::new(memory_schema())).await?);
+        } else {
+            table = Some(existing);
+        }
+    } else {
+        table = Some(open_or_create_named_table(&conn, &names, MEMORIES_TABLE, Arc::new(memory_schema())).await?);
+    }
+
+    let table = table.unwrap();
     ensure_memory_schema_columns(&table).await?;
 
     let tasks =
@@ -3005,7 +3202,7 @@ async fn open_all_tables(
     let edges =
         open_or_create_named_table(&conn, &names, EDGES_TABLE, Arc::new(edge_schema())).await?;
 
-    Ok((table, tasks, meetings, segments, nodes, edges))
+    Ok((table, legacy_table, tasks, meetings, segments, nodes, edges))
 }
 
 async fn open_or_create_named_table(

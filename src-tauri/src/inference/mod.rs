@@ -369,6 +369,52 @@ pub struct MeetingTaskBreakdownDraft {
     pub followups: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GitStats {
+    #[serde(default)]
+    pub added: i32,
+    #[serde(default)]
+    pub removed: i32,
+    #[serde(default)]
+    pub commits: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StructuredMemoryExtraction {
+    #[serde(default)]
+    pub session_key: String,
+    #[serde(default)]
+    pub activity_type: String,
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub files_touched: Vec<String>,
+    #[serde(default)]
+    pub symbols_changed: Vec<String>,
+    #[serde(default)]
+    pub git_stats: GitStats,
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub entities: Vec<String>,
+    #[serde(default)]
+    pub decisions: Vec<String>,
+    #[serde(default)]
+    pub errors: Vec<String>,
+    #[serde(default)]
+    pub next_steps: Vec<String>,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub dedup_fingerprint: String,
+}
+
 // ============================================================================
 // InferenceEngine
 // ============================================================================
@@ -700,6 +746,83 @@ Rules:\n\
         };
 
         self.complete(&prompt, 200).await
+    }
+
+    /// Extract structured memory fields natively via Qwen3-VL style JSON prompt.
+    pub async fn extract_structured_memory(
+        &self,
+        app_name: &str,
+        window_title: &str,
+        ocr_text: &str,
+    ) -> Option<StructuredMemoryExtraction> {
+        if ocr_text.trim().is_empty() {
+            return None;
+        }
+
+        let system_msg = format!(
+            "You are a structured memory extractor.\n\
+            RULES:\n\
+            - Output ONLY raw JSON.\n\
+            - No markdown formatting.\n\
+            - Do not copy OCR verbatim.\n\
+            - Summarize into privacy-safe structured memory.\n\
+            - summary must be max 120 chars and must not be app-only.\n\
+            - detail must be 2-4 useful sentences with concrete artifacts when available.\n\
+            - If uncertain, lower confidence instead of inventing details.\n\
+            \n\
+            SCHEMA:\n\
+            {{\n\
+              \"session_key\": \"YYYY-MM-DD_HH\",\n\
+              \"activity_type\": \"code_edit|git_op|search|review|config|test|build|writing|research|debugging|unknown\",\n\
+              \"project\": \"\",\n\
+              \"summary\": \"\",\n\
+              \"detail\": \"\",\n\
+              \"files_touched\": [],\n\
+              \"symbols_changed\": [],\n\
+              \"git_stats\": {{ \"added\": 0, \"removed\": 0, \"commits\": 0 }},\n\
+              \"outcome\": \"completed|reverted|in_progress|failed\",\n\
+              \"tags\": [],\n\
+              \"entities\": [],\n\
+              \"decisions\": [],\n\
+              \"errors\": [],\n\
+              \"next_steps\": [],\n\
+              \"confidence\": 0.0,\n\
+              \"dedup_fingerprint\": \"\"\n\
+            }}"
+        );
+
+        let user_msg = format!(
+            "APP: {}\nWINDOW: {}\nOCR TEXT:\n\"\"\"\n{}\n\"\"\"\n\nReturn JSON only.",
+            app_name,
+            window_title,
+            ocr_text.chars().take(4000).collect::<String>()
+        );
+
+        let prompt = self.build_prompt(&system_msg, &user_msg).ok()?;
+        let raw = self.complete(&prompt, 400).await;
+        
+        let candidate = extract_json_object(&raw)?;
+        match serde_json::from_str::<StructuredMemoryExtraction>(&candidate) {
+            Ok(draft) => Some(draft),
+            Err(e) => {
+                tracing::warn!("Failed to parse structured memory JSON: {}", e);
+                // Try repair once
+                let repair_msg = format!(
+                    "Fix this invalid JSON to match the strict schema. Output ONLY JSON.\nINVALID JSON:\n{}", 
+                    candidate
+                );
+                if let Ok(repair_prompt) = self.build_prompt(&system_msg, &repair_msg) {
+                    let repaired_raw = self.complete(&repair_prompt, 400).await;
+                    if let Some(repaired_candidate) = extract_json_object(&repaired_raw) {
+                        serde_json::from_str::<StructuredMemoryExtraction>(&repaired_candidate).ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     /// Extract structured meeting summary + action items.

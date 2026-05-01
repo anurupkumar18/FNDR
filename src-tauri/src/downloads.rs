@@ -226,6 +226,7 @@ async fn inject_download_memory(
         support_embedding,
         decay_score: 1.0,
         last_accessed_at: now.timestamp_millis(),
+        ..Default::default()
     };
 
     if state.store.add_batch(&[record.clone()]).await.is_err() {

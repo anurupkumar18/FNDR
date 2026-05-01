@@ -3,6 +3,16 @@
 use crate::config::{DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_TEXT_EMBEDDING_DIM};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GitStats {
+    #[serde(default)]
+    pub added: i32,
+    #[serde(default)]
+    pub removed: i32,
+    #[serde(default)]
+    pub commits: i32,
+}
+
 fn default_text_embedding() -> Vec<f32> {
     vec![0.0; DEFAULT_TEXT_EMBEDDING_DIM]
 }
@@ -32,7 +42,7 @@ fn default_lexical_shadow() -> String {
 }
 
 /// A single memory record stored in the database
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MemoryRecord {
     /// Unique identifier
     pub id: String,
@@ -100,6 +110,58 @@ pub struct MemoryRecord {
     /// Unix ms timestamp of last search access; used for decay computation
     #[serde(default)]
     pub last_accessed_at: i64,
+
+    // V2 Memory Fields
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub activity_type: String,
+    #[serde(default)]
+    pub files_touched: Vec<String>,
+    #[serde(default)]
+    pub symbols_changed: Vec<String>,
+    #[serde(default)]
+    pub session_duration_mins: u32,
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub entities: Vec<String>,
+    #[serde(default)]
+    pub decisions: Vec<String>,
+    #[serde(default)]
+    pub errors: Vec<String>,
+    #[serde(default)]
+    pub next_steps: Vec<String>,
+    #[serde(default)]
+    pub git_stats: Option<GitStats>,
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub extraction_confidence: f32,
+    #[serde(default)]
+    pub dedup_fingerprint: String,
+    #[serde(default)]
+    pub embedding_text: String,
+    #[serde(default)]
+    pub embedding_model: String,
+    #[serde(default)]
+    pub embedding_dim: u32,
+    #[serde(default)]
+    pub is_consolidated: bool,
+    #[serde(default)]
+    pub is_soft_deleted: bool,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub related_ids: Vec<String>,
+    #[serde(default)]
+    pub consolidated_from: Vec<String>,
+}
+
+fn default_schema_version() -> u32 {
+    1
 }
 
 /// Search result returned to the UI
@@ -138,6 +200,30 @@ pub struct SearchResult {
     /// Ebbinghaus decay score for this record (used in reranking)
     #[serde(default = "default_decay_score")]
     pub decay_score: f32,
+
+    // V2 Search Results
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub activity_type: String,
+    #[serde(default)]
+    pub files_touched: Vec<String>,
+    #[serde(default)]
+    pub session_duration_mins: u32,
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub extraction_confidence: f32,
+    #[serde(default)]
+    pub dedup_fingerprint: String,
+    #[serde(default)]
+    pub is_consolidated: bool,
+    #[serde(default)]
+    pub is_soft_deleted: bool,
 }
 
 /// Statistics about stored data

@@ -260,7 +260,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         // OCR
         let ocr_start = Instant::now();
-        let ocr_result = match ocr.recognize_with_metadata(&image_data) {
+        let (ocr_result, qwen_cleaned_text) = match ocr.recognize_with_metadata(&image_data) {
             Ok(result) => result,
             Err(e) => {
                 tracing::warn!("OCR failed: {}", e);
@@ -334,25 +334,19 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             }
         };
 
-        let summary = if let Some(engine) = engine.as_ref() {
+        let structured_memory = if let Some(engine) = engine.as_ref() {
             engine
-                .summarize_memory_node(&app_name, &window_title, &text)
+                .extract_structured_memory(&app_name, &window_title, &qwen_cleaned_text)
                 .await
         } else {
-            String::new()
+            None
         };
 
-        // VLM structured analysis is reserved for the Qwen extraction path.
-        // The legacy analyze_screen approach produced Action/Context format text
-        // that degraded embedding quality — skip it here.
         let vlm_analysis: Option<String> = None;
 
-
-        let (final_snippet, summary_source) = if !summary.is_empty() {
-            // Best case: we have a good LLM summary.
-            (summary, "llm".to_string())
+        let (final_snippet, summary_source) = if let Some(ref mem) = structured_memory {
+            (mem.summary.clone(), "llm".to_string())
         } else if let Some(ref vlm_text) = vlm_analysis {
-            // Second best: VLM produced structured metadata.
             (vlm_text.clone(), "vlm".to_string())
         } else {
             let fallback = text_cleanup::concise_fallback_snippet(&app_name, &window_title, &text);
@@ -538,6 +532,35 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             support_embedding,
             decay_score: 1.0,
             last_accessed_at: 0,
+            
+            // V2 Fields
+            schema_version: 2,
+            activity_type: structured_memory.as_ref().map(|m| m.activity_type.clone()).unwrap_or_default(),
+            files_touched: structured_memory.as_ref().map(|m| m.files_touched.clone()).unwrap_or_default(),
+            symbols_changed: structured_memory.as_ref().map(|m| m.symbols_changed.clone()).unwrap_or_default(),
+            session_duration_mins: 0,
+            project: structured_memory.as_ref().map(|m| m.project.clone()).unwrap_or_default(),
+            tags: structured_memory.as_ref().map(|m| m.tags.clone()).unwrap_or_default(),
+            entities: structured_memory.as_ref().map(|m| m.entities.clone()).unwrap_or_default(),
+            decisions: structured_memory.as_ref().map(|m| m.decisions.clone()).unwrap_or_default(),
+            errors: structured_memory.as_ref().map(|m| m.errors.clone()).unwrap_or_default(),
+            next_steps: structured_memory.as_ref().map(|m| m.next_steps.clone()).unwrap_or_default(),
+            git_stats: structured_memory.as_ref().map(|m| crate::store::schema::GitStats {
+                added: m.git_stats.added,
+                removed: m.git_stats.removed,
+                commits: m.git_stats.commits,
+            }),
+            outcome: structured_memory.as_ref().map(|m| m.outcome.clone()).unwrap_or_default(),
+            extraction_confidence: structured_memory.as_ref().map(|m| m.confidence).unwrap_or(0.0),
+            dedup_fingerprint: structured_memory.as_ref().map(|m| m.dedup_fingerprint.clone()).unwrap_or_default(),
+            embedding_text: String::new(), // Populated in the vector pipeline if needed
+            embedding_model: "bge-large-en-v1.5".to_string(), // Default assumption, actual model set in pipeline
+            embedding_dim: EMBEDDING_DIM as u32,
+            is_consolidated: false,
+            is_soft_deleted: false,
+            parent_id: None,
+            related_ids: Vec::new(),
+            consolidated_from: Vec::new(),
         };
         let merged_or_new = match merge_or_append_memory_record(
             state.as_ref(),
@@ -1180,6 +1203,7 @@ pub(crate) async fn merge_memory_records_with_policy(
         support_embedding: merged_support_embedding,
         decay_score: existing.decay_score.max(incoming.decay_score),
         last_accessed_at: existing.last_accessed_at.max(incoming.last_accessed_at),
+        ..Default::default()
     }
 }
 
