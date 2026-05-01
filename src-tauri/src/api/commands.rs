@@ -372,6 +372,9 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         raw_snippets: vec![fallback_snippet],
         evidence_ids: vec![memory_id],
         confidence: score.clamp(0.0, 1.0),
+        activity_type: String::new(),
+        files_touched: Vec::new(),
+        session_duration_mins: 0,
     }
 }
 

@@ -766,28 +766,51 @@ fn parse_env_bool(value: &str) -> bool {
 }
 
 /// Resolve the directory containing ONNX model files.
-/// Checks (in order): env var override, standard app data dir, dev CARGO_MANIFEST_DIR fallback.
+/// Priority chain (first match wins):
+///   1. FNDR_EMBED_MODEL_DIR env var (new, embed-specific)
+///   2. FNDR_MODEL_DIR env var (legacy, any model)
+///   3. ~/.fndr/models (user-installed, common for Homebrew/manual installs)
+///   4. ProjectDirs data dir / models (app data location)
+///   5. CARGO_MANIFEST_DIR/models (dev build fallback)
 fn resolve_model_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("FNDR_MODEL_DIR") {
-        let p = PathBuf::from(dir);
-        if model_assets_present(&p) {
-            return Some(p);
-        }
-        if p.exists() {
-            tracing::warn!(
-                "FNDR_MODEL_DIR is set to {}, but {} or {} is missing",
-                p.display(),
-                MODEL_FILENAME,
-                TOKENIZER_FILENAME
-            );
+    // 1. FNDR_EMBED_MODEL_DIR (new, dedicated embed env var)
+    for env_key in &["FNDR_EMBED_MODEL_DIR", "FNDR_MODEL_DIR"] {
+        if let Ok(dir) = std::env::var(env_key) {
+            let p = PathBuf::from(&dir);
+            if model_assets_present(&p) {
+                tracing::info!("Embedder model loaded from ${} = {}", env_key, p.display());
+                return Some(p);
+            }
+            if p.exists() {
+                tracing::warn!(
+                    "${} is set to {}, but {} or {} is missing. \
+                    Download the model with: ./scripts/download_model.sh",
+                    env_key,
+                    p.display(),
+                    MODEL_FILENAME,
+                    TOKENIZER_FILENAME
+                );
+            }
         }
     }
 
+    // 2. ~/.fndr/models (user-installed, common for Homebrew/manual installs)
+    if let Some(home) = dirs::home_dir() {
+        let user_models = home.join(".fndr").join("models");
+        if model_assets_present(&user_models) {
+            tracing::info!("Embedder model found at ~/.fndr/models");
+            return Some(user_models);
+        }
+    }
+
+    // 3. ProjectDirs app data location
     let app_models = directories::ProjectDirs::from("com", "fndr", "FNDR")
         .map(|proj| proj.data_dir().join("models"));
 
+    // 4. Dev build: CARGO_MANIFEST_DIR/models
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models");
-    if let Some(path) = app_models.as_ref() {
+
+    if let Some(ref path) = app_models {
         if model_assets_present(path) {
             return Some(path.clone());
         }
@@ -797,6 +820,7 @@ fn resolve_model_dir() -> Option<PathBuf> {
         return Some(dev);
     }
 
+    // Fallback: directory exists but assets may not yet be downloaded
     if let Some(path) = app_models {
         if path.exists() {
             return Some(path);

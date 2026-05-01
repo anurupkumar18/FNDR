@@ -70,7 +70,9 @@ impl Default for OcrConfig {
         Self {
             recognition_level: RecognitionLevel::Accurate,
             language_correction: true,
-            min_confidence: 0.5,
+            // Use 0.30 so we collect all Apple Vision confidence values before
+            // per-line filtering — previously 0.50 biased the average upward.
+            min_confidence: 0.30,
             aggressive_filtering: true,
             min_line_length: 7,
             custom_noise_patterns: Vec::new(),
@@ -110,20 +112,36 @@ impl OcrConfig {
     }
 }
 
+/// Aggregate stats from OCR preprocessing — stored in memory records.
+/// Never contains raw OCR text or per-line text.
+#[derive(Debug, Clone, Default)]
+pub struct OcrAggregateStats {
+    /// Average confidence across all lines (including low-conf)
+    pub avg_confidence_all: f32,
+    /// Average confidence across kept lines only
+    pub avg_confidence_kept: f32,
+    /// Lines used after preprocessing filters
+    pub lines_used: usize,
+    /// Lines dropped (confidence < 0.40)
+    pub lines_dropped: usize,
+    /// Lines tagged [LOW_CONF] (0.40 <= conf < 0.65)
+    pub low_conf_count: usize,
+}
+
 /// Recognized text with metadata
 #[derive(Debug, Clone)]
 pub struct RecognizedText {
-    /// The extracted text content
+    /// The extracted text content (normalized, noise-filtered)
     pub text: String,
 
-    /// Average confidence score
+    /// Average confidence score (over all recognized lines, not just kept ones)
     pub confidence: f32,
 
     /// Number of text blocks recognized
     pub block_count: usize,
 
-    /// Original text before normalization
-    pub raw_text: String,
+    /// Aggregate preprocessing stats (safe to store)
+    pub ocr_stats: OcrAggregateStats,
 }
 
 impl RecognizedText {
@@ -131,6 +149,15 @@ impl RecognizedText {
         self.text.trim().len() < min_chars
             || (self.block_count <= 1 && self.confidence < 0.40)
             || self.confidence < 0.15
+    }
+
+    /// Preprocess OCR for Qwen3-VL structured extraction.
+    ///
+    /// Returns (cleaned_text_for_qwen, aggregate_stats).
+    /// The cleaned text is transient — it must be discarded after Qwen extraction.
+    /// Only aggregate_stats should be persisted.
+    pub fn preprocess_for_qwen(&self, per_line_confidences: &[(String, f32)]) -> (String, OcrAggregateStats) {
+        preprocess_ocr_for_qwen(per_line_confidences)
     }
 }
 
@@ -188,30 +215,37 @@ impl OcrEngine {
     /// Recognize text with full metadata
     pub fn recognize_with_metadata(&self, image_data: &[u8]) -> Result<RecognizedText, OcrError> {
         unsafe {
-            // Create NSData from image bytes
             let ns_data =
                 NSData::dataWithBytes_length(image_data.as_ptr() as *mut c_void, image_data.len());
 
-            // Create VNImageRequestHandler
             let handler = self.create_image_request_handler(&ns_data)?;
-
-            // Create and configure VNRecognizeTextRequest
             let request = self.create_text_request()?;
-
-            // Perform request
             self.perform_request(&handler, &request)?;
 
-            // Extract results with confidence scores
-            let (raw_text, avg_confidence, block_count) = self.extract_results(&request)?;
+            // Collect all per-line data transiently (never stored).
+            let raw_lines = self.extract_raw_lines(&request)?;
 
-            // Normalize text according to config
-            let normalized = self.normalize_text(&raw_text);
+            // Compute true average confidence from ALL lines.
+            let avg_confidence_all = if raw_lines.is_empty() {
+                0.0
+            } else {
+                raw_lines.iter().map(|(_, c)| c).sum::<f32>() / raw_lines.len() as f32
+            };
 
+            // Build normalized text and compute aggregate stats from all lines.
+            let (cleaned_text, ocr_stats_from_all) = preprocess_ocr_for_qwen(&raw_lines);
+
+            // For the text field, apply noise filter on top of the preprocessed output.
+            let normalized = self.normalize_text(&cleaned_text);
+
+            let block_count = ocr_stats_from_all.lines_used;
+
+            // raw_lines is dropped here — not stored.
             Ok(RecognizedText {
                 text: normalized,
-                confidence: avg_confidence,
+                confidence: avg_confidence_all,
                 block_count,
-                raw_text,
+                ocr_stats: ocr_stats_from_all,
             })
         }
     }
@@ -281,22 +315,23 @@ impl OcrEngine {
         Ok(())
     }
 
-    unsafe fn extract_results(
+    /// Extract per-line (text, confidence) pairs from Apple Vision results.
+    /// Collects ALL lines (including low-confidence) so averages are accurate.
+    unsafe fn extract_raw_lines(
         &self,
         request: &AnyObject,
-    ) -> Result<(String, f32, usize), OcrError> {
+    ) -> Result<Vec<(String, f32)>, OcrError> {
         let results: *const AnyObject = msg_send![request, results];
         if results.is_null() {
-            return Ok((String::new(), 0.0, 0));
+            return Ok(Vec::new());
         }
 
         let count: usize = msg_send![results, count];
         if count == 0 {
-            return Ok((String::new(), 0.0, 0));
+            return Ok(Vec::new());
         }
 
-        let mut text_parts = Vec::with_capacity(count);
-        let mut confidence_scores = Vec::with_capacity(count);
+        let mut lines = Vec::with_capacity(count);
 
         for i in 0..count {
             let observation: *const AnyObject = msg_send![results, objectAtIndex: i];
@@ -304,7 +339,6 @@ impl OcrEngine {
                 continue;
             }
 
-            // Get top candidate
             let candidates: *const AnyObject = msg_send![observation, topCandidates: 1usize];
             if candidates.is_null() {
                 continue;
@@ -320,31 +354,18 @@ impl OcrEngine {
                 continue;
             }
 
-            // Extract confidence score
             let confidence: f32 = msg_send![candidate, confidence];
 
-            // Filter by minimum confidence
-            if confidence < self.config.min_confidence {
-                tracing::trace!("Skipping low-confidence text: {:.2}", confidence);
-                continue;
-            }
-
-            // Extract text
             let ns_string: *const NSString = msg_send![candidate, string];
             if !ns_string.is_null() {
-                let rust_string = (*ns_string).to_string();
-                text_parts.push(rust_string);
-                confidence_scores.push(confidence);
+                let text = (*ns_string).to_string();
+                if !text.trim().is_empty() {
+                    lines.push((text, confidence));
+                }
             }
         }
 
-        let avg_confidence = if confidence_scores.is_empty() {
-            0.0
-        } else {
-            confidence_scores.iter().sum::<f32>() / confidence_scores.len() as f32
-        };
-
-        Ok((text_parts.join("\n"), avg_confidence, text_parts.len()))
+        Ok(lines)
     }
 
     /// Normalize OCR text according to configuration
@@ -560,6 +581,82 @@ fn time_regex() -> &'static Regex {
 fn size_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^\d+(\.\d+)?\s*(B|KB|MB|GB|TB)$").expect("valid size regex"))
+}
+
+/// Preprocess per-line OCR data for structured Qwen3-VL extraction.
+///
+/// - Drops lines with confidence < 0.40 (unreliable, not worth sending to VLM)
+/// - Prefixes lines with 0.40 <= conf < 0.65 with "[LOW_CONF]" so Qwen can weight them lower
+/// - Applies basic normalization (de-duplicate consecutive whitespace)
+/// - Returns aggregate-only stats (safe to persist); cleaned text is transient
+pub fn preprocess_ocr_for_qwen(
+    lines: &[(String, f32)],
+) -> (String, OcrAggregateStats) {
+    const DROP_THRESHOLD: f32 = 0.40;
+    const LOW_CONF_THRESHOLD: f32 = 0.65;
+
+    let mut output = Vec::with_capacity(lines.len());
+    let mut lines_dropped = 0usize;
+    let mut low_conf_count = 0usize;
+    let mut kept_conf_sum = 0.0f32;
+    let mut kept_count = 0usize;
+    let all_conf_sum: f32 = lines.iter().map(|(_, c)| c).sum();
+
+    // De-duplicate consecutive equal lines (OCR often repeats the same block)
+    let mut prev_key: Option<String> = None;
+
+    for (text, conf) in lines {
+        if *conf < DROP_THRESHOLD {
+            lines_dropped += 1;
+            continue;
+        }
+
+        // Normalize whitespace inline
+        let normalized: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if normalized.is_empty() {
+            lines_dropped += 1;
+            continue;
+        }
+
+        // Skip exact duplicates from consecutive lines
+        let key = normalized.to_lowercase();
+        if prev_key.as_deref() == Some(&key) {
+            continue;
+        }
+        prev_key = Some(key);
+
+        let line = if *conf < LOW_CONF_THRESHOLD {
+            low_conf_count += 1;
+            format!("[LOW_CONF] {}", normalized)
+        } else {
+            normalized
+        };
+
+        kept_conf_sum += conf;
+        kept_count += 1;
+        output.push(line);
+    }
+
+    let avg_confidence_all = if lines.is_empty() {
+        0.0
+    } else {
+        all_conf_sum / lines.len() as f32
+    };
+    let avg_confidence_kept = if kept_count == 0 {
+        0.0
+    } else {
+        kept_conf_sum / kept_count as f32
+    };
+
+    let stats = OcrAggregateStats {
+        avg_confidence_all,
+        avg_confidence_kept,
+        lines_used: output.len(),
+        lines_dropped,
+        low_conf_count,
+    };
+
+    (output.join("\n"), stats)
 }
 
 #[cfg(test)]

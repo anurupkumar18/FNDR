@@ -37,6 +37,15 @@ pub struct MemoryCard {
     pub evidence_ids: Vec<String>,
     #[serde(default)]
     pub confidence: f32,
+    /// High-level activity category: "coding", "browsing", "communication", "docs", "design", "other"
+    #[serde(default)]
+    pub activity_type: String,
+    /// Files or code symbols mentioned across this group's snippets
+    #[serde(default)]
+    pub files_touched: Vec<String>,
+    /// Approximate session duration in minutes (0 if single capture)
+    #[serde(default)]
+    pub session_duration_mins: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +207,10 @@ impl MemoryCardSynthesizer {
                 summary = format!("Low confidence: {}", summary);
             }
 
+            let activity_type = infer_activity_type(&anchor.app_name, &anchor.window_title, &snippets);
+            let files_touched = extract_files_touched(&snippets);
+            let session_duration_mins = compute_session_duration(&group.members);
+
             cards.push(MemoryCard {
                 id: anchor.id.clone(),
                 title,
@@ -214,6 +227,9 @@ impl MemoryCardSynthesizer {
                 raw_snippets: snippets,
                 evidence_ids,
                 confidence,
+                activity_type,
+                files_touched,
+                session_duration_mins,
             });
         }
 
@@ -567,6 +583,8 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     {
         summary = format!("Low confidence: {}", summary);
     }
+    let activity_type = infer_activity_type(&result.app_name, &result.window_title, &snippets);
+    let files_touched = extract_files_touched(&snippets);
     MemoryCard {
         id: result.id.clone(),
         title,
@@ -583,7 +601,96 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         raw_snippets: snippets,
         evidence_ids,
         confidence,
+        activity_type,
+        files_touched,
+        session_duration_mins: 0,
     }
+}
+
+/// Classify the high-level activity from app/window/snippet signals.
+fn infer_activity_type(app_name: &str, window_title: &str, snippets: &[String]) -> String {
+    let haystack = format!(
+        "{} {} {}",
+        app_name.to_lowercase(),
+        window_title.to_lowercase(),
+        snippets.join(" ").to_lowercase()
+    );
+
+    // Ordered by specificity — first match wins.
+    if contains_any(&haystack, &["terminal", "iterm", "bash", "zsh", "cargo", "npm run", "git "]) {
+        return "coding".to_string();
+    }
+    if contains_any(&haystack, &["vscode", "cursor", "code", "intellij", "xcode", "rust", "python", "function", "def ", "class ", "impl "]) {
+        return "coding".to_string();
+    }
+    if contains_any(&haystack, &["figma", "sketch", "framer", "canva", "adobe", "mockup", "design"]) {
+        return "design".to_string();
+    }
+    if contains_any(&haystack, &["slack", "discord", "teams", "mail", "gmail", "outlook", "inbox", "message"]) {
+        return "communication".to_string();
+    }
+    if contains_any(&haystack, &["notion", "obsidian", "confluence", "docs", "word", "pages", "pdf", "readme"]) {
+        return "docs".to_string();
+    }
+    if contains_any(&haystack, &["chrome", "safari", "firefox", "arc browser", "http://", "https://", "www."]) {
+        return "browsing".to_string();
+    }
+    "other".to_string()
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| haystack.contains(n))
+}
+
+/// Extract file paths and code symbols from snippets (up to 6 unique entries).
+fn extract_files_touched(snippets: &[String]) -> Vec<String> {
+    let combined = snippets.join(" ");
+    let mut found: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for word in combined.split_whitespace() {
+        let w = word.trim_matches(|c: char| ",;:'\"()[]{}".contains(c));
+        if w.len() < 4 {
+            continue;
+        }
+        // File path heuristic: contains / or . with known extension
+        let is_path = w.contains('/') || (w.contains('.') && (
+            w.ends_with(".rs") || w.ends_with(".ts") || w.ends_with(".tsx")
+            || w.ends_with(".py") || w.ends_with(".js") || w.ends_with(".jsx")
+            || w.ends_with(".go") || w.ends_with(".json") || w.ends_with(".toml")
+            || w.ends_with(".md") || w.ends_with(".sh") || w.ends_with(".yaml")
+            || w.ends_with(".yml")
+        ));
+        if is_path {
+            // Normalize: strip leading slashes and keep only the last 2 components
+            let parts: Vec<&str> = w.trim_start_matches('/').rsplitn(3, '/').collect();
+            let normalized = if parts.len() >= 2 {
+                parts[..2].iter().rev().cloned().collect::<Vec<_>>().join("/")
+            } else {
+                w.to_string()
+            };
+            let key = normalized.to_lowercase();
+            if seen.insert(key) {
+                found.push(normalized);
+                if found.len() >= 6 {
+                    break;
+                }
+            }
+        }
+    }
+
+    found
+}
+
+/// Compute approximate session duration in minutes from member timestamps.
+fn compute_session_duration(members: &[SearchResult]) -> u32 {
+    if members.len() < 2 {
+        return 0;
+    }
+    let min_ts = members.iter().map(|m| m.timestamp).min().unwrap_or(0);
+    let max_ts = members.iter().map(|m| m.timestamp).max().unwrap_or(0);
+    let diff_ms = max_ts.saturating_sub(min_ts);
+    (diff_ms / 60_000).max(0) as u32
 }
 
 fn sanitize_title(raw: &str, app_name: &str, window_title: &str) -> String {

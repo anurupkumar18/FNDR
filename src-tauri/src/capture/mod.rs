@@ -342,23 +342,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             String::new()
         };
 
-        // Run VLM analysis in parallel to extract structured metadata (Action + Context).
-        // This enriches the record even when the LLM summary path produces a weak fallback.
-        let vlm_analysis = if let Some(vlm) = state.vlm_engine() {
-            match vlm.analyze_screen(&text, &app_name).await {
-                Ok(analysis) if !analysis.trim().is_empty() => {
-                    tracing::info!("VLM analysis: {}", analysis);
-                    Some(analysis)
-                }
-                Ok(_) => None,
-                Err(err) => {
-                    tracing::debug!("VLM analysis failed (non-fatal): {}", err);
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        // VLM structured analysis is reserved for the Qwen extraction path.
+        // The legacy analyze_screen approach produced Action/Context format text
+        // that degraded embedding quality — skip it here.
+        let vlm_analysis: Option<String> = None;
+
 
         let (final_snippet, summary_source) = if !summary.is_empty() {
             // Best case: we have a good LLM summary.
@@ -536,7 +524,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             text: String::new(),
             clean_text: enriched_clean_text,
             ocr_confidence: ocr_result.confidence,
-            ocr_block_count: ocr_result.block_count as u32,
+            ocr_block_count: ocr_result.ocr_stats.lines_used as u32,
             snippet: final_snippet,
             summary_source,
             noise_score,
