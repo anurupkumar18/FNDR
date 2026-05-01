@@ -74,6 +74,7 @@ const DEFAULT_AUTOFILL_SETTINGS: AutofillSettings = {
 
 export function ControlPanel({ status, compact = false, evalUi = false }: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
+    const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<Tab>("settings");
     const [blocklist, setBlocklistState] = useState<string[]>([]);
     const [privacyAlertCount, setPrivacyAlertCount] = useState(0);
@@ -213,6 +214,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         const previous = prevPrivacyAlertCountRef.current;
         if (privacyAlertCount > 0 && previous === 0) {
             setIsOpen(true);
+            setIsAppearanceOpen(false);
             setActiveTab("privacy");
         }
         prevPrivacyAlertCountRef.current = privacyAlertCount;
@@ -227,13 +229,16 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     // Close on escape
     useEffect(() => {
         const handleEscape = (e: KeyboardEvent) => {
-            if (e.key === "Escape") setIsOpen(false);
+            if (e.key === "Escape") {
+                setIsOpen(false);
+                setIsAppearanceOpen(false);
+            }
         };
-        if (isOpen) {
+        if (isOpen || isAppearanceOpen) {
             window.addEventListener("keydown", handleEscape);
             return () => window.removeEventListener("keydown", handleEscape);
         }
-    }, [isOpen]);
+    }, [isAppearanceOpen, isOpen]);
 
     // Apply theme to document root
     useEffect(() => {
@@ -574,20 +579,44 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
 
     return (
         <div className="control-panel-container">
-            <button
-                className={`ui-action-btn settings-toggle ${compact ? "compact" : ""}`}
-                onClick={() => setIsOpen(!isOpen)}
-                aria-label={privacyAlertCount > 0 ? `Open settings, ${privacyAlertCount} privacy alert${privacyAlertCount === 1 ? "" : "s"}` : "Open settings"}
-                title={privacyAlertCount > 0 ? `${privacyAlertCount} privacy alert${privacyAlertCount === 1 ? "" : "s"}` : "Open settings"}
-            >
-                <svg className="settings-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.86l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.86-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.86.34l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.86 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.86l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.86.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.86-.34l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.86v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z" />
-                </svg>
-                {privacyAlertCount > 0 && <span className="privacy-badge">{privacyAlertCount}</span>}
-            </button>
+            <div className="control-panel-actions">
+                <button
+                    className={`ui-action-btn settings-toggle ${compact ? "compact" : ""}`}
+                    onClick={() => {
+                        setIsAppearanceOpen(false);
+                        setIsOpen(!isOpen);
+                    }}
+                    aria-label={privacyAlertCount > 0 ? `Open settings, ${privacyAlertCount} privacy alert${privacyAlertCount === 1 ? "" : "s"}` : "Open settings"}
+                    title={privacyAlertCount > 0 ? `${privacyAlertCount} privacy alert${privacyAlertCount === 1 ? "" : "s"}` : "Open settings"}
+                >
+                    <svg className="settings-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.86l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.86-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.86.34l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.86 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.86l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.86.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.86-.34l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.86v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z" />
+                    </svg>
+                    {privacyAlertCount > 0 && <span className="privacy-badge">{privacyAlertCount}</span>}
+                </button>
+                <button
+                    className={`ui-action-btn settings-toggle ${compact ? "compact" : ""}`}
+                    onClick={() => {
+                        setIsOpen(false);
+                        setIsAppearanceOpen(!isAppearanceOpen);
+                    }}
+                    aria-label="Open appearance"
+                    title="Open appearance"
+                >
+                    <span className="settings-toggle-icon" aria-hidden="true">◐</span>
+                </button>
+            </div>
 
-            {isOpen && <div className="panel-backdrop" onClick={() => setIsOpen(false)} />}
+            {(isOpen || isAppearanceOpen) && (
+                <div
+                    className="panel-backdrop"
+                    onClick={() => {
+                        setIsOpen(false);
+                        setIsAppearanceOpen(false);
+                    }}
+                />
+            )}
             <aside className={`settings-panel ${isOpen ? "open" : ""}`}>
                 <header className="panel-header">
                     <div>
@@ -649,68 +678,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                     </button>
                                 </div>
                                 {profileMsg && <p className="profile-msg">{profileMsg}</p>}
-                            </section>
-
-                            <section className="panel-section">
-                                <h3>Appearance</h3>
-                                <p className="section-hint">Choose a mode and cinematic palette.</p>
-                                <div className="theme-choice-row" role="radiogroup" aria-label="Theme selection">
-                                    <button
-                                        className={`ui-action-btn theme-choice ${theme === "dark" ? "active" : ""}`}
-                                        onClick={() => setTheme("dark")}
-                                        aria-pressed={theme === "dark"}
-                                    >
-                                        <span className="theme-choice-icon" aria-hidden="true">🌙</span>
-                                        Dark
-                                    </button>
-                                    <button
-                                        className={`ui-action-btn theme-choice ${theme === "light" ? "active" : ""}`}
-                                        onClick={() => setTheme("light")}
-                                        aria-pressed={theme === "light"}
-                                    >
-                                        <span className="theme-choice-icon" aria-hidden="true">☀️</span>
-                                        Light
-                                    </button>
-                                </div>
-                                <div className="palette-choice-grid" role="listbox" aria-label="Cinematic palette">
-                                    {listPalettes().map((key) => {
-                                        const palette = PALETTES[key];
-                                        const active = paletteKey === key;
-                                        return (
-                                            <button
-                                                key={key}
-                                                type="button"
-                                                className={`palette-choice ${active ? "active" : ""}`}
-                                                onClick={() => {
-                                                    if (key === "fndrDark") {
-                                                        selectAppearance(key, "dark");
-                                                        return;
-                                                    }
-                                                    if (key === "fndrLight") {
-                                                        selectAppearance(key, "light");
-                                                        return;
-                                                    }
-                                                    setPaletteKey(key);
-                                                }}
-                                                aria-selected={active}
-                                            >
-                                                <span className="palette-choice-copy">
-                                                    <strong>{palette.name}</strong>
-                                                    <span>{palette.year} · {palette.director}</span>
-                                                </span>
-                                                <span className="palette-swatches" aria-hidden="true">
-                                                    {palette.shades.map((shade, index) => (
-                                                        <span
-                                                            key={`${key}-${shade}-${index}`}
-                                                            className="palette-swatch"
-                                                            style={{ backgroundColor: shade }}
-                                                        />
-                                                    ))}
-                                                </span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
                             </section>
 
                             <section className="panel-section">
@@ -1165,6 +1132,79 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                             </section>
                         </>
                     )}
+                </div>
+            </aside>
+
+            <aside className={`settings-panel ${isAppearanceOpen ? "open" : ""}`}>
+                <header className="panel-header">
+                    <div>
+                        <h2>Appearance</h2>
+                        <p className="panel-subtitle">Choose a mode and cinematic palette.</p>
+                    </div>
+                    <button className="ui-action-btn panel-close" onClick={() => setIsAppearanceOpen(false)} aria-label="Close">X</button>
+                </header>
+                <div className="panel-content">
+                    <section className="panel-section">
+                        <h3>Appearance</h3>
+                        <p className="section-hint">Choose a mode and cinematic palette.</p>
+                        <div className="theme-choice-row" role="radiogroup" aria-label="Theme selection">
+                            <button
+                                className={`ui-action-btn theme-choice ${theme === "dark" ? "active" : ""}`}
+                                onClick={() => setTheme("dark")}
+                                aria-pressed={theme === "dark"}
+                            >
+                                <span className="theme-choice-icon" aria-hidden="true">🌙</span>
+                                Dark
+                            </button>
+                            <button
+                                className={`ui-action-btn theme-choice ${theme === "light" ? "active" : ""}`}
+                                onClick={() => setTheme("light")}
+                                aria-pressed={theme === "light"}
+                            >
+                                <span className="theme-choice-icon" aria-hidden="true">☀️</span>
+                                Light
+                            </button>
+                        </div>
+                        <div className="palette-choice-grid" role="listbox" aria-label="Cinematic palette">
+                            {listPalettes().map((key) => {
+                                const palette = PALETTES[key];
+                                const active = paletteKey === key;
+                                return (
+                                    <button
+                                        key={key}
+                                        type="button"
+                                        className={`palette-choice ${active ? "active" : ""}`}
+                                        onClick={() => {
+                                            if (key === "fndrDark") {
+                                                selectAppearance(key, "dark");
+                                                return;
+                                            }
+                                            if (key === "fndrLight") {
+                                                selectAppearance(key, "light");
+                                                return;
+                                            }
+                                            setPaletteKey(key);
+                                        }}
+                                        aria-selected={active}
+                                    >
+                                        <span className="palette-choice-copy">
+                                            <strong>{palette.name}</strong>
+                                            <span>{palette.year} · {palette.director}</span>
+                                        </span>
+                                        <span className="palette-swatches" aria-hidden="true">
+                                            {palette.shades.map((shade, index) => (
+                                                <span
+                                                    key={`${key}-${shade}-${index}`}
+                                                    className="palette-swatch"
+                                                    style={{ backgroundColor: shade }}
+                                                />
+                                            ))}
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </section>
                 </div>
             </aside>
         </div>

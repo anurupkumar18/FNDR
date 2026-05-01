@@ -630,6 +630,12 @@
     gap: 8px;
 }
 
+.control-panel-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .privacy-badge {
     position: absolute;
     top: 2px;
