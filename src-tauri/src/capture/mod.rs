@@ -532,27 +532,65 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             support_embedding,
             decay_score: 1.0,
             last_accessed_at: 0,
-            
+
             // V2 Fields
             schema_version: 2,
-            activity_type: structured_memory.as_ref().map(|m| m.activity_type.clone()).unwrap_or_default(),
-            files_touched: structured_memory.as_ref().map(|m| m.files_touched.clone()).unwrap_or_default(),
-            symbols_changed: structured_memory.as_ref().map(|m| m.symbols_changed.clone()).unwrap_or_default(),
+            activity_type: structured_memory
+                .as_ref()
+                .map(|m| m.activity_type.clone())
+                .unwrap_or_default(),
+            files_touched: structured_memory
+                .as_ref()
+                .map(|m| m.files_touched.clone())
+                .unwrap_or_default(),
+            symbols_changed: structured_memory
+                .as_ref()
+                .map(|m| m.symbols_changed.clone())
+                .unwrap_or_default(),
             session_duration_mins: 0,
-            project: structured_memory.as_ref().map(|m| m.project.clone()).unwrap_or_default(),
-            tags: structured_memory.as_ref().map(|m| m.tags.clone()).unwrap_or_default(),
-            entities: structured_memory.as_ref().map(|m| m.entities.clone()).unwrap_or_default(),
-            decisions: structured_memory.as_ref().map(|m| m.decisions.clone()).unwrap_or_default(),
-            errors: structured_memory.as_ref().map(|m| m.errors.clone()).unwrap_or_default(),
-            next_steps: structured_memory.as_ref().map(|m| m.next_steps.clone()).unwrap_or_default(),
-            git_stats: structured_memory.as_ref().map(|m| crate::store::schema::GitStats {
-                added: m.git_stats.added,
-                removed: m.git_stats.removed,
-                commits: m.git_stats.commits,
-            }),
-            outcome: structured_memory.as_ref().map(|m| m.outcome.clone()).unwrap_or_default(),
-            extraction_confidence: structured_memory.as_ref().map(|m| m.confidence).unwrap_or(0.0),
-            dedup_fingerprint: structured_memory.as_ref().map(|m| m.dedup_fingerprint.clone()).unwrap_or_default(),
+            project: structured_memory
+                .as_ref()
+                .map(|m| m.project.clone())
+                .unwrap_or_default(),
+            tags: structured_memory
+                .as_ref()
+                .map(|m| m.tags.clone())
+                .unwrap_or_default(),
+            entities: structured_memory
+                .as_ref()
+                .map(|m| m.entities.clone())
+                .unwrap_or_default(),
+            decisions: structured_memory
+                .as_ref()
+                .map(|m| m.decisions.clone())
+                .unwrap_or_default(),
+            errors: structured_memory
+                .as_ref()
+                .map(|m| m.errors.clone())
+                .unwrap_or_default(),
+            next_steps: structured_memory
+                .as_ref()
+                .map(|m| m.next_steps.clone())
+                .unwrap_or_default(),
+            git_stats: structured_memory
+                .as_ref()
+                .map(|m| crate::store::schema::GitStats {
+                    added: m.git_stats.added,
+                    removed: m.git_stats.removed,
+                    commits: m.git_stats.commits,
+                }),
+            outcome: structured_memory
+                .as_ref()
+                .map(|m| m.outcome.clone())
+                .unwrap_or_default(),
+            extraction_confidence: structured_memory
+                .as_ref()
+                .map(|m| m.confidence)
+                .unwrap_or(0.0),
+            dedup_fingerprint: structured_memory
+                .as_ref()
+                .map(|m| m.dedup_fingerprint.clone())
+                .unwrap_or_default(),
             embedding_text: String::new(), // Populated in the vector pipeline if needed
             embedding_model: "bge-large-en-v1.5".to_string(), // Default assumption, actual model set in pipeline
             embedding_dim: EMBEDDING_DIM as u32,
@@ -1175,6 +1213,40 @@ pub(crate) async fn merge_memory_records_with_policy(
         existing.support_embedding.clone()
     };
 
+    let schema_version = existing
+        .schema_version
+        .max(incoming.schema_version)
+        .max(MemoryRecord::default().schema_version);
+    let activity_type = prefer_non_empty(&incoming.activity_type, &existing.activity_type);
+    let files_touched = merge_string_lists(&existing.files_touched, &incoming.files_touched);
+    let symbols_changed = merge_string_lists(&existing.symbols_changed, &incoming.symbols_changed);
+    let session_duration_mins = existing
+        .session_duration_mins
+        .max(incoming.session_duration_mins);
+    let project = prefer_non_empty(&incoming.project, &existing.project);
+    let tags = merge_string_lists(&existing.tags, &incoming.tags);
+    let entities = merge_string_lists(&existing.entities, &incoming.entities);
+    let decisions = merge_string_lists(&existing.decisions, &incoming.decisions);
+    let errors = merge_string_lists(&existing.errors, &incoming.errors);
+    let next_steps = merge_string_lists(&existing.next_steps, &incoming.next_steps);
+    let git_stats = incoming.git_stats.clone().or(existing.git_stats.clone());
+    let outcome = prefer_non_empty(&incoming.outcome, &existing.outcome);
+    let extraction_confidence = existing
+        .extraction_confidence
+        .max(incoming.extraction_confidence);
+    let dedup_fingerprint =
+        prefer_non_empty(&incoming.dedup_fingerprint, &existing.dedup_fingerprint);
+    let embedding_text = prefer_non_empty(&incoming.embedding_text, &existing.embedding_text);
+    let embedding_model = prefer_non_empty(&incoming.embedding_model, &existing.embedding_model);
+    let embedding_dim = incoming
+        .embedding_dim
+        .max(existing.embedding_dim)
+        .max(EMBEDDING_DIM as u32);
+    let parent_id = incoming.parent_id.clone().or(existing.parent_id.clone());
+    let related_ids = merge_string_lists(&existing.related_ids, &incoming.related_ids);
+    let consolidated_from =
+        merge_string_lists(&existing.consolidated_from, &incoming.consolidated_from);
+
     MemoryRecord {
         id: existing.id.clone(),
         timestamp: incoming.timestamp.max(existing.timestamp),
@@ -1203,8 +1275,56 @@ pub(crate) async fn merge_memory_records_with_policy(
         support_embedding: merged_support_embedding,
         decay_score: existing.decay_score.max(incoming.decay_score),
         last_accessed_at: existing.last_accessed_at.max(incoming.last_accessed_at),
-        ..Default::default()
+        schema_version,
+        activity_type,
+        files_touched,
+        symbols_changed,
+        session_duration_mins,
+        project,
+        tags,
+        entities,
+        decisions,
+        errors,
+        next_steps,
+        git_stats,
+        outcome,
+        extraction_confidence,
+        dedup_fingerprint,
+        embedding_text,
+        embedding_model,
+        embedding_dim,
+        is_consolidated: existing.is_consolidated || incoming.is_consolidated,
+        is_soft_deleted: existing.is_soft_deleted || incoming.is_soft_deleted,
+        parent_id,
+        related_ids,
+        consolidated_from,
     }
+}
+
+fn prefer_non_empty(incoming: &str, existing: &str) -> String {
+    let incoming_trim = incoming.trim();
+    if !incoming_trim.is_empty() {
+        incoming_trim.to_string()
+    } else {
+        existing.trim().to_string()
+    }
+}
+
+fn merge_string_lists(existing: &[String], incoming: &[String]) -> Vec<String> {
+    let mut merged = Vec::with_capacity(existing.len() + incoming.len());
+    for value in existing.iter().chain(incoming.iter()) {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !merged
+            .iter()
+            .any(|item: &String| item.eq_ignore_ascii_case(trimmed))
+        {
+            merged.push(trimmed.to_string());
+        }
+    }
+    merged
 }
 
 fn semantic_embeddings_enabled(text_embedder: Option<&Embedder>) -> bool {
@@ -1884,6 +2004,36 @@ fn extract_domain(url: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn merge_test_record(id: &str) -> MemoryRecord {
+        MemoryRecord {
+            id: id.to_string(),
+            timestamp: 1,
+            day_bucket: "2026-05-01".to_string(),
+            app_name: "Google Chrome".to_string(),
+            bundle_id: Some("com.google.Chrome".to_string()),
+            window_title: "Hacker News".to_string(),
+            session_id: "20260501-com.google.Chrome".to_string(),
+            text: String::new(),
+            clean_text: "Hacker News page text about AI budgets and developer tooling.".to_string(),
+            ocr_confidence: 0.8,
+            ocr_block_count: 12,
+            snippet: "Browsed Hacker News.".to_string(),
+            summary_source: "llm".to_string(),
+            noise_score: 0.0,
+            session_key: "google_chrome:news.ycombinator.com".to_string(),
+            lexical_shadow: "Hacker News AI budgets developer tooling".to_string(),
+            embedding: vec![0.1; EMBEDDING_DIM],
+            image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
+            screenshot_path: None,
+            url: Some("https://news.ycombinator.com".to_string()),
+            snippet_embedding: vec![0.2; EMBEDDING_DIM],
+            support_embedding: vec![0.3; EMBEDDING_DIM],
+            decay_score: 1.0,
+            last_accessed_at: 0,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn privacy_exclusion_blocks_capture_before_ocr() {
         let blocklist = vec!["1Password".to_string(), "bank.example.com".to_string()];
@@ -1909,5 +2059,88 @@ mod tests {
             Some("https://docs.example.com/fndr"),
             &blocklist,
         ));
+    }
+
+    #[tokio::test]
+    async fn merge_preserves_v2_metadata_when_incoming_is_sparse() {
+        let mut existing = merge_test_record("existing");
+        existing.schema_version = 2;
+        existing.activity_type = "research".to_string();
+        existing.tags = vec!["ai".to_string(), "tooling".to_string()];
+        existing.entities = vec!["Hacker News".to_string()];
+        existing.decisions = vec!["Track browser research sessions".to_string()];
+        existing.project = "FNDR".to_string();
+        existing.outcome = "in_progress".to_string();
+        existing.extraction_confidence = 0.9;
+        existing.dedup_fingerprint = "hn_research".to_string();
+        existing.embedding_model = "bge-large-en-v1.5".to_string();
+        existing.embedding_dim = EMBEDDING_DIM as u32;
+
+        let mut incoming = merge_test_record("incoming");
+        incoming.timestamp = 2;
+        incoming.clean_text = "More Hacker News page text about Claude Code.".to_string();
+        incoming.snippet = "Continued browsing Hacker News.".to_string();
+        incoming.schema_version = 0;
+        incoming.activity_type = String::new();
+        incoming.tags = Vec::new();
+        incoming.entities = Vec::new();
+        incoming.decisions = Vec::new();
+        incoming.project = String::new();
+        incoming.outcome = String::new();
+        incoming.extraction_confidence = 0.0;
+        incoming.dedup_fingerprint = String::new();
+        incoming.embedding_model = String::new();
+        incoming.embedding_dim = 0;
+
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+
+        assert_eq!(merged.schema_version, 2);
+        assert_eq!(merged.activity_type, "research");
+        assert_eq!(merged.project, "FNDR");
+        assert_eq!(merged.tags, vec!["ai".to_string(), "tooling".to_string()]);
+        assert_eq!(merged.entities, vec!["Hacker News".to_string()]);
+        assert_eq!(
+            merged.decisions,
+            vec!["Track browser research sessions".to_string()]
+        );
+        assert_eq!(merged.outcome, "in_progress");
+        assert_eq!(merged.extraction_confidence, 0.9);
+        assert_eq!(merged.dedup_fingerprint, "hn_research");
+        assert_eq!(merged.embedding_model, "bge-large-en-v1.5");
+        assert_eq!(merged.embedding_dim, EMBEDDING_DIM as u32);
+    }
+
+    #[tokio::test]
+    async fn merge_unions_v2_list_metadata_without_duplicates() {
+        let mut existing = merge_test_record("existing");
+        existing.tags = vec!["AI".to_string(), "tooling".to_string()];
+        existing.files_touched = vec!["src-tauri/src/store/lance_store.rs".to_string()];
+
+        let mut incoming = merge_test_record("incoming");
+        incoming.tags = vec!["ai".to_string(), "browser".to_string()];
+        incoming.files_touched = vec![
+            "src-tauri/src/store/lance_store.rs".to_string(),
+            "src-tauri/src/capture/mod.rs".to_string(),
+        ];
+
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+
+        assert_eq!(
+            merged.tags,
+            vec![
+                "AI".to_string(),
+                "tooling".to_string(),
+                "browser".to_string()
+            ]
+        );
+        assert_eq!(
+            merged.files_touched,
+            vec![
+                "src-tauri/src/store/lance_store.rs".to_string(),
+                "src-tauri/src/capture/mod.rs".to_string()
+            ]
+        );
     }
 }

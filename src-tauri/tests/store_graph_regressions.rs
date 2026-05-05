@@ -39,6 +39,7 @@ fn record(id: &str, snippet: &str, embedding_value: f32) -> MemoryRecord {
         support_embedding: embedding(embedding_value),
         decay_score: 1.0,
         last_accessed_at: 0,
+        ..Default::default()
     }
 }
 

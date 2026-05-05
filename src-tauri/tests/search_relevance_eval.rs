@@ -167,6 +167,7 @@ fn build_records(embedder: &Embedder) -> Vec<MemoryRecord> {
             support_embedding: vec![0.0; EMBEDDING_DIM],
             decay_score: 1.0,
             last_accessed_at: 0,
+            ..Default::default()
         })
         .collect()
 }

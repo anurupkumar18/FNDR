@@ -3519,6 +3519,7 @@ mod tests {
             support_embedding: vec![0.0; DEFAULT_TEXT_EMBEDDING_DIM],
             decay_score: 1.0,
             last_accessed_at: 0,
+            ..Default::default()
         }
     }
 

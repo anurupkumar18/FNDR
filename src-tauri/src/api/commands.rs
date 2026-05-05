@@ -7144,6 +7144,7 @@ mod daily_summary_tests {
             screenshot_path: None,
             url: url.map(str::to_string),
             decay_score: 1.0,
+            ..Default::default()
         }
     }
 

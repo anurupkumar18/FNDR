@@ -13,6 +13,16 @@ const COMPACT_EMBED_CHARS: usize = 720;
 const EMBEDDING_MIN_NORM: f32 = 1e-6;
 
 pub fn compact_clean_text(summary_source: &str, snippet: &str, clean_text: &str) -> String {
+    let normalized_clean = normalize_memory_text(clean_text);
+    if !normalized_clean.is_empty() {
+        let limit = if summary_source.trim().eq_ignore_ascii_case("fallback") {
+            FALLBACK_CLEAN_TEXT_CHARS
+        } else {
+            GENERIC_CLEAN_TEXT_CHARS
+        };
+        return trim_chars(&normalized_clean, limit);
+    }
+
     let normalized_snippet = normalize_memory_text(snippet);
     if !normalized_snippet.is_empty() {
         let limit = match summary_source.trim().to_ascii_lowercase().as_str() {
@@ -23,17 +33,7 @@ pub fn compact_clean_text(summary_source: &str, snippet: &str, clean_text: &str)
         return trim_chars(&normalized_snippet, limit);
     }
 
-    let normalized_clean = normalize_memory_text(clean_text);
-    if normalized_clean.is_empty() {
-        String::new()
-    } else {
-        let limit = if summary_source.trim().eq_ignore_ascii_case("fallback") {
-            FALLBACK_CLEAN_TEXT_CHARS
-        } else {
-            GENERIC_CLEAN_TEXT_CHARS
-        };
-        trim_chars(&normalized_clean, limit)
-    }
+    String::new()
 }
 
 pub fn compact_memory_record_payload(record: &MemoryRecord) -> MemoryRecord {
@@ -433,11 +433,12 @@ mod tests {
             support_embedding: vec![0.0; EMBEDDING_DIM],
             decay_score: 1.0,
             last_accessed_at: 0,
+            ..Default::default()
         }
     }
 
     #[test]
-    fn compaction_prefers_snippet_and_clears_payload_fields() {
+    fn compaction_preserves_clean_text_and_clears_payload_fields() {
         let source = record(
             "Discussed fixing memory reclaim and preserving embeddings.",
             "very long raw ocr text should not remain",
@@ -445,8 +446,22 @@ mod tests {
         let compacted = compact_memory_record_payload(&source);
 
         assert!(compacted.text.is_empty());
-        assert_eq!(compacted.clean_text, normalize_memory_text(&source.snippet));
+        assert_eq!(
+            compacted.clean_text,
+            normalize_memory_text(&source.clean_text)
+        );
         assert!(compacted.screenshot_path.is_none());
+    }
+
+    #[test]
+    fn compaction_uses_snippet_when_clean_text_is_empty() {
+        let source = record(
+            "Discussed fixing memory reclaim and preserving embeddings.",
+            "",
+        );
+        let compacted = compact_memory_record_payload(&source);
+
+        assert_eq!(compacted.clean_text, normalize_memory_text(&source.snippet));
     }
 
     #[test]

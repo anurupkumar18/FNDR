@@ -44,6 +44,7 @@ fn keyword_search_finds_seeded_content() {
         support_embedding: vec![0.0; EMBEDDING_DIM],
         decay_score: 1.0,
         last_accessed_at: 0,
+        ..Default::default()
     };
 
     let rt = tokio::runtime::Runtime::new().expect("runtime");

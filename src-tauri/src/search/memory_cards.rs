@@ -1274,6 +1274,7 @@ mod tests {
             screenshot_path: None,
             url: Some("https://www.youtube.com/watch?v=123".to_string()),
             decay_score: 1.0,
+            ..Default::default()
         };
 
         let mut second = base.clone();
@@ -1317,6 +1318,7 @@ mod tests {
             screenshot_path: None,
             url: Some("https://www.youtube.com/results?search_query=cricket".to_string()),
             decay_score: 1.0,
+            ..Default::default()
         };
 
         let (_, summary, _, _) = deterministic_fallback(
@@ -1355,6 +1357,7 @@ mod tests {
             screenshot_path: None,
             url: None,
             decay_score: 1.0,
+            ..Default::default()
         };
         let mut b = a.clone();
         b.id = "b".to_string();

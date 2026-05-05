@@ -184,6 +184,7 @@ fn diagnostic_record(
         support_embedding: embedding,
         decay_score: 1.0,
         last_accessed_at: 0,
+        ..Default::default()
     }
 }
 

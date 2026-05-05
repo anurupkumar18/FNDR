@@ -1903,6 +1903,7 @@ mod tests {
             screenshot_path: None,
             url: Some("https://example.com".to_string()),
             decay_score: 1.0,
+            ..Default::default()
         }
     }
 

@@ -42,7 +42,7 @@ fn default_lexical_shadow() -> String {
 }
 
 /// A single memory record stored in the database
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRecord {
     /// Unique identifier
     pub id: String,
@@ -161,7 +161,61 @@ pub struct MemoryRecord {
 }
 
 fn default_schema_version() -> u32 {
-    1
+    2
+}
+
+impl Default for MemoryRecord {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            timestamp: 0,
+            day_bucket: String::new(),
+            app_name: String::new(),
+            bundle_id: None,
+            window_title: String::new(),
+            session_id: String::new(),
+            text: String::new(),
+            clean_text: String::new(),
+            ocr_confidence: 0.0,
+            ocr_block_count: 0,
+            snippet: String::new(),
+            summary_source: default_summary_source(),
+            noise_score: 0.0,
+            session_key: String::new(),
+            lexical_shadow: default_lexical_shadow(),
+            embedding: default_text_embedding(),
+            image_embedding: default_image_embedding(),
+            screenshot_path: None,
+            url: None,
+            snippet_embedding: default_snippet_embedding(),
+            support_embedding: default_support_embedding(),
+            decay_score: default_decay_score(),
+            last_accessed_at: 0,
+            schema_version: default_schema_version(),
+            activity_type: String::new(),
+            files_touched: Vec::new(),
+            symbols_changed: Vec::new(),
+            session_duration_mins: 0,
+            project: String::new(),
+            tags: Vec::new(),
+            entities: Vec::new(),
+            decisions: Vec::new(),
+            errors: Vec::new(),
+            next_steps: Vec::new(),
+            git_stats: None,
+            outcome: String::new(),
+            extraction_confidence: 0.0,
+            dedup_fingerprint: String::new(),
+            embedding_text: String::new(),
+            embedding_model: crate::config::DEFAULT_EMBEDDING_MODEL_NAME.to_string(),
+            embedding_dim: DEFAULT_TEXT_EMBEDDING_DIM as u32,
+            is_consolidated: false,
+            is_soft_deleted: false,
+            parent_id: None,
+            related_ids: Vec::new(),
+            consolidated_from: Vec::new(),
+        }
+    }
 }
 
 /// Search result returned to the UI
@@ -224,6 +278,43 @@ pub struct SearchResult {
     pub is_consolidated: bool,
     #[serde(default)]
     pub is_soft_deleted: bool,
+}
+
+impl Default for SearchResult {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            timestamp: 0,
+            app_name: String::new(),
+            bundle_id: None,
+            window_title: String::new(),
+            session_id: String::new(),
+            text: String::new(),
+            clean_text: String::new(),
+            ocr_confidence: 0.0,
+            ocr_block_count: 0,
+            snippet: String::new(),
+            summary_source: default_summary_source(),
+            noise_score: 0.0,
+            session_key: String::new(),
+            lexical_shadow: default_lexical_shadow(),
+            score: 0.0,
+            screenshot_path: None,
+            url: None,
+            decay_score: default_decay_score(),
+            schema_version: default_schema_version(),
+            activity_type: String::new(),
+            files_touched: Vec::new(),
+            session_duration_mins: 0,
+            project: String::new(),
+            tags: Vec::new(),
+            outcome: String::new(),
+            extraction_confidence: 0.0,
+            dedup_fingerprint: String::new(),
+            is_consolidated: false,
+            is_soft_deleted: false,
+        }
+    }
 }
 
 /// Statistics about stored data

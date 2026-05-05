@@ -34,6 +34,7 @@ fn record(index: usize, now_ms: i64) -> MemoryRecord {
         support_embedding: vec![0.0; EMBEDDING_DIM],
         decay_score: 1.0,
         last_accessed_at: 0,
+        ..Default::default()
     }
 }
 
