@@ -13,9 +13,19 @@ const COMPACT_EMBED_CHARS: usize = 720;
 const EMBEDDING_MIN_NORM: f32 = 1e-6;
 
 pub fn compact_clean_text(summary_source: &str, snippet: &str, clean_text: &str) -> String {
+    let summary_src = summary_source.trim().to_ascii_lowercase();
+    let is_high_signal_summary = summary_src == "llm" || summary_src == "vlm";
+
+    if is_high_signal_summary {
+        let normalized_snippet = normalize_memory_text(snippet);
+        if !normalized_snippet.is_empty() {
+            return trim_chars(&normalized_snippet, SUMMARY_CLEAN_TEXT_CHARS);
+        }
+    }
+
     let normalized_clean = normalize_memory_text(clean_text);
     if !normalized_clean.is_empty() {
-        let limit = if summary_source.trim().eq_ignore_ascii_case("fallback") {
+        let limit = if summary_src == "fallback" {
             FALLBACK_CLEAN_TEXT_CHARS
         } else {
             GENERIC_CLEAN_TEXT_CHARS
@@ -25,7 +35,7 @@ pub fn compact_clean_text(summary_source: &str, snippet: &str, clean_text: &str)
 
     let normalized_snippet = normalize_memory_text(snippet);
     if !normalized_snippet.is_empty() {
-        let limit = match summary_source.trim().to_ascii_lowercase().as_str() {
+        let limit = match summary_src.as_str() {
             "llm" | "vlm" => SUMMARY_CLEAN_TEXT_CHARS,
             "fallback" => FALLBACK_CLEAN_TEXT_CHARS,
             _ => GENERIC_CLEAN_TEXT_CHARS,

@@ -89,14 +89,14 @@ pub fn anchor_coverage_score(query_context: &QueryContext, result: &SearchResult
 mod tests {
     use super::*;
 
-    fn result(summary: &str) -> SearchResult {
+    fn result(title: &str, summary: &str) -> SearchResult {
         SearchResult {
             id: "1".to_string(),
-            window_title: "IPL Highlights".to_string(),
+            window_title: title.to_string(),
             snippet: summary.to_string(),
             display_summary: summary.to_string(),
             clean_text: summary.to_string(),
-            extracted_entities: vec!["cricket".to_string()],
+            extracted_entities: Vec::new(),
             score: 0.8,
             ..Default::default()
         }
@@ -107,7 +107,10 @@ mod tests {
         let query = QueryContext::from_query("cricket");
         let (results, stats) = rerank_results(
             &query,
-            vec![result("Watched cricket highlights"), result("Debugged Rust compiler issues")],
+            vec![
+                result("IPL Highlights", "Watched cricket highlights"),
+                result("Rust Docs", "Debugged Rust compiler issues"),
+            ],
         );
 
         assert_eq!(stats.excluded_for_coverage, 1);

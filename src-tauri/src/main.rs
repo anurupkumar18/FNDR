@@ -59,6 +59,8 @@ fn main() {
             let store = Store::new(&data_dir)?;
             let store_arc = Arc::new(store);
             tracing::info!("Consolidated store initialized at {:?}", data_dir);
+            let state_store = Arc::new(fndr_lib::store::StateStore::new(&data_dir)?);
+            tracing::info!("State store initialized");
 
             let graph = GraphStore::new(store_arc.clone());
             tracing::info!("Graph store initialized");
@@ -88,10 +90,12 @@ fn main() {
                 data_dir.clone(),
                 config,
                 store_arc,
+                state_store,
                 graph,
                 None,
                 None,
             ));
+            state.set_app_handle(app.handle().clone());
 
             // Start capture pipeline
             let capture_state = state.clone();
@@ -466,6 +470,11 @@ fn main() {
             api::commands::get_mcp_server_status,
             api::commands::start_mcp_server,
             api::commands::stop_mcp_server,
+            api::commands::get_context_runtime_status,
+            api::commands::list_recent_context_packs,
+            api::commands::get_context_pack_detail,
+            api::commands::fndr_subscribe,
+            api::commands::fndr_unsubscribe,
             // Meetings
             api::commands::get_meeting_status,
             api::commands::start_meeting_recording,

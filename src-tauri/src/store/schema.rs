@@ -509,6 +509,15 @@ pub enum NodeType {
     Clipboard,
     /// Audio/meeting transcript segment
     AudioSegment,
+    Project,
+    File,
+    Error,
+    Command,
+    Decision,
+    AgentSession,
+    ActivityEvent,
+    Issue,
+    Concept,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -525,6 +534,20 @@ pub enum EdgeType {
     /// Memory chunk co-occurred with an audio/meeting segment
     #[serde(rename = "OCCURRED_DURING_AUDIO")]
     OccurredDuringAudio,
+    #[serde(rename = "BELONGS_TO")]
+    BelongsTo,
+    #[serde(rename = "MENTIONED_IN")]
+    MentionedIn,
+    #[serde(rename = "EDITED_FILE")]
+    EditedFile,
+    #[serde(rename = "FIXED_BY")]
+    FixedBy,
+    #[serde(rename = "BLOCKED_BY")]
+    BlockedBy,
+    #[serde(rename = "INFORMED_BY")]
+    InformedBy,
+    #[serde(rename = "RESULTED_IN")]
+    ResultedIn,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -544,4 +567,424 @@ pub struct GraphEdge {
     pub edge_type: EdgeType,
     pub timestamp: i64,
     pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivacyClass {
+    Public,
+    #[default]
+    Project,
+    Personal,
+    Sensitive,
+    Secret,
+    Blocked,
+    Ephemeral,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EvidenceRef {
+    pub id: String,
+    pub source_type: String,
+    pub source_id: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub snippet: String,
+    #[serde(default)]
+    pub timestamp: i64,
+    #[serde(default)]
+    pub privacy_class: PrivacyClass,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EntityRef {
+    pub canonical_id: String,
+    pub canonical_name: String,
+    pub entity_type: String,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ActivityEvent {
+    pub id: String,
+    pub memory_id: String,
+    pub start_time: i64,
+    pub end_time: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub activity_type: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub entities: Vec<EntityRef>,
+    #[serde(default)]
+    pub source_memory_ids: Vec<String>,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub memory_value: f32,
+    #[serde(default)]
+    pub privacy_class: PrivacyClass,
+    #[serde(default)]
+    pub active_files: Vec<String>,
+    #[serde(default)]
+    pub errors: Vec<String>,
+    #[serde(default)]
+    pub commands: Vec<String>,
+    #[serde(default)]
+    pub decisions: Vec<String>,
+    #[serde(default)]
+    pub next_steps: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RelevantFile {
+    pub path: String,
+    pub why: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DecisionSummary {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub timestamp: i64,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IssueSummary {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FailureSummary {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub error: String,
+    #[serde(default)]
+    pub related_files: Vec<String>,
+    #[serde(default)]
+    pub last_seen_at: i64,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContextTask {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProjectContext {
+    pub id: String,
+    pub project: String,
+    #[serde(default)]
+    pub active_goal: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub relevant_files: Vec<RelevantFile>,
+    #[serde(default)]
+    pub recent_decisions: Vec<DecisionSummary>,
+    #[serde(default)]
+    pub open_issues: Vec<IssueSummary>,
+    #[serde(default)]
+    pub known_failures: Vec<FailureSummary>,
+    #[serde(default)]
+    pub open_tasks: Vec<ContextTask>,
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub privacy_class: PrivacyClass,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DecisionLedgerEntry {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub proposed_by: String,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub privacy_class: PrivacyClass,
+    #[serde(default)]
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContextPackItemReason {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExcludedContextItem {
+    pub id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContextPack {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub generated_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub agent_type: String,
+    #[serde(default)]
+    pub budget_tokens: u32,
+    #[serde(default)]
+    pub tokens_used: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_goal: Option<String>,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub relevant_files: Vec<RelevantFile>,
+    #[serde(default)]
+    pub recent_decisions: Vec<DecisionSummary>,
+    #[serde(default)]
+    pub open_issues: Vec<IssueSummary>,
+    #[serde(default)]
+    pub known_failures: Vec<FailureSummary>,
+    #[serde(default)]
+    pub open_tasks: Vec<ContextTask>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_next_action: Option<String>,
+    #[serde(default)]
+    pub do_not_do: Vec<String>,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub included: Vec<ContextPackItemReason>,
+    #[serde(default)]
+    pub excluded: Vec<ExcludedContextItem>,
+    #[serde(default)]
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContextDelta {
+    pub id: String,
+    pub session_id: String,
+    #[serde(default)]
+    pub since: i64,
+    #[serde(default)]
+    pub generated_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub new_events: Vec<ActivityEvent>,
+    #[serde(default)]
+    pub changed_entities: Vec<EntityRef>,
+    #[serde(default)]
+    pub resolved_tasks: Vec<ContextTask>,
+    #[serde(default)]
+    pub new_failures: Vec<FailureSummary>,
+    #[serde(default)]
+    pub new_items: Vec<String>,
+    #[serde(default)]
+    pub tokens_used: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CommandEvent {
+    pub command: String,
+    #[serde(default)]
+    pub timestamp: i64,
+    #[serde(default)]
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ErrorEvent {
+    pub error: String,
+    #[serde(default)]
+    pub timestamp: i64,
+    #[serde(default)]
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CommitRef {
+    pub sha: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CodeContext {
+    pub repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub active_files: Vec<String>,
+    #[serde(default)]
+    pub related_files: Vec<RelevantFile>,
+    #[serde(default)]
+    pub recent_commands: Vec<CommandEvent>,
+    #[serde(default)]
+    pub recent_errors: Vec<ErrorEvent>,
+    #[serde(default)]
+    pub recent_commits: Vec<CommitRef>,
+    #[serde(default)]
+    pub relevant_decisions: Vec<DecisionSummary>,
+    #[serde(default)]
+    pub unresolved_tasks: Vec<ContextTask>,
+    #[serde(default)]
+    pub recommended_context: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkingState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_goal: Option<String>,
+    #[serde(default)]
+    pub recent_events: Vec<ActivityEvent>,
+    #[serde(default)]
+    pub relevant_files: Vec<RelevantFile>,
+    #[serde(default)]
+    pub open_tasks: Vec<ContextTask>,
+    #[serde(default)]
+    pub known_failures: Vec<FailureSummary>,
+    #[serde(default)]
+    pub recent_commands: Vec<String>,
+    #[serde(default)]
+    pub recent_errors: Vec<String>,
+    #[serde(default)]
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HealthStatus {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub index_ready: bool,
+    #[serde(default)]
+    pub embedding_model: String,
+    #[serde(default)]
+    pub embedding_dimension: u32,
+    #[serde(default)]
+    pub model_status: String,
+    #[serde(default)]
+    pub failed_jobs: u32,
+    #[serde(default)]
+    pub queue_lag_ms: u64,
+    #[serde(default)]
+    pub storage_usage_bytes: u64,
+    #[serde(default)]
+    pub runtime_tables: Vec<String>,
+    #[serde(default)]
+    pub degraded_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_context_pack_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContextRuntimeStatus {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub mcp_running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_context_pack: Option<String>,
+    #[serde(default)]
+    pub recent_pack_count: usize,
+    #[serde(default)]
+    pub activity_event_count: usize,
+    #[serde(default)]
+    pub decision_count: usize,
+    #[serde(default)]
+    pub failed_writes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_pack_summary: Option<String>,
+    #[serde(default)]
+    pub latest_pack_tokens_used: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EntityAliasRecord {
+    pub alias_key: String,
+    pub canonical_id: String,
+    pub canonical_name: String,
+    pub entity_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub updated_at: i64,
 }

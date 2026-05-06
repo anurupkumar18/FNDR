@@ -72,6 +72,155 @@ export interface McpServerStatus {
     last_error?: string | null;
 }
 
+export interface EvidenceRef {
+    id: string;
+    source_type: string;
+    source_id: string;
+    summary: string;
+    snippet: string;
+    timestamp: number;
+    privacy_class: string;
+}
+
+export interface ContextPackItemReason {
+    id: string;
+    label: string;
+    kind: string;
+    reason: string;
+}
+
+export interface ExcludedContextItem {
+    id: string;
+    reason: string;
+}
+
+export interface RelevantFile {
+    path: string;
+    why: string;
+}
+
+export interface DecisionSummary {
+    id: string;
+    title: string;
+    summary: string;
+    timestamp: number;
+    evidence: EvidenceRef[];
+}
+
+export interface IssueSummary {
+    id: string;
+    title: string;
+    summary: string;
+    status: string;
+}
+
+export interface FailureSummary {
+    id: string;
+    title: string;
+    summary: string;
+    error: string;
+    related_files: string[];
+    last_seen_at: number;
+    evidence: EvidenceRef[];
+}
+
+export interface ContextTask {
+    id: string;
+    title: string;
+    status: string;
+    source: string;
+    due_at?: number | null;
+}
+
+export interface EntityRef {
+    canonical_id: string;
+    canonical_name: string;
+    entity_type: string;
+    confidence: number;
+    aliases: string[];
+}
+
+export interface ActivityEvent {
+    id: string;
+    memory_id: string;
+    start_time: number;
+    end_time: number;
+    project?: string | null;
+    repo?: string | null;
+    branch?: string | null;
+    activity_type: string;
+    title: string;
+    summary: string;
+    intent?: string | null;
+    outcome: string;
+    entities: EntityRef[];
+    source_memory_ids: string[];
+    evidence: EvidenceRef[];
+    confidence: number;
+    memory_value: number;
+    privacy_class: string;
+    active_files: string[];
+    errors: string[];
+    commands: string[];
+    decisions: string[];
+    next_steps: string[];
+    tags: string[];
+    created_at: number;
+    updated_at: number;
+}
+
+export interface ContextPack {
+    id: string;
+    session_id?: string | null;
+    generated_at: number;
+    project?: string | null;
+    agent_type: string;
+    budget_tokens: number;
+    tokens_used: number;
+    query?: string | null;
+    active_goal?: string | null;
+    summary: string;
+    relevant_files: RelevantFile[];
+    recent_decisions: DecisionSummary[];
+    open_issues: IssueSummary[];
+    known_failures: FailureSummary[];
+    open_tasks: ContextTask[];
+    recommended_next_action?: string | null;
+    do_not_do: string[];
+    evidence: EvidenceRef[];
+    included: ContextPackItemReason[];
+    excluded: ExcludedContextItem[];
+    confidence: number;
+}
+
+export interface ContextDelta {
+    id: string;
+    session_id: string;
+    since: number;
+    generated_at: number;
+    query?: string | null;
+    new_events: ActivityEvent[];
+    changed_entities: EntityRef[];
+    resolved_tasks: ContextTask[];
+    new_failures: FailureSummary[];
+    new_items: string[];
+    tokens_used: number;
+}
+
+export interface ContextRuntimeStatus {
+    status: string;
+    mcp_running: boolean;
+    active_project?: string | null;
+    current_context_pack?: string | null;
+    recent_pack_count: number;
+    activity_event_count: number;
+    decision_count: number;
+    failed_writes: number;
+    last_error?: string | null;
+    latest_pack_summary?: string | null;
+    latest_pack_tokens_used: number;
+}
+
 export interface AppMergeCount {
     app_name: string;
     merged: number;
@@ -404,6 +553,32 @@ export async function startMcpServer(port?: number): Promise<McpServerStatus> {
 
 export async function stopMcpServer(): Promise<McpServerStatus> {
     return invoke<McpServerStatus>("stop_mcp_server");
+}
+
+export async function getContextRuntimeStatus(): Promise<ContextRuntimeStatus> {
+    return invoke<ContextRuntimeStatus>("get_context_runtime_status");
+}
+
+export async function listRecentContextPacks(limit = 8): Promise<ContextPack[]> {
+    return invoke<ContextPack[]>("list_recent_context_packs", { limit });
+}
+
+export async function getContextPackDetail(packId: string): Promise<ContextPack | null> {
+    return invoke<ContextPack | null>("get_context_pack_detail", { packId });
+}
+
+export async function fndrSubscribe(sessionId: string): Promise<boolean> {
+    return invoke<boolean>("fndr_subscribe", { sessionId });
+}
+
+export async function fndrUnsubscribe(sessionId: string): Promise<boolean> {
+    return invoke<boolean>("fndr_unsubscribe", { sessionId });
+}
+
+export function onContextDelta(handler: (delta: ContextDelta) => void): Promise<() => void> {
+    return listen<ContextDelta>("context://delta", (event) => {
+        handler(event.payload);
+    });
 }
 
 // Meeting Recorder

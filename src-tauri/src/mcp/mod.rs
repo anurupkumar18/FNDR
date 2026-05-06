@@ -13,6 +13,7 @@
 pub mod tls;
 pub mod token;
 
+use crate::context_runtime::{self, CodeContextRequest, ContextRequest, DecisionProposal};
 use crate::embed::Embedder;
 use crate::meeting;
 use crate::search::HybridSearcher;
@@ -169,6 +170,13 @@ struct SearchMeetingTranscriptsArgs {
 struct GetAmbientContextArgs {
     #[serde(default = "default_ambient_limit")]
     limit: usize,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct FndrDiffArgs {
+    session_id: String,
+    #[serde(default)]
+    since_timestamp: Option<i64>,
 }
 
 fn default_ambient_limit() -> usize {
@@ -688,6 +696,79 @@ fn tools_list_result() -> Value {
                         }
                     }
                 }
+            },
+            {
+                "name": "fndr_context",
+                "description": "Build a source-backed FNDR context pack for an agent session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "agent_type": { "type": "string" },
+                        "budget_tokens": { "type": "integer", "minimum": 200, "maximum": 12000 },
+                        "session_id": { "type": "string" },
+                        "active_files": { "type": "array", "items": { "type": "string" } },
+                        "project": { "type": "string" }
+                    }
+                }
+            },
+            {
+                "name": "fndr_search_code_context",
+                "description": "Return coding-oriented context for the active repo and files.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "repo": { "type": "string" },
+                        "files": { "type": "array", "items": { "type": "string" } },
+                        "budget_tokens": { "type": "integer", "minimum": 200, "maximum": 12000 }
+                    }
+                }
+            },
+            {
+                "name": "fndr_diff",
+                "description": "Return only new or changed FNDR context for a session since the last injection or explicit timestamp.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": { "type": "string" },
+                        "since_timestamp": { "type": "integer" }
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "fndr_get_recent_working_state",
+                "description": "Return FNDR's best current understanding of what the user was just doing.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project": { "type": "string" }
+                    }
+                }
+            },
+            {
+                "name": "fndr_remember_decision",
+                "description": "Append a proposed project decision to FNDR's decision ledger.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project": { "type": "string" },
+                        "title": { "type": "string" },
+                        "summary": { "type": "string" },
+                        "proposed_by": { "type": "string" },
+                        "evidence_ids": { "type": "array", "items": { "type": "string" } }
+                    },
+                    "required": ["title"]
+                }
+            },
+            {
+                "name": "fndr_health_check",
+                "description": "Return FNDR context runtime health, embedding contract status, and storage health.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
             }
         ]
     })
@@ -754,6 +835,44 @@ async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Va
                 });
             run_get_ambient_context(app_state, args).await
         }
+        "fndr_context" => {
+            let args: ContextRequest =
+                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
+                    code: -32602,
+                    message: format!("Invalid fndr_context args: {err}"),
+                })?;
+            run_fndr_context(app_state, args).await
+        }
+        "fndr_search_code_context" => {
+            let args: CodeContextRequest =
+                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
+                    code: -32602,
+                    message: format!("Invalid fndr_search_code_context args: {err}"),
+                })?;
+            run_fndr_search_code_context(app_state, args).await
+        }
+        "fndr_diff" => {
+            let args: FndrDiffArgs =
+                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
+                    code: -32602,
+                    message: format!("Invalid fndr_diff args: {err}"),
+                })?;
+            run_fndr_diff(app_state, args).await
+        }
+        "fndr_get_recent_working_state" => {
+            let args: ContextRequest = serde_json::from_value(params.arguments)
+                .unwrap_or_else(|_| ContextRequest::default());
+            run_fndr_get_recent_working_state(app_state, args).await
+        }
+        "fndr_remember_decision" => {
+            let args: DecisionProposal =
+                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
+                    code: -32602,
+                    message: format!("Invalid fndr_remember_decision args: {err}"),
+                })?;
+            run_fndr_remember_decision(app_state, args).await
+        }
+        "fndr_health_check" => run_fndr_health_check(app_state).await,
         unknown => Ok(tool_error(format!("Unknown tool: {unknown}"))),
     }
 }
@@ -763,6 +882,19 @@ async fn run_search_memories(
     args: SearchMemoriesArgs,
 ) -> Result<Value, JsonRpcError> {
     let limit = args.limit.clamp(1, 50);
+    let context_pack = context_runtime::build_context_pack(
+        &app_state,
+        ContextRequest {
+            query: args.query.clone(),
+            agent_type: "chat_agent".to_string(),
+            budget_tokens: 1200,
+            session_id: None,
+            active_files: Vec::new(),
+            project: None,
+        },
+    )
+    .await
+    .map_err(internal_tool_error)?;
     let embedder = Embedder::new().map_err(internal_tool_error)?;
     let results = HybridSearcher::search(
         &app_state.store,
@@ -778,43 +910,66 @@ async fn run_search_memories(
     Ok(tool_success(json!({
         "query": args.query,
         "count": results.len(),
-        "results": results
+        "results": results,
+        "context_pack": context_pack
     })))
 }
 
 async fn run_ask_fndr(app_state: Arc<AppState>, args: AskFndrArgs) -> Result<Value, JsonRpcError> {
+    let pack = context_runtime::build_context_pack(
+        &app_state,
+        ContextRequest {
+            query: args.query.clone(),
+            agent_type: "chat_agent".to_string(),
+            budget_tokens: 1600,
+            session_id: None,
+            active_files: Vec::new(),
+            project: None,
+        },
+    )
+    .await
+    .map_err(internal_tool_error)?;
+
     let embedder = Embedder::new().map_err(internal_tool_error)?;
     let results = HybridSearcher::search(&app_state.store, &embedder, &args.query, 8, None, None)
         .await
         .map_err(internal_tool_error)?;
 
-    if results.is_empty() {
+    if results.is_empty() && pack.evidence.is_empty() && pack.relevant_files.is_empty() {
         return Ok(tool_success(json!({
             "answer": "I couldn't find relevant memories for that question yet.",
-            "sources": []
+            "sources": [],
+            "context_pack": pack
         })));
     }
 
-    let context = results
-        .iter()
-        .take(8)
-        .map(|r| {
-            format!(
-                "[{}] App: {} | Window: {} | Snippet: {} | URL: {}",
-                r.timestamp,
-                r.app_name,
-                r.window_title,
-                r.snippet,
-                r.url.clone().unwrap_or_else(|| "n/a".to_string())
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut context_sections = Vec::new();
+    context_sections.push(context_runtime::render_pack_markdown(&pack));
+    if !results.is_empty() {
+        context_sections.push(
+            results
+                .iter()
+                .take(8)
+                .map(|r| {
+                    format!(
+                        "[{}] App: {} | Window: {} | Snippet: {} | URL: {}",
+                        r.timestamp,
+                        r.app_name,
+                        r.window_title,
+                        r.snippet,
+                        r.url.clone().unwrap_or_else(|| "n/a".to_string())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    let context = context_sections.join("\n\n");
 
     let answer_future = async {
         match app_state.ensure_inference_engine().await {
             Ok(Some(engine)) => engine.answer(&args.query, &context).await,
-            Ok(None) => "AI intelligence is disabled until Qwen3-VL is downloaded.".to_string(),
+            Ok(None) => pack.summary.clone(),
             Err(err) => format!("AI intelligence is temporarily unavailable: {}", err),
         }
     };
@@ -841,7 +996,8 @@ async fn run_ask_fndr(app_state: Arc<AppState>, args: AskFndrArgs) -> Result<Val
 
     Ok(tool_success(json!({
         "answer": answer,
-        "sources": sources
+        "sources": sources,
+        "context_pack": pack
     })))
 }
 
@@ -907,75 +1063,82 @@ async fn run_get_ambient_context(
     app_state: Arc<AppState>,
     args: GetAmbientContextArgs,
 ) -> Result<Value, JsonRpcError> {
-    let limit = args.limit.clamp(1, 20);
-
-    // 1. What app is the user in right now?
+    let _limit = args.limit.clamp(1, 20);
     let frontmost_app =
         crate::capture::macos_frontmost_app_name().unwrap_or_else(|| "Unknown".to_string());
-
-    // 2. Recent memory snippets (newest first)
-    let recent = app_state
-        .store
-        .list_recent_results(limit, None)
-        .await
-        .map_err(internal_tool_error)?;
-
-    // 3. Focus mode context (if active)
     let focus_task = app_state.focus_task.read().clone();
     let focus_drift_count = app_state
         .focus_drift_count
         .load(std::sync::atomic::Ordering::Relaxed);
-
-    // 4. Build a compact prose summary suitable for injection into an IDE prompt
-    let mut summary_lines: Vec<String> = Vec::new();
-    summary_lines.push(format!("Currently in: {}", frontmost_app));
-    if let Some(ref task) = focus_task {
-        summary_lines.push(format!("Focus task: {}", task));
-        if focus_drift_count >= 2 {
-            summary_lines.push(format!(
-                "Note: user may be drifting off-task ({} off-task captures)",
-                focus_drift_count
-            ));
-        }
-    }
-    if !recent.is_empty() {
-        summary_lines.push("Recent activity:".to_string());
-        for r in recent.iter().take(limit) {
-            summary_lines.push(format!(
-                "  [{app}] {title} — {snippet}",
-                app = r.app_name,
-                title = r.window_title,
-                snippet = if r.snippet.len() > 140 {
-                    format!("{}…", &r.snippet[..140])
-                } else {
-                    r.snippet.clone()
-                }
-            ));
-        }
-    }
-
-    let structured_snippets: Vec<Value> = recent
-        .iter()
-        .take(limit)
-        .map(|r| {
-            json!({
-                "id": r.id,
-                "timestamp": r.timestamp,
-                "app_name": r.app_name,
-                "window_title": r.window_title,
-                "snippet": r.snippet,
-                "url": r.url
-            })
-        })
-        .collect();
+    let working_state = context_runtime::get_recent_working_state(&app_state, None)
+        .await
+        .map_err(internal_tool_error)?;
 
     Ok(tool_success(json!({
         "frontmost_app": frontmost_app,
         "focus_task": focus_task,
         "focus_drift_count": focus_drift_count,
-        "summary": summary_lines.join("\n"),
-        "recent_memories": structured_snippets
+        "summary": working_state.summary,
+        "working_state": working_state
     })))
+}
+
+async fn run_fndr_context(
+    app_state: Arc<AppState>,
+    args: ContextRequest,
+) -> Result<Value, JsonRpcError> {
+    let pack = context_runtime::build_context_pack(&app_state, args)
+        .await
+        .map_err(internal_tool_error)?;
+    Ok(tool_success(json!({ "context_pack": pack })))
+}
+
+async fn run_fndr_search_code_context(
+    app_state: Arc<AppState>,
+    args: CodeContextRequest,
+) -> Result<Value, JsonRpcError> {
+    let code_context = context_runtime::build_code_context(&app_state, args)
+        .await
+        .map_err(internal_tool_error)?;
+    Ok(tool_success(json!({ "code_context": code_context })))
+}
+
+async fn run_fndr_diff(
+    app_state: Arc<AppState>,
+    args: FndrDiffArgs,
+) -> Result<Value, JsonRpcError> {
+    let delta =
+        context_runtime::build_context_delta(&app_state, &args.session_id, args.since_timestamp)
+            .await
+            .map_err(internal_tool_error)?;
+    Ok(tool_success(json!({ "context_delta": delta })))
+}
+
+async fn run_fndr_get_recent_working_state(
+    app_state: Arc<AppState>,
+    args: ContextRequest,
+) -> Result<Value, JsonRpcError> {
+    let working_state = context_runtime::get_recent_working_state(&app_state, args.project)
+        .await
+        .map_err(internal_tool_error)?;
+    Ok(tool_success(json!({ "working_state": working_state })))
+}
+
+async fn run_fndr_remember_decision(
+    app_state: Arc<AppState>,
+    args: DecisionProposal,
+) -> Result<Value, JsonRpcError> {
+    let decision = context_runtime::remember_decision(&app_state, args)
+        .await
+        .map_err(internal_tool_error)?;
+    Ok(tool_success(json!({ "decision": decision })))
+}
+
+async fn run_fndr_health_check(app_state: Arc<AppState>) -> Result<Value, JsonRpcError> {
+    let health = context_runtime::health_check(&app_state)
+        .await
+        .map_err(internal_tool_error)?;
+    Ok(tool_success(json!({ "health": health })))
 }
 
 // ---------------------------------------------------------------------------

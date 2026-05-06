@@ -26,6 +26,7 @@ pub fn macos_frontmost_app_name() -> Option<String> {
 }
 
 use crate::config::{DEFAULT_CAPTURE_EMBEDDING_CACHE_SIZE, DEFAULT_IMAGE_EMBEDDING_DIM};
+use crate::context_runtime;
 use crate::embed::{Embedder, EmbeddingBackend, EMBEDDING_DIM};
 use crate::memory_compaction::{
     build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
@@ -33,8 +34,8 @@ use crate::memory_compaction::{
 };
 use crate::ocr::{OcrEngine, RecognizedText};
 use crate::privacy::Blocklist;
-use crate::summariser::narration_filter::clean_or_fallback_display_summary;
 use crate::store::{MemoryRecord, SearchResult, Task, TaskType};
+use crate::summariser::narration_filter::clean_or_fallback_display_summary;
 use crate::tasks::parse_tasks_from_llm_response;
 use crate::AppState;
 use chrono::Local;
@@ -178,6 +179,12 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             if let Err(e) = state.store.add_batch(&batch).await {
                 tracing::error!("Failed to flush batch: {}", e);
             } else {
+                if let Err(err) =
+                    context_runtime::sync_memory_records(state.as_ref(), &batch, Some("screen"))
+                        .await
+                {
+                    tracing::warn!("Context runtime batch sync failed: {}", err);
+                }
                 purge_capture_artifacts(state.store.frames_dir());
                 state.invalidate_memory_derived_caches();
                 tracing::info!(
@@ -819,6 +826,11 @@ async fn merge_or_append_memory_record(
                     .add_batch(&[merged.clone()])
                     .await
                     .map_err(|e| e.to_string())?;
+                if let Err(err) =
+                    context_runtime::sync_memory_record(state, &merged, Some("screen")).await
+                {
+                    tracing::warn!("Context runtime merge sync failed: {}", err);
+                }
                 state.invalidate_memory_derived_caches();
                 if merged.screenshot_path != incoming.screenshot_path {
                     cleanup_screenshot_path(incoming.screenshot_path.clone());
@@ -873,6 +885,11 @@ async fn merge_or_append_memory_record(
                 .add_batch(&[merged.clone()])
                 .await
                 .map_err(|e| e.to_string())?;
+            if let Err(err) =
+                context_runtime::sync_memory_record(state, &merged, Some("screen")).await
+            {
+                tracing::warn!("Context runtime merge sync failed: {}", err);
+            }
             state.invalidate_memory_derived_caches();
             if merged.screenshot_path != incoming.screenshot_path {
                 cleanup_screenshot_path(incoming.screenshot_path.clone());
@@ -925,6 +942,11 @@ async fn merge_or_append_memory_record(
                 .add_batch(&[merged.clone()])
                 .await
                 .map_err(|e| e.to_string())?;
+            if let Err(err) =
+                context_runtime::sync_memory_record(state, &merged, Some("screen")).await
+            {
+                tracing::warn!("Context runtime merge sync failed: {}", err);
+            }
             if merged.screenshot_path != incoming.screenshot_path {
                 cleanup_screenshot_path(incoming.screenshot_path.clone());
             }
