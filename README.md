@@ -19,6 +19,7 @@ FNDR is a macOS desktop app for building a searchable local memory from screen c
 | [Architecture](#architecture) | Repository layout and major runtime components |
 | [Getting Started](#getting-started) | Prerequisites, setup, and local launch |
 | [Configuration](#configuration) | Environment variables and runtime settings |
+| [MCP Deployment](#mcp-deployment) | Local, tunnel, and public MCP transport setup |
 | [Local Models](#local-models) | Model catalog used by onboarding and settings |
 | [Privacy Controls](#privacy-controls) | Verified capture and data controls present in source |
 | [Known Limitations](#known-limitations) | Current stable-pipeline boundaries |
@@ -113,8 +114,41 @@ Runtime app configuration is written through `src-tauri/src/config.rs`. The `.en
 | `NEO4J_PASSWORD` | No | Password for optional Neo4j graph workflows |
 | `VITE_EVAL_UI` | No | Hides selected feature panels when set to `true` for evaluation builds |
 | `FNDR_MEETING_AUDIO_DEVICE` | No | Overrides macOS avfoundation meeting-recorder audio device selection |
+| `FNDR_MCP_MODE` | No | MCP deployment mode: `local` (default), `tunnel`, or `public` |
+| `FNDR_MCP_REQUIRE_AUTH` | No | Forces MCP bearer auth on or off (default follows mode) |
+| `FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS` | No | Allows localhost initialize/tools-list bypass (default only in `local` mode) |
+| `FNDR_MCP_ENABLE_TLS` | No | Enables self-signed HTTPS for the MCP server |
+| `FNDR_MCP_ALLOWED_ORIGINS` | No | Comma-separated allowed `Origin` list for non-local modes |
+| `FNDR_MCP_PUBLIC_BASE_URL` | No | Public tunnel base URL exposed in MCP status/discovery metadata |
 
 Core runtime settings include capture cadence, dedupe threshold, retention days, app blocklist, screenshot retention, proactive surface behavior, and autofill behavior.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## MCP Deployment
+
+FNDR MCP supports both the legacy HTTP+SSE flow and streamable-HTTP style `GET/POST /mcp` routing. Recommended deployment modes:
+
+- `local` (default): localhost-only personal use.
+- `tunnel`: localhost bind with auth required, intended for Cloudflare/ngrok/Tailscale tunneling.
+- `public`: explicit non-loopback bind for controlled network environments.
+
+For remote ChatGPT/Claude/Cursor-style access with Cloudflare tunnel:
+
+```bash
+export FNDR_MCP_MODE=tunnel
+export FNDR_MCP_REQUIRE_AUTH=true
+export FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS=false
+cloudflared tunnel --url http://127.0.0.1:58596
+```
+
+Then set:
+
+```bash
+export FNDR_MCP_PUBLIC_BASE_URL=https://your-subdomain.trycloudflare.com
+```
+
+The MCP control panel and `~/.fndr/mcp.json` discovery file will surface both local and public endpoints. Keep the bearer token secret; in tunnel/public mode, requests without a valid `Authorization: Bearer <token>` header are rejected.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

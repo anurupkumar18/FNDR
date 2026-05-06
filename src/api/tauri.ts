@@ -66,9 +66,12 @@ export interface CaptureStatus {
 
 export interface McpServerStatus {
     running: boolean;
+    mode: string;
     host: string;
     port: number;
     endpoint: string;
+    public_endpoint?: string | null;
+    public_sse_endpoint?: string | null;
     token: string;
     use_tls: boolean;
     require_auth: boolean;

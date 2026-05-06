@@ -909,7 +909,10 @@ pub async fn fndr_subscribe(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<bool, String> {
-    state.runtime_subscriptions.write().insert(session_id.clone());
+    state
+        .runtime_subscriptions
+        .write()
+        .insert(session_id.clone());
     tracing::info!(session_id, "Context runtime subscription active");
     Ok(true)
 }

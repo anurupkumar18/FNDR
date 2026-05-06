@@ -13,8 +13,8 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::Emitter;
 use std::collections::{HashMap, HashSet};
+use tauri::Emitter;
 
 static URL_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"https?://[^\s)>"]+"#).expect("valid URL regex"));

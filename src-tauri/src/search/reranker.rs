@@ -11,7 +11,10 @@ pub struct RerankStats {
     pub excluded_for_coverage: usize,
 }
 
-pub fn rerank_results(query_context: &QueryContext, results: Vec<SearchResult>) -> (Vec<SearchResult>, RerankStats) {
+pub fn rerank_results(
+    query_context: &QueryContext,
+    results: Vec<SearchResult>,
+) -> (Vec<SearchResult>, RerankStats) {
     if results.is_empty() {
         return (Vec::new(), RerankStats::default());
     }
@@ -29,7 +32,8 @@ pub fn rerank_results(query_context: &QueryContext, results: Vec<SearchResult>) 
         }
 
         let vector_similarity = result.score.clamp(0.0, 1.0);
-        result.score = (vector_similarity * VECTOR_WEIGHT + coverage * COVERAGE_WEIGHT).clamp(0.0, 1.0);
+        result.score =
+            (vector_similarity * VECTOR_WEIGHT + coverage * COVERAGE_WEIGHT).clamp(0.0, 1.0);
         reranked.push(result);
     }
 
@@ -79,7 +83,9 @@ pub fn anchor_coverage_score(query_context: &QueryContext, result: &SearchResult
     }
 
     let mut score = matched as f32 / query_context.anchor_terms.len() as f32;
-    if !query_context.normalized_query.is_empty() && merged_text.contains(&query_context.normalized_query) {
+    if !query_context.normalized_query.is_empty()
+        && merged_text.contains(&query_context.normalized_query)
+    {
         score = (score + 0.12).min(1.0);
     }
     score.clamp(0.0, 1.0)

@@ -37,7 +37,9 @@ pub fn narration_filter_hits(summary: &str) -> bool {
     if value.is_empty() {
         return false;
     }
-    BANNED_PATTERNS.iter().any(|pattern| pattern.is_match(value))
+    BANNED_PATTERNS
+        .iter()
+        .any(|pattern| pattern.is_match(value))
 }
 
 pub fn clean_or_fallback_display_summary(
@@ -64,7 +66,10 @@ pub fn clean_or_fallback_display_summary(
         }
     }
 
-    (fallback_display_summary(page_title, url, timestamp_ms), true)
+    (
+        fallback_display_summary(page_title, url, timestamp_ms),
+        true,
+    )
 }
 
 #[cfg(test)]
@@ -73,7 +78,9 @@ mod tests {
 
     #[test]
     fn detects_narration_leaks() {
-        assert!(narration_filter_hits("You reviewed memory_compaction.rs and tests"));
+        assert!(narration_filter_hits(
+            "You reviewed memory_compaction.rs and tests"
+        ));
         assert!(narration_filter_hits("User viewed dashboard"));
         assert!(!narration_filter_hits("Watched IPL highlights on YouTube."));
     }

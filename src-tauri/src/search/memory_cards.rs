@@ -105,7 +105,9 @@ impl MemoryCardSynthesizer {
             tokio::task::spawn_blocking({
                 let results = results.to_vec();
                 let enforce_query_support = !query.trim().is_empty();
-                move || group_results_with_query_support(&results, max_groups, enforce_query_support)
+                move || {
+                    group_results_with_query_support(&results, max_groups, enforce_query_support)
+                }
             }),
         )
         .await
@@ -215,7 +217,8 @@ impl MemoryCardSynthesizer {
                 summary = format!("Low confidence: {}", summary);
             }
 
-            let activity_type = infer_activity_type(&anchor.app_name, &anchor.window_title, &snippets);
+            let activity_type =
+                infer_activity_type(&anchor.app_name, &anchor.window_title, &snippets);
             let files_touched = extract_files_touched(&snippets);
             let session_duration_mins = compute_session_duration(&group.members);
 
@@ -326,10 +329,10 @@ fn should_group(a: &SearchResult, b: &SearchResult, enforce_query_support: bool)
     }
 
     if enforce_query_support {
-        let query_support_ratio =
-            ((a.anchor_coverage_score.clamp(0.0, 1.0) + b.anchor_coverage_score.clamp(0.0, 1.0))
-                / 2.0)
-                .clamp(0.0, 1.0);
+        let query_support_ratio = ((a.anchor_coverage_score.clamp(0.0, 1.0)
+            + b.anchor_coverage_score.clamp(0.0, 1.0))
+            / 2.0)
+            .clamp(0.0, 1.0);
         if query_support_ratio < 0.25 {
             return false;
         }
@@ -357,7 +360,10 @@ fn should_group(a: &SearchResult, b: &SearchResult, enforce_query_support: bool)
     false
 }
 
-fn split_impure_groups(groups: Vec<SessionGroup>, enforce_query_support: bool) -> Vec<SessionGroup> {
+fn split_impure_groups(
+    groups: Vec<SessionGroup>,
+    enforce_query_support: bool,
+) -> Vec<SessionGroup> {
     if !enforce_query_support {
         return groups;
     }
@@ -730,22 +736,66 @@ fn infer_activity_type(app_name: &str, window_title: &str, snippets: &[String]) 
     );
 
     // Ordered by specificity — first match wins.
-    if contains_any(&haystack, &["terminal", "iterm", "bash", "zsh", "cargo", "npm run", "git "]) {
+    if contains_any(
+        &haystack,
+        &[
+            "terminal", "iterm", "bash", "zsh", "cargo", "npm run", "git ",
+        ],
+    ) {
         return "coding".to_string();
     }
-    if contains_any(&haystack, &["vscode", "cursor", "code", "intellij", "xcode", "rust", "python", "function", "def ", "class ", "impl "]) {
+    if contains_any(
+        &haystack,
+        &[
+            "vscode", "cursor", "code", "intellij", "xcode", "rust", "python", "function", "def ",
+            "class ", "impl ",
+        ],
+    ) {
         return "coding".to_string();
     }
-    if contains_any(&haystack, &["figma", "sketch", "framer", "canva", "adobe", "mockup", "design"]) {
+    if contains_any(
+        &haystack,
+        &[
+            "figma", "sketch", "framer", "canva", "adobe", "mockup", "design",
+        ],
+    ) {
         return "design".to_string();
     }
-    if contains_any(&haystack, &["slack", "discord", "teams", "mail", "gmail", "outlook", "inbox", "message"]) {
+    if contains_any(
+        &haystack,
+        &[
+            "slack", "discord", "teams", "mail", "gmail", "outlook", "inbox", "message",
+        ],
+    ) {
         return "communication".to_string();
     }
-    if contains_any(&haystack, &["notion", "obsidian", "confluence", "docs", "word", "pages", "pdf", "readme"]) {
+    if contains_any(
+        &haystack,
+        &[
+            "notion",
+            "obsidian",
+            "confluence",
+            "docs",
+            "word",
+            "pages",
+            "pdf",
+            "readme",
+        ],
+    ) {
         return "docs".to_string();
     }
-    if contains_any(&haystack, &["chrome", "safari", "firefox", "arc browser", "http://", "https://", "www."]) {
+    if contains_any(
+        &haystack,
+        &[
+            "chrome",
+            "safari",
+            "firefox",
+            "arc browser",
+            "http://",
+            "https://",
+            "www.",
+        ],
+    ) {
         return "browsing".to_string();
     }
     "other".to_string()
@@ -767,18 +817,31 @@ fn extract_files_touched(snippets: &[String]) -> Vec<String> {
             continue;
         }
         // File path heuristic: contains / or . with known extension
-        let is_path = w.contains('/') || (w.contains('.') && (
-            w.ends_with(".rs") || w.ends_with(".ts") || w.ends_with(".tsx")
-            || w.ends_with(".py") || w.ends_with(".js") || w.ends_with(".jsx")
-            || w.ends_with(".go") || w.ends_with(".json") || w.ends_with(".toml")
-            || w.ends_with(".md") || w.ends_with(".sh") || w.ends_with(".yaml")
-            || w.ends_with(".yml")
-        ));
+        let is_path = w.contains('/')
+            || (w.contains('.')
+                && (w.ends_with(".rs")
+                    || w.ends_with(".ts")
+                    || w.ends_with(".tsx")
+                    || w.ends_with(".py")
+                    || w.ends_with(".js")
+                    || w.ends_with(".jsx")
+                    || w.ends_with(".go")
+                    || w.ends_with(".json")
+                    || w.ends_with(".toml")
+                    || w.ends_with(".md")
+                    || w.ends_with(".sh")
+                    || w.ends_with(".yaml")
+                    || w.ends_with(".yml")));
         if is_path {
             // Normalize: strip leading slashes and keep only the last 2 components
             let parts: Vec<&str> = w.trim_start_matches('/').rsplitn(3, '/').collect();
             let normalized = if parts.len() >= 2 {
-                parts[..2].iter().rev().cloned().collect::<Vec<_>>().join("/")
+                parts[..2]
+                    .iter()
+                    .rev()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("/")
             } else {
                 w.to_string()
             };

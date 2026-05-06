@@ -204,7 +204,10 @@ impl OcrEngine {
     }
 
     /// Recognize text with full metadata and transient Qwen cleaned text
-    pub fn recognize_with_metadata(&self, image_data: &[u8]) -> Result<(RecognizedText, String), OcrError> {
+    pub fn recognize_with_metadata(
+        &self,
+        image_data: &[u8],
+    ) -> Result<(RecognizedText, String), OcrError> {
         unsafe {
             let ns_data =
                 NSData::dataWithBytes_length(image_data.as_ptr() as *mut c_void, image_data.len());
@@ -232,12 +235,15 @@ impl OcrEngine {
             let block_count = ocr_stats_from_all.lines_used;
 
             // raw_lines is dropped here — not stored.
-            Ok((RecognizedText {
-                text: normalized,
-                confidence: avg_confidence_all,
-                block_count,
-                ocr_stats: ocr_stats_from_all,
-            }, cleaned_text))
+            Ok((
+                RecognizedText {
+                    text: normalized,
+                    confidence: avg_confidence_all,
+                    block_count,
+                    ocr_stats: ocr_stats_from_all,
+                },
+                cleaned_text,
+            ))
         }
     }
 
@@ -580,9 +586,7 @@ fn size_regex() -> &'static Regex {
 /// - Prefixes lines with 0.40 <= conf < 0.65 with "[LOW_CONF]" so Qwen can weight them lower
 /// - Applies basic normalization (de-duplicate consecutive whitespace)
 /// - Returns aggregate-only stats (safe to persist); cleaned text is transient
-pub fn preprocess_ocr_for_qwen(
-    lines: &[(String, f32)],
-) -> (String, OcrAggregateStats) {
+pub fn preprocess_ocr_for_qwen(lines: &[(String, f32)]) -> (String, OcrAggregateStats) {
     const DROP_THRESHOLD: f32 = 0.40;
     const LOW_CONF_THRESHOLD: f32 = 0.65;
 

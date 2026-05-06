@@ -91,8 +91,7 @@ fn extract_base_anchor_terms(normalized_query: &str) -> Vec<String> {
 fn is_anchor_stop_word(token: &str) -> bool {
     matches!(
         token,
-        "a"
-            | "an"
+        "a" | "an"
             | "and"
             | "are"
             | "as"

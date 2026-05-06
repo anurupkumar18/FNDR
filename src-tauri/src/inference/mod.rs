@@ -800,7 +800,7 @@ Rules:\n\
 
         let prompt = self.build_prompt(&system_msg, &user_msg).ok()?;
         let raw = self.complete(&prompt, 400).await;
-        
+
         let candidate = extract_json_object(&raw)?;
         match serde_json::from_str::<StructuredMemoryExtraction>(&candidate) {
             Ok(draft) => Some(draft),

@@ -1,6 +1,7 @@
 //! FNDR Library
 //!
 //! Core functionality for the FNDR memory search application.
+#![recursion_limit = "512"]
 
 pub mod accessibility;
 pub mod api;
@@ -139,7 +140,7 @@ impl AppState {
             app_handle: RwLock::new(None),
         }
     }
- 
+
     pub fn set_app_handle(&self, handle: tauri::AppHandle) {
         *self.app_handle.write() = Some(handle);
     }

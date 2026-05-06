@@ -58,9 +58,13 @@ pub fn clean_sentence(input: &str) -> String {
     }
 
     // Keep only the first sentence to enforce concise, one-sentence summaries.
-    let sentence_end = text
-        .char_indices()
-        .find_map(|(idx, ch)| if matches!(ch, '.' | '!' | '?') { Some(idx) } else { None });
+    let sentence_end = text.char_indices().find_map(|(idx, ch)| {
+        if matches!(ch, '.' | '!' | '?') {
+            Some(idx)
+        } else {
+            None
+        }
+    });
     if let Some(end_idx) = sentence_end {
         text = text[..=end_idx].to_string();
     }
@@ -158,7 +162,8 @@ mod tests {
         );
         assert!(with_title.to_lowercase().contains("cricket schedule"));
 
-        let no_title = fallback_display_summary("", Some("https://example.com/path"), 1_700_000_000_000);
+        let no_title =
+            fallback_display_summary("", Some("https://example.com/path"), 1_700_000_000_000);
         assert!(no_title.to_lowercase().contains("example.com"));
     }
 }
