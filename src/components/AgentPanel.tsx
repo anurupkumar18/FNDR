@@ -4,10 +4,14 @@ import { usePolling } from "../hooks/usePolling";
 import { createClientId } from "../lib/id";
 import {
     type AgentStatus,
+    type ContextPack,
+    type ContextRuntimeStatus,
     type HermesBridgeStatus,
     getAgentStatus,
+    getContextRuntimeStatus,
     getHermesBridgeStatus,
     installHermesBridge,
+    listRecentContextPacks,
     quickSetupOllama,
     saveHermesSetup,
     sendDirectChat,
@@ -16,6 +20,10 @@ import {
     stopAgent,
     stopHermesGateway,
     syncHermesBridgeContext,
+    fndrSubscribe,
+    fndrUnsubscribe,
+    onContextDelta,
+    type ContextDelta,
 } from "../api/tauri";
 import "./AgentPanel.css";
 
@@ -119,6 +127,8 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
     const [activeView, setActiveView] = useState<AgentView>("overview");
     const [status, setStatus] = useState<AgentStatus | null>(null);
     const [hermes, setHermes] = useState<HermesBridgeStatus | null>(null);
+    const [runtimeStatus, setRuntimeStatus] = useState<ContextRuntimeStatus | null>(null);
+    const [recentPacks, setRecentPacks] = useState<ContextPack[]>([]);
     const [busyAction, setBusyAction] = useState<string | null>(null);
     const [hermesError, setHermesError] = useState<string | null>(null);
     const [providerKind, setProviderKind] = useState<HermesProviderKind>("openrouter");
@@ -130,18 +140,23 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
     const [conversationId, setConversationId] = useState(() => nextConversationId());
     const [hasSeededForm, setHasSeededForm] = useState(false);
     const [setupExpanded, setSetupExpanded] = useState(false);
+    const [lastDelta, setLastDelta] = useState<ContextDelta | null>(null);
     const chatBottomRef = useRef<HTMLDivElement>(null);
     const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
     const loadAgentWorkspace = useCallback(async (isMounted: () => boolean) => {
         try {
-            const [agentStatus, hermesStatus] = await Promise.all([
+            const [agentStatus, hermesStatus, runtime, packs] = await Promise.all([
                 getAgentStatus(),
                 getHermesBridgeStatus(),
+                getContextRuntimeStatus(),
+                listRecentContextPacks(2),
             ]);
             if (isMounted()) {
                 setStatus(agentStatus);
                 setHermes(hermesStatus);
+                setRuntimeStatus(runtime);
+                setRecentPacks(packs);
             }
         } catch (err) {
             console.error("Failed to load agent workspace:", err);
@@ -175,6 +190,30 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
             window.setTimeout(() => chatInputRef.current?.focus(), 80);
         }
     }, [activeView, isHermesReady]);
+
+    useEffect(() => {
+        if (!isVisible) return;
+
+        let unlisten: (() => void) | null = null;
+
+        const setup = async () => {
+            try {
+                await fndrSubscribe(conversationId);
+                unlisten = await onContextDelta((delta) => {
+                    setLastDelta(delta);
+                });
+            } catch (err) {
+                console.error("Failed to subscribe to context runtime:", err);
+            }
+        };
+
+        setup();
+
+        return () => {
+            fndrUnsubscribe(conversationId).catch(() => {});
+            if (unlisten) unlisten();
+        };
+    }, [isVisible, conversationId]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -366,6 +405,9 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
                         <OverviewView
                             status={status}
                             hermes={hermes}
+                            runtimeStatus={runtimeStatus}
+                            latestPack={recentPacks[0] ?? null}
+                            lastDelta={lastDelta}
                             readinessStep={readinessStep}
                             onStop={() => stopAgent().then(setStatus).catch(console.error)}
                             onOpenHermes={() => setActiveView("hermes")}
@@ -423,12 +465,15 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
 interface OverviewViewProps {
     status: AgentStatus | null;
     hermes: HermesBridgeStatus | null;
+    runtimeStatus: ContextRuntimeStatus | null;
+    latestPack: ContextPack | null;
+    lastDelta: ContextDelta | null;
     readinessStep: number;
     onStop: () => void;
     onOpenHermes: () => void;
 }
 
-function OverviewView({ status, hermes, readinessStep, onStop, onOpenHermes }: OverviewViewProps) {
+function OverviewView({ status, hermes, runtimeStatus, latestPack, lastDelta, readinessStep, onStop, onOpenHermes }: OverviewViewProps) {
     const isRunning = status?.status === "running";
     const fullAgentReady = !!hermes?.api_server_ready;
     const localFallbackReady = !hermes?.installed && !!hermes?.direct_ollama_ready;
@@ -499,7 +544,38 @@ function OverviewView({ status, hermes, readinessStep, onStop, onOpenHermes }: O
                     detail={formatTimestamp(hermes?.last_synced_at ?? null)}
                     dotClass={hermes?.context_ready ? "ap-dot-ready" : "ap-dot-off"}
                 />
+                <MetricCard
+                    label="Runtime pack"
+                    value={runtimeStatus?.status ?? "Unknown"}
+                    detail={latestPack ? `${latestPack.tokens_used}/${latestPack.budget_tokens} tokens` : "No pack yet"}
+                    dotClass={runtimeStatus?.mcp_running ? "ap-dot-ready" : "ap-dot-off"}
+                />
             </div>
+
+            {/* Live Context Delta */}
+            {lastDelta && (lastDelta.new_events.length > 0 || lastDelta.new_items.length > 0) && (
+                <section className="ap-card ap-delta-card">
+                    <div className="ap-card-title">
+                        Live Context Updates
+                        <span className="ap-delta-live-dot" />
+                    </div>
+                    <div className="ap-memory-list">
+                        {lastDelta.new_events.map((event) => (
+                            <div key={event.id} className="ap-memory-row">
+                                <div className="ap-memory-app">{event.activity_type.toUpperCase()}</div>
+                                <div className="ap-memory-title">{event.title}</div>
+                                <div className="ap-memory-summary">{event.summary}</div>
+                            </div>
+                        ))}
+                        {lastDelta.new_items.map((item, i) => (
+                            <div key={`item-${i}`} className="ap-memory-row">
+                                <div className="ap-memory-app">NEW ITEM</div>
+                                <div className="ap-memory-title">{item}</div>
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            )}
 
             {/* Recent memories */}
             {(hermes?.recent_memories?.length ?? 0) > 0 && (
@@ -513,6 +589,21 @@ function OverviewView({ status, hermes, readinessStep, onStop, onOpenHermes }: O
                                 <div className="ap-memory-summary">{m.summary}</div>
                             </div>
                         ))}
+                    </div>
+                </section>
+            )}
+
+            {latestPack && (
+                <section className="ap-card">
+                    <div className="ap-card-title">Latest context pack</div>
+                    <div className="ap-memory-list">
+                        <div className="ap-memory-row">
+                            <div className="ap-memory-app">{latestPack.project ?? "General"}</div>
+                            <div className="ap-memory-title">{latestPack.active_goal ?? latestPack.summary}</div>
+                            <div className="ap-memory-summary">
+                                Included {latestPack.included.length} items, excluded {latestPack.excluded.length}, used {latestPack.tokens_used}/{latestPack.budget_tokens} tokens.
+                            </div>
+                        </div>
                     </div>
                 </section>
             )}

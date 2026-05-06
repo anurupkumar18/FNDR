@@ -14,6 +14,18 @@ vi.mock("../api/tauri", () => ({
         prefer_typed_injection: true,
         max_candidates: 4,
     }),
+    getContextRuntimeStatus: vi.fn().mockResolvedValue({
+        status: "healthy",
+        active_project: null,
+        current_context_pack_id: null,
+        latest_pack_summary: "",
+        tokens_used: 0,
+        last_generated_at: null,
+        recent_pack_count: 0,
+        activity_event_count: 0,
+        decision_count: 0,
+        runtime_tables_ready: true,
+    }),
     getMemoryRepairProgress: vi.fn(),
     getStorageHealth: vi.fn().mockResolvedValue({
         memory_db_bytes: 1024,

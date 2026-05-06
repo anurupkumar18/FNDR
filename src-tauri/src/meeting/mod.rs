@@ -2190,8 +2190,13 @@ async fn ingest_transcript_into_fndr_memory(
         .map_err(|e| format!("Store add failed: {e}"))?;
     app_state.invalidate_memory_derived_caches();
 
-    if let Err(err) = app_state.graph.ingest_memory(&record).await {
-        tracing::warn!("Graph ingest failed for meeting transcript: {}", err);
+    if let Err(err) =
+        crate::context_runtime::sync_memory_record(app_state.as_ref(), &record, Some("audio")).await
+    {
+        tracing::warn!(
+            "Context runtime sync failed for meeting transcript: {}",
+            err
+        );
     }
 
     Ok(())

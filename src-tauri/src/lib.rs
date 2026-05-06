@@ -6,6 +6,7 @@ pub mod accessibility;
 pub mod api;
 pub mod capture;
 pub mod config;
+pub mod context_runtime;
 pub mod downloads;
 pub mod embed;
 pub mod graph;
@@ -17,9 +18,9 @@ pub mod models;
 pub mod ocr;
 pub mod privacy;
 pub mod search;
-pub mod summariser;
 pub mod speech;
 pub mod store;
+pub mod summariser;
 pub mod tasks;
 pub mod telemetry;
 
@@ -30,7 +31,7 @@ use parking_lot::RwLock;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use store::{Stats, Store};
+use store::{StateStore, Stats, Store};
 use tokio::sync::Mutex as AsyncMutex;
 
 pub struct LoadedAiEngines {
@@ -60,6 +61,7 @@ pub struct AppState {
     pub app_data_dir: PathBuf,
     pub config: RwLock<Config>,
     pub store: Arc<Store>,
+    pub state_store: Arc<StateStore>,
     pub graph: GraphStore,
     pub is_paused: AtomicBool,
     pub is_incognito: AtomicBool,
@@ -92,6 +94,9 @@ pub struct AppState {
     pub pending_privacy_alerts: RwLock<Vec<PrivacyAlert>>,
     /// Key: domain_or_title, Value: snooze expiration timestamp (sec)
     pub snoozed_privacy_alerts: RwLock<std::collections::HashMap<String, i64>>,
+    /// Active context runtime subscriptions (session_ids).
+    pub runtime_subscriptions: RwLock<std::collections::HashSet<String>>,
+    pub app_handle: RwLock<Option<tauri::AppHandle>>,
 }
 
 impl AppState {
@@ -99,6 +104,7 @@ impl AppState {
         app_data_dir: PathBuf,
         config: Config,
         store: Arc<Store>,
+        state_store: Arc<StateStore>,
         graph: GraphStore,
         inference: Option<Arc<InferenceEngine>>,
         vlm: Option<Arc<VlmEngine>>,
@@ -108,6 +114,7 @@ impl AppState {
             app_data_dir,
             config: RwLock::new(config),
             store,
+            state_store,
             graph,
             is_paused: AtomicBool::new(false),
             is_incognito: AtomicBool::new(false),
@@ -128,7 +135,13 @@ impl AppState {
             focus_drift_count: std::sync::atomic::AtomicU32::new(0),
             pending_privacy_alerts: RwLock::new(Vec::new()),
             snoozed_privacy_alerts: RwLock::new(std::collections::HashMap::new()),
+            runtime_subscriptions: RwLock::new(std::collections::HashSet::new()),
+            app_handle: RwLock::new(None),
         }
+    }
+ 
+    pub fn set_app_handle(&self, handle: tauri::AppHandle) {
+        *self.app_handle.write() = Some(handle);
     }
 
     pub fn pause(&self) {

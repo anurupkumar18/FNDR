@@ -4,9 +4,10 @@
 //! All methods that touch LanceDB are async.
 
 use super::schema::{
-    AppCount, DayCount, DaypartCount, DomainCount, EdgeType, GraphEdge, GraphNode, HourCount,
-    MeetingSegment, MeetingSession, MemoryRecord, NodeType, SearchResult, Stats, Task, TaskType,
-    WeekdayCount,
+    ActivityEvent, AppCount, ContextDelta, ContextPack, DayCount, DaypartCount,
+    DecisionLedgerEntry, DomainCount, EdgeType, EntityAliasRecord, GraphEdge, GraphNode, HourCount,
+    MeetingSegment, MeetingSession, MemoryRecord, NodeType, ProjectContext, SearchResult, Stats,
+    Task, TaskType, WeekdayCount,
 };
 use crate::config::{
     DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_STORE_KEYWORD_QUERY_MULTIPLIER,
@@ -15,9 +16,9 @@ use crate::config::{
 };
 use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
 use arrow_array::{
-    builder::{Int64Builder, StringBuilder, ListBuilder},
-    Array, BooleanArray, FixedSizeListArray, Float32Array, Int64Array, RecordBatch,
-    RecordBatchIterator, RecordBatchReader, StringArray, UInt32Array, ListArray,
+    builder::{Int64Builder, ListBuilder, StringBuilder},
+    Array, BooleanArray, FixedSizeListArray, Float32Array, Int64Array, ListArray, RecordBatch,
+    RecordBatchIterator, RecordBatchReader, StringArray, UInt32Array,
 };
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
@@ -36,6 +37,12 @@ pub const MEETINGS_TABLE: &str = "meetings";
 pub const SEGMENTS_TABLE: &str = "segments";
 pub const NODES_TABLE: &str = "knowledge_nodes";
 pub const EDGES_TABLE: &str = "knowledge_edges";
+pub const ACTIVITY_EVENTS_TABLE: &str = "activity_events";
+pub const PROJECT_CONTEXTS_TABLE: &str = "project_contexts";
+pub const DECISION_LEDGER_TABLE: &str = "decision_ledger";
+pub const CONTEXT_PACKS_TABLE: &str = "context_packs";
+pub const CONTEXT_DELTAS_TABLE: &str = "context_deltas";
+pub const ENTITY_ALIASES_TABLE: &str = "entity_aliases";
 const SEARCH_RESULT_COLUMNS: &[&str] = &[
     "id",
     "timestamp",
@@ -84,6 +91,12 @@ pub struct Store {
     segments_table: Table,
     nodes_table: Table,
     edges_table: Table,
+    activity_events_table: Table,
+    project_contexts_table: Table,
+    decision_ledger_table: Table,
+    context_packs_table: Table,
+    context_deltas_table: Table,
+    entity_aliases_table: Table,
 }
 
 impl Store {
@@ -102,8 +115,21 @@ impl Store {
             .enable_all()
             .build()?;
 
-        let (table, legacy_table, tasks_table, meetings_table, segments_table, nodes_table, edges_table) =
-            rt.block_on(open_all_tables(&db_path))?;
+        let (
+            table,
+            legacy_table,
+            tasks_table,
+            meetings_table,
+            segments_table,
+            nodes_table,
+            edges_table,
+            activity_events_table,
+            project_contexts_table,
+            decision_ledger_table,
+            context_packs_table,
+            context_deltas_table,
+            entity_aliases_table,
+        ) = rt.block_on(open_all_tables(&db_path))?;
 
         // Migrate legacy storages if present.
         let memories_json = data_dir.join("memories.json");
@@ -144,6 +170,12 @@ impl Store {
             segments_table,
             nodes_table,
             edges_table,
+            activity_events_table,
+            project_contexts_table,
+            decision_ledger_table,
+            context_packs_table,
+            context_deltas_table,
+            entity_aliases_table,
         })
     }
 
@@ -172,6 +204,370 @@ impl Store {
             results.extend(batch_to_tasks(&b));
         }
         Ok(results)
+    }
+
+    pub async fn upsert_activity_events(
+        &self,
+        events: &[ActivityEvent],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let mut by_id: HashMap<String, ActivityEvent> = HashMap::with_capacity(events.len());
+        for event in events {
+            by_id.insert(event.id.clone(), event.clone());
+        }
+        let deduped = by_id.into_values().collect::<Vec<_>>();
+        if let Some(filter) = build_string_match_filter(
+            "id",
+            &deduped
+                .iter()
+                .map(|event| event.id.clone())
+                .collect::<Vec<_>>(),
+        ) {
+            self.activity_events_table.delete(&filter).await?;
+        }
+
+        let batch = activity_events_to_batch(&deduped)?;
+        let schema = Arc::new(activity_event_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.activity_events_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Append)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_activity_event_by_id(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<ActivityEvent>, Box<dyn std::error::Error>> {
+        let filter = format!("id = '{}'", sql_escape(event_id));
+        let batches = self
+            .activity_events_table
+            .query()
+            .only_if(filter)
+            .limit(1)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        for batch in batches {
+            if let Some(event) = batch_to_activity_events(&batch).into_iter().next() {
+                return Ok(Some(event));
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn get_activity_event_by_memory_id(
+        &self,
+        memory_id: &str,
+    ) -> Result<Option<ActivityEvent>, Box<dyn std::error::Error>> {
+        let filter = format!("memory_id = '{}'", sql_escape(memory_id));
+        let batches = self
+            .activity_events_table
+            .query()
+            .only_if(filter)
+            .limit(1)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        for batch in batches {
+            if let Some(event) = batch_to_activity_events(&batch).into_iter().next() {
+                return Ok(Some(event));
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn list_activity_events(
+        &self,
+        limit: usize,
+        project: Option<&str>,
+    ) -> Result<Vec<ActivityEvent>, Box<dyn std::error::Error>> {
+        let mut query = self.activity_events_table.query();
+        if let Some(project) = project.filter(|value| !value.trim().is_empty()) {
+            query = query.only_if(format!("project = '{}'", sql_escape(project)));
+        }
+        let batches = query.execute().await?.try_collect::<Vec<_>>().await?;
+        let mut results = Vec::new();
+        for batch in batches {
+            results.extend(batch_to_activity_events(&batch));
+        }
+        results.sort_by_key(|event| std::cmp::Reverse(event.end_time));
+        results.truncate(limit.max(1));
+        Ok(results)
+    }
+
+    pub async fn upsert_project_contexts(
+        &self,
+        contexts: &[ProjectContext],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if contexts.is_empty() {
+            return Ok(());
+        }
+
+        let mut by_project: HashMap<String, ProjectContext> =
+            HashMap::with_capacity(contexts.len());
+        for context in contexts {
+            by_project.insert(context.project.clone(), context.clone());
+        }
+        let deduped = by_project.into_values().collect::<Vec<_>>();
+        if let Some(filter) = build_string_match_filter(
+            "project",
+            &deduped
+                .iter()
+                .map(|context| context.project.clone())
+                .collect::<Vec<_>>(),
+        ) {
+            self.project_contexts_table.delete(&filter).await?;
+        }
+
+        let batch = project_contexts_to_batch(&deduped)?;
+        let schema = Arc::new(project_context_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.project_contexts_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Append)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_project_context(
+        &self,
+        project: &str,
+    ) -> Result<Option<ProjectContext>, Box<dyn std::error::Error>> {
+        let filter = format!("project = '{}'", sql_escape(project));
+        let batches = self
+            .project_contexts_table
+            .query()
+            .only_if(filter)
+            .limit(1)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        for batch in batches {
+            if let Some(context) = batch_to_project_contexts(&batch).into_iter().next() {
+                return Ok(Some(context));
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn append_decision_ledger_entries(
+        &self,
+        entries: &[DecisionLedgerEntry],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let batch = decision_ledger_to_batch(entries)?;
+        let schema = Arc::new(decision_ledger_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.decision_ledger_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Append)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_decision_ledger_entries(
+        &self,
+        limit: usize,
+        project: Option<&str>,
+    ) -> Result<Vec<DecisionLedgerEntry>, Box<dyn std::error::Error>> {
+        let mut query = self.decision_ledger_table.query();
+        if let Some(project) = project.filter(|value| !value.trim().is_empty()) {
+            query = query.only_if(format!("project = '{}'", sql_escape(project)));
+        }
+        let batches = query.execute().await?.try_collect::<Vec<_>>().await?;
+        let mut results = Vec::new();
+        for batch in batches {
+            results.extend(batch_to_decision_ledger_entries(&batch));
+        }
+        results.sort_by_key(|entry| std::cmp::Reverse(entry.created_at));
+        results.truncate(limit.max(1));
+        Ok(results)
+    }
+
+    pub async fn append_context_packs(
+        &self,
+        packs: &[ContextPack],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if packs.is_empty() {
+            return Ok(());
+        }
+
+        let batch = context_packs_to_batch(packs)?;
+        let schema = Arc::new(context_pack_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.context_packs_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Append)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_context_packs(
+        &self,
+        limit: usize,
+        session_id: Option<&str>,
+    ) -> Result<Vec<ContextPack>, Box<dyn std::error::Error>> {
+        let mut query = self.context_packs_table.query();
+        if let Some(session_id) = session_id.filter(|value| !value.trim().is_empty()) {
+            query = query.only_if(format!("session_id = '{}'", sql_escape(session_id)));
+        }
+        let batches = query.execute().await?.try_collect::<Vec<_>>().await?;
+        let mut results = Vec::new();
+        for batch in batches {
+            results.extend(batch_to_context_packs(&batch));
+        }
+        results.sort_by_key(|pack| std::cmp::Reverse(pack.generated_at));
+        results.truncate(limit.max(1));
+        Ok(results)
+    }
+
+    pub async fn get_context_pack_by_id(
+        &self,
+        pack_id: &str,
+    ) -> Result<Option<ContextPack>, Box<dyn std::error::Error>> {
+        let filter = format!("id = '{}'", sql_escape(pack_id));
+        let batches = self
+            .context_packs_table
+            .query()
+            .only_if(filter)
+            .limit(1)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        for batch in batches {
+            if let Some(pack) = batch_to_context_packs(&batch).into_iter().next() {
+                return Ok(Some(pack));
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn append_context_deltas(
+        &self,
+        deltas: &[ContextDelta],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if deltas.is_empty() {
+            return Ok(());
+        }
+
+        let batch = context_deltas_to_batch(deltas)?;
+        let schema = Arc::new(context_delta_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.context_deltas_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Append)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_context_deltas(
+        &self,
+        limit: usize,
+        session_id: Option<&str>,
+    ) -> Result<Vec<ContextDelta>, Box<dyn std::error::Error>> {
+        let mut query = self.context_deltas_table.query();
+        if let Some(session_id) = session_id.filter(|value| !value.trim().is_empty()) {
+            query = query.only_if(format!("session_id = '{}'", sql_escape(session_id)));
+        }
+        let batches = query.execute().await?.try_collect::<Vec<_>>().await?;
+        let mut results = Vec::new();
+        for batch in batches {
+            results.extend(batch_to_context_deltas(&batch));
+        }
+        results.sort_by_key(|delta| std::cmp::Reverse(delta.generated_at));
+        results.truncate(limit.max(1));
+        Ok(results)
+    }
+
+    pub async fn upsert_entity_aliases(
+        &self,
+        aliases: &[EntityAliasRecord],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if aliases.is_empty() {
+            return Ok(());
+        }
+
+        let mut by_alias: HashMap<String, EntityAliasRecord> =
+            HashMap::with_capacity(aliases.len());
+        for alias in aliases {
+            by_alias.insert(alias.alias_key.clone(), alias.clone());
+        }
+        let deduped = by_alias.into_values().collect::<Vec<_>>();
+        if let Some(filter) = build_string_match_filter(
+            "alias_key",
+            &deduped
+                .iter()
+                .map(|alias| alias.alias_key.clone())
+                .collect::<Vec<_>>(),
+        ) {
+            self.entity_aliases_table.delete(&filter).await?;
+        }
+
+        let batch = entity_aliases_to_batch(&deduped)?;
+        let schema = Arc::new(entity_alias_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.entity_aliases_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Append)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn resolve_entity_alias(
+        &self,
+        alias_key: &str,
+        project: Option<&str>,
+    ) -> Result<Option<EntityAliasRecord>, Box<dyn std::error::Error>> {
+        let mut filters = vec![format!("alias_key = '{}'", sql_escape(alias_key))];
+        if let Some(project) = project.filter(|value| !value.trim().is_empty()) {
+            filters.push(format!("project = '{}'", sql_escape(project)));
+        }
+        let filter = filters.join(" AND ");
+        let batches = self
+            .entity_aliases_table
+            .query()
+            .only_if(filter)
+            .limit(1)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        for batch in batches {
+            if let Some(alias) = batch_to_entity_aliases(&batch).into_iter().next() {
+                return Ok(Some(alias));
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn count_activity_events(&self) -> Result<usize, Box<dyn std::error::Error>> {
+        count_table_rows(&self.activity_events_table).await
+    }
+
+    pub async fn count_decision_entries(&self) -> Result<usize, Box<dyn std::error::Error>> {
+        count_table_rows(&self.decision_ledger_table).await
+    }
+
+    pub async fn count_context_packs(&self) -> Result<usize, Box<dyn std::error::Error>> {
+        count_table_rows(&self.context_packs_table).await
     }
 
     pub async fn upsert_meetings(
@@ -1380,15 +1776,43 @@ fn memory_schema() -> Schema {
         Field::new("last_accessed_at", DataType::Int64, false),
         Field::new("schema_version", DataType::UInt32, false),
         Field::new("activity_type", DataType::Utf8, false),
-        Field::new("files_touched", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
-        Field::new("symbols_changed", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new(
+            "files_touched",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "symbols_changed",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
         Field::new("session_duration_mins", DataType::UInt32, false),
         Field::new("project", DataType::Utf8, false),
-        Field::new("tags", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
-        Field::new("entities", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
-        Field::new("decisions", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
-        Field::new("errors", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
-        Field::new("next_steps", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new(
+            "tags",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "entities",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "decisions",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "errors",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "next_steps",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
         Field::new("git_stats", DataType::Utf8, true),
         Field::new("outcome", DataType::Utf8, false),
         Field::new("extraction_confidence", DataType::Float32, false),
@@ -1401,8 +1825,16 @@ fn memory_schema() -> Schema {
         Field::new("is_consolidated", DataType::Boolean, false),
         Field::new("is_soft_deleted", DataType::Boolean, false),
         Field::new("parent_id", DataType::Utf8, true),
-        Field::new("related_ids", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
-        Field::new("consolidated_from", DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))), false),
+        Field::new(
+            "related_ids",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "consolidated_from",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
     ])
 }
 
@@ -1490,6 +1922,82 @@ fn edge_schema() -> Schema {
     ])
 }
 
+fn activity_event_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("memory_id", DataType::Utf8, false),
+        Field::new("project", DataType::Utf8, true),
+        Field::new("activity_type", DataType::Utf8, false),
+        Field::new("title", DataType::Utf8, false),
+        Field::new("summary", DataType::Utf8, false),
+        Field::new("start_time", DataType::Int64, false),
+        Field::new("end_time", DataType::Int64, false),
+        Field::new("privacy_class", DataType::Utf8, false),
+        Field::new("payload_json", DataType::Utf8, false),
+    ])
+}
+
+fn project_context_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("project", DataType::Utf8, false),
+        Field::new("updated_at", DataType::Int64, false),
+        Field::new("summary", DataType::Utf8, false),
+        Field::new("privacy_class", DataType::Utf8, false),
+        Field::new("payload_json", DataType::Utf8, false),
+    ])
+}
+
+fn decision_ledger_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("project", DataType::Utf8, true),
+        Field::new("title", DataType::Utf8, false),
+        Field::new("status", DataType::Utf8, false),
+        Field::new("created_at", DataType::Int64, false),
+        Field::new("privacy_class", DataType::Utf8, false),
+        Field::new("payload_json", DataType::Utf8, false),
+    ])
+}
+
+fn context_pack_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("session_id", DataType::Utf8, true),
+        Field::new("project", DataType::Utf8, true),
+        Field::new("agent_type", DataType::Utf8, false),
+        Field::new("generated_at", DataType::Int64, false),
+        Field::new("budget_tokens", DataType::UInt32, false),
+        Field::new("tokens_used", DataType::UInt32, false),
+        Field::new("summary", DataType::Utf8, false),
+        Field::new("payload_json", DataType::Utf8, false),
+    ])
+}
+
+fn context_delta_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("session_id", DataType::Utf8, false),
+        Field::new("since", DataType::Int64, false),
+        Field::new("generated_at", DataType::Int64, false),
+        Field::new("tokens_used", DataType::UInt32, false),
+        Field::new("payload_json", DataType::Utf8, false),
+    ])
+}
+
+fn entity_alias_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("alias_key", DataType::Utf8, false),
+        Field::new("canonical_id", DataType::Utf8, false),
+        Field::new("canonical_name", DataType::Utf8, false),
+        Field::new("entity_type", DataType::Utf8, false),
+        Field::new("project", DataType::Utf8, true),
+        Field::new("confidence", DataType::Float32, false),
+        Field::new("updated_at", DataType::Int64, false),
+        Field::new("payload_json", DataType::Utf8, false),
+    ])
+}
+
 fn edge_type_literal(edge_type: EdgeType) -> &'static str {
     match edge_type {
         EdgeType::PartOfSession => "PART_OF_SESSION",
@@ -1497,6 +2005,13 @@ fn edge_type_literal(edge_type: EdgeType) -> &'static str {
         EdgeType::OccurredAt => "OCCURRED_AT",
         EdgeType::ClipboardCopied => "CLIPBOARD_COPIED",
         EdgeType::OccurredDuringAudio => "OCCURRED_DURING_AUDIO",
+        EdgeType::BelongsTo => "BELONGS_TO",
+        EdgeType::MentionedIn => "MENTIONED_IN",
+        EdgeType::EditedFile => "EDITED_FILE",
+        EdgeType::FixedBy => "FIXED_BY",
+        EdgeType::BlockedBy => "BLOCKED_BY",
+        EdgeType::InformedBy => "INFORMED_BY",
+        EdgeType::ResultedIn => "RESULTED_IN",
     }
 }
 
@@ -1550,7 +2065,10 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
     let ocr_block_counts: Vec<i64> = records.iter().map(|r| r.ocr_block_count as i64).collect();
     let snippets: Vec<&str> = records.iter().map(|r| r.snippet.as_str()).collect();
     let display_summaries: Vec<&str> = records.iter().map(|r| r.display_summary.as_str()).collect();
-    let internal_contexts: Vec<&str> = records.iter().map(|r| r.internal_context.as_str()).collect();
+    let internal_contexts: Vec<&str> = records
+        .iter()
+        .map(|r| r.internal_context.as_str())
+        .collect();
     let summary_sources: Vec<&str> = records.iter().map(|r| r.summary_source.as_str()).collect();
     let noise_scores: Vec<f32> = records.iter().map(|r| r.noise_score).collect();
     let session_keys: Vec<&str> = records.iter().map(|r| r.session_key.as_str()).collect();
@@ -1621,17 +2139,29 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
     let session_duration_mins: Vec<u32> = records.iter().map(|r| r.session_duration_mins).collect();
     let projects: Vec<&str> = records.iter().map(|r| r.project.as_str()).collect();
     let outcomes: Vec<&str> = records.iter().map(|r| r.outcome.as_str()).collect();
-    let extraction_confidences: Vec<f32> = records.iter().map(|r| r.extraction_confidence).collect();
-    let anchor_coverage_scores: Vec<f32> = records.iter().map(|r| r.anchor_coverage_score).collect();
+    let extraction_confidences: Vec<f32> =
+        records.iter().map(|r| r.extraction_confidence).collect();
+    let anchor_coverage_scores: Vec<f32> =
+        records.iter().map(|r| r.anchor_coverage_score).collect();
     let content_hashes: Vec<&str> = records.iter().map(|r| r.content_hash.as_str()).collect();
-    let dedup_fingerprints: Vec<&str> = records.iter().map(|r| r.dedup_fingerprint.as_str()).collect();
+    let dedup_fingerprints: Vec<&str> = records
+        .iter()
+        .map(|r| r.dedup_fingerprint.as_str())
+        .collect();
     let embedding_texts: Vec<&str> = records.iter().map(|r| r.embedding_text.as_str()).collect();
     let embedding_models: Vec<&str> = records.iter().map(|r| r.embedding_model.as_str()).collect();
     let embedding_dims: Vec<u32> = records.iter().map(|r| r.embedding_dim).collect();
     let is_consolidated_flags: Vec<bool> = records.iter().map(|r| r.is_consolidated).collect();
     let is_soft_deleted_flags: Vec<bool> = records.iter().map(|r| r.is_soft_deleted).collect();
     let parent_ids: Vec<Option<&str>> = records.iter().map(|r| r.parent_id.as_deref()).collect();
-    let git_stats_json: Vec<Option<String>> = records.iter().map(|r| r.git_stats.as_ref().and_then(|g| serde_json::to_string(g).ok())).collect();
+    let git_stats_json: Vec<Option<String>> = records
+        .iter()
+        .map(|r| {
+            r.git_stats
+                .as_ref()
+                .and_then(|g| serde_json::to_string(g).ok())
+        })
+        .collect();
     let git_stats_refs: Vec<Option<&str>> = git_stats_json.iter().map(|o| o.as_deref()).collect();
 
     let build_str_list = |extractor: &dyn Fn(&MemoryRecord) -> &Vec<String>| {
@@ -1831,7 +2361,8 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
                 decisions: extract_str_list(&decisions, i),
                 errors: extract_str_list(&errors, i),
                 next_steps: extract_str_list(&next_steps, i),
-                git_stats: get_opt_str(&git_stats_json, i).and_then(|j| serde_json::from_str(&j).ok()),
+                git_stats: get_opt_str(&git_stats_json, i)
+                    .and_then(|j| serde_json::from_str(&j).ok()),
                 outcome: get_str(&outcomes, i),
                 extraction_confidence: get_f32(&extraction_confidences, i),
                 anchor_coverage_score: get_f32(&anchor_coverage_scores, i).clamp(0.0, 1.0),
@@ -2254,6 +2785,15 @@ fn nodes_to_batch(nodes: &[GraphNode]) -> Result<RecordBatch, Box<dyn std::error
             NodeType::MemoryChunk => "MemoryChunk",
             NodeType::Clipboard => "Clipboard",
             NodeType::AudioSegment => "AudioSegment",
+            NodeType::Project => "Project",
+            NodeType::File => "File",
+            NodeType::Error => "Error",
+            NodeType::Command => "Command",
+            NodeType::Decision => "Decision",
+            NodeType::AgentSession => "AgentSession",
+            NodeType::ActivityEvent => "ActivityEvent",
+            NodeType::Issue => "Issue",
+            NodeType::Concept => "Concept",
         });
         labels.append_value(&n.label);
         created.append_value(n.created_at);
@@ -2322,6 +2862,15 @@ fn batch_to_nodes(batch: &RecordBatch) -> Vec<GraphNode> {
             "Url" => NodeType::Url,
             "Clipboard" => NodeType::Clipboard,
             "AudioSegment" => NodeType::AudioSegment,
+            "Project" => NodeType::Project,
+            "File" => NodeType::File,
+            "Error" => NodeType::Error,
+            "Command" => NodeType::Command,
+            "Decision" => NodeType::Decision,
+            "AgentSession" => NodeType::AgentSession,
+            "ActivityEvent" => NodeType::ActivityEvent,
+            "Issue" => NodeType::Issue,
+            "Concept" => NodeType::Concept,
             _ => NodeType::MemoryChunk,
         };
         nodes.push(GraphNode {
@@ -2347,10 +2896,17 @@ fn batch_to_edges(batch: &RecordBatch) -> Vec<GraphEdge> {
     let mut edges = Vec::with_capacity(n);
     for i in 0..n {
         let edge_type = match get_str(&types, i).as_str() {
-            "PART_OF_SESSION" | "PartOfSession" | "MentionedIn" => EdgeType::PartOfSession,
+            "PART_OF_SESSION" | "PartOfSession" => EdgeType::PartOfSession,
             "REFERENCE_FOR_TASK" | "ReferenceForTask" | "References" => EdgeType::ReferenceForTask,
             "CLIPBOARD_COPIED" | "ClipboardCopied" => EdgeType::ClipboardCopied,
             "OCCURRED_DURING_AUDIO" | "OccurredDuringAudio" => EdgeType::OccurredDuringAudio,
+            "BELONGS_TO" | "BelongsTo" => EdgeType::BelongsTo,
+            "MENTIONED_IN" | "MentionedIn" => EdgeType::MentionedIn,
+            "EDITED_FILE" | "EditedFile" => EdgeType::EditedFile,
+            "FIXED_BY" | "FixedBy" => EdgeType::FixedBy,
+            "BLOCKED_BY" | "BlockedBy" => EdgeType::BlockedBy,
+            "INFORMED_BY" | "InformedBy" => EdgeType::InformedBy,
+            "RESULTED_IN" | "ResultedIn" => EdgeType::ResultedIn,
             "OCCURRED_AT" | "OccurredAt" | "LinkedTo" => EdgeType::OccurredAt,
             _ => EdgeType::OccurredAt,
         };
@@ -2364,6 +2920,324 @@ fn batch_to_edges(batch: &RecordBatch) -> Vec<GraphEdge> {
         });
     }
     edges
+}
+
+fn activity_events_to_batch(events: &[ActivityEvent]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(activity_event_schema());
+    let ids: Vec<&str> = events.iter().map(|event| event.id.as_str()).collect();
+    let memory_ids: Vec<&str> = events
+        .iter()
+        .map(|event| event.memory_id.as_str())
+        .collect();
+    let projects: Vec<Option<&str>> = events
+        .iter()
+        .map(|event| event.project.as_deref())
+        .collect();
+    let activity_types: Vec<&str> = events
+        .iter()
+        .map(|event| event.activity_type.as_str())
+        .collect();
+    let titles: Vec<&str> = events.iter().map(|event| event.title.as_str()).collect();
+    let summaries: Vec<&str> = events.iter().map(|event| event.summary.as_str()).collect();
+    let starts: Vec<i64> = events.iter().map(|event| event.start_time).collect();
+    let ends: Vec<i64> = events.iter().map(|event| event.end_time).collect();
+    let privacy: Vec<String> = events
+        .iter()
+        .map(|event| privacy_class_literal(&event.privacy_class).to_string())
+        .collect();
+    let payloads: Vec<String> = events
+        .iter()
+        .map(|event| serde_json::to_string(event).unwrap_or_default())
+        .collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(memory_ids)),
+            Arc::new(StringArray::from(projects)),
+            Arc::new(StringArray::from(activity_types)),
+            Arc::new(StringArray::from(titles)),
+            Arc::new(StringArray::from(summaries)),
+            Arc::new(Int64Array::from(starts)),
+            Arc::new(Int64Array::from(ends)),
+            Arc::new(StringArray::from(privacy)),
+            Arc::new(StringArray::from(payloads)),
+        ],
+    )
+}
+
+fn batch_to_activity_events(batch: &RecordBatch) -> Vec<ActivityEvent> {
+    let payloads = str_col(batch, "payload_json");
+    let mut events = Vec::new();
+    if let Some(payloads) = payloads {
+        for i in 0..batch.num_rows() {
+            if let Ok(event) = serde_json::from_str::<ActivityEvent>(payloads.value(i)) {
+                events.push(event);
+            }
+        }
+    }
+    events
+}
+
+fn project_contexts_to_batch(contexts: &[ProjectContext]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(project_context_schema());
+    let ids: Vec<&str> = contexts.iter().map(|context| context.id.as_str()).collect();
+    let projects: Vec<&str> = contexts
+        .iter()
+        .map(|context| context.project.as_str())
+        .collect();
+    let updated_at: Vec<i64> = contexts.iter().map(|context| context.updated_at).collect();
+    let summaries: Vec<&str> = contexts
+        .iter()
+        .map(|context| context.summary.as_str())
+        .collect();
+    let privacy: Vec<String> = contexts
+        .iter()
+        .map(|context| privacy_class_literal(&context.privacy_class).to_string())
+        .collect();
+    let payloads: Vec<String> = contexts
+        .iter()
+        .map(|context| serde_json::to_string(context).unwrap_or_default())
+        .collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(projects)),
+            Arc::new(Int64Array::from(updated_at)),
+            Arc::new(StringArray::from(summaries)),
+            Arc::new(StringArray::from(privacy)),
+            Arc::new(StringArray::from(payloads)),
+        ],
+    )
+}
+
+fn batch_to_project_contexts(batch: &RecordBatch) -> Vec<ProjectContext> {
+    let payloads = str_col(batch, "payload_json");
+    let mut contexts = Vec::new();
+    if let Some(payloads) = payloads {
+        for i in 0..batch.num_rows() {
+            if let Ok(context) = serde_json::from_str::<ProjectContext>(payloads.value(i)) {
+                contexts.push(context);
+            }
+        }
+    }
+    contexts
+}
+
+fn decision_ledger_to_batch(entries: &[DecisionLedgerEntry]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(decision_ledger_schema());
+    let ids: Vec<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
+    let projects: Vec<Option<&str>> = entries
+        .iter()
+        .map(|entry| entry.project.as_deref())
+        .collect();
+    let titles: Vec<&str> = entries.iter().map(|entry| entry.title.as_str()).collect();
+    let statuses: Vec<&str> = entries.iter().map(|entry| entry.status.as_str()).collect();
+    let created_at: Vec<i64> = entries.iter().map(|entry| entry.created_at).collect();
+    let privacy: Vec<String> = entries
+        .iter()
+        .map(|entry| privacy_class_literal(&entry.privacy_class).to_string())
+        .collect();
+    let payloads: Vec<String> = entries
+        .iter()
+        .map(|entry| serde_json::to_string(entry).unwrap_or_default())
+        .collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(projects)),
+            Arc::new(StringArray::from(titles)),
+            Arc::new(StringArray::from(statuses)),
+            Arc::new(Int64Array::from(created_at)),
+            Arc::new(StringArray::from(privacy)),
+            Arc::new(StringArray::from(payloads)),
+        ],
+    )
+}
+
+fn batch_to_decision_ledger_entries(batch: &RecordBatch) -> Vec<DecisionLedgerEntry> {
+    let payloads = str_col(batch, "payload_json");
+    let mut entries = Vec::new();
+    if let Some(payloads) = payloads {
+        for i in 0..batch.num_rows() {
+            if let Ok(entry) = serde_json::from_str::<DecisionLedgerEntry>(payloads.value(i)) {
+                entries.push(entry);
+            }
+        }
+    }
+    entries
+}
+
+fn context_packs_to_batch(packs: &[ContextPack]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(context_pack_schema());
+    let ids: Vec<&str> = packs.iter().map(|pack| pack.id.as_str()).collect();
+    let session_ids: Vec<Option<&str>> = packs
+        .iter()
+        .map(|pack| pack.session_id.as_deref())
+        .collect();
+    let projects: Vec<Option<&str>> = packs.iter().map(|pack| pack.project.as_deref()).collect();
+    let agent_types: Vec<&str> = packs.iter().map(|pack| pack.agent_type.as_str()).collect();
+    let generated_at: Vec<i64> = packs.iter().map(|pack| pack.generated_at).collect();
+    let budget_tokens: Vec<u32> = packs.iter().map(|pack| pack.budget_tokens).collect();
+    let tokens_used: Vec<u32> = packs.iter().map(|pack| pack.tokens_used).collect();
+    let summaries: Vec<&str> = packs.iter().map(|pack| pack.summary.as_str()).collect();
+    let payloads: Vec<String> = packs
+        .iter()
+        .map(|pack| serde_json::to_string(pack).unwrap_or_default())
+        .collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(session_ids)),
+            Arc::new(StringArray::from(projects)),
+            Arc::new(StringArray::from(agent_types)),
+            Arc::new(Int64Array::from(generated_at)),
+            Arc::new(UInt32Array::from(budget_tokens)),
+            Arc::new(UInt32Array::from(tokens_used)),
+            Arc::new(StringArray::from(summaries)),
+            Arc::new(StringArray::from(payloads)),
+        ],
+    )
+}
+
+fn batch_to_context_packs(batch: &RecordBatch) -> Vec<ContextPack> {
+    let payloads = str_col(batch, "payload_json");
+    let mut packs = Vec::new();
+    if let Some(payloads) = payloads {
+        for i in 0..batch.num_rows() {
+            if let Ok(pack) = serde_json::from_str::<ContextPack>(payloads.value(i)) {
+                packs.push(pack);
+            }
+        }
+    }
+    packs
+}
+
+fn context_deltas_to_batch(deltas: &[ContextDelta]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(context_delta_schema());
+    let ids: Vec<&str> = deltas.iter().map(|delta| delta.id.as_str()).collect();
+    let session_ids: Vec<&str> = deltas
+        .iter()
+        .map(|delta| delta.session_id.as_str())
+        .collect();
+    let since: Vec<i64> = deltas.iter().map(|delta| delta.since).collect();
+    let generated_at: Vec<i64> = deltas.iter().map(|delta| delta.generated_at).collect();
+    let tokens_used: Vec<u32> = deltas.iter().map(|delta| delta.tokens_used).collect();
+    let payloads: Vec<String> = deltas
+        .iter()
+        .map(|delta| serde_json::to_string(delta).unwrap_or_default())
+        .collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(session_ids)),
+            Arc::new(Int64Array::from(since)),
+            Arc::new(Int64Array::from(generated_at)),
+            Arc::new(UInt32Array::from(tokens_used)),
+            Arc::new(StringArray::from(payloads)),
+        ],
+    )
+}
+
+fn batch_to_context_deltas(batch: &RecordBatch) -> Vec<ContextDelta> {
+    let payloads = str_col(batch, "payload_json");
+    let mut deltas = Vec::new();
+    if let Some(payloads) = payloads {
+        for i in 0..batch.num_rows() {
+            if let Ok(delta) = serde_json::from_str::<ContextDelta>(payloads.value(i)) {
+                deltas.push(delta);
+            }
+        }
+    }
+    deltas
+}
+
+fn entity_aliases_to_batch(aliases: &[EntityAliasRecord]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(entity_alias_schema());
+    let alias_keys: Vec<&str> = aliases
+        .iter()
+        .map(|alias| alias.alias_key.as_str())
+        .collect();
+    let canonical_ids: Vec<&str> = aliases
+        .iter()
+        .map(|alias| alias.canonical_id.as_str())
+        .collect();
+    let canonical_names: Vec<&str> = aliases
+        .iter()
+        .map(|alias| alias.canonical_name.as_str())
+        .collect();
+    let entity_types: Vec<&str> = aliases
+        .iter()
+        .map(|alias| alias.entity_type.as_str())
+        .collect();
+    let projects: Vec<Option<&str>> = aliases
+        .iter()
+        .map(|alias| alias.project.as_deref())
+        .collect();
+    let confidence: Vec<f32> = aliases.iter().map(|alias| alias.confidence).collect();
+    let updated_at: Vec<i64> = aliases.iter().map(|alias| alias.updated_at).collect();
+    let payloads: Vec<String> = aliases
+        .iter()
+        .map(|alias| serde_json::to_string(alias).unwrap_or_default())
+        .collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(alias_keys)),
+            Arc::new(StringArray::from(canonical_ids)),
+            Arc::new(StringArray::from(canonical_names)),
+            Arc::new(StringArray::from(entity_types)),
+            Arc::new(StringArray::from(projects)),
+            Arc::new(Float32Array::from(confidence)),
+            Arc::new(Int64Array::from(updated_at)),
+            Arc::new(StringArray::from(payloads)),
+        ],
+    )
+}
+
+fn batch_to_entity_aliases(batch: &RecordBatch) -> Vec<EntityAliasRecord> {
+    let payloads = str_col(batch, "payload_json");
+    let mut aliases = Vec::new();
+    if let Some(payloads) = payloads {
+        for i in 0..batch.num_rows() {
+            if let Ok(alias) = serde_json::from_str::<EntityAliasRecord>(payloads.value(i)) {
+                aliases.push(alias);
+            }
+        }
+    }
+    aliases
+}
+
+fn privacy_class_literal(value: &super::schema::PrivacyClass) -> &'static str {
+    match value {
+        super::schema::PrivacyClass::Public => "public",
+        super::schema::PrivacyClass::Project => "project",
+        super::schema::PrivacyClass::Personal => "personal",
+        super::schema::PrivacyClass::Sensitive => "sensitive",
+        super::schema::PrivacyClass::Secret => "secret",
+        super::schema::PrivacyClass::Blocked => "blocked",
+        super::schema::PrivacyClass::Ephemeral => "ephemeral",
+    }
+}
+
+async fn count_table_rows(table: &Table) -> Result<usize, Box<dyn std::error::Error>> {
+    let batches = table
+        .query()
+        .execute()
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    Ok(batches.into_iter().map(|batch| batch.num_rows()).sum())
 }
 
 fn batch_to_meetings(batch: &RecordBatch) -> Vec<MeetingSession> {
@@ -3198,20 +4072,26 @@ fn record_insert_dedup_key(record: &MemoryRecord) -> String {
     if !record.content_hash.trim().is_empty() {
         return record.content_hash.trim().to_string();
     }
-    compute_content_hash(record.url.as_deref(), &record.window_title, record.timestamp)
+    compute_content_hash(
+        record.url.as_deref(),
+        &record.window_title,
+        record.timestamp,
+    )
 }
 
 fn search_result_dedup_key(result: &SearchResult) -> String {
     if !result.content_hash.trim().is_empty() {
         return result.content_hash.trim().to_string();
     }
-    compute_content_hash(result.url.as_deref(), &result.window_title, result.timestamp)
+    compute_content_hash(
+        result.url.as_deref(),
+        &result.window_title,
+        result.timestamp,
+    )
 }
 
 fn compute_content_hash(url: Option<&str>, page_title: &str, timestamp_ms: i64) -> String {
-    let canonical_url = url
-        .map(canonicalize_index_url)
-        .unwrap_or_default();
+    let canonical_url = url.map(canonicalize_index_url).unwrap_or_default();
     let normalized_title = normalize_keyword_text(page_title);
     let five_min_bucket = timestamp_ms.div_euclid(300_000);
     let payload = format!("{canonical_url}|{normalized_title}|{five_min_bucket}");
@@ -3229,7 +4109,24 @@ fn sql_escape(s: &str) -> String {
 
 async fn open_all_tables(
     db_path: &Path,
-) -> Result<(Table, Option<Table>, Table, Table, Table, Table, Table), lancedb::Error> {
+) -> Result<
+    (
+        Table,
+        Option<Table>,
+        Table,
+        Table,
+        Table,
+        Table,
+        Table,
+        Table,
+        Table,
+        Table,
+        Table,
+        Table,
+        Table,
+    ),
+    lancedb::Error,
+> {
     let uri = db_path.to_string_lossy();
     let conn: Connection = lancedb::connect(&uri).execute().await?;
     let names = conn.table_names().execute().await?;
@@ -3258,12 +4155,23 @@ async fn open_all_tables(
         if is_384 && TEXT_EMBED_DIM == 1024 {
             legacy_table = Some(existing);
             // Create the new 1024d table
-            table = Some(open_or_create_named_table(&conn, &names, "memories_v2_1024", Arc::new(memory_schema())).await?);
+            table = Some(
+                open_or_create_named_table(
+                    &conn,
+                    &names,
+                    "memories_v2_1024",
+                    Arc::new(memory_schema()),
+                )
+                .await?,
+            );
         } else {
             table = Some(existing);
         }
     } else {
-        table = Some(open_or_create_named_table(&conn, &names, MEMORIES_TABLE, Arc::new(memory_schema())).await?);
+        table = Some(
+            open_or_create_named_table(&conn, &names, MEMORIES_TABLE, Arc::new(memory_schema()))
+                .await?,
+        );
     }
 
     let table = table.unwrap();
@@ -3281,8 +4189,64 @@ async fn open_all_tables(
         open_or_create_named_table(&conn, &names, NODES_TABLE, Arc::new(node_schema())).await?;
     let edges =
         open_or_create_named_table(&conn, &names, EDGES_TABLE, Arc::new(edge_schema())).await?;
+    let activity_events = open_or_create_named_table(
+        &conn,
+        &names,
+        ACTIVITY_EVENTS_TABLE,
+        Arc::new(activity_event_schema()),
+    )
+    .await?;
+    let project_contexts = open_or_create_named_table(
+        &conn,
+        &names,
+        PROJECT_CONTEXTS_TABLE,
+        Arc::new(project_context_schema()),
+    )
+    .await?;
+    let decision_ledger = open_or_create_named_table(
+        &conn,
+        &names,
+        DECISION_LEDGER_TABLE,
+        Arc::new(decision_ledger_schema()),
+    )
+    .await?;
+    let context_packs = open_or_create_named_table(
+        &conn,
+        &names,
+        CONTEXT_PACKS_TABLE,
+        Arc::new(context_pack_schema()),
+    )
+    .await?;
+    let context_deltas = open_or_create_named_table(
+        &conn,
+        &names,
+        CONTEXT_DELTAS_TABLE,
+        Arc::new(context_delta_schema()),
+    )
+    .await?;
+    let entity_aliases = open_or_create_named_table(
+        &conn,
+        &names,
+        ENTITY_ALIASES_TABLE,
+        Arc::new(entity_alias_schema()),
+    )
+    .await?;
 
-    Ok((table, legacy_table, tasks, meetings, segments, nodes, edges))
+    Ok((
+        table,
+        legacy_table,
+        tasks,
+        meetings,
+        segments,
+        nodes,
+        edges,
+        activity_events,
+        project_contexts,
+        decision_ledger,
+        context_packs,
+        context_deltas,
+        entity_aliases,
+    ))
 }
 
 async fn open_or_create_named_table(
