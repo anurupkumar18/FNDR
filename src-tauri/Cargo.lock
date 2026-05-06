@@ -2683,6 +2683,7 @@ dependencies = [
  "rustls-pemfile 2.2.0",
  "serde",
  "serde_json",
+ "sha2",
  "tantivy 0.22.1",
  "tauri",
  "tauri-build",

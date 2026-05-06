@@ -16,7 +16,7 @@ use crate::store::MemoryRecord;
 use crate::mcp::{self, McpServerStatus};
 use crate::meeting::{self, MeetingRecorderStatus, MeetingTranscript};
 
-use crate::search::{HybridSearcher, MemoryCard, MemoryCardSynthesizer};
+use crate::search::{rerank_results, HybridSearcher, MemoryCard, MemoryCardSynthesizer, QueryContext};
 use crate::speech;
 use crate::store::{MeetingSession, SearchResult, Stats, Task, TaskType};
 use crate::AppState;
@@ -293,10 +293,13 @@ fn title_from_summary(summary: &str, app_name: &str) -> Option<String> {
 }
 
 fn card_summary(result: &SearchResult) -> String {
+    let display = result.display_summary.trim();
     let snippet = result.snippet.trim();
     let clean = result.clean_text.trim();
 
-    let base = if !snippet.is_empty() && !is_low_signal_summary(snippet, &result.app_name) {
+    let base = if !display.is_empty() && !is_low_signal_summary(display, &result.app_name) {
+        display
+    } else if !snippet.is_empty() && !is_low_signal_summary(snippet, &result.app_name) {
         snippet
     } else if !clean.is_empty() && !is_low_signal_summary(clean, &result.app_name) {
         clean
@@ -359,7 +362,13 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
     MemoryCard {
         id: memory_id.clone(),
         title,
-        summary,
+        summary: summary.clone(),
+        display_summary: if result.display_summary.trim().is_empty() {
+            summary
+        } else {
+            result.display_summary.clone()
+        },
+        internal_context: result.internal_context.clone(),
         action,
         context,
         timestamp: result.timestamp,
@@ -372,6 +381,7 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         raw_snippets: vec![fallback_snippet],
         evidence_ids: vec![memory_id],
         confidence: score.clamp(0.0, 1.0),
+        anchor_coverage_score: result.anchor_coverage_score.clamp(0.0, 1.0),
         activity_type: String::new(),
         files_touched: Vec::new(),
         session_duration_mins: 0,
@@ -477,6 +487,17 @@ pub async fn search_memory_cards(
         raw_limit,
     )
     .await?;
+    raw_results.truncate(raw_limit);
+    let query_context = QueryContext::from_query(&query);
+    let (reranked, rerank_stats) = rerank_results(&query_context, raw_results);
+    let mut raw_results = reranked;
+    if rerank_stats.excluded_for_coverage > 0 {
+        tracing::info!(
+            excluded_for_coverage = rerank_stats.excluded_for_coverage,
+            query = %query_context.raw_query,
+            "search_memory_cards:coverage_gate"
+        );
+    }
     raw_results.truncate(raw_limit);
     tracing::info!(count = raw_results.len(), "search_memory_cards:rerank:done");
     if raw_results.is_empty() {
@@ -763,8 +784,7 @@ fn ensure_period(sentence: &str) -> String {
 
 fn build_grounded_search_summary(query: &str, evidence: &[SummaryEvidence]) -> String {
     if evidence.is_empty() {
-        return "Low confidence: No directly relevant memories found in captured snippets."
-            .to_string();
+        return String::new();
     }
 
     let query_terms = summary_terms(query);
@@ -786,15 +806,17 @@ fn build_grounded_search_summary(query: &str, evidence: &[SummaryEvidence]) -> S
 
     let selected = scored
         .iter()
-        .filter(|(_, relevance)| *relevance >= 0.16)
+        .filter(|(_, relevance)| *relevance >= 0.22)
         .take(2)
         .collect::<Vec<_>>();
 
-    if selected.is_empty() {
-        return format!(
-            "Low confidence: No directly relevant memories found for \"{}\".",
-            query.trim()
+    if selected.len() < 2 {
+        tracing::debug!(
+            query = %query,
+            selected = selected.len(),
+            "summarize_search:suppressed_insufficient_evidence"
         );
+        return String::new();
     }
 
     let mut fragments = Vec::new();
@@ -816,8 +838,13 @@ fn build_grounded_search_summary(query: &str, evidence: &[SummaryEvidence]) -> S
         summary.push_str(&ensure_period(second));
     }
 
-    if confidence < 0.45 {
-        summary = format!("Low confidence: {}", summary.trim());
+    if confidence < 0.36 {
+        tracing::debug!(
+            query = %query,
+            confidence,
+            "summarize_search:suppressed_low_confidence"
+        );
+        return String::new();
     }
 
     summary

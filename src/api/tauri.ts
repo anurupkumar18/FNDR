@@ -10,15 +10,22 @@ export interface SearchResult {
     session_id: string;
     text: string;
     snippet: string;
+    display_summary?: string;
+    internal_context?: string;
     score: number;
     screenshot_path?: string;
     url?: string;
+    anchor_coverage_score?: number;
+    extracted_entities?: string[];
+    content_hash?: string;
 }
 
 export interface MemoryCard {
     id: string;
     title: string;
     summary: string;
+    display_summary?: string;
+    internal_context?: string;
     action: string;
     context: string[];
     timestamp: number;
@@ -31,6 +38,7 @@ export interface MemoryCard {
     raw_snippets: string[];
     evidence_ids?: string[];
     confidence?: number;
+    anchor_coverage_score?: number;
     /** High-level activity category: "coding" | "browsing" | "communication" | "docs" | "design" | "other" */
     activity_type?: string;
     /** File paths or code symbols touched in this session */

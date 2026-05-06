@@ -17,6 +17,7 @@ pub mod models;
 pub mod ocr;
 pub mod privacy;
 pub mod search;
+pub mod summariser;
 pub mod speech;
 pub mod store;
 pub mod tasks;

@@ -33,6 +33,7 @@ use crate::memory_compaction::{
 };
 use crate::ocr::{OcrEngine, RecognizedText};
 use crate::privacy::Blocklist;
+use crate::summariser::narration_filter::clean_or_fallback_display_summary;
 use crate::store::{MemoryRecord, SearchResult, Task, TaskType};
 use crate::tasks::parse_tasks_from_llm_response;
 use crate::AppState;
@@ -361,6 +362,24 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         };
 
         let now = Local::now();
+        let (display_summary, narration_filtered) = clean_or_fallback_display_summary(
+            &final_snippet,
+            &window_title,
+            url.as_deref(),
+            now.timestamp_millis(),
+        );
+        if narration_filtered {
+            tracing::debug!(
+                app = %app_name,
+                title = %window_title,
+                "capture_pipeline:display_summary_narration_filter_hit"
+            );
+        }
+        let internal_context = structured_memory
+            .as_ref()
+            .map(|memory| memory.detail.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| final_snippet.clone());
 
         // --- Proactive Privacy Check ---
         if Blocklist::is_sensitive_context(url.as_deref(), Some(&window_title)) {
@@ -404,13 +423,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         };
         let lexical_shadow = build_lexical_shadow(
             &window_title,
-            &final_snippet,
+            &display_summary,
             &enriched_clean_text,
             url.as_deref(),
         );
         let snippet_embed_input = compact_summary_embedding_text(
             &summary_source,
-            &final_snippet,
+            &display_summary,
             &enriched_clean_text,
             &lexical_shadow,
         );
@@ -519,7 +538,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             clean_text: enriched_clean_text,
             ocr_confidence: ocr_result.confidence,
             ocr_block_count: ocr_result.ocr_stats.lines_used as u32,
-            snippet: final_snippet,
+            snippet: display_summary.clone(),
+            display_summary: display_summary.clone(),
+            internal_context,
             summary_source,
             noise_score,
             session_key,
@@ -587,6 +608,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 .as_ref()
                 .map(|m| m.confidence)
                 .unwrap_or(0.0),
+            anchor_coverage_score: 0.0,
+            content_hash: String::new(),
             dedup_fingerprint: structured_memory
                 .as_ref()
                 .map(|m| m.dedup_fingerprint.clone())
@@ -1130,9 +1153,28 @@ pub(crate) async fn merge_memory_records_with_policy(
     };
     let merged_window_title = choose_story_title(&existing.window_title, &incoming.window_title);
     let merged_url = incoming.url.clone().or(existing.url.clone());
+    let merged_timestamp = incoming.timestamp.max(existing.timestamp);
+    let (merged_display_summary, filtered_narration) = clean_or_fallback_display_summary(
+        &merged_snippet,
+        &merged_window_title,
+        merged_url.as_deref(),
+        merged_timestamp,
+    );
+    if filtered_narration {
+        tracing::debug!(
+            existing_id = %existing.id,
+            incoming_id = %incoming.id,
+            "capture_merge:display_summary_narration_filter_hit"
+        );
+    }
+    let merged_internal_context = merge_story_text(
+        &prefer_non_empty(&existing.internal_context, &existing.clean_text),
+        &prefer_non_empty(&incoming.internal_context, &incoming.clean_text),
+        6400,
+    );
     let merged_lexical_shadow = build_lexical_shadow(
         &merged_window_title,
-        &merged_snippet,
+        &merged_display_summary,
         &format!(
             "{}\n{}\n{}",
             merged_clean_text, existing.lexical_shadow, incoming.lexical_shadow
@@ -1141,7 +1183,7 @@ pub(crate) async fn merge_memory_records_with_policy(
     );
     let compact_snippet_text = compact_summary_embedding_text(
         &merged_summary_source,
-        &merged_snippet,
+        &merged_display_summary,
         &merged_clean_text,
         &merged_lexical_shadow,
     );
@@ -1249,7 +1291,7 @@ pub(crate) async fn merge_memory_records_with_policy(
 
     MemoryRecord {
         id: existing.id.clone(),
-        timestamp: incoming.timestamp.max(existing.timestamp),
+        timestamp: merged_timestamp,
         day_bucket: incoming.day_bucket.clone(),
         app_name: incoming.app_name.clone(),
         bundle_id: incoming.bundle_id.clone().or(existing.bundle_id.clone()),
@@ -1259,7 +1301,9 @@ pub(crate) async fn merge_memory_records_with_policy(
         clean_text: merged_clean_text,
         ocr_confidence: existing.ocr_confidence.max(incoming.ocr_confidence),
         ocr_block_count: existing.ocr_block_count.max(incoming.ocr_block_count),
-        snippet: merged_snippet,
+        snippet: merged_display_summary.clone(),
+        display_summary: merged_display_summary,
+        internal_context: merged_internal_context,
         summary_source: merged_summary_source,
         noise_score: ((existing.noise_score + incoming.noise_score) / 2.0).clamp(0.0, 1.0),
         session_key: choose_story_title(&existing.session_key, &incoming.session_key),
@@ -1289,6 +1333,10 @@ pub(crate) async fn merge_memory_records_with_policy(
         git_stats,
         outcome,
         extraction_confidence,
+        anchor_coverage_score: existing
+            .anchor_coverage_score
+            .max(incoming.anchor_coverage_score),
+        content_hash: prefer_non_empty(&incoming.content_hash, &existing.content_hash),
         dedup_fingerprint,
         embedding_text,
         embedding_model,

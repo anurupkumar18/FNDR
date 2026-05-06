@@ -1,4 +1,6 @@
 import { MemoryCard as MemoryCardData } from "../api/tauri";
+import { splitByAnchorTerms } from "../lib/highlight";
+import { extractAnchorTerms, scoreAnchorCoverage } from "../lib/search";
 import "./MemoryCard.css";
 
 interface MemoryCardProps {
@@ -16,23 +18,15 @@ export function MemoryCard({ result, query, onClick, isLarge }: MemoryCardProps)
         });
     };
 
-    // Highlight matching text
-    const highlightText = (text: string, highlight: string) => {
-        if (!highlight.trim()) return text;
-
-        try {
-            const regex = new RegExp(`(${highlight.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, "gi");
-            const parts = text.split(regex);
-
-            return parts.map((part, i) =>
-                regex.test(part) ? (
-                    <mark key={i} className="highlight">{part}</mark>
-                ) : part
-            );
-        } catch {
-            return text;
-        }
-    };
+    const anchorTerms = extractAnchorTerms(query);
+    const summaryText = result.display_summary ?? result.summary;
+    const coverage = result.anchor_coverage_score
+        ?? scoreAnchorCoverage(`${result.title} ${summaryText}`, anchorTerms);
+    const relevanceLabel = coverage >= 0.8
+        ? "Direct match"
+        : coverage >= 0.4
+            ? "Related"
+            : "Contextual";
 
     // Get app icon based on name
     const getAppIcon = (appName: string) => {
@@ -63,11 +57,20 @@ export function MemoryCard({ result, query, onClick, isLarge }: MemoryCardProps)
                     <span className="card-app-name">{result.app_name}</span>
                     <time className="card-time">{formatTime(result.timestamp)}</time>
                 </div>
+                <span className={`card-relevance ${coverage >= 0.8 ? "high" : coverage >= 0.4 ? "medium" : "low"}`}>
+                    {relevanceLabel}
+                </span>
             </header>
 
             <div className="card-body">
                 <p className="card-text">
-                    {highlightText(result.summary, query)}
+                    {splitByAnchorTerms(summaryText, anchorTerms).map((part, index) =>
+                        part.highlighted ? (
+                            <mark key={index} className="highlight">{part.text}</mark>
+                        ) : (
+                            <span key={index}>{part.text}</span>
+                        )
+                    )}
                 </p>
             </div>
 

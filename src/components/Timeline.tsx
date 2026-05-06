@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { MemoryCard } from "../api/tauri";
+import { cleanupCardsForRender } from "../lib/cardCleanup";
+import { extractAnchorTerms, scoreAnchorCoverage } from "../lib/search";
 import "./Timeline.css";
 
 const INITIAL_VISIBLE = 30;
@@ -100,14 +102,14 @@ export function Timeline({
         );
     }
 
-    const visibleResults = results.slice(0, visibleCount);
+    const visibleResults = cleanupCardsForRender(results.slice(0, visibleCount));
     const hasMore = results.length > visibleCount;
     const filteredResults = filterConsecutiveSimilar(visibleResults);
     return (
         <div className="timeline-container">
             <div className="timeline-stream">
                 {filteredResults.map((result) => {
-                    const cleanSummary = stripLegacySources(result.summary);
+                    const cleanSummary = stripLegacySources(result.display_summary ?? result.summary);
                     const displayTitle = preferredTitle(result);
                     const primaryText = cleanSummary || displayTitle || "Captured memory";
                     const storyMode = isStoryStyleApp(result);
@@ -183,7 +185,7 @@ export function Timeline({
                             )}
                             <div className="result-context-chips" aria-label="Match details">
                                 {matchReason && <span className="result-chip">{matchReason}</span>}
-                                <span className="result-chip">{qualityLabel(confidence)}</span>
+                                <span className="result-chip">{qualityLabel(result, query, confidence)}</span>
                                 {domain && <span className="result-chip">{domain}</span>}
                                 {result.source_count > 1 && (
                                     <span className="result-chip">{result.source_count} sources</span>
@@ -294,14 +296,27 @@ function preferredMatchReason(result: MemoryCard, query: string): string {
     return "Semantic + keyword match";
 }
 
-function qualityLabel(confidence: number): string {
+function qualityLabel(result: MemoryCard, query: string, confidence: number): string {
+    if (!query.trim()) {
+        return "Recent memory";
+    }
+
+    const coverage = result.anchor_coverage_score
+        ?? scoreAnchorCoverage(
+            `${result.title} ${result.display_summary ?? result.summary} ${(result.raw_snippets ?? []).join(" ")}`,
+            extractAnchorTerms(query)
+        );
+
+    if (coverage >= 0.8) {
+        return "Direct match";
+    }
+    if (coverage >= 0.4) {
+        return "Related";
+    }
     if (confidence >= 0.72) {
         return "Strong match";
     }
-    if (confidence >= 0.45) {
-        return "Moderate match";
-    }
-    return "Weak match";
+    return "Contextual";
 }
 
 function normalizeStoryText(value: string | undefined | null): string {
@@ -334,14 +349,49 @@ function filterConsecutiveSimilar(results: MemoryCard[]): MemoryCard[] {
         const curr = results[i];
 
         // Skip if same app and < 30s diff and highly similar title.
+        const summaryOverlap = tokenOverlap(
+            curr.display_summary ?? curr.summary,
+            prev.display_summary ?? prev.summary
+        );
         if (
             curr.app_name === prev.app_name &&
             Math.abs(curr.timestamp - prev.timestamp) < 30_000 &&
-            curr.title.toLowerCase() === prev.title.toLowerCase()
+            (curr.title.toLowerCase() === prev.title.toLowerCase() || summaryOverlap > 0.85)
         ) {
             continue;
         }
         filtered.push(curr);
     }
     return filtered;
+}
+
+function tokenOverlap(left: string, right: string): number {
+    const leftTokens = tokenize(left);
+    const rightTokens = tokenize(right);
+    if (leftTokens.size === 0 || rightTokens.size === 0) {
+        return 0;
+    }
+
+    let intersection = 0;
+    for (const token of leftTokens) {
+        if (rightTokens.has(token)) {
+            intersection += 1;
+        }
+    }
+    const union = new Set([...leftTokens, ...rightTokens]).size;
+    if (union === 0) {
+        return 0;
+    }
+    return intersection / union;
+}
+
+function tokenize(value: string): Set<string> {
+    return new Set(
+        value
+            .toLowerCase()
+            .replace(/[^a-z0-9\\s]/g, " ")
+            .split(/\\s+/)
+            .map((token) => token.trim())
+            .filter((token) => token.length > 1)
+    );
 }

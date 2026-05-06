@@ -25,6 +25,7 @@ use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::table::{AddDataMode, NewColumnTransform};
 use lancedb::{Connection, Table};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -47,6 +48,8 @@ const SEARCH_RESULT_COLUMNS: &[&str] = &[
     "ocr_confidence",
     "ocr_block_count",
     "snippet",
+    "display_summary",
+    "internal_context",
     "summary_source",
     "noise_score",
     "session_key",
@@ -54,6 +57,9 @@ const SEARCH_RESULT_COLUMNS: &[&str] = &[
     "screenshot_path",
     "url",
     "decay_score",
+    "entities",
+    "anchor_coverage_score",
+    "content_hash",
 ];
 const TEXT_EMBED_DIM: i32 = DEFAULT_TEXT_EMBEDDING_DIM as i32;
 const IMAGE_EMBED_DIM: i32 = DEFAULT_IMAGE_EMBEDDING_DIM as i32;
@@ -1330,6 +1336,8 @@ fn memory_schema() -> Schema {
         Field::new("ocr_confidence", DataType::Float32, false),
         Field::new("ocr_block_count", DataType::Int64, false),
         Field::new("snippet", DataType::Utf8, false),
+        Field::new("display_summary", DataType::Utf8, false),
+        Field::new("internal_context", DataType::Utf8, false),
         Field::new("summary_source", DataType::Utf8, false),
         Field::new("noise_score", DataType::Float32, false),
         Field::new("session_key", DataType::Utf8, false),
@@ -1384,6 +1392,8 @@ fn memory_schema() -> Schema {
         Field::new("git_stats", DataType::Utf8, true),
         Field::new("outcome", DataType::Utf8, false),
         Field::new("extraction_confidence", DataType::Float32, false),
+        Field::new("anchor_coverage_score", DataType::Float32, false),
+        Field::new("content_hash", DataType::Utf8, false),
         Field::new("dedup_fingerprint", DataType::Utf8, false),
         Field::new("embedding_text", DataType::Utf8, false),
         Field::new("embedding_model", DataType::Utf8, false),
@@ -1539,6 +1549,8 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
     let ocr_confidences: Vec<f32> = records.iter().map(|r| r.ocr_confidence).collect();
     let ocr_block_counts: Vec<i64> = records.iter().map(|r| r.ocr_block_count as i64).collect();
     let snippets: Vec<&str> = records.iter().map(|r| r.snippet.as_str()).collect();
+    let display_summaries: Vec<&str> = records.iter().map(|r| r.display_summary.as_str()).collect();
+    let internal_contexts: Vec<&str> = records.iter().map(|r| r.internal_context.as_str()).collect();
     let summary_sources: Vec<&str> = records.iter().map(|r| r.summary_source.as_str()).collect();
     let noise_scores: Vec<f32> = records.iter().map(|r| r.noise_score).collect();
     let session_keys: Vec<&str> = records.iter().map(|r| r.session_key.as_str()).collect();
@@ -1610,6 +1622,8 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
     let projects: Vec<&str> = records.iter().map(|r| r.project.as_str()).collect();
     let outcomes: Vec<&str> = records.iter().map(|r| r.outcome.as_str()).collect();
     let extraction_confidences: Vec<f32> = records.iter().map(|r| r.extraction_confidence).collect();
+    let anchor_coverage_scores: Vec<f32> = records.iter().map(|r| r.anchor_coverage_score).collect();
+    let content_hashes: Vec<&str> = records.iter().map(|r| r.content_hash.as_str()).collect();
     let dedup_fingerprints: Vec<&str> = records.iter().map(|r| r.dedup_fingerprint.as_str()).collect();
     let embedding_texts: Vec<&str> = records.iter().map(|r| r.embedding_text.as_str()).collect();
     let embedding_models: Vec<&str> = records.iter().map(|r| r.embedding_model.as_str()).collect();
@@ -1620,7 +1634,7 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
     let git_stats_json: Vec<Option<String>> = records.iter().map(|r| r.git_stats.as_ref().and_then(|g| serde_json::to_string(g).ok())).collect();
     let git_stats_refs: Vec<Option<&str>> = git_stats_json.iter().map(|o| o.as_deref()).collect();
 
-    let mut build_str_list = |extractor: &dyn Fn(&MemoryRecord) -> &Vec<String>| {
+    let build_str_list = |extractor: &dyn Fn(&MemoryRecord) -> &Vec<String>| {
         let mut builder = ListBuilder::new(StringBuilder::new());
         for record in records {
             let list = extractor(record);
@@ -1657,6 +1671,8 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
             Arc::new(Float32Array::from(ocr_confidences)),
             Arc::new(Int64Array::from(ocr_block_counts)),
             Arc::new(StringArray::from(snippets)),
+            Arc::new(StringArray::from(display_summaries)),
+            Arc::new(StringArray::from(internal_contexts)),
             Arc::new(StringArray::from(summary_sources)),
             Arc::new(Float32Array::from(noise_scores)),
             Arc::new(StringArray::from(session_keys)),
@@ -1683,6 +1699,8 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
             Arc::new(StringArray::from(git_stats_refs)),
             Arc::new(StringArray::from(outcomes)),
             Arc::new(Float32Array::from(extraction_confidences)),
+            Arc::new(Float32Array::from(anchor_coverage_scores)),
+            Arc::new(StringArray::from(content_hashes)),
             Arc::new(StringArray::from(dedup_fingerprints)),
             Arc::new(StringArray::from(embedding_texts)),
             Arc::new(StringArray::from(embedding_models)),
@@ -1710,6 +1728,8 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
     let ocr_confidences = f32_col(batch, "ocr_confidence");
     let ocr_block_counts = i64_col(batch, "ocr_block_count");
     let snippets = str_col(batch, "snippet");
+    let display_summaries = str_col(batch, "display_summary");
+    let internal_contexts = str_col(batch, "internal_context");
     let summary_sources = str_col(batch, "summary_source");
     let noise_scores = f32_col(batch, "noise_score");
     let session_keys = str_col(batch, "session_key");
@@ -1747,6 +1767,8 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
     let git_stats_json = str_col(batch, "git_stats");
     let outcomes = str_col(batch, "outcome");
     let extraction_confidences = f32_col(batch, "extraction_confidence");
+    let anchor_coverage_scores = f32_col(batch, "anchor_coverage_score");
+    let content_hashes = str_col(batch, "content_hash");
     let dedup_fingerprints = str_col(batch, "dedup_fingerprint");
     let embedding_texts = str_col(batch, "embedding_text");
     let embedding_models = str_col(batch, "embedding_model");
@@ -1777,6 +1799,15 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
                 ocr_confidence: get_f32(&ocr_confidences, i),
                 ocr_block_count: get_i64(&ocr_block_counts, i).max(0) as u32,
                 snippet: get_str(&snippets, i),
+                display_summary: {
+                    let summary = get_str(&display_summaries, i);
+                    if summary.trim().is_empty() {
+                        get_str(&snippets, i)
+                    } else {
+                        summary
+                    }
+                },
+                internal_context: get_str(&internal_contexts, i),
                 summary_source: get_str(&summary_sources, i),
                 noise_score: get_f32(&noise_scores, i),
                 session_key: get_str(&session_keys, i),
@@ -1803,6 +1834,19 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
                 git_stats: get_opt_str(&git_stats_json, i).and_then(|j| serde_json::from_str(&j).ok()),
                 outcome: get_str(&outcomes, i),
                 extraction_confidence: get_f32(&extraction_confidences, i),
+                anchor_coverage_score: get_f32(&anchor_coverage_scores, i).clamp(0.0, 1.0),
+                content_hash: {
+                    let hash = get_str(&content_hashes, i);
+                    if hash.trim().is_empty() {
+                        compute_content_hash(
+                            get_opt_str(&urls, i).as_deref(),
+                            &get_str(&window_titles, i),
+                            timestamps.as_ref().map(|c| c.value(i)).unwrap_or(0),
+                        )
+                    } else {
+                        hash
+                    }
+                },
                 dedup_fingerprint: get_str(&dedup_fingerprints, i),
                 embedding_text: get_str(&embedding_texts, i),
                 embedding_model: get_str(&embedding_models, i),
@@ -1830,6 +1874,8 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
     let ocr_confidences = f32_col(batch, "ocr_confidence");
     let ocr_block_counts = i64_col(batch, "ocr_block_count");
     let snippets = str_col(batch, "snippet");
+    let display_summaries = str_col(batch, "display_summary");
+    let internal_contexts = str_col(batch, "internal_context");
     let summary_sources = str_col(batch, "summary_source");
     let noise_scores = f32_col(batch, "noise_score");
     let session_keys = str_col(batch, "session_key");
@@ -1850,8 +1896,11 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
     let session_duration_mins = u32_col(batch, "session_duration_mins");
     let projects = str_col(batch, "project");
     let tags = list_str_col(batch, "tags");
+    let entities = list_str_col(batch, "entities");
     let outcomes = str_col(batch, "outcome");
     let extraction_confidences = f32_col(batch, "extraction_confidence");
+    let anchor_coverage_scores = f32_col(batch, "anchor_coverage_score");
+    let content_hashes = str_col(batch, "content_hash");
     let dedup_fingerprints = str_col(batch, "dedup_fingerprint");
     let is_consolidated_flags = bool_col(batch, "is_consolidated");
     let is_soft_deleted_flags = bool_col(batch, "is_soft_deleted");
@@ -1874,6 +1923,15 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
                 ocr_confidence: get_f32(&ocr_confidences, i),
                 ocr_block_count: get_i64(&ocr_block_counts, i).max(0) as u32,
                 snippet: get_str(&snippets, i),
+                display_summary: {
+                    let summary = get_str(&display_summaries, i);
+                    if summary.trim().is_empty() {
+                        get_str(&snippets, i)
+                    } else {
+                        summary
+                    }
+                },
+                internal_context: get_str(&internal_contexts, i),
                 summary_source: get_str(&summary_sources, i),
                 noise_score: get_f32(&noise_scores, i),
                 session_key: get_str(&session_keys, i),
@@ -1890,6 +1948,20 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
                 tags: extract_str_list(&tags, i),
                 outcome: get_str(&outcomes, i),
                 extraction_confidence: get_f32(&extraction_confidences, i),
+                anchor_coverage_score: get_f32(&anchor_coverage_scores, i).clamp(0.0, 1.0),
+                extracted_entities: extract_str_list(&entities, i),
+                content_hash: {
+                    let hash = get_str(&content_hashes, i);
+                    if hash.trim().is_empty() {
+                        compute_content_hash(
+                            get_opt_str(&urls, i).as_deref(),
+                            &get_str(&window_titles, i),
+                            timestamps.as_ref().map(|c| c.value(i)).unwrap_or(0),
+                        )
+                    } else {
+                        hash
+                    }
+                },
                 dedup_fingerprint: get_str(&dedup_fingerprints, i),
                 is_consolidated: get_bool(&is_consolidated_flags, i),
                 is_soft_deleted: get_bool(&is_soft_deleted_flags, i),
@@ -2854,6 +2926,20 @@ fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
         &normalized.image_embedding,
         IMAGE_EMBED_DIM as usize,
     );
+    if normalized.display_summary.trim().is_empty() {
+        normalized.display_summary = normalized.snippet.clone();
+    }
+    if normalized.internal_context.trim().is_empty() {
+        normalized.internal_context = normalized.clean_text.clone();
+    }
+    normalized.anchor_coverage_score = normalized.anchor_coverage_score.clamp(0.0, 1.0);
+    if normalized.content_hash.trim().is_empty() {
+        normalized.content_hash = compute_content_hash(
+            normalized.url.as_deref(),
+            &normalized.window_title,
+            normalized.timestamp,
+        );
+    }
     normalized
 }
 
@@ -3109,35 +3195,29 @@ fn dedup_search_results(mut results: Vec<SearchResult>, limit: usize) -> Vec<Sea
 }
 
 fn record_insert_dedup_key(record: &MemoryRecord) -> String {
-    format!(
-        "{}:{}:{}:{}:{}",
-        record.app_name.to_lowercase(),
-        normalize_keyword_text(&record.session_key),
-        normalize_keyword_text(&record.window_title),
-        normalize_keyword_text(&record.snippet),
-        record.timestamp / 15_000
-    )
+    if !record.content_hash.trim().is_empty() {
+        return record.content_hash.trim().to_string();
+    }
+    compute_content_hash(record.url.as_deref(), &record.window_title, record.timestamp)
 }
 
 fn search_result_dedup_key(result: &SearchResult) -> String {
-    let domain = result
-        .url
-        .as_deref()
-        .and_then(extract_domain)
+    if !result.content_hash.trim().is_empty() {
+        return result.content_hash.trim().to_string();
+    }
+    compute_content_hash(result.url.as_deref(), &result.window_title, result.timestamp)
+}
+
+fn compute_content_hash(url: Option<&str>, page_title: &str, timestamp_ms: i64) -> String {
+    let canonical_url = url
+        .map(canonicalize_index_url)
         .unwrap_or_default();
-    let session = if result.session_key.trim().is_empty() {
-        result.session_id.to_lowercase()
-    } else {
-        result.session_key.to_lowercase()
-    };
-    format!(
-        "{}:{}:{}:{}:{}",
-        result.app_name.to_lowercase(),
-        session,
-        domain,
-        normalize_keyword_text(&result.window_title),
-        normalize_keyword_text(&result.snippet)
-    )
+    let normalized_title = normalize_keyword_text(page_title);
+    let five_min_bucket = timestamp_ms.div_euclid(300_000);
+    let payload = format!("{canonical_url}|{normalized_title}|{five_min_bucket}");
+    let mut hasher = Sha256::new();
+    hasher.update(payload.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// Escape single quotes for SQL string literals.
@@ -3251,6 +3331,12 @@ async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Erro
     if !existing.contains("summary_source") {
         transforms.push(("summary_source".to_string(), "'fallback'".to_string()));
     }
+    if !existing.contains("display_summary") {
+        transforms.push(("display_summary".to_string(), "snippet".to_string()));
+    }
+    if !existing.contains("internal_context") {
+        transforms.push(("internal_context".to_string(), "clean_text".to_string()));
+    }
     if !existing.contains("noise_score") {
         transforms.push(("noise_score".to_string(), "CAST(0.0 AS FLOAT)".to_string()));
     }
@@ -3272,6 +3358,15 @@ async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Erro
     }
     if !existing.contains("last_accessed_at") {
         transforms.push(("last_accessed_at".to_string(), "timestamp".to_string()));
+    }
+    if !existing.contains("anchor_coverage_score") {
+        transforms.push((
+            "anchor_coverage_score".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("content_hash") {
+        transforms.push(("content_hash".to_string(), "''".to_string()));
     }
 
     if !transforms.is_empty() {

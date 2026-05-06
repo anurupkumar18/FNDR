@@ -6,6 +6,7 @@ import {
     summarizeSearch,
     transcribeVoiceInput,
 } from "../api/tauri";
+import { bubblePurityGate, extractAnchorTerms, scoreAnchorCoverage } from "../lib/search";
 import { PLACEHOLDERS } from "./placeholders";
 import "./SearchBar.css";
 
@@ -124,24 +125,80 @@ export function SearchBar({
             }
 
             try {
-                const snippets = latestResults
-                    .slice(0, 5)
+                const anchorTerms = extractAnchorTerms(activeValue);
+                const topicalCards = latestResults
+                    .map((result) => {
+                        const fallbackText = [
+                            result.title,
+                            result.display_summary ?? result.summary,
+                            result.summary,
+                            ...(result.raw_snippets ?? []),
+                        ]
+                            .filter(Boolean)
+                            .join(" ");
+                        const coverage = result.anchor_coverage_score
+                            ?? scoreAnchorCoverage(fallbackText, anchorTerms);
+                        return { result, coverage };
+                    })
+                    .filter((item) => item.coverage >= 0.3)
+                    .slice(0, 5);
+
+                if (topicalCards.length < 2) {
+                    setSummary(null);
+                    return;
+                }
+
+                const snippets = topicalCards
+                    .flatMap(({ result }) => {
+                        const evidence = (result.raw_snippets ?? [])
+                            .map((snippet) => snippet.trim())
+                            .filter(Boolean)
+                            .slice(0, 2);
+                        if (evidence.length === 0) {
+                            const fallback = (result.display_summary ?? result.summary ?? "").trim();
+                            return fallback
+                                ? [{ memoryId: result.id, score: result.score, appName: result.app_name, snippet: fallback }]
+                                : [];
+                        }
+                        return evidence.map((snippet) => ({
+                            memoryId: result.id,
+                            score: result.score,
+                            appName: result.app_name,
+                            snippet,
+                        }));
+                    })
+                    .slice(0, 10)
                     .map(
-                        (result) =>
-                            `[id:${result.id}][score:${result.score.toFixed(3)}][app:${result.app_name}] ${result.summary}`
+                        (item) =>
+                            `[id:${item.memoryId}][score:${item.score.toFixed(3)}][app:${item.appName}] ${item.snippet}`
                     );
+
+                if (snippets.length < 2) {
+                    setSummary(null);
+                    return;
+                }
 
                 const aiSummary = await summarizeSearch(activeValue, snippets);
                 if (cancelled || requestId !== summaryRequestRef.current) {
                     return;
                 }
-                setSummary(aiSummary || "Found relevant memories.");
+                if (!aiSummary?.trim()) {
+                    setSummary(null);
+                    return;
+                }
+
+                const purity = bubblePurityGate(aiSummary, anchorTerms);
+                if (!purity.pass) {
+                    setSummary(null);
+                    return;
+                }
+                setSummary(aiSummary);
             } catch (err) {
                 if (cancelled || requestId !== summaryRequestRef.current) {
                     return;
                 }
                 console.error("Summary generation failed:", err);
-                setSummary(`Found ${latestResults.length} relevant memories.`);
+                setSummary(null);
             } finally {
                 if (!cancelled && requestId === summaryRequestRef.current) {
                     setIsSummarizing(false);
@@ -501,7 +558,7 @@ export function SearchBar({
                 </div>
             )}
 
-            {hasQuery && resultCount > 0 && (
+            {hasQuery && resultCount > 0 && (isSummarizing || Boolean(summary)) && (
                 <div className="summary-bubble">
                     {isSummarizing ? (
                         <div className="summary-loading">

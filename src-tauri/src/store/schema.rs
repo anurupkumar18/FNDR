@@ -41,6 +41,10 @@ fn default_lexical_shadow() -> String {
     String::new()
 }
 
+fn default_content_hash() -> String {
+    String::new()
+}
+
 /// A single memory record stored in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRecord {
@@ -74,6 +78,12 @@ pub struct MemoryRecord {
     pub ocr_block_count: u32,
     /// Concise summary
     pub snippet: String,
+    /// User-facing one-sentence summary rendered in cards/search.
+    #[serde(default)]
+    pub display_summary: String,
+    /// Internal synthesis context retained for downstream processing and diagnostics.
+    #[serde(default)]
+    pub internal_context: String,
     /// Summary provenance: llm, vlm, fallback
     #[serde(default = "default_summary_source")]
     pub summary_source: String,
@@ -141,6 +151,10 @@ pub struct MemoryRecord {
     #[serde(default)]
     pub extraction_confidence: f32,
     #[serde(default)]
+    pub anchor_coverage_score: f32,
+    #[serde(default = "default_content_hash")]
+    pub content_hash: String,
+    #[serde(default)]
     pub dedup_fingerprint: String,
     #[serde(default)]
     pub embedding_text: String,
@@ -179,6 +193,8 @@ impl Default for MemoryRecord {
             ocr_confidence: 0.0,
             ocr_block_count: 0,
             snippet: String::new(),
+            display_summary: String::new(),
+            internal_context: String::new(),
             summary_source: default_summary_source(),
             noise_score: 0.0,
             session_key: String::new(),
@@ -205,6 +221,8 @@ impl Default for MemoryRecord {
             git_stats: None,
             outcome: String::new(),
             extraction_confidence: 0.0,
+            anchor_coverage_score: 0.0,
+            content_hash: default_content_hash(),
             dedup_fingerprint: String::new(),
             embedding_text: String::new(),
             embedding_model: crate::config::DEFAULT_EMBEDDING_MODEL_NAME.to_string(),
@@ -237,6 +255,10 @@ pub struct SearchResult {
     #[serde(default)]
     pub ocr_block_count: u32,
     pub snippet: String,
+    #[serde(default)]
+    pub display_summary: String,
+    #[serde(default)]
+    pub internal_context: String,
     #[serde(default = "default_summary_source")]
     pub summary_source: String,
     #[serde(default)]
@@ -273,6 +295,12 @@ pub struct SearchResult {
     #[serde(default)]
     pub extraction_confidence: f32,
     #[serde(default)]
+    pub anchor_coverage_score: f32,
+    #[serde(default)]
+    pub extracted_entities: Vec<String>,
+    #[serde(default = "default_content_hash")]
+    pub content_hash: String,
+    #[serde(default)]
     pub dedup_fingerprint: String,
     #[serde(default)]
     pub is_consolidated: bool,
@@ -294,6 +322,8 @@ impl Default for SearchResult {
             ocr_confidence: 0.0,
             ocr_block_count: 0,
             snippet: String::new(),
+            display_summary: String::new(),
+            internal_context: String::new(),
             summary_source: default_summary_source(),
             noise_score: 0.0,
             session_key: String::new(),
@@ -310,6 +340,9 @@ impl Default for SearchResult {
             tags: Vec::new(),
             outcome: String::new(),
             extraction_confidence: 0.0,
+            anchor_coverage_score: 0.0,
+            extracted_entities: Vec::new(),
+            content_hash: default_content_hash(),
             dedup_fingerprint: String::new(),
             is_consolidated: false,
             is_soft_deleted: false,

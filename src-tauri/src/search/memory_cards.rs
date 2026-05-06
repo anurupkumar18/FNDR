@@ -22,6 +22,10 @@ pub struct MemoryCard {
     pub id: String,
     pub title: String,
     pub summary: String,
+    #[serde(default)]
+    pub display_summary: String,
+    #[serde(default)]
+    pub internal_context: String,
     pub action: String,
     pub context: Vec<String>,
     pub timestamp: i64,
@@ -37,6 +41,8 @@ pub struct MemoryCard {
     pub evidence_ids: Vec<String>,
     #[serde(default)]
     pub confidence: f32,
+    #[serde(default)]
+    pub anchor_coverage_score: f32,
     /// High-level activity category: "coding", "browsing", "communication", "docs", "design", "other"
     #[serde(default)]
     pub activity_type: String,
@@ -98,7 +104,8 @@ impl MemoryCardSynthesizer {
             GROUPING_TIMEOUT,
             tokio::task::spawn_blocking({
                 let results = results.to_vec();
-                move || group_results(&results, max_groups)
+                let enforce_query_support = !query.trim().is_empty();
+                move || group_results_with_query_support(&results, max_groups, enforce_query_support)
             }),
         )
         .await
@@ -188,6 +195,7 @@ impl MemoryCardSynthesizer {
             let mut score = aggregate_score(&group.members);
             let source_count = group.members.len();
             let confidence = grounding_confidence(query, &summary, score, &snippets);
+            let anchor_coverage = aggregate_anchor_coverage(&group.members);
             let query_support = query_support_ratio(query, &snippets, &anchor);
             if !query.trim().is_empty() && query_support < 0.10 && confidence < 0.32 {
                 continue;
@@ -214,7 +222,9 @@ impl MemoryCardSynthesizer {
             cards.push(MemoryCard {
                 id: anchor.id.clone(),
                 title,
-                summary,
+                summary: summary.clone(),
+                display_summary: summary,
+                internal_context: anchor.internal_context.clone(),
                 action,
                 context,
                 timestamp: anchor.timestamp,
@@ -227,6 +237,7 @@ impl MemoryCardSynthesizer {
                 raw_snippets: snippets,
                 evidence_ids,
                 confidence,
+                anchor_coverage_score: anchor_coverage,
                 activity_type,
                 files_touched,
                 session_duration_mins,
@@ -259,7 +270,16 @@ impl MemoryCardSynthesizer {
     }
 }
 
+#[cfg(test)]
 fn group_results(results: &[SearchResult], max_groups: usize) -> Vec<SessionGroup> {
+    group_results_with_query_support(results, max_groups, false)
+}
+
+fn group_results_with_query_support(
+    results: &[SearchResult],
+    max_groups: usize,
+    enforce_query_support: bool,
+) -> Vec<SessionGroup> {
     let mut sorted = results.to_vec();
     sorted.sort_by_key(|r| std::cmp::Reverse(r.timestamp));
 
@@ -270,7 +290,7 @@ fn group_results(results: &[SearchResult], max_groups: usize) -> Vec<SessionGrou
         let key = grouping_key(&result);
         if let Some(group_idx) = key_to_group_idx.get(&key).copied() {
             let anchor = &groups[group_idx].members[0];
-            if should_group(anchor, &result) {
+            if should_group(anchor, &result, enforce_query_support) {
                 groups[group_idx].members.push(result);
                 continue;
             }
@@ -286,7 +306,7 @@ fn group_results(results: &[SearchResult], max_groups: usize) -> Vec<SessionGrou
         key_to_group_idx.insert(key, next_idx);
     }
 
-    groups
+    split_impure_groups(groups, enforce_query_support)
 }
 
 fn grouping_key(result: &SearchResult) -> String {
@@ -299,10 +319,20 @@ fn grouping_key(result: &SearchResult) -> String {
     format!("{}:{}:{}", result.app_name.to_lowercase(), domain, title)
 }
 
-fn should_group(a: &SearchResult, b: &SearchResult) -> bool {
+fn should_group(a: &SearchResult, b: &SearchResult, enforce_query_support: bool) -> bool {
     let within_time_window = (a.timestamp - b.timestamp).abs() <= 5 * 60 * 1000;
     if !within_time_window {
         return false;
+    }
+
+    if enforce_query_support {
+        let query_support_ratio =
+            ((a.anchor_coverage_score.clamp(0.0, 1.0) + b.anchor_coverage_score.clamp(0.0, 1.0))
+                / 2.0)
+                .clamp(0.0, 1.0);
+        if query_support_ratio < 0.25 {
+            return false;
+        }
     }
 
     if !a.session_key.is_empty() && a.session_key == b.session_key {
@@ -325,6 +355,74 @@ fn should_group(a: &SearchResult, b: &SearchResult) -> bool {
     }
 
     false
+}
+
+fn split_impure_groups(groups: Vec<SessionGroup>, enforce_query_support: bool) -> Vec<SessionGroup> {
+    if !enforce_query_support {
+        return groups;
+    }
+
+    let mut out = Vec::new();
+    for group in groups {
+        if group.members.len() <= 1 {
+            out.push(group);
+            continue;
+        }
+
+        let mut current_members: Vec<SearchResult> = Vec::new();
+        for member in group.members {
+            if let Some(last) = current_members.last() {
+                let entity_similarity = entity_overlap_similarity(last, &member);
+                let lexical_similarity = token_overlap(&merged_text(last), &merged_text(&member));
+                if entity_similarity < 0.35 && lexical_similarity < 0.20 {
+                    out.push(SessionGroup {
+                        members: std::mem::take(&mut current_members),
+                    });
+                }
+            }
+            current_members.push(member);
+        }
+
+        if !current_members.is_empty() {
+            out.push(SessionGroup {
+                members: current_members,
+            });
+        }
+    }
+
+    out
+}
+
+fn entity_overlap_similarity(a: &SearchResult, b: &SearchResult) -> f32 {
+    let left = if a.extracted_entities.is_empty() {
+        tokenize(&format!("{} {}", a.window_title, a.display_summary))
+    } else {
+        a.extracted_entities
+            .iter()
+            .map(|value| normalize_for_dedup(value))
+            .filter(|value| !value.is_empty())
+            .collect::<HashSet<_>>()
+    };
+    let right = if b.extracted_entities.is_empty() {
+        tokenize(&format!("{} {}", b.window_title, b.display_summary))
+    } else {
+        b.extracted_entities
+            .iter()
+            .map(|value| normalize_for_dedup(value))
+            .filter(|value| !value.is_empty())
+            .collect::<HashSet<_>>()
+    };
+
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    let intersection = left.intersection(&right).count() as f32;
+    let union = left.union(&right).count() as f32;
+    if union == 0.0 {
+        0.0
+    } else {
+        intersection / union
+    }
 }
 
 fn merged_text(result: &SearchResult) -> String {
@@ -419,6 +517,18 @@ fn aggregate_score(results: &[SearchResult]) -> f32 {
         0.0
     };
     (avg + (results.len() as f32 * 0.04)).min(1.0)
+}
+
+fn aggregate_anchor_coverage(results: &[SearchResult]) -> f32 {
+    if results.is_empty() {
+        return 0.0;
+    }
+
+    let total = results
+        .iter()
+        .map(|result| result.anchor_coverage_score.clamp(0.0, 1.0))
+        .sum::<f32>();
+    (total / results.len() as f32).clamp(0.0, 1.0)
 }
 
 fn collect_evidence_ids(results: &[SearchResult], max_ids: usize) -> Vec<String> {
@@ -588,7 +698,9 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     MemoryCard {
         id: result.id.clone(),
         title,
-        summary,
+        summary: summary.clone(),
+        display_summary: summary,
+        internal_context: result.internal_context.clone(),
         action,
         context,
         timestamp: result.timestamp,
@@ -601,6 +713,7 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         raw_snippets: snippets,
         evidence_ids,
         confidence,
+        anchor_coverage_score: result.anchor_coverage_score.clamp(0.0, 1.0),
         activity_type,
         files_touched,
         session_duration_mins: 0,
