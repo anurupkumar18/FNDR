@@ -69,6 +69,10 @@ export interface McpServerStatus {
     host: string;
     port: number;
     endpoint: string;
+    token: string;
+    use_tls: boolean;
+    require_auth: boolean;
+    auth_mode: string;
     last_error?: string | null;
 }
 

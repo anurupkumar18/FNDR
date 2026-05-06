@@ -1,11 +1,10 @@
-//! Robust MCP server for FNDR — HTTPS JSON-RPC 2.0 + SSE transport.
+//! Localhost-only MCP server for FNDR — HTTP JSON-RPC 2.0 + SSE transport.
 //!
 //! Features:
-//!  - Self-signed TLS (HTTPS) via `axum-server` + `rcgen`
-//!  - Binds to `0.0.0.0:0` (OS-assigned port) for LAN accessibility
+//!  - Binds to `127.0.0.1:0` (OS-assigned port) for localhost-only access
 //!  - Writes `~/.fndr/mcp.json` for client discovery
-//!  - Bearer-token authentication on all MCP endpoints
-//!  - CORS layer so mobile/web clients can connect
+//!  - Optional bearer-token authentication, disabled by default for localhost
+//!  - CORS layer permissive for local editor / tool connections
 //!  - SSE endpoint (`GET /mcp/sse`) for the official MCP streaming transport
 //!  - `spawn_blocking` for SQLite + embedding calls
 //!  - 30-second timeout on LLM inference
@@ -19,8 +18,8 @@ use crate::meeting;
 use crate::search::HybridSearcher;
 use crate::AppState;
 use axum::{
-    extract::State,
-    http::{header, HeaderMap, StatusCode},
+    extract::{ConnectInfo, OriginalUri, State},
+    http::{header, HeaderMap, StatusCode, Uri},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -32,7 +31,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -52,6 +51,9 @@ pub struct McpServerStatus {
     pub port: u16,
     pub endpoint: String,
     pub token: String,
+    pub use_tls: bool,
+    pub require_auth: bool,
+    pub auth_mode: String,
     pub last_error: Option<String>,
 }
 
@@ -65,6 +67,8 @@ struct McpRuntime {
     port: u16,
     endpoint: String,
     token: String,
+    use_tls: bool,
+    require_auth: bool,
     shutdown: Option<oneshot::Sender<()>>,
     server_handle: Option<axum_server::Handle>,
     task: Option<JoinHandle<()>>,
@@ -75,10 +79,12 @@ impl Default for McpRuntime {
     fn default() -> Self {
         Self {
             running: false,
-            host: "0.0.0.0".to_string(),
+            host: "127.0.0.1".to_string(),
             port: 0,
             endpoint: String::new(),
             token: String::new(),
+            use_tls: false,
+            require_auth: false,
             shutdown: None,
             server_handle: None,
             task: None,
@@ -91,6 +97,7 @@ impl Default for McpRuntime {
 struct HttpState {
     app_state: Arc<AppState>,
     token: String,
+    require_auth: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +199,7 @@ fn default_search_limit() -> usize {
 // ---------------------------------------------------------------------------
 
 static MCP_RUNTIME: OnceLock<Mutex<McpRuntime>> = OnceLock::new();
+const LOOPBACK_HOST: &str = "127.0.0.1";
 
 fn runtime() -> &'static Mutex<McpRuntime> {
     MCP_RUNTIME.get_or_init(|| Mutex::new(McpRuntime::default()))
@@ -204,6 +212,9 @@ fn to_status(rt: &McpRuntime) -> McpServerStatus {
         port: rt.port,
         endpoint: rt.endpoint.clone(),
         token: rt.token.clone(),
+        use_tls: rt.use_tls,
+        require_auth: rt.require_auth,
+        auth_mode: auth_mode_label(rt.require_auth),
         last_error: rt.last_error.clone(),
     }
 }
@@ -219,23 +230,26 @@ fn discovery_path() -> PathBuf {
         .join("mcp.json")
 }
 
-fn write_discovery(host: &str, port: u16, token: &str) {
+fn write_discovery(host: &str, port: u16, token: &str, use_tls: bool, require_auth: bool) {
     let path = discovery_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let connect_host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
-    let endpoint = format!("https://{}:{}/mcp", connect_host, port);
-    let cert_pem = tls::get_cert_pem();
+    let scheme = if use_tls { "https" } else { "http" };
+    let endpoint = format!("{}://{}:{}/mcp", scheme, host, port);
+    let cert_pem = if use_tls { tls::get_cert_pem() } else { None };
     let payload = json!({
-        "host": connect_host,
+        "host": host,
         "bind_host": host,
         "port": port,
         "token": token,
         "endpoint": endpoint,
-        "sse_endpoint": format!("https://{}:{}/mcp/sse", connect_host, port),
-        "tls": true,
-        "cert_pem": cert_pem
+        "sse_endpoint": format!("{}://{}:{}/mcp/sse", scheme, host, port),
+        "tls": use_tls,
+        "cert_pem": cert_pem,
+        "auth_required": require_auth,
+        "auth_mode": auth_mode_label(require_auth),
+        "local_only": true
     });
     match std::fs::write(
         &path,
@@ -278,10 +292,15 @@ pub async fn start(
     host: Option<String>,
     port: Option<u16>,
 ) -> Result<McpServerStatus, String> {
-    // Prefer LAN binding unless caller explicitly provides a host
-    let host = host.unwrap_or_else(|| "0.0.0.0".to_string());
-    // Port 0 = let OS pick a free port
+    let requested_host = host.unwrap_or_else(|| LOOPBACK_HOST.to_string());
+    if !is_loopback_host(&requested_host) {
+        return Err(format!(
+            "FNDR MCP only supports localhost transport. Refusing to bind to {requested_host}."
+        ));
+    }
+    let host = LOOPBACK_HOST.to_string();
     let port = port.unwrap_or(0);
+    let require_auth = mcp_require_auth();
 
     {
         let rt = runtime().lock();
@@ -290,19 +309,17 @@ pub async fn start(
         }
     }
 
+    let use_tls = false;
+
     // Load (or generate) the bearer token
     let tok = token::load_or_create();
-
-    // Generate or load self-signed TLS certificate
-    let tls_config = tls::load_or_create_rustls_config().await?;
 
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
         .map_err(|e| format!("Invalid MCP bind address: {e}"))?;
 
-    // When port is 0, discover a free port via a temporary TCP bind.
-    // axum-server::bind_rustls doesn't expose local_addr() before serving,
-    // so we probe first, drop the socket, and immediately re-bind with TLS.
+    // axum-server::bind doesn't expose local_addr() before serving,
+    // so we probe first, drop the socket, and immediately re-bind.
     let actual_addr = if port == 0 {
         let probe = std::net::TcpListener::bind(&addr)
             .map_err(|e| format!("Failed to probe for free port: {e}"))?;
@@ -315,22 +332,24 @@ pub async fn start(
         addr
     };
     let actual_port = actual_addr.port();
-    let connect_host = if host == "0.0.0.0" {
-        "127.0.0.1".to_string()
-    } else {
-        host.clone()
-    };
-    let endpoint = format!("https://{}:{}/mcp", connect_host, actual_port);
+    let endpoint = format!("http://{}:{}/mcp", host, actual_port);
 
-    // Write discovery file so mobile / desktop clients can find us
-    write_discovery(&host, actual_port, &tok);
+    tracing::info!(
+        requested_host = %requested_host,
+        bind_host = %host,
+        port = actual_port,
+        require_auth,
+        "Starting FNDR MCP server on localhost"
+    );
+
+    write_discovery(&host, actual_port, &tok, use_tls, require_auth);
 
     let server_state = Arc::new(HttpState {
         app_state,
         token: tok.clone(),
+        require_auth,
     });
 
-    // CORS: allow any origin (LAN mode) — restrict in production as desired
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -345,26 +364,40 @@ pub async fn start(
         .layer(cors);
 
     let (shutdown_tx, _shutdown_rx) = oneshot::channel();
-
     let handle = axum_server::Handle::new();
     let server_handle = handle.clone();
 
-    let task = tokio::spawn(async move {
-        if let Err(err) = axum_server::bind_rustls(actual_addr, tls_config)
-            .handle(server_handle)
-            .serve(router.into_make_service())
-            .await
-        {
-            tracing::error!("MCP HTTPS server error: {}", err);
-        }
-    });
+    let task = if use_tls {
+        let tls_config = tls::load_or_create_rustls_config().await?;
+        tokio::spawn(async move {
+            if let Err(err) = axum_server::bind_rustls(actual_addr, tls_config)
+                .handle(server_handle)
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+            {
+                tracing::error!("MCP HTTPS server error: {}", err);
+            }
+        })
+    } else {
+        tokio::spawn(async move {
+            if let Err(err) = axum_server::bind(actual_addr)
+                .handle(server_handle)
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+            {
+                tracing::error!("MCP HTTP server error: {}", err);
+            }
+        })
+    };
 
     let mut rt = runtime().lock();
     rt.running = true;
-    rt.host = connect_host;
+    rt.host = host;
     rt.port = actual_port;
     rt.endpoint = endpoint;
     rt.token = tok;
+    rt.use_tls = use_tls;
+    rt.require_auth = require_auth;
     rt.shutdown = Some(shutdown_tx);
     rt.server_handle = Some(handle);
     rt.task = Some(task);
@@ -397,29 +430,131 @@ pub async fn stop() -> McpServerStatus {
 // Authentication helper
 // ---------------------------------------------------------------------------
 
-/// Returns `None` if the request carries a valid bearer token, or
-/// `Some(Response)` with a 401 if authentication fails.
-fn check_auth(headers: &HeaderMap, expected_token: &str) -> Option<Response> {
+fn check_auth(headers: &HeaderMap, expected_token: &str) -> bool {
     let auth_header = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
 
-    let valid = auth_header
+    auth_header
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|t| t == expected_token)
-        .unwrap_or(false);
+        .unwrap_or(false)
+}
 
-    if valid {
-        None
-    } else {
-        Some(
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Unauthorized: valid Bearer token required"})),
-            )
-                .into_response(),
-        )
+fn mcp_require_auth() -> bool {
+    std::env::var("FNDR_MCP_REQUIRE_AUTH")
+        .ok()
+        .and_then(|value| parse_bool_env(&value))
+        .unwrap_or(false)
+}
+
+fn parse_bool_env(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
+}
+
+fn auth_mode_label(require_auth: bool) -> String {
+    if require_auth {
+        "required".to_string()
+    } else {
+        "disabled for localhost".to_string()
+    }
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
+
+fn is_local_peer(peer_addr: SocketAddr) -> bool {
+    peer_addr.ip().is_loopback()
+}
+
+fn is_local_handshake_method(rpc_method: Option<&str>) -> bool {
+    matches!(
+        rpc_method,
+        Some("initialize" | "tools/list" | "tools.list")
+    )
+}
+
+fn should_bypass_http_auth(
+    peer_addr: SocketAddr,
+    require_auth: bool,
+    rpc_method: Option<&str>,
+) -> bool {
+    if !is_local_peer(peer_addr) {
+        return false;
+    }
+    if !require_auth {
+        return true;
+    }
+    is_local_handshake_method(rpc_method)
+}
+
+fn log_auth_bypass(peer_addr: SocketAddr, uri: &Uri, rpc_method: Option<&str>, reason: &str) {
+    tracing::info!(
+        peer = %peer_addr,
+        path = %uri.path(),
+        rpc_method = rpc_method.unwrap_or("unknown"),
+        reason,
+        "MCP auth bypassed for localhost request"
+    );
+}
+
+fn jsonrpc_method_hint(payload: &Value) -> Option<&str> {
+    match payload {
+        Value::Object(map) => map.get("method").and_then(Value::as_str),
+        Value::Array(items) => items.iter().find_map(jsonrpc_method_hint),
+        _ => None,
+    }
+}
+
+fn unauthorized_jsonrpc_response(payload: &Value) -> Response {
+    let response_payload = unauthorized_jsonrpc_payload(payload);
+    (StatusCode::UNAUTHORIZED, Json(response_payload)).into_response()
+}
+
+fn unauthorized_jsonrpc_payload(payload: &Value) -> Value {
+    match payload {
+        Value::Array(items) => {
+            let responses = items
+                .iter()
+                .filter_map(unauthorized_jsonrpc_item)
+                .collect::<Vec<_>>();
+            if responses.is_empty() {
+                error_response(
+                    Value::Null,
+                    -32001,
+                    "Unauthorized: valid Bearer token required".to_string(),
+                )
+            } else {
+                Value::Array(responses)
+            }
+        }
+        _ => unauthorized_jsonrpc_item(payload).unwrap_or_else(|| {
+            error_response(
+                Value::Null,
+                -32001,
+                "Unauthorized: valid Bearer token required".to_string(),
+            )
+        }),
+    }
+}
+
+fn unauthorized_jsonrpc_item(payload: &Value) -> Option<Value> {
+    payload.as_object().map(|object| {
+        error_response(
+            object.get("id").cloned().unwrap_or(Value::Null),
+            -32001,
+            "Unauthorized: valid Bearer token required".to_string(),
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -427,26 +562,39 @@ fn check_auth(headers: &HeaderMap, expected_token: &str) -> Option<Response> {
 // ---------------------------------------------------------------------------
 
 /// Unauthenticated probe — lets clients discover the server without a token.
-async fn root_handler(State(_state): State<Arc<HttpState>>) -> impl IntoResponse {
+async fn root_handler(State(state): State<Arc<HttpState>>) -> impl IntoResponse {
     (
         StatusCode::OK,
         Json(json!({
             "name": "FNDR MCP Server",
             "mcp_endpoint": "/mcp",
             "sse_endpoint": "/mcp/sse",
-            "transport": ["http", "sse"]
+            "transport": ["http", "sse"],
+            "auth_required": state.require_auth,
+            "auth_mode": auth_mode_label(state.require_auth),
+            "local_only": true
         })),
     )
 }
 
-/// POST /mcp  and  POST /mcp/messages — authenticated JSON-RPC handler.
+/// POST /mcp  and  POST /mcp/messages — localhost JSON-RPC handler.
 async fn mcp_handler(
     State(state): State<Arc<HttpState>>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Response {
-    if let Some(err_resp) = check_auth(&headers, &state.token) {
-        return err_resp;
+    let rpc_method = jsonrpc_method_hint(&payload);
+    if should_bypass_http_auth(peer_addr, state.require_auth, rpc_method) {
+        let reason = if state.require_auth {
+            "local initialize/tools/list exemption"
+        } else {
+            "localhost auth disabled"
+        };
+        log_auth_bypass(peer_addr, &uri, rpc_method, reason);
+    } else if !check_auth(&headers, &state.token) {
+        return unauthorized_jsonrpc_response(&payload);
     }
 
     let app_state = state.app_state.clone();
@@ -471,9 +619,20 @@ async fn mcp_handler(
 ///
 /// Sends an initial `endpoint` event pointing the client at POST /mcp/messages,
 /// then keeps the stream alive with periodic pings.
-async fn sse_handler(State(state): State<Arc<HttpState>>, headers: HeaderMap) -> Response {
-    if let Some(err_resp) = check_auth(&headers, &state.token) {
-        return err_resp;
+async fn sse_handler(
+    State(state): State<Arc<HttpState>>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    if should_bypass_http_auth(peer_addr, state.require_auth, None) {
+        log_auth_bypass(peer_addr, &uri, Some("sse"), "localhost auth disabled");
+    } else if !check_auth(&headers, &state.token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Unauthorized: valid Bearer token required"})),
+        )
+            .into_response();
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -1192,5 +1351,125 @@ fn internal_tool_error<E: std::fmt::Display>(err: E) -> JsonRpcError {
     JsonRpcError {
         code: -32000,
         message: format!("Tool execution failed: {err}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::graph::GraphStore;
+    use crate::store::{StateStore, Store};
+    use tempfile::tempdir;
+
+    fn build_test_app_state() -> Arc<AppState> {
+        let temp_dir = tempdir().expect("tempdir");
+        let data_dir = temp_dir.path().to_path_buf();
+        std::mem::forget(temp_dir);
+        let store = Arc::new(Store::new(&data_dir).expect("store"));
+        let state_store = Arc::new(StateStore::new(&data_dir).expect("state store"));
+        let graph = GraphStore::new(store.clone());
+        Arc::new(AppState::new(
+            data_dir,
+            Config::default(),
+            store,
+            state_store,
+            graph,
+            None,
+            None,
+        ))
+    }
+
+    async fn wait_for_server(base_url: &str) {
+        let client = reqwest::Client::new();
+        for _ in 0..40 {
+            if client.get(base_url).send().await.is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("MCP server did not become ready at {base_url}");
+    }
+
+    #[test]
+    fn local_handshake_methods_bypass_auth_even_when_enabled() {
+        let peer = SocketAddr::from(([127, 0, 0, 1], 8080));
+        assert!(should_bypass_http_auth(peer, true, Some("initialize")));
+        assert!(should_bypass_http_auth(peer, true, Some("tools/list")));
+        assert!(!should_bypass_http_auth(peer, true, Some("tools/call")));
+    }
+
+    #[test]
+    fn localhost_initialize_tools_list_and_call_work_without_auth() {
+        std::env::remove_var("FNDR_MCP_REQUIRE_AUTH");
+        let app_state = build_test_app_state();
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        runtime.block_on(async move {
+            let _ = stop().await;
+            let status = start(app_state, None, Some(0)).await.expect("start mcp");
+            let base_url = format!("http://{}:{}/", status.host, status.port);
+            wait_for_server(&base_url).await;
+
+            let client = reqwest::Client::new();
+
+            let initialize = client
+                .post(&status.endpoint)
+                .header("Content-Type", "application/json")
+                .json(&json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": { "name": "reqwest-test", "version": "0.1.0" }
+                    }
+                }))
+                .send()
+                .await
+                .expect("initialize request");
+            assert_eq!(initialize.status(), reqwest::StatusCode::OK);
+            let initialize_body: Value = initialize.json().await.expect("initialize json");
+            assert_eq!(initialize_body["jsonrpc"], "2.0");
+            assert_eq!(initialize_body["result"]["serverInfo"]["name"], "FNDR");
+
+            let tools_list = client
+                .post(&status.endpoint)
+                .header("Content-Type", "application/json")
+                .json(&json!({
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/list"
+                }))
+                .send()
+                .await
+                .expect("tools/list request");
+            assert_eq!(tools_list.status(), reqwest::StatusCode::OK);
+            let tools_list_body: Value = tools_list.json().await.expect("tools/list json");
+            assert_eq!(tools_list_body["jsonrpc"], "2.0");
+            assert!(tools_list_body["result"]["tools"].is_array());
+
+            let tool_call = client
+                .post(&status.endpoint)
+                .header("Content-Type", "application/json")
+                .json(&json!({
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "fndr_health_check",
+                        "arguments": {}
+                    }
+                }))
+                .send()
+                .await
+                .expect("tools/call request");
+            assert_eq!(tool_call.status(), reqwest::StatusCode::OK);
+            let tool_call_body: Value = tool_call.json().await.expect("tools/call json");
+            assert_eq!(tool_call_body["jsonrpc"], "2.0");
+            assert!(tool_call_body["result"]["structuredContent"]["health"].is_object());
+
+            let _ = stop().await;
+        });
     }
 }

@@ -85,7 +85,6 @@ const INDEX_NOISE_HOSTS: &[&str] = &[
 pub struct Store {
     data_dir: PathBuf,
     table: Table,
-    legacy_table: Option<Table>,
     tasks_table: Table,
     meetings_table: Table,
     segments_table: Table,
@@ -117,7 +116,7 @@ impl Store {
 
         let (
             table,
-            legacy_table,
+            _legacy_table,
             tasks_table,
             meetings_table,
             segments_table,
@@ -164,7 +163,6 @@ impl Store {
         Ok(Self {
             data_dir,
             table,
-            legacy_table,
             tasks_table,
             meetings_table,
             segments_table,
@@ -4131,15 +4129,14 @@ async fn open_all_tables(
     let conn: Connection = lancedb::connect(&uri).execute().await?;
     let names = conn.table_names().execute().await?;
 
-    let mut legacy_table = None;
-    let mut table = None;
-
-    // Check if memories_v2_1024 already exists
-    if names.contains(&"memories_v2_1024".to_string()) {
-        table = Some(conn.open_table("memories_v2_1024").execute().await?);
-        if names.contains(&MEMORIES_TABLE.to_string()) {
-            legacy_table = Some(conn.open_table(MEMORIES_TABLE).execute().await?);
-        }
+    let (table, legacy_table) = if names.contains(&"memories_v2_1024".to_string()) {
+        let table = conn.open_table("memories_v2_1024").execute().await?;
+        let legacy_table = if names.contains(&MEMORIES_TABLE.to_string()) {
+            Some(conn.open_table(MEMORIES_TABLE).execute().await?)
+        } else {
+            None
+        };
+        (table, legacy_table)
     } else if names.contains(&MEMORIES_TABLE.to_string()) {
         let existing = conn.open_table(MEMORIES_TABLE).execute().await?;
         let schema = existing.schema().await?;
@@ -4153,28 +4150,24 @@ async fn open_all_tables(
         });
 
         if is_384 && TEXT_EMBED_DIM == 1024 {
-            legacy_table = Some(existing);
-            // Create the new 1024d table
-            table = Some(
-                open_or_create_named_table(
-                    &conn,
-                    &names,
-                    "memories_v2_1024",
-                    Arc::new(memory_schema()),
-                )
-                .await?,
-            );
+            let table = open_or_create_named_table(
+                &conn,
+                &names,
+                "memories_v2_1024",
+                Arc::new(memory_schema()),
+            )
+            .await?;
+            (table, Some(existing))
         } else {
-            table = Some(existing);
+            (existing, None)
         }
     } else {
-        table = Some(
+        (
             open_or_create_named_table(&conn, &names, MEMORIES_TABLE, Arc::new(memory_schema()))
                 .await?,
-        );
-    }
-
-    let table = table.unwrap();
+            None,
+        )
+    };
     ensure_memory_schema_columns(&table).await?;
 
     let tasks =

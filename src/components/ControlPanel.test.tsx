@@ -41,6 +41,8 @@ vi.mock("../api/tauri", () => ({
         host: "127.0.0.1",
         port: 8799,
         endpoint: "http://127.0.0.1:8799/mcp",
+        require_auth: false,
+        auth_mode: "disabled for localhost",
         last_error: null,
     }),
     getPrivacyAlerts: vi.fn().mockResolvedValue([]),
