@@ -31,12 +31,6 @@ export interface MemoryCard {
     raw_snippets: string[];
     evidence_ids?: string[];
     confidence?: number;
-    /** High-level activity category: "coding" | "browsing" | "communication" | "docs" | "design" | "other" */
-    activity_type?: string;
-    /** File paths or code symbols touched in this session */
-    files_touched?: string[];
-    /** Approximate session duration in minutes (0 if single capture) */
-    session_duration_mins?: number;
 }
 
 export interface CaptureStatus {

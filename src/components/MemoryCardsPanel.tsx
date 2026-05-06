@@ -102,17 +102,6 @@ function includesAny(haystack: string, needles: string[]): boolean {
     return needles.some((needle) => haystack.includes(needle));
 }
 
-function getActivityIcon(activityType?: string): string {
-    switch (activityType) {
-        case "coding": return "💻";
-        case "browsing": return "🌐";
-        case "communication": return "💬";
-        case "docs": return "📝";
-        case "design": return "🎨";
-        default: return "";
-    }
-}
-
 function matchesFilters(
     card: MemoryCard,
     timeFilter: TimeFilter,
@@ -129,20 +118,11 @@ function matchesFilters(
         if (timeFilter === "last_7d" && timestamp < now - 7 * 24 * 60 * 60 * 1000) return false;
     }
 
-    // 2. Perspective Filtering — prefer structured activity_type when present
+    // 2. Perspective Filtering
     if (perspectiveFilter === PERSPECTIVE_FILTER_ALL) {
         return true;
     }
 
-    // Use structured field first for accuracy
-    if (card.activity_type && card.activity_type !== "other") {
-        if (perspectiveFilter === "coding") return card.activity_type === "coding";
-        if (perspectiveFilter === "docs") return card.activity_type === "docs";
-        if (perspectiveFilter === "communication") return card.activity_type === "communication";
-        if (perspectiveFilter === "web") return card.activity_type === "browsing";
-    }
-
-    // Fall back to haystack matching
     const app = card.app_name.toLowerCase();
     const windowTitle = (card.window_title || "").toLowerCase();
     const context = card.context.join(" ").toLowerCase();
@@ -448,14 +428,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                 >
                                     <div className="result-meta memory-browse-meta">
                                         <div className="memory-browse-meta-main">
-                                            <span className="result-app">
-                                                {getActivityIcon(card.activity_type) && (
-                                                    <span className="memory-activity-icon" title={card.activity_type}>
-                                                        {getActivityIcon(card.activity_type)}
-                                                    </span>
-                                                )}
-                                                {card.app_name}
-                                            </span>
+                                            <span className="result-app">{card.app_name}</span>
                                             <span className="result-time">
                                                 {formatDay(card.timestamp)} ·{" "}
                                                 {new Date(card.timestamp).toLocaleTimeString(undefined, {
@@ -466,11 +439,6 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                             {card.source_count > 1 && (
                                                 <span className="memory-source-count" title={`Composed from ${card.source_count} captures`}>
                                                     {card.source_count} captures
-                                                </span>
-                                            )}
-                                            {card.session_duration_mins !== undefined && card.session_duration_mins > 0 && (
-                                                <span className="memory-duration" title="Session duration">
-                                                    {card.session_duration_mins}m
                                                 </span>
                                             )}
                                         </div>
@@ -492,13 +460,6 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                         ) : (
                                             <div className="memory-browse-summary memory-browse-summary-primary">
                                                 {summary}
-                                            </div>
-                                        )}
-                                        {card.files_touched && card.files_touched.length > 0 && (
-                                            <div className="memory-browse-files">
-                                                {card.files_touched.slice(0, 4).map((f) => (
-                                                    <span key={f} className="memory-file-chip" title={f}>{f}</span>
-                                                ))}
                                             </div>
                                         )}
                                     </div>
