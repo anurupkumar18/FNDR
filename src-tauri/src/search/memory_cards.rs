@@ -227,7 +227,11 @@ impl MemoryCardSynthesizer {
                 title,
                 summary: summary.clone(),
                 display_summary: summary,
-                internal_context: anchor.internal_context.clone(),
+                internal_context: if !anchor.memory_context.trim().is_empty() {
+                    anchor.memory_context.clone()
+                } else {
+                    anchor.internal_context.clone()
+                },
                 action,
                 context,
                 timestamp: anchor.timestamp,
@@ -444,7 +448,9 @@ fn collect_group_snippets(results: &[SearchResult]) -> Vec<String> {
     let mut seen = HashSet::new();
 
     for result in results {
-        let primary = if !result.snippet.trim().is_empty() {
+        let primary = if !result.memory_context.trim().is_empty() {
+            result.memory_context.trim().to_string()
+        } else if !result.snippet.trim().is_empty() {
             result.snippet.trim().to_string()
         } else {
             merged_text(result)
@@ -475,7 +481,9 @@ fn collect_group_snippets(results: &[SearchResult]) -> Vec<String> {
 fn collect_grounded_snippets(results: &[SearchResult]) -> Vec<String> {
     let mut snippets = Vec::new();
     for result in results.iter().take(MAX_GROUP_SNIPPETS) {
-        let snippet = if !result.snippet.trim().is_empty() {
+        let snippet = if !result.memory_context.trim().is_empty() {
+            result.memory_context.trim().to_string()
+        } else if !result.snippet.trim().is_empty() {
             result.snippet.trim().to_string()
         } else {
             merged_text(result)
@@ -706,7 +714,11 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         title,
         summary: summary.clone(),
         display_summary: summary,
-        internal_context: result.internal_context.clone(),
+        internal_context: if !result.memory_context.trim().is_empty() {
+            result.memory_context.clone()
+        } else {
+            result.internal_context.clone()
+        },
         action,
         context,
         timestamp: result.timestamp,
@@ -735,70 +747,37 @@ fn infer_activity_type(app_name: &str, window_title: &str, snippets: &[String]) 
         snippets.join(" ").to_lowercase()
     );
 
-    // Ordered by specificity — first match wins.
-    if contains_any(
-        &haystack,
-        &[
-            "terminal", "iterm", "bash", "zsh", "cargo", "npm run", "git ",
-        ],
-    ) {
-        return "coding".to_string();
+    let mut scores = vec![("other", 0.04_f32)];
+    if contains_any(&haystack, &["error", "failed", "trace", "exception"]) {
+        scores.push(("debugging", 0.40));
     }
     if contains_any(
         &haystack,
-        &[
-            "vscode", "cursor", "code", "intellij", "xcode", "rust", "python", "function", "def ",
-            "class ", "impl ",
-        ],
+        &["test", "build", "assert", "validation", "pipeline"],
     ) {
-        return "coding".to_string();
+        scores.push(("testing_workflow", 0.30));
+    }
+    if contains_any(&haystack, &["plan", "decision", "todo", "next step"]) {
+        scores.push(("planning", 0.28));
     }
     if contains_any(
         &haystack,
-        &[
-            "figma", "sketch", "framer", "canva", "adobe", "mockup", "design",
-        ],
+        &["code", "function", ".rs", ".ts", ".py", "class ", "impl "],
     ) {
-        return "design".to_string();
+        scores.push(("coding", 0.34));
     }
     if contains_any(
         &haystack,
-        &[
-            "slack", "discord", "teams", "mail", "gmail", "outlook", "inbox", "message",
-        ],
+        &["http://", "https://", "www.", "browser", "search"],
     ) {
-        return "communication".to_string();
+        scores.push(("researching", 0.24));
     }
-    if contains_any(
-        &haystack,
-        &[
-            "notion",
-            "obsidian",
-            "confluence",
-            "docs",
-            "word",
-            "pages",
-            "pdf",
-            "readme",
-        ],
-    ) {
-        return "docs".to_string();
-    }
-    if contains_any(
-        &haystack,
-        &[
-            "chrome",
-            "safari",
-            "firefox",
-            "arc browser",
-            "http://",
-            "https://",
-            "www.",
-        ],
-    ) {
-        return "browsing".to_string();
-    }
-    "other".to_string()
+
+    scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scores
+        .first()
+        .map(|(label, _)| (*label).to_string())
+        .unwrap_or_else(|| "other".to_string())
 }
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {

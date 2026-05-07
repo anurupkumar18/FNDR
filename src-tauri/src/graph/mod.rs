@@ -44,10 +44,15 @@ impl GraphStore {
         let now = chrono::Utc::now().timestamp_millis();
 
         let memory_node_id = memory_node_id(&record.id);
+        let narrative = if !record.memory_context.trim().is_empty() {
+            record.memory_context.clone()
+        } else {
+            record.snippet.clone()
+        };
         let node = GraphNode {
             id: memory_node_id.clone(),
             node_type: NodeType::MemoryChunk,
-            label: record.snippet.clone(),
+            label: trim_label(&narrative, 240),
             created_at: record.timestamp,
             metadata: json!({
                 "app_name": record.app_name,
@@ -57,6 +62,7 @@ impl GraphStore {
                 "session_id": record.session_id,
                 "session_key": record.session_key,
                 "summary_source": record.summary_source,
+                "memory_context": narrative,
                 "memory_type": classify_memory_type(
                     &record.app_name,
                     record.url.as_deref(),
@@ -483,6 +489,18 @@ impl GraphStore {
         // For now, we omit individual clear in favor of consolidated store management.
         Ok(())
     }
+}
+
+fn trim_label(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut out = value
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    out.push_str("...");
+    out
 }
 
 fn memory_node_id(memory_id: &str) -> String {

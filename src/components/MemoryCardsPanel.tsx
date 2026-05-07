@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { MemoryCard, deleteMemory, listMemoryCards } from "../api/tauri";
+import {
+    MemoryCard,
+    MemoryDebugInspector,
+    deleteMemory,
+    getMemoryDebugInspector,
+    listMemoryCards,
+} from "../api/tauri";
 import "./MemoryCardsPanel.css";
 
 interface MemoryCardsPanelProps {
@@ -265,6 +271,9 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(TIME_FILTER_ALL);
     const [perspectiveFilter, setPerspectiveFilter] = useState<PerspectiveFilter>(PERSPECTIVE_FILTER_ALL);
     const [deletingId, setDeletingId] = useState<string | null>(null);
+    const [openDebugIds, setOpenDebugIds] = useState<Set<string>>(new Set());
+    const [debugById, setDebugById] = useState<Record<string, MemoryDebugInspector>>({});
+    const [debugLoadingId, setDebugLoadingId] = useState<string | null>(null);
 
     const selectableApps = useMemo(() => {
         return appNames
@@ -335,6 +344,37 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
         } finally {
             setDeletingId(null);
         }
+    };
+
+    const handleToggleDebug = async (memoryId: string) => {
+        const isOpen = openDebugIds.has(memoryId);
+        if (isOpen) {
+            setOpenDebugIds((previous) => {
+                const next = new Set(previous);
+                next.delete(memoryId);
+                return next;
+            });
+            return;
+        }
+        if (!debugById[memoryId]) {
+            setDebugLoadingId(memoryId);
+            try {
+                const debug = await getMemoryDebugInspector(memoryId);
+                setDebugById((previous) => ({
+                    ...previous,
+                    [memoryId]: debug,
+                }));
+            } catch (err) {
+                setError(err instanceof Error ? err.message : "Unable to load memory debug details.");
+            } finally {
+                setDebugLoadingId(null);
+            }
+        }
+        setOpenDebugIds((previous) => {
+            const next = new Set(previous);
+            next.add(memoryId);
+            return next;
+        });
     };
 
     return (
@@ -474,15 +514,26 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                                 </span>
                                             )}
                                         </div>
-                                        <button
-                                            className="ui-action-btn memory-delete-btn"
-                                            onClick={(e) => { e.stopPropagation(); void handleDeleteCard(card.id); }}
-                                            disabled={deletingId === card.id}
-                                            aria-label="Delete memory card"
-                                            title="Delete this memory"
-                                        >
-                                            {deletingId === card.id ? "Deleting..." : "Delete"}
-                                        </button>
+                                        <div className="memory-card-actions">
+                                            <button
+                                                className="ui-action-btn memory-delete-btn"
+                                                onClick={(e) => { e.stopPropagation(); void handleToggleDebug(card.id); }}
+                                                disabled={debugLoadingId === card.id}
+                                                aria-label="Toggle memory debug details"
+                                                title="Inspect memory debug data"
+                                            >
+                                                {debugLoadingId === card.id ? "Loading..." : openDebugIds.has(card.id) ? "Hide Debug" : "Debug"}
+                                            </button>
+                                            <button
+                                                className="ui-action-btn memory-delete-btn"
+                                                onClick={(e) => { e.stopPropagation(); void handleDeleteCard(card.id); }}
+                                                disabled={deletingId === card.id}
+                                                aria-label="Delete memory card"
+                                                title="Delete this memory"
+                                            >
+                                                {deletingId === card.id ? "Deleting..." : "Delete"}
+                                            </button>
+                                        </div>
                                     </div>
                                     <div className="memory-browse-content">
                                         {storyMode ? (
@@ -499,6 +550,13 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                                 {card.files_touched.slice(0, 4).map((f) => (
                                                     <span key={f} className="memory-file-chip" title={f}>{f}</span>
                                                 ))}
+                                            </div>
+                                        )}
+                                        {openDebugIds.has(card.id) && (
+                                            <div className="memory-debug-drawer">
+                                                <pre>
+{JSON.stringify(debugById[card.id] ?? { memory_id: card.id, status: "loading" }, null, 2)}
+                                                </pre>
                                             </div>
                                         )}
                                     </div>

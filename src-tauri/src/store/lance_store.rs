@@ -6,13 +6,15 @@
 use super::schema::{
     ActivityEvent, AppCount, ContextDelta, ContextPack, DayCount, DaypartCount,
     DecisionLedgerEntry, DomainCount, EdgeType, EntityAliasRecord, GraphEdge, GraphNode, HourCount,
-    MeetingSegment, MeetingSession, MemoryRecord, NodeType, ProjectContext, SearchResult, Stats,
-    Task, TaskType, WeekdayCount,
+    KnowledgePage, MeetingSegment, MeetingSession, MemoryRecord, NodeType, ProjectContext,
+    SearchResult, Stats, Task, TaskType, WeekdayCount,
 };
 use crate::config::{
     DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_STORE_KEYWORD_QUERY_MULTIPLIER,
     DEFAULT_STORE_MAX_KEYWORD_SCAN, DEFAULT_STORE_VECTOR_QUERY_MULTIPLIER,
-    DEFAULT_TEXT_EMBEDDING_DIM,
+    DEFAULT_TEXT_EMBEDDING_DIM, DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN,
+    DEFAULT_PRIMARY_MEMORY_INTENT_MIN, DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX,
+    DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN,
 };
 use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
 use arrow_array::{
@@ -27,7 +29,7 @@ use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::table::{AddDataMode, NewColumnTransform};
 use lancedb::{Connection, Table};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -43,6 +45,7 @@ pub const DECISION_LEDGER_TABLE: &str = "decision_ledger";
 pub const CONTEXT_PACKS_TABLE: &str = "context_packs";
 pub const CONTEXT_DELTAS_TABLE: &str = "context_deltas";
 pub const ENTITY_ALIASES_TABLE: &str = "entity_aliases";
+pub const KNOWLEDGE_PAGES_TABLE: &str = "knowledge_pages";
 const SEARCH_RESULT_COLUMNS: &[&str] = &[
     "id",
     "timestamp",
@@ -61,6 +64,20 @@ const SEARCH_RESULT_COLUMNS: &[&str] = &[
     "noise_score",
     "session_key",
     "lexical_shadow",
+    "memory_context",
+    "user_intent",
+    "topic",
+    "workflow",
+    "search_aliases",
+    "related_memory_ids",
+    "evidence_confidence",
+    "confidence_score",
+    "importance_score",
+    "specificity_score",
+    "intent_score",
+    "entity_score",
+    "agent_usefulness_score",
+    "ocr_noise_score",
     "screenshot_path",
     "url",
     "decay_score",
@@ -96,6 +113,7 @@ pub struct Store {
     context_packs_table: Table,
     context_deltas_table: Table,
     entity_aliases_table: Table,
+    knowledge_pages_table: Table,
 }
 
 impl Store {
@@ -128,6 +146,7 @@ impl Store {
             context_packs_table,
             context_deltas_table,
             entity_aliases_table,
+            knowledge_pages_table,
         ) = rt.block_on(open_all_tables(&db_path))?;
 
         // Migrate legacy storages if present.
@@ -174,6 +193,7 @@ impl Store {
             context_packs_table,
             context_deltas_table,
             entity_aliases_table,
+            knowledge_pages_table,
         })
     }
 
@@ -353,6 +373,89 @@ impl Store {
         for batch in batches {
             if let Some(context) = batch_to_project_contexts(&batch).into_iter().next() {
                 return Ok(Some(context));
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn upsert_knowledge_pages(
+        &self,
+        pages: &[KnowledgePage],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if pages.is_empty() {
+            return Ok(());
+        }
+
+        let mut by_id: HashMap<String, KnowledgePage> = HashMap::with_capacity(pages.len());
+        for page in pages {
+            by_id.insert(page.page_id.clone(), page.clone());
+        }
+        let deduped = by_id.into_values().collect::<Vec<_>>();
+        if let Some(filter) = build_string_match_filter(
+            "page_id",
+            &deduped
+                .iter()
+                .map(|page| page.page_id.clone())
+                .collect::<Vec<_>>(),
+        ) {
+            self.knowledge_pages_table.delete(&filter).await?;
+        }
+
+        let batch = knowledge_pages_to_batch(&deduped)?;
+        let schema = Arc::new(knowledge_page_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.knowledge_pages_table
+            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .mode(AddDataMode::Append)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_knowledge_pages(
+        &self,
+        limit: usize,
+        page_type: Option<&str>,
+        project: Option<&str>,
+    ) -> Result<Vec<KnowledgePage>, Box<dyn std::error::Error>> {
+        let mut query = self.knowledge_pages_table.query();
+        let mut clauses = Vec::new();
+        if let Some(page_type) = page_type.filter(|value| !value.trim().is_empty()) {
+            clauses.push(format!("page_type = '{}'", sql_escape(page_type)));
+        }
+        if let Some(project) = project.filter(|value| !value.trim().is_empty()) {
+            clauses.push(format!("project = '{}'", sql_escape(project)));
+        }
+        if !clauses.is_empty() {
+            query = query.only_if(clauses.join(" AND "));
+        }
+        let batches = query.execute().await?.try_collect::<Vec<_>>().await?;
+        let mut pages = Vec::new();
+        for batch in batches {
+            pages.extend(batch_to_knowledge_pages(&batch));
+        }
+        pages.sort_by_key(|page| std::cmp::Reverse(page.last_updated));
+        pages.truncate(limit.max(1));
+        Ok(pages)
+    }
+
+    pub async fn get_knowledge_page(
+        &self,
+        page_id: &str,
+    ) -> Result<Option<KnowledgePage>, Box<dyn std::error::Error>> {
+        let filter = format!("page_id = '{}'", sql_escape(page_id));
+        let batches = self
+            .knowledge_pages_table
+            .query()
+            .only_if(filter)
+            .limit(1)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        for batch in batches {
+            if let Some(page) = batch_to_knowledge_pages(&batch).into_iter().next() {
+                return Ok(Some(page));
             }
         }
         Ok(None)
@@ -1772,6 +1875,102 @@ fn memory_schema() -> Schema {
         ),
         Field::new("decay_score", DataType::Float32, false),
         Field::new("last_accessed_at", DataType::Int64, false),
+        Field::new("timestamp_start", DataType::Int64, false),
+        Field::new("timestamp_end", DataType::Int64, false),
+        Field::new("source_type", DataType::Utf8, false),
+        Field::new("topic", DataType::Utf8, false),
+        Field::new("workflow", DataType::Utf8, false),
+        Field::new("user_intent", DataType::Utf8, false),
+        Field::new("intent_analysis", DataType::Utf8, false),
+        Field::new("memory_context", DataType::Utf8, false),
+        Field::new(
+            "commands",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "blockers",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "todos",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "open_questions",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "results",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "related_tools",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "related_agents",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "related_projects",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new("raw_evidence", DataType::Utf8, false),
+        Field::new(
+            "search_aliases",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "related_memory_ids",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "graph_node_ids",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "graph_edge_ids",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new("project_confidence", DataType::Float32, false),
+        Field::new("topic_confidence", DataType::Float32, false),
+        Field::new("workflow_confidence", DataType::Float32, false),
+        Field::new(
+            "project_evidence",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "related_project_ids",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new("evidence_confidence", DataType::Float32, false),
+        Field::new("confidence_score", DataType::Float32, false),
+        Field::new("importance_score", DataType::Float32, false),
+        Field::new("specificity_score", DataType::Float32, false),
+        Field::new("intent_score", DataType::Float32, false),
+        Field::new("entity_score", DataType::Float32, false),
+        Field::new("agent_usefulness_score", DataType::Float32, false),
+        Field::new("ocr_noise_score", DataType::Float32, false),
+        Field::new("graph_readiness_score", DataType::Float32, false),
+        Field::new("retrieval_value_score", DataType::Float32, false),
+        Field::new("storage_outcome", DataType::Utf8, false),
+        Field::new("quality_gate_reason", DataType::Utf8, false),
+        Field::new("extracted_entities_structured", DataType::Utf8, false),
+        Field::new("action_items", DataType::Utf8, false),
         Field::new("schema_version", DataType::UInt32, false),
         Field::new("activity_type", DataType::Utf8, false),
         Field::new(
@@ -1996,6 +2195,20 @@ fn entity_alias_schema() -> Schema {
     ])
 }
 
+fn knowledge_page_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("page_id", DataType::Utf8, false),
+        Field::new("page_type", DataType::Utf8, false),
+        Field::new("project", DataType::Utf8, true),
+        Field::new("topic", DataType::Utf8, true),
+        Field::new("title", DataType::Utf8, false),
+        Field::new("stability", DataType::Utf8, false),
+        Field::new("last_updated", DataType::Int64, false),
+        Field::new("confidence_score", DataType::Float32, false),
+        Field::new("payload_json", DataType::Utf8, false),
+    ])
+}
+
 fn edge_type_literal(edge_type: EdgeType) -> &'static str {
     match edge_type {
         EdgeType::PartOfSession => "PART_OF_SESSION",
@@ -2130,6 +2343,56 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
 
     let decay_scores: Vec<f32> = records.iter().map(|r| r.decay_score).collect();
     let last_accessed: Vec<i64> = records.iter().map(|r| r.last_accessed_at).collect();
+    let timestamp_starts: Vec<i64> = records.iter().map(|r| r.timestamp_start).collect();
+    let timestamp_ends: Vec<i64> = records.iter().map(|r| r.timestamp_end).collect();
+    let source_types: Vec<&str> = records.iter().map(|r| r.source_type.as_str()).collect();
+    let topics: Vec<&str> = records.iter().map(|r| r.topic.as_str()).collect();
+    let workflows: Vec<&str> = records.iter().map(|r| r.workflow.as_str()).collect();
+    let user_intents: Vec<&str> = records.iter().map(|r| r.user_intent.as_str()).collect();
+    let intent_analysis_json: Vec<String> = records
+        .iter()
+        .map(|r| serde_json::to_string(&r.intent_analysis).unwrap_or_else(|_| "{}".to_string()))
+        .collect();
+    let intent_analysis_refs: Vec<&str> = intent_analysis_json.iter().map(|s| s.as_str()).collect();
+    let memory_contexts: Vec<&str> = records.iter().map(|r| r.memory_context.as_str()).collect();
+    let raw_evidences: Vec<&str> = records.iter().map(|r| r.raw_evidence.as_str()).collect();
+    let project_confidences: Vec<f32> = records.iter().map(|r| r.project_confidence).collect();
+    let topic_confidences: Vec<f32> = records.iter().map(|r| r.topic_confidence).collect();
+    let workflow_confidences: Vec<f32> = records.iter().map(|r| r.workflow_confidence).collect();
+    let evidence_confidences: Vec<f32> = records.iter().map(|r| r.evidence_confidence).collect();
+    let confidence_scores: Vec<f32> = records.iter().map(|r| r.confidence_score).collect();
+    let importance_scores: Vec<f32> = records.iter().map(|r| r.importance_score).collect();
+    let specificity_scores: Vec<f32> = records.iter().map(|r| r.specificity_score).collect();
+    let intent_scores: Vec<f32> = records.iter().map(|r| r.intent_score).collect();
+    let entity_scores: Vec<f32> = records.iter().map(|r| r.entity_score).collect();
+    let agent_usefulness_scores: Vec<f32> =
+        records.iter().map(|r| r.agent_usefulness_score).collect();
+    let ocr_noise_scores: Vec<f32> = records.iter().map(|r| r.ocr_noise_score).collect();
+    let graph_readiness_scores: Vec<f32> =
+        records.iter().map(|r| r.graph_readiness_score).collect();
+    let retrieval_value_scores: Vec<f32> =
+        records.iter().map(|r| r.retrieval_value_score).collect();
+    let storage_outcomes: Vec<&str> = records.iter().map(|r| r.storage_outcome.as_str()).collect();
+    let quality_gate_reasons: Vec<&str> = records
+        .iter()
+        .map(|r| r.quality_gate_reason.as_str())
+        .collect();
+    let extracted_entities_structured_json: Vec<String> = records
+        .iter()
+        .map(|r| {
+            serde_json::to_string(&r.extracted_entities_structured)
+                .unwrap_or_else(|_| "[]".to_string())
+        })
+        .collect();
+    let extracted_entities_structured_refs: Vec<&str> = extracted_entities_structured_json
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    let action_items_json: Vec<String> = records
+        .iter()
+        .map(|r| serde_json::to_string(&r.action_items).unwrap_or_else(|_| "[]".to_string()))
+        .collect();
+    let action_items_refs: Vec<&str> = action_items_json.iter().map(|s| s.as_str()).collect();
 
     // V2 Fields
     let schema_versions: Vec<u32> = records.iter().map(|r| r.schema_version).collect();
@@ -2181,6 +2444,20 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
     let decisions_array = build_str_list(&|r| &r.decisions);
     let errors_array = build_str_list(&|r| &r.errors);
     let next_steps_array = build_str_list(&|r| &r.next_steps);
+    let commands_array = build_str_list(&|r| &r.commands);
+    let blockers_array = build_str_list(&|r| &r.blockers);
+    let todos_array = build_str_list(&|r| &r.todos);
+    let open_questions_array = build_str_list(&|r| &r.open_questions);
+    let results_array = build_str_list(&|r| &r.results);
+    let related_tools_array = build_str_list(&|r| &r.related_tools);
+    let related_agents_array = build_str_list(&|r| &r.related_agents);
+    let related_projects_array = build_str_list(&|r| &r.related_projects);
+    let search_aliases_array = build_str_list(&|r| &r.search_aliases);
+    let related_memory_ids_array = build_str_list(&|r| &r.related_memory_ids);
+    let graph_node_ids_array = build_str_list(&|r| &r.graph_node_ids);
+    let graph_edge_ids_array = build_str_list(&|r| &r.graph_edge_ids);
+    let project_evidence_array = build_str_list(&|r| &r.project_evidence);
+    let related_project_ids_array = build_str_list(&|r| &r.related_project_ids);
     let related_ids_array = build_str_list(&|r| &r.related_ids);
     let consolidated_from_array = build_str_list(&|r| &r.consolidated_from);
 
@@ -2213,6 +2490,46 @@ fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, ArrowError>
             Arc::new(support_embedding_array),
             Arc::new(Float32Array::from(decay_scores)),
             Arc::new(Int64Array::from(last_accessed)),
+            Arc::new(Int64Array::from(timestamp_starts)),
+            Arc::new(Int64Array::from(timestamp_ends)),
+            Arc::new(StringArray::from(source_types)),
+            Arc::new(StringArray::from(topics)),
+            Arc::new(StringArray::from(workflows)),
+            Arc::new(StringArray::from(user_intents)),
+            Arc::new(StringArray::from(intent_analysis_refs)),
+            Arc::new(StringArray::from(memory_contexts)),
+            Arc::new(commands_array),
+            Arc::new(blockers_array),
+            Arc::new(todos_array),
+            Arc::new(open_questions_array),
+            Arc::new(results_array),
+            Arc::new(related_tools_array),
+            Arc::new(related_agents_array),
+            Arc::new(related_projects_array),
+            Arc::new(StringArray::from(raw_evidences)),
+            Arc::new(search_aliases_array),
+            Arc::new(related_memory_ids_array),
+            Arc::new(graph_node_ids_array),
+            Arc::new(graph_edge_ids_array),
+            Arc::new(Float32Array::from(project_confidences)),
+            Arc::new(Float32Array::from(topic_confidences)),
+            Arc::new(Float32Array::from(workflow_confidences)),
+            Arc::new(project_evidence_array),
+            Arc::new(related_project_ids_array),
+            Arc::new(Float32Array::from(evidence_confidences)),
+            Arc::new(Float32Array::from(confidence_scores)),
+            Arc::new(Float32Array::from(importance_scores)),
+            Arc::new(Float32Array::from(specificity_scores)),
+            Arc::new(Float32Array::from(intent_scores)),
+            Arc::new(Float32Array::from(entity_scores)),
+            Arc::new(Float32Array::from(agent_usefulness_scores)),
+            Arc::new(Float32Array::from(ocr_noise_scores)),
+            Arc::new(Float32Array::from(graph_readiness_scores)),
+            Arc::new(Float32Array::from(retrieval_value_scores)),
+            Arc::new(StringArray::from(storage_outcomes)),
+            Arc::new(StringArray::from(quality_gate_reasons)),
+            Arc::new(StringArray::from(extracted_entities_structured_refs)),
+            Arc::new(StringArray::from(action_items_refs)),
             Arc::new(UInt32Array::from(schema_versions)),
             Arc::new(StringArray::from(activity_types)),
             Arc::new(files_touched_array),
@@ -2279,6 +2596,46 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
         .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>().cloned());
     let decay_scores = f32_col(batch, "decay_score");
     let last_accessed = i64_col(batch, "last_accessed_at");
+    let timestamp_starts = i64_col(batch, "timestamp_start");
+    let timestamp_ends = i64_col(batch, "timestamp_end");
+    let source_types = str_col(batch, "source_type");
+    let topics = str_col(batch, "topic");
+    let workflows = str_col(batch, "workflow");
+    let user_intents = str_col(batch, "user_intent");
+    let intent_analysis_json = str_col(batch, "intent_analysis");
+    let memory_contexts = str_col(batch, "memory_context");
+    let commands = list_str_col(batch, "commands");
+    let blockers = list_str_col(batch, "blockers");
+    let todos = list_str_col(batch, "todos");
+    let open_questions = list_str_col(batch, "open_questions");
+    let results = list_str_col(batch, "results");
+    let related_tools = list_str_col(batch, "related_tools");
+    let related_agents = list_str_col(batch, "related_agents");
+    let related_projects = list_str_col(batch, "related_projects");
+    let raw_evidence = str_col(batch, "raw_evidence");
+    let search_aliases = list_str_col(batch, "search_aliases");
+    let related_memory_ids = list_str_col(batch, "related_memory_ids");
+    let graph_node_ids = list_str_col(batch, "graph_node_ids");
+    let graph_edge_ids = list_str_col(batch, "graph_edge_ids");
+    let project_confidences = f32_col(batch, "project_confidence");
+    let topic_confidences = f32_col(batch, "topic_confidence");
+    let workflow_confidences = f32_col(batch, "workflow_confidence");
+    let project_evidence = list_str_col(batch, "project_evidence");
+    let related_project_ids = list_str_col(batch, "related_project_ids");
+    let evidence_confidences = f32_col(batch, "evidence_confidence");
+    let confidence_scores = f32_col(batch, "confidence_score");
+    let importance_scores = f32_col(batch, "importance_score");
+    let specificity_scores = f32_col(batch, "specificity_score");
+    let intent_scores = f32_col(batch, "intent_score");
+    let entity_scores = f32_col(batch, "entity_score");
+    let agent_usefulness_scores = f32_col(batch, "agent_usefulness_score");
+    let ocr_noise_scores = f32_col(batch, "ocr_noise_score");
+    let graph_readiness_scores = f32_col(batch, "graph_readiness_score");
+    let retrieval_value_scores = f32_col(batch, "retrieval_value_score");
+    let storage_outcomes = str_col(batch, "storage_outcome");
+    let quality_gate_reasons = str_col(batch, "quality_gate_reason");
+    let extracted_entities_structured_json = str_col(batch, "extracted_entities_structured");
+    let action_items_json = str_col(batch, "action_items");
 
     // V2 columns
     let schema_versions = u32_col(batch, "schema_version");
@@ -2348,6 +2705,64 @@ fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
                 support_embedding,
                 decay_score: get_f32(&decay_scores, i).max(0.01),
                 last_accessed_at: get_i64(&last_accessed, i),
+                timestamp_start: get_i64(&timestamp_starts, i),
+                timestamp_end: get_i64(&timestamp_ends, i),
+                source_type: get_str(&source_types, i),
+                topic: get_str(&topics, i),
+                workflow: get_str(&workflows, i),
+                user_intent: get_str(&user_intents, i),
+                intent_analysis: get_opt_str(&intent_analysis_json, i)
+                    .and_then(|v| serde_json::from_str(&v).ok())
+                    .unwrap_or_default(),
+                memory_context: {
+                    let context = get_str(&memory_contexts, i);
+                    if context.trim().is_empty() {
+                        let internal = get_str(&internal_contexts, i);
+                        if internal.trim().is_empty() {
+                            get_str(&display_summaries, i)
+                        } else {
+                            internal
+                        }
+                    } else {
+                        context
+                    }
+                },
+                commands: extract_str_list(&commands, i),
+                blockers: extract_str_list(&blockers, i),
+                todos: extract_str_list(&todos, i),
+                open_questions: extract_str_list(&open_questions, i),
+                results: extract_str_list(&results, i),
+                related_tools: extract_str_list(&related_tools, i),
+                related_agents: extract_str_list(&related_agents, i),
+                related_projects: extract_str_list(&related_projects, i),
+                raw_evidence: get_str(&raw_evidence, i),
+                search_aliases: extract_str_list(&search_aliases, i),
+                related_memory_ids: extract_str_list(&related_memory_ids, i),
+                graph_node_ids: extract_str_list(&graph_node_ids, i),
+                graph_edge_ids: extract_str_list(&graph_edge_ids, i),
+                project_confidence: get_f32(&project_confidences, i),
+                topic_confidence: get_f32(&topic_confidences, i),
+                workflow_confidence: get_f32(&workflow_confidences, i),
+                project_evidence: extract_str_list(&project_evidence, i),
+                related_project_ids: extract_str_list(&related_project_ids, i),
+                evidence_confidence: get_f32(&evidence_confidences, i),
+                confidence_score: get_f32(&confidence_scores, i),
+                importance_score: get_f32(&importance_scores, i),
+                specificity_score: get_f32(&specificity_scores, i),
+                intent_score: get_f32(&intent_scores, i),
+                entity_score: get_f32(&entity_scores, i),
+                agent_usefulness_score: get_f32(&agent_usefulness_scores, i),
+                ocr_noise_score: get_f32(&ocr_noise_scores, i),
+                graph_readiness_score: get_f32(&graph_readiness_scores, i),
+                retrieval_value_score: get_f32(&retrieval_value_scores, i),
+                storage_outcome: get_str(&storage_outcomes, i),
+                quality_gate_reason: get_str(&quality_gate_reasons, i),
+                extracted_entities_structured: get_opt_str(&extracted_entities_structured_json, i)
+                    .and_then(|v| serde_json::from_str(&v).ok())
+                    .unwrap_or_default(),
+                action_items: get_opt_str(&action_items_json, i)
+                    .and_then(|v| serde_json::from_str(&v).ok())
+                    .unwrap_or_default(),
                 schema_version: get_u32(&schema_versions, i),
                 activity_type: get_str(&activity_types, i),
                 files_touched: extract_str_list(&files_touched, i),
@@ -2409,6 +2824,20 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
     let noise_scores = f32_col(batch, "noise_score");
     let session_keys = str_col(batch, "session_key");
     let lexical_shadows = str_col(batch, "lexical_shadow");
+    let memory_contexts = str_col(batch, "memory_context");
+    let user_intents = str_col(batch, "user_intent");
+    let topics = str_col(batch, "topic");
+    let workflows = str_col(batch, "workflow");
+    let search_aliases = list_str_col(batch, "search_aliases");
+    let related_memory_ids = list_str_col(batch, "related_memory_ids");
+    let evidence_confidences = f32_col(batch, "evidence_confidence");
+    let confidence_scores = f32_col(batch, "confidence_score");
+    let importance_scores = f32_col(batch, "importance_score");
+    let specificity_scores = f32_col(batch, "specificity_score");
+    let intent_scores = f32_col(batch, "intent_score");
+    let entity_scores = f32_col(batch, "entity_score");
+    let agent_usefulness_scores = f32_col(batch, "agent_usefulness_score");
+    let ocr_noise_scores = f32_col(batch, "ocr_noise_score");
     let screenshot_paths = str_col(batch, "screenshot_path");
     let urls = str_col(batch, "url");
 
@@ -2465,6 +2894,32 @@ fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
                 noise_score: get_f32(&noise_scores, i),
                 session_key: get_str(&session_keys, i),
                 lexical_shadow: get_str(&lexical_shadows, i),
+                memory_context: {
+                    let context = get_str(&memory_contexts, i);
+                    if context.trim().is_empty() {
+                        let internal = get_str(&internal_contexts, i);
+                        if internal.trim().is_empty() {
+                            get_str(&display_summaries, i)
+                        } else {
+                            internal
+                        }
+                    } else {
+                        context
+                    }
+                },
+                user_intent: get_str(&user_intents, i),
+                topic: get_str(&topics, i),
+                workflow: get_str(&workflows, i),
+                search_aliases: extract_str_list(&search_aliases, i),
+                related_memory_ids: extract_str_list(&related_memory_ids, i),
+                evidence_confidence: get_f32(&evidence_confidences, i),
+                confidence_score: get_f32(&confidence_scores, i),
+                importance_score: get_f32(&importance_scores, i),
+                specificity_score: get_f32(&specificity_scores, i),
+                intent_score: get_f32(&intent_scores, i),
+                entity_score: get_f32(&entity_scores, i),
+                agent_usefulness_score: get_f32(&agent_usefulness_scores, i),
+                ocr_noise_score: get_f32(&ocr_noise_scores, i),
                 score,
                 screenshot_path: get_opt_str(&screenshot_paths, i),
                 url: get_opt_str(&urls, i),
@@ -3216,6 +3671,78 @@ fn batch_to_entity_aliases(batch: &RecordBatch) -> Vec<EntityAliasRecord> {
     aliases
 }
 
+fn knowledge_page_type_literal(value: &super::schema::KnowledgePageType) -> &'static str {
+    match value {
+        super::schema::KnowledgePageType::ProjectPage => "project_page",
+        super::schema::KnowledgePageType::TopicPage => "topic_page",
+        super::schema::KnowledgePageType::ClaimPage => "claim_page",
+        super::schema::KnowledgePageType::DecisionPage => "decision_page",
+        super::schema::KnowledgePageType::PatternPage => "pattern_page",
+        super::schema::KnowledgePageType::BreakthroughPage => "breakthrough_page",
+        super::schema::KnowledgePageType::ContradictionPage => "contradiction_page",
+        super::schema::KnowledgePageType::FrameworkPage => "framework_page",
+    }
+}
+
+fn knowledge_stability_literal(value: &super::schema::KnowledgeStability) -> &'static str {
+    match value {
+        super::schema::KnowledgeStability::Emerging => "emerging",
+        super::schema::KnowledgeStability::Stable => "stable",
+        super::schema::KnowledgeStability::Contradicted => "contradicted",
+        super::schema::KnowledgeStability::Deprecated => "deprecated",
+    }
+}
+
+fn knowledge_pages_to_batch(pages: &[KnowledgePage]) -> Result<RecordBatch, ArrowError> {
+    let schema = Arc::new(knowledge_page_schema());
+    let ids: Vec<&str> = pages.iter().map(|page| page.page_id.as_str()).collect();
+    let types: Vec<&str> = pages
+        .iter()
+        .map(|page| knowledge_page_type_literal(&page.page_type))
+        .collect();
+    let projects: Vec<Option<&str>> = pages.iter().map(|page| page.project.as_deref()).collect();
+    let topics: Vec<Option<&str>> = pages.iter().map(|page| page.topic.as_deref()).collect();
+    let titles: Vec<&str> = pages.iter().map(|page| page.title.as_str()).collect();
+    let stability: Vec<&str> = pages
+        .iter()
+        .map(|page| knowledge_stability_literal(&page.stability))
+        .collect();
+    let last_updated: Vec<i64> = pages.iter().map(|page| page.last_updated).collect();
+    let confidence: Vec<f32> = pages.iter().map(|page| page.confidence_score).collect();
+    let payloads: Vec<String> = pages
+        .iter()
+        .map(|page| serde_json::to_string(page).unwrap_or_default())
+        .collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(ids)),
+            Arc::new(StringArray::from(types)),
+            Arc::new(StringArray::from(projects)),
+            Arc::new(StringArray::from(topics)),
+            Arc::new(StringArray::from(titles)),
+            Arc::new(StringArray::from(stability)),
+            Arc::new(Int64Array::from(last_updated)),
+            Arc::new(Float32Array::from(confidence)),
+            Arc::new(StringArray::from(payloads)),
+        ],
+    )
+}
+
+fn batch_to_knowledge_pages(batch: &RecordBatch) -> Vec<KnowledgePage> {
+    let payloads = str_col(batch, "payload_json");
+    let mut pages = Vec::new();
+    if let Some(payloads) = payloads {
+        for i in 0..batch.num_rows() {
+            if let Ok(page) = serde_json::from_str::<KnowledgePage>(payloads.value(i)) {
+                pages.push(page);
+            }
+        }
+    }
+    pages
+}
+
 fn privacy_class_literal(value: &super::schema::PrivacyClass) -> &'static str {
     match value {
         super::schema::PrivacyClass::Public => "public",
@@ -3582,6 +4109,16 @@ fn normalize_keyword_text(input: &str) -> String {
         .join(" ")
 }
 
+fn trim_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let keep = max_chars.saturating_sub(3);
+    let mut out = value.chars().take(keep).collect::<String>();
+    out.push_str("...");
+    out
+}
+
 fn is_keyword_stop_word(token: &str) -> bool {
     matches!(
         token,
@@ -3620,8 +4157,19 @@ fn keyword_terms(query: &str) -> Vec<String> {
     }
 
     let mut terms = Vec::new();
+    let mut seen = HashSet::new();
+    let mut push = |value: String| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if seen.insert(trimmed.to_string()) {
+            terms.push(trimmed.to_string());
+        }
+    };
+
     // Keep the normalized query as a phrase candidate first.
-    terms.push(normalized.clone());
+    push(normalized.clone());
 
     for token in normalized.split_whitespace() {
         if token.len() <= 1 {
@@ -3630,13 +4178,47 @@ fn keyword_terms(query: &str) -> Vec<String> {
         if is_keyword_stop_word(token) && !token.chars().any(|ch| ch.is_ascii_digit()) {
             continue;
         }
-        if !terms.iter().any(|existing| existing == token) {
-            terms.push(token.to_string());
+        push(token.to_string());
+
+        if token.len() >= 3 {
+            push(token[..3].to_string());
+        }
+        if token.len() >= 4 {
+            push(token[..4].to_string());
+        }
+        if token.len() >= 5 {
+            push(drop_middle_char(token));
+        }
+        if token.len() >= 6 {
+            for gram in char_ngrams(token, 3).into_iter().take(3) {
+                push(gram);
+            }
         }
     }
 
-    terms.truncate(10);
+    terms.truncate(24);
     terms
+}
+
+fn drop_middle_char(token: &str) -> String {
+    let mut chars = token.chars().collect::<Vec<_>>();
+    if chars.len() <= 3 {
+        return token.to_string();
+    }
+    chars.remove(chars.len() / 2);
+    chars.into_iter().collect()
+}
+
+fn char_ngrams(token: &str, n: usize) -> Vec<String> {
+    let chars = token.chars().collect::<Vec<_>>();
+    if chars.len() < n {
+        return Vec::new();
+    }
+    let mut grams = Vec::new();
+    for idx in 0..=(chars.len() - n) {
+        grams.push(chars[idx..idx + n].iter().collect());
+    }
+    grams
 }
 
 fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
@@ -3646,7 +4228,9 @@ fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
 
     let title = normalize_keyword_text(&result.window_title);
     let snippet = normalize_keyword_text(&result.snippet);
+    let memory_context = normalize_keyword_text(&result.memory_context);
     let lexical_shadow = normalize_keyword_text(&result.lexical_shadow);
+    let alias_blob = normalize_keyword_text(&result.search_aliases.join(" "));
     let clean = normalize_keyword_text(if !result.clean_text.trim().is_empty() {
         &result.clean_text
     } else {
@@ -3658,7 +4242,10 @@ fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
         .as_ref()
         .map(|value| normalize_keyword_text(value))
         .unwrap_or_default();
-    let merged = format!("{} {} {} {} {}", title, snippet, clean, lexical_shadow, url);
+    let merged = format!(
+        "{} {} {} {} {} {} {}",
+        title, snippet, memory_context, clean, lexical_shadow, alias_blob, url
+    );
 
     let mut matched_terms = 0usize;
     let mut weighted = 0.0f32;
@@ -3677,8 +4264,16 @@ fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
             weighted += 1.1;
             matched = true;
         }
+        if memory_context.contains(term) {
+            weighted += 1.25;
+            matched = true;
+        }
         if lexical_shadow.contains(term) {
             weighted += 1.05;
+            matched = true;
+        }
+        if alias_blob.contains(term) {
+            weighted += 1.0;
             matched = true;
         }
         if app.contains(term) {
@@ -3804,6 +4399,105 @@ fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     if normalized.internal_context.trim().is_empty() {
         normalized.internal_context = normalized.clean_text.clone();
     }
+    if normalized.timestamp_start <= 0 {
+        normalized.timestamp_start = normalized.timestamp;
+    }
+    if normalized.timestamp_end <= 0 {
+        normalized.timestamp_end = normalized.timestamp;
+    }
+    if normalized.source_type.trim().is_empty() {
+        normalized.source_type = infer_source_type(&normalized);
+    }
+    normalize_event_fields(&mut normalized);
+
+    if normalized.memory_context.trim().is_empty() {
+        normalized.memory_context = derive_memory_context(&normalized);
+    }
+    if normalized.user_intent.trim().is_empty()
+        || normalized.intent_analysis.intent_label.is_empty()
+    {
+        let analysis = infer_intent_analysis(&normalized);
+        normalized.user_intent = analysis.intent_label.clone();
+        normalized.intent_analysis = analysis;
+    }
+    if normalized.topic.trim().is_empty() || normalized.topic == "unknown" {
+        normalized.topic = infer_topic(&normalized);
+    }
+    if normalized.workflow.trim().is_empty() || normalized.workflow == "unknown" {
+        normalized.workflow = infer_workflow(&normalized);
+    }
+    if normalized.embedding_text.trim().is_empty() {
+        normalized.embedding_text = compose_embedding_text(&normalized);
+    }
+    if normalized.search_aliases.is_empty() {
+        normalized.search_aliases = generate_search_aliases(&normalized);
+    }
+    if normalized.raw_evidence.trim().is_empty() {
+        normalized.raw_evidence = build_raw_evidence_payload(&normalized);
+    }
+    if normalized.extracted_entities_structured.is_empty() {
+        normalized.extracted_entities_structured = derive_structured_entities(&normalized);
+    }
+    if normalized.action_items.is_empty() {
+        normalized.action_items = derive_action_items(&normalized);
+    }
+    if normalized.topic_confidence <= 0.0 {
+        normalized.topic_confidence = estimate_topic_confidence(&normalized);
+    }
+    if normalized.workflow_confidence <= 0.0 {
+        normalized.workflow_confidence = estimate_workflow_confidence(&normalized);
+    }
+    if normalized.project_confidence <= 0.0 {
+        normalized.project_confidence = estimate_project_confidence(&normalized);
+    }
+    if normalized.ocr_noise_score <= 0.0 {
+        normalized.ocr_noise_score = normalized.noise_score.clamp(0.0, 1.0);
+    }
+    if normalized.evidence_confidence <= 0.0 {
+        normalized.evidence_confidence = normalized
+            .ocr_confidence
+            .max(normalized.extraction_confidence)
+            .clamp(0.0, 1.0);
+    }
+    if normalized.specificity_score <= 0.0 {
+        normalized.specificity_score = estimate_specificity_score(&normalized);
+    }
+    if normalized.intent_score <= 0.0 {
+        normalized.intent_score = normalized.intent_analysis.confidence.clamp(0.0, 1.0);
+    }
+    if normalized.entity_score <= 0.0 {
+        normalized.entity_score = estimate_entity_score(&normalized);
+    }
+    if normalized.importance_score <= 0.0 {
+        normalized.importance_score = estimate_importance_score(&normalized);
+    }
+    if normalized.agent_usefulness_score <= 0.0 {
+        normalized.agent_usefulness_score = estimate_agent_usefulness_score(&normalized);
+    }
+    if normalized.confidence_score <= 0.0 {
+        normalized.confidence_score = ((normalized.evidence_confidence * 0.55)
+            + (normalized.intent_analysis.confidence * 0.20)
+            + (normalized.extraction_confidence.clamp(0.0, 1.0) * 0.25))
+            .clamp(0.0, 1.0);
+    }
+    if normalized.graph_readiness_score <= 0.0 {
+        normalized.graph_readiness_score = ((normalized.entity_score * 0.4)
+            + (normalized.evidence_confidence * 0.35)
+            + (normalized.specificity_score * 0.25))
+            .clamp(0.0, 1.0);
+    }
+    if normalized.retrieval_value_score <= 0.0 {
+        normalized.retrieval_value_score = ((normalized.agent_usefulness_score * 0.45)
+            + (normalized.specificity_score * 0.30)
+            + (normalized.intent_score * 0.25))
+            .clamp(0.0, 1.0);
+    }
+    if normalized.storage_outcome.trim().is_empty() {
+        normalized.storage_outcome = quality_storage_outcome(&normalized);
+    }
+    if normalized.quality_gate_reason.trim().is_empty() {
+        normalized.quality_gate_reason = quality_gate_reason(&normalized);
+    }
     normalized.anchor_coverage_score = normalized.anchor_coverage_score.clamp(0.0, 1.0);
     if normalized.content_hash.trim().is_empty() {
         normalized.content_hash = compute_content_hash(
@@ -3815,10 +4509,647 @@ fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     normalized
 }
 
+fn normalize_event_fields(record: &mut MemoryRecord) {
+    if record.topic.trim().is_empty() {
+        record.topic = "unknown".to_string();
+    }
+    if record.workflow.trim().is_empty() {
+        record.workflow = "unknown".to_string();
+    }
+    if record.source_type.trim().is_empty() {
+        record.source_type = "screen".to_string();
+    }
+}
+
+fn infer_source_type(record: &MemoryRecord) -> String {
+    let app = record.app_name.to_ascii_lowercase();
+    if record.url.is_some() {
+        "browser".to_string()
+    } else if app.contains("terminal") || app.contains("iterm") || app.contains("warp") {
+        "terminal".to_string()
+    } else if app.contains("cursor") || app.contains("code") || app.contains("xcode") {
+        "ide".to_string()
+    } else if app.contains("word") || app.contains("pages") || app.contains("notion") {
+        "document".to_string()
+    } else {
+        "screen".to_string()
+    }
+}
+
+fn derive_memory_context(record: &MemoryRecord) -> String {
+    let summary = if !record.display_summary.trim().is_empty() {
+        record.display_summary.trim()
+    } else {
+        record.snippet.trim()
+    };
+    let detail = if !record.internal_context.trim().is_empty() {
+        record.internal_context.trim()
+    } else {
+        record.clean_text.trim()
+    };
+
+    let mut parts = Vec::new();
+    if !summary.is_empty() {
+        parts.push(summary.to_string());
+    }
+
+    let intent = if !record.user_intent.trim().is_empty() {
+        record.user_intent.trim().to_string()
+    } else if !record.activity_type.trim().is_empty() {
+        record.activity_type.trim().to_string()
+    } else {
+        String::new()
+    };
+    let mut context_bits = Vec::new();
+    if !intent.is_empty() {
+        context_bits.push(format!("Intent: {intent}"));
+    }
+    if !record.project.trim().is_empty() {
+        context_bits.push(format!("Project: {}", record.project.trim()));
+    }
+    if !record.topic.trim().is_empty() && record.topic != "unknown" {
+        context_bits.push(format!("Topic: {}", record.topic.trim()));
+    }
+    if !record.workflow.trim().is_empty() && record.workflow != "unknown" {
+        context_bits.push(format!("Workflow: {}", record.workflow.trim()));
+    }
+    if !record.files_touched.is_empty() {
+        context_bits.push(format!(
+            "Files: {}",
+            record
+                .files_touched
+                .iter()
+                .take(4)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !record.decisions.is_empty() {
+        context_bits.push(format!(
+            "Decisions: {}",
+            record
+                .decisions
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
+    if !record.errors.is_empty() {
+        context_bits.push(format!(
+            "Errors: {}",
+            record
+                .errors
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
+    if !record.next_steps.is_empty() {
+        context_bits.push(format!(
+            "Next actions: {}",
+            record
+                .next_steps
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
+    if !context_bits.is_empty() {
+        parts.push(context_bits.join(" | "));
+    }
+
+    if !detail.is_empty() && !summary.eq_ignore_ascii_case(detail) {
+        parts.push(trim_chars(detail, 700));
+    }
+    if parts.is_empty() {
+        return trim_chars(&record.window_title, 220);
+    }
+    trim_chars(&parts.join("\n"), 1_200)
+}
+
+fn infer_topic(record: &MemoryRecord) -> String {
+    if !record.project.trim().is_empty() {
+        return trim_chars(record.project.trim(), 80);
+    }
+    if let Some(url) = record.url.as_deref() {
+        if let Some(path) = extract_path_segments(url, 2) {
+            let normalized = path.replace('/', " ").replace('_', " ");
+            let topic = normalized
+                .split_whitespace()
+                .take(4)
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !topic.is_empty() {
+                return topic;
+            }
+        }
+    }
+    let from_title = normalize_keyword_text(&record.window_title)
+        .split_whitespace()
+        .filter(|token| token.len() >= 4 && !is_keyword_stop_word(token))
+        .take(5)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !from_title.is_empty() {
+        return from_title;
+    }
+    "unknown".to_string()
+}
+
+fn infer_workflow(record: &MemoryRecord) -> String {
+    let intent = infer_intent_analysis(record);
+    let label = intent.intent_label;
+    if label.is_empty() {
+        "unknown".to_string()
+    } else {
+        label
+    }
+}
+
+fn infer_intent_analysis(record: &MemoryRecord) -> crate::store::IntentAnalysis {
+    let mut scores: HashMap<&str, f32> = HashMap::new();
+    let mut evidence: HashMap<&str, Vec<String>> = HashMap::new();
+    let text = normalize_keyword_text(&format!(
+        "{} {} {} {}",
+        record.window_title, record.clean_text, record.internal_context, record.memory_context
+    ));
+    let app = record.app_name.to_ascii_lowercase();
+
+    let add = |scores: &mut HashMap<&str, f32>,
+               evidence: &mut HashMap<&str, Vec<String>>,
+               label: &'static str,
+               weight: f32,
+               reason: &str| {
+        *scores.entry(label).or_insert(0.0) += weight;
+        evidence.entry(label).or_default().push(reason.to_string());
+    };
+
+    if !record.files_touched.is_empty() || app.contains("cursor") || app.contains("code") {
+        add(
+            &mut scores,
+            &mut evidence,
+            "coding",
+            0.42,
+            "code/IDE artifacts present",
+        );
+    }
+    if !record.errors.is_empty() || text.contains("failed") || text.contains("error") {
+        add(
+            &mut scores,
+            &mut evidence,
+            "debugging",
+            0.45,
+            "failure/error signals present",
+        );
+    }
+    if !record.decisions.is_empty() || text.contains("decided") || text.contains("chose") {
+        add(
+            &mut scores,
+            &mut evidence,
+            "planning",
+            0.32,
+            "decision/planning language detected",
+        );
+    }
+    if record.url.is_some() {
+        add(
+            &mut scores,
+            &mut evidence,
+            "researching",
+            0.22,
+            "web/document context detected",
+        );
+    }
+    if app.contains("terminal") || !record.commands.is_empty() {
+        add(
+            &mut scores,
+            &mut evidence,
+            "testing_workflow",
+            0.30,
+            "terminal/command evidence present",
+        );
+    }
+    if text.contains("todo") || !record.next_steps.is_empty() {
+        add(
+            &mut scores,
+            &mut evidence,
+            "organizing_information",
+            0.22,
+            "explicit next-step/task language",
+        );
+    }
+    if scores.is_empty() {
+        add(
+            &mut scores,
+            &mut evidence,
+            "unknown",
+            0.20,
+            "insufficient high-confidence intent evidence",
+        );
+    }
+
+    let mut ranked = scores.into_iter().collect::<Vec<_>>();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let top = ranked.first().copied().unwrap_or(("unknown", 0.0));
+    let total: f32 = ranked
+        .iter()
+        .map(|(_, score)| *score)
+        .sum::<f32>()
+        .max(0.001);
+    let confidence = (top.1 / total).clamp(0.0, 1.0);
+    let competing = ranked
+        .iter()
+        .skip(1)
+        .take(2)
+        .map(|(label, score)| crate::store::IntentCandidate {
+            label: (*label).to_string(),
+            confidence: (*score / total).clamp(0.0, 1.0),
+        })
+        .collect::<Vec<_>>();
+
+    crate::store::IntentAnalysis {
+        intent_label: top.0.to_string(),
+        confidence,
+        supporting_evidence: evidence.get(top.0).cloned().unwrap_or_default(),
+        competing_intents: competing,
+    }
+}
+
+fn compose_embedding_text(record: &MemoryRecord) -> String {
+    let mut segments = Vec::new();
+    push_text_segment(&mut segments, &record.user_intent, "intent");
+    push_text_segment(&mut segments, &record.project, "project");
+    push_text_segment(&mut segments, &record.topic, "topic");
+    push_text_segment(&mut segments, &record.workflow, "workflow");
+    push_text_segment(&mut segments, &record.memory_context, "context");
+
+    let entity_blob = record.entities.join(", ");
+    push_text_segment(&mut segments, &entity_blob, "entities");
+    let alias_blob = record.search_aliases.join(", ");
+    push_text_segment(&mut segments, &alias_blob, "aliases");
+    let decisions = record.decisions.join("; ");
+    push_text_segment(&mut segments, &decisions, "decisions");
+    let errors = record.errors.join("; ");
+    push_text_segment(&mut segments, &errors, "errors");
+    let blockers = record.blockers.join("; ");
+    push_text_segment(&mut segments, &blockers, "blockers");
+    let todos = if !record.todos.is_empty() {
+        record.todos.join("; ")
+    } else {
+        record.next_steps.join("; ")
+    };
+    push_text_segment(&mut segments, &todos, "todos");
+    let results = record.results.join("; ");
+    push_text_segment(&mut segments, &results, "results");
+    push_text_segment(&mut segments, &record.files_touched.join(", "), "files");
+    if let Some(url) = record.url.as_deref() {
+        push_text_segment(&mut segments, url, "urls");
+    }
+    push_text_segment(&mut segments, &record.commands.join("; "), "commands");
+    push_text_segment(
+        &mut segments,
+        &trim_chars(&record.clean_text, 360),
+        "raw_evidence",
+    );
+
+    trim_chars(&segments.join("\n"), 2_000)
+}
+
+fn push_text_segment(out: &mut Vec<String>, value: &str, label: &str) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("unknown") {
+        return;
+    }
+    out.push(format!("{label}: {trimmed}"));
+}
+
+fn generate_search_aliases(record: &MemoryRecord) -> Vec<String> {
+    let mut aliases = HashSet::new();
+    for value in record
+        .entities
+        .iter()
+        .chain(record.tags.iter())
+        .chain(record.files_touched.iter())
+        .chain(record.related_tools.iter())
+    {
+        let base = value.trim();
+        if base.is_empty() {
+            continue;
+        }
+        aliases.insert(base.to_ascii_lowercase());
+        aliases.insert(base.replace('_', " ").to_ascii_lowercase());
+        aliases.insert(base.replace('-', " ").to_ascii_lowercase());
+        let acronym = acronym_for(base);
+        if acronym.len() >= 2 {
+            aliases.insert(acronym.to_ascii_lowercase());
+        }
+        let compact = normalize_keyword_text(base).replace(' ', "");
+        if compact.len() >= 3 {
+            aliases.insert(compact);
+        }
+    }
+    let mut out = aliases.into_iter().collect::<Vec<_>>();
+    out.sort();
+    out.truncate(24);
+    out
+}
+
+fn acronym_for(value: &str) -> String {
+    value
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.chars().next())
+        .collect::<String>()
+}
+
+fn build_raw_evidence_payload(record: &MemoryRecord) -> String {
+    serde_json::json!({
+        "timestamp_start": record.timestamp_start,
+        "timestamp_end": record.timestamp_end,
+        "app_name": record.app_name,
+        "window_title": record.window_title,
+        "url": record.url,
+        "source_type": record.source_type,
+        "ocr_confidence": record.ocr_confidence,
+        "noise_score": record.noise_score,
+        "clean_text_excerpt": trim_chars(&record.clean_text, 400),
+    })
+    .to_string()
+}
+
+fn derive_structured_entities(record: &MemoryRecord) -> Vec<crate::store::ExtractedEntity> {
+    let mut entities = Vec::new();
+    let now = chrono::Utc::now().timestamp_millis();
+    let base_evidence = vec![format!("memory_id={}", record.id), format!("ts={}", now)];
+
+    for entity in dedup_strings(record.entities.clone()) {
+        entities.push(crate::store::ExtractedEntity {
+            text: entity.clone(),
+            normalized_name: normalize_keyword_text(&entity),
+            entity_type: "entity".to_string(),
+            confidence: 0.72,
+            source: "memory_context".to_string(),
+            evidence: base_evidence.clone(),
+            aliases: vec![entity.to_ascii_lowercase()],
+            related_entity_ids: Vec::new(),
+        });
+    }
+    for file in dedup_strings(record.files_touched.clone()) {
+        entities.push(crate::store::ExtractedEntity {
+            text: file.clone(),
+            normalized_name: normalize_keyword_text(&file),
+            entity_type: "file".to_string(),
+            confidence: 0.86,
+            source: "path".to_string(),
+            evidence: vec!["detected file path".to_string()],
+            aliases: vec![basename(&file)],
+            related_entity_ids: Vec::new(),
+        });
+    }
+    if let Some(url) = record.url.as_ref() {
+        entities.push(crate::store::ExtractedEntity {
+            text: url.clone(),
+            normalized_name: normalize_keyword_text(url),
+            entity_type: "url".to_string(),
+            confidence: 0.9,
+            source: "url".to_string(),
+            evidence: vec!["record url metadata".to_string()],
+            aliases: extract_domain(url).into_iter().collect(),
+            related_entity_ids: Vec::new(),
+        });
+    }
+    entities
+}
+
+fn derive_action_items(record: &MemoryRecord) -> Vec<crate::store::MemoryActionItem> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut items = Vec::new();
+    for decision in dedup_strings(record.decisions.clone()) {
+        items.push(build_action_item(
+            "decision", decision, "observed", 0.8, &record.id, now,
+        ));
+    }
+    for err in dedup_strings(record.errors.clone()) {
+        items.push(build_action_item(
+            "error", err, "observed", 0.85, &record.id, now,
+        ));
+    }
+    for blocker in dedup_strings(record.blockers.clone()) {
+        items.push(build_action_item(
+            "blocker", blocker, "inferred", 0.68, &record.id, now,
+        ));
+    }
+    for todo in dedup_strings(record.todos.clone()) {
+        items.push(build_action_item(
+            "todo", todo, "observed", 0.78, &record.id, now,
+        ));
+    }
+    for todo in dedup_strings(record.next_steps.clone()) {
+        items.push(build_action_item(
+            "todo", todo, "inferred", 0.66, &record.id, now,
+        ));
+    }
+    for result in dedup_strings(record.results.clone()) {
+        items.push(build_action_item(
+            "result", result, "observed", 0.74, &record.id, now,
+        ));
+    }
+    items
+}
+
+fn build_action_item(
+    kind: &str,
+    text: String,
+    status: &str,
+    confidence: f32,
+    memory_id: &str,
+    now: i64,
+) -> crate::store::MemoryActionItem {
+    crate::store::MemoryActionItem {
+        kind: kind.to_string(),
+        text: trim_chars(text.trim(), 220),
+        confidence: confidence.clamp(0.0, 1.0),
+        status: status.to_string(),
+        evidence: vec![format!("source_memory={memory_id}")],
+        source_memory_id: memory_id.to_string(),
+        related_entities: Vec::new(),
+        related_files: Vec::new(),
+        related_urls: Vec::new(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn estimate_topic_confidence(record: &MemoryRecord) -> f32 {
+    let mut score: f32 = 0.18;
+    if !record.topic.trim().is_empty() && record.topic != "unknown" {
+        score += 0.22;
+    }
+    if !record.project.trim().is_empty() {
+        score += 0.20;
+    }
+    if record.url.is_some() {
+        score += 0.14;
+    }
+    if !record.files_touched.is_empty() {
+        score += 0.18;
+    }
+    score.clamp(0.0, 1.0)
+}
+
+fn estimate_workflow_confidence(record: &MemoryRecord) -> f32 {
+    let mut score: f32 = 0.2;
+    if !record.workflow.trim().is_empty() && record.workflow != "unknown" {
+        score += 0.22;
+    }
+    score += record.intent_analysis.confidence * 0.36;
+    if !record.commands.is_empty() || !record.errors.is_empty() {
+        score += 0.18;
+    }
+    score.clamp(0.0, 1.0)
+}
+
+fn estimate_project_confidence(record: &MemoryRecord) -> f32 {
+    let mut score: f32 = 0.12;
+    if !record.project.trim().is_empty() {
+        score += 0.30;
+    }
+    if !record.files_touched.is_empty() {
+        score += 0.22;
+    }
+    if record.url.is_some() {
+        score += 0.14;
+    }
+    if !record.related_projects.is_empty() {
+        score += 0.14;
+    }
+    score.clamp(0.0, 1.0)
+}
+
+fn estimate_specificity_score(record: &MemoryRecord) -> f32 {
+    let context_tokens = normalize_keyword_text(&record.memory_context)
+        .split_whitespace()
+        .count()
+        .min(120) as f32
+        / 120.0;
+    let artifact_count = (record.files_touched.len()
+        + record.entities.len()
+        + record.decisions.len()
+        + record.errors.len()
+        + record.next_steps.len()) as f32;
+    let artifact_score = (artifact_count / 16.0).clamp(0.0, 1.0);
+    (context_tokens * 0.55 + artifact_score * 0.45).clamp(0.0, 1.0)
+}
+
+fn estimate_entity_score(record: &MemoryRecord) -> f32 {
+    let count = (record.entities.len()
+        + record.files_touched.len()
+        + usize::from(record.url.is_some())) as f32;
+    (count / 12.0).clamp(0.0, 1.0)
+}
+
+fn estimate_importance_score(record: &MemoryRecord) -> f32 {
+    let mut score: f32 = 0.25;
+    if !record.errors.is_empty() {
+        score += 0.22;
+    }
+    if !record.decisions.is_empty() {
+        score += 0.2;
+    }
+    if !record.next_steps.is_empty() || !record.todos.is_empty() {
+        score += 0.18;
+    }
+    if !record.project.trim().is_empty() {
+        score += 0.14;
+    }
+    score.clamp(0.0, 1.0)
+}
+
+fn estimate_agent_usefulness_score(record: &MemoryRecord) -> f32 {
+    let mut score: f32 = 0.20;
+    if !record.memory_context.trim().is_empty() {
+        score += 0.22;
+    }
+    score += estimate_specificity_score(record) * 0.24;
+    score += estimate_entity_score(record) * 0.18;
+    score += record.intent_analysis.confidence * 0.16;
+    score += record.evidence_confidence * 0.10;
+    score -= record.noise_score.clamp(0.0, 1.0) * 0.14;
+    score.clamp(0.0, 1.0)
+}
+
+fn quality_storage_outcome(record: &MemoryRecord) -> String {
+    let is_primary = record.specificity_score >= DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN
+        && record.intent_score >= DEFAULT_PRIMARY_MEMORY_INTENT_MIN
+        && record.agent_usefulness_score >= DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN
+        && record.ocr_noise_score <= DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX;
+    if is_primary {
+        "primary_memory_card".to_string()
+    } else if !record.dedup_fingerprint.trim().is_empty()
+        && record.specificity_score < DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN
+    {
+        "merge_into_existing_memory".to_string()
+    } else if !record.related_memory_ids.is_empty()
+        && record.retrieval_value_score < 0.35
+        && record.evidence_confidence < 0.50
+    {
+        "discard_duplicate".to_string()
+    } else if record.agent_usefulness_score >= 0.45 {
+        "enriched_memory_card".to_string()
+    } else if record.evidence_confidence >= 0.45 {
+        "low_quality_evidence".to_string()
+    } else {
+        "defer_until_more_context".to_string()
+    }
+}
+
+fn quality_gate_reason(record: &MemoryRecord) -> String {
+    format!(
+        "specificity={:.2}, intent={:.2}, entities={:.2}, usefulness={:.2}, evidence={:.2}, noise={:.2}",
+        record.specificity_score,
+        record.intent_score,
+        record.entity_score,
+        record.agent_usefulness_score,
+        record.evidence_confidence,
+        record.ocr_noise_score
+    )
+}
+
+fn basename(path: &str) -> String {
+    path.replace('\\', "/")
+        .rsplit('/')
+        .find(|segment| !segment.trim().is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
+fn dedup_strings(values: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = trimmed.to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
+
 fn is_indexable_memory_record(record: &MemoryRecord) -> bool {
     let text_signal = format!(
-        "{} {} {}",
-        record.clean_text, record.snippet, record.lexical_shadow
+        "{} {} {} {}",
+        record.clean_text, record.snippet, record.memory_context, record.lexical_shadow
     );
     let alnum = text_signal
         .chars()
@@ -4122,6 +5453,7 @@ async fn open_all_tables(
         Table,
         Table,
         Table,
+        Table,
     ),
     lancedb::Error,
 > {
@@ -4224,6 +5556,13 @@ async fn open_all_tables(
         Arc::new(entity_alias_schema()),
     )
     .await?;
+    let knowledge_pages = open_or_create_named_table(
+        &conn,
+        &names,
+        KNOWLEDGE_PAGES_TABLE,
+        Arc::new(knowledge_page_schema()),
+    )
+    .await?;
 
     Ok((
         table,
@@ -4239,6 +5578,7 @@ async fn open_all_tables(
         context_packs,
         context_deltas,
         entity_aliases,
+        knowledge_pages,
     ))
 }
 
@@ -4315,6 +5655,162 @@ async fn ensure_memory_schema_columns(table: &Table) -> Result<(), lancedb::Erro
     }
     if !existing.contains("last_accessed_at") {
         transforms.push(("last_accessed_at".to_string(), "timestamp".to_string()));
+    }
+    if !existing.contains("timestamp_start") {
+        transforms.push(("timestamp_start".to_string(), "timestamp".to_string()));
+    }
+    if !existing.contains("timestamp_end") {
+        transforms.push(("timestamp_end".to_string(), "timestamp".to_string()));
+    }
+    if !existing.contains("source_type") {
+        transforms.push(("source_type".to_string(), "'screen'".to_string()));
+    }
+    if !existing.contains("topic") {
+        transforms.push(("topic".to_string(), "'unknown'".to_string()));
+    }
+    if !existing.contains("workflow") {
+        transforms.push(("workflow".to_string(), "'unknown'".to_string()));
+    }
+    if !existing.contains("user_intent") {
+        transforms.push(("user_intent".to_string(), "''".to_string()));
+    }
+    if !existing.contains("intent_analysis") {
+        transforms.push(("intent_analysis".to_string(), "'{}'".to_string()));
+    }
+    if !existing.contains("memory_context") {
+        transforms.push(("memory_context".to_string(), "display_summary".to_string()));
+    }
+    if !existing.contains("commands") {
+        transforms.push(("commands".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("blockers") {
+        transforms.push(("blockers".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("todos") {
+        transforms.push(("todos".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("open_questions") {
+        transforms.push(("open_questions".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("results") {
+        transforms.push(("results".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("related_tools") {
+        transforms.push(("related_tools".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("related_agents") {
+        transforms.push(("related_agents".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("related_projects") {
+        transforms.push(("related_projects".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("raw_evidence") {
+        transforms.push(("raw_evidence".to_string(), "'{}'".to_string()));
+    }
+    if !existing.contains("search_aliases") {
+        transforms.push(("search_aliases".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("related_memory_ids") {
+        transforms.push(("related_memory_ids".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("graph_node_ids") {
+        transforms.push(("graph_node_ids".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("graph_edge_ids") {
+        transforms.push(("graph_edge_ids".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("project_confidence") {
+        transforms.push((
+            "project_confidence".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("topic_confidence") {
+        transforms.push((
+            "topic_confidence".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("workflow_confidence") {
+        transforms.push((
+            "workflow_confidence".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("project_evidence") {
+        transforms.push(("project_evidence".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("related_project_ids") {
+        transforms.push(("related_project_ids".to_string(), "[]".to_string()));
+    }
+    if !existing.contains("evidence_confidence") {
+        transforms.push((
+            "evidence_confidence".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("confidence_score") {
+        transforms.push((
+            "confidence_score".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("importance_score") {
+        transforms.push((
+            "importance_score".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("specificity_score") {
+        transforms.push((
+            "specificity_score".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("intent_score") {
+        transforms.push(("intent_score".to_string(), "CAST(0.0 AS FLOAT)".to_string()));
+    }
+    if !existing.contains("entity_score") {
+        transforms.push(("entity_score".to_string(), "CAST(0.0 AS FLOAT)".to_string()));
+    }
+    if !existing.contains("agent_usefulness_score") {
+        transforms.push((
+            "agent_usefulness_score".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("ocr_noise_score") {
+        transforms.push(("ocr_noise_score".to_string(), "noise_score".to_string()));
+    }
+    if !existing.contains("graph_readiness_score") {
+        transforms.push((
+            "graph_readiness_score".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("retrieval_value_score") {
+        transforms.push((
+            "retrieval_value_score".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
+    }
+    if !existing.contains("storage_outcome") {
+        transforms.push((
+            "storage_outcome".to_string(),
+            "'enriched_memory_card'".to_string(),
+        ));
+    }
+    if !existing.contains("quality_gate_reason") {
+        transforms.push(("quality_gate_reason".to_string(), "''".to_string()));
+    }
+    if !existing.contains("extracted_entities_structured") {
+        transforms.push((
+            "extracted_entities_structured".to_string(),
+            "'[]'".to_string(),
+        ));
+    }
+    if !existing.contains("action_items") {
+        transforms.push(("action_items".to_string(), "'[]'".to_string()));
     }
     if !existing.contains("anchor_coverage_score") {
         transforms.push((

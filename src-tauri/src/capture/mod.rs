@@ -353,7 +353,17 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let vlm_analysis: Option<String> = None;
 
         let (final_snippet, summary_source) = if let Some(ref mem) = structured_memory {
-            (mem.summary.clone(), "llm".to_string())
+            let candidate = if !mem.memory_context.trim().is_empty() {
+                mem.memory_context
+                    .split_terminator(['.', '!', '?'])
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            } else {
+                mem.topic.trim().to_string()
+            };
+            (candidate, "llm".to_string())
         } else if let Some(ref vlm_text) = vlm_analysis {
             (vlm_text.clone(), "vlm".to_string())
         } else {
@@ -384,7 +394,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         }
         let internal_context = structured_memory
             .as_ref()
-            .map(|memory| memory.detail.trim().to_string())
+            .map(|memory| memory.memory_context.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| final_snippet.clone());
 
@@ -555,11 +565,103 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             embedding: text_embedding,
             image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
             screenshot_path: None,
-            url,
+            url: url.clone(),
             snippet_embedding,
             support_embedding,
             decay_score: 1.0,
             last_accessed_at: 0,
+            timestamp_start: now.timestamp_millis(),
+            timestamp_end: now.timestamp_millis(),
+            source_type: if url.is_some() {
+                "browser".to_string()
+            } else {
+                "screen".to_string()
+            },
+            topic: structured_memory
+                .as_ref()
+                .map(|m| {
+                    if m.topic.trim().is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        m.topic.clone()
+                    }
+                })
+                .unwrap_or_else(|| "unknown".to_string()),
+            workflow: structured_memory
+                .as_ref()
+                .map(|m| {
+                    if m.workflow.trim().is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        m.workflow.clone()
+                    }
+                })
+                .unwrap_or_else(|| "unknown".to_string()),
+            user_intent: structured_memory
+                .as_ref()
+                .map(|m| {
+                    if m.user_intent.trim().is_empty() {
+                        m.activity_type.clone()
+                    } else {
+                        m.user_intent.clone()
+                    }
+                })
+                .unwrap_or_default(),
+            intent_analysis: crate::store::IntentAnalysis::default(),
+            memory_context: structured_memory
+                .as_ref()
+                .map(|m| m.memory_context.clone())
+                .unwrap_or_else(|| display_summary.clone()),
+            commands: structured_memory
+                .as_ref()
+                .map(|m| m.commands.clone())
+                .unwrap_or_default(),
+            blockers: structured_memory
+                .as_ref()
+                .map(|m| m.blockers.clone())
+                .unwrap_or_default(),
+            todos: structured_memory
+                .as_ref()
+                .map(|m| m.todos.clone())
+                .unwrap_or_default(),
+            open_questions: structured_memory
+                .as_ref()
+                .map(|m| m.open_questions.clone())
+                .unwrap_or_default(),
+            results: structured_memory
+                .as_ref()
+                .map(|m| m.results.clone())
+                .unwrap_or_default(),
+            related_tools: Vec::new(),
+            related_agents: Vec::new(),
+            related_projects: Vec::new(),
+            raw_evidence: String::new(),
+            search_aliases: structured_memory
+                .as_ref()
+                .map(|m| m.search_aliases.clone())
+                .unwrap_or_default(),
+            related_memory_ids: Vec::new(),
+            graph_node_ids: Vec::new(),
+            graph_edge_ids: Vec::new(),
+            project_confidence: 0.0,
+            topic_confidence: 0.0,
+            workflow_confidence: 0.0,
+            project_evidence: Vec::new(),
+            related_project_ids: Vec::new(),
+            evidence_confidence: ocr_result.confidence,
+            confidence_score: 0.0,
+            importance_score: 0.0,
+            specificity_score: 0.0,
+            intent_score: 0.0,
+            entity_score: 0.0,
+            agent_usefulness_score: 0.0,
+            ocr_noise_score: noise_score,
+            graph_readiness_score: 0.0,
+            retrieval_value_score: 0.0,
+            storage_outcome: String::new(),
+            quality_gate_reason: String::new(),
+            extracted_entities_structured: Vec::new(),
+            action_items: Vec::new(),
 
             // V2 Fields
             schema_version: 2,
@@ -1341,6 +1443,95 @@ pub(crate) async fn merge_memory_records_with_policy(
         support_embedding: merged_support_embedding,
         decay_score: existing.decay_score.max(incoming.decay_score),
         last_accessed_at: existing.last_accessed_at.max(incoming.last_accessed_at),
+        timestamp_start: if existing.timestamp_start > 0 && incoming.timestamp_start > 0 {
+            existing.timestamp_start.min(incoming.timestamp_start)
+        } else {
+            existing.timestamp.min(incoming.timestamp)
+        },
+        timestamp_end: if existing.timestamp_end > 0 && incoming.timestamp_end > 0 {
+            existing.timestamp_end.max(incoming.timestamp_end)
+        } else {
+            existing.timestamp.max(incoming.timestamp)
+        },
+        source_type: prefer_non_empty(&incoming.source_type, &existing.source_type),
+        topic: prefer_non_empty(&incoming.topic, &existing.topic),
+        workflow: prefer_non_empty(&incoming.workflow, &existing.workflow),
+        user_intent: prefer_non_empty(&incoming.user_intent, &existing.user_intent),
+        intent_analysis: if incoming.intent_analysis.confidence
+            >= existing.intent_analysis.confidence
+        {
+            incoming.intent_analysis.clone()
+        } else {
+            existing.intent_analysis.clone()
+        },
+        memory_context: prefer_non_empty(&incoming.memory_context, &existing.memory_context),
+        commands: merge_string_lists(&existing.commands, &incoming.commands),
+        blockers: merge_string_lists(&existing.blockers, &incoming.blockers),
+        todos: merge_string_lists(&existing.todos, &incoming.todos),
+        open_questions: merge_string_lists(&existing.open_questions, &incoming.open_questions),
+        results: merge_string_lists(&existing.results, &incoming.results),
+        related_tools: merge_string_lists(&existing.related_tools, &incoming.related_tools),
+        related_agents: merge_string_lists(&existing.related_agents, &incoming.related_agents),
+        related_projects: merge_string_lists(
+            &existing.related_projects,
+            &incoming.related_projects,
+        ),
+        raw_evidence: prefer_non_empty(&incoming.raw_evidence, &existing.raw_evidence),
+        search_aliases: merge_string_lists(&existing.search_aliases, &incoming.search_aliases),
+        related_memory_ids: merge_string_lists(
+            &existing.related_memory_ids,
+            &incoming.related_memory_ids,
+        ),
+        graph_node_ids: merge_string_lists(&existing.graph_node_ids, &incoming.graph_node_ids),
+        graph_edge_ids: merge_string_lists(&existing.graph_edge_ids, &incoming.graph_edge_ids),
+        project_confidence: existing.project_confidence.max(incoming.project_confidence),
+        topic_confidence: existing.topic_confidence.max(incoming.topic_confidence),
+        workflow_confidence: existing
+            .workflow_confidence
+            .max(incoming.workflow_confidence),
+        project_evidence: merge_string_lists(
+            &existing.project_evidence,
+            &incoming.project_evidence,
+        ),
+        related_project_ids: merge_string_lists(
+            &existing.related_project_ids,
+            &incoming.related_project_ids,
+        ),
+        evidence_confidence: existing
+            .evidence_confidence
+            .max(incoming.evidence_confidence),
+        confidence_score: existing.confidence_score.max(incoming.confidence_score),
+        importance_score: existing.importance_score.max(incoming.importance_score),
+        specificity_score: existing.specificity_score.max(incoming.specificity_score),
+        intent_score: existing.intent_score.max(incoming.intent_score),
+        entity_score: existing.entity_score.max(incoming.entity_score),
+        agent_usefulness_score: existing
+            .agent_usefulness_score
+            .max(incoming.agent_usefulness_score),
+        ocr_noise_score: existing.ocr_noise_score.max(incoming.ocr_noise_score),
+        graph_readiness_score: existing
+            .graph_readiness_score
+            .max(incoming.graph_readiness_score),
+        retrieval_value_score: existing
+            .retrieval_value_score
+            .max(incoming.retrieval_value_score),
+        storage_outcome: prefer_non_empty(&incoming.storage_outcome, &existing.storage_outcome),
+        quality_gate_reason: prefer_non_empty(
+            &incoming.quality_gate_reason,
+            &existing.quality_gate_reason,
+        ),
+        extracted_entities_structured: if incoming.extracted_entities_structured.len()
+            >= existing.extracted_entities_structured.len()
+        {
+            incoming.extracted_entities_structured.clone()
+        } else {
+            existing.extracted_entities_structured.clone()
+        },
+        action_items: if incoming.action_items.len() >= existing.action_items.len() {
+            incoming.action_items.clone()
+        } else {
+            existing.action_items.clone()
+        },
         schema_version,
         activity_type,
         files_touched,

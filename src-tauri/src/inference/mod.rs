@@ -387,10 +387,14 @@ pub struct StructuredMemoryExtraction {
     pub activity_type: String,
     #[serde(default)]
     pub project: String,
+    #[serde(default, alias = "summary")]
+    pub topic: String,
+    #[serde(default, alias = "detail")]
+    pub memory_context: String,
     #[serde(default)]
-    pub summary: String,
+    pub workflow: String,
     #[serde(default)]
-    pub detail: String,
+    pub user_intent: String,
     #[serde(default)]
     pub files_touched: Vec<String>,
     #[serde(default)]
@@ -409,6 +413,18 @@ pub struct StructuredMemoryExtraction {
     pub errors: Vec<String>,
     #[serde(default)]
     pub next_steps: Vec<String>,
+    #[serde(default)]
+    pub commands: Vec<String>,
+    #[serde(default)]
+    pub blockers: Vec<String>,
+    #[serde(default)]
+    pub todos: Vec<String>,
+    #[serde(default)]
+    pub open_questions: Vec<String>,
+    #[serde(default)]
+    pub results: Vec<String>,
+    #[serde(default)]
+    pub search_aliases: Vec<String>,
     #[serde(default)]
     pub confidence: f32,
     #[serde(default)]
@@ -765,18 +781,19 @@ Rules:\n\
             - Output ONLY raw JSON.\n\
             - No markdown formatting.\n\
             - Do not copy OCR verbatim.\n\
-            - Summarize into privacy-safe structured memory.\n\
-            - summary must be max 120 chars and must not be app-only.\n\
-            - detail must be 2-4 useful sentences with concrete artifacts when available.\n\
+            - Build one rich memory_context narrative for AI-agent continuation.\n\
+            - memory_context must be specific, evidence-aware, and useful later.\n\
             - If uncertain, lower confidence instead of inventing details.\n\
             \n\
             SCHEMA:\n\
             {{\n\
               \"session_key\": \"YYYY-MM-DD_HH\",\n\
-              \"activity_type\": \"code_edit|git_op|search|review|config|test|build|writing|research|debugging|unknown\",\n\
+              \"activity_type\": \"coding|debugging|reviewing_agent_output|researching|planning|writing|studying|watching_or_listening|configuring_tool|testing_workflow|reading_results|organizing_information|communication|job_or_career_work|travel_or_logistics|entertainment_or_personal_interest|unknown\",\n\
               \"project\": \"\",\n\
-              \"summary\": \"\",\n\
-              \"detail\": \"\",\n\
+              \"topic\": \"\",\n\
+              \"workflow\": \"\",\n\
+              \"user_intent\": \"\",\n\
+              \"memory_context\": \"\",\n\
               \"files_touched\": [],\n\
               \"symbols_changed\": [],\n\
               \"git_stats\": {{ \"added\": 0, \"removed\": 0, \"commits\": 0 }},\n\
@@ -786,6 +803,12 @@ Rules:\n\
               \"decisions\": [],\n\
               \"errors\": [],\n\
               \"next_steps\": [],\n\
+              \"commands\": [],\n\
+              \"blockers\": [],\n\
+              \"todos\": [],\n\
+              \"open_questions\": [],\n\
+              \"results\": [],\n\
+              \"search_aliases\": [],\n\
               \"confidence\": 0.0,\n\
               \"dedup_fingerprint\": \"\"\n\
             }}"

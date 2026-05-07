@@ -6,7 +6,8 @@ use crate::store::{
     ContextPackItemReason, ContextRuntimeStatus, ContextTask, DecisionLedgerEntry, DecisionSummary,
     EdgeType, EntityAliasRecord, EntityRef, ErrorEvent, EvidenceRef, ExcludedContextItem,
     FailureSummary, GraphEdge, GraphNode, HealthStatus, IssueSummary, MemoryRecord, NodeType,
-    PrivacyClass, ProjectContext, RelevantFile, SearchResult, WorkingState,
+    PrivacyClass, ProjectContext, RelevantFile, SearchResult, WorkingState, KnowledgePage,
+    KnowledgePageType, KnowledgeStability,
 };
 use crate::AppState;
 use once_cell::sync::Lazy;
@@ -170,6 +171,11 @@ pub async fn sync_memory_record(
             .upsert_project_contexts(std::slice::from_ref(&project_context))
             .await
             .map_err(|e| e.to_string())?;
+        if let Ok(pages) = compile_knowledge_pages(state, Some(project)).await {
+            let _ = state.store.upsert_knowledge_pages(&pages).await;
+        }
+    } else if let Ok(pages) = compile_knowledge_pages(state, None).await {
+        let _ = state.store.upsert_knowledge_pages(&pages).await;
     }
 
     // Proactive delta push for active subscriptions
@@ -614,6 +620,7 @@ pub async fn health_check(state: &AppState) -> Result<HealthStatus, String> {
         "context_packs".to_string(),
         "context_deltas".to_string(),
         "entity_aliases".to_string(),
+        "knowledge_pages".to_string(),
     ];
     let last_pack = state
         .store
@@ -818,12 +825,18 @@ async fn build_activity_event(
         branch: detect_branch_for_record(record),
         activity_type: infer_activity_type(record),
         title: build_event_title(record),
-        summary: if !record.display_summary.trim().is_empty() {
+        summary: if !record.memory_context.trim().is_empty() {
+            trim_chars(&record.memory_context, 280)
+        } else if !record.display_summary.trim().is_empty() {
             record.display_summary.clone()
         } else {
             record.snippet.clone()
         },
-        intent: record.next_steps.first().cloned(),
+        intent: if !record.user_intent.trim().is_empty() {
+            Some(record.user_intent.clone())
+        } else {
+            record.next_steps.first().cloned()
+        },
         outcome: normalize_outcome(&record.outcome),
         entities,
         source_memory_ids: vec![record.id.clone()],
@@ -897,6 +910,462 @@ async fn rebuild_project_context(
         privacy_class: PrivacyClass::Project,
         updated_at: chrono::Utc::now().timestamp_millis(),
     })
+}
+
+fn compact_claim_title(prefix: &str, value: &str) -> String {
+    let trimmed = value.trim().trim_end_matches('.');
+    if trimmed.is_empty() {
+        return prefix.to_string();
+    }
+    let normalized = if trimmed.len() > 120 {
+        format!("{}...", &trimmed[..120])
+    } else {
+        trimmed.to_string()
+    };
+    format!("{prefix}: {normalized}")
+}
+
+fn summarize_page_context(events: &[ActivityEvent], fallback: &str) -> String {
+    let mut parts = Vec::new();
+    for event in events.iter().take(3) {
+        if !event.summary.trim().is_empty() {
+            parts.push(event.summary.trim().to_string());
+        }
+    }
+    if parts.is_empty() {
+        fallback.to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
+fn gather_page_entities(events: &[ActivityEvent]) -> Vec<String> {
+    let mut entities = Vec::new();
+    let mut seen = HashSet::new();
+    for event in events {
+        for entity in &event.entities {
+            let normalized = normalize_alias_key(&entity.canonical_name);
+            if normalized.is_empty() || !seen.insert(normalized) {
+                continue;
+            }
+            entities.push(entity.canonical_name.clone());
+            if entities.len() >= 12 {
+                return entities;
+            }
+        }
+    }
+    entities
+}
+
+fn collect_supporting_memory_ids(events: &[ActivityEvent]) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut seen = HashSet::new();
+    for event in events {
+        if seen.insert(event.memory_id.clone()) {
+            ids.push(event.memory_id.clone());
+        }
+        for memory_id in &event.source_memory_ids {
+            if seen.insert(memory_id.clone()) {
+                ids.push(memory_id.clone());
+            }
+        }
+    }
+    ids
+}
+
+fn collect_supporting_evidence_ids(events: &[ActivityEvent]) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut seen = HashSet::new();
+    for event in events {
+        for evidence in &event.evidence {
+            if seen.insert(evidence.id.clone()) {
+                ids.push(evidence.id.clone());
+            }
+        }
+    }
+    ids
+}
+
+fn average_event_confidence(events: &[ActivityEvent]) -> f32 {
+    if events.is_empty() {
+        return 0.0;
+    }
+    let sum: f32 = events.iter().map(|event| event.confidence).sum();
+    (sum / events.len() as f32).clamp(0.0, 1.0)
+}
+
+fn page_stability_from_support(support_count: usize) -> KnowledgeStability {
+    if support_count >= 4 {
+        KnowledgeStability::Stable
+    } else {
+        KnowledgeStability::Emerging
+    }
+}
+
+pub async fn compile_knowledge_pages(
+    state: &AppState,
+    project_filter: Option<&str>,
+) -> Result<Vec<KnowledgePage>, String> {
+    let events = state
+        .store
+        .list_activity_events(260, project_filter)
+        .await
+        .map_err(|e| e.to_string())?;
+    if events.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut pages: Vec<KnowledgePage> = Vec::new();
+
+    let mut by_project: HashMap<String, Vec<ActivityEvent>> = HashMap::new();
+    for event in &events {
+        if let Some(project) = event.project.as_deref() {
+            by_project.entry(project.to_string()).or_default().push(event.clone());
+        }
+    }
+    for (project, project_events) in by_project {
+        let first_seen = project_events
+            .iter()
+            .map(|event| event.start_time)
+            .min()
+            .unwrap_or_default();
+        let last_updated = project_events
+            .iter()
+            .map(|event| event.end_time)
+            .max()
+            .unwrap_or(first_seen);
+        let context = summarize_page_context(
+            &project_events,
+            &format!("Recent activity for project {}.", project),
+        );
+        let page = KnowledgePage {
+            page_id: format!("kp:project:{}", normalize_alias_key(&project)),
+            page_type: KnowledgePageType::ProjectPage,
+            title: compact_claim_title("Project Focus", &project),
+            page_context: context,
+            canonical_entities: gather_page_entities(&project_events),
+            supporting_memory_ids: collect_supporting_memory_ids(&project_events),
+            supporting_evidence_ids: collect_supporting_evidence_ids(&project_events),
+            related_page_ids: Vec::new(),
+            confidence_score: average_event_confidence(&project_events),
+            stability: page_stability_from_support(project_events.len()),
+            first_seen,
+            last_updated,
+            project: Some(project),
+            topic: None,
+            workflow: None,
+        };
+        pages.push(page);
+    }
+
+    let mut by_decision: HashMap<String, Vec<ActivityEvent>> = HashMap::new();
+    for event in &events {
+        for decision in &event.decisions {
+            let key = normalize_alias_key(decision);
+            if key.is_empty() {
+                continue;
+            }
+            by_decision.entry(key).or_default().push(event.clone());
+        }
+    }
+    for (decision_key, decision_events) in by_decision {
+        let sample = decision_events
+            .first()
+            .and_then(|event| event.decisions.first())
+            .cloned()
+            .unwrap_or_else(|| decision_key.clone());
+        let first_seen = decision_events
+            .iter()
+            .map(|event| event.start_time)
+            .min()
+            .unwrap_or_default();
+        let last_updated = decision_events
+            .iter()
+            .map(|event| event.end_time)
+            .max()
+            .unwrap_or(first_seen);
+        pages.push(KnowledgePage {
+            page_id: format!("kp:decision:{}", decision_key),
+            page_type: KnowledgePageType::DecisionPage,
+            title: compact_claim_title("Decision", &sample),
+            page_context: summarize_page_context(&decision_events, &sample),
+            canonical_entities: gather_page_entities(&decision_events),
+            supporting_memory_ids: collect_supporting_memory_ids(&decision_events),
+            supporting_evidence_ids: collect_supporting_evidence_ids(&decision_events),
+            related_page_ids: Vec::new(),
+            confidence_score: average_event_confidence(&decision_events),
+            stability: page_stability_from_support(decision_events.len()),
+            first_seen,
+            last_updated,
+            project: decision_events.first().and_then(|event| event.project.clone()),
+            topic: None,
+            workflow: None,
+        });
+    }
+
+    let mut by_breakthrough: HashMap<String, Vec<ActivityEvent>> = HashMap::new();
+    for event in &events {
+        let summary_lower = event.summary.to_ascii_lowercase();
+        let looks_breakthrough = summary_lower.contains("fixed")
+            || summary_lower.contains("resolved")
+            || summary_lower.contains("solved")
+            || summary_lower.contains("working")
+            || event.outcome.eq_ignore_ascii_case("succeeded");
+        if !looks_breakthrough {
+            continue;
+        }
+        let key = normalize_alias_key(&event.title);
+        if key.is_empty() {
+            continue;
+        }
+        by_breakthrough.entry(key).or_default().push(event.clone());
+    }
+    for (breakthrough_key, breakthrough_events) in by_breakthrough {
+        let sample = breakthrough_events
+            .first()
+            .map(|event| event.title.clone())
+            .unwrap_or_else(|| breakthrough_key.clone());
+        let first_seen = breakthrough_events
+            .iter()
+            .map(|event| event.start_time)
+            .min()
+            .unwrap_or_default();
+        let last_updated = breakthrough_events
+            .iter()
+            .map(|event| event.end_time)
+            .max()
+            .unwrap_or(first_seen);
+        pages.push(KnowledgePage {
+            page_id: format!("kp:breakthrough:{}", breakthrough_key),
+            page_type: KnowledgePageType::BreakthroughPage,
+            title: compact_claim_title("Breakthrough", &sample),
+            page_context: summarize_page_context(&breakthrough_events, &sample),
+            canonical_entities: gather_page_entities(&breakthrough_events),
+            supporting_memory_ids: collect_supporting_memory_ids(&breakthrough_events),
+            supporting_evidence_ids: collect_supporting_evidence_ids(&breakthrough_events),
+            related_page_ids: Vec::new(),
+            confidence_score: average_event_confidence(&breakthrough_events),
+            stability: page_stability_from_support(breakthrough_events.len()),
+            first_seen,
+            last_updated,
+            project: breakthrough_events.first().and_then(|event| event.project.clone()),
+            topic: None,
+            workflow: None,
+        });
+    }
+
+    let mut by_topic: HashMap<String, Vec<ActivityEvent>> = HashMap::new();
+    for event in &events {
+        for tag in &event.tags {
+            let key = normalize_alias_key(tag);
+            if key.is_empty() {
+                continue;
+            }
+            by_topic.entry(key).or_default().push(event.clone());
+        }
+    }
+    for (topic_key, topic_events) in by_topic {
+        if topic_events.len() < 2 {
+            continue;
+        }
+        let sample = topic_events
+            .first()
+            .and_then(|event| event.tags.first())
+            .cloned()
+            .unwrap_or_else(|| topic_key.clone());
+        let first_seen = topic_events
+            .iter()
+            .map(|event| event.start_time)
+            .min()
+            .unwrap_or_default();
+        let last_updated = topic_events
+            .iter()
+            .map(|event| event.end_time)
+            .max()
+            .unwrap_or(first_seen);
+        pages.push(KnowledgePage {
+            page_id: format!("kp:topic:{}", topic_key),
+            page_type: KnowledgePageType::TopicPage,
+            title: compact_claim_title("Topic Pattern", &sample),
+            page_context: summarize_page_context(&topic_events, &sample),
+            canonical_entities: gather_page_entities(&topic_events),
+            supporting_memory_ids: collect_supporting_memory_ids(&topic_events),
+            supporting_evidence_ids: collect_supporting_evidence_ids(&topic_events),
+            related_page_ids: Vec::new(),
+            confidence_score: average_event_confidence(&topic_events),
+            stability: page_stability_from_support(topic_events.len()),
+            first_seen,
+            last_updated,
+            project: topic_events.first().and_then(|event| event.project.clone()),
+            topic: Some(sample),
+            workflow: None,
+        });
+    }
+
+    let mut claim_groups: HashMap<String, Vec<ActivityEvent>> = HashMap::new();
+    for event in &events {
+        let claim = event
+            .summary
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let key = normalize_alias_key(&claim);
+        if key.split('_').count() < 4 {
+            continue;
+        }
+        claim_groups.entry(key).or_default().push(event.clone());
+    }
+    for (claim_key, claim_events) in claim_groups {
+        if claim_events.len() < 2 {
+            continue;
+        }
+        let sample = claim_events
+            .first()
+            .map(|event| event.summary.clone())
+            .unwrap_or_else(|| claim_key.clone());
+        let first_seen = claim_events
+            .iter()
+            .map(|event| event.start_time)
+            .min()
+            .unwrap_or_default();
+        let last_updated = claim_events
+            .iter()
+            .map(|event| event.end_time)
+            .max()
+            .unwrap_or(first_seen);
+        pages.push(KnowledgePage {
+            page_id: format!("kp:claim:{}", claim_key),
+            page_type: KnowledgePageType::ClaimPage,
+            title: compact_claim_title("Claim", &sample),
+            page_context: summarize_page_context(&claim_events, &sample),
+            canonical_entities: gather_page_entities(&claim_events),
+            supporting_memory_ids: collect_supporting_memory_ids(&claim_events),
+            supporting_evidence_ids: collect_supporting_evidence_ids(&claim_events),
+            related_page_ids: Vec::new(),
+            confidence_score: average_event_confidence(&claim_events),
+            stability: page_stability_from_support(claim_events.len()),
+            first_seen,
+            last_updated,
+            project: claim_events.first().and_then(|event| event.project.clone()),
+            topic: None,
+            workflow: None,
+        });
+    }
+
+    // Lightweight contradiction detection: opposite recommendation language for same project.
+    let mut contradiction_pages: Vec<KnowledgePage> = Vec::new();
+    let decisions = pages
+        .iter()
+        .filter(|page| page.page_type == KnowledgePageType::DecisionPage)
+        .cloned()
+        .collect::<Vec<_>>();
+    for left in &decisions {
+        for right in &decisions {
+            if left.page_id >= right.page_id {
+                continue;
+            }
+            if left.project != right.project {
+                continue;
+            }
+            let l = left.title.to_ascii_lowercase();
+            let r = right.title.to_ascii_lowercase();
+            let opposite = (l.contains("avoid") && !r.contains("avoid"))
+                || (r.contains("avoid") && !l.contains("avoid"))
+                || (l.contains("not ") && !r.contains("not "))
+                || (r.contains("not ") && !l.contains("not "));
+            if !opposite {
+                continue;
+            }
+            contradiction_pages.push(KnowledgePage {
+                page_id: format!(
+                    "kp:contradiction:{}:{}",
+                    normalize_alias_key(&left.page_id),
+                    normalize_alias_key(&right.page_id)
+                ),
+                page_type: KnowledgePageType::ContradictionPage,
+                title: compact_claim_title("Contradiction", &format!("{} vs {}", left.title, right.title)),
+                page_context: format!(
+                    "Newer evidence suggests a contradiction between '{}' and '{}'.",
+                    left.title, right.title
+                ),
+                canonical_entities: dedupe_strings(
+                    left.canonical_entities
+                        .iter()
+                        .cloned()
+                        .chain(right.canonical_entities.iter().cloned())
+                        .collect(),
+                ),
+                supporting_memory_ids: dedupe_strings(
+                    left.supporting_memory_ids
+                        .iter()
+                        .cloned()
+                        .chain(right.supporting_memory_ids.iter().cloned())
+                        .collect(),
+                ),
+                supporting_evidence_ids: dedupe_strings(
+                    left.supporting_evidence_ids
+                        .iter()
+                        .cloned()
+                        .chain(right.supporting_evidence_ids.iter().cloned())
+                        .collect(),
+                ),
+                related_page_ids: vec![left.page_id.clone(), right.page_id.clone()],
+                confidence_score: ((left.confidence_score + right.confidence_score) / 2.0).clamp(0.0, 1.0),
+                stability: KnowledgeStability::Contradicted,
+                first_seen: left.first_seen.min(right.first_seen),
+                last_updated: left.last_updated.max(right.last_updated),
+                project: left.project.clone(),
+                topic: None,
+                workflow: None,
+            });
+        }
+    }
+    pages.extend(contradiction_pages);
+
+    // Link related pages by entity overlap.
+    let snapshot = pages.clone();
+    let mut by_id: HashMap<String, Vec<String>> = HashMap::new();
+    for left in &snapshot {
+        let left_entities = left
+            .canonical_entities
+            .iter()
+            .map(|entity| normalize_alias_key(entity))
+            .collect::<HashSet<_>>();
+        for right in &snapshot {
+            if left.page_id == right.page_id {
+                continue;
+            }
+            if left.project != right.project && left.topic != right.topic {
+                continue;
+            }
+            let overlap = right
+                .canonical_entities
+                .iter()
+                .map(|entity| normalize_alias_key(entity))
+                .filter(|entity| left_entities.contains(entity))
+                .count();
+            if overlap > 0 {
+                by_id
+                    .entry(left.page_id.clone())
+                    .or_default()
+                    .push(right.page_id.clone());
+            }
+        }
+    }
+    for page in &mut pages {
+        page.related_page_ids = dedupe_strings(by_id.remove(&page.page_id).unwrap_or_default());
+    }
+
+    pages.sort_by(|left, right| {
+        right
+            .last_updated
+            .cmp(&left.last_updated)
+            .then_with(|| left.page_id.cmp(&right.page_id))
+    });
+    pages.truncate(240);
+    Ok(pages)
 }
 
 async fn collect_open_tasks(
@@ -1205,6 +1674,13 @@ async fn upsert_runtime_graph(
     }
 
     for entity in &event.entities {
+        let generic_entity = matches!(
+            normalize_alias_key(&entity.canonical_name).as_str(),
+            "ui" | "window" | "chrome" | "browser" | "tab" | "page"
+        );
+        if generic_entity && entity.confidence < 0.70 {
+            continue;
+        }
         let node_type = match entity.entity_type.as_str() {
             "file" => NodeType::File,
             "url" => NodeType::Url,
@@ -1225,6 +1701,8 @@ async fn upsert_runtime_graph(
                 "entity_type": entity.entity_type,
                 "aliases": entity.aliases,
                 "confidence": entity.confidence,
+                "evidence_backed": !generic_entity,
+                "uncertain": generic_entity,
             }),
         });
         let edge_type = match entity.entity_type.as_str() {
@@ -1244,7 +1722,88 @@ async fn upsert_runtime_graph(
             target: entity.canonical_id.clone(),
             edge_type,
             timestamp: now,
-            metadata: json!({"entity_type": entity.entity_type}),
+            metadata: json!({
+                "entity_type": entity.entity_type,
+                "evidence_backed": !generic_entity,
+                "uncertain": generic_entity
+            }),
+        });
+    }
+
+    for evidence in &event.evidence {
+        let evidence_node_id = if evidence.id.trim().is_empty() {
+            format!("evidence:{}:{}", event.id, normalize_alias_key(&evidence.source_id))
+        } else {
+            evidence.id.clone()
+        };
+        nodes.push(GraphNode {
+            id: evidence_node_id.clone(),
+            node_type: NodeType::Entity,
+            label: if !evidence.summary.trim().is_empty() {
+                trim_chars(&evidence.summary, 120)
+            } else {
+                trim_chars(&evidence.snippet, 120)
+            },
+            created_at: evidence.timestamp,
+            metadata: json!({
+                "entity_type": "evidence",
+                "source_type": evidence.source_type,
+                "source_id": evidence.source_id,
+                "privacy_class": evidence.privacy_class,
+                "evidence_backed": true,
+            }),
+        });
+        edges.push(GraphEdge {
+            id: format!("edge:{}:evidence:{}", event.id, normalize_alias_key(&evidence_node_id)),
+            source: event_node_id.clone(),
+            target: evidence_node_id,
+            edge_type: EdgeType::InformedBy,
+            timestamp: now,
+            metadata: json!({"entity_type": "evidence", "evidence_backed": true}),
+        });
+    }
+
+    for blocker in &event.errors {
+        if blocker.trim().is_empty() {
+            continue;
+        }
+        let blocker_id = format!("blocker:{}", normalize_alias_key(blocker));
+        nodes.push(GraphNode {
+            id: blocker_id.clone(),
+            node_type: NodeType::Error,
+            label: trim_chars(blocker, 120),
+            created_at: event.start_time,
+            metadata: json!({"entity_type": "blocker", "evidence_backed": true}),
+        });
+        edges.push(GraphEdge {
+            id: format!("edge:{}:blocker:{}", event.id, normalize_alias_key(blocker)),
+            source: event_node_id.clone(),
+            target: blocker_id,
+            edge_type: EdgeType::BlockedBy,
+            timestamp: now,
+            metadata: json!({"entity_type": "blocker", "evidence_backed": true}),
+        });
+    }
+
+    for todo in &event.next_steps {
+        if todo.trim().is_empty() {
+            continue;
+        }
+        let todo_id = format!("todo:{}", normalize_alias_key(todo));
+        nodes.push(GraphNode {
+            id: todo_id.clone(),
+            node_type: NodeType::Task,
+            label: trim_chars(todo, 120),
+            created_at: event.start_time,
+            metadata: json!({"entity_type": "todo", "evidence_backed": true}),
+        });
+        edges.push(GraphEdge {
+            id: format!("edge:{}:todo:{}", event.id, normalize_alias_key(todo)),
+            source: event_node_id.clone(),
+            target: todo_id,
+            edge_type: EdgeType::ResultedIn,
+            timestamp: now,
+            metadata: json!({"entity_type": "todo", "evidence_backed": true}),
         });
     }
 
@@ -1361,30 +1920,12 @@ fn infer_project_from_window(record: &MemoryRecord) -> Option<String> {
     FILE_RE
         .find_iter(&record.window_title)
         .find_map(|m| infer_project_from_path(m.as_str()))
-        .or_else(|| {
-            let lower_title = record.window_title.to_lowercase();
-            let lower_app = record.app_name.to_lowercase();
-            if looks_like_code_window(&lower_app) && lower_title.contains("fndr") {
-                Some("FNDR".to_string())
-            } else {
-                None
-            }
-        })
 }
 
 fn infer_repo_slug_from_window(record: &MemoryRecord) -> Option<String> {
     FILE_RE
         .find_iter(&record.window_title)
         .find_map(|m| infer_repo_slug_from_path(m.as_str()))
-        .or_else(|| {
-            let lower_title = record.window_title.to_lowercase();
-            let lower_app = record.app_name.to_lowercase();
-            if looks_like_code_window(&lower_app) && lower_title.contains("fndr") {
-                Some("fndr".to_string())
-            } else {
-                None
-            }
-        })
 }
 
 fn infer_project_from_url(url: Option<&str>) -> Option<String> {
@@ -1454,21 +1995,11 @@ fn path_segments(path: &str) -> Vec<String> {
 }
 
 fn looks_like_code_window(app_name: &str) -> bool {
-    [
-        "cursor",
-        "code",
-        "visual studio",
-        "vscode",
-        "zed",
-        "xcode",
-        "terminal",
-        "warp",
-        "iterm",
-        "claude",
-        "codex",
-    ]
-    .iter()
-    .any(|marker| app_name.contains(marker))
+    let lowered = app_name.to_ascii_lowercase();
+    let generic_markers = ["code", "editor", "terminal", "ide", "dev", "shell"];
+    generic_markers
+        .iter()
+        .any(|marker| lowered.contains(marker))
 }
 
 fn is_meaningful_project_segment(segment: &str) -> bool {
@@ -1546,24 +2077,39 @@ fn infer_activity_type(record: &MemoryRecord) -> String {
     if !record.activity_type.trim().is_empty() {
         return record.activity_type.to_lowercase();
     }
-    let haystack = format!(
-        "{} {}",
-        record.app_name.to_lowercase(),
-        record.window_title.to_lowercase()
+    let text = format!(
+        "{} {} {} {}",
+        record.app_name.to_ascii_lowercase(),
+        record.window_title.to_ascii_lowercase(),
+        record.clean_text.to_ascii_lowercase(),
+        record.internal_context.to_ascii_lowercase()
     );
-    if haystack.contains("terminal")
-        || haystack.contains("codex")
-        || haystack.contains("cursor")
-        || haystack.contains("code")
-    {
-        "coding".to_string()
-    } else if !record.errors.is_empty() {
-        "debugging".to_string()
-    } else if record.url.is_some() {
-        "research".to_string()
-    } else {
-        "reading".to_string()
+    let mut scores: Vec<(&str, f32)> = vec![("unknown", 0.05)];
+
+    if !record.files_touched.is_empty() || looks_like_code_window(&record.app_name) {
+        scores.push(("coding", 0.36));
     }
+    if !record.errors.is_empty() || text.contains("error") || text.contains("failed") {
+        scores.push(("debugging", 0.44));
+    }
+    if !record.decisions.is_empty() || text.contains("decision") || text.contains("tradeoff") {
+        scores.push(("planning", 0.30));
+    }
+    if record.url.is_some() {
+        scores.push(("researching", 0.20));
+    }
+    if !record.next_steps.is_empty() || text.contains("todo") || text.contains("next step") {
+        scores.push(("organizing_information", 0.24));
+    }
+    if text.contains("test") || text.contains("assert") || text.contains("validation") {
+        scores.push(("testing_workflow", 0.26));
+    }
+
+    scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scores
+        .first()
+        .map(|(label, _)| (*label).to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn build_event_title(record: &MemoryRecord) -> String {
@@ -1676,7 +2222,9 @@ fn memory_to_evidence(record: &MemoryRecord, source_type: String) -> EvidenceRef
         source_type,
         source_id: record.id.clone(),
         summary: trim_chars(
-            if !record.display_summary.trim().is_empty() {
+            if !record.memory_context.trim().is_empty() {
+                &record.memory_context
+            } else if !record.display_summary.trim().is_empty() {
                 &record.display_summary
             } else {
                 &record.snippet

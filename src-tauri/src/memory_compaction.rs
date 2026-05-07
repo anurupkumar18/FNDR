@@ -67,6 +67,27 @@ pub fn compact_memory_record_payload(record: &MemoryRecord) -> MemoryRecord {
 }
 
 pub fn best_embedding_text(record: &MemoryRecord) -> String {
+    let precomputed = normalize_memory_text(&record.embedding_text);
+    if !precomputed.is_empty() {
+        return trim_chars(&precomputed, COMPACT_EMBED_CHARS * 2);
+    }
+    let context = normalize_memory_text(&record.memory_context);
+    if !context.is_empty() {
+        let mut parts = vec![context];
+        if !record.user_intent.trim().is_empty() {
+            parts.insert(
+                0,
+                format!("intent {}", normalize_memory_text(&record.user_intent)),
+            );
+        }
+        if !record.project.trim().is_empty() {
+            parts.insert(
+                1.min(parts.len()),
+                format!("project {}", normalize_memory_text(&record.project)),
+            );
+        }
+        return trim_chars(&parts.join(" "), COMPACT_EMBED_CHARS * 2);
+    }
     let clean = normalize_memory_text(&record.clean_text);
     let shadow = compact_lexical_shadow(&record.lexical_shadow);
     if !clean.is_empty() {

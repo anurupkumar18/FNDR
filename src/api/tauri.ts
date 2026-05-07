@@ -47,6 +47,104 @@ export interface MemoryCard {
     session_duration_mins?: number;
 }
 
+export interface MemoryScoreBreakdown {
+    specificity: number;
+    intent: number;
+    entity: number;
+    usefulness: number;
+    evidence: number;
+    ocr_noise: number;
+    graph_readiness: number;
+    retrieval_value: number;
+}
+
+export interface MemoryDebugInspector {
+    memory_id: string;
+    memory_context: string;
+    project: string;
+    topic: string;
+    workflow: string;
+    activity_type: string;
+    user_intent: string;
+    entities: string[];
+    actions: string[];
+    quality_scores: MemoryScoreBreakdown;
+    embedding_text: string;
+    search_aliases: string[];
+    raw_ocr_evidence: unknown;
+    graph: {
+        nodes: unknown[];
+        edges: unknown[];
+        weak_evidence: string[];
+    };
+    storage_outcome: string;
+    quality_gate_reason: string;
+    query_match_reasons: string[];
+    related_knowledge_pages: unknown[];
+}
+
+export interface MemoryQualityFlag {
+    memory_id: string;
+    summary: string;
+    app_name: string;
+    timestamp: number;
+    storage_outcome: string;
+    issues: string[];
+    scores: MemoryScoreBreakdown;
+}
+
+export interface MemoryValidationReport {
+    generated_at: number;
+    lookback_minutes: number;
+    total_memories: number;
+    flagged_memories: MemoryQualityFlag[];
+}
+
+export interface RebuildMemoryPreview {
+    memory_id: string;
+    before_memory_context: string;
+    after_memory_context: string;
+    before_embedding_text: string;
+    after_embedding_text: string;
+    before_aliases: string[];
+    after_aliases: string[];
+    before_storage_outcome: string;
+    after_storage_outcome: string;
+}
+
+export interface RebuildMemoryContextReport {
+    dry_run: boolean;
+    start: number;
+    end: number;
+    scanned: number;
+    changed: number;
+    previews: RebuildMemoryPreview[];
+}
+
+export interface RetrievalEvalRow {
+    category: string;
+    query: string;
+    top_1_relevant: boolean;
+    top_5_relevant: boolean;
+    matched_by_semantic: boolean;
+    matched_by_prefix: boolean;
+    matched_by_fuzzy: boolean;
+    matched_by_ngram: boolean;
+    matched_by_graph: boolean;
+    matched_by_alias: boolean;
+    query_expansion_terms: string[];
+    bad_match_reason?: string | null;
+    top_memory_id?: string | null;
+}
+
+export interface RetrievalEvalReport {
+    generated_at: number;
+    total_queries: number;
+    top1_hits: number;
+    top5_hits: number;
+    rows: RetrievalEvalRow[];
+}
+
 export interface CaptureStatus {
     is_capturing: boolean;
     is_paused: boolean;
@@ -533,6 +631,32 @@ export async function listMemoryCards(
 
 export async function deleteMemory(memoryId: string): Promise<boolean> {
     return invoke<boolean>("delete_memory", { memoryId });
+}
+
+export async function getMemoryDebugInspector(
+    memoryId: string,
+    query?: string
+): Promise<MemoryDebugInspector> {
+    return invoke<MemoryDebugInspector>("get_memory_debug_inspector", { memoryId, query: query?.trim() || null });
+}
+
+export async function evaluateRecentMemoryQuality(
+    lookbackMinutes = 180,
+    limit = 180
+): Promise<MemoryValidationReport> {
+    return invoke<MemoryValidationReport>("evaluate_recent_memory_quality", { lookbackMinutes, limit });
+}
+
+export async function rebuildMemoryContextForRange(
+    start: number,
+    end: number,
+    dryRun = true
+): Promise<RebuildMemoryContextReport> {
+    return invoke<RebuildMemoryContextReport>("rebuild_memory_context_for_range", { start, end, dryRun });
+}
+
+export async function runMemoryRetrievalEval(): Promise<RetrievalEvalReport> {
+    return invoke<RetrievalEvalReport>("run_memory_retrieval_eval");
 }
 
 export async function generateDailyBriefing(mode?: "morning" | "evening"): Promise<string> {

@@ -65,6 +65,10 @@ pub const DEFAULT_PROACTIVE_SEEN_RING_CAPACITY: usize = 20;
 pub const DEFAULT_PROACTIVE_SEARCH_LIMIT: usize = 5;
 pub const DEFAULT_PROACTIVE_LOOKBACK_FILTER: &str = "7d";
 pub const DEFAULT_PROACTIVE_SIMILARITY_THRESHOLD: f32 = 0.82;
+pub const DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN: f32 = 0.60;
+pub const DEFAULT_PRIMARY_MEMORY_INTENT_MIN: f32 = 0.55;
+pub const DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN: f32 = 0.60;
+pub const DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX: f32 = 0.50;
 
 /// Local text embedding configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -433,6 +437,40 @@ impl ProactiveConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryQualityConfig {
+    #[serde(default = "default_primary_memory_specificity_min")]
+    pub primary_memory_specificity_min: f32,
+    #[serde(default = "default_primary_memory_intent_min")]
+    pub primary_memory_intent_min: f32,
+    #[serde(default = "default_primary_memory_agent_usefulness_min")]
+    pub primary_memory_agent_usefulness_min: f32,
+    #[serde(default = "default_primary_memory_ocr_noise_max")]
+    pub primary_memory_ocr_noise_max: f32,
+}
+
+impl Default for MemoryQualityConfig {
+    fn default() -> Self {
+        Self {
+            primary_memory_specificity_min: default_primary_memory_specificity_min(),
+            primary_memory_intent_min: default_primary_memory_intent_min(),
+            primary_memory_agent_usefulness_min: default_primary_memory_agent_usefulness_min(),
+            primary_memory_ocr_noise_max: default_primary_memory_ocr_noise_max(),
+        }
+    }
+}
+
+impl MemoryQualityConfig {
+    pub fn normalized(mut self) -> Self {
+        self.primary_memory_specificity_min = self.primary_memory_specificity_min.clamp(0.0, 1.0);
+        self.primary_memory_intent_min = self.primary_memory_intent_min.clamp(0.0, 1.0);
+        self.primary_memory_agent_usefulness_min =
+            self.primary_memory_agent_usefulness_min.clamp(0.0, 1.0);
+        self.primary_memory_ocr_noise_max = self.primary_memory_ocr_noise_max.clamp(0.0, 1.0);
+        self
+    }
+}
+
 /// Auto-fill configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutofillConfig {
@@ -545,6 +583,9 @@ pub struct Config {
     /// Proactive recall surface settings.
     #[serde(default)]
     pub proactive: ProactiveConfig,
+    /// Memory quality thresholds for primary cards and evidence gating.
+    #[serde(default)]
+    pub memory_quality: MemoryQualityConfig,
 }
 
 fn default_embedding_model_name() -> String {
@@ -767,6 +808,22 @@ fn default_proactive_similarity_threshold() -> f32 {
     DEFAULT_PROACTIVE_SIMILARITY_THRESHOLD
 }
 
+fn default_primary_memory_specificity_min() -> f32 {
+    DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN
+}
+
+fn default_primary_memory_intent_min() -> f32 {
+    DEFAULT_PRIMARY_MEMORY_INTENT_MIN
+}
+
+fn default_primary_memory_agent_usefulness_min() -> f32 {
+    DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN
+}
+
+fn default_primary_memory_ocr_noise_max() -> f32 {
+    DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX
+}
+
 fn default_use_vlm() -> bool {
     true
 }
@@ -842,6 +899,7 @@ impl Default for Config {
             memory_cards: MemoryCardConfig::default(),
             store: StoreConfig::default(),
             proactive: ProactiveConfig::default(),
+            memory_quality: MemoryQualityConfig::default(),
         }
     }
 }
@@ -858,6 +916,7 @@ impl Config {
         self.memory_cards = self.memory_cards.normalized();
         self.store = self.store.normalized();
         self.proactive = self.proactive.normalized();
+        self.memory_quality = self.memory_quality.normalized();
         self.fps_base = self.fps_base.clamp(0.05, 4.0);
         self.idle_fps = self.idle_fps.clamp(0.02, self.fps_base.max(0.02));
         self.idle_pause_seconds = self.idle_pause_seconds.clamp(1, 3600);

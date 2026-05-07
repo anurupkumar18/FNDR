@@ -18,7 +18,6 @@ use crate::embed::Embedder;
 use crate::meeting;
 use crate::search::HybridSearcher;
 use crate::AppState;
-use chrono::TimeZone;
 use axum::{
     extract::{ConnectInfo, OriginalUri, State},
     http::{header, HeaderMap, StatusCode, Uri},
@@ -29,6 +28,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::TimeZone;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -352,6 +352,66 @@ struct FndrDiffArgs {
     since_timestamp: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct WarmStartArgs {
+    #[serde(default)]
+    client_name: Option<String>,
+    #[serde(default)]
+    current_task: Option<String>,
+    #[serde(default = "default_agent_brief_budget")]
+    token_budget: u32,
+    #[serde(default = "default_true")]
+    include_recent_activity: bool,
+    #[serde(default = "default_true")]
+    include_project_context: bool,
+    #[serde(default = "default_true")]
+    include_decisions: bool,
+    #[serde(default = "default_true")]
+    include_open_tasks: bool,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct AgentOnboardingArgs {
+    #[serde(default = "default_agent_brief_budget")]
+    token_budget: u32,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ProjectWikiArgs {
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default = "default_full_context_limit")]
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ClaimsArgs {
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default = "default_full_context_limit")]
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct BreakthroughArgs {
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default = "default_full_context_limit")]
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SourceEvidenceArgs {
+    #[serde(default)]
+    page_id: Option<String>,
+    #[serde(default)]
+    memory_id: Option<String>,
+    #[serde(default = "default_full_context_limit")]
+    limit: usize,
+    #[serde(default)]
+    include_raw: bool,
+}
+
 fn default_ambient_limit() -> usize {
     5
 }
@@ -382,6 +442,10 @@ fn default_projects_limit() -> usize {
 
 fn default_recent_changes_lookback_minutes() -> u32 {
     180
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -1243,6 +1307,78 @@ fn tools_list_result() -> Value {
                 }
             },
             {
+                "name": "memory.warm_start",
+                "description": "Return an agent warm-start context with active focus, likely project, relevant wiki pages, decisions, blockers, todos, files, URLs, and graph-neighbored memories.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "client_name": { "type": "string" },
+                        "current_task": { "type": "string" },
+                        "token_budget": { "type": "integer", "minimum": 256, "maximum": 12000 },
+                        "include_recent_activity": { "type": "boolean" },
+                        "include_project_context": { "type": "boolean" },
+                        "include_decisions": { "type": "boolean" },
+                        "include_open_tasks": { "type": "boolean" }
+                    }
+                }
+            },
+            {
+                "name": "memory.agent_onboarding",
+                "description": "FNDR-native onboarding context for new agents: stable profile context, active projects, working preferences, constraints, recent decisions, blockers, and high-value context packs.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "token_budget": { "type": "integer", "minimum": 256, "maximum": 12000 }
+                    }
+                }
+            },
+            {
+                "name": "memory.project_wiki",
+                "description": "Return compiled project/topic wiki pages with source-backed evidence and related knowledge pages.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+                    }
+                }
+            },
+            {
+                "name": "memory.claims",
+                "description": "Return synthesized claim pages derived from repeated MemoryEvents with supporting source memory IDs.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+                    }
+                }
+            },
+            {
+                "name": "memory.breakthroughs",
+                "description": "Return breakthrough pages for solved problems, architecture direction, and high-value reusable insights.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+                    }
+                }
+            },
+            {
+                "name": "memory.source_evidence",
+                "description": "Return source-backed evidence for a knowledge page or memory. Raw OCR only included when include_raw=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "page_id": { "type": "string" },
+                        "memory_id": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+                        "include_raw": { "type": "boolean" }
+                    }
+                }
+            },
+            {
                 "name": "memory.search_raw",
                 "description": "Return raw semantic + keyword memory hits with minimal synthesis.",
                 "inputSchema": {
@@ -1595,8 +1731,37 @@ async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Va
             run_memory_timeline(app_state, args).await
         }
         "memory.active_focus" => {
-            let args: ActiveFocusArgs = serde_json::from_value(params.arguments).unwrap_or_default();
+            let args: ActiveFocusArgs =
+                serde_json::from_value(params.arguments).unwrap_or_default();
             run_memory_active_focus(app_state, args).await
+        }
+        "memory.warm_start" => {
+            let args: WarmStartArgs = serde_json::from_value(params.arguments).unwrap_or_default();
+            run_memory_warm_start(app_state, args).await
+        }
+        "memory.agent_onboarding" => {
+            let args: AgentOnboardingArgs =
+                serde_json::from_value(params.arguments).unwrap_or_default();
+            run_memory_agent_onboarding(app_state, args).await
+        }
+        "memory.project_wiki" => {
+            let args: ProjectWikiArgs =
+                serde_json::from_value(params.arguments).unwrap_or_default();
+            run_memory_project_wiki(app_state, args).await
+        }
+        "memory.claims" => {
+            let args: ClaimsArgs = serde_json::from_value(params.arguments).unwrap_or_default();
+            run_memory_claims(app_state, args).await
+        }
+        "memory.breakthroughs" => {
+            let args: BreakthroughArgs =
+                serde_json::from_value(params.arguments).unwrap_or_default();
+            run_memory_breakthroughs(app_state, args).await
+        }
+        "memory.source_evidence" => {
+            let args: SourceEvidenceArgs =
+                serde_json::from_value(params.arguments).unwrap_or_default();
+            run_memory_source_evidence(app_state, args).await
         }
         "memory.search_raw" => {
             let args: SearchRawArgs =
@@ -2091,10 +2256,7 @@ async fn run_memory_search_full_context(
     let memory_map = load_memories_for_results(&app_state, &merged).await?;
     let related_memories = fetch_related_memories(
         &app_state,
-        &memory_map
-            .values()
-            .cloned()
-            .collect::<Vec<_>>(),
+        &memory_map.values().cloned().collect::<Vec<_>>(),
         limit.saturating_mul(2),
     )
     .await?;
@@ -2258,6 +2420,7 @@ async fn run_memory_get_context_pack(
         "decisions": pack.recent_decisions,
         "todos": pack.open_tasks,
         "relevant_memories": recent_memories,
+        "graph_neighbors": pack.included,
         "next_actions": next_actions,
         "summary": pack.summary,
         "context_pack_id": pack.id
@@ -2353,7 +2516,9 @@ async fn run_memory_agent_brief(
     let llm_payload = format!(
         "Topic: {}\nProject: {}\nSummary: {}\nCurrent goal: {}\nNext actions: {}\n",
         args.topic,
-        pack.project.clone().unwrap_or_else(|| "unknown".to_string()),
+        pack.project
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
         pack.summary,
         pack.active_goal
             .clone()
@@ -2377,6 +2542,7 @@ async fn run_memory_agent_brief(
         "errors": errors,
         "files": files,
         "urls": urls,
+        "graph_neighbors": pack.included,
         "supporting_snippets": support,
         "next_actions": likely_next_actions,
         "llm_payload": llm_payload
@@ -2471,6 +2637,322 @@ async fn run_memory_active_focus(
         "recent_context": build_timeline_buckets(recent.clone(), "session"),
         "relevant_memories": relevant_memories,
         "confidence": working_state.confidence
+    })))
+}
+
+fn knowledge_page_to_json(page: &crate::store::KnowledgePage) -> Value {
+    json!({
+        "page_id": page.page_id,
+        "page_type": page.page_type,
+        "title": page.title,
+        "page_context": page.page_context,
+        "canonical_entities": page.canonical_entities,
+        "supporting_memory_ids": page.supporting_memory_ids,
+        "supporting_evidence_ids": page.supporting_evidence_ids,
+        "related_page_ids": page.related_page_ids,
+        "confidence_score": page.confidence_score,
+        "stability": page.stability,
+        "first_seen": page.first_seen,
+        "last_updated": page.last_updated,
+        "project": page.project,
+        "topic": page.topic,
+        "workflow": page.workflow,
+    })
+}
+
+fn filter_pages_by_type(
+    pages: &[crate::store::KnowledgePage],
+    page_type: crate::store::KnowledgePageType,
+    limit: usize,
+) -> Vec<Value> {
+    pages
+        .iter()
+        .filter(|page| page.page_type == page_type)
+        .take(limit.max(1))
+        .map(knowledge_page_to_json)
+        .collect()
+}
+
+async fn ensure_knowledge_pages(
+    app_state: &AppState,
+    project: Option<&str>,
+) -> Result<Vec<crate::store::KnowledgePage>, JsonRpcError> {
+    let pages = context_runtime::compile_knowledge_pages(app_state, project)
+        .await
+        .map_err(internal_tool_error)?;
+    if !pages.is_empty() {
+        let _ = app_state.store.upsert_knowledge_pages(&pages).await;
+    }
+    Ok(pages)
+}
+
+async fn run_memory_warm_start(
+    app_state: Arc<AppState>,
+    args: WarmStartArgs,
+) -> Result<Value, JsonRpcError> {
+    let budget = args.token_budget.clamp(256, 12000);
+    let focus = run_memory_active_focus(app_state.clone(), ActiveFocusArgs::default()).await?;
+    let focus_payload = focus
+        .get("structuredContent")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let project_guess = focus_payload
+        .get("current_project_guess")
+        .and_then(Value::as_str)
+        .map(|value| value.to_string());
+    let pages = ensure_knowledge_pages(app_state.as_ref(), project_guess.as_deref()).await?;
+    let project_pages =
+        filter_pages_by_type(&pages, crate::store::KnowledgePageType::ProjectPage, 6);
+    let claim_pages = filter_pages_by_type(&pages, crate::store::KnowledgePageType::ClaimPage, 8);
+    let decision_pages =
+        filter_pages_by_type(&pages, crate::store::KnowledgePageType::DecisionPage, 8);
+    let breakthrough_pages = filter_pages_by_type(
+        &pages,
+        crate::store::KnowledgePageType::BreakthroughPage,
+        8,
+    );
+
+    let pack = context_runtime::build_context_pack(
+        app_state.as_ref(),
+        ContextRequest {
+            query: args.current_task.clone().unwrap_or_default(),
+            agent_type: args
+                .client_name
+                .clone()
+                .unwrap_or_else(|| "mcp_warm_start".to_string()),
+            budget_tokens: budget,
+            session_id: None,
+            active_files: Vec::new(),
+            project: project_guess.clone(),
+        },
+    )
+    .await
+    .map_err(internal_tool_error)?;
+
+    let recent_results = app_state
+        .store
+        .list_recent_results(24, None)
+        .await
+        .map_err(internal_tool_error)?;
+    let memory_map = load_memories_for_results(&app_state, &recent_results).await?;
+    let recent_contexts = if args.include_recent_activity {
+        build_result_rows(
+            &recent_results
+                .iter()
+                .take(12)
+                .cloned()
+                .collect::<Vec<_>>(),
+            &memory_map,
+            false,
+        )
+    } else {
+        Vec::new()
+    };
+    let next_steps = suggested_next_steps_from_pack(&pack);
+    let open_tasks = if args.include_open_tasks {
+        pack.open_tasks.clone()
+    } else {
+        Vec::new()
+    };
+
+    Ok(tool_success(json!({
+        "orientation": pack.summary,
+        "current_focus": focus_payload.get("likely_intent").cloned().unwrap_or(Value::Null),
+        "likely_project": project_guess,
+        "relevant_project_pages": if args.include_project_context { project_pages } else { Vec::new() },
+        "relevant_claims": claim_pages,
+        "recent_memory_contexts": recent_contexts,
+        "decisions": if args.include_decisions { decision_pages } else { Vec::new() },
+        "breakthroughs": breakthrough_pages,
+        "blockers": pack.known_failures,
+        "todos": open_tasks,
+        "files_and_urls": {
+            "files": pack.relevant_files,
+            "urls": aggregate_urls(&recent_results, &memory_map)
+        },
+        "graph_neighbors": pack.included,
+        "what_the_agent_should_remember": next_steps,
+        "token_budget": budget
+    })))
+}
+
+async fn run_memory_agent_onboarding(
+    app_state: Arc<AppState>,
+    args: AgentOnboardingArgs,
+) -> Result<Value, JsonRpcError> {
+    let budget = args.token_budget.clamp(256, 12000);
+    let pages = ensure_knowledge_pages(app_state.as_ref(), None).await?;
+    let project_pages =
+        filter_pages_by_type(&pages, crate::store::KnowledgePageType::ProjectPage, 8);
+    let decision_pages =
+        filter_pages_by_type(&pages, crate::store::KnowledgePageType::DecisionPage, 8);
+    let breakthrough_pages = filter_pages_by_type(
+        &pages,
+        crate::store::KnowledgePageType::BreakthroughPage,
+        8,
+    );
+    let contradiction_pages = filter_pages_by_type(
+        &pages,
+        crate::store::KnowledgePageType::ContradictionPage,
+        8,
+    );
+
+    let pack = context_runtime::build_context_pack(
+        app_state.as_ref(),
+        ContextRequest {
+            query: "agent onboarding".to_string(),
+            agent_type: "agent_onboarding".to_string(),
+            budget_tokens: budget,
+            session_id: None,
+            active_files: Vec::new(),
+            project: None,
+        },
+    )
+    .await
+    .map_err(internal_tool_error)?;
+
+    Ok(tool_success(json!({
+        "user_profile_context": pack.summary,
+        "active_projects": project_pages,
+        "working_preferences": pack.do_not_do,
+        "current_focus": pack.active_goal,
+        "recurring_constraints": pack.do_not_do,
+        "recent_decisions": decision_pages,
+        "open_blockers": pack.known_failures,
+        "important_tools": pack.relevant_files,
+        "high_value_context_packs": {
+            "context_pack_id": pack.id,
+            "confidence": pack.confidence
+        },
+        "breakthroughs": breakthrough_pages,
+        "contradictions": contradiction_pages
+    })))
+}
+
+async fn run_memory_project_wiki(
+    app_state: Arc<AppState>,
+    args: ProjectWikiArgs,
+) -> Result<Value, JsonRpcError> {
+    let project = args.project.as_deref();
+    let pages = ensure_knowledge_pages(app_state.as_ref(), project).await?;
+    let limit = args.limit.clamp(1, 100);
+    let filtered = pages
+        .iter()
+        .filter(|page| {
+            if let Some(project) = project {
+                page.project
+                    .as_deref()
+                    .map(|value| value.eq_ignore_ascii_case(project))
+                    .unwrap_or(false)
+            } else {
+                page.page_type == crate::store::KnowledgePageType::ProjectPage
+                    || page.page_type == crate::store::KnowledgePageType::TopicPage
+            }
+        })
+        .take(limit)
+        .map(knowledge_page_to_json)
+        .collect::<Vec<_>>();
+    Ok(tool_success(json!({
+        "project": args.project,
+        "pages": filtered
+    })))
+}
+
+async fn run_memory_claims(
+    app_state: Arc<AppState>,
+    args: ClaimsArgs,
+) -> Result<Value, JsonRpcError> {
+    let pages = ensure_knowledge_pages(app_state.as_ref(), args.project.as_deref()).await?;
+    let claims = filter_pages_by_type(
+        &pages,
+        crate::store::KnowledgePageType::ClaimPage,
+        args.limit.clamp(1, 100),
+    );
+    Ok(tool_success(json!({
+        "project": args.project,
+        "claims": claims
+    })))
+}
+
+async fn run_memory_breakthroughs(
+    app_state: Arc<AppState>,
+    args: BreakthroughArgs,
+) -> Result<Value, JsonRpcError> {
+    let pages = ensure_knowledge_pages(app_state.as_ref(), args.project.as_deref()).await?;
+    let breakthroughs = filter_pages_by_type(
+        &pages,
+        crate::store::KnowledgePageType::BreakthroughPage,
+        args.limit.clamp(1, 100),
+    );
+    Ok(tool_success(json!({
+        "project": args.project,
+        "breakthroughs": breakthroughs
+    })))
+}
+
+async fn run_memory_source_evidence(
+    app_state: Arc<AppState>,
+    args: SourceEvidenceArgs,
+) -> Result<Value, JsonRpcError> {
+    let mut memory_ids = Vec::new();
+    if let Some(memory_id) = args.memory_id.as_deref() {
+        memory_ids.push(memory_id.to_string());
+    }
+    if let Some(page_id) = args.page_id.as_deref() {
+        if let Some(page) = app_state
+            .store
+            .get_knowledge_page(page_id)
+            .await
+            .map_err(internal_tool_error)?
+        {
+            memory_ids.extend(page.supporting_memory_ids);
+        }
+    }
+    memory_ids = dedupe_strings_preserve_order(memory_ids);
+    let limit = args.limit.clamp(1, 100);
+    memory_ids.truncate(limit);
+    let mut memories = Vec::new();
+    for memory_id in &memory_ids {
+        if let Some(memory) = app_state
+            .store
+            .get_memory_by_id(memory_id)
+            .await
+            .map_err(internal_tool_error)?
+        {
+            let mut row = json!({
+                "memory_id": memory.id,
+                "timestamp": memory.timestamp,
+                "memory_context": memory.memory_context,
+                "project": memory.project,
+                "topic": memory.topic,
+                "workflow": memory.workflow,
+                "intent": memory.user_intent,
+                "decisions": memory.decisions,
+                "errors": memory.errors,
+                "blockers": memory.blockers,
+                "todos": memory.todos,
+                "results": memory.results,
+                "entities": memory.entities,
+                "files": memory.files_touched,
+                "url": memory.url,
+                "graph_neighbors": memory.related_memory_ids,
+            });
+            if args.include_raw {
+                row["raw"] = json!({
+                    "text": trim_chars(&memory.text, 1200),
+                    "clean_text": trim_chars(&memory.clean_text, 1200),
+                    "raw_evidence": trim_chars(&memory.raw_evidence, 1500),
+                });
+            }
+            memories.push(row);
+        }
+    }
+
+    Ok(tool_success(json!({
+        "page_id": args.page_id,
+        "memory_id": args.memory_id,
+        "include_raw": args.include_raw,
+        "evidence": memories
     })))
 }
 
@@ -2669,7 +3151,10 @@ async fn run_memory_decisions(
     })))
 }
 
-async fn run_memory_errors(app_state: Arc<AppState>, args: ErrorsArgs) -> Result<Value, JsonRpcError> {
+async fn run_memory_errors(
+    app_state: Arc<AppState>,
+    args: ErrorsArgs,
+) -> Result<Value, JsonRpcError> {
     let index_status = inspect_memory_index_status(&app_state).await?;
     let time_window = parse_time_window_value(args.time_window.as_ref())?;
     let limit = args.limit.clamp(1, 100);
@@ -2730,7 +3215,10 @@ async fn run_memory_blockers(
     })))
 }
 
-async fn run_memory_todos(app_state: Arc<AppState>, args: TodosArgs) -> Result<Value, JsonRpcError> {
+async fn run_memory_todos(
+    app_state: Arc<AppState>,
+    args: TodosArgs,
+) -> Result<Value, JsonRpcError> {
     let index_status = inspect_memory_index_status(&app_state).await?;
     let limit = args.limit.clamp(1, 200);
     let tasks = app_state
@@ -2739,7 +3227,10 @@ async fn run_memory_todos(app_state: Arc<AppState>, args: TodosArgs) -> Result<V
         .await
         .map_err(internal_tool_error)?;
     let mut rows = Vec::new();
-    for task in tasks.into_iter().filter(|task| !task.is_completed && !task.is_dismissed) {
+    for task in tasks
+        .into_iter()
+        .filter(|task| !task.is_completed && !task.is_dismissed)
+    {
         if let Some(project_filter) = args.project.as_deref() {
             let mut matched = false;
             if let Some(source_id) = task.source_memory_id.as_deref() {
@@ -2822,12 +3313,19 @@ async fn run_memory_graph_query(
         .filter(|node| {
             node.id.to_ascii_lowercase().contains(&query)
                 || node.label.to_ascii_lowercase().contains(&query)
-                || node.metadata.to_string().to_ascii_lowercase().contains(&query)
+                || node
+                    .metadata
+                    .to_string()
+                    .to_ascii_lowercase()
+                    .contains(&query)
         })
         .collect::<Vec<_>>();
     nodes.sort_by_key(|node| std::cmp::Reverse(node.created_at));
     nodes.truncate(limit);
-    let node_ids = nodes.iter().map(|node| node.id.clone()).collect::<HashSet<_>>();
+    let node_ids = nodes
+        .iter()
+        .map(|node| node.id.clone())
+        .collect::<HashSet<_>>();
     let edges = app_state
         .store
         .get_all_edges()
@@ -2896,7 +3394,8 @@ async fn inspect_memory_index_status(
     if !has_memories {
         return Err(JsonRpcError {
             code: -32010,
-            message: "Memory index unavailable: no indexed memories found on this laptop.".to_string(),
+            message: "Memory index unavailable: no indexed memories found on this laptop."
+                .to_string(),
         });
     }
 
@@ -2925,15 +3424,17 @@ async fn inspect_memory_index_status(
         }
     }
     if let Some(ts) = latest_ts {
-        let stale_cutoff = chrono::Utc::now().timestamp_millis()
-            - chrono::Duration::hours(6).num_milliseconds();
+        let stale_cutoff =
+            chrono::Utc::now().timestamp_millis() - chrono::Duration::hours(6).num_milliseconds();
         if ts < stale_cutoff {
             status = if status == "degraded" {
                 "degraded_stale".to_string()
             } else {
                 "stale".to_string()
             };
-            warnings.push("Memory index appears stale: latest memory is older than 6 hours.".to_string());
+            warnings.push(
+                "Memory index appears stale: latest memory is older than 6 hours.".to_string(),
+            );
         }
     }
 
@@ -3156,9 +3657,7 @@ async fn fetch_results_in_range(
     Ok(rows)
 }
 
-fn dedupe_results_by_id(
-    rows: Vec<crate::store::SearchResult>,
-) -> Vec<crate::store::SearchResult> {
+fn dedupe_results_by_id(rows: Vec<crate::store::SearchResult>) -> Vec<crate::store::SearchResult> {
     let mut seen = HashSet::new();
     let mut deduped = Vec::new();
     for row in rows {
@@ -3223,9 +3722,7 @@ async fn fetch_related_memories(
     Ok(results)
 }
 
-fn derive_window_from_results(
-    rows: &[crate::store::SearchResult],
-) -> (Option<i64>, Option<i64>) {
+fn derive_window_from_results(rows: &[crate::store::SearchResult]) -> (Option<i64>, Option<i64>) {
     if rows.is_empty() {
         return (None, None);
     }
@@ -3294,6 +3791,10 @@ fn result_row_to_json(
         "project": (!row.project.is_empty()).then(|| row.project.clone()),
         "snippet": row.snippet,
         "display_summary": row.display_summary,
+        "memory_context": if !row.memory_context.trim().is_empty() { row.memory_context.clone() } else { row.display_summary.clone() },
+        "user_intent": row.user_intent,
+        "topic": row.topic,
+        "workflow": row.workflow,
         "score": row.score,
         "confidence": if row.extraction_confidence > 0.0 { row.extraction_confidence } else { row.ocr_confidence },
         "files_touched": row.files_touched,
@@ -3331,6 +3832,20 @@ fn memory_to_search_result(memory: &crate::store::MemoryRecord) -> crate::store:
         noise_score: memory.noise_score,
         session_key: memory.session_key.clone(),
         lexical_shadow: memory.lexical_shadow.clone(),
+        memory_context: memory.memory_context.clone(),
+        user_intent: memory.user_intent.clone(),
+        topic: memory.topic.clone(),
+        workflow: memory.workflow.clone(),
+        search_aliases: memory.search_aliases.clone(),
+        related_memory_ids: memory.related_memory_ids.clone(),
+        evidence_confidence: memory.evidence_confidence,
+        confidence_score: memory.confidence_score,
+        importance_score: memory.importance_score,
+        specificity_score: memory.specificity_score,
+        intent_score: memory.intent_score,
+        entity_score: memory.entity_score,
+        agent_usefulness_score: memory.agent_usefulness_score,
+        ocr_noise_score: memory.ocr_noise_score,
         score: 1.0,
         screenshot_path: memory.screenshot_path.clone(),
         url: memory.url.clone(),
@@ -3440,7 +3955,10 @@ fn suggested_next_steps_from_pack(pack: &crate::store::ContextPack) -> Vec<Strin
             steps.push(format!("Resolve: {}", failure.summary));
         }
     }
-    dedupe_strings_preserve_order(steps).into_iter().take(8).collect()
+    dedupe_strings_preserve_order(steps)
+        .into_iter()
+        .take(8)
+        .collect()
 }
 
 fn dedupe_strings_preserve_order(values: Vec<String>) -> Vec<String> {
@@ -3547,7 +4065,9 @@ fn build_bucket_row(group: Vec<crate::store::SearchResult>) -> Value {
     let summary = group
         .last()
         .map(|row| {
-            if !row.display_summary.trim().is_empty() {
+            if !row.memory_context.trim().is_empty() {
+                row.memory_context.clone()
+            } else if !row.display_summary.trim().is_empty() {
                 row.display_summary.clone()
             } else {
                 row.snippet.clone()
@@ -3585,11 +4105,35 @@ fn build_bucket_row(group: Vec<crate::store::SearchResult>) -> Value {
             .filter(|value| !value.trim().is_empty())
             .collect::<Vec<_>>(),
     );
+    let topics = dedupe_strings_preserve_order(
+        group
+            .iter()
+            .map(|row| row.topic.clone())
+            .filter(|value| !value.trim().is_empty() && value != "unknown")
+            .collect::<Vec<_>>(),
+    );
+    let workflows = dedupe_strings_preserve_order(
+        group
+            .iter()
+            .map(|row| row.workflow.clone())
+            .filter(|value| !value.trim().is_empty() && value != "unknown")
+            .collect::<Vec<_>>(),
+    );
+    let intents = dedupe_strings_preserve_order(
+        group
+            .iter()
+            .map(|row| row.user_intent.clone())
+            .filter(|value| !value.trim().is_empty())
+            .collect::<Vec<_>>(),
+    );
     json!({
         "start_time": start,
         "end_time": end,
         "summary": summary,
         "project": project,
+        "topics": topics,
+        "workflows": workflows,
+        "intents": intents,
         "apps": apps,
         "windows": windows,
         "urls": urls,

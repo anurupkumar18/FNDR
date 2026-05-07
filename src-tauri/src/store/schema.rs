@@ -45,6 +45,80 @@ fn default_content_hash() -> String {
     String::new()
 }
 
+fn default_source_type() -> String {
+    "screen".to_string()
+}
+
+fn default_unknown() -> String {
+    "unknown".to_string()
+}
+
+fn default_storage_outcome() -> String {
+    "enriched_memory_card".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IntentCandidate {
+    pub label: String,
+    #[serde(default)]
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IntentAnalysis {
+    #[serde(default)]
+    pub intent_label: String,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub supporting_evidence: Vec<String>,
+    #[serde(default)]
+    pub competing_intents: Vec<IntentCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExtractedEntity {
+    pub text: String,
+    #[serde(default)]
+    pub normalized_name: String,
+    #[serde(default)]
+    pub entity_type: String,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub related_entity_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryActionItem {
+    pub kind: String,
+    pub text: String,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    #[serde(default)]
+    pub source_memory_id: String,
+    #[serde(default)]
+    pub related_entities: Vec<String>,
+    #[serde(default)]
+    pub related_files: Vec<String>,
+    #[serde(default)]
+    pub related_urls: Vec<String>,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
 /// A single memory record stored in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRecord {
@@ -120,6 +194,88 @@ pub struct MemoryRecord {
     /// Unix ms timestamp of last search access; used for decay computation
     #[serde(default)]
     pub last_accessed_at: i64,
+
+    // Agentic MemoryEvent Fields (additive)
+    #[serde(default)]
+    pub timestamp_start: i64,
+    #[serde(default)]
+    pub timestamp_end: i64,
+    #[serde(default = "default_source_type")]
+    pub source_type: String,
+    #[serde(default = "default_unknown")]
+    pub topic: String,
+    #[serde(default = "default_unknown")]
+    pub workflow: String,
+    #[serde(default)]
+    pub user_intent: String,
+    #[serde(default)]
+    pub intent_analysis: IntentAnalysis,
+    #[serde(default)]
+    pub memory_context: String,
+    #[serde(default)]
+    pub commands: Vec<String>,
+    #[serde(default)]
+    pub blockers: Vec<String>,
+    #[serde(default)]
+    pub todos: Vec<String>,
+    #[serde(default)]
+    pub open_questions: Vec<String>,
+    #[serde(default)]
+    pub results: Vec<String>,
+    #[serde(default)]
+    pub related_tools: Vec<String>,
+    #[serde(default)]
+    pub related_agents: Vec<String>,
+    #[serde(default)]
+    pub related_projects: Vec<String>,
+    #[serde(default)]
+    pub raw_evidence: String,
+    #[serde(default)]
+    pub search_aliases: Vec<String>,
+    #[serde(default)]
+    pub related_memory_ids: Vec<String>,
+    #[serde(default)]
+    pub graph_node_ids: Vec<String>,
+    #[serde(default)]
+    pub graph_edge_ids: Vec<String>,
+    #[serde(default)]
+    pub project_confidence: f32,
+    #[serde(default)]
+    pub topic_confidence: f32,
+    #[serde(default)]
+    pub workflow_confidence: f32,
+    #[serde(default)]
+    pub project_evidence: Vec<String>,
+    #[serde(default)]
+    pub related_project_ids: Vec<String>,
+    #[serde(default)]
+    pub evidence_confidence: f32,
+    #[serde(default)]
+    pub confidence_score: f32,
+    #[serde(default)]
+    pub importance_score: f32,
+    #[serde(default)]
+    pub specificity_score: f32,
+    #[serde(default)]
+    pub intent_score: f32,
+    #[serde(default)]
+    pub entity_score: f32,
+    #[serde(default)]
+    pub agent_usefulness_score: f32,
+    #[serde(default)]
+    pub ocr_noise_score: f32,
+    #[serde(default)]
+    pub graph_readiness_score: f32,
+    #[serde(default)]
+    pub retrieval_value_score: f32,
+    #[serde(default = "default_storage_outcome")]
+    pub storage_outcome: String,
+    #[serde(default)]
+    pub quality_gate_reason: String,
+    #[serde(default)]
+    pub extracted_entities_structured: Vec<ExtractedEntity>,
+    #[serde(default)]
+    pub action_items: Vec<MemoryActionItem>,
 
     // V2 Memory Fields
     #[serde(default = "default_schema_version")]
@@ -207,6 +363,46 @@ impl Default for MemoryRecord {
             support_embedding: default_support_embedding(),
             decay_score: default_decay_score(),
             last_accessed_at: 0,
+            timestamp_start: 0,
+            timestamp_end: 0,
+            source_type: default_source_type(),
+            topic: default_unknown(),
+            workflow: default_unknown(),
+            user_intent: String::new(),
+            intent_analysis: IntentAnalysis::default(),
+            memory_context: String::new(),
+            commands: Vec::new(),
+            blockers: Vec::new(),
+            todos: Vec::new(),
+            open_questions: Vec::new(),
+            results: Vec::new(),
+            related_tools: Vec::new(),
+            related_agents: Vec::new(),
+            related_projects: Vec::new(),
+            raw_evidence: String::new(),
+            search_aliases: Vec::new(),
+            related_memory_ids: Vec::new(),
+            graph_node_ids: Vec::new(),
+            graph_edge_ids: Vec::new(),
+            project_confidence: 0.0,
+            topic_confidence: 0.0,
+            workflow_confidence: 0.0,
+            project_evidence: Vec::new(),
+            related_project_ids: Vec::new(),
+            evidence_confidence: 0.0,
+            confidence_score: 0.0,
+            importance_score: 0.0,
+            specificity_score: 0.0,
+            intent_score: 0.0,
+            entity_score: 0.0,
+            agent_usefulness_score: 0.0,
+            ocr_noise_score: 0.0,
+            graph_readiness_score: 0.0,
+            retrieval_value_score: 0.0,
+            storage_outcome: default_storage_outcome(),
+            quality_gate_reason: String::new(),
+            extracted_entities_structured: Vec::new(),
+            action_items: Vec::new(),
             schema_version: default_schema_version(),
             activity_type: String::new(),
             files_touched: Vec::new(),
@@ -267,6 +463,34 @@ pub struct SearchResult {
     pub session_key: String,
     #[serde(default = "default_lexical_shadow")]
     pub lexical_shadow: String,
+    #[serde(default)]
+    pub memory_context: String,
+    #[serde(default)]
+    pub user_intent: String,
+    #[serde(default = "default_unknown")]
+    pub topic: String,
+    #[serde(default)]
+    pub workflow: String,
+    #[serde(default)]
+    pub search_aliases: Vec<String>,
+    #[serde(default)]
+    pub related_memory_ids: Vec<String>,
+    #[serde(default)]
+    pub evidence_confidence: f32,
+    #[serde(default)]
+    pub confidence_score: f32,
+    #[serde(default)]
+    pub importance_score: f32,
+    #[serde(default)]
+    pub specificity_score: f32,
+    #[serde(default)]
+    pub intent_score: f32,
+    #[serde(default)]
+    pub entity_score: f32,
+    #[serde(default)]
+    pub agent_usefulness_score: f32,
+    #[serde(default)]
+    pub ocr_noise_score: f32,
     pub score: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_path: Option<String>,
@@ -328,6 +552,20 @@ impl Default for SearchResult {
             noise_score: 0.0,
             session_key: String::new(),
             lexical_shadow: default_lexical_shadow(),
+            memory_context: String::new(),
+            user_intent: String::new(),
+            topic: default_unknown(),
+            workflow: default_unknown(),
+            search_aliases: Vec::new(),
+            related_memory_ids: Vec::new(),
+            evidence_confidence: 0.0,
+            confidence_score: 0.0,
+            importance_score: 0.0,
+            specificity_score: 0.0,
+            intent_score: 0.0,
+            entity_score: 0.0,
+            agent_usefulness_score: 0.0,
+            ocr_noise_score: 0.0,
             score: 0.0,
             screenshot_path: None,
             url: None,
@@ -742,6 +980,63 @@ pub struct ProjectContext {
     pub privacy_class: PrivacyClass,
     #[serde(default)]
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgePageType {
+    #[default]
+    ProjectPage,
+    TopicPage,
+    ClaimPage,
+    DecisionPage,
+    PatternPage,
+    BreakthroughPage,
+    ContradictionPage,
+    FrameworkPage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeStability {
+    #[default]
+    Emerging,
+    Stable,
+    Contradicted,
+    Deprecated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct KnowledgePage {
+    pub page_id: String,
+    #[serde(default)]
+    pub page_type: KnowledgePageType,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub page_context: String,
+    #[serde(default)]
+    pub canonical_entities: Vec<String>,
+    #[serde(default)]
+    pub supporting_memory_ids: Vec<String>,
+    #[serde(default)]
+    pub supporting_evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub related_page_ids: Vec<String>,
+    #[serde(default)]
+    pub confidence_score: f32,
+    #[serde(default)]
+    pub stability: KnowledgeStability,
+    #[serde(default)]
+    pub first_seen: i64,
+    #[serde(default)]
+    pub last_updated: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
