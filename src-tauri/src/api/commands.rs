@@ -112,6 +112,17 @@ pub struct MemoryScoreBreakdown {
     pub ocr_noise: f32,
     pub graph_readiness: f32,
     pub retrieval_value: f32,
+    /// Top-k span concentration on clean_text — higher means a few dense spans
+    /// carry the document's signal.
+    #[serde(default)]
+    pub salience_concentration: f32,
+    /// Non-empty topic that meaningfully overlaps memory_context / entities.
+    #[serde(default)]
+    pub topic_clarity: f32,
+    /// Composite of OCR noise + (1 − salience_concentration). Higher means
+    /// the record is harder to retrieve usefully.
+    #[serde(default)]
+    pub pollution_ratio: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -552,6 +563,17 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
     } else {
         "Revisit context".to_string()
     };
+    let anchor_memory_context = if !result.memory_context.trim().is_empty() {
+        result.memory_context.clone()
+    } else {
+        result.internal_context.clone()
+    };
+    let continuation_of = crate::search::parse_continuation_of(&anchor_memory_context);
+    let reopen_target = crate::search::parse_reopen_target(
+        &anchor_memory_context,
+        result.url.as_deref(),
+        &result.files_touched,
+    );
     MemoryCard {
         id: memory_id.clone(),
         title,
@@ -561,7 +583,7 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         } else {
             result.display_summary.clone()
         },
-        internal_context: result.internal_context.clone(),
+        internal_context: anchor_memory_context,
         action,
         context,
         timestamp: result.timestamp,
@@ -578,6 +600,8 @@ fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         activity_type: result.activity_type.clone(),
         files_touched: result.files_touched.clone(),
         session_duration_mins: result.session_duration_mins,
+        continuation_of,
+        reopen_target,
     }
 }
 
@@ -1006,31 +1030,21 @@ fn compose_rebuild_embedding_text(record: &MemoryRecord) -> String {
 }
 
 fn regenerate_search_aliases_basic(record: &MemoryRecord) -> Vec<String> {
-    let mut values = Vec::new();
-    values.push(record.project.clone());
-    values.push(record.topic.clone());
-    values.push(record.workflow.clone());
-    values.push(record.user_intent.clone());
-    values.extend(record.entities.clone());
-    values.extend(record.files_touched.clone());
-    values.extend(record.related_tools.clone());
-    values.extend(record.decisions.clone());
-    values.extend(record.errors.clone());
-    if let Some(url) = record.url.as_deref() {
-        values.push(url.to_string());
+    // Delegate to the store-side noun-phrase generator so capture and rebuild
+    // paths produce identical alias sets. Falls back to a small heuristic seed
+    // when the structured fields are empty (legacy rows).
+    let aliases = crate::store::generate_search_aliases_public(record);
+    if !aliases.is_empty() {
+        return aliases;
     }
-    let mut aliases = dedupe_trimmed_strings(values, 64);
-    if aliases.is_empty() {
-        aliases = dedupe_trimmed_strings(
-            vec![
-                record.app_name.clone(),
-                record.window_title.clone(),
-                record.memory_context.clone(),
-            ],
-            64,
-        );
-    }
-    aliases
+    dedupe_trimmed_strings(
+        vec![
+            record.app_name.clone(),
+            record.window_title.clone(),
+            record.memory_context.clone(),
+        ],
+        24,
+    )
 }
 
 fn derive_rebuild_memory_context(
@@ -1141,6 +1155,9 @@ fn memory_quality_scores(memory: &MemoryRecord) -> MemoryScoreBreakdown {
         ocr_noise: memory.ocr_noise_score,
         graph_readiness: memory.graph_readiness_score,
         retrieval_value: memory.retrieval_value_score,
+        salience_concentration: crate::store::salience_concentration_score(memory),
+        topic_clarity: crate::store::topic_clarity_score(memory),
+        pollution_ratio: crate::store::pollution_ratio_score(memory),
     }
 }
 

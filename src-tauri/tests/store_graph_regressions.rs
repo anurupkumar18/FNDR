@@ -39,6 +39,9 @@ fn record(id: &str, snippet: &str, embedding_value: f32) -> MemoryRecord {
         support_embedding: embedding(embedding_value),
         decay_score: 1.0,
         last_accessed_at: 0,
+        // `record_insert_dedup_key` buckets by URL + title + 5m clock; without a unique
+        // hash, distinct regression memories in the same bucket collapse to one insert.
+        content_hash: format!("store-graph-regression-{id}"),
         ..Default::default()
     }
 }

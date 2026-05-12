@@ -2013,14 +2013,6 @@ fn path_segments(path: &str) -> Vec<String> {
         .collect()
 }
 
-fn looks_like_code_window(app_name: &str) -> bool {
-    let lowered = app_name.to_ascii_lowercase();
-    let generic_markers = ["code", "editor", "terminal", "ide", "dev", "shell"];
-    generic_markers
-        .iter()
-        .any(|marker| lowered.contains(marker))
-}
-
 fn is_meaningful_project_segment(segment: &str) -> bool {
     let trimmed = segment
         .trim()
@@ -2096,34 +2088,66 @@ fn infer_activity_type(record: &MemoryRecord) -> String {
     if !record.activity_type.trim().is_empty() {
         return record.activity_type.to_lowercase();
     }
+
+    // All branches below derive labels from already-extracted structured
+    // fields on `MemoryRecord`. No app-name or URL-host allowlists.
+    let has_errors = !record.errors.is_empty();
+    let has_commands = !record.commands.is_empty();
+    let has_decisions_count = record.decisions.len();
+    let has_next_steps_count = record.next_steps.len();
+    let has_files_touched_count = record.files_touched.len();
+    let memory_context_chars = record.memory_context.chars().count();
+
+    if has_errors && has_commands {
+        return "debugging".to_string();
+    }
+    if has_decisions_count >= 1 && has_next_steps_count >= 2 {
+        return "implementation planning".to_string();
+    }
+    if has_files_touched_count >= 2 && has_decisions_count == 0 {
+        return "refactor review".to_string();
+    }
+    if record
+        .decisions
+        .iter()
+        .any(|d| decision_verb_stem_design(d))
+    {
+        return "system design".to_string();
+    }
+    if has_next_steps_count >= 1 && record.url.is_some() {
+        return "architecture analysis".to_string();
+    }
+    if memory_context_chars > 800 && !has_errors && !has_commands {
+        return "instruction writing".to_string();
+    }
+
+    // Lightweight content-derived fallback when no strong structural signal
+    // is present. Uses only generic morphological cues, never app names.
     let text = format!(
-        "{} {} {} {}",
-        record.app_name.to_ascii_lowercase(),
-        record.window_title.to_ascii_lowercase(),
+        "{} {} {}",
         record.clean_text.to_ascii_lowercase(),
-        record.internal_context.to_ascii_lowercase()
+        record.internal_context.to_ascii_lowercase(),
+        record.memory_context.to_ascii_lowercase()
     );
     let mut scores: Vec<(&str, f32)> = vec![("unknown", 0.05)];
-
-    if !record.files_touched.is_empty() || looks_like_code_window(&record.app_name) {
-        scores.push(("coding", 0.36));
+    if has_files_touched_count > 0 {
+        scores.push(("coding", 0.32));
     }
-    if !record.errors.is_empty() || text.contains("error") || text.contains("failed") {
-        scores.push(("debugging", 0.44));
+    if has_errors || text.contains("error") || text.contains("failed") {
+        scores.push(("debugging", 0.40));
     }
-    if !record.decisions.is_empty() || text.contains("decision") || text.contains("tradeoff") {
+    if has_decisions_count > 0 || text.contains("decision") || text.contains("tradeoff") {
         scores.push(("planning", 0.30));
     }
     if record.url.is_some() {
         scores.push(("researching", 0.20));
     }
-    if !record.next_steps.is_empty() || text.contains("todo") || text.contains("next step") {
+    if has_next_steps_count > 0 || text.contains("todo") || text.contains("next step") {
         scores.push(("organizing_information", 0.24));
     }
     if text.contains("test") || text.contains("assert") || text.contains("validation") {
         scores.push(("testing_workflow", 0.26));
     }
-
     scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scores
         .first()
@@ -2131,7 +2155,29 @@ fn infer_activity_type(record: &MemoryRecord) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// True when a decision string starts with a generic design/proposal verb.
+/// Stems-only — independent of any product or library naming.
+fn decision_verb_stem_design(decision: &str) -> bool {
+    let lower = decision.trim().to_ascii_lowercase();
+    let first = lower.split_whitespace().next().unwrap_or("");
+    matches!(
+        first,
+        "design"
+            | "designed"
+            | "propose"
+            | "proposed"
+            | "plan"
+            | "planned"
+            | "architect"
+            | "architected"
+    )
+}
+
 fn build_event_title(record: &MemoryRecord) -> String {
+    let compressed = crate::graph::compress_node_label(record);
+    if !compressed.trim().is_empty() {
+        return trim_chars(&compressed, 96);
+    }
     if !record.display_summary.trim().is_empty() {
         return trim_chars(&record.display_summary, 96);
     }
@@ -2883,5 +2929,70 @@ mod tests {
             None
         );
         assert_eq!(infer_project_from_url(Some("https://github.com")), None);
+    }
+
+    #[test]
+    fn infer_activity_type_respects_explicit_non_empty_value() {
+        let mut memory = record();
+        memory.activity_type = "Researching".to_string();
+        assert_eq!(infer_activity_type(&memory), "researching");
+    }
+
+    #[test]
+    fn infer_activity_type_errors_and_commands_is_debugging() {
+        let mut memory = record();
+        memory.errors = vec!["timeout".to_string()];
+        memory.commands = vec!["cargo test".to_string()];
+        assert_eq!(infer_activity_type(&memory), "debugging");
+    }
+
+    #[test]
+    fn infer_activity_type_implementation_planning_signal() {
+        let mut memory = record();
+        memory.decisions = vec!["Ship incremental rollout".to_string()];
+        memory.next_steps = vec!["Add metrics".to_string(), "Cut feature flag".to_string()];
+        assert_eq!(infer_activity_type(&memory), "implementation planning");
+    }
+
+    #[test]
+    fn infer_activity_type_refactor_review_two_files_no_decisions() {
+        let mut memory = record();
+        memory.files_touched = vec!["a.rs".to_string(), "b.rs".to_string()];
+        assert_eq!(infer_activity_type(&memory), "refactor review");
+    }
+
+    #[test]
+    fn infer_activity_type_system_design_from_decision_stem() {
+        let mut memory = record();
+        memory.decisions = vec!["Design modular boundaries".to_string()];
+        memory.files_touched = vec!["a.rs".to_string(), "b.rs".to_string()];
+        assert_eq!(infer_activity_type(&memory), "system design");
+    }
+
+    #[test]
+    fn infer_activity_type_architecture_analysis_url_and_next_steps() {
+        let mut memory = record();
+        memory.url = Some("https://example.com/arch".to_string());
+        memory.next_steps = vec!["Document ADR".to_string()];
+        assert_eq!(infer_activity_type(&memory), "architecture analysis");
+    }
+
+    #[test]
+    fn infer_activity_type_instruction_writing_long_context() {
+        let mut memory = record();
+        memory.memory_context = "y".repeat(801);
+        assert_eq!(infer_activity_type(&memory), "instruction writing");
+    }
+
+    #[test]
+    fn infer_activity_type_fallback_scoring_from_text_signals() {
+        let mut memory = record();
+        memory.clean_text = "Investigated the compilation error on line 12".to_string();
+        assert_eq!(infer_activity_type(&memory), "debugging");
+
+        memory.clean_text = "Added unit tests and assertions for the parser".to_string();
+        memory.internal_context = String::new();
+        memory.memory_context = String::new();
+        assert_eq!(infer_activity_type(&memory), "testing_workflow");
     }
 }

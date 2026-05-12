@@ -188,42 +188,18 @@ function matchesFilters(
     return true;
 }
 
-function isStoryStyleApp(card: MemoryCard): boolean {
-    const app = card.app_name.toLowerCase();
-    const title = (card.window_title || "").toLowerCase();
-    const haystack = `${app} ${title}`;
-    return includesAny(haystack, [
-        "codex",
-        "antigravity",
-        "chatgpt",
-        "gemini",
-        "claude",
-        "cursor",
-        "visual studio code",
-        "vscode",
-        "vs code",
-        "terminal",
-        "iterm",
-        "zed",
-        "xcode",
-        "intellij",
-    ]);
-}
-
 function isContinuityCard(card: MemoryCard): boolean {
-    return Boolean(card.continuity) || card.source_count > 1;
+    return Boolean(card.continuity) || card.source_count > 1 || Boolean(card.continuation_of);
 }
 
-function buildStoryText(
-    title: string,
-    summary: string,
-    windowTitle: string
-): string {
-    return (
-        normalizeText(summary)
-        || normalizeText(title)
-        || normalizeText(windowTitle)
-    );
+const MEMORY_BODY_TRUNCATE_CHARS = 360;
+
+function memoryBodyText(card: MemoryCard): string {
+    const raw = normalizeText(card.internal_context) || fallbackSummary(card);
+    return raw
+        .replace(/^Continues from\s+\S+(?::[^\n]*)?\n?/m, "")
+        .replace(/^Reopen:\s+\S+\s*\n?/m, "")
+        .trim();
 }
 
 function cardCopy(
@@ -231,17 +207,44 @@ function cardCopy(
 ): {
     title: string;
     summary: string;
-    storyMode: boolean;
-    story: string;
+    body: string;
     continuity: boolean;
 } {
     const title = fallbackTitle(card);
-    const storyMode = isStoryStyleApp(card);
     const continuity = isContinuityCard(card);
     const summary = fallbackSummary(card);
-    const story = buildStoryText(title, summary, card.window_title);
+    const body = memoryBodyText(card) || summary;
 
-    return { title, summary, storyMode, story, continuity };
+    return { title, summary, body, continuity };
+}
+
+function isHttpUrl(target: string): boolean {
+    return /^https?:\/\//i.test(target);
+}
+
+function isFileUrl(target: string): boolean {
+    return /^file:\/\//i.test(target);
+}
+
+async function handleReopen(target: string) {
+    if (isHttpUrl(target)) {
+        window.open(target, "_blank", "noopener,noreferrer");
+        return;
+    }
+    if (isFileUrl(target)) {
+        try {
+            const shellModule = await import("@tauri-apps/plugin-shell");
+            await shellModule.open(target);
+            return;
+        } catch (err) {
+            console.warn("Shell open failed; copying target to clipboard", err);
+        }
+    }
+    try {
+        await navigator.clipboard.writeText(target);
+    } catch (err) {
+        console.warn("Clipboard write failed", err);
+    }
 }
 
 function formatDay(timestamp: number): string {
@@ -274,6 +277,19 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
     const [openDebugIds, setOpenDebugIds] = useState<Set<string>>(new Set());
     const [debugById, setDebugById] = useState<Record<string, MemoryDebugInspector>>({});
     const [debugLoadingId, setDebugLoadingId] = useState<string | null>(null);
+    const [expandedBodyIds, setExpandedBodyIds] = useState<Set<string>>(new Set());
+
+    const toggleExpandedBody = (memoryId: string) => {
+        setExpandedBodyIds((previous) => {
+            const next = new Set(previous);
+            if (next.has(memoryId)) {
+                next.delete(memoryId);
+            } else {
+                next.add(memoryId);
+            }
+            return next;
+        });
+    };
 
     const selectableApps = useMemo(() => {
         return appNames
@@ -479,7 +495,14 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                 {filteredCards.length > 0 && (
                     <div className="memory-cards-stream">
                         {filteredCards.slice(0, MAX_RENDERED_CARDS).map((card) => {
-                            const { summary, storyMode, story } = cardCopy(card);
+                            const { body } = cardCopy(card);
+                            const expanded = expandedBodyIds.has(card.id);
+                            const truncated = body.length > MEMORY_BODY_TRUNCATE_CHARS;
+                            const displayBody = !expanded && truncated
+                                ? `${body.slice(0, MEMORY_BODY_TRUNCATE_CHARS).trimEnd()}…`
+                                : body;
+                            const reopenTarget = card.reopen_target?.trim();
+                            const continuationId = card.continuation_of?.trim();
 
                             return (
                                 <article
@@ -536,13 +559,38 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                         </div>
                                     </div>
                                     <div className="memory-browse-content">
-                                        {storyMode ? (
-                                            <div className="memory-browse-summary memory-browse-summary-primary">
-                                                {story}
-                                            </div>
-                                        ) : (
-                                            <div className="memory-browse-summary memory-browse-summary-primary">
-                                                {summary}
+                                        <div className="memory-browse-summary memory-browse-summary-primary">
+                                            {displayBody}
+                                            {truncated && (
+                                                <button
+                                                    type="button"
+                                                    className="memory-body-expand"
+                                                    onClick={() => toggleExpandedBody(card.id)}
+                                                >
+                                                    {expanded ? "Show less" : "Show more"}
+                                                </button>
+                                            )}
+                                        </div>
+                                        {(reopenTarget || continuationId) && (
+                                            <div className="memory-browse-affordances">
+                                                {reopenTarget && (
+                                                    <button
+                                                        type="button"
+                                                        className="memory-reopen-anchor"
+                                                        onClick={() => { void handleReopen(reopenTarget); }}
+                                                        title={reopenTarget}
+                                                    >
+                                                        Reopen
+                                                    </button>
+                                                )}
+                                                {continuationId && (
+                                                    <span
+                                                        className="memory-continuation-chip"
+                                                        title={`Continues from ${continuationId}`}
+                                                    >
+                                                        Continues from earlier capture
+                                                    </span>
+                                                )}
                                             </div>
                                         )}
                                         {card.files_touched && card.files_touched.length > 0 && (

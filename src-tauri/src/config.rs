@@ -69,6 +69,8 @@ pub const DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN: f32 = 0.60;
 pub const DEFAULT_PRIMARY_MEMORY_INTENT_MIN: f32 = 0.55;
 pub const DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN: f32 = 0.60;
 pub const DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX: f32 = 0.50;
+pub const DEFAULT_MEMORY_CONTEXT_MIN_CHARS: u32 = 220;
+pub const DEFAULT_MEMORY_CONTEXT_MAX_CHARS: u32 = 1800;
 
 /// Local text embedding configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -447,6 +449,17 @@ pub struct MemoryQualityConfig {
     pub primary_memory_agent_usefulness_min: f32,
     #[serde(default = "default_primary_memory_ocr_noise_max")]
     pub primary_memory_ocr_noise_max: f32,
+    /// Lower bound on durable `memory_context` length (chars). Capture-time
+    /// synthesis pads with grounded fields until at least this many characters
+    /// are emitted; downstream estimators treat values below this as a
+    /// soft signal of weak grounding.
+    #[serde(default = "default_memory_context_min_chars")]
+    pub memory_context_min_chars: u32,
+    /// Upper bound on durable `memory_context` length (chars). Long-running
+    /// sessions get truncated to this many characters so the field stays
+    /// embedding-friendly.
+    #[serde(default = "default_memory_context_max_chars")]
+    pub memory_context_max_chars: u32,
 }
 
 impl Default for MemoryQualityConfig {
@@ -456,6 +469,8 @@ impl Default for MemoryQualityConfig {
             primary_memory_intent_min: default_primary_memory_intent_min(),
             primary_memory_agent_usefulness_min: default_primary_memory_agent_usefulness_min(),
             primary_memory_ocr_noise_max: default_primary_memory_ocr_noise_max(),
+            memory_context_min_chars: default_memory_context_min_chars(),
+            memory_context_max_chars: default_memory_context_max_chars(),
         }
     }
 }
@@ -467,6 +482,10 @@ impl MemoryQualityConfig {
         self.primary_memory_agent_usefulness_min =
             self.primary_memory_agent_usefulness_min.clamp(0.0, 1.0);
         self.primary_memory_ocr_noise_max = self.primary_memory_ocr_noise_max.clamp(0.0, 1.0);
+        self.memory_context_min_chars = self.memory_context_min_chars.clamp(80, 4_096);
+        self.memory_context_max_chars = self
+            .memory_context_max_chars
+            .clamp(self.memory_context_min_chars, 8_192);
         self
     }
 }
@@ -822,6 +841,14 @@ fn default_primary_memory_agent_usefulness_min() -> f32 {
 
 fn default_primary_memory_ocr_noise_max() -> f32 {
     DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX
+}
+
+fn default_memory_context_min_chars() -> u32 {
+    DEFAULT_MEMORY_CONTEXT_MIN_CHARS
+}
+
+fn default_memory_context_max_chars() -> u32 {
+    DEFAULT_MEMORY_CONTEXT_MAX_CHARS
 }
 
 fn default_use_vlm() -> bool {

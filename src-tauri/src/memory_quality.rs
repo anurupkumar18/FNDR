@@ -1,9 +1,9 @@
 //! Shared memory-quality helpers used by capture, store normalization, and API diagnostics.
 
 use crate::config::{
-    MemoryQualityConfig, DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN,
-    DEFAULT_PRIMARY_MEMORY_INTENT_MIN, DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX,
-    DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN,
+    MemoryQualityConfig, DEFAULT_MEMORY_CONTEXT_MAX_CHARS, DEFAULT_MEMORY_CONTEXT_MIN_CHARS,
+    DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN, DEFAULT_PRIMARY_MEMORY_INTENT_MIN,
+    DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX, DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN,
 };
 use crate::store::MemoryRecord;
 
@@ -13,6 +13,8 @@ pub fn default_memory_quality_config() -> MemoryQualityConfig {
         primary_memory_intent_min: DEFAULT_PRIMARY_MEMORY_INTENT_MIN,
         primary_memory_agent_usefulness_min: DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN,
         primary_memory_ocr_noise_max: DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX,
+        memory_context_min_chars: DEFAULT_MEMORY_CONTEXT_MIN_CHARS,
+        memory_context_max_chars: DEFAULT_MEMORY_CONTEXT_MAX_CHARS,
     }
 }
 

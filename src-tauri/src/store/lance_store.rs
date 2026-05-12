@@ -1763,6 +1763,52 @@ impl Store {
         Ok(None)
     }
 
+    /// Fetch the up-to-`limit` newest memories that share `session_id` or
+    /// `project` with the given record id. Used by capture-time durable
+    /// `memory_context` synthesis to chain a new card to its predecessors
+    /// without storing extra columns.
+    pub async fn list_recent_by_session_or_project(
+        &self,
+        session_id: &str,
+        project: &str,
+        exclude_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        if session_id.trim().is_empty() && project.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut clauses = Vec::new();
+        if !session_id.trim().is_empty() {
+            clauses.push(format!("session_id = '{}'", sql_escape(session_id)));
+        }
+        if !project.trim().is_empty() {
+            clauses.push(format!("project = '{}'", sql_escape(project)));
+        }
+        let mut filter = clauses.join(" OR ");
+        if let Some(exclude) = exclude_id.filter(|s| !s.trim().is_empty()) {
+            filter = format!("({}) AND id <> '{}'", filter, sql_escape(exclude));
+        }
+
+        let mut query = self
+            .table
+            .query()
+            .select(Select::columns(SEARCH_RESULT_COLUMNS));
+        query = query.only_if(filter);
+
+        let batches: Vec<RecordBatch> = query.execute().await?.try_collect().await?;
+        let mut results = Vec::new();
+        for batch in &batches {
+            let mut batch_results = batch_to_search_results(batch);
+            for result in &mut batch_results {
+                result.score = 1.0;
+            }
+            results.extend(batch_results);
+        }
+        results.sort_by_key(|result| std::cmp::Reverse(result.timestamp));
+        results.truncate(limit.max(1));
+        Ok(results)
+    }
+
     /// List newest memories as raw search-style rows (optionally filtered by app).
     pub async fn list_recent_results(
         &self,
@@ -4499,9 +4545,15 @@ fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
             .clamp(0.0, 1.0);
     }
     if normalized.retrieval_value_score <= 0.0 {
-        normalized.retrieval_value_score = ((normalized.agent_usefulness_score * 0.45)
-            + (normalized.specificity_score * 0.30)
-            + (normalized.intent_score * 0.25))
+        let salience_concentration = estimate_salience_concentration(&normalized);
+        let topic_clarity = estimate_topic_clarity(&normalized);
+        let pollution = estimate_pollution_ratio(&normalized);
+        normalized.retrieval_value_score = ((normalized.agent_usefulness_score * 0.35)
+            + (normalized.specificity_score * 0.25)
+            + (normalized.intent_score * 0.15)
+            + (salience_concentration * 0.15)
+            + (topic_clarity * 0.10)
+            - (pollution * 0.20))
             .clamp(0.0, 1.0);
     }
     if normalized.storage_outcome.trim().is_empty() {
@@ -4558,6 +4610,14 @@ fn infer_source_type(record: &MemoryRecord) -> String {
 }
 
 fn derive_memory_context(record: &MemoryRecord) -> String {
+    let quality_config = default_memory_quality_config();
+    derive_memory_context_with_config(record, &quality_config)
+}
+
+fn derive_memory_context_with_config(
+    record: &MemoryRecord,
+    config: &crate::config::MemoryQualityConfig,
+) -> String {
     let summary = if !record.display_summary.trim().is_empty() {
         record.display_summary.trim()
     } else {
@@ -4652,7 +4712,7 @@ fn derive_memory_context(record: &MemoryRecord) -> String {
     if parts.is_empty() {
         return trim_chars(&record.window_title, 220);
     }
-    trim_chars(&parts.join("\n"), 1_200)
+    trim_chars(&parts.join("\n"), config.memory_context_max_chars as usize)
 }
 
 fn infer_topic(record: &MemoryRecord) -> String {
@@ -4809,6 +4869,8 @@ fn compose_embedding_text(record: &MemoryRecord) -> String {
     push_text_segment(&mut segments, &record.project, "project");
     push_text_segment(&mut segments, &record.topic, "topic");
     push_text_segment(&mut segments, &record.workflow, "workflow");
+    // The durable memory_context anchors retrieval; keep it immediately after
+    // the structured anchors and ahead of enumerated fields.
     push_text_segment(&mut segments, &record.memory_context, "context");
 
     let entity_blob = record.entities.join(", ");
@@ -4834,11 +4896,12 @@ fn compose_embedding_text(record: &MemoryRecord) -> String {
         push_text_segment(&mut segments, url, "urls");
     }
     push_text_segment(&mut segments, &record.commands.join("; "), "commands");
-    push_text_segment(
-        &mut segments,
-        &trim_chars(&record.clean_text, 360),
-        "raw_evidence",
+    let evidence = crate::capture::text_cleanup::compress_to_salient_evidence(
+        &record.clean_text,
+        &record.app_name,
+        360,
     );
+    push_text_segment(&mut segments, &evidence, "raw_evidence");
 
     trim_chars(&segments.join("\n"), 2_000)
 }
@@ -4851,8 +4914,125 @@ fn push_text_segment(out: &mut Vec<String>, value: &str, label: &str) {
     out.push(format!("{label}: {trimmed}"));
 }
 
+/// Source noun-phrase candidates for alias generation from the strongest
+/// semantic fields: topic, workflow, decisions, next_steps, and the head of
+/// memory_context. Returns trimmed phrase strings.
+fn alias_noun_phrase_sources(record: &MemoryRecord) -> Vec<String> {
+    let mut phrases: Vec<String> = Vec::new();
+    let push_if_non_empty = |out: &mut Vec<String>, value: &str| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("unknown") {
+            return;
+        }
+        out.push(trimmed.to_string());
+    };
+    push_if_non_empty(&mut phrases, &record.topic);
+    push_if_non_empty(&mut phrases, &record.workflow);
+    push_if_non_empty(&mut phrases, &record.project);
+    for decision in record.decisions.iter().take(3) {
+        push_if_non_empty(&mut phrases, decision);
+    }
+    for step in record.next_steps.iter().take(3) {
+        push_if_non_empty(&mut phrases, step);
+    }
+    // memory_context head (first salient span) reuses the same scoring helper
+    // so the noun-phrase set stays consistent with the embedding tail.
+    let context_head: String = record
+        .memory_context
+        .split("\n\n")
+        .next()
+        .unwrap_or("")
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(140)
+        .collect();
+    push_if_non_empty(&mut phrases, &context_head);
+    phrases
+}
+
+fn acronym_for_phrase(value: &str) -> Option<String> {
+    let tokens: Vec<&str> = value
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .collect();
+    let capital_tokens = tokens
+        .iter()
+        .filter(|tok| tok.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
+        .count();
+    // Only emit acronyms for proper-noun compounds (≥2 capitalized tokens).
+    if capital_tokens < 2 || tokens.len() < 2 {
+        return None;
+    }
+    let acronym: String = tokens
+        .iter()
+        .filter_map(|tok| tok.chars().next())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if acronym.len() >= 2 {
+        Some(acronym)
+    } else {
+        None
+    }
+}
+
+/// Public re-export so capture/api rebuild paths share one alias generator.
+pub fn generate_search_aliases_public(record: &MemoryRecord) -> Vec<String> {
+    generate_search_aliases(record)
+}
+
+/// Diagnostics-facing wrappers around the new retrieval-aware estimators.
+pub fn salience_concentration_score(record: &MemoryRecord) -> f32 {
+    estimate_salience_concentration(record)
+}
+
+pub fn topic_clarity_score(record: &MemoryRecord) -> f32 {
+    estimate_topic_clarity(record)
+}
+
+pub fn pollution_ratio_score(record: &MemoryRecord) -> f32 {
+    estimate_pollution_ratio(record)
+}
+
 fn generate_search_aliases(record: &MemoryRecord) -> Vec<String> {
-    let mut aliases = HashSet::new();
+    let mut aliases: HashSet<String> = HashSet::new();
+    let push_alias = |aliases: &mut HashSet<String>, value: String| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        aliases.insert(trimmed.to_ascii_lowercase());
+    };
+
+    // Phrase-based sources keep aliases anchored to noun-phrases.
+    for phrase in alias_noun_phrase_sources(record) {
+        push_alias(&mut aliases, phrase.clone());
+        let underscored = phrase.replace('_', " ");
+        if underscored != phrase {
+            push_alias(&mut aliases, underscored);
+        }
+        let dashed = phrase.replace('-', " ");
+        if dashed != phrase {
+            push_alias(&mut aliases, dashed);
+        }
+        if let Some(acronym) = acronym_for_phrase(&phrase) {
+            push_alias(&mut aliases, acronym);
+        }
+        // Compact form (no spaces) only when the phrase is ≤3 tokens to avoid
+        // generating opaque alphabet soup from long sentences.
+        let token_count = phrase.split_whitespace().count();
+        if token_count > 0 && token_count <= 3 {
+            let compact = normalize_keyword_text(&phrase).replace(' ', "");
+            if compact.len() >= 3 {
+                push_alias(&mut aliases, compact);
+            }
+        }
+    }
+
+    // Explicit names — entities, files, tags, related tools — surface as-is
+    // but never get acronymized, which is the source of the historical
+    // `df`/`lco`/`mce` noise.
     for value in record
         .entities
         .iter()
@@ -4864,30 +5044,21 @@ fn generate_search_aliases(record: &MemoryRecord) -> Vec<String> {
         if base.is_empty() {
             continue;
         }
-        aliases.insert(base.to_ascii_lowercase());
-        aliases.insert(base.replace('_', " ").to_ascii_lowercase());
-        aliases.insert(base.replace('-', " ").to_ascii_lowercase());
-        let acronym = acronym_for(base);
-        if acronym.len() >= 2 {
-            aliases.insert(acronym.to_ascii_lowercase());
+        push_alias(&mut aliases, base.to_string());
+        let underscored = base.replace('_', " ");
+        if underscored != base {
+            push_alias(&mut aliases, underscored);
         }
-        let compact = normalize_keyword_text(base).replace(' ', "");
-        if compact.len() >= 3 {
-            aliases.insert(compact);
+        let dashed = base.replace('-', " ");
+        if dashed != base {
+            push_alias(&mut aliases, dashed);
         }
     }
+
     let mut out = aliases.into_iter().collect::<Vec<_>>();
     out.sort();
     out.truncate(24);
     out
-}
-
-fn acronym_for(value: &str) -> String {
-    value
-        .split(|ch: char| !ch.is_alphanumeric())
-        .filter(|part| !part.is_empty())
-        .filter_map(|part| part.chars().next())
-        .collect::<String>()
 }
 
 fn build_raw_evidence_payload(record: &MemoryRecord) -> String {
@@ -5091,6 +5262,49 @@ fn estimate_importance_score(record: &MemoryRecord) -> f32 {
         score += 0.14;
     }
     score.clamp(0.0, 1.0)
+}
+
+/// Top-k span concentration on `clean_text`. Higher means a few dense spans
+/// carry the document's signal — a strong indicator that retrieval against
+/// this record will surface meaningful matches.
+fn estimate_salience_concentration(record: &MemoryRecord) -> f32 {
+    crate::capture::text_cleanup::salience_concentration(&record.clean_text, &record.app_name)
+}
+
+/// Crude topic-clarity signal: non-empty/non-"unknown" topic with at least
+/// some token presence in `memory_context` or `entities`. Range [0, 1].
+fn estimate_topic_clarity(record: &MemoryRecord) -> f32 {
+    let topic = record.topic.trim();
+    if topic.is_empty() || topic.eq_ignore_ascii_case("unknown") {
+        return 0.0;
+    }
+    let topic_norm = normalize_keyword_text(topic);
+    let topic_tokens: HashSet<&str> = topic_norm
+        .split_whitespace()
+        .filter(|t| t.len() >= 3)
+        .collect();
+    if topic_tokens.is_empty() {
+        return 0.25;
+    }
+    let context_norm = normalize_keyword_text(&record.memory_context);
+    let entities_norm = normalize_keyword_text(&record.entities.join(" "));
+    let mut hits = 0usize;
+    for token in &topic_tokens {
+        if context_norm.contains(token) || entities_norm.contains(token) {
+            hits += 1;
+        }
+    }
+    let coverage = hits as f32 / topic_tokens.len() as f32;
+    (0.30 + coverage * 0.70).clamp(0.0, 1.0)
+}
+
+/// Pollution ratio: blends OCR noise with the inverse of salience
+/// concentration. Higher → noisier / less useful for retrieval.
+fn estimate_pollution_ratio(record: &MemoryRecord) -> f32 {
+    let noise = record.ocr_noise_score.clamp(0.0, 1.0);
+    let concentration = estimate_salience_concentration(record);
+    let diffusion = (1.0 - concentration).clamp(0.0, 1.0);
+    ((noise * 0.55) + (diffusion * 0.45)).clamp(0.0, 1.0)
 }
 
 fn estimate_agent_usefulness_score(record: &MemoryRecord) -> f32 {
@@ -6168,5 +6382,52 @@ mod tests {
         assert!(is_supported_dedup_fingerprint(
             &normalized.dedup_fingerprint
         ));
+    }
+
+    #[test]
+    fn generate_search_aliases_noun_phrases_compact_and_acronym() {
+        let mut r = record(
+            Some("https://example.com/doc"),
+            "Notes",
+            "Supporting snippet for alias coverage.",
+        );
+        r.topic = "Memory Card Storage".to_string();
+        r.workflow = "unknown".to_string();
+        r.project = "unknown".to_string();
+        let aliases = generate_search_aliases_public(&r);
+        assert!(
+            aliases.contains(&"memory card storage".to_string()),
+            "expected lowercase phrase, got {aliases:?}"
+        );
+        assert!(
+            aliases.contains(&"memorycardstorage".to_string()),
+            "expected ≤3-token compact alias, got {aliases:?}"
+        );
+
+        r.topic = "HTTP API Gateway".to_string();
+        let aliases = generate_search_aliases_public(&r);
+        assert!(aliases.contains(&"http api gateway".to_string()));
+        assert!(
+            aliases.contains(&"hag".to_string()),
+            "expected acronym for multi-token proper noun phrase, got {aliases:?}"
+        );
+    }
+
+    #[test]
+    fn generate_search_aliases_entity_underscore_variant_without_acronym_noise() {
+        let mut r = record(
+            Some("https://example.com/x"),
+            "Editor",
+            "Touched config files.",
+        );
+        r.topic = "unknown".to_string();
+        r.entities = vec!["fndr_search_pipeline".to_string()];
+        let aliases = generate_search_aliases_public(&r);
+        assert!(aliases.contains(&"fndr_search_pipeline".to_string()));
+        assert!(aliases.contains(&"fndr search pipeline".to_string()));
+        assert!(
+            !aliases.iter().any(|a| a.len() == 2 && a.chars().all(|c| c.is_ascii_lowercase())),
+            "single-token entities must not produce two-letter acronym noise: {aliases:?}"
+        );
     }
 }

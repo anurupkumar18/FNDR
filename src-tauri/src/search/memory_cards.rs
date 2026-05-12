@@ -52,6 +52,16 @@ pub struct MemoryCard {
     /// Approximate session duration in minutes (0 if single capture)
     #[serde(default)]
     pub session_duration_mins: u32,
+    /// Short id of the prior card this one continues from, parsed out of
+    /// the durable `memory_context` "Continues from <short_id>" marker.
+    /// Never persisted on its own — derived from `memory_context` metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation_of: Option<String>,
+    /// URL / file:// / app:// link recovered from the durable `memory_context`
+    /// "Reopen: …" marker, or from `record.url` / `record.files_touched[0]`
+    /// when the marker is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_target: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -222,16 +232,23 @@ impl MemoryCardSynthesizer {
             let files_touched = extract_files_touched(&snippets);
             let session_duration_mins = compute_session_duration(&group.members);
 
+            let anchor_memory_context = if !anchor.memory_context.trim().is_empty() {
+                anchor.memory_context.clone()
+            } else {
+                anchor.internal_context.clone()
+            };
+            let continuation_of = parse_continuation_of(&anchor_memory_context);
+            let reopen_target = parse_reopen_target(
+                &anchor_memory_context,
+                anchor.url.as_deref(),
+                &files_touched,
+            );
             cards.push(MemoryCard {
                 id: anchor.id.clone(),
                 title,
                 summary: summary.clone(),
                 display_summary: summary,
-                internal_context: if !anchor.memory_context.trim().is_empty() {
-                    anchor.memory_context.clone()
-                } else {
-                    anchor.internal_context.clone()
-                },
+                internal_context: anchor_memory_context,
                 action,
                 context,
                 timestamp: anchor.timestamp,
@@ -248,6 +265,8 @@ impl MemoryCardSynthesizer {
                 activity_type,
                 files_touched,
                 session_duration_mins,
+                continuation_of,
+                reopen_target,
             });
         }
 
@@ -709,16 +728,20 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     }
     let activity_type = infer_activity_type(&result.app_name, &result.window_title, &snippets);
     let files_touched = extract_files_touched(&snippets);
+    let anchor_memory_context = if !result.memory_context.trim().is_empty() {
+        result.memory_context.clone()
+    } else {
+        result.internal_context.clone()
+    };
+    let continuation_of = parse_continuation_of(&anchor_memory_context);
+    let reopen_target =
+        parse_reopen_target(&anchor_memory_context, result.url.as_deref(), &files_touched);
     MemoryCard {
         id: result.id.clone(),
         title,
         summary: summary.clone(),
         display_summary: summary,
-        internal_context: if !result.memory_context.trim().is_empty() {
-            result.memory_context.clone()
-        } else {
-            result.internal_context.clone()
-        },
+        internal_context: anchor_memory_context,
         action,
         context,
         timestamp: result.timestamp,
@@ -735,17 +758,65 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         activity_type,
         files_touched,
         session_duration_mins: 0,
+        continuation_of,
+        reopen_target,
     }
 }
 
-/// Classify the high-level activity from app/window/snippet signals.
-fn infer_activity_type(app_name: &str, window_title: &str, snippets: &[String]) -> String {
-    let haystack = format!(
-        "{} {} {}",
-        app_name.to_lowercase(),
-        window_title.to_lowercase(),
-        snippets.join(" ").to_lowercase()
-    );
+/// Extract the short id encoded by `build_durable_memory_context` after
+/// `Continues from `. Returns the trimmed first whitespace-delimited token
+/// (never an arbitrary substring). Empty when the marker is absent.
+pub fn parse_continuation_of(memory_context: &str) -> Option<String> {
+    for line in memory_context.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Continues from ") {
+            let id = rest
+                .split(|ch: char| ch == ':' || ch.is_whitespace())
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !id.is_empty() {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Recover the reopen target token from `memory_context`, falling back to
+/// `url` then the first `files_touched` entry.
+pub fn parse_reopen_target(
+    memory_context: &str,
+    url: Option<&str>,
+    files_touched: &[String],
+) -> Option<String> {
+    for line in memory_context.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Reopen: ") {
+            let value = rest.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    if let Some(u) = url.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(u.to_string());
+    }
+    if let Some(first) = files_touched
+        .iter()
+        .map(|s| s.trim())
+        .find(|s| !s.is_empty())
+    {
+        return Some(format!("file://{}", first));
+    }
+    None
+}
+
+/// Classify the high-level activity from content-derived signals only.
+/// All cues are generic English / file-extension morphology — no app names,
+/// no URL-host allowlists.
+fn infer_activity_type(_app_name: &str, _window_title: &str, snippets: &[String]) -> String {
+    let haystack = snippets.join(" ").to_lowercase();
 
     let mut scores = vec![("other", 0.04_f32)];
     if contains_any(&haystack, &["error", "failed", "trace", "exception"]) {
@@ -762,14 +833,11 @@ fn infer_activity_type(app_name: &str, window_title: &str, snippets: &[String]) 
     }
     if contains_any(
         &haystack,
-        &["code", "function", ".rs", ".ts", ".py", "class ", "impl "],
+        &["function", ".rs", ".ts", ".py", "class ", "impl "],
     ) {
         scores.push(("coding", 0.34));
     }
-    if contains_any(
-        &haystack,
-        &["http://", "https://", "www.", "browser", "search"],
-    ) {
+    if contains_any(&haystack, &["http://", "https://"]) {
         scores.push(("researching", 0.24));
     }
 

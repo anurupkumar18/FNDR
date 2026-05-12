@@ -36,6 +36,7 @@ const GENERIC_BROWSER_LABELS: &[&str] = &[
     "discover",
     "notifications",
     "inbox",
+    "starred",
     "settings",
     "untitled",
 ];
@@ -149,7 +150,7 @@ fn looks_like_notification_fragment(line: &str) -> bool {
         || lower.contains(" hours ago")
         || lower.contains(" liked this")
         || lower.contains(" replied")
-        || lower.contains(" suggested for you")
+        || lower.contains("suggested for you")
         || lower.starts_with("breaking:")
 }
 
@@ -277,6 +278,11 @@ fn should_drop_line(app_name: &str, line: &str) -> bool {
     }
 
     if browser_app && is_generic_browser_label(line) {
+        return true;
+    }
+
+    // Mail sidebars reuse the same short nav labels as browser chrome in OCR.
+    if mail_app && is_generic_browser_label(line) {
         return true;
     }
 
@@ -521,6 +527,232 @@ pub fn reduce_chrome_noise(text: &str) -> String {
     reduce_chrome_noise_for_app("", text)
 }
 
+// ── Semantic salience ranking ────────────────────────────────────────────────
+//
+// `rank_salient_spans`, `compress_to_salient_evidence`, and
+// `salience_concentration` extend the existing `line_quality_score` /
+// `estimate_noise_score` primitives one level up: a salient *span* is the
+// blank-line- or sentence-bounded fragment likely to carry meaning rather than
+// chrome. All signals are morphological / lexical / structural — no app names
+// or URL hosts.
+
+#[derive(Debug, Clone)]
+pub struct SalientSpan {
+    pub text: String,
+    pub score: f32,
+}
+
+/// Maximum number of spans considered for salience aggregation; bounded so
+/// pathological inputs don't run quadratic ranking.
+const MAX_RANKED_SPANS: usize = 64;
+
+fn split_block_into_sentences(block: &str) -> Vec<String> {
+    let trimmed = block.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut buffer = String::new();
+    let mut chars = trimmed.chars().peekable();
+    while let Some(ch) = chars.next() {
+        buffer.push(ch);
+        let is_terminator = matches!(ch, '.' | '!' | '?');
+        let next_is_break = matches!(chars.peek(), Some(' ') | Some('\n') | None);
+        if is_terminator && next_is_break {
+            let candidate = buffer.trim().to_string();
+            if candidate.chars().count() >= 12 {
+                out.push(candidate);
+                buffer.clear();
+            }
+        } else if ch == '\n' {
+            let candidate = buffer.trim().to_string();
+            if candidate.chars().count() >= 12 {
+                out.push(candidate);
+                buffer.clear();
+            }
+        }
+    }
+    let tail = buffer.trim().to_string();
+    if !tail.is_empty() {
+        out.push(tail);
+    }
+    if out.is_empty() {
+        out.push(trimmed.to_string());
+    }
+    out
+}
+
+fn span_score(app_name: &str, span: &str) -> f32 {
+    let normalized = normalize_inline(span);
+    if normalized.chars().count() < 10 {
+        return 0.0;
+    }
+
+    let mut line_sum = 0.0_f32;
+    let mut line_count = 0usize;
+    for line in span.lines() {
+        let line = normalize_inline(line.trim());
+        if line.is_empty() {
+            continue;
+        }
+        line_sum += line_quality_score(app_name, &line, false);
+        line_count += 1;
+    }
+    let avg_line = if line_count == 0 {
+        line_quality_score(app_name, &normalized, false)
+    } else {
+        line_sum / line_count as f32
+    };
+
+    let tokens: Vec<&str> = normalized.split_whitespace().collect();
+    if tokens.is_empty() {
+        return 0.0;
+    }
+
+    let cap_count = tokens
+        .iter()
+        .filter(|tok| {
+            tok.chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false)
+        })
+        .count();
+    let cap_ratio = ((cap_count as f32 / tokens.len() as f32).min(0.45) / 0.45).clamp(0.0, 1.0);
+
+    let verb_count = tokens
+        .iter()
+        .filter(|tok| {
+            let lower = tok.to_ascii_lowercase();
+            lower.ends_with("ed")
+                || lower.ends_with("ing")
+                || lower.ends_with("tion")
+                || lower.ends_with("sion")
+                || lower.ends_with("ment")
+                || lower.ends_with("able")
+                || lower.ends_with("ible")
+        })
+        .count();
+    let verb_ratio = ((verb_count as f32 / tokens.len() as f32).min(0.30) / 0.30).clamp(0.0, 1.0);
+
+    let lower = normalized.to_ascii_lowercase();
+    const CUE_WORDS: &[&str] = &[
+        "because",
+        "however",
+        "therefore",
+        "should",
+        "must",
+        "todo",
+        "next",
+        "plan",
+        "need to",
+        "consider",
+        "implement",
+        "review",
+        "fix",
+        "blocker",
+        "decided",
+        "open question",
+    ];
+    let cue_count = CUE_WORDS.iter().filter(|w| lower.contains(*w)).count();
+    let cue_bonus = (cue_count as f32 * 0.05).min(0.18);
+
+    let length_ratio = (normalized.chars().count().min(280) as f32 / 280.0).clamp(0.0, 1.0);
+
+    let distinct: HashSet<&&str> = tokens.iter().collect();
+    let distinct_ratio = (distinct.len() as f32 / tokens.len() as f32).clamp(0.0, 1.0);
+
+    let score = avg_line * 0.40
+        + cap_ratio * 0.12
+        + verb_ratio * 0.10
+        + length_ratio * 0.16
+        + distinct_ratio * 0.12
+        + cue_bonus;
+
+    score.clamp(0.0, 1.0)
+}
+
+/// Score and order content-bearing spans in `cleaned`. Spans are split on
+/// blank-line boundaries first, then on sentence terminators inside each
+/// block. The returned vector is sorted high-score first.
+pub fn rank_salient_spans(cleaned: &str, app_name: &str) -> Vec<SalientSpan> {
+    if cleaned.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut spans: Vec<SalientSpan> = Vec::new();
+    for block in cleaned.split("\n\n") {
+        for sentence in split_block_into_sentences(block) {
+            if spans.len() >= MAX_RANKED_SPANS {
+                break;
+            }
+            let trimmed = sentence.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let score = span_score(app_name, trimmed);
+            if score <= 0.0 {
+                continue;
+            }
+            spans.push(SalientSpan {
+                text: trimmed.to_string(),
+                score,
+            });
+        }
+        if spans.len() >= MAX_RANKED_SPANS {
+            break;
+        }
+    }
+    spans.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    spans
+}
+
+/// Replace the blind 320-character tail used by embedding composition with the
+/// highest-ranked salient spans, capped at `max_chars`. Falls back to the raw
+/// head of `cleaned` only when no scoring spans are recovered (e.g. very short
+/// inputs).
+pub fn compress_to_salient_evidence(cleaned: &str, app_name: &str, max_chars: usize) -> String {
+    if max_chars == 0 || cleaned.trim().is_empty() {
+        return String::new();
+    }
+    let spans = rank_salient_spans(cleaned, app_name);
+    if spans.is_empty() {
+        return cleaned.chars().take(max_chars).collect::<String>();
+    }
+    let mut out = String::new();
+    for span in spans {
+        if out.chars().count() >= max_chars {
+            break;
+        }
+        if !out.is_empty() {
+            out.push_str(" • ");
+        }
+        if out.chars().count() + span.text.chars().count() > max_chars {
+            let remaining = max_chars.saturating_sub(out.chars().count());
+            out.extend(span.text.chars().take(remaining));
+            break;
+        }
+        out.push_str(&span.text);
+    }
+    out
+}
+
+/// Ratio of top-k span score mass to total span score mass; 1.0 means a few
+/// dense spans carry the document's signal, near-0 means the signal is diffuse
+/// (typically dominated by chrome / OCR noise).
+pub fn salience_concentration(cleaned: &str, app_name: &str) -> f32 {
+    let spans = rank_salient_spans(cleaned, app_name);
+    if spans.is_empty() {
+        return 0.0;
+    }
+    let total: f32 = spans.iter().map(|s| s.score).sum();
+    if total <= 1e-6 {
+        return 0.0;
+    }
+    let top_k = 3.min(spans.len());
+    let top_sum: f32 = spans.iter().take(top_k).map(|s| s.score).sum();
+    (top_sum / total).clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,5 +858,53 @@ mod tests {
         assert!(out.text.contains("Subject: Updated deployment plan"));
         assert!(out.text.contains("Please review the rollout risks"));
         assert!(!out.text.to_lowercase().contains("starred"));
+    }
+
+    #[test]
+    fn rank_salient_spans_ranks_navigation_below_content() {
+        let raw = "Home\n\nDiscover\n\nWe should consider refactoring the synthesis module because the durable context needs to survive across captures.\n\nNotifications";
+        let spans = rank_salient_spans(raw, "GenericApp");
+        assert!(!spans.is_empty(), "spans must not be empty");
+        let top = &spans[0];
+        assert!(
+            top.text
+                .to_lowercase()
+                .contains("durable context")
+                || top.text.to_lowercase().contains("refactoring"),
+            "top span should be the meaty sentence, got {:?}",
+            top.text
+        );
+        let nav_top = spans
+            .iter()
+            .position(|s| s.text.eq_ignore_ascii_case("home") || s.text.eq_ignore_ascii_case("discover"));
+        if let Some(idx) = nav_top {
+            assert!(idx > 0, "nav-style spans must rank below content spans");
+        }
+    }
+
+    #[test]
+    fn compress_to_salient_evidence_respects_byte_budget() {
+        let raw = "Reviewing the architecture document.\n\nWe decided to consolidate alias generation into a single helper to avoid drift between capture and rebuild paths.\n\nNext steps: validate retrieval scores on the regression fixtures and update the design doc.";
+        let compressed = compress_to_salient_evidence(raw, "Editor", 120);
+        assert!(compressed.chars().count() <= 120);
+        assert!(
+            compressed.to_lowercase().contains("alias")
+                || compressed.to_lowercase().contains("consolidate")
+                || compressed.to_lowercase().contains("next steps"),
+            "compressed evidence should carry semantic spans, got: {}",
+            compressed
+        );
+    }
+
+    #[test]
+    fn salience_concentration_increases_with_signal_density() {
+        let polluted = "Home\nDiscover\nTrending\nNew Tab\nNotifications";
+        let dense = "We must finalize the durable memory context implementation before the next release. The reopen anchor needs to survive truncation. Decisions made today should be documented.";
+        let polluted_score = salience_concentration(polluted, "Chrome");
+        let dense_score = salience_concentration(dense, "Editor");
+        assert!(
+            dense_score >= polluted_score,
+            "dense content should have >= concentration than nav frames (dense={dense_score}, polluted={polluted_score})"
+        );
     }
 }

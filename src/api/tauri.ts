@@ -39,12 +39,18 @@ export interface MemoryCard {
     evidence_ids?: string[];
     confidence?: number;
     anchor_coverage_score?: number;
-    /** High-level activity category: "coding" | "browsing" | "communication" | "docs" | "design" | "other" */
+    /** High-level activity category — content-derived, never tied to an app name. */
     activity_type?: string;
     /** File paths or code symbols touched in this session */
     files_touched?: string[];
     /** Approximate session duration in minutes (0 if single capture) */
     session_duration_mins?: number;
+    /** Short id of the prior card this one continues from, derived from
+     *  the durable memory_context "Continues from <short_id>" marker. */
+    continuation_of?: string;
+    /** http(s):// URL, file:// path, or app:// deep-link recovered from
+     *  the durable memory_context "Reopen: …" marker. */
+    reopen_target?: string;
 }
 
 export interface MemoryScoreBreakdown {
@@ -56,6 +62,12 @@ export interface MemoryScoreBreakdown {
     ocr_noise: number;
     graph_readiness: number;
     retrieval_value: number;
+    /** Top-k span concentration on clean_text (0..1). */
+    salience_concentration?: number;
+    /** Topic clarity / token-overlap signal (0..1). */
+    topic_clarity?: number;
+    /** Composite OCR noise + diffuse-content score (0..1). */
+    pollution_ratio?: number;
 }
 
 export interface MemoryDebugInspector {

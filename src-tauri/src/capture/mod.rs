@@ -499,6 +499,322 @@ fn validate_structured_memory_extraction(
     (grounding_confidence, issues)
 }
 
+/// Pick a deterministic semantic anchor for the durable memory context.
+/// Priority: structured topic → first salient span head → window-title noun
+/// phrase. No app names — fully content-derived.
+fn pick_semantic_center(
+    extraction: Option<&StructuredMemoryExtraction>,
+    app_name: &str,
+    window_title: &str,
+    clean_text: &str,
+) -> String {
+    if let Some(mem) = extraction {
+        let topic = mem.topic.trim();
+        if !topic.is_empty() && topic.to_ascii_lowercase() != "unknown" {
+            return topic.to_string();
+        }
+    }
+    let spans = text_cleanup::rank_salient_spans(clean_text, app_name);
+    if let Some(top) = spans.first() {
+        let trimmed = top
+            .text
+            .split_terminator(['.', '!', '?', '\n'])
+            .next()
+            .unwrap_or(&top.text)
+            .trim();
+        if !trimmed.is_empty() {
+            return trimmed.chars().take(120).collect::<String>();
+        }
+    }
+    let title = window_title.trim();
+    if !title.is_empty() {
+        return title.chars().take(120).collect();
+    }
+    String::new()
+}
+
+/// Compose the "where / continuation" footer.
+fn build_continuation_footer(
+    reopen_target: Option<&str>,
+    prior_chain: &[crate::store::SearchResult],
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(target) = reopen_target {
+        let trimmed = target.trim();
+        if !trimmed.is_empty() {
+            lines.push(format!("Reopen: {}", trimmed));
+        }
+    }
+    if let Some(prev) = prior_chain.first() {
+        let short_id: String = prev.id.chars().take(8).collect();
+        let head: String = prev
+            .memory_context
+            .trim()
+            .split('\n')
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(80)
+            .collect();
+        if !short_id.is_empty() {
+            let mut line = format!("Continues from {}", short_id);
+            if !head.trim().is_empty() {
+                line.push_str(": ");
+                line.push_str(head.trim());
+            }
+            lines.push(line);
+        }
+    }
+    lines.join("\n")
+}
+
+/// Derive a deterministic reopen target without naming any application.
+/// Priority: explicit url → first file → app://bundle_id deep link.
+fn derive_reopen_target(
+    extraction: Option<&StructuredMemoryExtraction>,
+    url: Option<&str>,
+    bundle_id: Option<&str>,
+    window_title: &str,
+) -> Option<String> {
+    if let Some(u) = url.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(u.to_string());
+    }
+    if let Some(mem) = extraction {
+        if let Some(first_file) = mem
+            .files_touched
+            .iter()
+            .map(|s| s.trim())
+            .find(|s| !s.is_empty())
+        {
+            return Some(format!("file://{}", first_file));
+        }
+    }
+    if let Some(bundle) = bundle_id.map(str::trim).filter(|s| !s.is_empty()) {
+        let title_param = urlencode_minimal(window_title.trim());
+        if title_param.is_empty() {
+            return Some(format!("app://{}", bundle));
+        }
+        return Some(format!("app://{}?title={}", bundle, title_param));
+    }
+    None
+}
+
+/// Minimal RFC-3986 percent-encoder; only escapes whitespace and a handful of
+/// reserved characters. Sufficient for the synthetic `app://` deep link.
+fn urlencode_minimal(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            ' ' => out.push_str("%20"),
+            '#' => out.push_str("%23"),
+            '?' => out.push_str("%3F"),
+            '&' => out.push_str("%26"),
+            '%' => out.push_str("%25"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Pad short contexts with grounded structured fields until at least
+/// `min_chars` are emitted. Pure helper; no I/O.
+fn pad_with_structured(
+    base: &str,
+    extraction: Option<&StructuredMemoryExtraction>,
+    app_name: &str,
+    clean_text: &str,
+    min_chars: usize,
+) -> String {
+    if base.chars().count() >= min_chars {
+        return base.to_string();
+    }
+    let mut out = base.to_string();
+    let mut extras: Vec<String> = Vec::new();
+    if let Some(mem) = extraction {
+        if !mem.workflow.trim().is_empty() && mem.workflow.trim().to_ascii_lowercase() != "unknown"
+        {
+            extras.push(format!("Workflow: {}", mem.workflow.trim()));
+        }
+        if !mem.entities.is_empty() {
+            extras.push(format!(
+                "Entities: {}",
+                mem.entities
+                    .iter()
+                    .take(4)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if !mem.results.is_empty() {
+            extras.push(format!(
+                "Results: {}",
+                mem.results
+                    .iter()
+                    .take(2)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+    }
+    for extra in extras {
+        if !out.is_empty() {
+            out.push_str("\n");
+        }
+        out.push_str(&extra);
+        if out.chars().count() >= min_chars {
+            return out;
+        }
+    }
+    if out.chars().count() < min_chars {
+        let evidence = text_cleanup::compress_to_salient_evidence(
+            clean_text,
+            app_name,
+            min_chars.saturating_sub(out.chars().count()).max(60),
+        );
+        if !evidence.trim().is_empty() {
+            if !out.is_empty() {
+                out.push_str("\n");
+            }
+            out.push_str(&evidence);
+        }
+    }
+    out
+}
+
+/// Capture-time durable `memory_context`. Composes three sections (what /
+/// state / where) bounded by config min/max chars, embeds an optional
+/// continuation pointer to the prior card, and falls back gracefully when
+/// structured extraction is absent.
+pub(crate) fn build_durable_memory_context(
+    extraction: Option<&StructuredMemoryExtraction>,
+    app_name: &str,
+    window_title: &str,
+    clean_text: &str,
+    display_summary: &str,
+    bundle_id: Option<&str>,
+    url: Option<&str>,
+    prior_chain: &[crate::store::SearchResult],
+    config: &crate::config::MemoryQualityConfig,
+) -> String {
+    let center = pick_semantic_center(extraction, app_name, window_title, clean_text);
+
+    let mut what_lines: Vec<String> = Vec::new();
+    if !center.is_empty() {
+        what_lines.push(format!("Topic: {}", center));
+    }
+    if let Some(mem) = extraction {
+        let intent = mem.user_intent.trim();
+        if !intent.is_empty() {
+            what_lines.push(format!("You were {}.", intent));
+        } else if !mem.activity_type.trim().is_empty()
+            && mem.activity_type.trim().to_ascii_lowercase() != "unknown"
+        {
+            what_lines.push(format!("Activity: {}.", mem.activity_type.trim()));
+        }
+        if !mem.memory_context.trim().is_empty() {
+            what_lines.push(mem.memory_context.trim().to_string());
+        }
+    }
+    if what_lines.is_empty() && !display_summary.trim().is_empty() {
+        what_lines.push(display_summary.trim().to_string());
+    }
+    let what_section = what_lines.join("\n");
+
+    let why_section = if let Some(mem) = extraction {
+        let mut bits: Vec<String> = Vec::new();
+        if !mem.decisions.is_empty() {
+            bits.push(format!(
+                "Decisions: {}",
+                mem.decisions
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+        if !mem.errors.is_empty() {
+            bits.push(format!(
+                "Errors: {}",
+                mem.errors
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+        if !mem.blockers.is_empty() {
+            bits.push(format!(
+                "Blockers: {}",
+                mem.blockers
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+        if !mem.next_steps.is_empty() {
+            bits.push(format!(
+                "Next: {}",
+                mem.next_steps
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+        if !mem.results.is_empty() {
+            bits.push(format!(
+                "Results: {}",
+                mem.results
+                    .iter()
+                    .take(2)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+        bits.join("\n")
+    } else {
+        String::new()
+    };
+
+    let reopen_target = derive_reopen_target(extraction, url, bundle_id, window_title);
+    let where_section = build_continuation_footer(reopen_target.as_deref(), prior_chain);
+
+    let mut sections: Vec<String> = Vec::new();
+    if !what_section.trim().is_empty() {
+        sections.push(what_section);
+    }
+    if !why_section.trim().is_empty() {
+        sections.push(why_section);
+    }
+    if !where_section.trim().is_empty() {
+        sections.push(where_section);
+    }
+
+    let min_chars = config.memory_context_min_chars as usize;
+    let max_chars = config.memory_context_max_chars as usize;
+    let mut combined = sections.join("\n\n");
+    if combined.chars().count() < min_chars {
+        combined = pad_with_structured(&combined, extraction, app_name, clean_text, min_chars);
+    }
+    if combined.chars().count() > max_chars {
+        let mut truncated: String = combined
+            .chars()
+            .take(max_chars.saturating_sub(3))
+            .collect();
+        truncated.push_str("...");
+        combined = truncated;
+    }
+    combined
+}
+
 fn build_grounded_memory_context(
     extraction: Option<&StructuredMemoryExtraction>,
     app_name: &str,
@@ -579,6 +895,14 @@ fn compose_primary_embedding_text(
         if !mem.workflow.trim().is_empty() {
             segments.push(format!("workflow: {}", mem.workflow.trim()));
         }
+    }
+    // The durable memory_context is now the strongest single retrieval signal
+    // — promote it ahead of entities/files/results so the embedding tower
+    // anchors on synthesis rather than enumerations.
+    if !memory_context.trim().is_empty() {
+        segments.push(format!("context: {}", memory_context.trim()));
+    }
+    if let Some(mem) = extraction {
         if !mem.entities.is_empty() {
             segments.push(format!(
                 "entities: {}",
@@ -613,9 +937,6 @@ fn compose_primary_embedding_text(
             ));
         }
     }
-    if !memory_context.trim().is_empty() {
-        segments.push(format!("context: {}", memory_context.trim()));
-    }
     if !display_summary.trim().is_empty() {
         segments.push(format!("summary: {}", display_summary.trim()));
     }
@@ -624,13 +945,19 @@ fn compose_primary_embedding_text(
         app_name.trim(),
         window_title.trim()
     ));
-    let evidence_tail = clean_text.chars().take(320).collect::<String>();
+    let evidence_tail =
+        text_cleanup::compress_to_salient_evidence(clean_text, app_name, 320);
     if !evidence_tail.trim().is_empty() {
         segments.push(format!("evidence: {}", evidence_tail.trim()));
     }
-    let shadow = lexical_shadow.chars().take(220).collect::<String>();
-    if !shadow.trim().is_empty() {
-        segments.push(format!("shadow: {}", shadow.trim()));
+    // Shadow is only useful when surrounding tokens carry meaning; drop it
+    // when salience concentration is too low to avoid amplifying noise.
+    let concentration = text_cleanup::salience_concentration(clean_text, app_name);
+    if concentration >= 0.25 {
+        let shadow = lexical_shadow.chars().take(220).collect::<String>();
+        if !shadow.trim().is_empty() {
+            segments.push(format!("shadow: {}", shadow.trim()));
+        }
     }
     segments.join("\n")
 }
@@ -1367,6 +1694,51 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &display_summary,
         );
 
+        // Fetch up to 3 recent same-session-or-project records to chain the
+        // new durable memory_context to its predecessors. Failures here are
+        // non-fatal — capture proceeds with an empty prior chain.
+        let prior_chain = {
+            let session_id_for_chain = build_session_id(
+                &Local::now(),
+                &app_name,
+                app_context.bundle_id.as_deref(),
+                &build_session_key(&app_name, &window_title, url.as_deref()),
+            );
+            let project_for_chain = structured_memory
+                .as_ref()
+                .map(|m| m.project.clone())
+                .unwrap_or_default();
+            match state
+                .store
+                .list_recent_by_session_or_project(
+                    &session_id_for_chain,
+                    &project_for_chain,
+                    None,
+                    3,
+                )
+                .await
+            {
+                Ok(rows) => rows,
+                Err(err) => {
+                    tracing::debug!(
+                        "memory_context:prior_chain_fetch_skipped err={err}"
+                    );
+                    Vec::new()
+                }
+            }
+        };
+        let durable_memory_context = build_durable_memory_context(
+            structured_memory.as_ref(),
+            &app_name,
+            &window_title,
+            &text,
+            &display_summary,
+            app_context.bundle_id.as_deref(),
+            url.as_deref(),
+            &prior_chain,
+            &config.memory_quality,
+        );
+
         // --- Proactive Privacy Check ---
         if Blocklist::is_sensitive_context(url.as_deref(), Some(&window_title)) {
             let alert_key = Blocklist::context_key(url.as_deref(), Some(&window_title))
@@ -1417,7 +1789,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             structured_memory.as_ref(),
             &app_name,
             &window_title,
-            &internal_context,
+            &durable_memory_context,
             &display_summary,
             &enriched_clean_text,
             &lexical_shadow,
@@ -1650,10 +2022,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 })
                 .unwrap_or_default(),
             intent_analysis: crate::store::IntentAnalysis::default(),
-            memory_context: structured_memory
-                .as_ref()
-                .map(|m| m.memory_context.clone())
-                .unwrap_or_else(|| display_summary.clone()),
+            memory_context: durable_memory_context.clone(),
             commands: structured_memory
                 .as_ref()
                 .map(|m| m.commands.clone())
@@ -3721,5 +4090,138 @@ mod tests {
         );
         let norm = (merged.iter().map(|value| value * value).sum::<f32>()).sqrt();
         assert!((norm - 1.0).abs() < 1e-3);
+    }
+
+    fn durable_context_config(min: u32, max: u32) -> crate::config::MemoryQualityConfig {
+        let mut cfg = crate::config::MemoryQualityConfig::default();
+        cfg.memory_context_min_chars = min;
+        cfg.memory_context_max_chars = max;
+        cfg
+    }
+
+    fn synth_prior_search_result(id: &str, context: &str) -> crate::store::SearchResult {
+        crate::store::SearchResult {
+            id: id.to_string(),
+            memory_context: context.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn durable_memory_context_respects_min_max_bounds_with_empty_chain() {
+        let extraction = StructuredMemoryExtraction {
+            user_intent: "Refactor the synthesis pipeline".to_string(),
+            project: "FNDR".to_string(),
+            topic: "memory synthesis".to_string(),
+            decisions: vec!["Use durable memory_context as embedding seed".to_string()],
+            next_steps: vec!["Wire compress_to_salient_evidence into the tail".to_string()],
+            ..Default::default()
+        };
+        let cfg = durable_context_config(220, 1800);
+        let context = build_durable_memory_context(
+            Some(&extraction),
+            "GenericEditor",
+            "synthesis-doc.md",
+            "We are aligning the embedding text composition.",
+            "Refactored OCR cleanup.",
+            Some("com.example.editor"),
+            None,
+            &[],
+            &cfg,
+        );
+        assert!(
+            context.chars().count() >= cfg.memory_context_min_chars as usize,
+            "durable context shorter than min ({}): {}",
+            context.chars().count(),
+            context
+        );
+        assert!(context.chars().count() <= cfg.memory_context_max_chars as usize);
+        assert!(
+            context.to_lowercase().contains("topic")
+                || context.to_lowercase().contains("memory synthesis"),
+            "should surface semantic center"
+        );
+    }
+
+    #[test]
+    fn durable_memory_context_chains_to_prior_short_id() {
+        let extraction = StructuredMemoryExtraction {
+            user_intent: "Continue refactor".to_string(),
+            topic: "alias generation".to_string(),
+            decisions: vec!["Adopt noun-phrase sourcing".to_string()],
+            ..Default::default()
+        };
+        let cfg = durable_context_config(160, 1800);
+        let prior = synth_prior_search_result(
+            "abcd1234efgh5678",
+            "Earlier card outlining the durable memory context plan.",
+        );
+        let context = build_durable_memory_context(
+            Some(&extraction),
+            "GenericEditor",
+            "doc",
+            "More work",
+            "",
+            None,
+            None,
+            std::slice::from_ref(&prior),
+            &cfg,
+        );
+        assert!(
+            context.contains("Continues from abcd1234"),
+            "prior short id missing: {}",
+            context
+        );
+    }
+
+    #[test]
+    fn durable_memory_context_embeds_reopen_target_when_url_present() {
+        let cfg = durable_context_config(160, 1800);
+        let context = build_durable_memory_context(
+            None,
+            "GenericEditor",
+            "doc",
+            "Worked on the design doc and reviewed the spec.",
+            "Reviewed design doc.",
+            None,
+            Some("https://example.org/path"),
+            &[],
+            &cfg,
+        );
+        assert!(
+            context.contains("Reopen: https://example.org/path"),
+            "reopen target missing: {}",
+            context
+        );
+    }
+
+    #[test]
+    fn durable_memory_context_truncates_to_max_with_three_priors() {
+        let extraction = StructuredMemoryExtraction {
+            user_intent: "Long-running multi-session refactor".to_string(),
+            topic: "memory synthesis".to_string(),
+            decisions: vec!["a; ".repeat(60).trim_end().to_string()],
+            errors: vec!["x; ".repeat(60).trim_end().to_string()],
+            next_steps: vec!["n; ".repeat(60).trim_end().to_string()],
+            results: vec!["r; ".repeat(60).trim_end().to_string()],
+            ..Default::default()
+        };
+        let cfg = durable_context_config(220, 600);
+        let prior_a = synth_prior_search_result("a1b2c3d4", "Prior alpha context.");
+        let prior_b = synth_prior_search_result("e5f6g7h8", "Prior beta context.");
+        let prior_c = synth_prior_search_result("i9j0k1l2", "Prior gamma context.");
+        let priors = vec![prior_a, prior_b, prior_c];
+        let context = build_durable_memory_context(
+            Some(&extraction),
+            "GenericEditor",
+            "doc",
+            "evidence body",
+            "Reviewed design doc.",
+            None,
+            None,
+            &priors,
+            &cfg,
+        );
+        assert!(context.chars().count() <= cfg.memory_context_max_chars as usize);
     }
 }
