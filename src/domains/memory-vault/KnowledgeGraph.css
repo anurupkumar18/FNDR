@@ -1,0 +1,16 @@
+.knowledge-graph-wrap {
+    width: 100%;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    background: color-mix(in srgb, currentColor 4%, transparent);
+    overflow: hidden;
+}
+
+.knowledge-graph-svg {
+    display: block;
+    cursor: grab;
+}
+
+.knowledge-graph-svg:active {
+    cursor: grabbing;
+}

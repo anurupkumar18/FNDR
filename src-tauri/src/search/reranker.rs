@@ -1,4 +1,4 @@
-use crate::store::SearchResult;
+use crate::storage::SearchResult;
 
 use super::query_processor::{normalize_text, QueryContext};
 

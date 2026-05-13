@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { requestBiometricAuth } from "../api/onboarding";
+import { requestBiometricAuth } from "@/shared/ipc/onboarding";
 
 interface BiometricLockScreenProps {
     onUnlock: () => void;

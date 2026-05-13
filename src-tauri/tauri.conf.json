@@ -35,9 +35,9 @@
         ],
         "resources": {
             "target/hermes-agent-bundle/": "hermes-agent/",
-            "sidecar/parakeet_runner.py": "sidecar/parakeet_runner.py",
-            "sidecar/whisper_gguf_runner.py": "sidecar/whisper_gguf_runner.py",
-            "sidecar/orpheus_tts_runner.py": "sidecar/orpheus_tts_runner.py"
+            "sidecars/parakeet_runner.py": "sidecars/parakeet_runner.py",
+            "sidecars/whisper_gguf_runner.py": "sidecars/whisper_gguf_runner.py",
+            "sidecars/orpheus_tts_runner.py": "sidecars/orpheus_tts_runner.py"
         },
         "icon": [
             "icons/icon.png",

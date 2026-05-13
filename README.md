@@ -35,7 +35,7 @@ FNDR captures macOS screen context, extracts OCR text, stores compact memory rec
 | Area | Current implementation |
 | --- | --- |
 | Capture | macOS screen capture, OCR, adaptive sampling, perceptual deduplication, semantic deduplication, and batched memory writes |
-| Search | Hybrid vector and keyword search, sentence-aware reranking, memory cards, timeline browsing, and raw result inspection |
+| Search | Hybrid vector and keyword search, sentence-aware reranking, Memory Vault / memory cards, timeline browsing, and raw result inspection |
 | Summaries | Local model-backed memory summaries, daily summaries, daily briefings, and search-result synthesis |
 | Tasks | Todo, reminder, and follow-up parsing with persisted task state |
 | Meetings | Meeting detection heuristics, ffmpeg-based segmented audio capture, Whisper sidecar transcription, transcript search, and markdown/json export |
@@ -48,15 +48,40 @@ FNDR captures macOS screen context, extracts OCR text, stores compact memory rec
 
 ## Architecture
 
+### Project map
+
+**Frontend (`src/`)**
+
+| Path | Role |
+| --- | --- |
+| `src/app/` | App shell: `App.tsx`, `main.tsx`, autofill entry, sidebar, panels host, global `styles/`. |
+| `src/domains/` | User-facing product areas (Memory Vault, search bar, timeline, command palette, workspace panels). See `src/domains/README.md`. |
+| `src/shared/` | Reusable UI glue: `ipc/` (Tauri `invoke` bindings), `hooks/`, `utils/`, `theme/`. |
+
+**Backend (`src-tauri/`)**
+
+| Path | Role |
+| --- | --- |
+| `src-tauri/src/ipc/` | Thin Tauri command handlers (`ipc/commands/*`). |
+| `src-tauri/src/capture/` | Screen capture pipeline. |
+| `src-tauri/src/ocr/` | Apple Vision OCR. |
+| `src-tauri/src/embedding/` | Chunking and embeddings. |
+| `src-tauri/src/search/` | Hybrid retrieval and memory cards. |
+| `src-tauri/src/storage/` | LanceDB and filesystem persistence. |
+| `src-tauri/src/memory/` | Memory-centric graph (`memory/graph/`). |
+| `src-tauri/src/inference/` | Local LLM / VLM. |
+| `src-tauri/src/privacy/` | Privacy enforcement. |
+| `src-tauri/src/mcp/` | MCP server. |
+| `src-tauri/sidecars/` | Python helpers (Whisper, TTS, etc.). |
+
 ```text
 fndr/
-├── src/                 # React + TypeScript frontend
-├── src-tauri/           # Rust backend for capture, search, storage, meetings, MCP, and Tauri commands
-│   ├── src/
-│   └── sidecar/         # Python sidecars for agent, transcription, graph, and TTS workflows
-├── docs/                # Architecture, decisions, design, and intelligence-engine documentation
-├── scripts/             # Local maintenance scripts
-├── download_embedding_model.sh
+├── src/                 # React + Vite frontend (see Project map above)
+├── src-tauri/           # Tauri / Rust backend + `sidecars/` Python helpers
+├── docs/                # Product, architecture, setup — start at docs/README.md
+├── scripts/             # bootstrap/, dev utilities, release helpers
+├── tools/bin/           # Local tool binaries (e.g. pinned npm)
+├── public/              # Static assets copied verbatim at build (see public/README.md)
 ├── Makefile
 ├── package.json
 └── README.md
@@ -64,17 +89,17 @@ fndr/
 
 | Component | Primary paths |
 | --- | --- |
-| Frontend shell | `src/App.tsx`, `src/main.tsx`, `src/components/` |
-| Tauri commands | `src-tauri/src/api/commands.rs` |
+| Frontend shell | `src/app/App.tsx`, `src/app/main.tsx`, `src/app/AppPanels.tsx` |
+| Tauri commands | `src-tauri/src/ipc/commands/` |
 | Capture pipeline | `src-tauri/src/capture/` |
-| Search and memory cards | `src-tauri/src/search/` |
-| LanceDB store | `src-tauri/src/store/` |
+| Search + Memory Vault | `src-tauri/src/search/` |
+| LanceDB | `src-tauri/src/storage/` |
 | Model catalog | `src-tauri/src/models.rs` |
 | Runtime config | `src-tauri/src/config.rs` |
 | Privacy controls | `src-tauri/src/privacy/` |
-| Meeting recorder | `src-tauri/src/meeting/`, `src-tauri/sidecar/whisper_gguf_runner.py` |
+| Meeting recorder | `src-tauri/src/meeting/`, `src-tauri/sidecars/whisper_gguf_runner.py` |
 
-See `docs/ARCHITECTURE.md` for the capture -> OCR -> chunking -> embedding -> LanceDB -> hybrid search -> MemoryCards -> UI pipeline map.
+See `docs/architecture/ARCHITECTURE.md` for the capture → OCR → chunking → embedding → LanceDB → hybrid search → Memory Vault / cards → UI pipeline map.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -93,7 +118,7 @@ Install dependencies and launch the development app from the repository root:
 
 ```bash
 make install
-./download_embedding_model.sh
+./scripts/bootstrap/download-embedding-model.sh
 npm run tauri dev
 ```
 
@@ -198,7 +223,7 @@ The controls below are implemented in source and exposed through Tauri commands 
 
 | Control | Source-backed behavior |
 | --- | --- |
-| Pause and resume | `pause_capture` and `resume_capture` toggle capture state in `src-tauri/src/api/commands.rs` |
+| Pause and resume | `pause_capture` and `resume_capture` toggle capture state in `src-tauri/src/ipc/commands/` |
 | App blocklist | `get_blocklist` and `set_blocklist` read/write blocked app names in runtime config |
 | Default blocked apps | `1Password`, `Keychain Access`, `System Preferences`, and `System Settings` are seeded in `Config::default` |
 | Sensitive-context alerts | `Blocklist::is_sensitive_context` detects selected banking and finance keywords for proactive alerts |

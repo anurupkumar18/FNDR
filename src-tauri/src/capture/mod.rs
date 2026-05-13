@@ -5,6 +5,7 @@
 //! LanceDB.
 
 mod admission;
+pub mod entity_extractor;
 pub mod clipboard;
 mod dedupe;
 pub(crate) mod macos;
@@ -29,7 +30,7 @@ pub fn macos_frontmost_app_name() -> Option<String> {
 
 use crate::config::{DEFAULT_CAPTURE_EMBEDDING_CACHE_SIZE, DEFAULT_IMAGE_EMBEDDING_DIM};
 use crate::context_runtime;
-use crate::embed::{Embedder, EmbeddingBackend, EMBEDDING_DIM};
+use crate::embedding::{Embedder, EmbeddingBackend, EMBEDDING_DIM};
 use crate::inference::StructuredMemoryExtraction;
 use crate::memory_compaction::{
     build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
@@ -38,7 +39,7 @@ use crate::memory_compaction::{
 use crate::memory_quality::{deterministic_dedup_fingerprint, is_supported_dedup_fingerprint};
 use crate::ocr::{OcrEngine, RecognizedText};
 use crate::privacy::Blocklist;
-use crate::store::{MemoryRecord, SearchResult, Task, TaskType};
+use crate::storage::{MemoryRecord, SearchResult, Task, TaskType};
 use crate::summariser::narration_filter::clean_or_fallback_display_summary;
 use crate::tasks::parse_tasks_from_llm_response;
 use crate::telemetry::quality_logger::append_quality_event;
@@ -418,7 +419,7 @@ fn pick_semantic_center(
 /// Compose the "where / continuation" footer.
 fn build_continuation_footer(
     reopen_target: Option<&str>,
-    prior_chain: &[crate::store::SearchResult],
+    prior_chain: &[crate::storage::SearchResult],
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
     if let Some(target) = reopen_target {
@@ -577,7 +578,7 @@ pub(crate) fn build_durable_memory_context(
     display_summary: &str,
     bundle_id: Option<&str>,
     url: Option<&str>,
-    prior_chain: &[crate::store::SearchResult],
+    prior_chain: &[crate::storage::SearchResult],
     config: &crate::config::MemoryQualityConfig,
 ) -> String {
     let center = pick_semantic_center(extraction, app_name, window_title, clean_text);
@@ -955,6 +956,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         .await
                 {
                     tracing::warn!("Context runtime batch sync failed: {}", err);
+                }
+                for rec in batch.iter() {
+                    state.enqueue_graph_from_flushed_memory(rec);
                 }
                 purge_capture_artifacts(state.store.frames_dir());
                 state.invalidate_memory_derived_caches();
@@ -1897,7 +1901,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     }
                 })
                 .unwrap_or_default(),
-            intent_analysis: crate::store::IntentAnalysis::default(),
+            intent_analysis: crate::storage::IntentAnalysis::default(),
             memory_context: durable_memory_context.clone(),
             commands: structured_memory
                 .as_ref()
@@ -1991,7 +1995,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 .unwrap_or_default(),
             git_stats: structured_memory
                 .as_ref()
-                .map(|m| crate::store::schema::GitStats {
+                .map(|m| crate::storage::schema::GitStats {
                     added: m.git_stats.added,
                     removed: m.git_stats.removed,
                     commits: m.git_stats.commits,
@@ -2018,6 +2022,12 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             parent_id: None,
             related_ids: Vec::new(),
             consolidated_from: Vec::new(),
+            insight_what_happened: String::new(),
+            insight_why_mattered: String::new(),
+            insight_what_changed: String::new(),
+            insight_context_thread: String::new(),
+            insight_spans_json: String::new(),
+            insight_card_confidence: 0.0,
         };
         let incoming_record_id = record.id.clone();
         let merged_or_new = match merge_or_append_memory_record(
@@ -2057,7 +2067,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             let record_clone = merged_or_new.clone();
             let cluster_store = state.store.clone();
             tauri::async_runtime::spawn(async move {
-                let graph = crate::graph::GraphStore::new(cluster_store);
+                let graph = crate::memory::graph::GraphStore::new(cluster_store);
                 if let Err(e) = graph.auto_link_to_task(&record_clone).await {
                     tracing::debug!("Auto task link: {e}");
                 }
@@ -2744,6 +2754,26 @@ pub(crate) async fn merge_memory_records_with_policy(
     let related_ids = merge_string_lists(&existing.related_ids, &incoming.related_ids);
     let consolidated_from =
         merge_string_lists(&existing.consolidated_from, &incoming.consolidated_from);
+    let insight_what_happened = prefer_non_empty(
+        &incoming.insight_what_happened,
+        &existing.insight_what_happened,
+    );
+    let insight_why_mattered = prefer_non_empty(
+        &incoming.insight_why_mattered,
+        &existing.insight_why_mattered,
+    );
+    let insight_what_changed = prefer_non_empty(
+        &incoming.insight_what_changed,
+        &existing.insight_what_changed,
+    );
+    let insight_context_thread = prefer_non_empty(
+        &incoming.insight_context_thread,
+        &existing.insight_context_thread,
+    );
+    let insight_spans_json = prefer_non_empty(&incoming.insight_spans_json, &existing.insight_spans_json);
+    let insight_card_confidence = existing
+        .insight_card_confidence
+        .max(incoming.insight_card_confidence);
 
     MemoryRecord {
         id: existing.id.clone(),
@@ -2891,6 +2921,12 @@ pub(crate) async fn merge_memory_records_with_policy(
         parent_id,
         related_ids,
         consolidated_from,
+        insight_what_happened,
+        insight_why_mattered,
+        insight_what_changed,
+        insight_context_thread,
+        insight_spans_json,
+        insight_card_confidence,
     }
 }
 
@@ -3975,8 +4011,8 @@ mod tests {
         cfg
     }
 
-    fn synth_prior_search_result(id: &str, context: &str) -> crate::store::SearchResult {
-        crate::store::SearchResult {
+    fn synth_prior_search_result(id: &str, context: &str) -> crate::storage::SearchResult {
+        crate::storage::SearchResult {
             id: id.to_string(),
             memory_context: context.to_string(),
             ..Default::default()

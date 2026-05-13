@@ -4,12 +4,12 @@
 //! and injects synthetic memory records so they become searchable.
 
 use crate::config::DEFAULT_IMAGE_EMBEDDING_DIM;
-use crate::embed::{Embedder, EMBEDDING_DIM};
+use crate::embedding::{Embedder, EMBEDDING_DIM};
 use crate::memory_compaction::{
     build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
     support_embedding_texts,
 };
-use crate::store::MemoryRecord;
+use crate::storage::MemoryRecord;
 use crate::AppState;
 use chrono::Local;
 use notify::{

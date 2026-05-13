@@ -5,7 +5,7 @@ use crate::config::{
     DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN, DEFAULT_PRIMARY_MEMORY_INTENT_MIN,
     DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX, DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN,
 };
-use crate::store::MemoryRecord;
+use crate::storage::MemoryRecord;
 
 pub fn default_memory_quality_config() -> MemoryQualityConfig {
     MemoryQualityConfig {

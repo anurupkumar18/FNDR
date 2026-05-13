@@ -9,7 +9,7 @@ use crate::config::{
     DEFAULT_MEMORY_CARD_MAX_LLM_GROUPS,
 };
 use crate::inference::{InferenceEngine, MemoryCardDraft};
-use crate::store::SearchResult;
+use crate::storage::SearchResult;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use tokio::time::{timeout, Duration};
@@ -62,6 +62,28 @@ pub struct MemoryCard {
     /// when the marker is absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reopen_target: Option<String>,
+    /// Insight-first layers (ADR 007), copied from search hits.
+    #[serde(default)]
+    pub insight_what_happened: String,
+    #[serde(default)]
+    pub insight_why_mattered: String,
+    #[serde(default)]
+    pub insight_what_changed: String,
+    #[serde(default)]
+    pub insight_context_thread: String,
+    #[serde(default)]
+    pub insight_spans_json: String,
+    #[serde(default)]
+    pub insight_card_confidence: f32,
+    /// Content-derived coarse action for adaptive timeline UI.
+    #[serde(default)]
+    pub timeline_action_class: String,
+    /// Persisted memory `project` field (best-effort), for project-scoped graph view.
+    #[serde(default)]
+    pub project: String,
+    /// Count of insight `graph_nodes` rows citing this memory id in `source_memory_ids`.
+    #[serde(default)]
+    pub insight_kg_node_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -267,6 +289,17 @@ impl MemoryCardSynthesizer {
                 session_duration_mins,
                 continuation_of,
                 reopen_target,
+                insight_what_happened: anchor.insight_what_happened.clone(),
+                insight_why_mattered: anchor.insight_why_mattered.clone(),
+                insight_what_changed: anchor.insight_what_changed.clone(),
+                insight_context_thread: anchor.insight_context_thread.clone(),
+                insight_spans_json: anchor.insight_spans_json.clone(),
+                insight_card_confidence: anchor.insight_card_confidence,
+                timeline_action_class: crate::timeline::classify_action_class(&anchor)
+                    .as_str()
+                    .to_string(),
+                project: anchor.project.clone(),
+                insight_kg_node_count: 0,
             });
         }
 
@@ -760,6 +793,17 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         session_duration_mins: 0,
         continuation_of,
         reopen_target,
+        insight_what_happened: result.insight_what_happened.clone(),
+        insight_why_mattered: result.insight_why_mattered.clone(),
+        insight_what_changed: result.insight_what_changed.clone(),
+        insight_context_thread: result.insight_context_thread.clone(),
+        insight_spans_json: result.insight_spans_json.clone(),
+        insight_card_confidence: result.insight_card_confidence,
+        timeline_action_class: crate::timeline::classify_action_class(result)
+            .as_str()
+            .to_string(),
+        project: result.project.clone(),
+        insight_kg_node_count: 0,
     }
 }
 

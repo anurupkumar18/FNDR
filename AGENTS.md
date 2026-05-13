@@ -4,13 +4,17 @@ These rules apply to **every** AI-assisted change in this repository (Cursor, Cl
 
 ## Product context
 
-FNDR is a macOS desktop app: local screen-context memory, search, meetings, tasks, and MCP integrations. Stack: **React + TypeScript** (`src/`), **Tauri 2 + Rust** (`src-tauri/`), LanceDB, local embeddings, optional local GGUF. Authoritative overview: `README.md` and `docs/ARCHITECTURE.md`.
+FNDR is a macOS desktop app: local screen-context memory, search, meetings, tasks, and MCP integrations. Stack: **React + TypeScript** (`src/`), **Tauri 2 + Rust** (`src-tauri/`), LanceDB, local embeddings, optional local GGUF. Authoritative overview: `README.md` and `docs/architecture/ARCHITECTURE.md`.
 
 ## Repo map for agents
 
-- Shared vocabulary and pointers: `CONTEXT.md` (root)
+- Shared vocabulary and pointers: `docs/CONTEXT.md` (stub at repo root: `CONTEXT.md`)
+- Documentation index: `docs/README.md`
 - Architecture decisions: `docs/decisions/`
-- Design direction: `docs/DESIGN_DIRECTION.md`
+- Design direction: `docs/product/DESIGN_DIRECTION.md`
+- UI domains: `src/domains/` (see `src/domains/README.md`)
+- Insight graph schema (Lance): `docs/architecture/graph-schema.md`
+- Product technical notes: `docs/product/`
 
 ## Verification (after meaningful edits)
 

@@ -1,6 +1,6 @@
-use fndr_lib::embed::{embedding_runtime_status, Embedder, EMBEDDING_DIM};
+use fndr_lib::embedding::{embedding_runtime_status, Embedder, EMBEDDING_DIM};
 use fndr_lib::search::HybridSearcher;
-use fndr_lib::store::{MemoryRecord, Store};
+use fndr_lib::storage::{MemoryRecord, Store};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::Instant;

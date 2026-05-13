@@ -6,7 +6,7 @@
 
 use chrono::Timelike;
 use fndr_lib::{
-    api, capture, config::Config, graph::GraphStore, store::Store, AppState, ProactiveSuggestion,
+    capture, config::Config, ipc, memory::graph::GraphStore, storage::Store, AppState, ProactiveSuggestion,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,6 +36,7 @@ const APP_SWITCH_THRESHOLD: usize = 8;
 const APP_SWITCH_UNIQUE_THRESHOLD: usize = 6;
 const BRIEFING_MIN_MEMORIES: usize = 3;
 const BRIEFING_MAX_CARD_LINES: usize = 20;
+const GRAPH_COMMIT_INTERVAL: Duration = Duration::from_secs(90);
 
 fn main() {
     // Install default TLS crypto provider (required by rustls 0.23+)
@@ -83,7 +84,7 @@ fn main() {
             let store = Store::new(&data_dir)?;
             let store_arc = Arc::new(store);
             tracing::info!("Consolidated store initialized at {:?}", data_dir);
-            let state_store = Arc::new(fndr_lib::store::StateStore::new(&data_dir)?);
+            let state_store = Arc::new(fndr_lib::storage::StateStore::new(&data_dir)?);
             tracing::info!("State store initialized");
 
             let graph = GraphStore::new(store_arc.clone());
@@ -138,7 +139,7 @@ fn main() {
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(MAINTENANCE_FIRST_DELAY).await;
                     loop {
-                        match api::commands::reclaim_memory_storage_silent(maintenance_state.clone()).await {
+                        match ipc::commands::reclaim_memory_storage_silent(maintenance_state.clone()).await {
                             Ok(summary)
                                 if summary.bytes_reclaimed > 0
                                     || summary.chars_reclaimed > 0
@@ -156,6 +157,23 @@ fn main() {
                             Err(err) => tracing::debug!("Automatic storage reclaim skipped: {}", err),
                         }
                         tokio::time::sleep(STORAGE_RECLAIM_INTERVAL).await;
+                    }
+                });
+            }
+
+            // Background: idle insight-graph Lance commits (non-blocking).
+            {
+                let graph_state = state.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(MAINTENANCE_FIRST_DELAY).await;
+                    let mut interval = tokio::time::interval(GRAPH_COMMIT_INTERVAL);
+                    loop {
+                        interval.tick().await;
+                        if let Err(err) =
+                            fndr_lib::ipc::commands::commit_graph_updates(graph_state.clone()).await
+                        {
+                            tracing::debug!("commit_graph_updates: {err}");
+                        }
                     }
                 });
             }
@@ -464,10 +482,10 @@ fn main() {
 
             // Pre-create the autofill overlay window so it's loaded and ready
             // by the time the user first presses the hotkey.
-            api::commands::create_autofill_overlay_window(&app.handle());
+            ipc::commands::create_autofill_overlay_window(app.handle());
 
-            if let Err(err) = api::commands::register_autofill_shortcut(
-                &app.handle(),
+            if let Err(err) = ipc::commands::register_autofill_shortcut(
+                app.handle(),
                 &state.config.read().autofill.clone(),
             ) {
                 tracing::warn!("Auto-fill shortcut registration failed: {err}");
@@ -481,103 +499,111 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            api::commands::search::search,
-            api::commands::search::search_raw_results,
-            api::commands::search::search_memory_cards,
-            api::commands::search::list_memory_cards,
-            api::commands::search::summarize_search,
-            api::commands::get_fun_greeting,
-            api::commands::get_status,
+            ipc::commands::search::search,
+            ipc::commands::search::search_raw_results,
+            ipc::commands::search::search_memory_cards,
+            ipc::commands::search::list_memory_cards,
+            ipc::commands::search::summarize_search,
+            ipc::commands::get_fun_greeting,
+            ipc::commands::get_status,
             // MCP
-            api::commands::get_mcp_server_status,
-            api::commands::start_mcp_server,
-            api::commands::stop_mcp_server,
-            api::commands::get_context_runtime_status,
-            api::commands::list_recent_context_packs,
-            api::commands::fndr_subscribe,
-            api::commands::fndr_unsubscribe,
+            ipc::commands::get_mcp_server_status,
+            ipc::commands::start_mcp_server,
+            ipc::commands::stop_mcp_server,
+            ipc::commands::get_context_runtime_status,
+            ipc::commands::list_recent_context_packs,
+            ipc::commands::fndr_subscribe,
+            ipc::commands::fndr_unsubscribe,
             // Meetings
-            api::commands::get_meeting_status,
-            api::commands::start_meeting_recording,
-            api::commands::stop_meeting_recording,
-            api::commands::list_meetings,
-            api::commands::delete_meeting,
-            api::commands::get_meeting_transcript,
-            api::commands::retranscribe_meeting,
-            api::commands::export_daily_summary_pdf,
-            api::commands::open_exported_pdf,
+            ipc::commands::get_meeting_status,
+            ipc::commands::start_meeting_recording,
+            ipc::commands::stop_meeting_recording,
+            ipc::commands::list_meetings,
+            ipc::commands::delete_meeting,
+            ipc::commands::get_meeting_transcript,
+            ipc::commands::retranscribe_meeting,
+            ipc::commands::export_daily_summary_pdf,
+            ipc::commands::open_exported_pdf,
             // Voice / Speech
-            api::commands::transcribe_voice_input,
+            ipc::commands::transcribe_voice_input,
             // Capture control
-            api::commands::pause_capture,
-            api::commands::resume_capture,
+            ipc::commands::pause_capture,
+            ipc::commands::resume_capture,
             // Privacy & data
-            api::commands::get_blocklist,
-            api::commands::set_blocklist,
-            api::commands::delete_all_data,
-            api::commands::delete_memory,
-            api::commands::get_stats,
-            api::commands::get_retention_days,
-            api::commands::set_retention_days,
-            api::commands::delete_older_than,
-            api::commands::get_app_names,
-            api::commands::get_storage_health,
-            api::commands::clean_dev_build_cache,
-            api::commands::run_memory_repair_backfill,
-            api::commands::get_memory_repair_progress,
-            api::commands::get_memory_debug_inspector,
-            api::commands::evaluate_recent_memory_quality,
-            api::commands::rebuild_memory_context_for_range,
-            api::commands::run_memory_retrieval_eval,
-            api::commands::get_storage_reclaim_progress,
-            api::commands::reclaim_memory_storage,
-            api::commands::get_privacy_alerts,
-            api::commands::dismiss_privacy_alert,
-            api::commands::add_to_blocklist,
+            ipc::commands::get_blocklist,
+            ipc::commands::set_blocklist,
+            ipc::commands::delete_all_data,
+            ipc::commands::delete_memory,
+            ipc::commands::get_stats,
+            ipc::commands::get_retention_days,
+            ipc::commands::set_retention_days,
+            ipc::commands::delete_older_than,
+            ipc::commands::get_app_names,
+            ipc::commands::get_storage_health,
+            ipc::commands::clean_dev_build_cache,
+            ipc::commands::run_memory_repair_backfill,
+            ipc::commands::get_memory_repair_progress,
+            ipc::commands::get_memory_debug_inspector,
+            ipc::commands::evaluate_recent_memory_quality,
+            ipc::commands::rebuild_memory_context_for_range,
+            ipc::commands::backfill_insight_layers_for_range,
+            ipc::commands::run_memory_retrieval_eval,
+            ipc::commands::get_storage_reclaim_progress,
+            ipc::commands::reclaim_memory_storage,
+            ipc::commands::run_idle_wiki_knowledge_compile,
+            ipc::commands::get_graph_for_project,
+            ipc::commands::get_full_graph,
+            ipc::commands::search_graph,
+            ipc::commands::get_node_detail,
+            ipc::commands::find_graph_path,
+            ipc::commands::get_god_nodes,
+            ipc::commands::get_privacy_alerts,
+            ipc::commands::dismiss_privacy_alert,
+            ipc::commands::add_to_blocklist,
             // Tasks / Todos
-            api::commands::add_todo,
-            api::commands::get_todos,
-            api::commands::update_todo,
-            api::commands::dismiss_todo,
+            ipc::commands::add_todo,
+            ipc::commands::get_todos,
+            ipc::commands::update_todo,
+            ipc::commands::dismiss_todo,
             // Agent SDK
-            api::commands::start_agent_task,
-            api::commands::get_agent_status,
-            api::commands::stop_agent,
-            api::commands::get_hermes_bridge_status,
-            api::commands::install_hermes_bridge,
-            api::commands::save_hermes_setup,
-            api::commands::sync_hermes_bridge_context,
-            api::commands::start_hermes_gateway,
-            api::commands::stop_hermes_gateway,
-            api::commands::send_hermes_message,
-            api::commands::send_direct_chat,
-            api::commands::quick_setup_ollama,
-            api::commands::generate_daily_briefing,
-            api::commands::generate_daily_summary_for_date,
+            ipc::commands::start_agent_task,
+            ipc::commands::get_agent_status,
+            ipc::commands::stop_agent,
+            ipc::commands::get_hermes_bridge_status,
+            ipc::commands::install_hermes_bridge,
+            ipc::commands::save_hermes_setup,
+            ipc::commands::sync_hermes_bridge_context,
+            ipc::commands::start_hermes_gateway,
+            ipc::commands::stop_hermes_gateway,
+            ipc::commands::send_hermes_message,
+            ipc::commands::send_direct_chat,
+            ipc::commands::quick_setup_ollama,
+            ipc::commands::generate_daily_briefing,
+            ipc::commands::generate_daily_summary_for_date,
             // Time tracking & Focus Mode
-            api::commands::get_time_tracking,
-            api::commands::set_focus_task,
-            api::commands::get_focus_status,
+            ipc::commands::get_time_tracking,
+            ipc::commands::set_focus_task,
+            ipc::commands::get_focus_status,
             // Auto-fill
-            api::commands::get_autofill_settings,
-            api::commands::set_autofill_settings,
-            api::commands::set_autofill_overlay_ready,
-            api::commands::take_pending_autofill_payload,
-            api::commands::resolve_autofill,
-            api::commands::inject_text,
-            api::commands::dismiss_autofill,
+            ipc::commands::get_autofill_settings,
+            ipc::commands::set_autofill_settings,
+            ipc::commands::set_autofill_overlay_ready,
+            ipc::commands::take_pending_autofill_payload,
+            ipc::commands::resolve_autofill,
+            ipc::commands::inject_text,
+            ipc::commands::dismiss_autofill,
             // Onboarding
-            api::onboarding::get_onboarding_state,
-            api::onboarding::save_onboarding_state,
-            api::onboarding::request_biometric_auth,
-            api::onboarding::check_permissions,
-            api::onboarding::open_system_settings,
-            api::onboarding::list_available_models,
-            api::onboarding::download_model,
-            api::onboarding::get_model_download_status,
-            api::onboarding::refresh_ai_models,
-            api::onboarding::check_model_exists,
-            api::onboarding::delete_ai_model,
+            ipc::onboarding::get_onboarding_state,
+            ipc::onboarding::save_onboarding_state,
+            ipc::onboarding::request_biometric_auth,
+            ipc::onboarding::check_permissions,
+            ipc::onboarding::open_system_settings,
+            ipc::onboarding::list_available_models,
+            ipc::onboarding::download_model,
+            ipc::onboarding::get_model_download_status,
+            ipc::onboarding::refresh_ai_models,
+            ipc::onboarding::check_model_exists,
+            ipc::onboarding::delete_ai_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

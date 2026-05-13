@@ -1,7 +1,7 @@
 use fndr_lib::config::DEFAULT_IMAGE_EMBEDDING_DIM;
-use fndr_lib::embed::{Embedder, EMBEDDING_DIM};
+use fndr_lib::embedding::{Embedder, EMBEDDING_DIM};
 use fndr_lib::search::HybridSearcher;
-use fndr_lib::store::{MemoryRecord, Store};
+use fndr_lib::storage::{MemoryRecord, Store};
 use serde::Deserialize;
 use std::collections::HashSet;
 

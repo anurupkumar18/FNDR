@@ -2,8 +2,8 @@
 
 use crate::capture::text_cleanup;
 use crate::config::SearchConfig;
-use crate::embed::{Embedder, EmbeddingBackend};
-use crate::store::{SearchResult, Store};
+use crate::embedding::{Embedder, EmbeddingBackend};
+use crate::storage::{SearchResult, Store};
 use std::collections::{HashMap, HashSet};
 use tokio::time::{timeout, Duration, Instant};
 

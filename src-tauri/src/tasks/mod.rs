@@ -1,6 +1,6 @@
 //! Task extraction and management helpers.
 
-pub use crate::store::{Task, TaskType};
+pub use crate::storage::{Task, TaskType};
 
 fn normalize_task_text(value: &str) -> String {
     value

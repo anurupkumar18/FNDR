@@ -5,7 +5,7 @@
 //! linked to the most recent `MemoryChunk` via a `ClipboardCopied` edge.
 
 use crate::capture::text_cleanup;
-use crate::store::{EdgeType, GraphEdge, GraphNode, NodeType, Store};
+use crate::storage::{EdgeType, GraphEdge, GraphNode, NodeType, Store};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;

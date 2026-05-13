@@ -5,13 +5,13 @@
 
 use crate::{
     config::DEFAULT_IMAGE_EMBEDDING_DIM,
-    embed::{Embedder, EMBEDDING_DIM},
+    embedding::{Embedder, EMBEDDING_DIM},
     memory_compaction::{
         build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
         support_embedding_texts,
     },
     speech,
-    store::{
+    storage::{
         MeetingBreakdown, MeetingSegment, MeetingSession, MemoryRecord, Store, Task, TaskType,
     },
     AppState,
@@ -545,7 +545,7 @@ pub async fn list_meetings() -> Result<Vec<MeetingSession>, String> {
 }
 
 /// Return all segments for a given meeting, sorted by index.
-pub async fn get_meeting_segments(meeting_id: &str) -> Vec<crate::store::MeetingSegment> {
+pub async fn get_meeting_segments(meeting_id: &str) -> Vec<crate::storage::MeetingSegment> {
     match get_store() {
         Ok(store) => store.get_segments_for_meeting(meeting_id).await,
         Err(_) => Vec::new(),
@@ -2336,7 +2336,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::embed::EmbeddingBackend;
+    use crate::embedding::EmbeddingBackend;
     use std::io::Write;
 
     #[test]

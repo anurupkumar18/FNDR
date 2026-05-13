@@ -1,10 +1,10 @@
-import type { PanelKey } from "../components/CommandPalette";
+import type { PanelKey } from "@/domains/command-palette/CommandPalette";
 
 const SIDEBAR_GROUPS = [
     {
         label: "Features",
         items: [
-            { key: "memoryCards", text: "Memory Cards" },
+            { key: "memoryCards", text: "Memory Vault" },
             { key: "stats", text: "Stats" },
             { key: "todo", text: "To Do" },
             { key: "meeting", text: "Meetings" },

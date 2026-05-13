@@ -1,0 +1,26 @@
+# FNDR documentation
+
+Use this index to find the right document quickly. **Authoritative agent vocabulary** lives in [`CONTEXT.md`](../CONTEXT.md) together with [`AGENTS.md`](../AGENTS.md) at the repository root.
+
+## Start here
+
+| Document | Purpose |
+| --- | --- |
+| [`CONTEXT.md`](../CONTEXT.md) | Product terms, where truth lives, default quality bar |
+| [`architecture/ARCHITECTURE.md`](architecture/ARCHITECTURE.md) | Capture → search → UI pipeline and core Rust modules |
+| [`product/DESIGN_DIRECTION.md`](product/DESIGN_DIRECTION.md) | UX and visual direction |
+
+## By topic
+
+| Folder | Contents |
+| --- | --- |
+| [`decisions/`](decisions/) | Architecture decision records (ADRs), numbered filenames |
+| [`architecture/`](architecture/) | Long-form architecture + insight graph schema (`graph-schema.md`) |
+| [`setup/engineering/`](setup/engineering/) | Implementation guides (timeline rules, repo layout, refactoring notes, agent tooling) |
+| [`product/`](product/) | Product-level technical notes (e.g. intelligence engine) |
+| [`agents/`](agents/) | Reserved for agent/MCP-oriented runbooks (add as needed) |
+| Frontend source layout | [`../src/domains/README.md`](../src/domains/README.md) |
+
+## Root files (not under `docs/`)
+
+`README.md`, `AGENTS.md`, `CLAUDE.md`, and a short root `CONTEXT.md` pointer exist for tooling and first-time orientation. All substantive prose should live under **`docs/`** as above.

@@ -4,38 +4,51 @@
 #![recursion_limit = "512"]
 
 pub mod accessibility;
-pub mod api;
+pub mod ipc;
 pub mod capture;
 pub mod config;
 pub mod context_runtime;
 pub mod downloads;
-pub mod embed;
-pub mod graph;
+pub mod embedding;
+pub mod memory;
 pub mod http_util;
 pub mod inference;
 pub mod mcp;
 pub mod meeting;
 pub mod memory_compaction;
+pub mod memory_insight;
 pub mod memory_quality;
 pub mod models;
 pub mod ocr;
 pub mod privacy;
 pub mod search;
 pub mod speech;
-pub mod store;
+pub mod storage;
 pub mod summariser;
 pub mod tasks;
 pub mod telemetry;
+pub mod timeline;
+pub mod system_resources;
+pub mod wiki;
 
 use config::Config;
-use graph::GraphStore;
+use memory::graph::GraphStore;
 use inference::{InferenceEngine, VlmEngine};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use store::{StateStore, Stats, Store};
+use storage::{StateStore, Stats, Store};
 use tokio::sync::Mutex as AsyncMutex;
+
+/// Queued insight-graph upsert work (see `capture` flush + idle `commit_graph_updates`).
+#[derive(Debug, Clone)]
+pub struct PendingGraphUpdate {
+    pub memory_id: String,
+    pub nodes: Vec<memory::graph::schema::GraphNode>,
+    pub edges: Vec<memory::graph::schema::GraphEdge>,
+    pub overall_confidence: f32,
+}
 
 pub struct LoadedAiEngines {
     pub inference: Option<Arc<InferenceEngine>>,
@@ -100,6 +113,12 @@ pub struct AppState {
     /// Active context runtime subscriptions (session_ids).
     pub runtime_subscriptions: RwLock<std::collections::HashSet<String>>,
     pub app_handle: RwLock<Option<tauri::AppHandle>>,
+    /// High-confidence graph extractions waiting for idle Lance commit.
+    pub pending_graph_updates: Mutex<Vec<PendingGraphUpdate>>,
+    /// Extractions below the auto-commit confidence threshold (never auto-written).
+    pub low_confidence_graph_candidates: Mutex<Vec<PendingGraphUpdate>>,
+    /// When true, idle graph commit treats the machine as battery-saver tier.
+    pub graph_governor_battery_saver: AtomicBool,
 }
 
 impl AppState {
@@ -140,6 +159,48 @@ impl AppState {
             snoozed_privacy_alerts: RwLock::new(std::collections::HashMap::new()),
             runtime_subscriptions: RwLock::new(std::collections::HashSet::new()),
             app_handle: RwLock::new(None),
+            pending_graph_updates: Mutex::new(Vec::new()),
+            low_confidence_graph_candidates: Mutex::new(Vec::new()),
+            graph_governor_battery_saver: AtomicBool::new(false),
+        }
+    }
+
+    /// Queue graph extraction from a flushed memory row (normalized like Lance indexing).
+    pub fn enqueue_graph_from_flushed_memory(&self, record: &storage::MemoryRecord) {
+        let normalized = storage::normalize_record_for_index(record);
+        let memory_id = normalized.id.clone();
+        let ex = capture::entity_extractor::extract(&normalized);
+        let node_count = ex.nodes.len();
+        let edge_count = ex.edges.len();
+        let overall = ex.overall_confidence;
+        let update = PendingGraphUpdate {
+            memory_id: memory_id.clone(),
+            nodes: ex.nodes,
+            edges: ex.edges,
+            overall_confidence: overall,
+        };
+        if overall >= 0.5 {
+            tracing::info!(
+                target: "fndr::graph_queue",
+                memory_id = %memory_id,
+                node_count,
+                edge_count,
+                overall,
+                queue = "pending_graph_updates",
+                "graph_extraction queued"
+            );
+            self.pending_graph_updates.lock().push(update);
+        } else {
+            tracing::info!(
+                target: "fndr::graph_queue",
+                memory_id = %memory_id,
+                node_count,
+                edge_count,
+                overall,
+                queue = "low_confidence_graph_candidates",
+                "graph_extraction queued"
+            );
+            self.low_confidence_graph_candidates.lock().push(update);
         }
     }
 

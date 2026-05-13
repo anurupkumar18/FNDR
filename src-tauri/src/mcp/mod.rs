@@ -14,7 +14,7 @@ pub mod tls;
 pub mod token;
 
 use crate::context_runtime::{self, CodeContextRequest, ContextRequest, DecisionProposal};
-use crate::embed::Embedder;
+use crate::embedding::Embedder;
 use crate::meeting;
 use crate::search::HybridSearcher;
 use crate::AppState;
@@ -335,6 +335,22 @@ struct GraphQueryArgs {
     query: String,
     #[serde(default = "default_full_context_limit")]
     limit: usize,
+}
+
+fn default_graph_context_depth() -> u32 {
+    2
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphContextArgs {
+    /// Filter project nodes / wiki stub; optional.
+    #[serde(default)]
+    project: Option<String>,
+    /// When set, include a BFS neighborhood around this insight-graph node UUID.
+    #[serde(default)]
+    start_node_id: Option<String>,
+    #[serde(default = "default_graph_context_depth")]
+    depth: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1507,6 +1523,18 @@ fn tools_list_result() -> Value {
                 }
             },
             {
+                "name": "memory.graph_context",
+                "description": "Insight Lance graph context: top project nodes, high-confidence edges, conflicts, optional wiki stub, and optional BFS neighborhood from `start_node_id` (UUID). For legacy string-id graph rows, use `memory.graph_query`.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project": { "type": "string" },
+                        "start_node_id": { "type": "string" },
+                        "depth": { "type": "integer", "minimum": 1, "maximum": 3 }
+                    }
+                }
+            },
+            {
                 "name": "memory.recent_changes",
                 "description": "Summarize recent memory/task/error changes over a lookback period.",
                 "inputSchema": {
@@ -1826,6 +1854,15 @@ async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Va
                     message: format!("Invalid memory.graph_query args: {err}"),
                 })?;
             run_memory_graph_query(app_state, args).await
+        }
+        "memory.graph_context" => {
+            let args: GraphContextArgs =
+                serde_json::from_value(params.arguments).unwrap_or(GraphContextArgs {
+                    project: None,
+                    start_node_id: None,
+                    depth: default_graph_context_depth(),
+                });
+            run_memory_graph_context(app_state, args).await
         }
         "memory.recent_changes" => {
             let args: RecentChangesArgs =
@@ -2640,8 +2677,9 @@ async fn run_memory_active_focus(
     })))
 }
 
-fn knowledge_page_to_json(page: &crate::store::KnowledgePage) -> Value {
+fn knowledge_page_to_json(page: &crate::storage::KnowledgePage) -> Value {
     json!({
+        "payload_schema_version": 1,
         "page_id": page.page_id,
         "page_type": page.page_type,
         "title": page.title,
@@ -2661,8 +2699,8 @@ fn knowledge_page_to_json(page: &crate::store::KnowledgePage) -> Value {
 }
 
 fn filter_pages_by_type(
-    pages: &[crate::store::KnowledgePage],
-    page_type: crate::store::KnowledgePageType,
+    pages: &[crate::storage::KnowledgePage],
+    page_type: crate::storage::KnowledgePageType,
     limit: usize,
 ) -> Vec<Value> {
     pages
@@ -2676,7 +2714,7 @@ fn filter_pages_by_type(
 async fn ensure_knowledge_pages(
     app_state: &AppState,
     project: Option<&str>,
-) -> Result<Vec<crate::store::KnowledgePage>, JsonRpcError> {
+) -> Result<Vec<crate::storage::KnowledgePage>, JsonRpcError> {
     let pages = context_runtime::compile_knowledge_pages(app_state, project)
         .await
         .map_err(internal_tool_error)?;
@@ -2702,12 +2740,12 @@ async fn run_memory_warm_start(
         .map(|value| value.to_string());
     let pages = ensure_knowledge_pages(app_state.as_ref(), project_guess.as_deref()).await?;
     let project_pages =
-        filter_pages_by_type(&pages, crate::store::KnowledgePageType::ProjectPage, 6);
-    let claim_pages = filter_pages_by_type(&pages, crate::store::KnowledgePageType::ClaimPage, 8);
+        filter_pages_by_type(&pages, crate::storage::KnowledgePageType::ProjectPage, 6);
+    let claim_pages = filter_pages_by_type(&pages, crate::storage::KnowledgePageType::ClaimPage, 8);
     let decision_pages =
-        filter_pages_by_type(&pages, crate::store::KnowledgePageType::DecisionPage, 8);
+        filter_pages_by_type(&pages, crate::storage::KnowledgePageType::DecisionPage, 8);
     let breakthrough_pages =
-        filter_pages_by_type(&pages, crate::store::KnowledgePageType::BreakthroughPage, 8);
+        filter_pages_by_type(&pages, crate::storage::KnowledgePageType::BreakthroughPage, 8);
 
     let pack = context_runtime::build_context_pack(
         app_state.as_ref(),
@@ -2776,14 +2814,14 @@ async fn run_memory_agent_onboarding(
     let budget = args.token_budget.clamp(256, 12000);
     let pages = ensure_knowledge_pages(app_state.as_ref(), None).await?;
     let project_pages =
-        filter_pages_by_type(&pages, crate::store::KnowledgePageType::ProjectPage, 8);
+        filter_pages_by_type(&pages, crate::storage::KnowledgePageType::ProjectPage, 8);
     let decision_pages =
-        filter_pages_by_type(&pages, crate::store::KnowledgePageType::DecisionPage, 8);
+        filter_pages_by_type(&pages, crate::storage::KnowledgePageType::DecisionPage, 8);
     let breakthrough_pages =
-        filter_pages_by_type(&pages, crate::store::KnowledgePageType::BreakthroughPage, 8);
+        filter_pages_by_type(&pages, crate::storage::KnowledgePageType::BreakthroughPage, 8);
     let contradiction_pages = filter_pages_by_type(
         &pages,
-        crate::store::KnowledgePageType::ContradictionPage,
+        crate::storage::KnowledgePageType::ContradictionPage,
         8,
     );
 
@@ -2835,8 +2873,8 @@ async fn run_memory_project_wiki(
                     .map(|value| value.eq_ignore_ascii_case(project))
                     .unwrap_or(false)
             } else {
-                page.page_type == crate::store::KnowledgePageType::ProjectPage
-                    || page.page_type == crate::store::KnowledgePageType::TopicPage
+                page.page_type == crate::storage::KnowledgePageType::ProjectPage
+                    || page.page_type == crate::storage::KnowledgePageType::TopicPage
             }
         })
         .take(limit)
@@ -2855,7 +2893,7 @@ async fn run_memory_claims(
     let pages = ensure_knowledge_pages(app_state.as_ref(), args.project.as_deref()).await?;
     let claims = filter_pages_by_type(
         &pages,
-        crate::store::KnowledgePageType::ClaimPage,
+        crate::storage::KnowledgePageType::ClaimPage,
         args.limit.clamp(1, 100),
     );
     Ok(tool_success(json!({
@@ -2871,7 +2909,7 @@ async fn run_memory_breakthroughs(
     let pages = ensure_knowledge_pages(app_state.as_ref(), args.project.as_deref()).await?;
     let breakthroughs = filter_pages_by_type(
         &pages,
-        crate::store::KnowledgePageType::BreakthroughPage,
+        crate::storage::KnowledgePageType::BreakthroughPage,
         args.limit.clamp(1, 100),
     );
     Ok(tool_success(json!({
@@ -3334,6 +3372,48 @@ async fn run_memory_graph_query(
     })))
 }
 
+async fn run_memory_graph_context(
+    app_state: Arc<AppState>,
+    args: GraphContextArgs,
+) -> Result<Value, JsonRpcError> {
+    let index_status = inspect_memory_index_status(&app_state).await?;
+    let proj = args
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+
+    if let Some(start) = args
+        .start_node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let id = uuid::Uuid::parse_str(start).map_err(|_| JsonRpcError {
+            code: -32602,
+            message: "start_node_id must be a UUID for the insight graph".to_string(),
+        })?;
+        let depth = args.depth.clamp(1, 3);
+        let gs = crate::storage::graph_store::GraphStore::new(app_state.store.clone());
+        let neighborhood = gs
+            .get_subgraph(id, depth)
+            .await
+            .map_err(internal_tool_error)?;
+        let insight = context_runtime::insight_graph_context_mcp(app_state.as_ref(), proj).await;
+        return Ok(tool_success(json!({
+            "index_status": index_status,
+            "neighborhood": neighborhood,
+            "insight": insight,
+        })));
+    }
+
+    let insight = context_runtime::insight_graph_context_mcp(app_state.as_ref(), proj).await;
+    Ok(tool_success(json!({
+        "index_status": index_status,
+        "insight": insight,
+    })))
+}
+
 async fn run_memory_recent_changes(
     app_state: Arc<AppState>,
     args: RecentChangesArgs,
@@ -3613,9 +3693,9 @@ fn timestamp_in_window(timestamp: i64, window: &ParsedTimeWindow) -> bool {
 }
 
 fn filter_results_by_window(
-    rows: Vec<crate::store::SearchResult>,
+    rows: Vec<crate::storage::SearchResult>,
     window: &ParsedTimeWindow,
-) -> Vec<crate::store::SearchResult> {
+) -> Vec<crate::storage::SearchResult> {
     rows.into_iter()
         .filter(|row| timestamp_in_window(row.timestamp, window))
         .collect()
@@ -3626,7 +3706,7 @@ async fn fetch_results_in_range(
     start_ms: Option<i64>,
     end_ms: Option<i64>,
     max_rows: usize,
-) -> Result<Vec<crate::store::SearchResult>, JsonRpcError> {
+) -> Result<Vec<crate::storage::SearchResult>, JsonRpcError> {
     if let (Some(start), Some(end)) = (start_ms, end_ms) {
         let mut rows = app_state
             .store
@@ -3647,7 +3727,7 @@ async fn fetch_results_in_range(
     Ok(rows)
 }
 
-fn dedupe_results_by_id(rows: Vec<crate::store::SearchResult>) -> Vec<crate::store::SearchResult> {
+fn dedupe_results_by_id(rows: Vec<crate::storage::SearchResult>) -> Vec<crate::storage::SearchResult> {
     let mut seen = HashSet::new();
     let mut deduped = Vec::new();
     for row in rows {
@@ -3660,8 +3740,8 @@ fn dedupe_results_by_id(rows: Vec<crate::store::SearchResult>) -> Vec<crate::sto
 
 async fn load_memories_for_results(
     app_state: &Arc<AppState>,
-    rows: &[crate::store::SearchResult],
-) -> Result<HashMap<String, crate::store::MemoryRecord>, JsonRpcError> {
+    rows: &[crate::storage::SearchResult],
+) -> Result<HashMap<String, crate::storage::MemoryRecord>, JsonRpcError> {
     let mut map = HashMap::new();
     for row in rows {
         if map.contains_key(&row.id) {
@@ -3681,9 +3761,9 @@ async fn load_memories_for_results(
 
 async fn fetch_related_memories(
     app_state: &Arc<AppState>,
-    memories: &[crate::store::MemoryRecord],
+    memories: &[crate::storage::MemoryRecord],
     limit: usize,
-) -> Result<Vec<crate::store::MemoryRecord>, JsonRpcError> {
+) -> Result<Vec<crate::storage::MemoryRecord>, JsonRpcError> {
     let mut ids = HashSet::new();
     for memory in memories {
         if let Some(parent) = memory.parent_id.as_deref() {
@@ -3712,7 +3792,7 @@ async fn fetch_related_memories(
     Ok(results)
 }
 
-fn derive_window_from_results(rows: &[crate::store::SearchResult]) -> (Option<i64>, Option<i64>) {
+fn derive_window_from_results(rows: &[crate::storage::SearchResult]) -> (Option<i64>, Option<i64>) {
     if rows.is_empty() {
         return (None, None);
     }
@@ -3726,8 +3806,8 @@ fn derive_window_from_results(rows: &[crate::store::SearchResult]) -> (Option<i6
 }
 
 fn build_result_rows(
-    rows: &[crate::store::SearchResult],
-    memory_map: &HashMap<String, crate::store::MemoryRecord>,
+    rows: &[crate::storage::SearchResult],
+    memory_map: &HashMap<String, crate::storage::MemoryRecord>,
     include_raw: bool,
 ) -> Vec<Value> {
     rows.iter()
@@ -3735,7 +3815,7 @@ fn build_result_rows(
         .collect()
 }
 
-fn build_memory_rows(memories: &[crate::store::MemoryRecord], include_raw: bool) -> Vec<Value> {
+fn build_memory_rows(memories: &[crate::storage::MemoryRecord], include_raw: bool) -> Vec<Value> {
     memories
         .iter()
         .map(|memory| {
@@ -3768,8 +3848,8 @@ fn build_memory_rows(memories: &[crate::store::MemoryRecord], include_raw: bool)
 }
 
 fn result_row_to_json(
-    row: &crate::store::SearchResult,
-    memory: Option<&crate::store::MemoryRecord>,
+    row: &crate::storage::SearchResult,
+    memory: Option<&crate::storage::MemoryRecord>,
     include_raw: bool,
 ) -> Value {
     let mut base = json!({
@@ -3803,8 +3883,8 @@ fn result_row_to_json(
     base
 }
 
-fn memory_to_search_result(memory: &crate::store::MemoryRecord) -> crate::store::SearchResult {
-    crate::store::SearchResult {
+fn memory_to_search_result(memory: &crate::storage::MemoryRecord) -> crate::storage::SearchResult {
+    crate::storage::SearchResult {
         id: memory.id.clone(),
         timestamp: memory.timestamp,
         app_name: memory.app_name.clone(),
@@ -3854,12 +3934,18 @@ fn memory_to_search_result(memory: &crate::store::MemoryRecord) -> crate::store:
         dedup_fingerprint: memory.dedup_fingerprint.clone(),
         is_consolidated: memory.is_consolidated,
         is_soft_deleted: memory.is_soft_deleted,
+        insight_what_happened: memory.insight_what_happened.clone(),
+        insight_why_mattered: memory.insight_why_mattered.clone(),
+        insight_what_changed: memory.insight_what_changed.clone(),
+        insight_context_thread: memory.insight_context_thread.clone(),
+        insight_spans_json: memory.insight_spans_json.clone(),
+        insight_card_confidence: memory.insight_card_confidence,
     }
 }
 
 fn aggregate_urls(
-    rows: &[crate::store::SearchResult],
-    memory_map: &HashMap<String, crate::store::MemoryRecord>,
+    rows: &[crate::storage::SearchResult],
+    memory_map: &HashMap<String, crate::storage::MemoryRecord>,
 ) -> Vec<Value> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for row in rows {
@@ -3891,8 +3977,8 @@ fn aggregate_urls(
 }
 
 fn aggregate_files(
-    rows: &[crate::store::SearchResult],
-    memory_map: &HashMap<String, crate::store::MemoryRecord>,
+    rows: &[crate::storage::SearchResult],
+    memory_map: &HashMap<String, crate::storage::MemoryRecord>,
 ) -> Vec<Value> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for row in rows {
@@ -3923,7 +4009,7 @@ fn aggregate_files(
     files
 }
 
-fn suggested_next_steps_from_pack(pack: &crate::store::ContextPack) -> Vec<String> {
+fn suggested_next_steps_from_pack(pack: &crate::storage::ContextPack) -> Vec<String> {
     let mut steps = Vec::new();
     if let Some(step) = pack.recommended_next_action.as_deref() {
         if !step.trim().is_empty() {
@@ -3987,7 +4073,7 @@ fn infer_source_type(url: Option<&str>, app_name: &str) -> String {
 }
 
 fn build_timeline_buckets(
-    mut rows: Vec<crate::store::SearchResult>,
+    mut rows: Vec<crate::storage::SearchResult>,
     granularity: &str,
 ) -> Vec<Value> {
     if rows.is_empty() {
@@ -3999,7 +4085,7 @@ fn build_timeline_buckets(
         return build_session_buckets(rows);
     }
 
-    let mut grouped: HashMap<String, Vec<crate::store::SearchResult>> = HashMap::new();
+    let mut grouped: HashMap<String, Vec<crate::storage::SearchResult>> = HashMap::new();
     for row in rows {
         let key = match mode.as_str() {
             "hour" => {
@@ -4029,8 +4115,8 @@ fn build_timeline_buckets(
     buckets
 }
 
-fn build_session_buckets(rows: Vec<crate::store::SearchResult>) -> Vec<Value> {
-    let mut sessions: Vec<Vec<crate::store::SearchResult>> = Vec::new();
+fn build_session_buckets(rows: Vec<crate::storage::SearchResult>) -> Vec<Value> {
+    let mut sessions: Vec<Vec<crate::storage::SearchResult>> = Vec::new();
     let session_gap_ms = chrono::Duration::minutes(20).num_milliseconds();
     for row in rows {
         if let Some(last_group) = sessions.last_mut() {
@@ -4049,7 +4135,7 @@ fn build_session_buckets(rows: Vec<crate::store::SearchResult>) -> Vec<Value> {
     sessions.into_iter().map(build_bucket_row).collect()
 }
 
-fn build_bucket_row(group: Vec<crate::store::SearchResult>) -> Value {
+fn build_bucket_row(group: Vec<crate::storage::SearchResult>) -> Value {
     let start = group.first().map(|row| row.timestamp).unwrap_or_default();
     let end = group.last().map(|row| row.timestamp).unwrap_or(start);
     let summary = group
@@ -4191,8 +4277,8 @@ fn internal_tool_error<E: std::fmt::Display>(err: E) -> JsonRpcError {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::graph::GraphStore;
-    use crate::store::{StateStore, Store};
+    use crate::memory::graph::GraphStore;
+    use crate::storage::{StateStore, Store};
     use tempfile::tempdir;
 
     fn build_test_app_state() -> Arc<AppState> {
@@ -4331,5 +4417,20 @@ mod tests {
 
             let _ = stop().await;
         });
+    }
+
+    #[test]
+    fn knowledge_page_json_contract_has_schema_version() {
+        use crate::storage::{KnowledgePage, KnowledgePageType};
+        let page = KnowledgePage {
+            page_id: "kp:test".to_string(),
+            page_type: KnowledgePageType::TopicPage,
+            title: "Example".to_string(),
+            ..Default::default()
+        };
+        let v = super::knowledge_page_to_json(&page);
+        assert_eq!(v.get("payload_schema_version").and_then(|x| x.as_u64()), Some(1));
+        assert!(v.get("page_id").is_some());
+        assert!(v.get("stability").is_some());
     }
 }

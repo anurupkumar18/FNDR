@@ -1,0 +1,73 @@
+.insight-layers {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.9rem;
+}
+
+.insight-layers--low-conf {
+  opacity: 0.92;
+}
+
+.insight-low-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  color: rgba(255, 200, 160, 0.95);
+  border: 1px solid rgba(255, 180, 120, 0.35);
+  background: rgba(120, 60, 20, 0.25);
+}
+
+.insight-row {
+  margin-bottom: 8px;
+}
+
+.insight-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.45);
+  margin-bottom: 2px;
+}
+
+.insight-value {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.88);
+  line-height: 1.45;
+}
+
+.insight-spans-debug {
+  margin-top: 8px;
+  font-size: 0.78rem;
+}
+
+.insight-spans-pre {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 8px;
+  border-radius: 8px;
+}
+
+[data-theme="light"] .insight-layers {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .insight-label {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="light"] .insight-value {
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .insight-spans-pre {
+  background: rgba(0, 0, 0, 0.06);
+}

@@ -1,7 +1,7 @@
-use crate::embed::Embedder;
+use crate::embedding::Embedder;
 use crate::mcp;
 use crate::search::HybridSearcher;
-use crate::store::{
+use crate::storage::{
     ActivityEvent, CodeContext, CommandEvent, CommitRef, ContextDelta, ContextPack,
     ContextPackItemReason, ContextRuntimeStatus, ContextTask, DecisionLedgerEntry, DecisionSummary,
     EdgeType, EntityAliasRecord, EntityRef, ErrorEvent, EvidenceRef, ExcludedContextItem,
@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use tauri::Emitter;
+
+mod wiki_policy;
 
 static URL_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"https?://[^\s)>"]+"#).expect("valid URL regex"));
@@ -209,6 +211,93 @@ pub async fn sync_memory_records(
     Ok(events)
 }
 
+/// Bounded JSON snapshot of the Lance insight graph for MCP and [`ContextPack::graph_context`].
+pub async fn insight_graph_context_mcp(
+    state: &AppState,
+    project: Option<&str>,
+) -> Option<serde_json::Value> {
+    use crate::memory::graph::schema::{GraphEdgeType, GraphNodeType};
+    use crate::storage::graph_store::GraphStore;
+
+    let gs = GraphStore::new(state.store.clone());
+    let nodes = gs.all_nodes().await.ok()?;
+    let edges = gs.all_edges().await.ok()?;
+    let mut pr_nodes: Vec<_> = nodes
+        .iter()
+        .filter(|n| n.node_type == GraphNodeType::Project)
+        .cloned()
+        .collect();
+    if let Some(p) = project {
+        if !p.trim().is_empty() {
+            pr_nodes.retain(|n| {
+                n.label.eq_ignore_ascii_case(p)
+                    || n.label.contains(p)
+                    || p.contains(n.label.as_str())
+            });
+        }
+    }
+    pr_nodes.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+    pr_nodes.truncate(5);
+    let mut e_sorted = edges.clone();
+    e_sorted.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+    let top_edges: Vec<serde_json::Value> = e_sorted
+        .iter()
+        .take(3)
+        .map(|e| {
+            json!({
+                "source": e.source_id,
+                "target": e.target_id,
+                "edge_type": format!("{:?}", e.edge_type),
+                "confidence": e.confidence,
+                "conflict_flag": e.conflict_flag,
+            })
+        })
+        .collect();
+    let conflicts: Vec<serde_json::Value> = edges
+        .iter()
+        .filter(|e| e.conflict_flag || e.edge_type == GraphEdgeType::Contradicts)
+        .take(8)
+        .map(|e| {
+            json!({
+                "source": e.source_id,
+                "target": e.target_id,
+                "confidence": e.confidence,
+            })
+        })
+        .collect();
+    let mut wiki = crate::wiki::synthesize_wiki_stub(project);
+    if wiki.len() > 1800 {
+        wiki.truncate(1797);
+        wiki.push_str("...");
+    }
+    let pr_json: Vec<serde_json::Value> = pr_nodes
+        .iter()
+        .map(|n| {
+            json!({
+                "id": n.id,
+                "label": n.label,
+                "confidence": n.confidence,
+                "source_memory_ids": n.source_memory_ids,
+            })
+        })
+        .collect();
+    let out = json!({
+        "top_project_nodes": pr_json,
+        "top_edges": top_edges,
+        "conflicts": conflicts,
+        "wiki_summary": wiki,
+    });
+    let s = serde_json::to_string(&out).unwrap_or_default();
+    if s.len() > 7500 {
+        Some(json!({
+            "truncated": true,
+            "preview": s.chars().take(7400).collect::<String>(),
+        }))
+    } else {
+        Some(out)
+    }
+}
+
 pub async fn build_context_pack(
     state: &AppState,
     request: ContextRequest,
@@ -364,6 +453,8 @@ pub async fn build_context_pack(
         });
     }
 
+    let graph_context = insight_graph_context_mcp(state, active_project.as_deref()).await;
+
     let mut pack = ContextPack {
         id: format!("ctx_{}", uuid::Uuid::new_v4().simple()),
         session_id: request.session_id.clone(),
@@ -386,6 +477,7 @@ pub async fn build_context_pack(
         included,
         excluded,
         confidence: average_confidence(&events),
+        graph_context,
     };
 
     apply_section_budgets(&mut pack);
@@ -1425,9 +1517,9 @@ async fn collect_open_tasks(
             id: task.id,
             title: task.title,
             status: match task.task_type {
-                crate::store::TaskType::Todo => "todo".to_string(),
-                crate::store::TaskType::Reminder => "reminder".to_string(),
-                crate::store::TaskType::Followup => "followup".to_string(),
+                crate::storage::TaskType::Todo => "todo".to_string(),
+                crate::storage::TaskType::Reminder => "reminder".to_string(),
+                crate::storage::TaskType::Followup => "followup".to_string(),
             },
             source: task.source_app,
             due_at: task.due_date,
@@ -2205,7 +2297,7 @@ fn decision_verb_stem_design(decision: &str) -> bool {
 }
 
 fn build_event_title(record: &MemoryRecord) -> String {
-    let compressed = crate::graph::compress_node_label(record);
+    let compressed = crate::memory::graph::compress_node_label(record);
     if !compressed.trim().is_empty() {
         return trim_chars(&compressed, 96);
     }
@@ -2933,7 +3025,7 @@ mod tests {
         let mut memory = record();
         memory.files_touched = vec![
             "/Users/anurupkumar/fndr/src-tauri/src/search/hybrid.rs".to_string(),
-            "/Users/anurupkumar/fndr/src/components/AgentPanel.tsx".to_string(),
+            "/Users/anurupkumar/fndr/src/domains/workspace/AgentPanel.tsx".to_string(),
         ];
         memory.url = Some("https://github.com/example/other-repo/issues/1".to_string());
 

@@ -1,7 +1,7 @@
 //! Helpers for compacting persisted memory payloads.
 
-use crate::embed::{TextChunker, EMBEDDING_DIM};
-use crate::store::MemoryRecord;
+use crate::embedding::{TextChunker, EMBEDDING_DIM};
+use crate::storage::MemoryRecord;
 
 const SUMMARY_CLEAN_TEXT_CHARS: usize = 360;
 const FALLBACK_CLEAN_TEXT_CHARS: usize = 560;

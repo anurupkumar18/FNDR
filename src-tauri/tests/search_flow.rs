@@ -1,8 +1,8 @@
 //! Integration smoke: LanceDB + keyword search over seeded rows.
 
 use fndr_lib::config::DEFAULT_IMAGE_EMBEDDING_DIM;
-use fndr_lib::embed::{Embedder, EMBEDDING_DIM};
-use fndr_lib::store::{MemoryRecord, Store};
+use fndr_lib::embedding::{Embedder, EMBEDDING_DIM};
+use fndr_lib::storage::{MemoryRecord, Store};
 
 #[test]
 fn keyword_search_finds_seeded_content() {

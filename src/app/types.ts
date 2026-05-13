@@ -1,4 +1,4 @@
-import type { PanelKey } from "../components/CommandPalette";
+import type { PanelKey } from "@/domains/command-palette/CommandPalette";
 
 export interface AppToast {
     id: string;
