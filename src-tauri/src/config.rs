@@ -566,7 +566,7 @@ pub struct Config {
     /// Enable VLM for intelligent image understanding
     #[serde(default = "default_use_vlm")]
     pub use_vlm: bool,
-    /// VLM model size: "4B" (primary)
+    /// VLM model size: "1B" (Llama, default) or "4B" (Qwen, advanced).
     #[serde(default = "default_vlm_model_size")]
     pub vlm_model_size: String,
     /// Days to retain screenshot files on disk (records kept; only pixel data deleted). 0 = keep forever.
@@ -856,7 +856,7 @@ fn default_use_vlm() -> bool {
 }
 
 fn default_vlm_model_size() -> String {
-    "4B".to_string()
+    "1B".to_string()
 }
 
 fn default_screenshot_retention_days() -> u32 {
@@ -914,7 +914,7 @@ impl Default for Config {
             redact_mode: false,
             min_text_length: 20,
             use_vlm: true,
-            vlm_model_size: "4B".to_string(),
+            vlm_model_size: default_vlm_model_size(),
             screenshot_retention_days: 30,
             proactive_surface_enabled: true,
             decay_half_life_days: 21,
@@ -953,6 +953,11 @@ impl Config {
         self.min_text_length = self.min_text_length.clamp(1, 2000);
         self.screenshot_retention_days = self.screenshot_retention_days.min(3650);
         self.decay_half_life_days = self.decay_half_life_days.clamp(1, 3650);
+        let vlm = self.vlm_model_size.trim().to_string();
+        self.vlm_model_size = match vlm.as_str() {
+            "4B" => "4B".to_string(),
+            _ => "1B".to_string(),
+        };
         self
     }
 

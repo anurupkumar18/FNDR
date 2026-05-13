@@ -604,6 +604,7 @@ fn main() {
             ipc::onboarding::refresh_ai_models,
             ipc::onboarding::check_model_exists,
             ipc::onboarding::delete_ai_model,
+            ipc::commands::import_meta_glasses_photo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,7 +1,8 @@
 //! Vision Language Model (VLM) inference engine
 //!
-//! Uses Qwen3-VL 4B GGUF for richer OCR-grounded screen understanding.
-//! Primary: Qwen3VL-4B-Instruct-Q4_K_M.gguf
+//! Loads a GGUF from the shared catalog for OCR-grounded screen prompts.
+//! Default path uses Llama 3.2 1B (text weights; prompts are OCR-only).
+//! Optional Qwen3-VL 4B for users who accept higher RAM use.
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -164,7 +165,6 @@ impl VlmEngine {
         let preferred_model_id = match preferred_size {
             "4B" => Some("qwen3-vl-4b"),
             "1B" => Some("llama-3.2-1b"),
-            "500M" => Some("smolvlm-500m"),
             _ => None,
         };
 

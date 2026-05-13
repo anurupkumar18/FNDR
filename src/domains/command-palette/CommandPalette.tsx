@@ -6,6 +6,7 @@ import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import {
     MemoryCard,
     deleteMemory,
+    importMetaGlassesPhoto,
     pauseCapture,
     resumeCapture,
     startAgentTask,
@@ -219,6 +220,17 @@ const COMMANDS: Command[] = [
         category: "capture",
         keywords: ["resume", "start", "record"],
         run: async () => { await resumeCapture(); },
+    },
+    {
+        id: "import-meta-glasses-photo",
+        label: "Import Meta glasses photo",
+        description: "Add a phone-exported glasses photo to memory (CLIP + OCR + search)",
+        category: "capture",
+        keywords: ["glasses", "meta", "ray-ban", "photo", "image", "import", "camera"],
+        run: async () => {
+            const id = await importMetaGlassesPhoto(null);
+            window.alert(`Imported memory ${id}`);
+        },
     },
     // Memory-specific (only shown when a memory is selected)
     {

@@ -40,6 +40,9 @@ pub use hermes_agent::*;
 mod graph;
 pub use graph::*;
 
+mod glasses_import;
+pub use glasses_import::*;
+
 #[cfg(test)]
 mod daily_summary_tests {
     use crate::embedding::{Embedder, EmbeddingBackend};

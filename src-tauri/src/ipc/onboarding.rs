@@ -92,6 +92,10 @@ impl Default for OnboardingState {
 }
 
 fn normalize_onboarding_state(mut state: OnboardingState) -> OnboardingState {
+    if matches!(state.model_id.as_deref(), Some("smolvlm-500m")) {
+        state.model_id = Some("llama-3.2-1b".to_string());
+    }
+
     if !state.model_downloaded
         && matches!(
             state.step,

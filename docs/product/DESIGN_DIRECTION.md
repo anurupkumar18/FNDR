@@ -43,8 +43,8 @@ FNDR is a **local-first, privacy-focused memory assistant** for macOS. It contin
 |---|---|---|
 | App framework | Tauri (Rust) | Smaller binary, native Metal access, memory-safe |
 | LLM runtime | llama-cpp-2 | Best macOS Metal performance for local inference |
-| LLM model | Llama 3.2 1B Q4 | Balance of quality and speed on consumer hardware |
-| VLM model | SmolVLM-500M/256M | Tiny footprint for on-device screen understanding |
+| LLM model | Llama 3.2 1B Q4 (default) | Fast summaries on consumer hardware; optional Qwen3-VL 4B for advanced users |
+| Vision import | CLIP ViT-B/32 vision ONNX | Tiny encoder for Meta glasses / photo imports; hybrid search remains OCR+BGE-first |
 | Search | Hybrid semantic + keyword ranking | Better recall than either approach alone |
 | Graph storage | LanceDB + local graph tables | Fast local retrieval with structured node/edge persistence |
 | Agent SDK | Anthropic Messages API | Standard tool-use patterns, streaming support |

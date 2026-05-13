@@ -734,6 +734,11 @@ export async function deleteMemory(memoryId: string): Promise<boolean> {
     return invoke<boolean>("delete_memory", { memoryId });
 }
 
+/** Import a photo (e.g. from Meta glasses) into memory. Omit path to open a file picker. */
+export async function importMetaGlassesPhoto(path?: string | null): Promise<string> {
+    return invoke<string>("import_meta_glasses_photo", { path: path ?? null });
+}
+
 export async function getMemoryDebugInspector(
     memoryId: string,
     query?: string
