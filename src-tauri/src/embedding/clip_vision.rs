@@ -79,12 +79,26 @@ impl ClipVisionSession {
             .try_extract_tensor::<f32>()
             .map_err(|e| format!("CLIP output extract: {e}"))?;
         let dims: Vec<usize> = shape.iter().map(|d| *d as usize).collect();
+        let flat: &[f32] = data;
         let mut vec = match dims.as_slice() {
-            [1, dim] if *dim == DEFAULT_IMAGE_EMBEDDING_DIM => data.to_vec(),
-            [dim] if *dim == DEFAULT_IMAGE_EMBEDDING_DIM => data.to_vec(),
+            [1, dim] if *dim == DEFAULT_IMAGE_EMBEDDING_DIM => flat.to_vec(),
+            [dim] if *dim == DEFAULT_IMAGE_EMBEDDING_DIM => flat.to_vec(),
+            [1, 1, dim] if *dim == DEFAULT_IMAGE_EMBEDDING_DIM => flat.to_vec(),
+            [1, rows, dim] if *dim == DEFAULT_IMAGE_EMBEDDING_DIM && *rows >= 1 => {
+                // Some exports use [1, seq, dim]; take the last row (CLS-style).
+                if flat.len() != rows * DEFAULT_IMAGE_EMBEDDING_DIM {
+                    return Err(format!(
+                        "Unexpected CLIP flat length {} for shape {dims:?}",
+                        flat.len()
+                    ));
+                }
+                let start = (rows - 1) * DEFAULT_IMAGE_EMBEDDING_DIM;
+                flat[start..start + DEFAULT_IMAGE_EMBEDDING_DIM].to_vec()
+            }
+            _ if flat.len() == DEFAULT_IMAGE_EMBEDDING_DIM => flat.to_vec(),
             _ => {
                 return Err(format!(
-                    "Unexpected CLIP output shape {dims:?}; expected [1, {}]",
+                    "Unexpected CLIP output shape {dims:?}; expected trailing dim {}",
                     DEFAULT_IMAGE_EMBEDDING_DIM
                 ));
             }

@@ -8,6 +8,8 @@ import { FocusSessionPanel } from "@/domains/workspace/FocusSessionPanel";
 import { MeetingRecorderPanel } from "@/domains/workspace/MeetingRecorderPanel";
 import { MemoryCardsPanel } from "@/domains/memory-vault/MemoryCardsPanel";
 import { PipelineInspectorPanel } from "@/domains/workspace/PipelineInspectorPanel";
+import { EngineMetricsPanel } from "@/domains/workspace/EngineMetricsPanel";
+import { GlassesImportPanel } from "@/domains/workspace/GlassesImportPanel";
 import { QuickSkillsPanel } from "@/domains/workspace/QuickSkillsPanel";
 import { ResearchPanel } from "@/domains/workspace/ResearchPanel";
 import { SearchHistoryPanel } from "@/domains/workspace/SearchHistoryPanel";
@@ -82,6 +84,12 @@ export function AppPanels({
             <StatsPanel isVisible={activePanel === "stats"} onClose={onClosePanel} />
             <TodoPanel isVisible={activePanel === "todo"} onClose={onClosePanel} />
             <DailySummaryPanel isVisible={activePanel === "dailySummary"} onClose={onClosePanel} />
+            <EngineMetricsPanel
+                isVisible={activePanel === "engineMetrics"}
+                onClose={onClosePanel}
+                onOpenPipelineInspector={() => onOpenPanel("pipeline")}
+            />
+            <GlassesImportPanel isVisible={activePanel === "glassesImport"} onClose={onClosePanel} />
             <PipelineInspectorPanel
                 isVisible={activePanel === "pipeline"}
                 onClose={onClosePanel}

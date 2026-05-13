@@ -1538,7 +1538,8 @@ fn fusion_weights(
 fn estimate_result_signal_strength(result: &SearchResult) -> f32 {
     let summary_weight = match result.summary_source.trim().to_ascii_lowercase().as_str() {
         "llm" => 1.0,
-        "vlm" => 0.9,
+        "vlm" | "vision_mtmd" => 0.9,
+        "vision_fallback" => 0.72,
         "fallback" => 0.66,
         _ => 0.58,
     };

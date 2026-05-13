@@ -6,7 +6,6 @@ import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import {
     MemoryCard,
     deleteMemory,
-    importMetaGlassesPhoto,
     pauseCapture,
     resumeCapture,
     startAgentTask,
@@ -52,6 +51,8 @@ export type PanelKey =
     | "meeting"
     | "dailySummary"
     | "pipeline"
+    | "engineMetrics"
+    | "glassesImport"
     | "searchHistory"
     | "quickSkills"
     | "focusSession"
@@ -161,6 +162,22 @@ const COMMANDS: Command[] = [
         keywords: ["debug", "pipeline", "inspect", "ranking"],
         run: ({ onOpenPanel }) => onOpenPanel("pipeline"),
     },
+    {
+        id: "engine-metrics",
+        label: "Engine metrics (performance)",
+        description: "Live latency, RSS, hybrid search timings — use while tuning performance",
+        category: "navigate",
+        keywords: ["metrics", "performance", "latency", "cpu", "ram", "rss", "profiler", "timing", "hybrid"],
+        run: ({ onOpenPanel }) => onOpenPanel("engineMetrics"),
+    },
+    {
+        id: "glasses-photo-import",
+        label: "Import glasses / camera photo",
+        description: "Visual semantic extraction + OCR evidence + embeddings (requires Qwen3-VL + mmproj)",
+        category: "navigate",
+        keywords: ["glasses", "meta", "ray-ban", "photo", "image", "import", "camera", "heic", "jpeg"],
+        run: ({ onOpenPanel }) => onOpenPanel("glassesImport"),
+    },
     // Smart / search
     {
         id: "search-coding",
@@ -223,14 +240,11 @@ const COMMANDS: Command[] = [
     },
     {
         id: "import-meta-glasses-photo",
-        label: "Import Meta glasses photo",
-        description: "Add a phone-exported glasses photo to memory (CLIP + OCR + search)",
+        label: "Import Meta glasses photo (same as sidebar)",
+        description: "Open the photo import screen with step-by-step instructions",
         category: "capture",
         keywords: ["glasses", "meta", "ray-ban", "photo", "image", "import", "camera"],
-        run: async () => {
-            const id = await importMetaGlassesPhoto(null);
-            window.alert(`Imported memory ${id}`);
-        },
+        run: ({ onOpenPanel }) => onOpenPanel("glassesImport"),
     },
     // Memory-specific (only shown when a memory is selected)
     {

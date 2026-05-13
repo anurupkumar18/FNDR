@@ -14,7 +14,10 @@ const EMBEDDING_MIN_NORM: f32 = 1e-6;
 
 pub fn compact_clean_text(summary_source: &str, snippet: &str, clean_text: &str) -> String {
     let summary_src = summary_source.trim().to_ascii_lowercase();
-    let is_high_signal_summary = summary_src == "llm" || summary_src == "vlm";
+    let is_high_signal_summary = summary_src == "llm"
+        || summary_src == "vlm"
+        || summary_src == "vision_mtmd"
+        || summary_src == "vision_fallback";
 
     if is_high_signal_summary {
         let normalized_snippet = normalize_memory_text(snippet);
@@ -36,7 +39,7 @@ pub fn compact_clean_text(summary_source: &str, snippet: &str, clean_text: &str)
     let normalized_snippet = normalize_memory_text(snippet);
     if !normalized_snippet.is_empty() {
         let limit = match summary_src.as_str() {
-            "llm" | "vlm" => SUMMARY_CLEAN_TEXT_CHARS,
+            "llm" | "vlm" | "vision_mtmd" | "vision_fallback" => SUMMARY_CLEAN_TEXT_CHARS,
             "fallback" => FALLBACK_CLEAN_TEXT_CHARS,
             _ => GENERIC_CLEAN_TEXT_CHARS,
         };

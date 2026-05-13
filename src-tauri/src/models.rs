@@ -1,3 +1,4 @@
+use crate::config::Config;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -67,6 +68,59 @@ pub fn model_by_id(model_id: &str) -> Option<&'static ModelDefinition> {
     MODEL_CATALOG.iter().find(|model| model.id == model_id)
 }
 
+/// Filenames for Qwen3-VL multimodal projection weights (`mmproj`), searched under
+/// [`candidate_model_dirs`]. At least one must be present for pixel-based import vision.
+///
+/// Hugging Face ships `Qwen3VL` (no hyphen) in the filename; some mirrors use `Qwen3-VL`.
+pub const QWEN3_VL_MMPROJ_FILENAMES: &[&str] = &[
+    "mmproj-Qwen3VL-4B-Instruct-F16.gguf",
+    "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+    "mmproj-Qwen3-VL-4B-Instruct-F16.gguf",
+    "mmproj-Qwen3-VL-4B-Instruct-Q8_0.gguf",
+    "mmproj-Qwen3-VL-4B-Instruct-Q4_0.gguf",
+    "mmproj-Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+];
+
+/// Resolve a Qwen3-VL `mmproj` GGUF on disk (any known catalog name).
+pub fn resolve_qwen3_vl_mmproj(app_data_dir: Option<&Path>) -> Option<PathBuf> {
+    for dir in candidate_model_dirs(app_data_dir) {
+        for name in QWEN3_VL_MMPROJ_FILENAMES {
+            let path = dir.join(name);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Minimum on-disk size for the catalog `Qwen3VL-4B-Instruct-*.gguf` to be treated as plausible.
+///
+/// Rejects Git LFS pointer files, empty placeholders, or unrelated GGUFs renamed to the
+/// expected filename (a common cause of `n_embd` mismatch vs the official mmproj).
+pub const QWEN3_VL_4B_MAIN_GGUF_MIN_BYTES: u64 = 1_800_000_000;
+
+/// Returns `Err` if `path` exists but is too small to be a real Qwen3-VL 4B weights file.
+pub fn validate_qwen3_vl_main_gguf_file(path: &Path) -> Result<(), String> {
+    let len = std::fs::metadata(path)
+        .map_err(|e| format!("stat {}: {e}", path.display()))?
+        .len();
+    if len < QWEN3_VL_4B_MAIN_GGUF_MIN_BYTES {
+        let def = model_by_id("qwen3-vl-4b").expect("qwen3-vl-4b in catalog");
+        return Err(format!(
+            "Qwen3-VL main GGUF at {} is only {} bytes (expected at least ~{} bytes for {}). \
+             This is often a Git LFS pointer, incomplete download, or the wrong model renamed to the catalog filename — \
+             which then breaks mmproj pairing (n_embd mismatch). Re-download: {}",
+            path.display(),
+            len,
+            QWEN3_VL_4B_MAIN_GGUF_MIN_BYTES,
+            def.filename,
+            def.download_url
+        ));
+    }
+    Ok(())
+}
+
 pub fn models_dir(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("models")
 }
@@ -81,6 +135,26 @@ pub fn preferred_model_id_from_onboarding(app_data_dir: &Path) -> Option<String>
     serde_json::from_str::<StoredOnboardingState>(&raw)
         .ok()?
         .model_id
+}
+
+/// GGUF id passed to [`crate::inference::InferenceEngine`] resolution.
+///
+/// Uses `config.vlm_model_size` as product intent: default **`1B`** tier prefers
+/// Llama 3.2 1B even when onboarding still references a past **`qwen3-vl-4b`**
+/// download. **`4B`** tier prefers Qwen3-VL (with catalog fallback if only Llama is on disk).
+pub fn inference_preferred_model_id(app_data_dir: &Path, config: &Config) -> Option<String> {
+    let from_onboarding = preferred_model_id_from_onboarding(app_data_dir);
+    match config.vlm_model_size.as_str() {
+        "4B" => Some("qwen3-vl-4b".to_string()),
+        _ => {
+            let id = match from_onboarding.as_deref() {
+                Some("qwen3-vl-4b") => "llama-3.2-1b".to_string(),
+                Some(other) => other.to_string(),
+                None => "llama-3.2-1b".to_string(),
+            };
+            Some(id)
+        }
+    }
 }
 
 pub fn candidate_model_dirs(app_data_dir: Option<&Path>) -> Vec<PathBuf> {
@@ -205,6 +279,53 @@ mod tests {
     }
 
     #[test]
+    fn resolve_qwen3_vl_mmproj_finds_known_filename() {
+        let temp_dir = make_temp_dir();
+        let model_dir = models_dir(&temp_dir);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        let mm = model_dir.join("mmproj-Qwen3-VL-4B-Instruct-F16.gguf");
+        std::fs::write(&mm, b"x").unwrap();
+        let found = resolve_qwen3_vl_mmproj(Some(temp_dir.as_path()));
+        assert_eq!(found, Some(mm));
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_qwen3_vl_mmproj_finds_huggingface_qwen3vl_filename() {
+        let temp_dir = make_temp_dir();
+        let model_dir = models_dir(&temp_dir);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        let mm = model_dir.join("mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf");
+        std::fs::write(&mm, b"x").unwrap();
+        let found = resolve_qwen3_vl_mmproj(Some(temp_dir.as_path()));
+        assert_eq!(found, Some(mm));
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn validate_qwen3_vl_main_gguf_file_rejects_small_file() {
+        let temp_dir = make_temp_dir();
+        let p = models_dir(&temp_dir).join("Qwen3VL-4B-Instruct-Q4_K_M.gguf");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b"x").unwrap();
+        let err = validate_qwen3_vl_main_gguf_file(&p).expect_err("tiny file");
+        assert!(err.contains("bytes"), "{err}");
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn validate_qwen3_vl_main_gguf_file_accepts_sparse_min_size() {
+        let temp_dir = make_temp_dir();
+        let p = models_dir(&temp_dir).join("Qwen3VL-4B-Instruct-Q4_K_M.gguf");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let f = std::fs::File::create(&p).unwrap();
+        f.set_len(QWEN3_VL_4B_MAIN_GGUF_MIN_BYTES).unwrap();
+        drop(f);
+        validate_qwen3_vl_main_gguf_file(&p).expect("size gate should pass");
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
     fn resolve_model_without_preference_prefers_first_catalog_file_found() {
         let temp_dir = make_temp_dir();
         let model_dir = models_dir(&temp_dir);
@@ -217,6 +338,36 @@ mod tests {
         let resolved = resolve_model(None, Some(temp_dir.as_path())).unwrap();
         assert_eq!(resolved.definition.id, "llama-3.2-1b");
 
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn inference_preferred_model_id_1b_tier_ignores_stale_qwen_onboarding() {
+        let temp_dir = make_temp_dir();
+        let onboarding_path = temp_dir.join("onboarding.json");
+        std::fs::write(
+            &onboarding_path,
+            r#"{"model_id":"qwen3-vl-4b"}"#,
+        )
+        .unwrap();
+        let mut cfg = crate::config::Config::default();
+        cfg.vlm_model_size = "1B".to_string();
+        assert_eq!(
+            super::inference_preferred_model_id(temp_dir.as_path(), &cfg).as_deref(),
+            Some("llama-3.2-1b")
+        );
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn inference_preferred_model_id_4b_tier_prefers_qwen() {
+        let temp_dir = make_temp_dir();
+        let mut cfg = crate::config::Config::default();
+        cfg.vlm_model_size = "4B".to_string();
+        assert_eq!(
+            super::inference_preferred_model_id(temp_dir.as_path(), &cfg).as_deref(),
+            Some("qwen3-vl-4b")
+        );
         std::fs::remove_dir_all(temp_dir).unwrap();
     }
 }

@@ -100,6 +100,8 @@ export interface MemoryDebugInspector {
     embedding_text: string;
     search_aliases: string[];
     raw_ocr_evidence: unknown;
+    /** Import vision pipeline fields (from persisted `raw_evidence` JSON). */
+    visual_semantics?: Record<string, unknown>;
     graph: {
         nodes: unknown[];
         edges: unknown[];

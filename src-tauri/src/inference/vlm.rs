@@ -56,7 +56,7 @@ pub struct VlmConfig {
 impl Default for VlmConfig {
     fn default() -> Self {
         Self {
-            context_size: 2048,
+            context_size: 1536,
             max_tokens: 100,
             temperature: 0.7,
             top_p: 0.9,
@@ -130,11 +130,18 @@ impl VlmEngine {
             }
         };
 
+        let n_ctx_u = config.context_size.max(256);
+        let n_ctx = NonZeroU32::new(n_ctx_u).ok_or_else(|| {
+            VlmError::InitializationError("Context size must be non-zero".to_string())
+        })?;
+        // Keep batch well below ctx — large n_batch dominates Metal transient memory.
+        let n_batch = config.context_size.min(384).max(32).min(n_ctx_u);
+        let n_ubatch = (n_batch / 2).max(64).min(n_batch);
+
         let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(NonZeroU32::new(config.context_size).ok_or_else(
-                || VlmError::InitializationError("Context size must be non-zero".to_string()),
-            )?))
-            .with_n_batch(config.context_size);
+            .with_n_ctx(Some(n_ctx))
+            .with_n_batch(n_batch)
+            .with_n_ubatch(n_ubatch);
 
         let context = model_ref.new_context(&backend, ctx_params).map_err(|e| {
             VlmError::InitializationError(format!("Context creation failed: {}", e))
@@ -295,44 +302,58 @@ impl VlmEngine {
         // Clear previous context
         ctx.clear_kv_cache();
 
+        let n_batch = ctx.n_batch().max(1) as usize;
+        let n_ctx = ctx.n_ctx() as usize;
+
         // Tokenize input
         let mut tokens_list = self
             .model
             .str_to_token(prompt, AddBos::Never)
             .map_err(|e| VlmError::TokenizationError(e.to_string()))?;
 
-        // Truncate to ensure the batch never exceeds context_size (cparams.n_batch)
-        let max_prompt_len = self
+        if tokens_list.is_empty() {
+            return Err(VlmError::TokenizationError(
+                "tokenization produced no tokens".to_string(),
+            ));
+        }
+
+        // Fit prompt + worst-case generation into the real context; also respect configured cap.
+        let gen_cap = (max_tokens.max(0) as usize).min(n_ctx.saturating_sub(1));
+        let max_prompt_by_ctx = n_ctx.saturating_sub(gen_cap).max(1);
+        let max_prompt_by_config = self
             .config
             .context_size
             .saturating_sub(max_tokens as u32)
-            .saturating_sub(1) as usize;
+            .max(1) as usize;
+        let max_prompt_len = max_prompt_by_ctx.min(max_prompt_by_config);
         if tokens_list.len() > max_prompt_len {
             tracing::warn!(
-                "Prompt tokens ({}) > context limit ({}), truncating...",
+                "Prompt tokens ({}) > limit ({}), truncating from the start...",
                 tokens_list.len(),
                 max_prompt_len
             );
-            // Drain excess tokens from the beginning and keep the BOS intact
             let excess = tokens_list.len() - max_prompt_len;
-            tokens_list.drain(1..1 + excess);
+            tokens_list.drain(..excess);
         }
 
-        // Create batch with appropriate size
-        let batch_size = (tokens_list.len() + max_tokens as usize).max(512);
-        let mut batch = LlamaBatch::new(batch_size, 1);
-
-        // Add tokens to batch
-        for (i, token) in tokens_list.iter().enumerate() {
-            let last = i == tokens_list.len() - 1;
-            batch
-                .add(*token, i as i32, &[0], last)
-                .map_err(|e| VlmError::InferenceError(format!("Batch add failed: {}", e)))?;
+        let prompt_len = tokens_list.len();
+        // Each decode must have <= n_batch tokens (llama.cpp GGML_ASSERT).
+        let mut batch = LlamaBatch::new(n_batch, 1);
+        let mut offset = 0usize;
+        while offset < prompt_len {
+            let end = (offset + n_batch).min(prompt_len);
+            batch.clear();
+            for pos in offset..end {
+                let logits = pos == prompt_len - 1;
+                batch
+                    .add(tokens_list[pos], pos as i32, &[0], logits)
+                    .map_err(|e| VlmError::InferenceError(format!("Batch add failed: {}", e)))?;
+            }
+            ctx.decode(&mut batch).map_err(|e| {
+                VlmError::InferenceError(format!("Initial decode failed: {}", e))
+            })?;
+            offset = end;
         }
-
-        // Initial decode
-        ctx.decode(&mut batch)
-            .map_err(|e| VlmError::InferenceError(format!("Initial decode failed: {}", e)))?;
 
         // Create sampler with configured parameters
         let mut sampler = LlamaSampler::chain_simple(vec![

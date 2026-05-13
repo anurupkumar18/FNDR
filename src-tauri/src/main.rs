@@ -45,6 +45,17 @@ fn main() {
     // Load environment variables from .env if present
     let _ = dotenvy::dotenv();
 
+    // Quiet ggml / Metal chatter before any llama.cpp init (shell can override).
+    if std::env::var_os("GGML_METAL_LOG_INFO").is_none() {
+        std::env::set_var("GGML_METAL_LOG_INFO", "0");
+    }
+    if std::env::var_os("GGML_METAL_LOG_WARN").is_none() {
+        std::env::set_var("GGML_METAL_LOG_WARN", "0");
+    }
+    if std::env::var_os("GGML_LOG_LEVEL").is_none() {
+        std::env::set_var("GGML_LOG_LEVEL", "0");
+    }
+
     // Initialize logging
     use tracing_subscriber::{fmt, EnvFilter};
     tracing_subscriber::registry()

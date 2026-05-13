@@ -235,7 +235,7 @@ impl AppState {
     }
 
     pub fn ai_model_available(&self) -> bool {
-        let preferred_model_id = self.preferred_model_id();
+        let preferred_model_id = self.inference_preferred_model_id();
         models::resolve_model(
             preferred_model_id.as_deref(),
             Some(self.app_data_dir.as_path()),
@@ -243,8 +243,15 @@ impl AppState {
         .is_some()
     }
 
+    /// Raw onboarding selection (may disagree with `config.vlm_model_size`).
     pub fn preferred_model_id(&self) -> Option<String> {
         models::preferred_model_id_from_onboarding(self.app_data_dir.as_path())
+    }
+
+    /// GGUF id used to load [`InferenceEngine`], aligned with `config.vlm_model_size`.
+    pub fn inference_preferred_model_id(&self) -> Option<String> {
+        let config = self.config.read();
+        models::inference_preferred_model_id(self.app_data_dir.as_path(), &config)
     }
 
     pub fn loaded_model_id(&self) -> Option<String> {
@@ -274,7 +281,7 @@ impl AppState {
             return Ok(Some(engine));
         }
 
-        let preferred_model_id = self.preferred_model_id();
+        let preferred_model_id = self.inference_preferred_model_id();
         if models::resolve_model(
             preferred_model_id.as_deref(),
             Some(self.app_data_dir.as_path()),
@@ -298,14 +305,11 @@ impl AppState {
     }
 }
 
-pub async fn load_ai_engines(
-    app_data_dir: &Path,
-    _config: &Config,
-    preferred_model_id: Option<&str>,
-) -> LoadedAiEngines {
+pub async fn load_ai_engines(app_data_dir: &Path, config: &Config) -> LoadedAiEngines {
+    let preferred_model_id = models::inference_preferred_model_id(app_data_dir, config);
     let inference = match InferenceEngine::new(
         Some(app_data_dir.to_path_buf()),
-        preferred_model_id.map(str::to_owned),
+        preferred_model_id,
     )
     .await
     {
@@ -323,7 +327,8 @@ pub async fn load_ai_engines(
     };
 
     tracing::info!(
-        "Skipping eager VLM warm-up; Qwen core and optional accelerators load on demand."
+        "Skipping eager VLM warm-up; VLM loads on demand (Settings tier: {}).",
+        config.vlm_model_size
     );
     let vlm = None;
 

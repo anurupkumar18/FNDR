@@ -137,7 +137,8 @@ pub(super) fn estimate_signal_strength(
 ) -> f32 {
     let summary_weight = match summary_source.trim().to_ascii_lowercase().as_str() {
         "llm" => 1.0,
-        "vlm" => 0.9,
+        "vlm" | "vision_mtmd" => 0.9,
+        "vision_fallback" => 0.72,
         "fallback" => 0.66,
         _ => 0.58,
     };

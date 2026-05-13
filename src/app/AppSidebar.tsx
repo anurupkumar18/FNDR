@@ -5,6 +5,8 @@ const SIDEBAR_GROUPS = [
         label: "Features",
         items: [
             { key: "memoryCards", text: "Memory Vault" },
+            { key: "engineMetrics", text: "Engine metrics" },
+            { key: "glassesImport", text: "Glasses photo import" },
             { key: "stats", text: "Stats" },
             { key: "todo", text: "To Do" },
             { key: "meeting", text: "Meetings" },

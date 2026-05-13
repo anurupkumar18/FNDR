@@ -188,18 +188,18 @@ The onboarding and settings flows read the model catalog from `src-tauri/src/mod
 | ID | Display name | Size | RAM | Role |
 | --- | --- | --- | --- | --- |
 | `llama-3.2-1b` | Llama 3.2 · 1B | 770 MB | 2.0 GB | **Recommended** default for summaries and OCR-grounded prompts on ~8 GB RAM |
-| `qwen3-vl-4b` | Qwen3-VL · 4B (advanced) | 2.5 GB | 6.0 GB | Optional heavier GGUF for richer screen understanding when you have the RAM |
+| `qwen3-vl-4b` | Qwen3-VL · 4B (advanced) | 2.5 GB | 6.0 GB | Optional multimodal GGUF: **screen VLM (OCR-grounded)** and **Meta glasses photo import** (pixels via llama.cpp MTMD). Requires a matching **`mmproj-*.gguf`** in the same models directory (see filenames in `src-tauri/src/models.rs` → `QWEN3_VL_MMPROJ_FILENAMES`). |
 
 Separate ONNX assets (not in the GGUF catalog):
 
 | File | Purpose |
 | --- | --- |
 | `bge-large-en-v1.5-quantized.onnx` + `tokenizer.json` | 1024-d text embeddings (hybrid search) |
-| `clip-vit-base-patch32-vision_q4.onnx` | 512-d CLIP vision embeddings for imported photos |
+| `clip-vit-base-patch32-vision_q4.onnx` | 512-d CLIP vision embeddings for imported photos (similarity; complements Qwen vision text) |
 
 Install BGE + CLIP with `./scripts/download_model.sh` (or run `scripts/bootstrap/download-embedding-model.sh` and `scripts/bootstrap/download-clip-vision-onnx.sh` separately). Override CLIP path with `FNDR_CLIP_VISION_ONNX` if needed.
 
-Optional: `./scripts/bootstrap/download-local-llm.sh` downloads only Llama 3.2 1B. Remove obsolete `SmolVLM-500M-*.gguf` and `mmproj-*.gguf` files from your models folder if you no longer need them.
+Optional: `./scripts/bootstrap/download-local-llm.sh` downloads only Llama 3.2 1B. For **photo import vision**, add Qwen3-VL GGUF plus an **mmproj** from the [official GGUF repo](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/tree/main). Hugging Face names them `mmproj-Qwen3VL-4B-Instruct-*.gguf` (note **Qwen3VL**). Run `./scripts/bootstrap/download-qwen3-vl-4b.sh` for the main `Qwen3VL-4B-Instruct-Q4_K_M.gguf` (~2.5 GiB) and `./scripts/bootstrap/download-qwen3-vl-mmproj.sh` (defaults to Q8_0) for the mmproj, or place files next to each other in the models directory; see `QWEN3_VL_MMPROJ_FILENAMES` for every accepted mmproj name.
 
 Validate the local embedding and LanceDB path with:
 

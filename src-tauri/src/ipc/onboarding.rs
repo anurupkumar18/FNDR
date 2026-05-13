@@ -579,16 +579,12 @@ pub async fn refresh_ai_models(
 ) -> Result<AiRuntimeStatus, String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let config = state.inner().config.read().clone();
-    let preferred_model_id = models::preferred_model_id_from_onboarding(app_data_dir.as_path());
+    let preferred_model_id =
+        models::inference_preferred_model_id(app_data_dir.as_path(), &config);
     let ai_model_available =
         models::resolve_model(preferred_model_id.as_deref(), Some(app_data_dir.as_path()))
             .is_some();
-    let loaded_ai = load_ai_engines(
-        app_data_dir.as_path(),
-        &config,
-        preferred_model_id.as_deref(),
-    )
-    .await;
+    let loaded_ai = load_ai_engines(app_data_dir.as_path(), &config).await;
 
     let loaded_model_id = loaded_ai
         .inference

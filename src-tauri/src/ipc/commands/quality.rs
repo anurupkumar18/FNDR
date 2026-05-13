@@ -61,6 +61,9 @@ pub struct MemoryDebugInspector {
     pub embedding_text: String,
     pub search_aliases: Vec<String>,
     pub raw_ocr_evidence: serde_json::Value,
+    /// Import / vision pipeline fields from `raw_evidence` JSON when present.
+    #[serde(default)]
+    pub visual_semantics: serde_json::Value,
     pub graph: MemoryGraphSnapshot,
     pub storage_outcome: String,
     pub quality_gate_reason: String,
@@ -674,6 +677,8 @@ pub async fn get_memory_debug_inspector(
             "raw_evidence": truncate_chars(&memory.raw_evidence, 2200),
             "parsed_raw_evidence": evidence,
         }),
+        visual_semantics: serde_json::from_str::<serde_json::Value>(&memory.raw_evidence)
+            .unwrap_or_else(|_| serde_json::json!({})),
         graph,
         storage_outcome: memory.storage_outcome.clone(),
         quality_gate_reason: memory.quality_gate_reason.clone(),

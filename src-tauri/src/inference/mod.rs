@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 mod vlm;
+mod image_semantics;
 
 /// Global shared LlamaBackend singleton.
 /// Both InferenceEngine and VlmEngine must share one backend instance
@@ -34,15 +35,32 @@ pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, Box<dyn std::error::Er
     }
 
     // Suppress overly verbose metal/llama.cpp internal logs for cleaner developer output
-    std::env::set_var("GGML_METAL_LOG_INFO", "0");
-    std::env::set_var("GGML_METAL_LOG_WARN", "0");
-    std::env::set_var("GGML_LOG_LEVEL", "0");
+    // (honour pre-set env from main / shell if the user overrides).
+    if std::env::var_os("GGML_METAL_LOG_INFO").is_none() {
+        std::env::set_var("GGML_METAL_LOG_INFO", "0");
+    }
+    if std::env::var_os("GGML_METAL_LOG_WARN").is_none() {
+        std::env::set_var("GGML_METAL_LOG_WARN", "0");
+    }
+    if std::env::var_os("GGML_LOG_LEVEL").is_none() {
+        std::env::set_var("GGML_LOG_LEVEL", "0");
+    }
 
-    let backend = Arc::new(LlamaBackend::init()?);
+    let mut backend = LlamaBackend::init()?;
+    // llama.cpp model loader is very chatty on stderr; void unless debugging inference.
+    if std::env::var_os("FNDR_LLAMA_VERBOSE").is_none() {
+        backend.void_logs();
+    }
+    let backend = Arc::new(backend);
     // If another thread raced us, that's fine – just return our copy
     let _ = LLAMA_BACKEND.set(Arc::clone(&backend));
     Ok(backend)
 }
+pub use image_semantics::{
+    build_import_raw_evidence, compose_import_memory_context, extract_image_semantics,
+    insight_vision_extraction_failed, should_include_import_ocr, ImageImportSource,
+    ImageSemanticInsight, ImportMemoryText, ImportOcrStats,
+};
 pub use vlm::VlmEngine;
 
 const MAX_OCR_SUMMARY_CHARS: usize = 1100;
@@ -438,6 +456,8 @@ pub struct StructuredMemoryExtraction {
 /// AI Inference Engine for FNDR using llama-cpp-2.
 /// Persists the LlamaContext to prevent Metal resource exhaustion crashes.
 ///
+/// After a GPU OOM cascade, quit and relaunch the app before expecting stable Metal behaviour.
+///
 /// # Lifetime safety
 ///
 /// The model is intentionally leaked (`Box::leak`) to obtain a `'static` reference
@@ -508,12 +528,28 @@ impl InferenceEngine {
         .map_err(|e| format!("Join error during model load: {}", e))?
         .map_err(|e| format!("Model load failed: {}", e))?;
 
-        // n_ctx: 4096 gives room for long OCR + system prompt + chat template overhead.
-        // n_batch: must be <= n_ctx. Previously set to 8192 with n_ctx=2048, which
-        // llama.cpp silently clamped; fixed here.
+        // n_ctx / n_batch tuned down for Apple Silicon unified memory (Metal peak working set).
+        // Raise via env only when debugging long-context behaviour (values are clamped to llama.cpp rules).
+        let n_ctx = std::env::var("FNDR_INFERENCE_N_CTX")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .and_then(NonZeroU32::new)
+            .unwrap_or_else(|| NonZeroU32::new(2048).expect("2048 is non-zero"));
+        let n_batch = std::env::var("FNDR_INFERENCE_N_BATCH")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(512)
+            .min(n_ctx.get());
+        let n_ubatch = std::env::var("FNDR_INFERENCE_N_UBATCH")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(256)
+            .min(n_batch);
+
         let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(4096))
-            .with_n_batch(2048);
+            .with_n_ctx(Some(n_ctx))
+            .with_n_batch(n_batch)
+            .with_n_ubatch(n_ubatch);
 
         let context = model_ref.new_context(&backend, ctx_params)?;
 
@@ -1124,7 +1160,10 @@ TRANSCRIPT:\n{}",
         // Reset KV cache between independent requests.
         ctx.clear_kv_cache();
 
-        let tokens_list = match self.model.str_to_token(prompt, AddBos::Never) {
+        let n_batch = ctx.n_batch().max(1) as usize;
+        let n_ctx = ctx.n_ctx() as usize;
+
+        let mut tokens_list = match self.model.str_to_token(prompt, AddBos::Never) {
             Ok(t) => t,
             Err(e) => {
                 tracing::error!("Tokenization failed: {}", e);
@@ -1137,15 +1176,40 @@ TRANSCRIPT:\n{}",
             return String::new();
         }
 
-        let mut batch = LlamaBatch::new(2048, 1);
-        for (i, token) in tokens_list.iter().enumerate() {
-            let last = i == tokens_list.len() - 1;
-            let _ = batch.add(*token, i as i32, &[0], last);
+        // Worst case we may generate up to `max_tokens`; prompt must fit in n_ctx with headroom.
+        let gen_cap = (max_tokens.max(0) as usize).min(n_ctx.saturating_sub(1));
+        let max_prompt_tokens = n_ctx.saturating_sub(gen_cap).max(1);
+        if tokens_list.len() > max_prompt_tokens {
+            let excess = tokens_list.len() - max_prompt_tokens;
+            tracing::warn!(
+                "Prompt tokenized to {} tokens; truncating {} from the start to fit n_ctx={} (gen budget {})",
+                tokens_list.len(),
+                excess,
+                n_ctx,
+                gen_cap
+            );
+            tokens_list.drain(..excess);
         }
 
-        if let Err(e) = ctx.decode(&mut batch) {
-            tracing::error!("Decode failed: {}", e);
-            return "AI Error: LLM Decode failed.".to_string();
+        let prompt_len = tokens_list.len();
+        // llama.cpp asserts n_tokens_all <= n_batch for each decode; chunk the prefill.
+        let mut batch = LlamaBatch::new(n_batch, 1);
+        let mut offset = 0usize;
+        while offset < prompt_len {
+            let end = (offset + n_batch).min(prompt_len);
+            batch.clear();
+            for pos in offset..end {
+                let logits = pos == prompt_len - 1;
+                if let Err(e) = batch.add(tokens_list[pos], pos as i32, &[0], logits) {
+                    tracing::error!("Batch add failed during prefill: {:?}", e);
+                    return "AI Error: LLM batch setup failed.".to_string();
+                }
+            }
+            if let Err(e) = ctx.decode(&mut batch) {
+                tracing::error!("Decode failed: {}", e);
+                return "AI Error: LLM Decode failed.".to_string();
+            }
+            offset = end;
         }
 
         // Proper sampler chain: repetition penalty + greedy.
@@ -1207,6 +1271,21 @@ TRANSCRIPT:\n{}",
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefill_chunk_windows_respect_n_batch_and_cover_prompt() {
+        let n_batch = 512;
+        let prompt_len = 1500;
+        let mut offset = 0usize;
+        let mut total = 0usize;
+        while offset < prompt_len {
+            let end = (offset + n_batch).min(prompt_len);
+            assert!(end - offset <= n_batch);
+            total += end - offset;
+            offset = end;
+        }
+        assert_eq!(total, prompt_len);
+    }
 
     #[test]
     fn cleans_common_summary_preambles() {

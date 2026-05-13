@@ -252,6 +252,7 @@ function App() {
     // Command Palette panel dispatcher — opens any panel by key
     const handleOpenPanel = useCallback((panel: PanelKey) => {
         setShowCommandPalette(false);
+        setIsSidebarOpen(false);
         setActivePanel(panel);
     }, []);
 
@@ -483,7 +484,15 @@ function App() {
             )}
 
             <div className="top-right-control">
-                <ControlPanel status={status} compact={true} evalUi={EVAL_UI} />
+                <ControlPanel
+                    status={status}
+                    compact={true}
+                    evalUi={EVAL_UI}
+                    onOpenPanel={(panel) => {
+                        setIsSidebarOpen(false);
+                        setActivePanel(panel);
+                    }}
+                />
             </div>
 
             {!EVAL_UI && meetingStatus?.is_recording && (
