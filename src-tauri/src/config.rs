@@ -613,6 +613,17 @@ pub struct Config {
     /// VLM model size: "1B" (Llama, default) or "4B" (Qwen, advanced).
     #[serde(default = "default_vlm_model_size")]
     pub vlm_model_size: String,
+    /// Maximum VLM calls per minute across the capture pipeline.
+    /// Default 10 calls/min → one every 6 seconds maximum, safe for 8 GB RAM.
+    #[serde(default = "default_vlm_max_calls_per_minute")]
+    pub vlm_max_calls_per_minute: u32,
+    /// Per-call VLM timeout in seconds. Falls back to OCR-only if the model doesn't respond.
+    #[serde(default = "default_vlm_timeout_secs")]
+    pub vlm_timeout_secs: u64,
+    /// Explicit VLM model ID override. When set, overrides vlm_model_size.
+    /// Example: "smolvlm-500m" or "qwen3-vl-4b". None = use vlm_model_size tier.
+    #[serde(default)]
+    pub vlm_model_id: Option<String>,
     /// Days to retain screenshot files on disk (records kept; only pixel data deleted). 0 = keep forever.
     #[serde(default = "default_screenshot_retention_days")]
     pub screenshot_retention_days: u32,
@@ -923,6 +934,14 @@ fn default_vlm_model_size() -> String {
     "1B".to_string()
 }
 
+fn default_vlm_max_calls_per_minute() -> u32 {
+    10
+}
+
+fn default_vlm_timeout_secs() -> u64 {
+    30
+}
+
 fn default_screenshot_retention_days() -> u32 {
     30
 }
@@ -979,6 +998,9 @@ impl Default for Config {
             min_text_length: 20,
             use_vlm: true,
             vlm_model_size: default_vlm_model_size(),
+            vlm_max_calls_per_minute: default_vlm_max_calls_per_minute(),
+            vlm_timeout_secs: default_vlm_timeout_secs(),
+            vlm_model_id: None,
             screenshot_retention_days: 30,
             proactive_surface_enabled: true,
             decay_half_life_days: 21,
