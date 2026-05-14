@@ -57,6 +57,40 @@ impl ImageImportSource {
     }
 }
 
+/// Which MTMD model family is loaded in the singleton runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MtmdModelFamily {
+    /// Qwen3-VL 4B — high quality, ~6 GB RAM
+    Qwen3Vl4B,
+    /// SmolVLM 500M — lightweight, ~1.2 GB RAM
+    SmolVlm500M,
+}
+
+impl MtmdModelFamily {
+    pub fn from_model_id(model_id: &str) -> Option<Self> {
+        match model_id {
+            "qwen3-vl-4b" => Some(Self::Qwen3Vl4B),
+            "smolvlm-500m" => Some(Self::SmolVlm500M),
+            _ => None,
+        }
+    }
+
+    pub fn model_id_str(&self) -> &'static str {
+        match self {
+            Self::Qwen3Vl4B => "qwen3-vl-4b",
+            Self::SmolVlm500M => "smolvlm-500m",
+        }
+    }
+
+    /// Context size to use for this model family.
+    pub fn context_size(&self) -> u32 {
+        match self {
+            Self::Qwen3Vl4B => 1536,
+            Self::SmolVlm500M => 1024,
+        }
+    }
+}
+
 /// Structured output from the local vision model (JSON contract).
 #[derive(Debug, Clone, Default)]
 pub struct ImageSemanticInsight {
@@ -831,6 +865,7 @@ struct QwenVlImportRuntime {
     chat_template: LlamaChatTemplate,
     _backend: Arc<LlamaBackend>,
     inner: Mutex<LlamaMtmdPair>,
+    model_family: MtmdModelFamily,
 }
 
 /// [`LlamaContext`] is not `Send` in the Rust bindings, but this runtime is only used behind
@@ -853,30 +888,40 @@ impl QwenVlImportRuntime {
     }
 
     fn load(app_data_dir: &Path) -> Result<Self, String> {
-        let resolved =
-            models::resolve_model(Some("qwen3-vl-4b"), Some(app_data_dir)).ok_or_else(|| {
-                "Qwen3-VL 4B GGUF not found. Install it (see README / model picker), \
-                 including mmproj weights for vision."
-                    .to_string()
-            })?;
-        models::validate_qwen3_vl_main_gguf_file(&resolved.path)?;
-        let mmproj = models::resolve_qwen3_vl_mmproj(Some(app_data_dir)).ok_or_else(|| {
-            format!(
-                "Qwen3-VL mmproj file not found under models directories. \
-                 Download one of: {}",
-                models::QWEN3_VL_MMPROJ_FILENAMES.join(", ")
-            )
-        })?;
+        // Try SmolVLM 500M first (lightweight); fall back to Qwen3-VL 4B.
+        let (model_path, mmproj, model_family) = {
+            let smolvlm_model = models::resolve_model(Some("smolvlm-500m"), Some(app_data_dir));
+            let smolvlm_mmproj = models::resolve_smolvlm_mmproj(Some(app_data_dir));
+
+            if let (Some(main), Some(mmproj)) = (smolvlm_model, smolvlm_mmproj) {
+                (main.path, mmproj, MtmdModelFamily::SmolVlm500M)
+            } else {
+                // Fall back to Qwen3-VL 4B
+                let qwen_model = models::resolve_model(Some("qwen3-vl-4b"), Some(app_data_dir))
+                    .ok_or_else(|| {
+                        "No MTMD model found: install SmolVLM 500M or Qwen3-VL 4B".to_string()
+                    })?;
+                if let Err(e) = models::validate_qwen3_vl_main_gguf_file(&qwen_model.path) {
+                    return Err(format!("Qwen3-VL main GGUF invalid: {e}"));
+                }
+                let mmproj = models::resolve_qwen3_vl_mmproj(Some(app_data_dir)).ok_or_else(|| {
+                    format!(
+                        "Qwen3-VL 4B model found but mmproj missing. Download one of: {}",
+                        models::QWEN3_VL_MMPROJ_FILENAMES.join(", ")
+                    )
+                })?;
+                (qwen_model.path, mmproj, MtmdModelFamily::Qwen3Vl4B)
+            }
+        };
 
         let backend = get_or_init_backend().map_err(|e| e.to_string())?;
-        let model_path = resolved.path.clone();
-        let model_id = resolved.definition.id.to_string();
+        let load_path = model_path.clone();
 
         let backend_clone = Arc::clone(&backend);
         let model_ref = std::thread::spawn(move || -> Result<&'static LlamaModel, String> {
             let params = LlamaModelParams::default();
-            let model = LlamaModel::load_from_file(&backend_clone, &model_path, &params)
-                .map_err(|e| format!("load Qwen3-VL: {e}"))?;
+            let model = LlamaModel::load_from_file(&backend_clone, &load_path, &params)
+                .map_err(|e| format!("load MTMD model: {e}"))?;
             let model_ref: &'static LlamaModel = Box::leak(Box::new(model));
             Ok(model_ref)
         })
@@ -886,12 +931,16 @@ impl QwenVlImportRuntime {
         let chat_template = match model_ref.chat_template(None) {
             Ok(t) => t,
             Err(err) => {
-                tracing::warn!("Qwen3-VL chat template missing ({err}); using chatml fallback");
+                tracing::warn!(
+                    model = ?model_family,
+                    "MTMD model chat template missing ({err}); using chatml fallback"
+                );
                 LlamaChatTemplate::new("chatml").map_err(|e| e.to_string())?
             }
         };
 
-        let n_ctx = NonZeroU32::new(8192).expect("nonzero");
+        let n_ctx =
+            NonZeroU32::new(model_family.context_size() * 8).unwrap_or(NonZeroU32::new(8192).expect("nonzero"));
         let n_batch: u32 = 512;
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(Some(n_ctx))
@@ -906,14 +955,14 @@ impl QwenVlImportRuntime {
         let mut mparams = MtmdContextParams::default();
         mparams.use_gpu = true;
         mparams.print_timings = false;
-        let qwen_path = resolved.path.display().to_string();
+        let model_path_str = model_path.display().to_string();
         let mtmd = MtmdContext::init_from_file(mmproj_str, model_ref, &mparams).map_err(|e| {
             let detail = e.to_string();
             let mut msg = format!("mtmd init: {detail}");
             if detail.contains("returned null") {
                 msg.push_str(&format!(
                     " Check the terminal for `mtmd_init_from_file: error:` (often `n_embd` mismatch). \
-                     That means `{qwen_path}` is not a matching Qwen3-VL-4B-Instruct GGUF for this mmproj — \
+                     That means `{model_path_str}` is not a matching GGUF for this mmproj — \
                      replace both from the same Hugging Face repo (see README)."
                 ));
             }
@@ -924,9 +973,9 @@ impl QwenVlImportRuntime {
         }
 
         tracing::info!(
-            "Qwen3-VL import vision runtime ready (model_id={}, mmproj={})",
-            model_id,
-            mmproj.display()
+            model = ?model_family,
+            mmproj = %mmproj.display(),
+            "MTMD import vision runtime ready"
         );
 
         Ok(Self {
@@ -934,6 +983,7 @@ impl QwenVlImportRuntime {
             chat_template,
             _backend: backend,
             inner: Mutex::new(LlamaMtmdPair { llama, mtmd }),
+            model_family,
         })
     }
 
@@ -1020,7 +1070,7 @@ impl QwenVlImportRuntime {
         drop(chunks);
         drop(bitmap);
 
-        parse_vision_json(&out, "qwen3-vl-4b-mtmd")
+        parse_vision_json(&out, self.model_family.model_id_str())
     }
 }
 
@@ -1090,6 +1140,22 @@ pub fn build_import_raw_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mtmd_model_family_roundtrip() {
+        assert_eq!(
+            MtmdModelFamily::from_model_id("smolvlm-500m"),
+            Some(MtmdModelFamily::SmolVlm500M)
+        );
+        assert_eq!(
+            MtmdModelFamily::from_model_id("qwen3-vl-4b"),
+            Some(MtmdModelFamily::Qwen3Vl4B)
+        );
+        assert_eq!(MtmdModelFamily::from_model_id("unknown"), None);
+        assert_eq!(MtmdModelFamily::SmolVlm500M.model_id_str(), "smolvlm-500m");
+        assert_eq!(MtmdModelFamily::SmolVlm500M.context_size(), 1024);
+        assert_eq!(MtmdModelFamily::Qwen3Vl4B.context_size(), 1536);
+    }
 
     #[test]
     fn rejects_garbage_ocr_line() {
