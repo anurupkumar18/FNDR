@@ -18,7 +18,10 @@ fn sanitize_field(value: &str) -> String {
     }
 }
 
-pub fn distill_memory_from_record(record: &MemoryRecord, evidence: &CleanedEvidence) -> DistilledMemory {
+pub fn distill_memory_from_record(
+    record: &MemoryRecord,
+    evidence: &CleanedEvidence,
+) -> DistilledMemory {
     let summary_short = if !record.display_summary.trim().is_empty() {
         sanitize_field(&record.display_summary)
     } else {

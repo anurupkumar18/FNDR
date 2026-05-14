@@ -96,11 +96,11 @@ pub fn clean_evidence_text(app_name: &str, raw_text: &str) -> CleanedEvidence {
     .filter(|span| span.score > 0.0)
     .collect::<Vec<_>>();
 
-    let repeated_text_ratio = text_cleanup::estimate_noise_score(app_name, &high_signal.text)
-        .clamp(0.0, 1.0);
+    let repeated_text_ratio =
+        text_cleanup::estimate_noise_score(app_name, &high_signal.text).clamp(0.0, 1.0);
     let ui_chrome_ratio = ratio(dropped_total, high_signal.stats.total_lines);
-    let content_density_score = text_cleanup::salience_concentration(&high_signal.text, app_name)
-        .clamp(0.0, 1.0);
+    let content_density_score =
+        text_cleanup::salience_concentration(&high_signal.text, app_name).clamp(0.0, 1.0);
     let contamination_score = (ui_chrome_ratio * 0.6 + repeated_text_ratio * 0.4).clamp(0.0, 1.0);
     let evidence_quality = ((1.0 - contamination_score) * 0.55
         + high_signal.stats.avg_line_score.clamp(0.0, 1.0) * 0.45)

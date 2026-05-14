@@ -25,7 +25,10 @@ pub struct RepairAudit {
     pub quarantine_reason: String,
 }
 
-pub fn classify_repair_disposition(record: &MemoryRecord, quality: &QualityDecision) -> RepairDisposition {
+pub fn classify_repair_disposition(
+    record: &MemoryRecord,
+    quality: &QualityDecision,
+) -> RepairDisposition {
     if quality.passed {
         return RepairDisposition::Clean;
     }

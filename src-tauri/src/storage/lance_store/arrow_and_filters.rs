@@ -13,13 +13,13 @@ use futures::TryStreamExt;
 use lancedb::query::ExecutableQuery;
 use lancedb::Table;
 
+use crate::memory::reopen::{ReopenKind, ReopenValidationStatus};
 use crate::storage::schema::{
     ActivityEvent, ContextDelta, ContextPack, DecisionLedgerEntry, EdgeType, EntityAliasRecord,
     GraphEdge, GraphNode, KnowledgePage, KnowledgePageType, KnowledgeStability, MeetingSegment,
     MeetingSession, MemoryRecord, NodeType, PrivacyClass, ProjectContext, SearchResult, Task,
     TaskType,
 };
-use crate::memory::reopen::{ReopenKind, ReopenValidationStatus};
 
 use super::schemas::{
     activity_event_schema, context_delta_schema, context_pack_schema, decision_ledger_schema,

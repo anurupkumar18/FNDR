@@ -4445,11 +4445,7 @@ fn should_text_heavy_override(
 ) -> bool {
     !drop_due_to_stacked
         && noise_score <= noise_threshold
-        && crate::ocr::text_volume_qualifies(
-            text_len,
-            observed_confidence,
-            observed_block_count,
-        )
+        && crate::ocr::text_volume_qualifies(text_len, observed_confidence, observed_block_count)
 }
 
 #[cfg(test)]
@@ -5191,19 +5187,25 @@ mod tests {
     #[test]
     fn text_heavy_override_fires_for_large_clean_ocr() {
         // 1,400 chars, 38 blocks, confidence 0.49, low noise — should override
-        assert!(should_text_heavy_override(1400, 0.49, 38, 0.20, 0.50, false));
+        assert!(should_text_heavy_override(
+            1400, 0.49, 38, 0.20, 0.50, false
+        ));
     }
 
     #[test]
     fn text_heavy_override_blocked_by_stacked_issues() {
         // Even with good OCR, stacked issues prevent override
-        assert!(!should_text_heavy_override(1400, 0.49, 38, 0.20, 0.50, true));
+        assert!(!should_text_heavy_override(
+            1400, 0.49, 38, 0.20, 0.50, true
+        ));
     }
 
     #[test]
     fn text_heavy_override_blocked_by_high_noise() {
         // High noise_score prevents override even for large text
-        assert!(!should_text_heavy_override(1400, 0.49, 38, 0.80, 0.50, false));
+        assert!(!should_text_heavy_override(
+            1400, 0.49, 38, 0.80, 0.50, false
+        ));
     }
 
     #[test]

@@ -870,7 +870,12 @@ pub fn parse_reopen_target(memory_context: &str, result: &SearchResult) -> Optio
         }
     }
 
-    if let Some(u) = result.url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(u) = result
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         return Some(u.to_string());
     }
     if let Some(first) = result

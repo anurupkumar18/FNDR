@@ -241,10 +241,7 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     if normalized.reopen_kind == ReopenKind::Unknown {
         let derived = build_reopen_target(
             normalized.url.as_deref(),
-            normalized
-                .files_touched
-                .first()
-                .map(|value| value.as_str()),
+            normalized.files_touched.first().map(|value| value.as_str()),
             normalized.bundle_id.as_deref(),
             &normalized.app_name,
             normalized.timestamp,
@@ -1694,10 +1691,16 @@ pub(super) async fn ensure_memory_schema_columns(table: &Table) -> Result<(), la
         transforms.push(("reopen_captured_at_ms".to_string(), "timestamp".to_string()));
     }
     if !existing.contains("reopen_confidence") {
-        transforms.push(("reopen_confidence".to_string(), "CAST(0.0 AS FLOAT)".to_string()));
+        transforms.push((
+            "reopen_confidence".to_string(),
+            "CAST(0.0 AS FLOAT)".to_string(),
+        ));
     }
     if !existing.contains("reopen_validation_status") {
-        transforms.push(("reopen_validation_status".to_string(), "'unchecked'".to_string()));
+        transforms.push((
+            "reopen_validation_status".to_string(),
+            "'unchecked'".to_string(),
+        ));
     }
     if !existing.contains("search_aliases") {
         transforms.push(("search_aliases".to_string(), "[]".to_string()));

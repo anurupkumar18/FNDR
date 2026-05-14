@@ -1,14 +1,20 @@
 use crate::memory::types::{
-    DistilledMemory, DiagnosticObservation, MemoryDecision, QualityDecision, QualityScores,
+    DiagnosticObservation, DistilledMemory, MemoryDecision, QualityDecision, QualityScores,
     SkipReason, ValidatedMemory,
 };
 use crate::storage::MemoryRecord;
 
 fn has_display_template_noise(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    ["reopen:", "find similar", "delete", "topic:", "continues from"]
-        .iter()
-        .any(|needle| lower.contains(needle))
+    [
+        "reopen:",
+        "find similar",
+        "delete",
+        "topic:",
+        "continues from",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 fn is_url_only_topic(topic: &str) -> bool {
@@ -68,7 +74,10 @@ pub fn quality_decision_for_record(record: &MemoryRecord) -> QualityDecision {
     QualityDecision {
         decision: if passed {
             "store".to_string()
-        } else if reasons.iter().any(|r| r == "high_pollution" || r == "display_template_noise") {
+        } else if reasons
+            .iter()
+            .any(|r| r == "high_pollution" || r == "display_template_noise")
+        {
             "quarantine".to_string()
         } else {
             "skip".to_string()
@@ -119,21 +128,23 @@ pub fn decide_memory(distilled: DistilledMemory, quality: &QualityDecision) -> M
         });
     }
 
-    MemoryDecision::Skip(if quality
-        .reasons
-        .iter()
-        .any(|reason| reason == "grounding_confidence_zero")
-    {
-        SkipReason::LowGrounding
-    } else if quality
-        .reasons
-        .iter()
-        .any(|reason| reason == "missing_topic")
-    {
-        SkipReason::MissingCoreFields
-    } else {
-        SkipReason::WeakEvidence
-    })
+    MemoryDecision::Skip(
+        if quality
+            .reasons
+            .iter()
+            .any(|reason| reason == "grounding_confidence_zero")
+        {
+            SkipReason::LowGrounding
+        } else if quality
+            .reasons
+            .iter()
+            .any(|reason| reason == "missing_topic")
+        {
+            SkipReason::MissingCoreFields
+        } else {
+            SkipReason::WeakEvidence
+        },
+    )
 }
 
 pub fn can_merge_into_continuity(record: &MemoryRecord) -> bool {
@@ -204,7 +215,9 @@ mod tests {
         let record = make_record(0.30, 0.0, &ctx, "coding");
         let decision = quality_decision_for_record(&record);
         assert!(!decision.passed);
-        assert!(decision.reasons.contains(&"grounding_confidence_zero".to_string()));
+        assert!(decision
+            .reasons
+            .contains(&"grounding_confidence_zero".to_string()));
     }
 
     #[test]
