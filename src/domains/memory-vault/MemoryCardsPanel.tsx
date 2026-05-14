@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+    backfillGraphFromExistingMemories,
     MemoryCard,
     MemoryDebugInspector,
     SearchResult,
@@ -35,6 +36,9 @@ interface MemoryCardsPanelProps {
     onClose: () => void;
     appNames: string[];
     onMemoryDeleted?: (memoryId: string) => void;
+    feature?: "mixed" | "vault" | "graph";
+    focusMemoryId?: string | null;
+    onOpenMemoryById?: (memoryId: string) => void;
 }
 
 const APP_FILTER_ALL = "__all__";
@@ -260,8 +264,25 @@ function formatDay(timestamp: number): string {
     });
 }
 
-export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted }: MemoryCardsPanelProps) {
-    const [browseMode, setBrowseMode] = useState<"list" | "graph" | "project">(readStoredBrowseMode);
+export function MemoryCardsPanel({
+    isVisible,
+    onClose,
+    appNames,
+    onMemoryDeleted,
+    feature = "mixed",
+    focusMemoryId = null,
+    onOpenMemoryById,
+}: MemoryCardsPanelProps) {
+    const [browseMode, setBrowseMode] = useState<"list" | "graph" | "project">(() => {
+        if (feature === "vault") {
+            return "list";
+        }
+        if (feature === "graph") {
+            const stored = readStoredBrowseMode();
+            return stored === "list" ? "graph" : stored;
+        }
+        return readStoredBrowseMode();
+    });
     const [insightProject, setInsightProject] = useState("");
     const [graphNodeFilter, setGraphNodeFilter] = useState("");
     const [selectedGraphNode, setSelectedGraphNode] = useState<GraphNode | null>(null);
@@ -300,13 +321,32 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
     const [similarErrorById, setSimilarErrorById] = useState<Record<string, string>>({});
     const [expandedBodyIds, setExpandedBodyIds] = useState<Set<string>>(new Set());
 
+    const isVaultFeature = feature === "vault";
+    const isGraphFeature = feature === "graph";
+    const showListSurface = !isGraphFeature && browseMode === "list";
+    const showGraphSurface = !isVaultFeature && (browseMode === "graph" || browseMode === "project");
+    const showEmbeddedGraphStrip = feature === "mixed" && browseMode === "list";
+
+    useEffect(() => {
+        if (feature === "vault" && browseMode !== "list") {
+            setBrowseMode("list");
+            return;
+        }
+        if (feature === "graph" && browseMode === "list") {
+            setBrowseMode("graph");
+        }
+    }, [feature, browseMode]);
+
     useEffect(() => {
         try {
+            if (feature === "vault") {
+                return;
+            }
             sessionStorage.setItem(VAULT_BROWSE_STORAGE_KEY, browseMode);
         } catch {
             /* ignore */
         }
-    }, [browseMode]);
+    }, [browseMode, feature]);
 
     const toggleExpandedBody = (memoryId: string) => {
         setExpandedBodyIds((previous) => {
@@ -378,6 +418,9 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
         if (!isVisible) {
             return;
         }
+        if (isVaultFeature) {
+            return;
+        }
         if (browseMode === "list") {
             void loadGraph({ mode: "full" });
             return;
@@ -401,6 +444,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
         projectPicker,
         uniqueProjects,
         loadGraph,
+        isVaultFeature,
     ]);
 
     useEffect(() => {
@@ -509,6 +553,22 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
             cancelled = true;
         };
     }, [isVisible, appFilter]);
+
+    useEffect(() => {
+        if (!isVisible || !focusMemoryId) {
+            return;
+        }
+        if (!showListSurface) {
+            return;
+        }
+        const frame = requestAnimationFrame(() => {
+            document.getElementById(`memory-card-${focusMemoryId}`)?.scrollIntoView({
+                behavior: "smooth",
+                block: "center",
+            });
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [isVisible, focusMemoryId, cards, showListSurface]);
 
     const handleDeleteCard = async (memoryId: string) => {
         if (deletingId) {
@@ -620,15 +680,6 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
             setGraphDetailLoading(false);
         }
         const firstMem = detail.source_memory_ids?.[0];
-        if (firstMem) {
-            setBrowseMode("list");
-            requestAnimationFrame(() => {
-                document.getElementById(`memory-card-${firstMem}`)?.scrollIntoView({
-                    behavior: "smooth",
-                    block: "center",
-                });
-            });
-        }
         if (!firstMem) {
             return;
         }
@@ -682,6 +733,11 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
         setHubHighlightIds(ids);
     };
 
+    const handleGraphBackfill = async () => {
+        await backfillGraphFromExistingMemories(2500);
+        handleGraphReload();
+    };
+
     if (!isVisible) {
         return null;
     }
@@ -690,54 +746,51 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
         <div className="memory-cards-panel">
             <div className="memory-cards-header">
                 <div className="memory-cards-heading">
-                    <h2>Memory Vault</h2>
-                    <p>Global graph, every memory, and project views — local to this Mac.</p>
+                    <h2>{isGraphFeature ? "Knowledge Graph" : "Memory Vault"}</h2>
+                    <p>
+                        {isGraphFeature
+                            ? "Hierarchical memory graph with project, session, memory, and entity links."
+                            : "All captured memories in one browseable vault."}
+                    </p>
                 </div>
                 <button className="ui-action-btn memory-cards-close-btn" onClick={onClose}>X</button>
             </div>
 
             <div className="memory-cards-toolbar">
                 <div className="memory-cards-toolbar-top">
-                    <div className="memory-cards-view-tabs" role="tablist" aria-label="Vault view">
-                        <button
-                            type="button"
-                            role="tab"
-                            aria-selected={browseMode === "graph"}
-                            className={`memory-cards-tab${browseMode === "graph" ? " memory-cards-tab--active" : ""}`}
-                            onClick={() => setBrowseMode("graph")}
-                        >
-                            Global graph
-                        </button>
-                        <button
-                            type="button"
-                            role="tab"
-                            aria-selected={browseMode === "list"}
-                            className={`memory-cards-tab${browseMode === "list" ? " memory-cards-tab--active" : ""}`}
-                            onClick={() => setBrowseMode("list")}
-                        >
-                            All memories
-                        </button>
-                        <button
-                            type="button"
-                            role="tab"
-                            aria-selected={browseMode === "project"}
-                            className={`memory-cards-tab${browseMode === "project" ? " memory-cards-tab--active" : ""}`}
-                            onClick={() => setBrowseMode("project")}
-                        >
-                            By project
-                        </button>
-                    </div>
-                    {browseMode === "list" && (
+                    {isVaultFeature ? null : (
+                        <div className="memory-cards-view-tabs" role="tablist" aria-label="Graph view">
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={browseMode === "graph"}
+                                className={`ui-action-btn memory-cards-tab${browseMode === "graph" ? " memory-cards-tab--active" : ""}`}
+                                onClick={() => setBrowseMode("graph")}
+                            >
+                                Global graph
+                            </button>
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={browseMode === "project"}
+                                className={`ui-action-btn memory-cards-tab${browseMode === "project" ? " memory-cards-tab--active" : ""}`}
+                                onClick={() => setBrowseMode("project")}
+                            >
+                                By project
+                            </button>
+                        </div>
+                    )}
+                    {showListSurface && (
                         <div className="memory-cards-count">{filteredCards.length} cards</div>
                     )}
-                    {(browseMode === "graph" || browseMode === "project") && (
+                    {showGraphSurface && (
                         <div className="memory-cards-count">
                             {(subgraph?.nodes?.length ?? 0)} nodes · {(subgraph?.edges?.length ?? 0)} links
                         </div>
                     )}
                 </div>
 
-                {browseMode === "list" && (
+                {showListSurface && (
                 <div className="memory-cards-filters">
                     <label className="memory-cards-filter">
                         Universe
@@ -799,7 +852,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                 </div>
                 )}
 
-                {(browseMode === "graph" || browseMode === "project") && (
+                {showGraphSurface && (
                     <div className="memory-graph-chrome" aria-label="Graph scope">
                         {browseMode === "project" && (
                             <label className="memory-graph-project-field">
@@ -841,6 +894,9 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                             <button type="button" className="ui-action-btn" onClick={() => handleGraphReload()}>
                                 Reload
                             </button>
+                            <button type="button" className="ui-action-btn" onClick={() => void handleGraphBackfill()}>
+                                Backfill graph
+                            </button>
                             <button type="button" className="ui-action-btn" onClick={() => void handleToggleHubs()}>
                                 {hubHighlightIds?.length ? "Clear hubs" : "Hub nodes"}
                             </button>
@@ -860,11 +916,12 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
 
             <div
                 className={`memory-cards-body${
-                    browseMode === "graph" || browseMode === "project" ? " memory-cards-body--graph" : ""
-                }${browseMode === "list" ? " memory-cards-body--vault-list" : ""}`}
+                    showGraphSurface ? " memory-cards-body--graph" : ""
+                }${showListSurface ? " memory-cards-body--vault-list" : ""}`}
             >
-                {browseMode === "list" && (
+                {showListSurface && (
                 <>
+                {showEmbeddedGraphStrip && (
                 <section className="memory-vault-global-graph" aria-label="Global memory graph">
                     {subgraph?.cluster_0_name ? (
                         <div className="memory-vault-cluster-legend" title="Louvain community 0 label">
@@ -896,6 +953,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                         />
                     )}
                 </section>
+                )}
                 {loading && cards.length === 0 && (
                     <div className="memory-cards-state">
                         <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
@@ -975,7 +1033,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                                         {card.timeline_action_class}
                                                     </span>
                                                 )}
-                                            {(memoryIdsInGraph.has(card.id) || (card.insight_kg_node_count ?? 0) > 0) && (
+                                            {((!isVaultFeature && memoryIdsInGraph.has(card.id)) || (card.insight_kg_node_count ?? 0) > 0) && (
                                                 <span
                                                     className="memory-graph-badge"
                                                     title="Referenced by at least one insight graph entity"
@@ -1129,7 +1187,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                 </>
                 )}
 
-                {(browseMode === "graph" || browseMode === "project") && (
+                {showGraphSurface && (
                     <div className="memory-graph-layout">
                         {graphError && (
                             <div className="memory-cards-inline-error" role="alert">
@@ -1148,6 +1206,9 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                 <p className="memory-graph-empty-hint">
                                     Try clearing the project field for the full graph, or capture more context so entities can be extracted.
                                 </p>
+                                <button type="button" className="ui-action-btn" onClick={() => void handleGraphBackfill()}>
+                                    Build graph from existing memories
+                                </button>
                             </div>
                         )}
                         {(subgraph?.nodes?.length ?? 0) > 0 && (
@@ -1209,6 +1270,15 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                                     onClick={() => void handleFindPathToSelected()}
                                                 >
                                                     Find path here
+                                                </button>
+                                            )}
+                                            {graphNodeDetail?.source_memory_ids?.[0] && onOpenMemoryById && (
+                                                <button
+                                                    type="button"
+                                                    className="ui-action-btn"
+                                                    onClick={() => onOpenMemoryById(graphNodeDetail.source_memory_ids[0])}
+                                                >
+                                                    Open linked memory
                                                 </button>
                                             )}
                                         </div>
