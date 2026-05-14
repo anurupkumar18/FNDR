@@ -58,6 +58,7 @@ function App() {
     // CommandPalette is kept separate because it layers on top of the current panel.
     const [activePanel, setActivePanel] = useState<PanelKey | null>(null);
     const [researchSeedMemory, setResearchSeedMemory] = useState<MemoryCard | null>(null);
+    const [memoryVaultFocusId, setMemoryVaultFocusId] = useState<string | null>(null);
     const [showCommandPalette, setShowCommandPalette] = useState(false);
     const [appToasts, setAppToasts] = useState<AppToast[]>([]);
     const toastTimersRef = useRef<Map<string, number>>(new Map());
@@ -253,7 +254,17 @@ function App() {
     const handleOpenPanel = useCallback((panel: PanelKey) => {
         setShowCommandPalette(false);
         setIsSidebarOpen(false);
+        if (panel !== "memoryCards") {
+            setMemoryVaultFocusId(null);
+        }
         setActivePanel(panel);
+    }, []);
+
+    const handleOpenMemoryById = useCallback((memoryId: string) => {
+        setMemoryVaultFocusId(memoryId);
+        setShowCommandPalette(false);
+        setIsSidebarOpen(false);
+        setActivePanel("memoryCards");
     }, []);
 
     // Research trigger — opens Research panel seeded with a memory
@@ -551,6 +562,7 @@ function App() {
                         onAppFilterChange={setAppFilter}
                         onSetMeetingPanelOpen={(open) => setActivePanel(open ? "meeting" : null)}
                         onSetMemoryCardsPanelOpen={(open) => setActivePanel(open ? "memoryCards" : null)}
+                        onSetKnowledgeGraphPanelOpen={(open) => setActivePanel(open ? "knowledgeGraph" : null)}
                         appNames={appNames}
                         resultCount={visibleResults.length}
                         searchResults={visibleResults}
@@ -606,6 +618,8 @@ function App() {
                     onRunSkill={handleRunSkill}
                     onSearchApp={handleSearchApp}
                     onToastAction={handleToastAction}
+                    memoryVaultFocusId={memoryVaultFocusId}
+                    onOpenMemoryById={handleOpenMemoryById}
                 />
             )}
         </div>

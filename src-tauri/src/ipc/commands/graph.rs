@@ -123,16 +123,29 @@ pub async fn get_god_nodes(
     })
 }
 
-/// Drain `pending_graph_updates` into Lance when resource gating allows.
-pub async fn commit_graph_updates(state: Arc<AppState>) -> Result<(), String> {
-    if !crate::system_resources::allows_graph_idle_commit(state.as_ref()) {
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphBackfillReport {
+    pub scanned: usize,
+    pub queued: usize,
+    pub low_confidence_queued: usize,
+}
+
+async fn commit_graph_updates_internal(
+    state: Arc<AppState>,
+    bypass_resource_gate: bool,
+) -> Result<(), String> {
+    if !bypass_resource_gate && !crate::system_resources::allows_graph_idle_commit(state.as_ref()) {
         return Ok(());
     }
     let pending: Vec<crate::PendingGraphUpdate> = {
         let mut q = state.pending_graph_updates.lock();
         std::mem::take(&mut *q)
     };
-    if pending.is_empty() {
+    let low_confidence: Vec<crate::PendingGraphUpdate> = {
+        let mut q = state.low_confidence_graph_candidates.lock();
+        std::mem::take(&mut *q)
+    };
+    if pending.is_empty() && low_confidence.is_empty() {
         return Ok(());
     }
     let t0 = std::time::Instant::now();
@@ -140,12 +153,28 @@ pub async fn commit_graph_updates(state: Arc<AppState>) -> Result<(), String> {
     let mut merged_nodes = 0usize;
     let mut merged_edges = 0usize;
     let mut conflicts = 0usize;
-    for batch in pending {
+    let mut low_conf_nodes = 0usize;
+    let mut low_conf_edges = 0usize;
+
+    for batch in pending.iter().chain(low_confidence.iter()) {
+        let is_low_confidence = batch.overall_confidence < 0.5;
         for n in &batch.nodes {
-            gs.upsert_node(n).await.map_err(|e| e.to_string())?;
+            let mut node = n.clone();
+            if is_low_confidence {
+                low_conf_nodes += 1;
+                if let Some(obj) = node.metadata.as_object_mut() {
+                    obj.insert("low_confidence".to_string(), serde_json::json!(true));
+                } else {
+                    node.metadata = serde_json::json!({ "low_confidence": true });
+                }
+            }
+            gs.upsert_node(&node).await.map_err(|e| e.to_string())?;
             merged_nodes += 1;
         }
         for e in &batch.edges {
+            if is_low_confidence {
+                low_conf_edges += 1;
+            }
             if e.conflict_flag {
                 conflicts += 1;
             }
@@ -160,10 +189,48 @@ pub async fn commit_graph_updates(state: Arc<AppState>) -> Result<(), String> {
         target: "fndr::graph_commit",
         merged_nodes,
         merged_edges,
+        low_conf_nodes,
+        low_conf_edges,
         conflicts,
         stale_marked = stale,
         elapsed_ms,
         "commit_graph_updates completed"
     );
     Ok(())
+}
+
+/// Drain queued graph updates when resource gating allows.
+pub async fn commit_graph_updates(state: Arc<AppState>) -> Result<(), String> {
+    commit_graph_updates_internal(state, false).await
+}
+
+/// Immediate graph commit path for post-capture freshness.
+pub async fn commit_graph_updates_now(state: Arc<AppState>) -> Result<(), String> {
+    commit_graph_updates_internal(state, true).await
+}
+
+#[tauri::command]
+pub async fn backfill_graph_from_existing_memories(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<usize>,
+) -> Result<GraphBackfillReport, String> {
+    let all = state
+        .inner()
+        .store
+        .list_all_memories()
+        .await
+        .map_err(|e| e.to_string())?;
+    let take_n = limit.unwrap_or(2500).max(1);
+    let scanned = all.len().min(take_n);
+    for record in all.iter().take(take_n) {
+        state.inner().enqueue_graph_from_flushed_memory(record);
+    }
+    let queued = state.inner().pending_graph_updates.lock().len();
+    let low_confidence_queued = state.inner().low_confidence_graph_candidates.lock().len();
+    commit_graph_updates_internal(state.inner().clone(), true).await?;
+    Ok(GraphBackfillReport {
+        scanned,
+        queued,
+        low_confidence_queued,
+    })
 }

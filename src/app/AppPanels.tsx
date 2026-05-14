@@ -31,6 +31,7 @@ interface AppPanelsProps {
     selectedResult: MemoryCard | null;
     showCommandPalette: boolean;
     timeFilter: string | null;
+    memoryVaultFocusId: string | null;
     onClearSearch: () => void;
     onCloseCommandPalette: () => void;
     onClosePanel: () => void;
@@ -43,6 +44,7 @@ interface AppPanelsProps {
     onRunSkill: (skillQuery: string, timeFilter?: string) => void;
     onSearchApp: (appName: string) => void;
     onToastAction: (toast: AppToast) => void;
+    onOpenMemoryById: (memoryId: string) => void;
 }
 
 export function AppPanels({
@@ -56,6 +58,7 @@ export function AppPanels({
     selectedResult,
     showCommandPalette,
     timeFilter,
+    memoryVaultFocusId,
     onClearSearch,
     onCloseCommandPalette,
     onClosePanel,
@@ -68,6 +71,7 @@ export function AppPanels({
     onRunSkill,
     onSearchApp,
     onToastAction,
+    onOpenMemoryById,
 }: AppPanelsProps) {
     return (
         <>
@@ -80,6 +84,16 @@ export function AppPanels({
                 onClose={onClosePanel}
                 appNames={appNames}
                 onMemoryDeleted={onMemoryDeleted}
+                feature="vault"
+                focusMemoryId={memoryVaultFocusId}
+                onOpenMemoryById={onOpenMemoryById}
+            />
+            <MemoryCardsPanel
+                isVisible={activePanel === "knowledgeGraph"}
+                onClose={onClosePanel}
+                appNames={appNames}
+                feature="graph"
+                onOpenMemoryById={onOpenMemoryById}
             />
             <StatsPanel isVisible={activePanel === "stats"} onClose={onClosePanel} />
             <TodoPanel isVisible={activePanel === "todo"} onClose={onClosePanel} />

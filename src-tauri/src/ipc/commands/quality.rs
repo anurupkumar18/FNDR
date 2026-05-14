@@ -921,7 +921,7 @@ fn result_relevant_for_query(result: &SearchResult, query_ctx: &QueryContext) ->
 pub async fn run_memory_retrieval_eval(
     state: State<'_, Arc<AppState>>,
 ) -> Result<RetrievalEvalReport, String> {
-    let fixture = include_str!("../fixtures/retrieval_eval_queries.json");
+    let fixture = include_str!("../fixtures/retrieval_eval_queries.jsonc");
     let cases: Vec<RetrievalEvalCase> = serde_json::from_str(fixture)
         .map_err(|err| format!("Invalid retrieval eval fixture: {err}"))?;
     let now = chrono::Utc::now().timestamp_millis();

@@ -28,6 +28,7 @@ interface SearchBarProps {
     onAppFilterChange: (filter: string | null) => void;
     onSetMeetingPanelOpen: (open: boolean) => void;
     onSetMemoryCardsPanelOpen: (open: boolean) => void;
+    onSetKnowledgeGraphPanelOpen: (open: boolean) => void;
     appNames: string[];
     resultCount: number;
     searchResults: MemoryCard[];
@@ -50,6 +51,7 @@ export function SearchBar({
     onAppFilterChange,
     onSetMeetingPanelOpen,
     onSetMemoryCardsPanelOpen,
+    onSetKnowledgeGraphPanelOpen,
     appNames,
     resultCount,
     searchResults,
@@ -347,14 +349,26 @@ export function SearchBar({
         }
 
         if (normalized.includes("open graph") || normalized.includes("open knowledge graph")) {
-            onSetMemoryCardsPanelOpen(true);
+            onSetKnowledgeGraphPanelOpen(true);
             setVoiceStatus("Opened Graph.");
             return;
         }
 
         if (normalized.includes("close graph") || normalized.includes("close knowledge graph")) {
-            onSetMemoryCardsPanelOpen(false);
+            onSetKnowledgeGraphPanelOpen(false);
             setVoiceStatus("Closed Graph.");
+            return;
+        }
+
+        if (normalized.includes("open memory vault")) {
+            onSetMemoryCardsPanelOpen(true);
+            setVoiceStatus("Opened Memory Vault.");
+            return;
+        }
+
+        if (normalized.includes("close memory vault")) {
+            onSetMemoryCardsPanelOpen(false);
+            setVoiceStatus("Closed Memory Vault.");
             return;
         }
 

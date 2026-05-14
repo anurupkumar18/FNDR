@@ -1,0 +1,17 @@
+[
+  {
+    "category": "workstream",
+    "query": "what did I work on today",
+    "notes": "Baseline recall query for recent active tasks."
+  },
+  {
+    "category": "meeting",
+    "query": "meeting notes and action items",
+    "notes": "Checks retrieval of meeting-related memories and tasks."
+  },
+  {
+    "category": "project",
+    "query": "current project priorities",
+    "notes": "Checks whether project summaries and plans rank in top results."
+  }
+]

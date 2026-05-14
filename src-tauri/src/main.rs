@@ -623,6 +623,7 @@ fn main() {
             ipc::commands::get_node_detail,
             ipc::commands::find_graph_path,
             ipc::commands::get_god_nodes,
+            ipc::commands::backfill_graph_from_existing_memories,
             ipc::commands::get_privacy_alerts,
             ipc::commands::dismiss_privacy_alert,
             ipc::commands::add_to_blocklist,

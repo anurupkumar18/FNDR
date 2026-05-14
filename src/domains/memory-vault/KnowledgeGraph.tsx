@@ -28,6 +28,8 @@ export interface KnowledgeGraphProps {
     louvainByNodeId?: Record<string, number> | null;
     /** Defaults to {@link GRAPH_SIM_MAX_TICKS}. */
     maxSimulationTicks?: number;
+    /** Hierarchical by default: Project -> Session -> Memory -> Entity nodes. */
+    layoutMode?: "hierarchical" | "force";
 }
 
 export function KnowledgeGraph({
@@ -40,6 +42,7 @@ export function KnowledgeGraph({
     highlightNodeIds = null,
     louvainByNodeId = null,
     maxSimulationTicks = GRAPH_SIM_MAX_TICKS,
+    layoutMode = "hierarchical",
 }: KnowledgeGraphProps) {
     const ref = useRef<SVGSVGElement | null>(null);
 
@@ -120,6 +123,44 @@ export function KnowledgeGraph({
             });
         }
 
+        const isHierarchical = layoutMode === "hierarchical";
+        const layerIndex = (nodeType: string): number => {
+            if (nodeType === "Project") return 0;
+            if (nodeType === "Session") return 1;
+            if (nodeType === "Memory") return 2;
+            return 3;
+        };
+        const layerNames = ["Project", "Session", "Memory", "Entity"];
+        const layerY = (layer: number) => {
+            const top = 56;
+            const bottom = height - 40;
+            const slots = layerNames.length - 1;
+            return top + ((bottom - top) * layer) / Math.max(1, slots);
+        };
+
+        if (isHierarchical) {
+            const layers = gRoot.append("g").attr("aria-hidden", "true");
+            layerNames.forEach((name, idx) => {
+                const y = layerY(idx);
+                layers
+                    .append("line")
+                    .attr("x1", 24)
+                    .attr("x2", width - 24)
+                    .attr("y1", y)
+                    .attr("y2", y)
+                    .attr("stroke", "currentColor")
+                    .attr("stroke-opacity", 0.08);
+                layers
+                    .append("text")
+                    .attr("x", 28)
+                    .attr("y", y - 8)
+                    .attr("fill", "currentColor")
+                    .attr("opacity", 0.45)
+                    .attr("font-size", 10)
+                    .text(name);
+            });
+        }
+
         const simulation = d3
             .forceSimulation<SimNode>(simNodes)
             .force(
@@ -143,6 +184,28 @@ export function KnowledgeGraph({
             .force("charge", d3.forceManyBody<SimNode>().strength(-150))
             .force("center", d3.forceCenter(width / 2, height / 2))
             .force("collision", d3.forceCollide<SimNode>().radius(28));
+
+        if (isHierarchical) {
+            simulation
+                .force(
+                    "layerY",
+                    d3.forceY<SimNode>((d) => layerY(layerIndex(d.nodeType))).strength(0.65)
+                )
+                .force(
+                    "layerX",
+                    d3.forceX<SimNode>((d) => {
+                        const layer = layerIndex(d.nodeType);
+                        const peers = simNodes.filter((n) => layerIndex(n.nodeType) === layer);
+                        const position = peers.findIndex((n) => n.id === d.id);
+                        if (peers.length <= 1 || position < 0) {
+                            return width / 2;
+                        }
+                        const margin = 80;
+                        const span = Math.max(120, width - margin * 2);
+                        return margin + (span * position) / (peers.length - 1);
+                    }).strength(0.25)
+                );
+        }
 
         if (louvain && clusterIds.length > 0) {
             simulation
@@ -226,6 +289,8 @@ export function KnowledgeGraph({
                 }
                 return d.nodeType === "Project"
                     ? "var(--accent, #6ea8fe)"
+                    : d.nodeType === "Memory"
+                      ? "var(--success, #34d399)"
                     : d.nodeType === "Error"
                       ? "var(--danger, #f87171)"
                       : "var(--surface-2, #3f3f46)";
@@ -281,7 +346,7 @@ export function KnowledgeGraph({
             simulation.on("tick", null);
             root.on(".zoom", null);
         };
-    }, [simNodes, simLinks, height, onNodeClick, selectedNodeId, pathNodeIds, highlightNodeIds, maxSimulationTicks, louvainByNodeId]);
+    }, [simNodes, simLinks, height, onNodeClick, selectedNodeId, pathNodeIds, highlightNodeIds, maxSimulationTicks, louvainByNodeId, layoutMode]);
 
     return (
         <div className="knowledge-graph-wrap" style={{ height }}>

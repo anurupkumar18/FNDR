@@ -66,6 +66,7 @@ describe("MemoryCardsPanel", () => {
                 isVisible={true}
                 onClose={() => {}}
                 appNames={["VS Code"]}
+                feature="vault"
             />
         );
 

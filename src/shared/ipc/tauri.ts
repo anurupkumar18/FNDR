@@ -793,6 +793,18 @@ export async function getGodNodes(k = 8): Promise<{
     return invoke("get_god_nodes", { k });
 }
 
+export interface GraphBackfillReport {
+    scanned: number;
+    queued: number;
+    low_confidence_queued: number;
+}
+
+export async function backfillGraphFromExistingMemories(limit?: number): Promise<GraphBackfillReport> {
+    return invoke<GraphBackfillReport>("backfill_graph_from_existing_memories", {
+        limit: typeof limit === "number" ? limit : null,
+    });
+}
+
 export async function deleteMemory(memoryId: string): Promise<boolean> {
     return invoke<boolean>("delete_memory", { memoryId });
 }

@@ -1,6 +1,8 @@
 //! Deterministic entity extraction from **finalized** memory fields only (no raw OCR, no Lance).
 
-use crate::memory::graph::schema::{GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
+use crate::memory::graph::schema::{
+    GraphEdge, GraphEdgeType, GraphNode, GraphNodeType,
+};
 use crate::storage::MemoryRecord;
 use chrono::Utc;
 use std::collections::HashSet;
@@ -20,17 +22,13 @@ pub struct ExtractionResult {
 }
 
 fn norm_label(s: &str) -> String {
-    s.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_string()
+    s.split_whitespace().collect::<Vec<_>>().join(" ").trim().to_string()
 }
 
 fn is_stop_phrase(lower: &str) -> bool {
     const STOPS: &[&str] = &[
-        "the", "and", "for", "with", "from", "this", "that", "unknown", "none", "n/a", "untitled",
-        "page", "window", "document", "loading", "error", "home", "search",
+        "the", "and", "for", "with", "from", "this", "that", "unknown", "none", "n/a",
+        "untitled", "page", "window", "document", "loading", "error", "home", "search",
     ];
     STOPS.iter().any(|w| *w == lower)
 }
@@ -48,15 +46,37 @@ fn acceptable_label(label: &str) -> bool {
     true
 }
 
-fn stable_node_id(memory_id: &str, kind: GraphNodeType, label_key: &str) -> Uuid {
-    let key = format!("{memory_id}|{kind:?}|{}", label_key.to_ascii_lowercase());
+fn parse_continuation_of(memory_context: &str) -> Option<String> {
+    for line in memory_context.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Continues from ") {
+            let id = rest
+                .split(|ch: char| ch == ':' || ch.is_whitespace())
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !id.is_empty() {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn stable_node_id(kind: GraphNodeType, label_key: &str) -> Uuid {
+    let key = format!("{kind:?}|{}", label_key.to_ascii_lowercase());
+    Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes())
+}
+
+fn stable_memory_node_id(memory_id: &str) -> Uuid {
+    let key = format!("Memory|{memory_id}");
     Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes())
 }
 
 fn push_node(
     out: &mut Vec<GraphNode>,
     seen: &mut HashSet<(String, GraphNodeType)>,
-    memory_id: &str,
+    source_memory_id: &str,
     node_type: GraphNodeType,
     label: String,
     confidence: f32,
@@ -71,20 +91,38 @@ fn push_node(
     if !seen.insert(key) {
         return;
     }
-    let id = stable_node_id(memory_id, node_type, &label);
+    let id = stable_node_id(node_type, &label);
     let now = Utc::now();
     out.push(GraphNode {
         id,
         node_type,
         label: label.chars().take(MAX_LABEL).collect(),
         confidence: confidence.clamp(0.0, 1.0),
-        source_memory_ids: vec![memory_id.to_string()],
+        source_memory_ids: vec![source_memory_id.to_string()],
         embedding: None,
         created_at: now,
         updated_at: now,
         stale: false,
         metadata: serde_json::json!({}),
     });
+}
+
+fn ensure_memory_node(nodes: &mut Vec<GraphNode>, memory_id: &str, confidence: f32) -> Uuid {
+    let id = stable_memory_node_id(memory_id);
+    let now = Utc::now();
+    nodes.push(GraphNode {
+        id,
+        node_type: GraphNodeType::Memory,
+        label: format!("Memory {}", memory_id.chars().take(10).collect::<String>()),
+        confidence: confidence.clamp(0.0, 1.0),
+        source_memory_ids: vec![memory_id.to_string()],
+        embedding: None,
+        created_at: now,
+        updated_at: now,
+        stale: false,
+        metadata: serde_json::json!({ "memory_id": memory_id }),
+    });
+    id
 }
 
 fn push_edge(
@@ -119,6 +157,7 @@ pub fn extract(record: &MemoryRecord) -> ExtractionResult {
 
     let ic = record.insight_card_confidence.clamp(0.0, 1.0);
     let base = (ic * 0.55 + record.confidence_score.clamp(0.0, 1.0) * 0.45).clamp(0.0, 1.0);
+    let memory_node_id = ensure_memory_node(&mut nodes, mid, (base * 0.95).max(0.45));
 
     if !record.project.trim().is_empty() && record.project != "unknown" {
         push_node(
@@ -213,8 +252,8 @@ pub fn extract(record: &MemoryRecord) -> ExtractionResult {
     push_node(
         &mut nodes,
         &mut seen_keys,
-        mid,
-        GraphNodeType::Session,
+            mid,
+            GraphNodeType::Session,
         session_label,
         (base * 0.5).max(0.3),
     );
@@ -230,8 +269,8 @@ pub fn extract(record: &MemoryRecord) -> ExtractionResult {
             push_node(
                 &mut nodes,
                 &mut seen_keys,
-                mid,
-                GraphNodeType::Concept,
+            mid,
+            GraphNodeType::Concept,
                 t,
                 (base * boost).max(0.36),
             );
@@ -244,37 +283,37 @@ pub fn extract(record: &MemoryRecord) -> ExtractionResult {
         nodes.iter().find(|n| n.node_type == t).map(|n| n.id)
     }
 
-    if let (Some(s), Some(p)) = (
-        first_id(&nodes, GraphNodeType::Session),
+    if let (Some(p), Some(s)) = (
         first_id(&nodes, GraphNodeType::Project),
-    ) {
-        push_edge(&mut edges, s, p, GraphEdgeType::PartOf, base * 0.75, false);
-    }
-    if let (Some(s), Some(c)) = (
         first_id(&nodes, GraphNodeType::Session),
-        first_id(&nodes, GraphNodeType::Concept),
     ) {
+        // Hierarchical backbone: project -> session -> memory.
+        push_edge(&mut edges, p, s, GraphEdgeType::Contains, base * 0.78, false);
+        push_edge(&mut edges, s, memory_node_id, GraphEdgeType::Contains, base * 0.82, false);
+    }
+
+    for node in &nodes {
+        if node.id == memory_node_id {
+            continue;
+        }
+        if matches!(node.node_type, GraphNodeType::Project | GraphNodeType::Session) {
+            continue;
+        }
         push_edge(
             &mut edges,
-            s,
-            c,
+            memory_node_id,
+            node.id,
             GraphEdgeType::MentionedIn,
             base * 0.7,
             false,
         );
     }
-    if let (Some(proj), Some(u)) = (
+
+    if let (Some(proj), Some(url_node)) = (
         first_id(&nodes, GraphNodeType::Project),
         first_id(&nodes, GraphNodeType::Url),
     ) {
-        push_edge(
-            &mut edges,
-            proj,
-            u,
-            GraphEdgeType::AppliesTo,
-            base * 0.72,
-            false,
-        );
+        push_edge(&mut edges, proj, url_node, GraphEdgeType::AppliesTo, base * 0.72, false);
     }
     let dec = nodes
         .iter()
@@ -301,6 +340,33 @@ pub fn extract(record: &MemoryRecord) -> ExtractionResult {
             base * 0.55,
             true,
         );
+    }
+
+    for related in &record.related_memory_ids {
+        let rid = related.trim();
+        if rid.is_empty() || rid == mid {
+            continue;
+        }
+        push_edge(
+            &mut edges,
+            memory_node_id,
+            stable_memory_node_id(rid),
+            GraphEdgeType::SimilarTo,
+            base * 0.66,
+            false,
+        );
+    }
+    if let Some(prev) = parse_continuation_of(&record.memory_context) {
+        if !prev.trim().is_empty() && prev.trim() != mid {
+            push_edge(
+                &mut edges,
+                stable_memory_node_id(prev.trim()),
+                memory_node_id,
+                GraphEdgeType::FollowedBy,
+                base * 0.64,
+                false,
+            );
+        }
     }
 
     let overall_confidence = if nodes.is_empty() {
@@ -347,15 +413,9 @@ mod tests {
         r.decisions = vec!["Ship dark mode first".into()];
         r.errors = vec!["Flaky integration test".into()];
         let ex = extract(&r);
-        assert!(ex
-            .nodes
-            .iter()
-            .any(|n| n.node_type == GraphNodeType::Decision));
+        assert!(ex.nodes.iter().any(|n| n.node_type == GraphNodeType::Decision));
         assert!(ex.nodes.iter().any(|n| n.node_type == GraphNodeType::Error));
-        assert!(ex
-            .edges
-            .iter()
-            .any(|e| e.edge_type == GraphEdgeType::Contradicts));
+        assert!(ex.edges.iter().any(|e| e.edge_type == GraphEdgeType::Contradicts));
     }
 
     #[test]
@@ -388,5 +448,64 @@ mod tests {
         for e in &ex.edges {
             assert!(e.confidence >= EDGE_CONF_MIN);
         }
+    }
+
+    #[test]
+    fn creates_memory_node_and_hierarchy_backbone() {
+        let r = base_record();
+        let ex = extract(&r);
+        let memory = ex
+            .nodes
+            .iter()
+            .find(|n| n.node_type == GraphNodeType::Memory)
+            .expect("memory node");
+        let project = ex
+            .nodes
+            .iter()
+            .find(|n| n.node_type == GraphNodeType::Project)
+            .expect("project node");
+        let session = ex
+            .nodes
+            .iter()
+            .find(|n| n.node_type == GraphNodeType::Session)
+            .expect("session node");
+        assert!(ex.edges.iter().any(|e| {
+            e.source_id == project.id && e.target_id == session.id && e.edge_type == GraphEdgeType::Contains
+        }));
+        assert!(ex.edges.iter().any(|e| {
+            e.source_id == session.id && e.target_id == memory.id && e.edge_type == GraphEdgeType::Contains
+        }));
+    }
+
+    #[test]
+    fn related_memory_ids_add_cross_memory_edges() {
+        let mut r = base_record();
+        r.related_memory_ids = vec!["other-memory-id".to_string()];
+        let ex = extract(&r);
+        assert!(ex
+            .edges
+            .iter()
+            .any(|e| e.edge_type == GraphEdgeType::SimilarTo));
+    }
+
+    #[test]
+    fn shared_entities_have_stable_global_ids() {
+        let mut a = base_record();
+        a.id = "mem-a".into();
+        let mut b = base_record();
+        b.id = "mem-b".into();
+        let ex_a = extract(&a);
+        let ex_b = extract(&b);
+        let concept_a = ex_a
+            .nodes
+            .iter()
+            .find(|n| n.node_type == GraphNodeType::Concept)
+            .expect("concept A");
+        let concept_b = ex_b
+            .nodes
+            .iter()
+            .find(|n| n.node_type == GraphNodeType::Concept)
+            .expect("concept B");
+        assert_eq!(concept_a.id, concept_b.id);
     }
 }

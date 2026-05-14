@@ -46,6 +46,7 @@ interface CommandContext {
 
 export type PanelKey =
     | "memoryCards"
+    | "knowledgeGraph"
     | "stats"
     | "todo"
     | "meeting"
@@ -77,10 +78,18 @@ const COMMANDS: Command[] = [
     {
         id: "memory-cards",
         label: "Memory Vault",
-        description: "Global memory graph and full browse",
+        description: "Browse all memory cards",
         category: "navigate",
-        keywords: ["browse", "all", "cards", "memories", "vault", "graph"],
+        keywords: ["browse", "all", "cards", "memories", "vault"],
         run: ({ onOpenPanel }) => onOpenPanel("memoryCards"),
+    },
+    {
+        id: "knowledge-graph",
+        label: "Knowledge Graph",
+        description: "Explore hierarchical memory connections",
+        category: "navigate",
+        keywords: ["graph", "knowledge", "hierarchy", "connections", "second brain"],
+        run: ({ onOpenPanel }) => onOpenPanel("knowledgeGraph"),
     },
     {
         id: "daily-summary",

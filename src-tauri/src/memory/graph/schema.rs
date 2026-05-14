@@ -12,6 +12,7 @@ use uuid::Uuid;
 #[serde(rename_all = "PascalCase")]
 pub enum GraphNodeType {
     Project,
+    Memory,
     Concept,
     Decision,
     File,

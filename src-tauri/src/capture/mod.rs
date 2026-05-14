@@ -1365,6 +1365,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 for rec in batch.iter() {
                     state.enqueue_graph_from_flushed_memory(rec);
                 }
+                if let Err(err) = crate::ipc::commands::commit_graph_updates_now(state.clone()).await {
+                    tracing::debug!("immediate graph commit skipped: {}", err);
+                }
                 purge_capture_artifacts(state.store.frames_dir());
                 state.invalidate_memory_derived_caches();
                 let flush_ms = flush_start.elapsed().as_millis() as u64;

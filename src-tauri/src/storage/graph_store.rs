@@ -31,6 +31,7 @@ const TEXT_DIM: i32 = DEFAULT_TEXT_EMBEDDING_DIM as i32;
 fn node_type_lit(t: GraphNodeType) -> &'static str {
     match t {
         GraphNodeType::Project => "Project",
+        GraphNodeType::Memory => "Memory",
         GraphNodeType::Concept => "Concept",
         GraphNodeType::Decision => "Decision",
         GraphNodeType::File => "File",
@@ -75,6 +76,7 @@ fn edge_type_lit(t: GraphEdgeType) -> &'static str {
 fn parse_node_type(s: &str) -> GraphNodeType {
     match s {
         "Project" => GraphNodeType::Project,
+        "Memory" => GraphNodeType::Memory,
         "Concept" => GraphNodeType::Concept,
         "Decision" => GraphNodeType::Decision,
         "File" => GraphNodeType::File,
