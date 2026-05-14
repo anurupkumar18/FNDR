@@ -1,6 +1,7 @@
 //! Database schema for memory records
 
 use crate::config::{DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_TEXT_EMBEDDING_DIM};
+use crate::memory::reopen::{ReopenKind, ReopenValidationStatus};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -55,6 +56,14 @@ fn default_unknown() -> String {
 
 fn default_storage_outcome() -> String {
     "enriched_memory_card".to_string()
+}
+
+fn default_reopen_kind() -> ReopenKind {
+    ReopenKind::Unknown
+}
+
+fn default_reopen_validation_status() -> ReopenValidationStatus {
+    ReopenValidationStatus::Unchecked
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -230,6 +239,24 @@ pub struct MemoryRecord {
     pub related_projects: Vec<String>,
     #[serde(default)]
     pub raw_evidence: String,
+    #[serde(default = "default_reopen_kind")]
+    pub reopen_kind: ReopenKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_app_bundle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_app_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_app_deep_link: Option<String>,
+    #[serde(default)]
+    pub reopen_captured_at_ms: i64,
+    #[serde(default)]
+    pub reopen_confidence: f32,
+    #[serde(default = "default_reopen_validation_status")]
+    pub reopen_validation_status: ReopenValidationStatus,
     #[serde(default)]
     pub search_aliases: Vec<String>,
     #[serde(default)]
@@ -397,6 +424,15 @@ impl Default for MemoryRecord {
             related_agents: Vec::new(),
             related_projects: Vec::new(),
             raw_evidence: String::new(),
+            reopen_kind: default_reopen_kind(),
+            reopen_url: None,
+            reopen_file_path: None,
+            reopen_app_bundle_id: None,
+            reopen_app_name: None,
+            reopen_app_deep_link: None,
+            reopen_captured_at_ms: 0,
+            reopen_confidence: 0.0,
+            reopen_validation_status: default_reopen_validation_status(),
             search_aliases: Vec::new(),
             related_memory_ids: Vec::new(),
             graph_node_ids: Vec::new(),
@@ -488,6 +524,24 @@ pub struct SearchResult {
     pub lexical_shadow: String,
     #[serde(default)]
     pub memory_context: String,
+    #[serde(default = "default_reopen_kind")]
+    pub reopen_kind: ReopenKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_app_bundle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_app_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_app_deep_link: Option<String>,
+    #[serde(default)]
+    pub reopen_captured_at_ms: i64,
+    #[serde(default)]
+    pub reopen_confidence: f32,
+    #[serde(default = "default_reopen_validation_status")]
+    pub reopen_validation_status: ReopenValidationStatus,
     #[serde(default)]
     pub user_intent: String,
     #[serde(default = "default_unknown")]
@@ -590,6 +644,15 @@ impl Default for SearchResult {
             session_key: String::new(),
             lexical_shadow: default_lexical_shadow(),
             memory_context: String::new(),
+            reopen_kind: default_reopen_kind(),
+            reopen_url: None,
+            reopen_file_path: None,
+            reopen_app_bundle_id: None,
+            reopen_app_name: None,
+            reopen_app_deep_link: None,
+            reopen_captured_at_ms: 0,
+            reopen_confidence: 0.0,
+            reopen_validation_status: default_reopen_validation_status(),
             user_intent: String::new(),
             topic: default_unknown(),
             workflow: default_unknown(),

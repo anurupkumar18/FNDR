@@ -57,9 +57,8 @@ pub struct MemoryCard {
     /// Never persisted on its own — derived from `memory_context` metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_of: Option<String>,
-    /// URL / file:// / app:// link recovered from the durable `memory_context`
-    /// "Reopen: …" marker, or from `record.url` / `record.files_touched[0]`
-    /// when the marker is absent.
+    /// URL / file:// / app:// link derived from typed persisted reopen provenance.
+    /// Legacy `memory_context` marker parsing is fallback-only during migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reopen_target: Option<String>,
     /// Insight-first layers (ADR 007), copied from search hits.
@@ -260,11 +259,7 @@ impl MemoryCardSynthesizer {
                 anchor.internal_context.clone()
             };
             let continuation_of = parse_continuation_of(&anchor_memory_context);
-            let reopen_target = parse_reopen_target(
-                &anchor_memory_context,
-                anchor.url.as_deref(),
-                &files_touched,
-            );
+            let reopen_target = parse_reopen_target(&anchor_memory_context, &anchor);
             cards.push(MemoryCard {
                 id: anchor.id.clone(),
                 title,
@@ -767,11 +762,7 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         result.internal_context.clone()
     };
     let continuation_of = parse_continuation_of(&anchor_memory_context);
-    let reopen_target = parse_reopen_target(
-        &anchor_memory_context,
-        result.url.as_deref(),
-        &files_touched,
-    );
+    let reopen_target = parse_reopen_target(&anchor_memory_context, result);
     MemoryCard {
         id: result.id.clone(),
         title,
@@ -830,13 +821,45 @@ pub fn parse_continuation_of(memory_context: &str) -> Option<String> {
     None
 }
 
-/// Recover the reopen target token from `memory_context`, falling back to
-/// `url` then the first `files_touched` entry.
-pub fn parse_reopen_target(
-    memory_context: &str,
-    url: Option<&str>,
-    files_touched: &[String],
-) -> Option<String> {
+/// Resolve reopen target from typed persisted fields. Legacy `memory_context`
+/// marker parsing remains as migration fallback only.
+pub fn parse_reopen_target(memory_context: &str, result: &SearchResult) -> Option<String> {
+    match &result.reopen_kind {
+        crate::memory::reopen::ReopenKind::BrowserUrl => {
+            if let Some(url) = result.reopen_url.as_deref() {
+                let trimmed = url.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        crate::memory::reopen::ReopenKind::FilePath => {
+            if let Some(path) = result.reopen_file_path.as_deref() {
+                let trimmed = path.trim();
+                if !trimmed.is_empty() {
+                    return Some(format!("file://{}", trimmed.trim_start_matches("file://")));
+                }
+            }
+        }
+        crate::memory::reopen::ReopenKind::AppDeepLink => {
+            if let Some(link) = result.reopen_app_deep_link.as_deref() {
+                let trimmed = link.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        crate::memory::reopen::ReopenKind::AppBundle => {
+            if let Some(bundle) = result.reopen_app_bundle_id.as_deref() {
+                let trimmed = bundle.trim();
+                if !trimmed.is_empty() {
+                    return Some(format!("app-bundle://{}", trimmed));
+                }
+            }
+        }
+        crate::memory::reopen::ReopenKind::Unknown => {}
+    }
+
     for line in memory_context.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("Reopen: ") {
@@ -846,10 +869,12 @@ pub fn parse_reopen_target(
             }
         }
     }
-    if let Some(u) = url.map(str::trim).filter(|s| !s.is_empty()) {
+
+    if let Some(u) = result.url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         return Some(u.to_string());
     }
-    if let Some(first) = files_touched
+    if let Some(first) = result
+        .files_touched
         .iter()
         .map(|s| s.trim())
         .find(|s| !s.is_empty())
@@ -1684,5 +1709,30 @@ mod tests {
         assert!(!cards.is_empty());
         assert!(cards.iter().all(|card| !card.summary.trim().is_empty()));
         assert!(cards.iter().all(|card| card.source_count >= 1));
+    }
+
+    #[test]
+    fn reopen_target_prefers_typed_provenance_over_legacy_marker() {
+        let result = SearchResult {
+            reopen_kind: crate::memory::reopen::ReopenKind::BrowserUrl,
+            reopen_url: Some("https://typed.example/path".to_string()),
+            url: Some("https://record.example".to_string()),
+            files_touched: vec!["/tmp/legacy.txt".to_string()],
+            ..Default::default()
+        };
+
+        let parsed = parse_reopen_target("Reopen: https://legacy.example/path", &result);
+        assert_eq!(parsed.as_deref(), Some("https://typed.example/path"));
+    }
+
+    #[test]
+    fn reopen_target_allows_legacy_marker_fallback_for_unknown_rows() {
+        let result = SearchResult {
+            reopen_kind: crate::memory::reopen::ReopenKind::Unknown,
+            ..Default::default()
+        };
+
+        let parsed = parse_reopen_target("Reopen: https://legacy.example/path", &result);
+        assert_eq!(parsed.as_deref(), Some("https://legacy.example/path"));
     }
 }

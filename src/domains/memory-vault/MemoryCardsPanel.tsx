@@ -8,6 +8,7 @@ import {
     getContextRuntimeStatus,
     getMemoryDebugInspector,
     listMemoryCards,
+    reopenMemory,
     type GraphNode,
 } from "@/shared/ipc/tauri";
 import "./MemoryCardsPanel.css";
@@ -229,32 +230,14 @@ function cardCopy(
     return { title, summary, body, continuity };
 }
 
-function isHttpUrl(target: string): boolean {
-    return /^https?:\/\//i.test(target);
-}
-
-function isFileUrl(target: string): boolean {
-    return /^file:\/\//i.test(target);
-}
-
-async function handleReopen(target: string) {
-    if (isHttpUrl(target)) {
-        window.open(target, "_blank", "noopener,noreferrer");
-        return;
-    }
-    if (isFileUrl(target)) {
-        try {
-            const shellModule = await import("@tauri-apps/plugin-shell");
-            await shellModule.open(target);
-            return;
-        } catch (err) {
-            console.warn("Shell open failed; copying target to clipboard", err);
-        }
-    }
+async function handleReopen(memoryId: string) {
     try {
-        await navigator.clipboard.writeText(target);
+        const opened = await reopenMemory(memoryId);
+        if (!opened) {
+            console.warn("No reopen target available for memory", memoryId);
+        }
     } catch (err) {
-        console.warn("Clipboard write failed", err);
+        console.warn("Reopen command failed", err);
     }
 }
 
@@ -1054,7 +1037,7 @@ export function MemoryCardsPanel({ isVisible, onClose, appNames, onMemoryDeleted
                                                     <button
                                                         type="button"
                                                         className="memory-reopen-anchor"
-                                                        onClick={() => { void handleReopen(reopenTarget); }}
+                                                        onClick={() => { void handleReopen(card.id); }}
                                                         title={reopenTarget}
                                                     >
                                                         Reopen

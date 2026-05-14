@@ -17,6 +17,7 @@ use lancedb::{Connection, Table};
 
 use crate::capture::text_cleanup;
 use crate::config::{DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_TEXT_EMBEDDING_DIM};
+use crate::memory::reopen::{build_reopen_target, ReopenKind, ReopenValidationStatus};
 use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
 use crate::memory_quality::{
     classify_storage_outcome, default_memory_quality_config, deterministic_dedup_fingerprint,
@@ -236,6 +237,27 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     }
     if normalized.source_type.trim().is_empty() {
         normalized.source_type = infer_source_type(&normalized);
+    }
+    if normalized.reopen_kind == ReopenKind::Unknown {
+        let derived = build_reopen_target(
+            normalized.url.as_deref(),
+            normalized
+                .files_touched
+                .first()
+                .map(|value| value.as_str()),
+            normalized.bundle_id.as_deref(),
+            &normalized.app_name,
+            normalized.timestamp,
+        );
+        normalized.reopen_kind = derived.kind;
+        normalized.reopen_url = derived.url;
+        normalized.reopen_file_path = derived.file_path;
+        normalized.reopen_app_bundle_id = derived.app_bundle_id;
+        normalized.reopen_app_name = derived.app_name;
+        normalized.reopen_app_deep_link = derived.app_deep_link;
+        normalized.reopen_captured_at_ms = derived.captured_at_ms;
+        normalized.reopen_confidence = derived.confidence;
+        normalized.reopen_validation_status = derived.validation_status;
     }
     normalize_event_fields(&mut normalized);
 
@@ -1649,6 +1671,33 @@ pub(super) async fn ensure_memory_schema_columns(table: &Table) -> Result<(), la
     }
     if !existing.contains("raw_evidence") {
         transforms.push(("raw_evidence".to_string(), "'{}'".to_string()));
+    }
+    if !existing.contains("reopen_kind") {
+        transforms.push(("reopen_kind".to_string(), "'unknown'".to_string()));
+    }
+    if !existing.contains("reopen_url") {
+        transforms.push(("reopen_url".to_string(), "NULL".to_string()));
+    }
+    if !existing.contains("reopen_file_path") {
+        transforms.push(("reopen_file_path".to_string(), "NULL".to_string()));
+    }
+    if !existing.contains("reopen_app_bundle_id") {
+        transforms.push(("reopen_app_bundle_id".to_string(), "NULL".to_string()));
+    }
+    if !existing.contains("reopen_app_name") {
+        transforms.push(("reopen_app_name".to_string(), "NULL".to_string()));
+    }
+    if !existing.contains("reopen_app_deep_link") {
+        transforms.push(("reopen_app_deep_link".to_string(), "NULL".to_string()));
+    }
+    if !existing.contains("reopen_captured_at_ms") {
+        transforms.push(("reopen_captured_at_ms".to_string(), "timestamp".to_string()));
+    }
+    if !existing.contains("reopen_confidence") {
+        transforms.push(("reopen_confidence".to_string(), "CAST(0.0 AS FLOAT)".to_string()));
+    }
+    if !existing.contains("reopen_validation_status") {
+        transforms.push(("reopen_validation_status".to_string(), "'unchecked'".to_string()));
     }
     if !existing.contains("search_aliases") {
         transforms.push(("search_aliases".to_string(), "[]".to_string()));

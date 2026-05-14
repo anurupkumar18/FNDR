@@ -261,11 +261,7 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         result.internal_context.clone()
     };
     let continuation_of = crate::search::parse_continuation_of(&anchor_memory_context);
-    let reopen_target = crate::search::parse_reopen_target(
-        &anchor_memory_context,
-        result.url.as_deref(),
-        &result.files_touched,
-    );
+    let reopen_target = crate::search::parse_reopen_target(&anchor_memory_context, &result);
     MemoryCard {
         id: memory_id.clone(),
         title,

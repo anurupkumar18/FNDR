@@ -6,6 +6,7 @@ use crate::config::{
     DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX, DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN,
 };
 use crate::storage::MemoryRecord;
+use serde_json::Value;
 
 pub fn default_memory_quality_config() -> MemoryQualityConfig {
     MemoryQualityConfig {
@@ -19,6 +20,13 @@ pub fn default_memory_quality_config() -> MemoryQualityConfig {
 }
 
 pub fn classify_storage_outcome(record: &MemoryRecord, config: &MemoryQualityConfig) -> String {
+    if hard_gate_structured_extraction_failed(record) {
+        return "quarantine_low_grounding".to_string();
+    }
+    if hard_gate_polluted_memory_context(record) {
+        return "quarantine_polluted_context".to_string();
+    }
+
     let primary = record.specificity_score >= config.primary_memory_specificity_min
         && record.intent_score >= config.primary_memory_intent_min
         && record.agent_usefulness_score >= config.primary_memory_agent_usefulness_min
@@ -44,6 +52,13 @@ pub fn classify_storage_outcome(record: &MemoryRecord, config: &MemoryQualityCon
 }
 
 pub fn quality_gate_reason(record: &MemoryRecord) -> String {
+    if hard_gate_structured_extraction_failed(record) {
+        return "hard_gate=structured_extraction_unavailable_with_zero_grounding".to_string();
+    }
+    if hard_gate_polluted_memory_context(record) {
+        return "hard_gate=machine_marker_in_memory_context".to_string();
+    }
+
     format!(
         "specificity={:.2}, intent={:.2}, entities={:.2}, usefulness={:.2}, evidence={:.2}, noise={:.2}",
         record.specificity_score,
@@ -161,6 +176,38 @@ const STOP_TOKENS: &[&str] = &[
     "the", "and", "for", "with", "from", "this", "that", "into", "your", "you", "user", "www",
 ];
 
+fn hard_gate_structured_extraction_failed(record: &MemoryRecord) -> bool {
+    if record.evidence_confidence > 0.0 {
+        return false;
+    }
+    extraction_issues(record)
+        .iter()
+        .any(|issue| issue.eq_ignore_ascii_case("structured_extraction_unavailable"))
+}
+
+fn hard_gate_polluted_memory_context(record: &MemoryRecord) -> bool {
+    let context = record.memory_context.trim();
+    context.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("Reopen: ") || trimmed.starts_with("Continues from ")
+    })
+}
+
+fn extraction_issues(record: &MemoryRecord) -> Vec<String> {
+    let parsed = serde_json::from_str::<Value>(&record.raw_evidence).ok();
+    parsed
+        .as_ref()
+        .and_then(|json| json.get("extraction_issues"))
+        .and_then(|value| value.as_array())
+        .map(|issues| {
+            issues
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,5 +258,39 @@ mod tests {
         };
         let outcome = classify_storage_outcome(&record, &cfg);
         assert_eq!(outcome, "merge_into_existing_memory");
+    }
+
+    #[test]
+    fn storage_outcome_quarantines_when_structured_extraction_is_unavailable_with_zero_grounding() {
+        let cfg = default_memory_quality_config();
+        let record = MemoryRecord {
+            evidence_confidence: 0.0,
+            raw_evidence: "{\"extraction_issues\":[\"structured_extraction_unavailable\"]}"
+                .to_string(),
+            ..Default::default()
+        };
+
+        let outcome = classify_storage_outcome(&record, &cfg);
+        assert_eq!(outcome, "quarantine_low_grounding");
+        assert_eq!(
+            quality_gate_reason(&record),
+            "hard_gate=structured_extraction_unavailable_with_zero_grounding"
+        );
+    }
+
+    #[test]
+    fn storage_outcome_quarantines_when_memory_context_contains_machine_markers() {
+        let cfg = default_memory_quality_config();
+        let record = MemoryRecord {
+            memory_context: "Continues from abcd1234\nReopen: https://example.com".to_string(),
+            ..Default::default()
+        };
+
+        let outcome = classify_storage_outcome(&record, &cfg);
+        assert_eq!(outcome, "quarantine_polluted_context");
+        assert_eq!(
+            quality_gate_reason(&record),
+            "hard_gate=machine_marker_in_memory_context"
+        );
     }
 }

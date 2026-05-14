@@ -37,6 +37,7 @@ use crate::inference::{
     compose_import_memory_context, extract_image_semantics, ImageImportSource,
     StructuredMemoryExtraction,
 };
+use crate::memory::reopen::build_reopen_target;
 use crate::memory_compaction::{
     build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
     support_embedding_texts,
@@ -856,20 +857,10 @@ fn pick_semantic_center(
     String::new()
 }
 
-/// Compose the "where / continuation" footer.
-fn build_continuation_footer(
-    reopen_target: Option<&str>,
-    prior_chain: &[crate::storage::SearchResult],
-) -> String {
+/// Compose a human-readable continuity footer.
+fn build_continuation_footer(prior_chain: &[crate::storage::SearchResult]) -> String {
     let mut lines: Vec<String> = Vec::new();
-    if let Some(target) = reopen_target {
-        let trimmed = target.trim();
-        if !trimmed.is_empty() {
-            lines.push(format!("Reopen: {}", trimmed));
-        }
-    }
     if let Some(prev) = prior_chain.first() {
-        let short_id: String = prev.id.chars().take(8).collect();
         let head: String = prev
             .memory_context
             .trim()
@@ -879,64 +870,16 @@ fn build_continuation_footer(
             .chars()
             .take(80)
             .collect();
-        if !short_id.is_empty() {
-            let mut line = format!("Continues from {}", short_id);
-            if !head.trim().is_empty() {
-                line.push_str(": ");
-                line.push_str(head.trim());
-            }
-            lines.push(line);
+        if !head.trim().is_empty() {
+            lines.push(format!(
+                "This continues earlier related work: {}.",
+                head.trim()
+            ));
+        } else {
+            lines.push("This continues earlier related work from the same session.".to_string());
         }
     }
     lines.join("\n")
-}
-
-/// Derive a deterministic reopen target without naming any application.
-/// Priority: explicit url → first file → app://bundle_id deep link.
-fn derive_reopen_target(
-    extraction: Option<&StructuredMemoryExtraction>,
-    url: Option<&str>,
-    bundle_id: Option<&str>,
-    window_title: &str,
-) -> Option<String> {
-    if let Some(u) = url.map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(u.to_string());
-    }
-    if let Some(mem) = extraction {
-        if let Some(first_file) = mem
-            .files_touched
-            .iter()
-            .map(|s| s.trim())
-            .find(|s| !s.is_empty())
-        {
-            return Some(format!("file://{}", first_file));
-        }
-    }
-    if let Some(bundle) = bundle_id.map(str::trim).filter(|s| !s.is_empty()) {
-        let title_param = urlencode_minimal(window_title.trim());
-        if title_param.is_empty() {
-            return Some(format!("app://{}", bundle));
-        }
-        return Some(format!("app://{}?title={}", bundle, title_param));
-    }
-    None
-}
-
-/// Minimal RFC-3986 percent-encoder; only escapes whitespace and a handful of
-/// reserved characters. Sufficient for the synthetic `app://` deep link.
-fn urlencode_minimal(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            ' ' => out.push_str("%20"),
-            '#' => out.push_str("%23"),
-            '?' => out.push_str("%3F"),
-            '&' => out.push_str("%26"),
-            '%' => out.push_str("%25"),
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 /// Pad short contexts with grounded structured fields until at least
@@ -1016,8 +959,8 @@ pub(crate) fn build_durable_memory_context(
     window_title: &str,
     clean_text: &str,
     display_summary: &str,
-    bundle_id: Option<&str>,
-    url: Option<&str>,
+    _bundle_id: Option<&str>,
+    _url: Option<&str>,
     prior_chain: &[crate::storage::SearchResult],
     config: &crate::config::MemoryQualityConfig,
 ) -> String {
@@ -1123,8 +1066,7 @@ pub(crate) fn build_durable_memory_context(
         String::new()
     };
 
-    let reopen_target = derive_reopen_target(extraction, url, bundle_id, window_title);
-    let where_section = build_continuation_footer(reopen_target.as_deref(), prior_chain);
+    let where_section = build_continuation_footer(prior_chain);
 
     let mut sections: Vec<String> = Vec::new();
     if !what_section.trim().is_empty() {
@@ -1544,6 +1486,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 format!("Visited {}", domain)
             };
             let memory_context = format!("URL-only surface capture for {} at {}", domain, snippet);
+            let reopen_target = build_reopen_target(
+                url.as_deref(),
+                None,
+                app_context.bundle_id.as_deref(),
+                &app_name,
+                now.timestamp_millis(),
+            );
             let mut record = MemoryRecord {
                 id: uuid::Uuid::new_v4().to_string(),
                 timestamp: now.timestamp_millis(),
@@ -1586,6 +1535,15 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     "url": url,
                 })
                 .to_string(),
+                reopen_kind: reopen_target.kind,
+                reopen_url: reopen_target.url,
+                reopen_file_path: reopen_target.file_path,
+                reopen_app_bundle_id: reopen_target.app_bundle_id,
+                reopen_app_name: reopen_target.app_name,
+                reopen_app_deep_link: reopen_target.app_deep_link,
+                reopen_captured_at_ms: reopen_target.captured_at_ms,
+                reopen_confidence: reopen_target.confidence,
+                reopen_validation_status: reopen_target.validation_status,
                 schema_version: 2,
                 activity_type: "browsing".to_string(),
                 embedding_text: format!("url: {} | title: {}", domain, snippet),
@@ -2299,6 +2257,20 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &prior_chain,
             &config.memory_quality,
         );
+        let reopen_target = build_reopen_target(
+            url.as_deref(),
+            structured_memory
+                .as_ref()
+                .and_then(|memory| memory.files_touched.first().map(String::as_str)),
+            app_context.bundle_id.as_deref(),
+            &app_name,
+            now.timestamp_millis(),
+        );
+        let related_memory_ids_from_chain = prior_chain
+            .iter()
+            .map(|row| row.id.clone())
+            .take(3)
+            .collect::<Vec<_>>();
 
         // --- Proactive Privacy Check ---
         if Blocklist::is_sensitive_context(url.as_deref(), Some(&window_title)) {
@@ -2646,11 +2618,20 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             related_agents: Vec::new(),
             related_projects: Vec::new(),
             raw_evidence: raw_evidence_payload,
+            reopen_kind: reopen_target.kind,
+            reopen_url: reopen_target.url,
+            reopen_file_path: reopen_target.file_path,
+            reopen_app_bundle_id: reopen_target.app_bundle_id,
+            reopen_app_name: reopen_target.app_name,
+            reopen_app_deep_link: reopen_target.app_deep_link,
+            reopen_captured_at_ms: reopen_target.captured_at_ms,
+            reopen_confidence: reopen_target.confidence,
+            reopen_validation_status: reopen_target.validation_status,
             search_aliases: structured_memory
                 .as_ref()
                 .map(|m| m.search_aliases.clone())
                 .unwrap_or_default(),
-            related_memory_ids: Vec::new(),
+            related_memory_ids: related_memory_ids_from_chain,
             graph_node_ids: Vec::new(),
             graph_edge_ids: Vec::new(),
             project_confidence: 0.0,
@@ -3568,6 +3549,41 @@ pub(crate) async fn merge_memory_records_with_policy(
             &incoming.related_projects,
         ),
         raw_evidence: prefer_non_empty(&incoming.raw_evidence, &existing.raw_evidence),
+        reopen_kind: if incoming.reopen_kind != crate::memory::reopen::ReopenKind::Unknown {
+            incoming.reopen_kind.clone()
+        } else {
+            existing.reopen_kind.clone()
+        },
+        reopen_url: incoming.reopen_url.clone().or(existing.reopen_url.clone()),
+        reopen_file_path: incoming
+            .reopen_file_path
+            .clone()
+            .or(existing.reopen_file_path.clone()),
+        reopen_app_bundle_id: incoming
+            .reopen_app_bundle_id
+            .clone()
+            .or(existing.reopen_app_bundle_id.clone()),
+        reopen_app_name: incoming
+            .reopen_app_name
+            .clone()
+            .or(existing.reopen_app_name.clone()),
+        reopen_app_deep_link: incoming
+            .reopen_app_deep_link
+            .clone()
+            .or(existing.reopen_app_deep_link.clone()),
+        reopen_captured_at_ms: if incoming.reopen_captured_at_ms > 0 {
+            incoming.reopen_captured_at_ms
+        } else {
+            existing.reopen_captured_at_ms
+        },
+        reopen_confidence: existing.reopen_confidence.max(incoming.reopen_confidence),
+        reopen_validation_status: if incoming.reopen_validation_status
+            != crate::memory::reopen::ReopenValidationStatus::Unchecked
+        {
+            incoming.reopen_validation_status.clone()
+        } else {
+            existing.reopen_validation_status.clone()
+        },
         search_aliases: merge_string_lists(&existing.search_aliases, &incoming.search_aliases),
         related_memory_ids: merge_string_lists(
             &existing.related_memory_ids,
@@ -4810,7 +4826,7 @@ mod tests {
     }
 
     #[test]
-    fn durable_memory_context_chains_to_prior_short_id() {
+    fn durable_memory_context_references_prior_work_without_machine_marker() {
         let extraction = StructuredMemoryExtraction {
             user_intent: "Continue refactor".to_string(),
             topic: "alias generation".to_string(),
@@ -4834,14 +4850,19 @@ mod tests {
             &cfg,
         );
         assert!(
-            context.contains("Continues from abcd1234"),
-            "prior short id missing: {}",
+            context.contains("This continues earlier related work"),
+            "continuation footer missing: {}",
+            context
+        );
+        assert!(
+            !context.contains("Continues from "),
+            "machine continuation marker leaked into memory_context: {}",
             context
         );
     }
 
     #[test]
-    fn durable_memory_context_embeds_reopen_target_when_url_present() {
+    fn durable_memory_context_keeps_reopen_marker_out_of_context() {
         let cfg = durable_context_config(160, 1800);
         let context = build_durable_memory_context(
             None,
@@ -4855,8 +4876,8 @@ mod tests {
             &cfg,
         );
         assert!(
-            context.contains("Reopen: https://example.org/path"),
-            "reopen target missing: {}",
+            !context.contains("Reopen:"),
+            "reopen marker leaked into memory_context: {}",
             context
         );
     }

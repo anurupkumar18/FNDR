@@ -19,6 +19,7 @@ use crate::storage::schema::{
     MeetingSession, MemoryRecord, NodeType, PrivacyClass, ProjectContext, SearchResult, Task,
     TaskType,
 };
+use crate::memory::reopen::{ReopenKind, ReopenValidationStatus};
 
 use super::schemas::{
     activity_event_schema, context_delta_schema, context_pack_schema, decision_ledger_schema,
@@ -146,6 +147,30 @@ pub(super) fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, 
     let intent_analysis_refs: Vec<&str> = intent_analysis_json.iter().map(|s| s.as_str()).collect();
     let memory_contexts: Vec<&str> = records.iter().map(|r| r.memory_context.as_str()).collect();
     let raw_evidences: Vec<&str> = records.iter().map(|r| r.raw_evidence.as_str()).collect();
+    let reopen_kinds: Vec<&str> = records.iter().map(|r| r.reopen_kind.as_str()).collect();
+    let reopen_urls: Vec<Option<&str>> = records.iter().map(|r| r.reopen_url.as_deref()).collect();
+    let reopen_file_paths: Vec<Option<&str>> = records
+        .iter()
+        .map(|r| r.reopen_file_path.as_deref())
+        .collect();
+    let reopen_app_bundle_ids: Vec<Option<&str>> = records
+        .iter()
+        .map(|r| r.reopen_app_bundle_id.as_deref())
+        .collect();
+    let reopen_app_names: Vec<Option<&str>> = records
+        .iter()
+        .map(|r| r.reopen_app_name.as_deref())
+        .collect();
+    let reopen_app_deep_links: Vec<Option<&str>> = records
+        .iter()
+        .map(|r| r.reopen_app_deep_link.as_deref())
+        .collect();
+    let reopen_captured_at: Vec<i64> = records.iter().map(|r| r.reopen_captured_at_ms).collect();
+    let reopen_confidences: Vec<f32> = records.iter().map(|r| r.reopen_confidence).collect();
+    let reopen_validation_statuses: Vec<&str> = records
+        .iter()
+        .map(|r| r.reopen_validation_status.as_str())
+        .collect();
     let project_confidences: Vec<f32> = records.iter().map(|r| r.project_confidence).collect();
     let topic_confidences: Vec<f32> = records.iter().map(|r| r.topic_confidence).collect();
     let workflow_confidences: Vec<f32> = records.iter().map(|r| r.workflow_confidence).collect();
@@ -319,6 +344,15 @@ pub(super) fn records_to_batch(records: &[MemoryRecord]) -> Result<RecordBatch, 
             Arc::new(related_agents_array),
             Arc::new(related_projects_array),
             Arc::new(StringArray::from(raw_evidences)),
+            Arc::new(StringArray::from(reopen_kinds)),
+            Arc::new(StringArray::from(reopen_urls)),
+            Arc::new(StringArray::from(reopen_file_paths)),
+            Arc::new(StringArray::from(reopen_app_bundle_ids)),
+            Arc::new(StringArray::from(reopen_app_names)),
+            Arc::new(StringArray::from(reopen_app_deep_links)),
+            Arc::new(Int64Array::from(reopen_captured_at)),
+            Arc::new(Float32Array::from(reopen_confidences)),
+            Arc::new(StringArray::from(reopen_validation_statuses)),
             Arc::new(search_aliases_array),
             Arc::new(related_memory_ids_array),
             Arc::new(graph_node_ids_array),
@@ -431,6 +465,15 @@ pub(super) fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> 
     let related_agents = list_str_col(batch, "related_agents");
     let related_projects = list_str_col(batch, "related_projects");
     let raw_evidence = str_col(batch, "raw_evidence");
+    let reopen_kinds = str_col(batch, "reopen_kind");
+    let reopen_urls = str_col(batch, "reopen_url");
+    let reopen_file_paths = str_col(batch, "reopen_file_path");
+    let reopen_app_bundle_ids = str_col(batch, "reopen_app_bundle_id");
+    let reopen_app_names = str_col(batch, "reopen_app_name");
+    let reopen_app_deep_links = str_col(batch, "reopen_app_deep_link");
+    let reopen_captured_at = i64_col(batch, "reopen_captured_at_ms");
+    let reopen_confidences = f32_col(batch, "reopen_confidence");
+    let reopen_validation_statuses = str_col(batch, "reopen_validation_status");
     let search_aliases = list_str_col(batch, "search_aliases");
     let related_memory_ids = list_str_col(batch, "related_memory_ids");
     let graph_node_ids = list_str_col(batch, "graph_node_ids");
@@ -560,6 +603,18 @@ pub(super) fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> 
                 related_agents: extract_str_list(&related_agents, i),
                 related_projects: extract_str_list(&related_projects, i),
                 raw_evidence: get_str(&raw_evidence, i),
+                reopen_kind: ReopenKind::from_label(&get_str(&reopen_kinds, i)),
+                reopen_url: get_opt_str(&reopen_urls, i),
+                reopen_file_path: get_opt_str(&reopen_file_paths, i),
+                reopen_app_bundle_id: get_opt_str(&reopen_app_bundle_ids, i),
+                reopen_app_name: get_opt_str(&reopen_app_names, i),
+                reopen_app_deep_link: get_opt_str(&reopen_app_deep_links, i),
+                reopen_captured_at_ms: get_i64(&reopen_captured_at, i),
+                reopen_confidence: get_f32(&reopen_confidences, i),
+                reopen_validation_status: ReopenValidationStatus::from_label(&get_str(
+                    &reopen_validation_statuses,
+                    i,
+                )),
                 search_aliases: extract_str_list(&search_aliases, i),
                 related_memory_ids: extract_str_list(&related_memory_ids, i),
                 graph_node_ids: extract_str_list(&graph_node_ids, i),
@@ -655,6 +710,15 @@ pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> 
     let session_keys = str_col(batch, "session_key");
     let lexical_shadows = str_col(batch, "lexical_shadow");
     let memory_contexts = str_col(batch, "memory_context");
+    let reopen_kinds = str_col(batch, "reopen_kind");
+    let reopen_urls = str_col(batch, "reopen_url");
+    let reopen_file_paths = str_col(batch, "reopen_file_path");
+    let reopen_app_bundle_ids = str_col(batch, "reopen_app_bundle_id");
+    let reopen_app_names = str_col(batch, "reopen_app_name");
+    let reopen_app_deep_links = str_col(batch, "reopen_app_deep_link");
+    let reopen_captured_at = i64_col(batch, "reopen_captured_at_ms");
+    let reopen_confidences = f32_col(batch, "reopen_confidence");
+    let reopen_validation_statuses = str_col(batch, "reopen_validation_status");
     let user_intents = str_col(batch, "user_intent");
     let topics = str_col(batch, "topic");
     let workflows = str_col(batch, "workflow");
@@ -743,6 +807,18 @@ pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> 
                         context
                     }
                 },
+                reopen_kind: ReopenKind::from_label(&get_str(&reopen_kinds, i)),
+                reopen_url: get_opt_str(&reopen_urls, i),
+                reopen_file_path: get_opt_str(&reopen_file_paths, i),
+                reopen_app_bundle_id: get_opt_str(&reopen_app_bundle_ids, i),
+                reopen_app_name: get_opt_str(&reopen_app_names, i),
+                reopen_app_deep_link: get_opt_str(&reopen_app_deep_links, i),
+                reopen_captured_at_ms: get_i64(&reopen_captured_at, i),
+                reopen_confidence: get_f32(&reopen_confidences, i),
+                reopen_validation_status: ReopenValidationStatus::from_label(&get_str(
+                    &reopen_validation_statuses,
+                    i,
+                )),
                 user_intent: get_str(&user_intents, i),
                 topic: get_str(&topics, i),
                 workflow: get_str(&workflows, i),

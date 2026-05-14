@@ -598,6 +598,7 @@ fn main() {
             ipc::commands::set_blocklist,
             ipc::commands::delete_all_data,
             ipc::commands::delete_memory,
+            ipc::commands::reopen_memory,
             ipc::commands::get_stats,
             ipc::commands::get_runtime_metrics,
             ipc::commands::get_retention_days,

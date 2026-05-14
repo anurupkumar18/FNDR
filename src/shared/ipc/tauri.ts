@@ -48,8 +48,8 @@ export interface MemoryCard {
     /** Short id of the prior card this one continues from, derived from
      *  the durable memory_context "Continues from <short_id>" marker. */
     continuation_of?: string;
-    /** http(s):// URL, file:// path, or app:// deep-link recovered from
-     *  the durable memory_context "Reopen: …" marker. */
+    /** http(s):// URL, file:// path, or app/deep-link derived from typed
+     *  reopen provenance (legacy marker parsing may still backfill old rows). */
     reopen_target?: string;
     insight_what_happened?: string;
     insight_why_mattered?: string;
@@ -699,6 +699,12 @@ export async function listMemoryCards(
     return invoke<MemoryCard[]>("list_memory_cards", {
         limit,
         appFilter: appFilter?.trim() || null,
+    });
+}
+
+export async function reopenMemory(memoryId: string): Promise<boolean> {
+    return invoke<boolean>("reopen_memory", {
+        memoryId,
     });
 }
 
