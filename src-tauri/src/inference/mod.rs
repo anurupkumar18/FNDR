@@ -22,6 +22,7 @@ use std::sync::{Arc, OnceLock};
 
 mod image_semantics;
 mod vlm;
+pub mod vlm_router;
 
 /// Global shared LlamaBackend singleton.
 /// Both InferenceEngine and VlmEngine must share one backend instance
