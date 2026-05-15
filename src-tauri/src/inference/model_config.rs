@@ -17,7 +17,7 @@ pub const EMBEDDING_MODEL_FILENAME: &str = "embeddinggemma-300m.onnx";
 pub const EMBEDDING_TOKENIZER_FILENAME: &str = "tokenizer.json";
 /// EmbeddingGemma-300M with matryoshka head at 256 dimensions.
 pub const EMBEDDING_DIMENSIONS: usize = 256;
-pub const EMBEDDING_DIMENSIONS_I32: i32 = 256;
+pub const EMBEDDING_DIMENSIONS_I32: i32 = EMBEDDING_DIMENSIONS as i32;
 pub const EMBEDDING_MAX_SEQ_LEN: usize = 512;
 
 pub const MAX_CONCURRENT_MULTIMODAL_JOBS: usize = 1;
