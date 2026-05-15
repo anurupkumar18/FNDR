@@ -22,6 +22,7 @@ use std::sync::{Arc, OnceLock};
 
 mod image_semantics;
 mod vlm;
+pub mod model_config;
 pub mod vlm_router;
 
 /// Global shared LlamaBackend singleton.
@@ -59,8 +60,9 @@ pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, Box<dyn std::error::Er
 }
 pub use image_semantics::{
     build_import_raw_evidence, compose_import_memory_context, extract_image_semantics,
-    insight_from_ocr_only, insight_from_structured, should_include_import_ocr, ImageImportSource,
-    ImageSemanticInsight, ImportMemoryText, ImportOcrStats,
+    insight_from_ocr_only, insight_from_structured, should_include_import_ocr,
+    synthesize_vision_insight, ImageImportSource, ImageSemanticInsight, ImportMemoryText,
+    ImportOcrStats, SynthesizedVisionMemory,
 };
 pub use vlm::VlmEngine;
 
@@ -846,6 +848,67 @@ impl InferenceEngine {
         let candidate = extract_json_object(&raw)?;
         let draft: MemoryCardDraft = serde_json::from_str(&candidate).ok()?;
         validate_memory_card_draft(draft)
+    }
+
+    /// Generate a knowledge-rich significance sentence and enriched search aliases from a
+    /// VLM-produced scene description. Returns a [`SynthesizedVisionMemory`] with empty fields
+    /// when the prompt cannot be built or the model is unavailable.
+    pub async fn synthesize_vision_description(
+        &self,
+        scene_block: &str,
+    ) -> crate::inference::image_semantics::SynthesizedVisionMemory {
+        use crate::inference::image_semantics::SynthesizedVisionMemory;
+
+        if scene_block.trim().is_empty() {
+            return SynthesizedVisionMemory::default();
+        }
+
+        let system_msg = "You write one concise memory significance sentence.\n\
+            RULES:\n\
+            - Output ONLY raw JSON. No markdown.\n\
+            - why_mattered: exactly one sentence (10-30 words) explaining what the user documented.\n\
+            - enriched_aliases: array of 3-8 short search terms someone might use to find this memory.\n\
+            - Never invent details not present in the scene description.\n\
+            - Start with first-person perspective: 'You attended...', 'You captured...', 'You visited...'.\n\
+            SCHEMA: {\"why_mattered\": \"\", \"enriched_aliases\": []}";
+
+        let prompt = match self.build_prompt(
+            system_msg,
+            &format!("SCENE:\n{scene_block}\n\nReturn JSON only."),
+        ) {
+            Ok(p) => p,
+            Err(_) => return SynthesizedVisionMemory::default(),
+        };
+
+        let raw = self.complete(&prompt, 120).await;
+        let candidate = match extract_json_object(&raw) {
+            Some(c) => c,
+            None => return SynthesizedVisionMemory::default(),
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&candidate) else {
+            return SynthesizedVisionMemory::default();
+        };
+        let why_mattered = v
+            .get("why_mattered")
+            .and_then(|s| s.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("")
+            .to_string();
+        let enriched_aliases = v
+            .get("enriched_aliases")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|e| e.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        SynthesizedVisionMemory {
+            why_mattered,
+            enriched_aliases,
+        }
     }
 
     /// Extract actionable todos/reminders from memory text.
