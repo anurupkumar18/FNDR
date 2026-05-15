@@ -1,10 +1,11 @@
+/// Decision produced by [`should_run_vlm`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum VlmRouteDecision {
     SkipDuplicate,
     SkipGoodOcr,
     SkipLowValue,
-    RunLightweightVlm,
-    RunHeavyVlmExplicitOnly,
+    /// Run Qwen3-VL-2B for this frame.
+    RunQwenVlm,
     FallbackOcrOnly { reason: String },
 }
 
@@ -14,8 +15,7 @@ impl VlmRouteDecision {
             Self::SkipDuplicate => "skip_duplicate",
             Self::SkipGoodOcr => "skip_good_ocr",
             Self::SkipLowValue => "skip_low_value",
-            Self::RunLightweightVlm => "run_lightweight_vlm",
-            Self::RunHeavyVlmExplicitOnly => "run_heavy_vlm_explicit",
+            Self::RunQwenVlm => "run_qwen_vlm",
             Self::FallbackOcrOnly { .. } => "fallback_ocr_only",
         }
     }
@@ -28,10 +28,7 @@ impl VlmRouteDecision {
     }
 
     pub fn runs_pixel_vlm(&self) -> bool {
-        matches!(
-            self,
-            Self::RunLightweightVlm | Self::RunHeavyVlmExplicitOnly
-        )
+        matches!(self, Self::RunQwenVlm)
     }
 }
 
@@ -42,71 +39,60 @@ pub struct VlmRouteInput<'a> {
     pub visual_signal: bool,
     pub is_duplicate: bool,
     pub system_pressure_skip: bool,
-    pub host_supports_vlm: bool,
+    /// Host has ≥ 8 GB RAM — safe to run Qwen3-VL-2B (~3.5 GB usage).
+    pub host_supports_qwen_vlm: bool,
     pub vlm_enabled: bool,
-    pub vlm_model_id: Option<&'a str>,
     pub vlm_available: bool,
     pub vlm_calls_remaining: u32,
     pub vlm_timeout_secs: u64,
+    // Phantom lifetime to allow callers that pass &str fields without needing
+    // to restructure call sites.
+    pub _phantom: std::marker::PhantomData<&'a ()>,
 }
 
 pub fn should_run_vlm(input: &VlmRouteInput) -> VlmRouteDecision {
     if input.is_duplicate {
         return VlmRouteDecision::SkipDuplicate;
     }
-
     if !input.vlm_enabled {
         return VlmRouteDecision::FallbackOcrOnly {
             reason: "vlm_disabled".to_string(),
         };
     }
-
-    if !input.host_supports_vlm {
+    if !input.host_supports_qwen_vlm {
         return VlmRouteDecision::FallbackOcrOnly {
             reason: "vlm_blocked_low_ram".to_string(),
         };
     }
-
     if input.system_pressure_skip {
         return VlmRouteDecision::FallbackOcrOnly {
             reason: "system_pressure".to_string(),
         };
     }
-
     // Good OCR: VLM adds diminishing returns when text is rich.
     if input.ocr_text_len >= 300 && input.ocr_block_count >= 10 && input.ocr_confidence >= 0.40 {
         return VlmRouteDecision::SkipGoodOcr;
     }
-
     // Low value: almost nothing to analyze visually.
     if !input.visual_signal && input.ocr_text_len < 60 && input.ocr_block_count < 3 {
         return VlmRouteDecision::SkipLowValue;
     }
-
     if input.vlm_timeout_secs == 0 {
         return VlmRouteDecision::FallbackOcrOnly {
             reason: "vlm_timeout_disabled".to_string(),
         };
     }
-
     if input.vlm_calls_remaining == 0 {
         return VlmRouteDecision::FallbackOcrOnly {
             reason: "vlm_rate_limited".to_string(),
         };
     }
-
     if !input.vlm_available {
         return VlmRouteDecision::FallbackOcrOnly {
             reason: "vlm_unavailable".to_string(),
         };
     }
-
-    // Heavy VLM (Qwen3-VL 4B) only when explicitly requested — never default.
-    if matches!(input.vlm_model_id, Some("qwen3-vl-4b")) {
-        return VlmRouteDecision::RunHeavyVlmExplicitOnly;
-    }
-
-    VlmRouteDecision::RunLightweightVlm
+    VlmRouteDecision::RunQwenVlm
 }
 
 #[cfg(test)]
@@ -121,12 +107,12 @@ mod tests {
             visual_signal: true,
             is_duplicate: false,
             system_pressure_skip: false,
-            host_supports_vlm: true,
+            host_supports_qwen_vlm: true,
             vlm_enabled: true,
-            vlm_model_id: Some("smolvlm-500m"),
             vlm_available: true,
             vlm_calls_remaining: 10,
             vlm_timeout_secs: 30,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -156,9 +142,9 @@ mod tests {
     }
 
     #[test]
-    fn fallback_low_ram_before_model_load() {
+    fn fallback_low_ram() {
         let mut inp = base_input();
-        inp.host_supports_vlm = false;
+        inp.host_supports_qwen_vlm = false;
         assert_eq!(
             should_run_vlm(&inp),
             VlmRouteDecision::FallbackOcrOnly {
@@ -168,40 +154,22 @@ mod tests {
     }
 
     #[test]
+    fn run_qwen_for_weak_ocr_frame() {
+        assert_eq!(should_run_vlm(&base_input()), VlmRouteDecision::RunQwenVlm);
+    }
+
+    #[test]
     fn fallback_system_pressure() {
         let mut inp = base_input();
         inp.system_pressure_skip = true;
-        assert!(matches!(
-            should_run_vlm(&inp),
-            VlmRouteDecision::FallbackOcrOnly { .. }
-        ));
+        assert!(matches!(should_run_vlm(&inp), VlmRouteDecision::FallbackOcrOnly { .. }));
     }
 
     #[test]
     fn fallback_vlm_disabled() {
         let mut inp = base_input();
         inp.vlm_enabled = false;
-        assert!(matches!(
-            should_run_vlm(&inp),
-            VlmRouteDecision::FallbackOcrOnly { .. }
-        ));
-    }
-
-    #[test]
-    fn run_lightweight_vlm_for_weak_ocr_frame() {
-        let inp = base_input();
-        assert_eq!(should_run_vlm(&inp), VlmRouteDecision::RunLightweightVlm);
-    }
-
-    #[test]
-    fn heavy_vlm_only_when_explicitly_qwen() {
-        let mut inp = base_input();
-        inp.vlm_model_id = Some("qwen3-vl-4b");
-        inp.ocr_text_len = 50;
-        assert_eq!(
-            should_run_vlm(&inp),
-            VlmRouteDecision::RunHeavyVlmExplicitOnly
-        );
+        assert!(matches!(should_run_vlm(&inp), VlmRouteDecision::FallbackOcrOnly { .. }));
     }
 
     #[test]
@@ -210,21 +178,7 @@ mod tests {
         inp.vlm_calls_remaining = 0;
         assert_eq!(
             should_run_vlm(&inp),
-            VlmRouteDecision::FallbackOcrOnly {
-                reason: "vlm_rate_limited".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn fallback_when_timeout_disabled() {
-        let mut inp = base_input();
-        inp.vlm_timeout_secs = 0;
-        assert_eq!(
-            should_run_vlm(&inp),
-            VlmRouteDecision::FallbackOcrOnly {
-                reason: "vlm_timeout_disabled".to_string()
-            }
+            VlmRouteDecision::FallbackOcrOnly { reason: "vlm_rate_limited".to_string() }
         );
     }
 
@@ -234,9 +188,7 @@ mod tests {
         inp.vlm_available = false;
         assert_eq!(
             should_run_vlm(&inp),
-            VlmRouteDecision::FallbackOcrOnly {
-                reason: "vlm_unavailable".to_string()
-            }
+            VlmRouteDecision::FallbackOcrOnly { reason: "vlm_unavailable".to_string() }
         );
     }
 }

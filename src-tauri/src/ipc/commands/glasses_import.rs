@@ -35,8 +35,7 @@ fn route_label(decision: &VlmRouteDecision) -> &'static str {
         VlmRouteDecision::SkipDuplicate => "skip_duplicate",
         VlmRouteDecision::SkipGoodOcr => "skip_good_ocr",
         VlmRouteDecision::SkipLowValue => "skip_low_value",
-        VlmRouteDecision::RunLightweightVlm => "run_lightweight_vlm",
-        VlmRouteDecision::RunHeavyVlmExplicitOnly => "run_heavy_vlm_explicit",
+        VlmRouteDecision::RunQwenVlm => "run_qwen_vlm",
         VlmRouteDecision::FallbackOcrOnly { .. } => "fallback_ocr_only",
     }
 }
@@ -50,9 +49,7 @@ fn fallback_reason(decision: &VlmRouteDecision) -> Option<&str> {
 
 fn route_import_pixel_vlm(
     config: &crate::config::Config,
-    model_id: Option<&str>,
-    host_supports_lightweight_vlm: bool,
-    host_supports_heavy_vlm: bool,
+    host_supports_qwen_vlm: bool,
     pressure_skip: bool,
     vlm_available: bool,
     calls_remaining: u32,
@@ -64,13 +61,12 @@ fn route_import_pixel_vlm(
         visual_signal: true,
         is_duplicate: false,
         system_pressure_skip: pressure_skip,
-        host_supports_lightweight_vlm,
-        host_supports_heavy_vlm,
+        host_supports_qwen_vlm,
         vlm_enabled: config.use_vlm,
-        vlm_model_id: model_id,
         vlm_available,
         vlm_calls_remaining: calls_remaining,
         vlm_timeout_secs: config.vlm_timeout_secs,
+        _phantom: std::marker::PhantomData,
     })
 }
 
@@ -182,31 +178,24 @@ pub async fn import_meta_glasses_photo(
 
     let config = state.config.read().clone();
     let model_id = models::configured_vlm_model_id(&config);
-    let host_supports_lightweight_vlm =
+    let host_supports_qwen_vlm =
         crate::telemetry::system_metrics::host_supports_lightweight_vlm();
-    let host_supports_heavy_vlm = crate::telemetry::system_metrics::host_supports_vlm();
     let vlm_available =
         models::pixel_vlm_available(model_id.as_deref(), Some(app_data_dir.as_path()));
 
-    // System-pressure and host-size throttle: when even the lightweight VLM
-    // cannot safely run on this host, skip MTMD and use OCR-grounded fallback.
-    // 8 GB machines can run SmolVLM 500M; Qwen3-VL 4B requires ≥ 12 GB.
+    // System-pressure and host-size throttle: when the host cannot safely run
+    // Qwen3-VL-2B, skip MTMD and use OCR-grounded fallback.
     let (skip_vlm, skip_reason) =
         crate::telemetry::system_metrics::pressure_recommends_skipping_heavy_models();
     let vlm_route = route_import_pixel_vlm(
         &config,
-        model_id.as_deref(),
-        host_supports_lightweight_vlm,
-        host_supports_heavy_vlm,
+        host_supports_qwen_vlm,
         skip_vlm,
         vlm_available,
         config.vlm_max_calls_per_minute,
     );
 
-    let vision = if matches!(
-        vlm_route,
-        VlmRouteDecision::RunLightweightVlm | VlmRouteDecision::RunHeavyVlmExplicitOnly
-    ) {
+    let vision = if matches!(vlm_route, VlmRouteDecision::RunQwenVlm) {
         extract_image_semantics(
             file_bytes.clone(),
             filename.as_str(),
@@ -362,7 +351,7 @@ pub async fn import_meta_glasses_photo(
         serde_json::from_str(&raw_evidence_base).unwrap_or_else(|_| json!({}));
     raw_evidence_json["vlm_route"] = json!(route_label(&vlm_route));
     raw_evidence_json["vlm_block_reason"] = json!(fallback_reason(&vlm_route));
-    raw_evidence_json["host_supports_vlm"] = json!(host_supports_lightweight_vlm);
+    raw_evidence_json["host_supports_vlm"] = json!(host_supports_qwen_vlm);
     raw_evidence_json["pressure_reason"] = json!(skip_reason);
     raw_evidence_json["clip_embedding_status"] =
         json!(if image_embedding.iter().all(|v| *v == 0.0) {
@@ -380,7 +369,7 @@ pub async fn import_meta_glasses_photo(
         "ocr_rejected_reason": ocr_rejected_reason,
         "vlm_route": route_label(&vlm_route),
         "vlm_block_reason": fallback_reason(&vlm_route),
-        "host_supports_vlm": host_supports_lightweight_vlm,
+        "host_supports_vlm": host_supports_qwen_vlm,
         "pressure_reason": skip_reason,
     })
     .to_string();
@@ -476,12 +465,10 @@ mod tests {
         config.vlm_max_calls_per_minute = 10;
         config.vlm_timeout_secs = 30;
 
-        // Neither lightweight nor heavy VLM supported (< 8 GB host)
+        // Host below Qwen3-VL-2B RAM floor
         let decision = route_import_pixel_vlm(
             &config,
-            Some("smolvlm-500m"),
-            false, // host_supports_lightweight_vlm
-            false, // host_supports_heavy_vlm
+            false, // host_supports_qwen_vlm
             false,
             true,
             config.vlm_max_calls_per_minute,
@@ -496,24 +483,21 @@ mod tests {
     }
 
     #[test]
-    fn import_pixel_vlm_route_allows_lightweight_on_eight_gb_host() {
+    fn import_pixel_vlm_route_runs_qwen_on_supported_host() {
         let mut config = crate::config::Config::default().normalized();
         config.use_vlm = true;
         config.vlm_max_calls_per_minute = 10;
         config.vlm_timeout_secs = 30;
 
-        // 8 GB host: lightweight OK, heavy blocked
         let decision = route_import_pixel_vlm(
             &config,
-            Some("smolvlm-500m"),
-            true,  // host_supports_lightweight_vlm
-            false, // host_supports_heavy_vlm
+            true,  // host_supports_qwen_vlm
             false,
             true,
             config.vlm_max_calls_per_minute,
         );
 
-        assert_eq!(decision, VlmRouteDecision::RunLightweightVlm);
+        assert_eq!(decision, VlmRouteDecision::RunQwenVlm);
     }
 
     #[test]
@@ -523,9 +507,7 @@ mod tests {
 
         let decision = route_import_pixel_vlm(
             &config,
-            Some("smolvlm-500m"),
-            true, // host_supports_lightweight_vlm
-            true, // host_supports_heavy_vlm
+            true, // host_supports_qwen_vlm
             false,
             true,
             config.vlm_max_calls_per_minute,

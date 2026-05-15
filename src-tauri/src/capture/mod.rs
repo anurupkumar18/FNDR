@@ -194,7 +194,7 @@ fn capture_pixel_vlm_route(
     visual_signal: bool,
     is_duplicate: bool,
     system_pressure_skip: bool,
-    host_supports_vlm: bool,
+    host_supports_qwen_vlm: bool,
     calls_remaining: u32,
 ) -> VlmRouteDecision {
     let model_id = models::configured_vlm_model_id(config);
@@ -206,12 +206,12 @@ fn capture_pixel_vlm_route(
         visual_signal,
         is_duplicate,
         system_pressure_skip,
-        host_supports_vlm,
+        host_supports_qwen_vlm,
         vlm_enabled: config.use_vlm,
-        vlm_model_id: model_id.as_deref(),
         vlm_available,
         vlm_calls_remaining: calls_remaining,
         vlm_timeout_secs: config.vlm_timeout_secs,
+        _phantom: std::marker::PhantomData,
     })
 }
 
@@ -290,7 +290,8 @@ async fn compose_visual_capture_record(
     // machines below the VLM RAM floor, skip MTMD and fall back to the
     // OCR/window grounded path.
     let config = state.config.read().clone();
-    let host_supports_vlm = crate::telemetry::system_metrics::host_supports_vlm();
+    let host_supports_qwen_vlm =
+        crate::telemetry::system_metrics::host_supports_lightweight_vlm();
     let (skip_vlm, skip_reason) =
         crate::telemetry::system_metrics::pressure_recommends_skipping_heavy_models();
     let vlm_route = capture_pixel_vlm_route(
@@ -302,7 +303,7 @@ async fn compose_visual_capture_record(
         true,
         false,
         skip_vlm,
-        host_supports_vlm,
+        host_supports_qwen_vlm,
         config.vlm_max_calls_per_minute,
     );
 
@@ -443,7 +444,7 @@ async fn compose_visual_capture_record(
         "visual_admission_novelty": novelty,
         "vlm_route": vlm_route.label(),
         "vlm_block_reason": vlm_route.fallback_reason(),
-        "host_supports_vlm": host_supports_vlm,
+        "host_supports_vlm": host_supports_qwen_vlm,
         "pressure_reason": skip_reason,
         "app_name": app_name,
         "window_title": window_title,
@@ -2936,7 +2937,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 }
             }
         };
-        let host_supports_vlm = crate::telemetry::system_metrics::host_supports_vlm();
+        let host_supports_qwen_vlm =
+            crate::telemetry::system_metrics::host_supports_lightweight_vlm();
         let (vlm_pressure_skip, vlm_pressure_reason) =
             crate::telemetry::system_metrics::pressure_recommends_skipping_heavy_models();
         let text_capture_vlm_route = capture_pixel_vlm_route(
@@ -2948,7 +2950,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             clip_embedding_status == "ok",
             false,
             vlm_pressure_skip,
-            host_supports_vlm,
+            host_supports_qwen_vlm,
             config.vlm_max_calls_per_minute,
         );
 
@@ -3059,7 +3061,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 .unwrap_or_else(|| json!([])),
             "vlm_route": text_capture_vlm_route.label(),
             "vlm_block_reason": text_capture_vlm_route.fallback_reason(),
-            "host_supports_vlm": host_supports_vlm,
+            "host_supports_vlm": host_supports_qwen_vlm,
             "pressure_reason": vlm_pressure_reason,
             "clip_embedding_status": clip_embedding_status,
             "extraction_grounding_confidence": extraction_grounding_confidence,
