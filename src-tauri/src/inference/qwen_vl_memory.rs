@@ -151,7 +151,10 @@ pub fn build_user_prompt(input: &MemorySynthesisInput) -> String {
 pub fn parse_synthesis_json(raw: &str) -> Result<MemorySynthesisOutput, String> {
     let trimmed = strip_markdown_fence(raw);
     let slice = extract_json_object(&trimmed)
-        .ok_or_else(|| format!("no JSON object in output: {}", &trimmed[..trimmed.len().min(200)]))?;
+        .ok_or_else(|| {
+            let preview: String = trimmed.chars().take(200).collect();
+            format!("no JSON object in output: {preview}")
+        })?;
     let row: SynthesisJsonRow = serde_json::from_str(slice)
         .map_err(|e| format!("JSON parse: {e}"))?;
     if row.memory_context.trim().is_empty() {
