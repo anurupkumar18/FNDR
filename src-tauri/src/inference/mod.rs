@@ -23,6 +23,7 @@ use std::sync::{Arc, OnceLock};
 mod image_semantics;
 mod vlm;
 pub mod model_config;
+pub mod qwen_vl_memory;
 pub mod vlm_router;
 
 /// Global shared LlamaBackend singleton.
