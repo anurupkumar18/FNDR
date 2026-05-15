@@ -142,13 +142,103 @@ pub fn pressure_recommends_skipping_heavy_models() -> (bool, &'static str) {
     if snap.host_memory.pressure_label == "high" {
         return (true, "host_memory_high");
     }
+    if snap.host_memory.pressure_label == "moderate" {
+        // On moderate pressure we still skip the VLM — better a degraded
+        // fallback than a swap-thrash freeze. The LLM path uses spawn_blocking
+        // and is fine; only the heaviest model is gated here.
+        return (true, "host_memory_moderate");
+    }
     if snap.process_cpu.cpu_percent > 380.0 {
         return (true, "process_cpu_saturated");
     }
-    if snap.process_memory.phys_footprint_bytes > 6 * 1024 * 1024 * 1024 {
-        return (true, "process_footprint_over_6gib");
+    // FNDR process holding more than 3 GiB resident is the bound that
+    // matters on 8 GB Macs. The earlier 6 GiB threshold could only ever fire
+    // AFTER a freeze; this catches it before.
+    if snap.process_memory.phys_footprint_bytes > 3 * 1024 * 1024 * 1024 {
+        return (true, "process_footprint_over_3gib");
     }
     (false, "ok")
+}
+
+/// Compute the human-readable pressure label from the two raw signals we
+/// trust on macOS:
+///   * `available_bytes` = free + inactive + speculative (the evictable pool)
+///   * `compressor_bytes` = pages compressed by the kernel (the *real*
+///     pressure indicator — Activity Monitor reads this same counter)
+///
+/// Two independent OR'd gates. Either flips the label up:
+///   - `available_ratio < 10 %`   → "high"  (acute pool exhaustion)
+///   - `compressor_ratio > 25 %`  → "high"  (kernel is hard-pressed; next
+///                                 large allocation goes to disk swap)
+///   - `available_ratio < 20 %`   → "moderate"
+///   - `compressor_ratio > 15 %`  → "moderate"
+///   - otherwise                   → "low"
+///
+/// The compressor gate is what catches the 8 GB Mac case. The earlier
+/// heuristic ignored the compressor entirely and reported "low" while the
+/// kernel was already burning CPU to delay swap.
+pub fn compute_pressure_label(
+    available_bytes: u64,
+    compressor_bytes: u64,
+    total_bytes: u64,
+) -> &'static str {
+    if total_bytes == 0 {
+        return "low";
+    }
+    let total = total_bytes as f32;
+    let available_ratio = available_bytes as f32 / total;
+    let compressor_ratio = compressor_bytes as f32 / total;
+    if available_ratio < 0.10 || compressor_ratio > 0.25 {
+        "high"
+    } else if available_ratio < 0.20 || compressor_ratio > 0.15 {
+        "moderate"
+    } else {
+        "low"
+    }
+}
+
+/// Hard safety floor: on systems with less RAM than this, the VLM (Qwen3-VL
+/// 4B at ~2.6 GB working set) cannot coexist with the LLM + everything else
+/// without thrashing. Used by the capture path to refuse to load the VLM at
+/// all on memory-constrained machines, independent of the runtime pressure
+/// gate (which only sees the moment, not the structural shortage).
+pub const VLM_SAFE_MIN_HOST_RAM_BYTES: u64 = 12 * 1024 * 1024 * 1024;
+
+/// Returns total host physical memory in bytes. Reads once and caches.
+pub fn host_total_ram_bytes() -> u64 {
+    static CACHED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        let snap = latest_snapshot();
+        if snap.host_memory.total_bytes > 0 {
+            return snap.host_memory.total_bytes;
+        }
+        // Fallback before the sampler has run: read directly via sysctl.
+        #[cfg(target_os = "macos")]
+        unsafe {
+            let mut mem: u64 = 0;
+            let mut size = std::mem::size_of::<u64>();
+            let mib = [libc::CTL_HW, libc::HW_MEMSIZE];
+            if libc::sysctl(
+                mib.as_ptr() as *mut _,
+                mib.len() as u32,
+                &mut mem as *mut _ as *mut _,
+                &mut size as *mut _ as *mut _,
+                std::ptr::null_mut(),
+                0,
+            ) == 0
+            {
+                return mem;
+            }
+        }
+        // Conservative default if we can't read: assume 8 GB.
+        8 * 1024 * 1024 * 1024
+    })
+}
+
+/// Returns true if this host has enough RAM to safely run the VLM alongside
+/// the LLM and the rest of FNDR.
+pub fn host_supports_vlm() -> bool {
+    host_total_ram_bytes() >= VLM_SAFE_MIN_HOST_RAM_BYTES
 }
 
 /// Refresh the snapshot once. Intended for the background sampler task; also
@@ -564,39 +654,36 @@ mod imp {
         let active = (s.active_count as u64) * page_size;
         let inactive = (s.inactive_count as u64) * page_size;
         let wired = (s.wire_count as u64) * page_size;
-        // vm_statistics64 has additional compressor fields beyond the libc
-        // struct above; the conservative "compressed" estimate uses
-        // speculative + purgeable as a proxy when compressor counters are
-        // not exposed by the libc binding.
-        let compressed = (s.speculative_count as u64 + s.purgeable_count as u64) * page_size;
-        let total = free + active + inactive + wired + compressed;
+        // The macOS memory compressor is the kernel's FIRST line of defense
+        // before disk-swap. `compressor_page_count` is the real pressure
+        // indicator on Apple Silicon — Activity Monitor reads the same field.
+        // Heavy compressor use means the kernel is already trading CPU for RAM
+        // to delay swap, and adding a 2.6 GB VLM on top will tip into swap-thrash.
+        let compressor_bytes = (s.compressor_page_count as u64) * page_size;
+        // Keep the speculative+purgeable estimate available for the snapshot
+        // (UI continues to render "compressed" as the volatile reclaim pool).
+        let compressed = (s.speculative_count as u64 + s.purgeable_count as u64) * page_size
+            + compressor_bytes;
+        // Total physical = active + wired + inactive + free + compressor.
+        // (Speculative + purgeable are subsets of inactive/free in practice.)
+        let total = free + active + inactive + wired + compressor_bytes;
 
-        // macOS pressure ≠ "free RAM is low". The kernel deliberately drives
-        // free toward 0 (free is wasted RAM) and serves allocations from
-        // inactive/speculative. Activity Monitor's pressure indicator is a
-        // function of compressor activity and swap, not raw free.
+        // Real-world pressure on macOS is dominated by compressor saturation,
+        // not raw "free". The kernel deliberately drives free toward 0 and
+        // serves allocations from inactive/speculative. The first signal the
+        // user actually feels (fan spin, slow scroll, beachballs) is the
+        // compressor working hard to delay swap.
         //
-        // Heuristic that matches reality for our gate:
-        //   * `available = free + inactive + speculative` is the truly
-        //     evictable pool; pressure rises as it shrinks.
-        //   * "high" only when available drops below 10% of total RAM.
-        //   * "moderate" between 10% and 20%.
-        // This way loading Llama (~770 MB resident) does not flip the gate
-        // on its own — only sustained, machine-wide pressure does.
+        // Two independent gates — either flips the label to "high":
+        //   1) classic available-pool gate (free + inactive + speculative)
+        //      < 10% of total → "high". This catches the rare case of an
+        //      uncompressible allocation burst.
+        //   2) compressor-saturation gate: compressor > 25% of total RAM →
+        //      "high". This is what would have caught the freeze on the 8 GB
+        //      Mac — the compressor was at ~32% before the VLM piled on.
         let available = free + inactive + ((s.speculative_count as u64) * page_size);
-        let available_ratio = if total == 0 {
-            1.0
-        } else {
-            available as f32 / total as f32
-        };
-        let pressure_label = if available_ratio < 0.10 {
-            "high"
-        } else if available_ratio < 0.20 {
-            "moderate"
-        } else {
-            "low"
-        }
-        .to_string();
+        let pressure_label =
+            super::compute_pressure_label(available, compressor_bytes, total).to_string();
 
         HostMemorySnapshot {
             page_size_bytes: page_size,
@@ -826,12 +913,83 @@ mod tests {
             assert!(
                 matches!(
                     reason,
-                    "host_memory_high" | "process_cpu_saturated" | "process_footprint_over_6gib"
+                    "host_memory_high"
+                        | "host_memory_moderate"
+                        | "process_cpu_saturated"
+                        | "process_footprint_over_3gib"
                 ),
                 "unexpected pressure reason: {reason}"
             );
         } else {
             assert_eq!(reason, "ok");
+        }
+    }
+
+    #[test]
+    fn compute_pressure_label_returns_high_when_compressor_saturated() {
+        // 8 GB total, compressor holding 2.6 GB (~32%), available pool 3 GB (37%).
+        // Old heuristic looked only at available and would have returned "low".
+        // New heuristic must catch this and return "high".
+        let total = 8u64 * 1024 * 1024 * 1024;
+        let available = 3u64 * 1024 * 1024 * 1024;
+        let compressor = 2_600u64 * 1024 * 1024;
+        assert_eq!(compute_pressure_label(available, compressor, total), "high");
+    }
+
+    #[test]
+    fn compute_pressure_label_returns_moderate_at_compressor_15_percent() {
+        let total = 8u64 * 1024 * 1024 * 1024;
+        let available = 3u64 * 1024 * 1024 * 1024;
+        let compressor = (total as f32 * 0.16) as u64;
+        assert_eq!(
+            compute_pressure_label(available, compressor, total),
+            "moderate"
+        );
+    }
+
+    #[test]
+    fn compute_pressure_label_returns_high_when_available_under_10_percent() {
+        let total = 8u64 * 1024 * 1024 * 1024;
+        let available = (total as f32 * 0.05) as u64;
+        let compressor = 0;
+        assert_eq!(compute_pressure_label(available, compressor, total), "high");
+    }
+
+    #[test]
+    fn compute_pressure_label_low_when_both_signals_calm() {
+        let total = 16u64 * 1024 * 1024 * 1024;
+        let available = 8u64 * 1024 * 1024 * 1024;
+        let compressor = 1u64 * 1024 * 1024 * 1024;
+        assert_eq!(compute_pressure_label(available, compressor, total), "low");
+    }
+
+    #[test]
+    fn compute_pressure_label_handles_zero_total_safely() {
+        assert_eq!(compute_pressure_label(0, 0, 0), "low");
+    }
+
+    #[test]
+    fn host_total_ram_bytes_returns_nonzero() {
+        let bytes = host_total_ram_bytes();
+        assert!(bytes > 0, "should always read some RAM size on real hosts");
+        assert!(
+            bytes >= 2 * 1024 * 1024 * 1024,
+            "any real Mac has >= 2 GB; got {bytes}"
+        );
+    }
+
+    #[test]
+    fn vlm_safe_min_is_twelve_gib() {
+        assert_eq!(VLM_SAFE_MIN_HOST_RAM_BYTES, 12 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn host_supports_vlm_matches_threshold() {
+        let supports = host_supports_vlm();
+        if host_total_ram_bytes() < VLM_SAFE_MIN_HOST_RAM_BYTES {
+            assert!(!supports, "must refuse VLM on small-RAM hosts");
+        } else {
+            assert!(supports, "must allow VLM on large-RAM hosts");
         }
     }
 }
