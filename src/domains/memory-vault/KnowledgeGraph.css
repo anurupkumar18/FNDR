@@ -1,16 +1,268 @@
-.knowledge-graph-wrap {
+.knowledge-graph-shell {
     width: 100%;
-    border-radius: 10px;
-    border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-    background: color-mix(in srgb, currentColor 4%, transparent);
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 0;
+    border-radius: var(--film-radius-lg);
+    border: 1px solid var(--cp-border);
+    background: radial-gradient(
+        ellipse at 50% 40%,
+        var(--cp-surface) 0%,
+        var(--cp-bg) 60%,
+        color-mix(in srgb, var(--cp-bg) 70%, #000) 100%
+    );
+    overflow: hidden;
+    position: relative;
+    isolation: isolate;
+}
+.knowledge-graph-shell-bare {
+    grid-template-columns: 1fr;
+}
+.knowledge-graph-shell[data-empty="true"] .knowledge-graph-canvas-wrap {
+    background: transparent;
+}
+
+.knowledge-graph-canvas-wrap {
+    position: relative;
     overflow: hidden;
 }
 
+.kg-canvas {
+    display: block;
+    cursor: grab;
+    width: 100%;
+    height: 100%;
+}
+.kg-canvas:active {
+    cursor: grabbing;
+}
+
+.kg-empty {
+    font: 400 14px/1.4 var(--film-font-body);
+    fill: var(--cp-text-secondary);
+    font-style: italic;
+}
+
+/* Nodes */
+.kg-node {
+    transition: opacity var(--film-dur-hover) var(--film-ease-shutter);
+}
+.kg-node-halo {
+    fill: var(--cp-accent);
+    opacity: 0;
+    transition: opacity var(--film-dur-hover) var(--film-ease-shutter);
+}
+.kg-node-core {
+    stroke: var(--cp-border-strong);
+    stroke-width: 0.6;
+    transition: stroke var(--film-dur-hover) var(--film-ease-shutter),
+        stroke-width var(--film-dur-hover) var(--film-ease-shutter);
+}
+
+.kg-node[data-state="hovered"] .kg-node-halo,
+.kg-node[data-state="selected"] .kg-node-halo {
+    opacity: 0.22;
+}
+.kg-node[data-state="hovered"] .kg-node-core,
+.kg-node[data-state="selected"] .kg-node-core {
+    stroke: var(--cp-accent);
+    stroke-width: 1.4;
+}
+.kg-node[data-state="selected"] .kg-node-halo {
+    opacity: 0.32;
+}
+.kg-node[data-state="dimmed"] {
+    opacity: 0.18;
+}
+.kg-node-path .kg-node-core {
+    stroke: #fbbf24;
+    stroke-width: 1.8;
+}
+.kg-node-hub .kg-node-core {
+    stroke: var(--cp-accent);
+    stroke-width: 2;
+}
+
+/* Edges */
+.kg-edge {
+    stroke: var(--cp-border);
+    opacity: 0.45;
+    transition: opacity var(--film-dur-hover) var(--film-ease-shutter),
+        stroke var(--film-dur-hover) var(--film-ease-shutter);
+}
+.kg-edge-semantic {
+    stroke-dasharray: 4 3;
+}
+.kg-edge-reference {
+    stroke-dasharray: 1 3;
+}
+.kg-edge-conflict {
+    stroke: var(--cp-accent);
+    stroke-dasharray: 6 2 1 2;
+}
+.kg-edge[data-state="dimmed"] {
+    opacity: 0.12;
+}
+.kg-edge[data-state="active"] {
+    stroke: var(--cp-accent);
+    opacity: 0.95;
+    filter: drop-shadow(0 0 4px color-mix(in srgb, var(--cp-accent) 50%, transparent));
+}
+
+/* Side panel */
+.kg-side-panel {
+    background: color-mix(in srgb, var(--cp-bg) 60%, transparent);
+    backdrop-filter: blur(24px) saturate(120%);
+    -webkit-backdrop-filter: blur(24px) saturate(120%);
+    border-left: 1px solid var(--cp-border);
+    padding: 24px 22px;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 0;
+    color: var(--cp-text-primary);
+    font-family: var(--film-font-body);
+}
+.kg-side-panel-empty-text {
+    color: var(--cp-text-secondary);
+    font-style: italic;
+    font-family: var(--film-font-body);
+}
+.kg-side-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.kg-stamp {
+    font: 600 9px/1 var(--film-font-mono);
+    letter-spacing: var(--film-track-stamp);
+    text-transform: uppercase;
+    padding: 5px 9px;
+    border: 1px solid var(--cp-accent);
+    color: var(--cp-accent);
+    border-radius: var(--film-radius-xs);
+    display: inline-block;
+    transform: rotate(-1deg);
+}
+.kg-side-panel-title {
+    font: 500 26px/1.2 var(--film-font-display);
+    color: var(--cp-text-primary);
+    margin: 0;
+}
+.kg-side-panel-meta {
+    font: 400 11px/1.4 var(--film-font-mono);
+    letter-spacing: 0.06em;
+    color: var(--cp-text-secondary);
+    margin: 0;
+}
+.kg-side-panel-preview {
+    font: 400 14px/1.6 var(--film-font-body);
+    color: color-mix(in srgb, var(--cp-text-primary) 80%, var(--cp-text-secondary));
+    font-style: italic;
+    margin: 0;
+}
+.kg-side-panel-preview-muted {
+    color: var(--cp-text-secondary);
+}
+.kg-side-panel-label {
+    font: 500 10px/1.2 var(--film-font-mono);
+    letter-spacing: var(--film-track-label);
+    text-transform: uppercase;
+    color: var(--cp-text-secondary);
+    margin: 0 0 8px 0;
+}
+.kg-side-panel-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.kg-pill {
+    font: 500 10px/1 var(--film-font-mono);
+    letter-spacing: var(--film-track-label);
+    text-transform: uppercase;
+    padding: 5px 9px;
+    border: 1px solid var(--cp-border-strong);
+    color: var(--cp-text-secondary);
+    border-radius: var(--film-radius-pill);
+}
+.kg-side-panel-connections {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.kg-connection {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    border-radius: var(--film-radius-sm);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background var(--film-dur-hover) var(--film-ease-shutter),
+        border-color var(--film-dur-hover) var(--film-ease-shutter);
+}
+.kg-connection:hover,
+.kg-connection:focus-visible {
+    background: var(--cp-surface);
+    border-color: var(--cp-border-strong);
+    outline: none;
+}
+.kg-connection-label {
+    font: 400 13px/1.2 var(--film-font-body);
+    color: var(--cp-text-primary);
+}
+.kg-connection-reason {
+    font: 400 10px/1.3 var(--film-font-mono);
+    letter-spacing: 0.04em;
+    color: var(--cp-text-secondary);
+}
+.kg-tone-amber { color: var(--cp-accent); }
+.kg-tone-alarm { color: #c4521e; }
+
+.kg-side-panel-actions {
+    margin-top: auto;
+    display: flex;
+    gap: 8px;
+}
+.kg-action {
+    flex: 1;
+    font: 500 11px/1 var(--film-font-mono);
+    letter-spacing: var(--film-track-label);
+    text-transform: uppercase;
+    padding: 9px 14px;
+    border-radius: var(--film-radius-sm);
+    border: 1px solid var(--cp-border-strong);
+    background: transparent;
+    color: var(--cp-text-primary);
+    cursor: pointer;
+    transition: background var(--film-dur-hover) var(--film-ease-shutter),
+        border-color var(--film-dur-hover) var(--film-ease-shutter);
+}
+.kg-action:hover:not(:disabled) {
+    background: var(--cp-surface);
+    border-color: var(--cp-accent);
+    box-shadow: var(--film-halation-soft);
+}
+.kg-action:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Back-compat — keep the old class names alive in case any caller still references them. */
+.knowledge-graph-wrap {
+    width: 100%;
+    border-radius: var(--film-radius-lg);
+    border: 1px solid var(--cp-border);
+    overflow: hidden;
+}
 .knowledge-graph-svg {
     display: block;
     cursor: grab;
 }
-
 .knowledge-graph-svg:active {
     cursor: grabbing;
 }
