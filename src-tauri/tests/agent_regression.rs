@@ -60,6 +60,46 @@ mod agent_regression {
 }
 
 #[cfg(test)]
+mod action_policy {
+    use fndr_lib::agent::actions::{policy_for_action, AgentActionKind};
+    use fndr_lib::agent::policy::{AgentMode, RiskLevel};
+
+    #[test]
+    fn ask_mode_blocks_all_actions() {
+        let decision = policy_for_action(&AgentActionKind::OpenUrl, &RiskLevel::Low, &AgentMode::Ask);
+        assert!(!decision.allowed, "Ask mode must block all actions");
+        assert!(decision.blocked_because.is_some());
+    }
+
+    #[test]
+    fn plan_mode_proposes_but_requires_approval() {
+        let decision = policy_for_action(&AgentActionKind::OpenUrl, &RiskLevel::Low, &AgentMode::Plan);
+        assert!(decision.allowed, "Plan mode should allow proposals");
+        assert!(decision.requires_approval, "Plan mode requires approval to execute");
+    }
+
+    #[test]
+    fn high_risk_command_is_blocked_in_act_mode() {
+        let decision = policy_for_action(&AgentActionKind::RunReadOnlyCommand, &RiskLevel::High, &AgentMode::Act);
+        assert!(!decision.allowed, "High-risk commands must be blocked");
+    }
+
+    #[test]
+    fn low_risk_open_url_allowed_without_approval() {
+        let decision = policy_for_action(&AgentActionKind::OpenUrl, &RiskLevel::Low, &AgentMode::Act);
+        assert!(decision.allowed);
+        assert!(!decision.requires_approval);
+    }
+
+    #[test]
+    fn unsupported_action_always_blocked() {
+        let decision = policy_for_action(&AgentActionKind::Unsupported, &RiskLevel::Low, &AgentMode::Act);
+        assert!(!decision.allowed);
+        assert!(decision.blocked_because.is_some());
+    }
+}
+
+#[cfg(test)]
 mod audit_persistence {
     use fndr_lib::agent::audit::{
         append_agent_audit_record, list_agent_audit_runs, AgentAuditRecord,
