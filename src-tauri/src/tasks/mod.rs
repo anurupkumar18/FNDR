@@ -1,5 +1,7 @@
 //! Task extraction and management helpers.
 
+pub mod extract_from_memory;
+
 pub use crate::storage::{Task, TaskType};
 
 fn normalize_task_text(value: &str) -> String {
