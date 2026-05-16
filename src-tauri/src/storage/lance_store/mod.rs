@@ -101,6 +101,8 @@ const SEARCH_RESULT_COLUMNS: &[&str] = &[
 ];
 const TEXT_EMBED_DIM: i32 = DEFAULT_TEXT_EMBEDDING_DIM as i32;
 const IMAGE_EMBED_DIM: i32 = DEFAULT_IMAGE_EMBEDDING_DIM as i32;
+/// EmbeddingGemma 256-dim — same as TEXT_EMBED_DIM now that config is updated.
+pub(crate) const EMBED_GEMMA_DIM: i32 = TEXT_EMBED_DIM;
 const VECTOR_QUERY_MULTIPLIER: usize = DEFAULT_STORE_VECTOR_QUERY_MULTIPLIER;
 const KEYWORD_QUERY_MULTIPLIER: usize = DEFAULT_STORE_KEYWORD_QUERY_MULTIPLIER;
 const MAX_KEYWORD_SCAN: usize = DEFAULT_STORE_MAX_KEYWORD_SCAN;
@@ -1997,6 +1999,24 @@ impl Store {
             results.extend(batch_results);
         }
         Ok(results)
+    }
+
+    /// Open (or create) the EmbeddingGemma 256-dim memories table on demand.
+    pub async fn open_or_create_memories_v3(
+        &self,
+    ) -> Result<lancedb::Table, lancedb::Error> {
+        use crate::inference::model_config::MEMORIES_V3_TABLE;
+        let db_path = self.data_dir.join("lancedb");
+        let uri = db_path.to_string_lossy();
+        let conn = lancedb::connect(&uri).execute().await?;
+        let names = conn.table_names().execute().await?;
+        open_or_create_named_table(
+            &conn,
+            &names,
+            MEMORIES_V3_TABLE,
+            std::sync::Arc::new(memories_v3_schema()),
+        )
+        .await
     }
 }
 
