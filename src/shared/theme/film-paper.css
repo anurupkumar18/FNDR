@@ -1,0 +1,64 @@
+/* =============================================================
+   FNDR brand-only tokens layered on top of cinematic-palettes.ts.
+   The --cp-* vars (bg, accent, fg) come from applyPalette("film").
+   Tokens here are brand atmospherics (halation, eases, fonts,
+   font-family) and live in :root because they're palette-invariant.
+   ============================================================= */
+
+@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Cutive+Mono&display=swap");
+
+:root {
+    --film-font-display: "Cormorant Garamond", "Times New Roman", serif;
+    --film-font-body: "EB Garamond", Georgia, serif;
+    --film-font-mono: "Cutive Mono", "Courier New", ui-monospace, monospace;
+
+    --film-ease-shutter: cubic-bezier(0.22, 1, 0.36, 1);
+    --film-ease-develop: cubic-bezier(0.65, 0, 0.35, 1);
+    --film-ease-iris: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    --film-dur-fast: 180ms;
+    --film-dur-base: 320ms;
+    --film-dur-hover: 220ms;
+    --film-dur-slow: 680ms;
+
+    --film-track-label: 0.16em;
+    --film-track-stamp: 0.24em;
+
+    --film-radius-xs: 2px;
+    --film-radius-sm: 4px;
+    --film-radius-md: 8px;
+    --film-radius-lg: 12px;
+    --film-radius-pill: 999px;
+}
+
+/* Halation derives from --cp-accent so it follows whichever palette is active. */
+:root {
+    --film-halation: 0 0 24px -2px color-mix(in srgb, var(--cp-accent) 45%, transparent),
+        0 0 48px -8px color-mix(in srgb, var(--cp-accent) 28%, transparent);
+    --film-halation-soft: 0 0 16px -4px color-mix(in srgb, var(--cp-accent) 30%, transparent);
+    --film-halation-strong: 0 0 0 1px color-mix(in srgb, var(--cp-accent) 45%, transparent),
+        0 0 28px -2px color-mix(in srgb, var(--cp-accent) 55%, transparent),
+        0 0 64px -8px color-mix(in srgb, var(--cp-accent) 35%, transparent);
+}
+
+/* Film grain helper — opt in by adding `.film-grain` to a positioned element. */
+.film-grain {
+    position: relative;
+    isolation: isolate;
+}
+.film-grain::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(
+            circle at 30% 20%,
+            rgba(232, 223, 200, 0.07) 0,
+            transparent 60%
+        ),
+        radial-gradient(circle at 80% 70%, rgba(232, 223, 200, 0.05) 0, transparent 55%);
+    background-size: 220px 220px;
+    opacity: 0.6;
+    mix-blend-mode: overlay;
+    pointer-events: none;
+    z-index: 2;
+}
