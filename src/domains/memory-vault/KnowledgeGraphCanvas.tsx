@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import * as d3 from "d3";
 import type { GraphNodeView, GraphView } from "./graph/types";
 import {
@@ -21,20 +21,34 @@ export interface KnowledgeGraphCanvasProps {
     onSelect: (node: GraphNodeView) => void;
 }
 
-export function KnowledgeGraphCanvas({
-    view,
-    width,
-    height,
-    selectedId,
-    hoveredId,
-    neighborhoodIds,
-    pathNodeIds,
-    hubNodeIds,
-    maxTicks,
-    onHover,
-    onSelect,
-}: KnowledgeGraphCanvasProps) {
+export interface KnowledgeGraphCanvasHandle {
+    zoomIn: () => void;
+    zoomOut: () => void;
+    reset: () => void;
+    fit: () => void;
+}
+
+export const KnowledgeGraphCanvas = forwardRef<
+    KnowledgeGraphCanvasHandle,
+    KnowledgeGraphCanvasProps
+>(function KnowledgeGraphCanvas(
+    {
+        view,
+        width,
+        height,
+        selectedId,
+        hoveredId,
+        neighborhoodIds,
+        pathNodeIds,
+        hubNodeIds,
+        maxTicks,
+        onHover,
+        onSelect,
+    },
+    ref,
+) {
     const svgRef = useRef<SVGSVGElement | null>(null);
+    const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
 
     const simNodes = useMemo<LayoutSimNode[]>(
         () =>
@@ -78,6 +92,7 @@ export function KnowledgeGraphCanvas({
                 gRoot.attr("transform", event.transform.toString());
             });
         root.call(zoom);
+        zoomRef.current = zoom;
 
         if (simNodes.length === 0) {
             gRoot
@@ -216,6 +231,59 @@ export function KnowledgeGraphCanvas({
             });
     }, [selectedId, hoveredId, neighborhoodIds, pathNodeIds, hubNodeIds]);
 
+    useImperativeHandle(
+        ref,
+        () => ({
+            zoomIn: () => {
+                const svg = svgRef.current;
+                const zoom = zoomRef.current;
+                if (!svg || !zoom) return;
+                d3.select(svg).transition().duration(280).call(zoom.scaleBy, 1.4);
+            },
+            zoomOut: () => {
+                const svg = svgRef.current;
+                const zoom = zoomRef.current;
+                if (!svg || !zoom) return;
+                d3.select(svg).transition().duration(280).call(zoom.scaleBy, 1 / 1.4);
+            },
+            reset: () => {
+                const svg = svgRef.current;
+                const zoom = zoomRef.current;
+                if (!svg || !zoom) return;
+                d3.select(svg).transition().duration(420).call(zoom.transform, d3.zoomIdentity);
+            },
+            fit: () => {
+                const svg = svgRef.current;
+                const zoom = zoomRef.current;
+                if (!svg || !zoom) return;
+                const g = svg.querySelector("g.kg-canvas-root") as SVGGraphicsElement | null;
+                if (!g) return;
+                let bbox: DOMRect;
+                try {
+                    bbox = g.getBBox() as unknown as DOMRect;
+                } catch {
+                    return;
+                }
+                if (!bbox || bbox.width <= 0 || bbox.height <= 0) return;
+                const w = svg.clientWidth || width || 800;
+                const h = svg.clientHeight || height || 480;
+                const pad = 32;
+                const scale = Math.min(
+                    (w - pad * 2) / bbox.width,
+                    (h - pad * 2) / bbox.height,
+                    4,
+                );
+                const tx = w / 2 - scale * (bbox.x + bbox.width / 2);
+                const ty = h / 2 - scale * (bbox.y + bbox.height / 2);
+                d3.select(svg)
+                    .transition()
+                    .duration(560)
+                    .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+            },
+        }),
+        [width, height],
+    );
+
     return (
         <svg
             ref={svgRef}
@@ -226,4 +294,4 @@ export function KnowledgeGraphCanvas({
             aria-label="Knowledge graph"
         />
     );
-}
+});
