@@ -4,6 +4,7 @@ type Theme = "dark" | "light";
 import {
     AutofillSettings,
     CaptureStatus,
+    ContextRuntimeStatus,
     MemoryRepairProgress,
     MemoryRepairSummary,
     StorageHealth,
@@ -19,6 +20,7 @@ import {
     getMcpServerStatus,
     getRetentionDays,
     getAutofillSettings,
+    getContextRuntimeStatus,
     pauseCapture,
     resumeCapture,
     setBlocklist,
@@ -30,7 +32,7 @@ import {
     reclaimMemoryStorage,
     getPrivacyAlerts,
     cleanDevBuildCache,
-} from "../api/tauri";
+} from "@/shared/ipc/tauri";
 import {
     ModelInfo,
     OnboardingState,
@@ -40,17 +42,18 @@ import {
     listAvailableModels,
     refreshAiModels,
     saveOnboardingState,
-} from "../api/onboarding";
-import { useModelDownloadStatus } from "../hooks/useModelDownloadStatus";
-import { usePolling } from "../hooks/usePolling";
-import { formatBytes } from "../lib/format";
+} from "@/shared/ipc/onboarding";
+import { useModelDownloadStatus } from "@/shared/hooks/useModelDownloadStatus";
+import { usePolling } from "@/shared/hooks/usePolling";
+import { STORAGE_KEYS } from "@/shared/utils/config";
+import { formatBytes } from "@/shared/utils/format";
 import {
     PALETTES,
     applyPalette,
     isPaletteKey,
     listPalettes,
     type PaletteKey,
-} from "../theme/cinematic-palettes";
+} from "@/shared/theme/cinematic-palettes";
 import "./ControlPanel.css";
 import { PrivacyPanel } from "./PrivacyPanel";
 
@@ -59,6 +62,8 @@ interface ControlPanelProps {
     compact?: boolean;
     /** Hide MCP and emphasize core privacy when true (VITE_EVAL_UI build). */
     evalUi?: boolean;
+    /** Compatibility: caller may still pass a panel opener; settings no longer renders this section. */
+    onOpenPanel?: (panel: PanelKey) => void;
 }
 
 type Tab = "settings" | "model" | "privacy";
@@ -72,7 +77,12 @@ const DEFAULT_AUTOFILL_SETTINGS: AutofillSettings = {
     max_candidates: 4,
 };
 
-export function ControlPanel({ status, compact = false, evalUi = false }: ControlPanelProps) {
+export function ControlPanel({
+    status,
+    compact = false,
+    evalUi = false,
+    onOpenPanel: _onOpenPanel,
+}: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<Tab>("settings");
@@ -83,6 +93,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     const [retentionDays, setRetentionDaysState] = useState<number>(7);
     const [retentionBusy, setRetentionBusy] = useState(false);
     const [mcpStatus, setMcpStatus] = useState<McpServerStatus | null>(null);
+    const [contextRuntimeStatus, setContextRuntimeStatus] = useState<ContextRuntimeStatus | null>(null);
     const [mcpBusy, setMcpBusy] = useState(false);
     const [copiedMcpLink, setCopiedMcpLink] = useState(false);
     const [profileName, setProfileName] = useState("");
@@ -110,10 +121,10 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
 
     // Theme state
     const [theme, setTheme] = useState<Theme>(() => {
-        return (localStorage.getItem("fndr-theme") as Theme) || "dark";
+        return (localStorage.getItem(STORAGE_KEYS.theme) as Theme) || "dark";
     });
     const [paletteKey, setPaletteKey] = useState<PaletteKey>(() => {
-        const stored = localStorage.getItem("fndr-palette");
+        const stored = localStorage.getItem(STORAGE_KEYS.palette);
         return isPaletteKey(stored) ? stored : "matrix";
     });
 
@@ -145,10 +156,11 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 setAutofillSettingsState(autofill);
                 setSavedAutofillSettingsState(autofill);
             } else {
-                const [bl, ret, mcp, onboarding, health, autofill] = await Promise.all([
+                const [bl, ret, mcp, runtimeStatus, onboarding, health, autofill] = await Promise.all([
                     getBlocklist(),
                     getRetentionDays(),
                     getMcpServerStatus(),
+                    getContextRuntimeStatus(),
                     getOnboardingState(),
                     getStorageHealth(),
                     getAutofillSettings(),
@@ -156,6 +168,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 setBlocklistState(bl);
                 setRetentionDaysState(ret);
                 setMcpStatus(mcp);
+                setContextRuntimeStatus(runtimeStatus);
                 setStorageHealth(health);
                 const name = onboarding.display_name ?? "";
                 setProfileName(name);
@@ -243,8 +256,8 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     // Apply theme to document root
     useEffect(() => {
         document.documentElement.setAttribute("data-theme", theme);
-        localStorage.setItem("fndr-theme", theme);
-        localStorage.setItem("fndr-palette", paletteKey);
+        localStorage.setItem(STORAGE_KEYS.theme, theme);
+        localStorage.setItem(STORAGE_KEYS.palette, paletteKey);
         applyPalette(paletteKey, theme);
     }, [paletteKey, theme]);
 
@@ -278,7 +291,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 const runtime = await refreshAiModels();
                 if (!runtime.ai_model_available && !cancelled) {
                     setModelError(
-                        `Model download finished, but FNDR still cannot see Qwen at ${downloadStatus.destination_path ?? "disk"}.`,
+                        `Model download finished, but FNDR still cannot see the files at ${downloadStatus.destination_path ?? "disk"}.`,
                     );
                 }
             } catch (refreshError) {
@@ -307,7 +320,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
             try {
                 const runtime = await refreshAiModels();
                 if (!runtime.ai_model_available) {
-                    setModelError("Qwen is supposed to be on disk, but FNDR could not find the local model files.");
+                    setModelError("The model file should be on disk, but FNDR could not find it in the models folder.");
                 }
             } catch (e) {
                 setModelError(String(e));
@@ -519,9 +532,10 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
     };
 
     const handleCopyMcpLink = async () => {
-        if (!mcpStatus?.endpoint) return;
+        const mcpLink = mcpStatus?.public_endpoint ?? mcpStatus?.endpoint;
+        if (!mcpLink) return;
         try {
-            await navigator.clipboard.writeText(mcpStatus.endpoint);
+            await navigator.clipboard.writeText(mcpLink);
             setCopiedMcpLink(true);
             setTimeout(() => setCopiedMcpLink(false), 1500);
         } catch (e) {
@@ -583,6 +597,17 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                 <button
                     className={`ui-action-btn settings-toggle ${compact ? "compact" : ""}`}
                     onClick={() => {
+                        setIsOpen(false);
+                        setIsAppearanceOpen(!isAppearanceOpen);
+                    }}
+                    aria-label="Open appearance"
+                    title="Open appearance"
+                >
+                    <span className="settings-toggle-icon" aria-hidden="true">◐</span>
+                </button>
+                <button
+                    className={`ui-action-btn settings-toggle ${compact ? "compact" : ""}`}
+                    onClick={() => {
                         setIsAppearanceOpen(false);
                         setIsOpen(!isOpen);
                     }}
@@ -594,17 +619,6 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                         <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.86l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.7 1.7 0 0 0-1.86-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.86.34l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.86 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.86l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.7 1.7 0 0 0 1.86.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.86-.34l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.86v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z" />
                     </svg>
                     {privacyAlertCount > 0 && <span className="privacy-badge">{privacyAlertCount}</span>}
-                </button>
-                <button
-                    className={`ui-action-btn settings-toggle ${compact ? "compact" : ""}`}
-                    onClick={() => {
-                        setIsOpen(false);
-                        setIsAppearanceOpen(!isAppearanceOpen);
-                    }}
-                    aria-label="Open appearance"
-                    title="Open appearance"
-                >
-                    <span className="settings-toggle-icon" aria-hidden="true">◐</span>
                 </button>
             </div>
 
@@ -688,10 +702,7 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                 >
                                     {status?.is_paused ? "Resume capture" : "Pause capture"}
                                 </button>
-                                <div className="capture-stats">
-                                    <span>Frames: {status?.frames_captured ?? 0}</span>
-                                    <span>Dropped: {status?.frames_dropped ?? 0}</span>
-                                </div>
+                                <CapturePipelineSummary status={status} />
                             </section>
 
                             <section className="panel-section">
@@ -880,12 +891,30 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                     <div className="mcp-link-row">
                                         <input
                                             className="mcp-link-input"
-                                            value={mcpStatus?.endpoint ?? "http://127.0.0.1:8799/mcp"}
+                                            value={
+                                                mcpStatus?.public_endpoint ??
+                                                mcpStatus?.endpoint ??
+                                                "http://127.0.0.1:8799/mcp"
+                                            }
                                             readOnly
                                         />
                                         <button className="ui-action-btn btn-primary" onClick={() => void handleCopyMcpLink()}>
                                             {copiedMcpLink ? "Copied" : "Copy link"}
                                         </button>
+                                    </div>
+                                    <div className="mcp-link-row">
+                                        <input
+                                            className="mcp-link-input"
+                                            value={`Auth: ${mcpStatus?.auth_mode ?? "disabled for localhost"}`}
+                                            readOnly
+                                        />
+                                    </div>
+                                    <div className="mcp-link-row">
+                                        <input
+                                            className="mcp-link-input"
+                                            value={`Runtime: ${contextRuntimeStatus?.status ?? "unknown"} · Project: ${contextRuntimeStatus?.active_project ?? "n/a"} · Pack: ${contextRuntimeStatus?.current_context_pack ?? "none"}`}
+                                            readOnly
+                                        />
                                     </div>
                                     {mcpStatus?.last_error && <p className="mcp-error">{mcpStatus.last_error}</p>}
                                 </section>
@@ -896,13 +925,26 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                     {activeTab === "model" && (
                         <section className="panel-section">
                             <h3>AI Model</h3>
+                            <div className="local-ai-status">
+                                <div className="ai-model-row">
+                                    <span className="label">Memory model:</span>
+                                    <span className="value">Qwen3-VL-2B</span>
+                                </div>
+                                <div className="ai-model-row">
+                                    <span className="label">Search model:</span>
+                                    <span className="value">EmbeddingGemma 300M</span>
+                                </div>
+                                <div className="ai-model-row">
+                                    <span className="label">Mode:</span>
+                                    <span className="value">8 GB Mac optimized</span>
+                                </div>
+                            </div>
                             <p className="section-hint">
-                                Qwen3-VL is FNDR&apos;s required local model for summaries, Q&amp;A, and smarter indexing.
                                 {status?.ai_model_available
                                     ? status?.ai_model_loaded
-                                        ? " It is currently loaded in memory."
-                                        : " It is downloaded and will load automatically when needed."
-                                    : " It is not downloaded yet."}
+                                        ? "Qwen3-VL-2B is loaded and ready."
+                                        : "Qwen3-VL-2B is on disk and will load when needed."
+                                    : "Download Qwen3-VL-2B below to enable AI memory synthesis."}
                             </p>
                             <p className="section-hint">
                                 Search embeddings: {status
@@ -1076,9 +1118,17 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
                                         updated {repairSummary.task_reference_updates} task references,
                                         refreshed {repairSummary.embeddings_refreshed} embeddings,
                                         reclaimed {(repairSummary.chars_reclaimed / 1024).toFixed(1)} KB of raw OCR payload.
-                                        Spotify {repairSummary.spotify_merges}, YouTube {repairSummary.youtube_merges},
-                                        Codex {repairSummary.codex_merges}, Discord {repairSummary.discord_merges},
-                                        GitLab {repairSummary.gitlab_merges}, Antigravity {repairSummary.antigravity_merges}.
+                                        {repairSummary.app_merges.length > 0 && (
+                                            <>
+                                                {" "}
+                                                Top merge sources:{" "}
+                                                {repairSummary.app_merges
+                                                    .slice(0, 8)
+                                                    .map((row) => `${row.app_name} (${row.merged})`)
+                                                    .join(", ")}
+                                                {repairSummary.app_merges.length > 8 ? "…" : "."}
+                                            </>
+                                        )}
                                     </p>
                                 )}
                                 {repairError && <p className="section-hint" style={{ marginTop: 8 }}>{repairError}</p>}
@@ -1210,3 +1260,69 @@ export function ControlPanel({ status, compact = false, evalUi = false }: Contro
         </div>
     );
 }
+
+/**
+ * Compact "stored vs skipped (with reasons)" breakdown for the Capture
+ * Status card. Replaces the old `Frames: N / Dropped: M` line, which only
+ * counted successful stores and dedup drops — every other reason a frame
+ * could be discarded (surface policy, low signal, noise, grounding, …)
+ * was previously invisible to the UI.
+ */
+function CapturePipelineSummary({ status }: { status: CaptureStatus | null }) {
+    const pipeline = status?.pipeline;
+    if (!pipeline) {
+        return (
+            <div className="capture-stats">
+                <span>Frames: {status?.frames_captured ?? 0}</span>
+                <span>Dropped: {status?.frames_dropped ?? 0}</span>
+            </div>
+        );
+    }
+    const reasons: Array<{ key: string; label: string; value: number }> = [
+        { key: "self_app", label: "this app (FNDR)", value: pipeline.skipped_self_app ?? 0 },
+        { key: "perceptual_dup", label: "dedup (image)", value: pipeline.skipped_perceptual_dup },
+        { key: "semantic_dup", label: "dedup (text)", value: pipeline.skipped_semantic_dup },
+        { key: "low_signal_text", label: "low signal", value: pipeline.skipped_low_signal_text },
+        { key: "noise", label: "noise", value: pipeline.skipped_noise },
+        { key: "grounding", label: "grounding", value: pipeline.skipped_grounding },
+        { key: "stacked_extraction", label: "extraction", value: pipeline.skipped_stacked_extraction },
+        { key: "surface_policy", label: "surface", value: pipeline.skipped_surface_policy },
+        { key: "blocklist", label: "blocklist", value: pipeline.skipped_blocklist },
+        { key: "visual_novelty", label: "visual novelty", value: pipeline.skipped_visual_novelty },
+        { key: "visual_small", label: "visual small", value: pipeline.skipped_visual_small },
+        { key: "visual_compose_failed", label: "visual fail", value: pipeline.skipped_visual_compose_failed },
+        { key: "ocr_failed", label: "ocr fail", value: pipeline.skipped_ocr_failed },
+        { key: "screen_capture_failed", label: "screen fail", value: pipeline.skipped_screen_capture_failed },
+    ].filter((r) => r.value > 0);
+    const lastSkipLabel = pipeline.last_skip_reason
+        ? `Last skip: ${pipeline.last_skip_reason}${pipeline.last_skip_app ? ` (${pipeline.last_skip_app})` : ""}`
+        : null;
+    const selfSkipHint =
+        (pipeline.skipped_self_app ?? 0) > 0 ? (
+            <p className="capture-stats-hint">
+                FNDR never records its own window. Focus Cursor, Chrome, or another app to build memories
+                while this panel is open.
+            </p>
+        ) : null;
+    return (
+        <div className="capture-stats capture-stats--pipeline">
+            <div className="capture-stats-row">
+                <span>Stored: {pipeline.stored_total}</span>
+                <span>Skipped: {pipeline.skipped_total}</span>
+                <span>Evaluated: {pipeline.evaluated}</span>
+            </div>
+            {selfSkipHint}
+            {reasons.length > 0 && (
+                <div className="capture-stats-reasons" title="Why frames were skipped this session">
+                    {reasons.map((r) => (
+                        <span key={r.key} className="capture-stats-chip">
+                            {r.label}: {r.value}
+                        </span>
+                    ))}
+                </div>
+            )}
+            {lastSkipLabel && <div className="capture-stats-last">{lastSkipLabel}</div>}
+        </div>
+    );
+}
+import type { PanelKey } from "@/domains/command-palette/CommandPalette";
