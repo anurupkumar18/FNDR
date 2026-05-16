@@ -1059,6 +1059,54 @@ impl HybridSearcher {
                 score *= 1.05;
             }
 
+            // Vague-intent boost: when the query's primary terms match a
+            // candidate's topic_categories (broader semantic labels filled by
+            // synthesis), boost the score. This is what lets "sport" surface
+            // cricket captures without keyword overlap. Capped to avoid
+            // over-firing on multi-category records.
+            if !candidate.topic_categories.is_empty() {
+                let cat_matches = candidate
+                    .topic_categories
+                    .iter()
+                    .filter(|cat| {
+                        let cat_lower = cat.to_ascii_lowercase();
+                        profile
+                            .primary_terms
+                            .iter()
+                            .any(|t| cat_lower == *t || cat_lower.contains(t))
+                            || query_lower.contains(&cat_lower)
+                    })
+                    .count();
+                if cat_matches > 0 {
+                    score *= 1.0 + (cat_matches as f32 * 0.12).min(0.30);
+                }
+            }
+
+            // Alias-driven recall: synonym/abbreviation matches in
+            // search_aliases (e.g., query "KKR" matches a record whose
+            // aliases include "Kolkata Knight Riders"). Slightly smaller
+            // boost than topic_categories since aliases are more specific.
+            if !candidate.search_aliases.is_empty() {
+                let alias_matches = candidate
+                    .search_aliases
+                    .iter()
+                    .filter(|alias| {
+                        let alias_lower = alias.to_ascii_lowercase();
+                        if alias_lower.len() < 2 {
+                            return false;
+                        }
+                        profile
+                            .primary_terms
+                            .iter()
+                            .any(|t| alias_lower == *t || alias_lower.contains(t))
+                            || query_lower.contains(&alias_lower)
+                    })
+                    .count();
+                if alias_matches > 0 {
+                    score *= 1.0 + (alias_matches as f32 * 0.08).min(0.20);
+                }
+            }
+
             let coherence = session_counts
                 .get(&session_key(candidate))
                 .copied()
