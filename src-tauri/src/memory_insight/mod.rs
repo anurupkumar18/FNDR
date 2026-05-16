@@ -7,6 +7,8 @@
 
 mod derive;
 mod embedding_text;
+pub mod fluff;
 
 pub use derive::derive_insight_for_record;
 pub use embedding_text::compose_insight_embedding_text;
+pub use fluff::strip_fluff;

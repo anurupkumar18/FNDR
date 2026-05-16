@@ -203,6 +203,9 @@ fn clip_chars(s: String, max: usize) -> String {
 /// Populate `insight_*` when layers are still empty (idempotent for pre-filled rows).
 pub fn derive_insight_for_record(record: &mut MemoryRecord) {
     if !record.insight_what_happened.trim().is_empty() {
+        // Even when synthesis pre-filled the insight fields, strip fluff
+        // (redundant app/project mentions, "the user is..." preambles).
+        apply_fluff_strip(record);
         return;
     }
 
@@ -298,6 +301,41 @@ pub fn derive_insight_for_record(record: &mut MemoryRecord) {
         "dropped": dropped
     })
     .to_string();
+
+    apply_fluff_strip(record);
+}
+
+/// Run fluff stripping on the insight fields, using the record's own metadata
+/// to identify redundant terms. Idempotent — safe to call multiple times.
+fn apply_fluff_strip(record: &mut MemoryRecord) {
+    let domain = record
+        .url
+        .as_deref()
+        .and_then(|u| {
+            u.split("://")
+                .nth(1)
+                .unwrap_or(u)
+                .split('/')
+                .next()
+                .map(|h| h.trim_start_matches("www.").to_string())
+        })
+        .unwrap_or_default();
+
+    let app = record.app_name.clone();
+    let project = record.project.clone();
+
+    if !record.insight_what_happened.is_empty() {
+        record.insight_what_happened =
+            crate::memory_insight::fluff::strip_fluff(&record.insight_what_happened, &app, &project, &domain);
+    }
+    if !record.insight_why_mattered.is_empty() {
+        record.insight_why_mattered =
+            crate::memory_insight::fluff::strip_fluff(&record.insight_why_mattered, &app, &project, &domain);
+    }
+    if !record.insight_what_changed.is_empty() {
+        record.insight_what_changed =
+            crate::memory_insight::fluff::strip_fluff(&record.insight_what_changed, &app, &project, &domain);
+    }
 }
 
 #[cfg(test)]
@@ -423,5 +461,30 @@ mod tests {
         let before = r.insight_what_happened.clone();
         derive_insight_for_record(&mut r);
         assert_eq!(r.insight_what_happened, before);
+    }
+
+    #[test]
+    fn fluff_strip_runs_on_prefilled_insights() {
+        let mut r = base();
+        r.app_name = "Google Chrome".to_string();
+        // LLM produced fluff-heavy output with repeated app name
+        r.insight_what_happened =
+            "Google Chrome — Google Chrome news article on AI".to_string();
+        derive_insight_for_record(&mut r);
+        // App name should appear at most once
+        let count = r.insight_what_happened.matches("Google Chrome").count();
+        assert_eq!(count, 1, "expected one app mention, got: {}", r.insight_what_happened);
+    }
+
+    #[test]
+    fn fluff_strip_drops_the_user_prefix_from_llm_output() {
+        let mut r = base();
+        r.insight_what_happened = "the user is debugging a Rust borrow error".to_string();
+        derive_insight_for_record(&mut r);
+        assert!(
+            !r.insight_what_happened.to_lowercase().starts_with("the user"),
+            "the user prefix leaked: {}",
+            r.insight_what_happened
+        );
     }
 }
