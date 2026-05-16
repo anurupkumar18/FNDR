@@ -45,40 +45,36 @@ pub struct MemorySynthesisOutput {
     pub errors: Vec<String>,
     pub next_steps: Vec<String>,
     pub search_aliases: Vec<String>,
+    pub insight_what_happened: String,
+    pub insight_why_mattered: String,
+    pub topic_categories: Vec<String>,
     pub confidence_score: f32,
     pub importance_score: f32,
 }
 
-pub const MEMORY_SYNTHESIS_PROMPT: &str = r#"You are FNDR's local memory extraction model.
+pub const MEMORY_SYNTHESIS_PROMPT: &str = r#"You are FNDR's memory model. Write a structured, searchable memory that would let a future version of the user recall what they were doing and why it mattered — like a journal entry, not a screenshot description.
 
-Create a structured memory from the user's screen.
+Available evidence: OCR text, app name, window title, URL, timestamp, source type, image pixels (if attached).
 
-Use all available evidence:
-- screenshot image (if provided)
-- OCR text
-- app name
-- window title
-- URL
-- timestamp
-- source type
+Output rules:
+- memory_context: 2-5 sentences. First-person, past tense ("You reviewed…", "You debugged…", "You watched…"). Describe the specific action, what the user was engaging with, and the outcome or significance. Never describe the screen ("The screen shows…"). Never use "User" or "the user".
+- summary_short: One sentence version of memory_context. Starts with "You".
+- insight_what_happened: One crisp sentence. The most specific action taken — name the thing (file, URL, team, document, feature) not the app. E.g.: "You watched the KKR vs Gujarat Titans IPL match on Willow TV" not "You used Google Chrome."
+- insight_why_mattered: One sentence. Why this was significant: a decision made, information consumed, an error encountered, a milestone reached. Can be empty string only if nothing notable happened.
+- topic_categories: 3-5 short lowercase labels a user might type when searching for this content WITHOUT remembering the specific name. These are the conceptual umbrella terms. E.g., for cricket content: ["sport", "entertainment", "live events"]. For a code review: ["programming", "code review", "software"]. For a Figma design: ["design", "ui", "product"]. For email: ["communication", "email"]. For finance: ["finance", "investing"]. Use intuition — what would a human type to find this?
+- search_aliases: 4-8 short strings: abbreviations (KKR for Kolkata Knight Riders), synonyms, alternate phrasings, key proper nouns. Max 30 chars each.
+- topic, activity_type, user_intent: concise labels.
+- entities: named things (people, teams, files, products, companies, commands). No stop words.
+- Do not invent details. Lower confidence_score when evidence is weak.
+- Return compact JSON only. No markdown. No commentary.
 
-Rules:
-- Do not invent details not supported by the evidence.
-- Prefer concrete nouns, app names, file names, URLs, project names, commands, errors, decisions, todos, and next steps.
-- memory_context should help a future AI agent understand what the user was doing, why it mattered, and what context should be remembered.
-- Use OCR as primary text evidence.
-- Use the image for layout, visual context, screenshots, logos, diagrams, UI state, and image-heavy screens.
-- If evidence is weak, lower confidence_score.
-- Avoid storing unnecessary sensitive raw text.
-- Return JSON only. No markdown. No explanation.
-
-Required JSON schema:
+Schema:
 {
-  "memory_context": "...",
-  "summary_short": "...",
-  "topic": "...",
-  "activity_type": "...",
-  "user_intent": "...",
+  "memory_context": "You …",
+  "summary_short": "You …",
+  "topic": "…",
+  "activity_type": "…",
+  "user_intent": "…",
   "entities": [],
   "files": [],
   "urls": [],
@@ -86,6 +82,9 @@ Required JSON schema:
   "errors": [],
   "next_steps": [],
   "search_aliases": [],
+  "topic_categories": [],
+  "insight_what_happened": "You …",
+  "insight_why_mattered": "…",
   "confidence_score": 0.0,
   "importance_score": 0.0
 }"#;
@@ -116,6 +115,12 @@ struct SynthesisJsonRow {
     next_steps: Vec<String>,
     #[serde(default)]
     search_aliases: Vec<String>,
+    #[serde(default)]
+    insight_what_happened: String,
+    #[serde(default)]
+    insight_why_mattered: String,
+    #[serde(default)]
+    topic_categories: Vec<String>,
     #[serde(default)]
     confidence_score: f32,
     #[serde(default)]
@@ -173,6 +178,14 @@ pub fn parse_synthesis_json(raw: &str) -> Result<MemorySynthesisOutput, String> 
         errors: sanitize_list(row.errors, 12, 200),
         next_steps: sanitize_list(row.next_steps, 12, 200),
         search_aliases: sanitize_list(row.search_aliases, 24, 48),
+        insight_what_happened: sanitize_field(&row.insight_what_happened),
+        insight_why_mattered: sanitize_field(&row.insight_why_mattered),
+        topic_categories: row.topic_categories
+            .into_iter()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty() && s.len() <= 40)
+            .take(6)
+            .collect(),
         confidence_score: row.confidence_score.clamp(0.0, 1.0),
         importance_score: row.importance_score.clamp(0.0, 1.0),
     })
@@ -214,6 +227,9 @@ pub fn synthesis_ocr_only_fallback(input: &MemorySynthesisInput) -> MemorySynthe
         errors: Vec::new(),
         next_steps: Vec::new(),
         search_aliases: Vec::new(),
+        insight_what_happened: String::new(),
+        insight_why_mattered: String::new(),
+        topic_categories: Vec::new(),
         confidence_score: 0.30,
         importance_score: 0.30,
     }
@@ -246,6 +262,23 @@ fn sanitize_list(mut v: Vec<String>, max_items: usize, max_each: usize) -> Vec<S
     v.retain(|s| !s.trim().is_empty());
     v.truncate(max_items);
     v.into_iter().map(|s| clamp(s, max_each)).collect()
+}
+
+pub(crate) fn is_prompt_scaffold(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    lower.starts_with("here is")
+        || lower.contains("best memory snippet")
+        || lower.contains("```json")
+        || lower.contains("topic:")
+}
+
+fn sanitize_field(value: &str) -> String {
+    let trimmed = value.trim();
+    if is_prompt_scaffold(trimmed) {
+        String::new()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -305,5 +338,50 @@ mod tests {
         assert!(!out.memory_context.is_empty());
         assert!(!out.summary_short.is_empty());
         assert!(out.confidence_score >= 0.0 && out.confidence_score <= 1.0);
+    }
+
+    #[test]
+    fn synthesis_row_accepts_new_insight_fields() {
+        let json = r#"{
+            "memory_context": "You reviewed the diff for the auth refactor.",
+            "summary_short": "Reviewed auth PR.",
+            "topic": "code review",
+            "activity_type": "development",
+            "user_intent": "reviewing code for correctness",
+            "entities": ["auth module", "JWT"],
+            "files": [], "urls": [], "decisions": [], "errors": [],
+            "next_steps": [],
+            "search_aliases": ["code review", "PR", "authentication", "JWT"],
+            "topic_categories": ["programming", "software development", "code review"],
+            "insight_what_happened": "You reviewed the authentication refactor pull request.",
+            "insight_why_mattered": "Ensuring security correctness before merging a breaking change.",
+            "confidence_score": 0.88,
+            "importance_score": 0.75
+        }"#;
+        let row: SynthesisJsonRow = serde_json::from_str(json).unwrap();
+        assert!(!row.insight_what_happened.is_empty());
+        assert!(!row.insight_why_mattered.is_empty());
+        assert!(!row.topic_categories.is_empty());
+        assert!(!row.search_aliases.is_empty());
+    }
+
+    #[test]
+    fn synthesis_row_is_backwards_compatible_with_missing_new_fields() {
+        let json = r#"{
+            "memory_context": "You used the terminal.",
+            "summary_short": "Terminal session.",
+            "confidence_score": 0.5
+        }"#;
+        let row: SynthesisJsonRow = serde_json::from_str(json).unwrap();
+        assert!(row.insight_what_happened.is_empty());
+        assert!(row.topic_categories.is_empty());
+    }
+
+    #[test]
+    fn sanitize_field_strips_prompt_scaffolding() {
+        let bad = "Here is the best memory snippet for your review:";
+        assert!(is_prompt_scaffold(bad));
+        let good = "You deployed the backend service to staging.";
+        assert!(!is_prompt_scaffold(good));
     }
 }
