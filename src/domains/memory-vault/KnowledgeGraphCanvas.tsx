@@ -147,6 +147,7 @@ export const KnowledgeGraphCanvas = forwardRef<
             .attr("class", "kg-node")
             .attr("data-node-id", (d) => d.id)
             .style("cursor", "pointer")
+            .style("animation-delay", (d) => `${(d.id.charCodeAt(0) % 6) * 0.5}s`)
             .on("mouseenter", (_e, d) => onHover(d.id))
             .on("mouseleave", () => onHover(null))
             .on("click", (_e, d) => onSelect(d.view))

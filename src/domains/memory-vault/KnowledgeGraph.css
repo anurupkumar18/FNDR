@@ -46,6 +46,22 @@
 /* Nodes */
 .kg-node {
     transition: opacity var(--film-dur-hover) var(--film-ease-shutter);
+    animation: kg-drift 6s ease-in-out infinite alternate;
+    transform-box: fill-box;
+}
+.kg-node[data-state="hovered"],
+.kg-node[data-state="selected"] {
+    animation-play-state: paused;
+}
+@keyframes kg-drift {
+    0%   { transform: translate(0, 0); }
+    50%  { transform: translate(1px, -1px); }
+    100% { transform: translate(0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .kg-node {
+        animation: none;
+    }
 }
 .kg-node-halo {
     fill: var(--cp-accent);
