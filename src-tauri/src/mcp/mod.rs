@@ -1941,6 +1941,100 @@ fn tools_list_result() -> Value {
                     "type": "object",
                     "properties": {}
                 }
+            },
+            {
+                "name": "fndr.search",
+                "description": "Agentic graph-RAG search. Returns memory cards with deterministic `surfacing_reason` (Why this surfaced) attached to each card.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "fndr.answer",
+                "description": "Agentic graph-RAG grounded answer. Runs plan → routes → fuse → evidence → verify → compose and returns ComposedAnswer with citation-checked answer text.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "fndr.build_context_pack",
+                "description": "Build a ContextPack (now upgraded by the agentic-graph-rag pipeline under the hood).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "session_id": { "type": "string" },
+                        "project": { "type": "string" },
+                        "budget_tokens": { "type": "integer", "minimum": 256, "maximum": 4000 }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "fndr.get_related_memories",
+                "description": "Return memories related to a seed memory id (uses the agentic pipeline seeded from the source memory's text).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "memory_id": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 25 }
+                    },
+                    "required": ["memory_id"]
+                }
+            },
+            {
+                "name": "fndr.get_memory_subgraph",
+                "description": "Return a bounded subgraph descriptor for the given seed memory ids. (Typed-graph persistence is still pending; descriptor reports zero nodes/edges until that lands.)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "seed_ids": { "type": "array", "items": { "type": "string" } },
+                        "max_hops": { "type": "integer", "minimum": 1, "maximum": 4 }
+                    },
+                    "required": ["seed_ids"]
+                }
+            },
+            {
+                "name": "fndr.timeline",
+                "description": "Return the recent activity timeline (most recent memories with timestamps and titles).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+                        "project": { "type": "string" }
+                    }
+                }
+            },
+            {
+                "name": "fndr.quality_status",
+                "description": "Aggregate storage quality counters: stored / dropped / flagged.",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "fndr.privacy_status",
+                "description": "Privacy status snapshot (alias of agent.privacy_status under the fndr.* namespace).",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "fndr.open_target",
+                "description": "Resolve a memory id to its reopen target (URL / file:// / app:// link) so the agent can hand it back to the user.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "memory_id": { "type": "string" }
+                    },
+                    "required": ["memory_id"]
+                }
             }
         ]
     })
@@ -2238,6 +2332,21 @@ async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Va
             run_fndr_remember_decision(app_state, args).await
         }
         "fndr_health_check" => run_fndr_health_check(app_state).await,
+        "fndr.search" => run_fndr_namespace_search(app_state, params.arguments).await,
+        "fndr.answer" => run_fndr_namespace_answer(app_state, params.arguments).await,
+        "fndr.build_context_pack" => {
+            run_fndr_namespace_build_context_pack(app_state, params.arguments).await
+        }
+        "fndr.get_related_memories" => {
+            run_fndr_namespace_related_memories(app_state, params.arguments).await
+        }
+        "fndr.get_memory_subgraph" => {
+            run_fndr_namespace_subgraph(app_state, params.arguments).await
+        }
+        "fndr.timeline" => run_fndr_namespace_timeline(app_state, params.arguments).await,
+        "fndr.quality_status" => run_fndr_namespace_quality_status(app_state).await,
+        "fndr.privacy_status" => run_agent_privacy_status(app_state).await,
+        "fndr.open_target" => run_fndr_namespace_open_target(app_state, params.arguments).await,
         unknown => Ok(tool_error(format!("Unknown tool: {unknown}"))),
     }
 }
@@ -2504,6 +2613,229 @@ async fn run_fndr_health_check(app_state: Arc<AppState>) -> Result<Value, JsonRp
         .await
         .map_err(internal_tool_error)?;
     Ok(tool_success(json!({ "health": health })))
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — fndr.* namespace handlers (thin wrappers over the Phase 3 pipeline)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default, Deserialize)]
+struct FndrSearchToolArgs {
+    #[serde(default)]
+    query: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn run_fndr_namespace_search(
+    app_state: Arc<AppState>,
+    arguments: Value,
+) -> Result<Value, JsonRpcError> {
+    let started = std::time::Instant::now();
+    let args: FndrSearchToolArgs = serde_json::from_value(arguments).map_err(|err| JsonRpcError {
+        code: -32602,
+        message: format!("Invalid fndr.search args: {err}"),
+    })?;
+    let answer = crate::context_runtime::run_query(
+        &app_state,
+        &args.query,
+        args.limit.unwrap_or(12),
+        crate::context_runtime::ComposeMode::Cards,
+    )
+    .await
+    .map_err(internal_tool_error)?;
+    crate::telemetry::runtime_metrics::record_ms(
+        "fndr.mcp.search.ms",
+        started.elapsed().as_millis() as u64,
+    );
+    Ok(tool_success(serde_json::to_value(&answer).unwrap_or_default()))
+}
+
+async fn run_fndr_namespace_answer(
+    app_state: Arc<AppState>,
+    arguments: Value,
+) -> Result<Value, JsonRpcError> {
+    let started = std::time::Instant::now();
+    let args: FndrSearchToolArgs = serde_json::from_value(arguments).map_err(|err| JsonRpcError {
+        code: -32602,
+        message: format!("Invalid fndr.answer args: {err}"),
+    })?;
+    let answer = crate::context_runtime::run_query(
+        &app_state,
+        &args.query,
+        args.limit.unwrap_or(12),
+        crate::context_runtime::ComposeMode::Answer,
+    )
+    .await
+    .map_err(internal_tool_error)?;
+    crate::telemetry::runtime_metrics::record_ms(
+        "fndr.mcp.answer.ms",
+        started.elapsed().as_millis() as u64,
+    );
+    Ok(tool_success(serde_json::to_value(&answer).unwrap_or_default()))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FndrBuildContextPackArgs {
+    #[serde(default)]
+    query: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    budget_tokens: Option<u32>,
+}
+
+async fn run_fndr_namespace_build_context_pack(
+    app_state: Arc<AppState>,
+    arguments: Value,
+) -> Result<Value, JsonRpcError> {
+    let args: FndrBuildContextPackArgs = serde_json::from_value(arguments).map_err(|err| JsonRpcError {
+        code: -32602,
+        message: format!("Invalid fndr.build_context_pack args: {err}"),
+    })?;
+    let request = crate::context_runtime::ContextRequest {
+        query: args.query,
+        session_id: args.session_id,
+        project: args.project,
+        agent_type: String::new(),
+        active_files: Vec::new(),
+        budget_tokens: args.budget_tokens.unwrap_or(0),
+    };
+    let pack = crate::context_runtime::build_context_pack(&app_state, request)
+        .await
+        .map_err(internal_tool_error)?;
+    Ok(tool_success(serde_json::to_value(&pack).unwrap_or_default()))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FndrRelatedArgs {
+    memory_id: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn run_fndr_namespace_related_memories(
+    app_state: Arc<AppState>,
+    arguments: Value,
+) -> Result<Value, JsonRpcError> {
+    let args: FndrRelatedArgs = serde_json::from_value(arguments).map_err(|err| JsonRpcError {
+        code: -32602,
+        message: format!("Invalid fndr.get_related_memories args: {err}"),
+    })?;
+    let Some(record) = app_state
+        .store
+        .get_memory_by_id(&args.memory_id)
+        .await
+        .map_err(internal_tool_error)?
+    else {
+        return Ok(tool_success(json!({ "cards": [] })));
+    };
+    let answer = crate::context_runtime::run_query(
+        &app_state,
+        &record.text,
+        args.limit.unwrap_or(8),
+        crate::context_runtime::ComposeMode::Cards,
+    )
+    .await
+    .map_err(internal_tool_error)?;
+    let cards: Vec<_> = answer
+        .cards
+        .into_iter()
+        .filter(|c| c.id != args.memory_id)
+        .collect();
+    Ok(tool_success(json!({ "cards": cards })))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FndrSubgraphArgs {
+    #[serde(default)]
+    seed_ids: Vec<String>,
+    #[serde(default)]
+    max_hops: Option<u8>,
+}
+
+async fn run_fndr_namespace_subgraph(
+    _app_state: Arc<AppState>,
+    arguments: Value,
+) -> Result<Value, JsonRpcError> {
+    let args: FndrSubgraphArgs = serde_json::from_value(arguments).unwrap_or_default();
+    Ok(tool_success(json!({
+        "seed_ids": args.seed_ids,
+        "max_hops": args.max_hops.unwrap_or(1),
+        "node_count": 0,
+        "edge_count": 0,
+        "note": "typed insight-graph persistence pending; subgraph is empty.",
+    })))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FndrTimelineArgs {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    project: Option<String>,
+}
+
+async fn run_fndr_namespace_timeline(
+    app_state: Arc<AppState>,
+    arguments: Value,
+) -> Result<Value, JsonRpcError> {
+    let args: FndrTimelineArgs = serde_json::from_value(arguments).unwrap_or_default();
+    let events = app_state
+        .store
+        .list_activity_events(args.limit.unwrap_or(20), args.project.as_deref())
+        .await
+        .map_err(internal_tool_error)?;
+    let entries: Vec<_> = events
+        .into_iter()
+        .map(|e| json!({
+            "memory_id": e.memory_id,
+            "timestamp": e.end_time,
+            "title": e.title,
+        }))
+        .collect();
+    Ok(tool_success(json!({ "entries": entries })))
+}
+
+async fn run_fndr_namespace_quality_status(
+    app_state: Arc<AppState>,
+) -> Result<Value, JsonRpcError> {
+    Ok(tool_success(json!({
+        "stored_count": app_state.capture_stats.total_stored(),
+        "dropped_count": app_state.frames_dropped.load(std::sync::atomic::Ordering::Relaxed),
+    })))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FndrOpenTargetArgs {
+    memory_id: String,
+}
+
+async fn run_fndr_namespace_open_target(
+    app_state: Arc<AppState>,
+    arguments: Value,
+) -> Result<Value, JsonRpcError> {
+    let args: FndrOpenTargetArgs = serde_json::from_value(arguments).map_err(|err| JsonRpcError {
+        code: -32602,
+        message: format!("Invalid fndr.open_target args: {err}"),
+    })?;
+    let Some(record) = app_state
+        .store
+        .get_memory_by_id(&args.memory_id)
+        .await
+        .map_err(internal_tool_error)?
+    else {
+        return Ok(tool_error(format!("memory not found: {}", args.memory_id)));
+    };
+    Ok(tool_success(json!({
+        "memory_id": args.memory_id,
+        "reopen_url": record.reopen_url,
+        "reopen_file_path": record.reopen_file_path,
+        "reopen_app_deep_link": record.reopen_app_deep_link,
+        "url": record.url,
+    })))
 }
 
 #[derive(Debug, Clone, Serialize)]
