@@ -15,6 +15,7 @@ import {
 import "./MemoryCardsPanel.css";
 import { InsightLayers } from "./InsightLayers";
 import { KnowledgeGraph } from "./KnowledgeGraph";
+import { SurfacingReason } from "./SurfacingReason";
 import { GRAPH_SIM_MAX_TICKS, useGraph } from "./useGraph";
 
 const VAULT_BROWSE_STORAGE_KEY = "fndr.memoryVault.browseMode";
@@ -1081,6 +1082,9 @@ export function MemoryCardsPanel({
                                         </div>
                                     </div>
                                     <div className="memory-browse-content">
+                                        {card.surfacing_reason && (
+                                            <SurfacingReason reason={card.surfacing_reason} />
+                                        )}
                                         <div className="memory-browse-summary memory-browse-summary-primary">
                                             {displayBody}
                                             {truncated && (

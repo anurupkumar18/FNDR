@@ -69,6 +69,109 @@ export interface MemoryCard {
     topic_categories?: string[];
     /** Semantic search aliases / synonyms */
     search_aliases?: string[];
+    /** Phase 3 — deterministic "Why this surfaced" attached by the
+     *  agentic-graph-rag composer. Absent on legacy code paths. */
+    surfacing_reason?: SurfacingReason;
+}
+
+// ── Phase 4 agentic-graph-rag types ───────────────────────────────────────
+
+export interface GraphPathStep {
+    from_label: string;
+    edge: string;
+    to_label: string;
+}
+
+export interface SurfacingReason {
+    headline: string;
+    routes: string[];
+    graph_path?: GraphPathStep[];
+    anchor_terms_hit?: string[];
+    recency_boost?: number;
+}
+
+export interface FileRef {
+    path: string;
+    memory_ids: string[];
+}
+export interface CommandRef { command: string; memory_ids: string[] }
+export interface DecisionRef { decision: string; memory_ids: string[] }
+export interface ErrorRef { error: string; memory_ids: string[] }
+export interface TaskRef { task: string; memory_ids: string[] }
+export interface UrlRef { url: string; memory_ids: string[] }
+
+export interface EvidencePack {
+    files: FileRef[];
+    commands: CommandRef[];
+    decisions: DecisionRef[];
+    errors: ErrorRef[];
+    todos: TaskRef[];
+    urls: UrlRef[];
+}
+
+export type VerifyOutcome =
+    | { kind: "grounded"; confidence: number }
+    | { kind: "partial_answer"; missing: string[] }
+    | { kind: "not_enough_evidence"; reason: string };
+
+export interface ComposedAnswer {
+    query: string;
+    answer: string;
+    evidence: EvidencePack;
+    cards: MemoryCard[];
+    verify_outcome: VerifyOutcome;
+    surfacing_reasons: SurfacingReason[];
+}
+
+export interface FndrSearchResponse {
+    query: string;
+    cards: MemoryCard[];
+}
+
+export async function fndrSearch(query: string, limit?: number): Promise<FndrSearchResponse> {
+    return invoke("fndr_search", { query, limit });
+}
+
+export async function fndrAnswer(query: string, limit?: number): Promise<ComposedAnswer> {
+    return invoke("fndr_answer", { query, limit });
+}
+
+export async function fndrBuildContextPack(args: {
+    query: string;
+    session_id?: string;
+    project?: string;
+    budget_tokens?: number;
+}): Promise<unknown> {
+    return invoke("fndr_build_context_pack", args);
+}
+
+export async function fndrGetRelatedMemories(
+    memoryId: string,
+    limit?: number,
+): Promise<MemoryCard[]> {
+    return invoke("fndr_get_related_memories", { memoryId, limit });
+}
+
+export async function fndrGetMemorySubgraph(
+    seedIds: string[],
+    maxHops = 2,
+): Promise<{ seed_ids: string[]; node_count: number; edge_count: number }> {
+    return invoke("fndr_get_memory_subgraph", { seedIds, maxHops });
+}
+
+export async function fndrTimeline(args?: {
+    limit?: number;
+    project?: string;
+}): Promise<Array<{ memory_id: string; timestamp: number; snippet: string }>> {
+    return invoke("fndr_timeline", args ?? {});
+}
+
+export async function fndrQualityStatus(): Promise<{
+    stored_count: number;
+    dropped_count: number;
+    flagged_count: number;
+}> {
+    return invoke("fndr_quality_status");
 }
 
 export interface MemoryScoreBreakdown {
