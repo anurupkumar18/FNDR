@@ -527,7 +527,6 @@ function App() {
                 <AppSidebar
                     activePanel={activePanel}
                     isOpen={isSidebarOpen}
-                    onCloseSidebar={() => setIsSidebarOpen(false)}
                     onTogglePanel={(key) => {
                         if (key === "research") setResearchSeedMemory(null);
                         setActivePanel(activePanel === key ? null : key);
