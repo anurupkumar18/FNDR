@@ -1,8 +1,6 @@
 //! Deterministic entity extraction from **finalized** memory fields only (no raw OCR, no Lance).
 
-use crate::memory::graph::schema::{
-    GraphEdge, GraphEdgeType, GraphNode, GraphNodeType,
-};
+use crate::graph::schema::{GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
 use crate::storage::MemoryRecord;
 use chrono::Utc;
 use std::collections::HashSet;
@@ -22,13 +20,17 @@ pub struct ExtractionResult {
 }
 
 fn norm_label(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").trim().to_string()
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
 }
 
 fn is_stop_phrase(lower: &str) -> bool {
     const STOPS: &[&str] = &[
-        "the", "and", "for", "with", "from", "this", "that", "unknown", "none", "n/a",
-        "untitled", "page", "window", "document", "loading", "error", "home", "search",
+        "the", "and", "for", "with", "from", "this", "that", "unknown", "none", "n/a", "untitled",
+        "page", "window", "document", "loading", "error", "home", "search",
     ];
     STOPS.iter().any(|w| *w == lower)
 }
@@ -252,8 +254,8 @@ pub fn extract(record: &MemoryRecord) -> ExtractionResult {
     push_node(
         &mut nodes,
         &mut seen_keys,
-            mid,
-            GraphNodeType::Session,
+        mid,
+        GraphNodeType::Session,
         session_label,
         (base * 0.5).max(0.3),
     );
@@ -269,8 +271,8 @@ pub fn extract(record: &MemoryRecord) -> ExtractionResult {
             push_node(
                 &mut nodes,
                 &mut seen_keys,
-            mid,
-            GraphNodeType::Concept,
+                mid,
+                GraphNodeType::Concept,
                 t,
                 (base * boost).max(0.36),
             );
@@ -288,15 +290,58 @@ pub fn extract(record: &MemoryRecord) -> ExtractionResult {
         first_id(&nodes, GraphNodeType::Session),
     ) {
         // Hierarchical backbone: project -> session -> memory.
-        push_edge(&mut edges, p, s, GraphEdgeType::Contains, base * 0.78, false);
-        push_edge(&mut edges, s, memory_node_id, GraphEdgeType::Contains, base * 0.82, false);
+        push_edge(
+            &mut edges,
+            p,
+            s,
+            GraphEdgeType::Contains,
+            base * 0.78,
+            false,
+        );
+        push_edge(
+            &mut edges,
+            s,
+            memory_node_id,
+            GraphEdgeType::Contains,
+            base * 0.82,
+            false,
+        );
+    }
+
+    if let Some(project_id) = first_id(&nodes, GraphNodeType::Project) {
+        if !record.project.trim().is_empty() && !record.project.eq_ignore_ascii_case("unknown") {
+            push_edge(
+                &mut edges,
+                memory_node_id,
+                project_id,
+                GraphEdgeType::BelongsToProject,
+                base * 0.82,
+                false,
+            );
+        }
+    }
+
+    if let Some(session_id) = first_id(&nodes, GraphNodeType::Session) {
+        if !record.session_id.trim().is_empty() {
+            push_edge(
+                &mut edges,
+                memory_node_id,
+                session_id,
+                GraphEdgeType::OccurredInSession,
+                base * 0.82,
+                false,
+            );
+        }
     }
 
     for node in &nodes {
         if node.id == memory_node_id {
             continue;
         }
-        if matches!(node.node_type, GraphNodeType::Project | GraphNodeType::Session) {
+        if matches!(
+            node.node_type,
+            GraphNodeType::Project | GraphNodeType::Session
+        ) {
             continue;
         }
         push_edge(
@@ -313,7 +358,14 @@ pub fn extract(record: &MemoryRecord) -> ExtractionResult {
         first_id(&nodes, GraphNodeType::Project),
         first_id(&nodes, GraphNodeType::Url),
     ) {
-        push_edge(&mut edges, proj, url_node, GraphEdgeType::AppliesTo, base * 0.72, false);
+        push_edge(
+            &mut edges,
+            proj,
+            url_node,
+            GraphEdgeType::AppliesTo,
+            base * 0.72,
+            false,
+        );
     }
     let dec = nodes
         .iter()
@@ -413,9 +465,15 @@ mod tests {
         r.decisions = vec!["Ship dark mode first".into()];
         r.errors = vec!["Flaky integration test".into()];
         let ex = extract(&r);
-        assert!(ex.nodes.iter().any(|n| n.node_type == GraphNodeType::Decision));
+        assert!(ex
+            .nodes
+            .iter()
+            .any(|n| n.node_type == GraphNodeType::Decision));
         assert!(ex.nodes.iter().any(|n| n.node_type == GraphNodeType::Error));
-        assert!(ex.edges.iter().any(|e| e.edge_type == GraphEdgeType::Contradicts));
+        assert!(ex
+            .edges
+            .iter()
+            .any(|e| e.edge_type == GraphEdgeType::Contradicts));
     }
 
     #[test]
@@ -470,11 +528,58 @@ mod tests {
             .find(|n| n.node_type == GraphNodeType::Session)
             .expect("session node");
         assert!(ex.edges.iter().any(|e| {
-            e.source_id == project.id && e.target_id == session.id && e.edge_type == GraphEdgeType::Contains
+            e.source_id == project.id
+                && e.target_id == session.id
+                && e.edge_type == GraphEdgeType::Contains
         }));
         assert!(ex.edges.iter().any(|e| {
-            e.source_id == session.id && e.target_id == memory.id && e.edge_type == GraphEdgeType::Contains
+            e.source_id == session.id
+                && e.target_id == memory.id
+                && e.edge_type == GraphEdgeType::Contains
         }));
+    }
+
+    #[test]
+    fn emits_project_and_session_edges_from_memory() {
+        let r = base_record();
+        let ex = extract(&r);
+        let memory = ex
+            .nodes
+            .iter()
+            .find(|n| n.node_type == GraphNodeType::Memory)
+            .expect("memory node");
+        let project = ex
+            .nodes
+            .iter()
+            .find(|n| n.node_type == GraphNodeType::Project)
+            .expect("project node");
+        let session = ex
+            .nodes
+            .iter()
+            .find(|n| n.node_type == GraphNodeType::Session)
+            .expect("session node");
+        assert_eq!(
+            ex.edges
+                .iter()
+                .filter(|e| {
+                    e.source_id == memory.id
+                        && e.target_id == project.id
+                        && e.edge_type == GraphEdgeType::BelongsToProject
+                })
+                .count(),
+            1
+        );
+        assert_eq!(
+            ex.edges
+                .iter()
+                .filter(|e| {
+                    e.source_id == memory.id
+                        && e.target_id == session.id
+                        && e.edge_type == GraphEdgeType::OccurredInSession
+                })
+                .count(),
+            1
+        );
     }
 
     #[test]

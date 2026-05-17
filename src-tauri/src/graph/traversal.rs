@@ -1,17 +1,17 @@
-//! Graph algorithms over in-memory [`crate::memory::graph::schema`] structures (no DB I/O).
+//! Graph algorithms over in-memory [`crate::graph::schema`] structures (no DB I/O).
 
-use crate::memory::graph::schema::{GraphEdge, GraphNode, GraphSubgraph};
+use crate::graph::schema::{GraphEdge, GraphEdgeType, GraphNode, GraphSubgraph};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 const MIN_EDGE_CONF: f32 = 0.3;
 
 /// Undirected adjacency for algorithms that ignore edge direction.
-fn undirected_adjacency<'a>(
+pub fn undirected_adjacency(
     nodes: &[GraphNode],
     edges: &[GraphEdge],
-) -> HashMap<uuid::Uuid, Vec<(uuid::Uuid, f32)>> {
+) -> HashMap<uuid::Uuid, Vec<(uuid::Uuid, GraphEdgeType, f32)>> {
     let alive: HashSet<_> = nodes.iter().map(|n| n.id).collect();
-    let mut m: HashMap<uuid::Uuid, Vec<(uuid::Uuid, f32)>> = HashMap::new();
+    let mut m: HashMap<uuid::Uuid, Vec<(uuid::Uuid, GraphEdgeType, f32)>> = HashMap::new();
     for e in edges {
         if e.confidence < MIN_EDGE_CONF {
             continue;
@@ -21,10 +21,10 @@ fn undirected_adjacency<'a>(
         }
         m.entry(e.source_id)
             .or_default()
-            .push((e.target_id, e.confidence));
+            .push((e.target_id, e.edge_type, e.confidence));
         m.entry(e.target_id)
             .or_default()
-            .push((e.source_id, e.confidence));
+            .push((e.source_id, e.edge_type, e.confidence));
     }
     m
 }
@@ -41,7 +41,7 @@ pub fn bfs_neighborhood(sub: &GraphSubgraph, start: uuid::Uuid, depth: u32) -> G
             continue;
         }
         if let Some(nbrs) = adj.get(&u) {
-            for &(v, _) in nbrs {
+            for &(v, _, _) in nbrs {
                 if seen.insert(v) {
                     q.push_back((v, d + 1));
                 }
@@ -73,55 +73,6 @@ pub fn bfs_neighborhood(sub: &GraphSubgraph, start: uuid::Uuid, depth: u32) -> G
     }
 }
 
-/// Shortest path by hop count; tie-break: higher average edge confidence along path.
-pub fn find_path(
-    sub: &GraphSubgraph,
-    from: uuid::Uuid,
-    to: uuid::Uuid,
-) -> Option<(Vec<uuid::Uuid>, f32)> {
-    let adj = undirected_adjacency(&sub.nodes, &sub.edges);
-    if from == to {
-        return Some((vec![from], 1.0));
-    }
-    // parent -> (prev_node, edge_conf used to step)
-    let mut parent: HashMap<uuid::Uuid, (Option<uuid::Uuid>, f32)> = HashMap::new();
-    let mut q = VecDeque::new();
-    parent.insert(from, (None, 0.0));
-    q.push_back(from);
-    while let Some(u) = q.pop_front() {
-        if u == to {
-            break;
-        }
-        if let Some(nbrs) = adj.get(&u) {
-            for &(v, w) in nbrs {
-                if !parent.contains_key(&v) {
-                    parent.insert(v, (Some(u), w));
-                    q.push_back(v);
-                }
-            }
-        }
-    }
-    let _ = parent.get(&to)?;
-    // reconstruct all equal-hop paths is expensive; BFS first hit is min hops.
-    let mut path = vec![to];
-    let mut cur = to;
-    let mut confs: Vec<f32> = Vec::new();
-    while cur != from {
-        let (p, c) = parent.get(&cur).copied()?;
-        confs.push(c);
-        let prev = p?;
-        cur = prev;
-        path.push(cur);
-    }
-    path.reverse();
-    let avg = if confs.is_empty() {
-        1.0
-    } else {
-        confs.iter().sum::<f32>() / confs.len() as f32
-    };
-    Some((path, avg))
-}
-
 /// Iterative PageRank on undirected support graph (edge confidence as weight).
 pub fn pagerank(sub: &GraphSubgraph, iters: usize, d: f32) -> HashMap<uuid::Uuid, f32> {
     let n = sub.nodes.len().max(1);
@@ -134,11 +85,11 @@ pub fn pagerank(sub: &GraphSubgraph, iters: usize, d: f32) -> HashMap<uuid::Uuid
             let mut s = (1.0 - d) / n as f32;
             if let Some(nbrs) = adj.get(id) {
                 let mut wsum = 0.0f32;
-                for &(_, w) in nbrs {
+                for &(_, _, w) in nbrs {
                     wsum += w;
                 }
                 if wsum > 0.0 {
-                    for &(j, w) in nbrs {
+                    for &(j, _, w) in nbrs {
                         let rj = *rank.get(&j).unwrap_or(&0.0);
                         s += d * w * rj / wsum;
                     }
@@ -202,7 +153,8 @@ pub fn god_nodes(sub: &GraphSubgraph, k: usize) -> Vec<(uuid::Uuid, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::graph::schema::{GraphEdgeType, GraphNodeType};
+    use crate::graph::pathfinding::find_path;
+    use crate::graph::schema::{GraphEdgeType, GraphNodeType};
     use chrono::Utc;
 
     fn n(id: u8, label: &str) -> GraphNode {

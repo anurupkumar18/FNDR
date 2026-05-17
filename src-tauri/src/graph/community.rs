@@ -1,6 +1,6 @@
-//! Community detection on [`crate::memory::graph::schema`] subgraphs (pure, no I/O).
+//! Community detection on [`crate::graph::schema`] subgraphs (pure, no I/O).
 
-use crate::memory::graph::schema::GraphSubgraph;
+use crate::graph::schema::GraphSubgraph;
 use std::collections::HashMap;
 
 const MIN_W: f32 = 0.3;
@@ -111,8 +111,8 @@ pub fn attach_louvain_metadata(sub: &mut GraphSubgraph) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::graph::schema::{GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
-    use crate::memory::graph::traversal;
+    use crate::graph::schema::{GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
+    use crate::graph::traversal;
     use chrono::Utc;
 
     #[test]

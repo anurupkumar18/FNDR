@@ -16,11 +16,9 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::AddDataMode;
 use uuid::Uuid;
 
-use super::Store;
 use crate::config::DEFAULT_TEXT_EMBEDDING_DIM;
-use crate::memory::graph::schema::{
-    GraphEdge, GraphEdgeType, GraphNode, GraphNodeType, GraphSubgraph,
-};
+use crate::graph::schema::{GraphEdge, GraphEdgeType, GraphNode, GraphNodeType, GraphSubgraph};
+use crate::storage::Store;
 
 fn escape_sql_literal(s: &str) -> String {
     s.replace('\'', "''")
@@ -29,95 +27,19 @@ fn escape_sql_literal(s: &str) -> String {
 const TEXT_DIM: i32 = DEFAULT_TEXT_EMBEDDING_DIM as i32;
 
 fn node_type_lit(t: GraphNodeType) -> &'static str {
-    match t {
-        GraphNodeType::Project => "Project",
-        GraphNodeType::Memory => "Memory",
-        GraphNodeType::Concept => "Concept",
-        GraphNodeType::Decision => "Decision",
-        GraphNodeType::File => "File",
-        GraphNodeType::Error => "Error",
-        GraphNodeType::Tool => "Tool",
-        GraphNodeType::Person => "Person",
-        GraphNodeType::Url => "Url",
-        GraphNodeType::Session => "Session",
-        GraphNodeType::Task => "Task",
-    }
+    t.to_str()
 }
 
 fn edge_type_lit(t: GraphEdgeType) -> &'static str {
-    match t {
-        GraphEdgeType::DependsOn => "DependsOn",
-        GraphEdgeType::Contains => "Contains",
-        GraphEdgeType::Imports => "Imports",
-        GraphEdgeType::Extends => "Extends",
-        GraphEdgeType::Implements => "Implements",
-        GraphEdgeType::PartOf => "PartOf",
-        GraphEdgeType::Supports => "Supports",
-        GraphEdgeType::Contradicts => "Contradicts",
-        GraphEdgeType::Supersedes => "Supersedes",
-        GraphEdgeType::Refines => "Refines",
-        GraphEdgeType::Questions => "Questions",
-        GraphEdgeType::Resolves => "Resolves",
-        GraphEdgeType::Causes => "Causes",
-        GraphEdgeType::Prevents => "Prevents",
-        GraphEdgeType::TriggeredBy => "TriggeredBy",
-        GraphEdgeType::FixedBy => "FixedBy",
-        GraphEdgeType::BrokeBy => "BrokeBy",
-        GraphEdgeType::PrecededBy => "PrecededBy",
-        GraphEdgeType::FollowedBy => "FollowedBy",
-        GraphEdgeType::SimilarTo => "SimilarTo",
-        GraphEdgeType::MentionedIn => "MentionedIn",
-        GraphEdgeType::UsedIn => "UsedIn",
-        GraphEdgeType::CreatedBy => "CreatedBy",
-        GraphEdgeType::AppliesTo => "AppliesTo",
-    }
+    t.to_str()
 }
 
 fn parse_node_type(s: &str) -> GraphNodeType {
-    match s {
-        "Project" => GraphNodeType::Project,
-        "Memory" => GraphNodeType::Memory,
-        "Concept" => GraphNodeType::Concept,
-        "Decision" => GraphNodeType::Decision,
-        "File" => GraphNodeType::File,
-        "Error" => GraphNodeType::Error,
-        "Tool" => GraphNodeType::Tool,
-        "Person" => GraphNodeType::Person,
-        "Url" => GraphNodeType::Url,
-        "Session" => GraphNodeType::Session,
-        "Task" => GraphNodeType::Task,
-        _ => GraphNodeType::Concept,
-    }
+    GraphNodeType::from_str(s).unwrap_or(GraphNodeType::Concept)
 }
 
 fn parse_edge_type(s: &str) -> GraphEdgeType {
-    match s {
-        "DependsOn" => GraphEdgeType::DependsOn,
-        "Contains" => GraphEdgeType::Contains,
-        "Imports" => GraphEdgeType::Imports,
-        "Extends" => GraphEdgeType::Extends,
-        "Implements" => GraphEdgeType::Implements,
-        "PartOf" => GraphEdgeType::PartOf,
-        "Supports" => GraphEdgeType::Supports,
-        "Contradicts" => GraphEdgeType::Contradicts,
-        "Supersedes" => GraphEdgeType::Supersedes,
-        "Refines" => GraphEdgeType::Refines,
-        "Questions" => GraphEdgeType::Questions,
-        "Resolves" => GraphEdgeType::Resolves,
-        "Causes" => GraphEdgeType::Causes,
-        "Prevents" => GraphEdgeType::Prevents,
-        "TriggeredBy" => GraphEdgeType::TriggeredBy,
-        "FixedBy" => GraphEdgeType::FixedBy,
-        "BrokeBy" => GraphEdgeType::BrokeBy,
-        "PrecededBy" => GraphEdgeType::PrecededBy,
-        "FollowedBy" => GraphEdgeType::FollowedBy,
-        "SimilarTo" => GraphEdgeType::SimilarTo,
-        "MentionedIn" => GraphEdgeType::MentionedIn,
-        "UsedIn" => GraphEdgeType::UsedIn,
-        "CreatedBy" => GraphEdgeType::CreatedBy,
-        "AppliesTo" => GraphEdgeType::AppliesTo,
-        _ => GraphEdgeType::MentionedIn,
-    }
+    GraphEdgeType::from_str(s).unwrap_or(GraphEdgeType::MentionedIn)
 }
 
 fn zero_embedding() -> Vec<f32> {
@@ -505,7 +427,7 @@ impl GraphStore {
             edges,
             ..Default::default()
         };
-        Ok(crate::memory::graph::traversal::bfs_neighborhood(
+        Ok(crate::graph::traversal::bfs_neighborhood(
             &sub, start, depth,
         ))
     }
@@ -528,7 +450,7 @@ impl GraphStore {
         }
         let mut acc_n: HashSet<Uuid> = HashSet::new();
         for s in seed {
-            let part = crate::memory::graph::traversal::bfs_neighborhood(
+            let part = crate::graph::traversal::bfs_neighborhood(
                 &GraphSubgraph {
                     nodes: nodes.clone(),
                     edges: edges.clone(),

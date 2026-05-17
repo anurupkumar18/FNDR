@@ -6,12 +6,11 @@ use serde::Serialize;
 use tauri::State;
 use uuid::Uuid;
 
-use crate::memory::graph::clusters::{
-    attach_louvain_metadata, cluster_0_display_name, louvain_partition,
-};
-use crate::memory::graph::schema::{GraphNode, GraphSubgraph};
-use crate::memory::graph::traversal::{find_path, god_nodes};
-use crate::storage::graph_store::GraphStore;
+use crate::graph::community::{attach_louvain_metadata, cluster_0_display_name, louvain_partition};
+use crate::graph::graph_store::GraphStore;
+use crate::graph::pathfinding::find_path;
+use crate::graph::schema::{GraphNode, GraphSubgraph};
+use crate::graph::traversal::god_nodes;
 use crate::telemetry::runtime_metrics;
 use crate::AppState;
 

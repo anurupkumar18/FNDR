@@ -1,6 +1,6 @@
 use fndr_lib::config::DEFAULT_IMAGE_EMBEDDING_DIM;
 use fndr_lib::embedding::EMBEDDING_DIM;
-use fndr_lib::memory::graph::GraphStore;
+use fndr_lib::graph::GraphStore;
 use fndr_lib::storage::{
     EdgeType, GraphEdge, GraphNode, MemoryRecord, NodeType, Store, Task, TaskType,
 };

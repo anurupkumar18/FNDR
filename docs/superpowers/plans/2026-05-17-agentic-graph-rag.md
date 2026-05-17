@@ -74,19 +74,19 @@ Find-and-replace import sites (script + manual verify):
 
 ### Tasks
 
-- [ ] **0.1: Create the new directory skeleton.**
+- [x] **0.1: Create the new directory skeleton.**
   - `mkdir src-tauri/src/graph` and add empty `mod.rs` re-exporting `pub mod entities; pub mod edges; pub mod schema; pub mod graph_store; pub mod graph_index; pub mod traversal; pub mod community; pub mod pathfinding; pub mod graph_rerank;`
-- [ ] **0.2: Copy files into new location** (do not delete originals yet).
+- [x] **0.2: Copy files into new location** (do not delete originals yet).
   - `cp src-tauri/src/memory/graph/schema.rs src-tauri/src/graph/_schema_full.rs`
   - `cp src-tauri/src/memory/graph/traversal.rs src-tauri/src/graph/traversal.rs`
   - `cp src-tauri/src/memory/graph/clusters.rs src-tauri/src/graph/community.rs`
   - `cp src-tauri/src/memory/graph/legacy.rs src-tauri/src/graph/legacy.rs` (legacy stays as a sub-file)
   - `cp src-tauri/src/storage/graph_store.rs src-tauri/src/graph/graph_store.rs`
-- [ ] **0.3: Split `_schema_full.rs`** into `entities.rs` (the `GraphNodeType` enum + `from_str`/`to_str` for nodes), `edges.rs` (the `GraphEdgeType` enum + `from_str`/`to_str` for edges), and `schema.rs` (the `GraphNode`, `GraphEdge` record structs, Arrow constants, and field accessors).
+- [x] **0.3: Split `_schema_full.rs`** into `entities.rs` (the `GraphNodeType` enum + `from_str`/`to_str` for nodes), `edges.rs` (the `GraphEdgeType` enum + `from_str`/`to_str` for edges), and `schema.rs` (the `GraphNode`, `GraphEdge` record structs, Arrow constants, and field accessors).
   - Each enum gets a `#[derive(Serialize, Deserialize, specta::Type)]` matching the current derives.
   - Delete `_schema_full.rs`.
-- [ ] **0.4: Extract `find_path`** from `traversal.rs` into `pathfinding.rs`; update internal callers (just `traversal.rs` and `clusters.rs`).
-- [ ] **0.5: Add new node variants.** In `entities.rs`:
+- [x] **0.4: Extract `find_path`** from `traversal.rs` into `pathfinding.rs`; update internal callers (just `traversal.rs` and `clusters.rs`).
+- [x] **0.5: Add new node variants.** In `entities.rs`:
   ```rust
   pub enum GraphNodeType {
       Project, Memory, Concept, Decision, File, Error, Tool,
@@ -95,14 +95,14 @@ Find-and-replace import sites (script + manual verify):
   }
   ```
   Update `to_str`/`from_str` to include the new variants.
-- [ ] **0.6: Add new edge variants.** In `edges.rs`:
+- [x] **0.6: Add new edge variants.** In `edges.rs`:
   ```rust
   pub enum GraphEdgeType {
       // existing 25 variants...
       OccurredInSession, BelongsToProject, UsedApp, SameTaskAs, EvidencedBy,
   }
   ```
-- [ ] **0.7: Add `edge_aliases::canonical(name: &str) -> Option<GraphEdgeType>`** translating spec names → canonical Rust variants:
+- [x] **0.7: Add `edge_aliases::canonical(name: &str) -> Option<GraphEdgeType>`** translating spec names → canonical Rust variants:
   ```rust
   "HasTopic"        => MentionedIn
   "CausedError"     => Causes
@@ -117,8 +117,8 @@ Find-and-replace import sites (script + manual verify):
   "MentionsEntity"  => MentionedIn
   ```
   Plus identity for the 5 new variants and the 25 existing variants. Unit test mapping every spec name.
-- [ ] **0.8: Update `graph_store.rs`** to extend `node_type_lit` / `node_type_from_lit` / `edge_type_lit` / `edge_type_from_lit` to cover the new variants.
-- [ ] **0.9: Stub `graph_index.rs`:**
+- [x] **0.8: Update `graph_store.rs`** to extend `node_type_lit` / `node_type_from_lit` / `edge_type_lit` / `edge_type_from_lit` to cover the new variants.
+- [x] **0.9: Stub `graph_index.rs`:**
   ```rust
   pub struct GraphIndex { /* adjacency: HashMap<Uuid, Vec<Adj>> */ }
   impl GraphIndex {
@@ -126,22 +126,22 @@ Find-and-replace import sites (script + manual verify):
       pub fn neighbors(&self, id: Uuid, allowed: &[GraphEdgeType], max_hops: usize) -> Vec<NeighborHit> { /* call traversal::bfs_neighborhood */ }
   }
   ```
-- [ ] **0.10: Stub `graph_rerank.rs`:** empty function body + signature; unit test marked `#[ignore]`.
-- [ ] **0.11: Update `src-tauri/src/lib.rs`** — add `pub mod graph;`. Remove `pub mod graph;` from `src-tauri/src/memory/mod.rs` and `pub mod graph_store;` from `src-tauri/src/storage/mod.rs`.
-- [ ] **0.12: Replace imports.**
+- [x] **0.10: Stub `graph_rerank.rs`:** empty function body + signature; unit test marked `#[ignore]`.
+- [x] **0.11: Update `src-tauri/src/lib.rs`** — add `pub mod graph;`. Remove `pub mod graph;` from `src-tauri/src/memory/mod.rs` and `pub mod graph_store;` from `src-tauri/src/storage/mod.rs`.
+- [x] **0.12: Replace imports.**
   ```bash
   rg -l "crate::memory::graph" src-tauri/src | xargs sd "crate::memory::graph" "crate::graph"
   rg -l "crate::storage::graph_store" src-tauri/src | xargs sd "crate::storage::graph_store" "crate::graph::graph_store"
   ```
   Spot-check `rg "memory::graph|storage::graph_store" src-tauri/src` → 0 hits.
-- [ ] **0.13: Delete originals.** `rm -r src-tauri/src/memory/graph` and `rm src-tauri/src/storage/graph_store.rs`.
-- [ ] **0.14: Extend entity extractor.** In `capture/entity_extractor.rs::extract`, after the existing Project/Session/Memory node creation, emit edges:
+- [x] **0.13: Delete originals.** `rm -r src-tauri/src/memory/graph` and `rm src-tauri/src/storage/graph_store.rs`.
+- [x] **0.14: Extend entity extractor.** In `capture/entity_extractor.rs::extract`, after the existing Project/Session/Memory node creation, emit edges:
   - `Memory --BelongsToProject--> Project` when `record.project.is_some()`.
   - `Memory --OccurredInSession--> Session` when `record.session_id.is_some()`.
   Use the existing confidence formula. Cap edges per record (existing limit is 8 nodes; raise edge cap symmetrically if needed).
-- [ ] **0.15: Run `cargo test -p fndr graph::`** (formerly `memory::graph::`). Update test paths. All graph tests pass.
-- [ ] **0.16: Run `make test`.** Expected: green.
-- [ ] **0.17: Commit.**
+- [x] **0.15: Run `cargo test -p fndr graph::`** (formerly `memory::graph::`). Update test paths. All graph tests pass.
+- [x] **0.16: Run `make test`.** Expected: green.
+- [x] **0.17: Commit.**
   ```bash
   git add -A
   git commit -m "refactor(graph): hoist graph/ to top-level, split entities/edges, add Window/App/Command + 5 new edge variants"

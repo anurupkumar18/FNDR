@@ -12,6 +12,7 @@ pub mod downloads;
 pub mod embed;
 pub mod embedding;
 pub mod evals;
+pub mod graph;
 pub mod http_util;
 pub mod inference;
 pub mod ipc;
@@ -35,8 +36,8 @@ pub mod timeline;
 pub mod wiki;
 
 use config::Config;
+use graph::GraphStore;
 use inference::{InferenceEngine, VlmEngine};
-use memory::graph::GraphStore;
 use parking_lot::{Mutex, RwLock};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -48,8 +49,8 @@ use tokio::sync::Mutex as AsyncMutex;
 #[derive(Debug, Clone)]
 pub struct PendingGraphUpdate {
     pub memory_id: String,
-    pub nodes: Vec<memory::graph::schema::GraphNode>,
-    pub edges: Vec<memory::graph::schema::GraphEdge>,
+    pub nodes: Vec<graph::schema::GraphNode>,
+    pub edges: Vec<graph::schema::GraphEdge>,
     pub overall_confidence: f32,
 }
 

@@ -3,7 +3,6 @@
 pub mod distill;
 pub mod embed_doc;
 pub mod evidence;
-pub mod graph;
 pub mod reopen;
 pub mod repair;
 pub mod types;

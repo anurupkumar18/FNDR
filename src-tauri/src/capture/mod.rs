@@ -3426,7 +3426,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             let record_clone = merged_or_new.clone();
             let cluster_store = state.store.clone();
             tauri::async_runtime::spawn(async move {
-                let graph = crate::memory::graph::GraphStore::new(cluster_store);
+                let graph = crate::graph::GraphStore::new(cluster_store);
                 if let Err(e) = graph.auto_link_to_task(&record_clone).await {
                     tracing::debug!("Auto task link: {e}");
                 }

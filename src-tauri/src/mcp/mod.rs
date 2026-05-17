@@ -3782,7 +3782,7 @@ async fn run_memory_graph_context(
             message: "start_node_id must be a UUID for the insight graph".to_string(),
         })?;
         let depth = args.depth.clamp(1, 3);
-        let gs = crate::storage::graph_store::GraphStore::new(app_state.store.clone());
+        let gs = crate::graph::graph_store::GraphStore::new(app_state.store.clone());
         let neighborhood = gs
             .get_subgraph(id, depth)
             .await
@@ -4678,7 +4678,7 @@ fn internal_tool_error<E: std::fmt::Display>(err: E) -> JsonRpcError {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::memory::graph::GraphStore;
+    use crate::graph::GraphStore;
     use crate::storage::{StateStore, Store};
     use tempfile::tempdir;
 

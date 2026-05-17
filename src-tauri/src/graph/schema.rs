@@ -1,4 +1,4 @@
-//! Typed insight graph model (distinct from legacy `storage::schema::GraphNode` rows).
+//! Typed insight graph records (distinct from legacy `storage::schema::GraphNode` rows).
 
 use std::collections::HashMap;
 
@@ -7,52 +7,28 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use uuid::Uuid;
 
-/// High-level entity kinds extracted from finalized memory / insight fields.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
-#[serde(rename_all = "PascalCase")]
-pub enum GraphNodeType {
-    Project,
-    Memory,
-    Concept,
-    Decision,
-    File,
-    Error,
-    Tool,
-    Person,
-    Url,
-    Session,
-    Task,
-}
+pub use crate::graph::edges::GraphEdgeType;
+pub use crate::graph::entities::GraphNodeType;
 
-/// Semantic edge kinds for the insight graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
-#[serde(rename_all = "PascalCase")]
-pub enum GraphEdgeType {
-    DependsOn,
-    Contains,
-    Imports,
-    Extends,
-    Implements,
-    PartOf,
-    Supports,
-    Contradicts,
-    Supersedes,
-    Refines,
-    Questions,
-    Resolves,
-    Causes,
-    Prevents,
-    TriggeredBy,
-    FixedBy,
-    BrokeBy,
-    PrecededBy,
-    FollowedBy,
-    SimilarTo,
-    MentionedIn,
-    UsedIn,
-    CreatedBy,
-    AppliesTo,
-}
+pub const NODE_ID_FIELD: &str = "id";
+pub const NODE_TYPE_FIELD: &str = "node_type";
+pub const NODE_LABEL_FIELD: &str = "label";
+pub const NODE_CONFIDENCE_FIELD: &str = "confidence";
+pub const NODE_SOURCE_MEMORY_IDS_FIELD: &str = "source_memory_ids";
+pub const NODE_EMBEDDING_FIELD: &str = "embedding";
+pub const NODE_CREATED_AT_MS_FIELD: &str = "created_at_ms";
+pub const NODE_UPDATED_AT_MS_FIELD: &str = "updated_at_ms";
+pub const NODE_STALE_FIELD: &str = "stale";
+pub const NODE_METADATA_FIELD: &str = "metadata";
+
+pub const EDGE_ID_FIELD: &str = "id";
+pub const EDGE_SOURCE_ID_FIELD: &str = "source_id";
+pub const EDGE_TARGET_ID_FIELD: &str = "target_id";
+pub const EDGE_TYPE_FIELD: &str = "edge_type";
+pub const EDGE_CONFIDENCE_FIELD: &str = "confidence";
+pub const EDGE_CONFLICT_FLAG_FIELD: &str = "conflict_flag";
+pub const EDGE_CREATED_AT_MS_FIELD: &str = "created_at_ms";
+pub const EDGE_METADATA_FIELD: &str = "metadata";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct GraphNode {

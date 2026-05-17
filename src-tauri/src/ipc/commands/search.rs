@@ -1,11 +1,11 @@
 //! Search-related Tauri commands and helpers.
 
 use super::common::{shared_embedder, strip_internal_fndr_results, truncate_chars};
+use crate::graph::graph_store::GraphStore;
 use crate::privacy::Blocklist;
 use crate::search::{
     rerank_results, HybridSearcher, MemoryCard, MemoryCardSynthesizer, QueryContext,
 };
-use crate::storage::graph_store::GraphStore;
 use crate::storage::SearchResult;
 use crate::AppState;
 use std::collections::HashSet;

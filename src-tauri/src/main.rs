@@ -6,7 +6,7 @@
 
 use chrono::Timelike;
 use fndr_lib::{
-    capture, config::Config, ipc, memory::graph::GraphStore, models, storage::Store, AppState,
+    capture, config::Config, graph::GraphStore, ipc, models, storage::Store, AppState,
     ProactiveSuggestion,
 };
 use std::sync::Arc;

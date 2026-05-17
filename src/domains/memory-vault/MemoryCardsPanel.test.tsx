@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryCardsPanel } from "./MemoryCardsPanel";
 import { listMemoryCards } from "@/shared/ipc/tauri";
 import type { MemoryCard } from "@/shared/ipc/tauri";
@@ -73,7 +73,6 @@ describe("MemoryCardsPanel", () => {
         await waitFor(() => {
             expect(listMemoryCards).toHaveBeenCalledWith(1500, null);
         });
-        fireEvent.click(screen.getByRole("tab", { name: /all memories/i }));
         expect(await screen.findByText("1500 cards")).toBeInTheDocument();
     });
 });

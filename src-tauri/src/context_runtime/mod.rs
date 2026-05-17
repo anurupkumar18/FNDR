@@ -216,8 +216,8 @@ pub async fn insight_graph_context_mcp(
     state: &AppState,
     project: Option<&str>,
 ) -> Option<serde_json::Value> {
-    use crate::memory::graph::schema::{GraphEdgeType, GraphNodeType};
-    use crate::storage::graph_store::GraphStore;
+    use crate::graph::graph_store::GraphStore;
+    use crate::graph::schema::{GraphEdgeType, GraphNodeType};
 
     let gs = GraphStore::new(state.store.clone());
     let nodes = gs.all_nodes().await.ok()?;
@@ -2297,7 +2297,7 @@ fn decision_verb_stem_design(decision: &str) -> bool {
 }
 
 fn build_event_title(record: &MemoryRecord) -> String {
-    let compressed = crate::memory::graph::compress_node_label(record);
+    let compressed = crate::graph::compress_node_label(record);
     if !compressed.trim().is_empty() {
         return trim_chars(&compressed, 96);
     }

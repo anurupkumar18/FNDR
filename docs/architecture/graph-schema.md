@@ -11,11 +11,13 @@ This document describes the **insight** graph persisted in LanceDB alongside mem
 
 ## Node types (`GraphNodeType`)
 
-`Project`, `Concept`, `Decision`, `File`, `Error`, `Tool`, `Person`, `Url`, `Session`, `Task`
+`Project`, `Memory`, `Concept`, `Decision`, `File`, `Error`, `Tool`, `Person`, `Url`, `Session`, `Task`, `Window`, `App`, `Command`
 
 ## Edge types (`GraphEdgeType`)
 
-`DependsOn`, `Contains`, `Imports`, `Extends`, `Implements`, `PartOf`, `Supports`, `Contradicts`, `Supersedes`, `Refines`, `Questions`, `Resolves`, `Causes`, `Prevents`, `TriggeredBy`, `FixedBy`, `BrokeBy`, `PrecededBy`, `FollowedBy`, `SimilarTo`, `MentionedIn`, `UsedIn`, `CreatedBy`, `AppliesTo`
+`DependsOn`, `Contains`, `Imports`, `Extends`, `Implements`, `PartOf`, `Supports`, `Contradicts`, `Supersedes`, `Refines`, `Questions`, `Resolves`, `Causes`, `Prevents`, `TriggeredBy`, `FixedBy`, `BrokeBy`, `PrecededBy`, `FollowedBy`, `SimilarTo`, `MentionedIn`, `UsedIn`, `CreatedBy`, `AppliesTo`, `OccurredInSession`, `BelongsToProject`, `UsedApp`, `SameTaskAs`, `EvidencedBy`
+
+Spec-name aliases are normalized by `src-tauri/src/graph/edges.rs::edge_aliases::canonical`. Persisted Lance rows keep canonical PascalCase edge literals.
 
 ## `graph_nodes` columns
 
@@ -72,12 +74,12 @@ This document describes the **insight** graph persisted in LanceDB alongside mem
 
 ## Louvain metadata on API subgraphs
 
-`get_full_graph` and `get_graph_for_project` attach `louvain` (node id → community id) and `cluster_0_name` via `graph::clusters::attach_louvain_metadata` for UI clustering (Memory Vault graph).
+`get_full_graph` and `get_graph_for_project` attach `louvain` (node id → community id) and `cluster_0_name` via `graph::community::attach_louvain_metadata` for UI clustering (Memory Vault graph).
 
 ## Write path
 
 - **Capture / flush:** `entity_extractor::extract` runs on normalized memory rows; results are queued on `AppState` (`pending_graph_updates` / `low_confidence_graph_candidates`). No Lance writes on the capture hot path.
-- **Idle commit:** `commit_graph_updates` drains the queue into Lance via `store::graph_store::GraphStore`, gated by `system_resources::allows_graph_idle_commit` (pause, battery saver, power, CPU load).
+- **Idle commit:** `commit_graph_updates` drains the queue into Lance via `graph::graph_store::GraphStore`, gated by `system_resources::allows_graph_idle_commit` (pause, battery saver, power, CPU load).
 
 ## MCP
 
@@ -94,7 +96,8 @@ Bounded JSON (~7500 serialized chars) with top project nodes, top edges, conflic
 
 ## Code map
 
-- Schema & pure algorithms: `src-tauri/src/memory/graph/schema.rs`, `traversal.rs`, `clusters.rs`
-- Lance I/O: `src-tauri/src/storage/graph_store.rs` (uses `Store`’s opened `graph_nodes_table` / `graph_edges_table`)
+- Schema & pure algorithms: `src-tauri/src/graph/entities.rs`, `edges.rs`, `schema.rs`, `traversal.rs`, `pathfinding.rs`, `community.rs`
+- Lance I/O: `src-tauri/src/graph/graph_store.rs` (uses `Store`’s opened `graph_nodes_table` / `graph_edges_table`)
+- Retrieval scaffolding: `src-tauri/src/graph/graph_index.rs`, `graph_rerank.rs`
 - Extraction: `src-tauri/src/capture/entity_extractor.rs`
 - Tauri commands: `src-tauri/src/ipc/commands/graph.rs`
