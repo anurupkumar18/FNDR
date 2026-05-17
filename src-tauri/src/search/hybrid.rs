@@ -2,7 +2,9 @@
 
 use crate::capture::text_cleanup;
 use crate::config::SearchConfig;
-use crate::embedding::{Embedder, EmbeddingBackend};
+use crate::context_runtime::query_plan::{plan as plan_query, PlanHints, Route};
+use crate::context_runtime::retrieval_routes::{RouteBranch, RouteCtx, RouteRunner};
+use crate::embedding::Embedder;
 use crate::storage::{SearchResult, Store};
 use crate::telemetry::runtime_metrics;
 use std::collections::{HashMap, HashSet};
@@ -120,7 +122,7 @@ impl QueryProfile {
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.normalized.is_empty()
     }
 
@@ -140,7 +142,7 @@ impl QueryProfile {
         &self.primary_terms
     }
 
-    fn keyword_variants(&self, max_variants: usize) -> Vec<String> {
+    pub(crate) fn keyword_variants(&self, max_variants: usize) -> Vec<String> {
         let mut variants = Vec::new();
 
         if let Some(phrase) = self.phrase.as_ref() {
@@ -200,7 +202,7 @@ impl QueryProfile {
 
     /// Build the embedding query, optionally augmented with extra concept
     /// terms (e.g., LLM-expanded synonyms for the original query).
-    fn embedding_query_with_extras(&self, extras: &[String]) -> String {
+    pub(crate) fn embedding_query_with_extras(&self, extras: &[String]) -> String {
         let mut parts = Vec::new();
 
         if !self.raw.trim().is_empty() {
@@ -254,6 +256,10 @@ impl QueryProfile {
 
     fn is_short_intent_query(&self) -> bool {
         self.primary_terms.len() <= 2 && self.intent == QueryIntent::General
+    }
+
+    pub(crate) fn primary_terms_len(&self) -> usize {
+        self.primary_terms.len()
     }
 
     /// True when the raw query is an abstract concept (lowercase, no
@@ -315,8 +321,11 @@ impl HybridSearcher {
             if profile.is_abstract_concept_query() {
                 // Race the LLM expansion against a tight timeout. If we don't
                 // get a response in 600ms, proceed without expansion.
-                match timeout(Duration::from_millis(600), engine.expand_search_query(query))
-                    .await
+                match timeout(
+                    Duration::from_millis(600),
+                    engine.expand_search_query(query),
+                )
+                .await
                 {
                     Ok(terms) => {
                         tracing::info!(
@@ -415,11 +424,6 @@ impl HybridSearcher {
             return Ok(Vec::new());
         }
         let search_config = search_config.clone().normalized();
-        let semantic_branch_timeout = Duration::from_millis(search_config.semantic_timeout_ms);
-        let snippet_branch_timeout = Duration::from_millis(search_config.snippet_timeout_ms);
-        let keyword_total_timeout = Duration::from_millis(search_config.keyword_timeout_ms);
-        let keyword_variant_timeout =
-            Duration::from_millis(search_config.keyword_variant_timeout_ms);
 
         tracing::info!(
             query = %query,
@@ -429,174 +433,48 @@ impl HybridSearcher {
             "hybrid_search:start"
         );
 
-        let base_limit = limit.max(1);
-        let semantic_branch_limit = (base_limit * search_config.candidate_multiplier)
-            .min(search_config.max_semantic_branch_limit);
-        let keyword_branch_limit = (base_limit * 2)
-            .min(search_config.max_keyword_branch_limit)
-            .max(base_limit);
-        let semantic_enabled = matches!(embedder.backend(), EmbeddingBackend::Real);
-        let query_embedding = if semantic_enabled {
-            let embedding_query = profile.embedding_query_with_extras(expansion);
-            let t_embed = Instant::now();
-            let out = match embedder.embed_batch(&[embedding_query]) {
-                Ok(vectors) => Some(vectors.into_iter().next().unwrap_or_default()),
-                Err(err) => {
-                    tracing::warn!(err = %err, "hybrid_search:embed_failed");
-                    None
-                }
-            };
-            runtime_metrics::record_ms(
-                "hybrid.embed_query_ms",
-                t_embed.elapsed().as_millis() as u64,
-            );
-            out
-        } else {
-            None
-        };
+        let mut route_plan = plan_query(query, &PlanHints::default());
+        route_plan.retrieval_routes = vec![Route::Vector, Route::Keyword];
+        let route_ctx = RouteCtx::new(store, &search_config)
+            .with_embedder(embedder)
+            .with_limits(limit, time_filter, app_filter, expansion);
+        let route_hits = RouteRunner::dispatch(&route_plan, &route_ctx).await;
 
-        let allow_snippet_branch = query_embedding.is_some()
-            && profile.primary_terms.len() >= search_config.min_snippet_query_terms;
-        let semantic_fut = async {
-            let branch_started = Instant::now();
-            let mut timed_out = false;
-            let results = if let Some(query_embedding) = query_embedding.as_ref() {
-                match timeout(
-                    semantic_branch_timeout,
-                    store.vector_search(
-                        query_embedding,
-                        semantic_branch_limit,
-                        time_filter,
-                        app_filter,
-                    ),
-                )
-                .await
-                {
-                    Ok(Ok(results)) => results,
-                    Ok(Err(err)) => {
-                        tracing::warn!(err = %err, "hybrid_search:semantic_failed");
-                        Vec::new()
-                    }
-                    Err(_) => {
-                        timed_out = true;
-                        tracing::warn!(
-                            timeout_ms = semantic_branch_timeout.as_millis(),
-                            "hybrid_search:semantic_timeout"
-                        );
-                        Vec::new()
-                    }
-                }
-            } else {
-                Vec::new()
-            };
-            (results, branch_started.elapsed(), timed_out)
-        };
-        let snippet_fut = async {
-            let branch_started = Instant::now();
-            let mut timed_out = false;
-            let results = if allow_snippet_branch {
-                if let Some(query_embedding) = query_embedding.as_ref() {
-                    match timeout(
-                        snippet_branch_timeout,
-                        store.snippet_vector_search(
-                            query_embedding,
-                            semantic_branch_limit,
-                            time_filter,
-                            app_filter,
-                        ),
-                    )
-                    .await
-                    {
-                        Ok(Ok(results)) => results,
-                        Ok(Err(err)) => {
-                            tracing::warn!(err = %err, "hybrid_search:snippet_failed");
-                            Vec::new()
-                        }
-                        Err(_) => {
-                            timed_out = true;
-                            tracing::warn!(
-                                timeout_ms = snippet_branch_timeout.as_millis(),
-                                "hybrid_search:snippet_timeout"
-                            );
-                            Vec::new()
-                        }
-                    }
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
-            (results, branch_started.elapsed(), timed_out)
-        };
-        let keyword_fut = async {
-            let branch_started = Instant::now();
-            let mut timed_out = false;
-            let results = match timeout(
-                keyword_total_timeout,
-                Self::keyword_search_with_budget(
-                    store,
-                    &profile,
-                    keyword_branch_limit,
-                    time_filter,
-                    app_filter,
-                    &search_config,
-                    keyword_total_timeout,
-                    keyword_variant_timeout,
-                ),
-            )
-            .await
-            {
-                Ok(Ok(results)) => results,
-                Ok(Err(err)) => {
-                    tracing::warn!(err = %err, "hybrid_search:keyword_failed");
-                    Vec::new()
-                }
-                Err(_) => {
-                    timed_out = true;
-                    tracing::warn!(
-                        timeout_ms = keyword_total_timeout.as_millis(),
-                        "hybrid_search:keyword_timeout"
-                    );
-                    Vec::new()
-                }
-            };
-            (results, branch_started.elapsed(), timed_out)
-        };
+        let mut semantic_results = Vec::new();
+        let mut snippet_results = Vec::new();
+        let mut keyword_results = Vec::new();
+        let mut vector_elapsed_ms = 0;
+        let mut keyword_elapsed_ms = 0;
 
-        let (
-            (semantic_results, semantic_elapsed, semantic_timed_out),
-            (snippet_results, snippet_elapsed, snippet_timed_out),
-            (keyword_results, keyword_elapsed, keyword_timed_out),
-        ) = tokio::join!(semantic_fut, snippet_fut, keyword_fut);
+        for route_group in route_hits {
+            match route_group.route {
+                Route::Vector => vector_elapsed_ms = route_group.elapsed_ms,
+                Route::Keyword => keyword_elapsed_ms = route_group.elapsed_ms,
+                _ => {}
+            }
+            for hit in route_group.hits {
+                let Some(result) = hit.signals.search_result else {
+                    continue;
+                };
+                match hit.signals.branch {
+                    RouteBranch::Semantic => semantic_results.push(result),
+                    RouteBranch::Snippet => snippet_results.push(result),
+                    RouteBranch::Keyword => keyword_results.push(result),
+                    _ => {}
+                }
+            }
+        }
 
         tracing::info!(
             semantic_count = semantic_results.len(),
             snippet_count = snippet_results.len(),
             keyword_count = keyword_results.len(),
-            semantic_ms = semantic_elapsed.as_millis(),
-            snippet_ms = snippet_elapsed.as_millis(),
-            keyword_ms = keyword_elapsed.as_millis(),
-            semantic_timed_out,
-            snippet_timed_out,
-            keyword_timed_out,
-            semantic_enabled,
-            snippet_enabled = allow_snippet_branch,
+            vector_ms = vector_elapsed_ms,
+            keyword_ms = keyword_elapsed_ms,
+            snippet_enabled = profile.primary_terms_len() >= search_config.min_snippet_query_terms,
             elapsed_ms = started.elapsed().as_millis(),
             "hybrid_search:branches_complete"
         );
-        runtime_metrics::record_ms("hybrid.semantic_ms", semantic_elapsed.as_millis() as u64);
-        runtime_metrics::record_ms("hybrid.snippet_ms", snippet_elapsed.as_millis() as u64);
-        runtime_metrics::record_ms("hybrid.keyword_ms", keyword_elapsed.as_millis() as u64);
-        if semantic_timed_out {
-            runtime_metrics::bump("hybrid.semantic_timeout");
-        }
-        if snippet_timed_out {
-            runtime_metrics::bump("hybrid.snippet_timeout");
-        }
-        if keyword_timed_out {
-            runtime_metrics::bump("hybrid.keyword_timeout");
-        }
 
         let fused = Self::hybrid_fusion(
             &profile,
@@ -614,107 +492,6 @@ impl HybridSearcher {
         runtime_metrics::record_ms("hybrid.total_ms", started.elapsed().as_millis() as u64);
 
         Ok(reranked)
-    }
-
-    async fn keyword_search_with_budget(
-        store: &Store,
-        profile: &QueryProfile,
-        branch_limit: usize,
-        time_filter: Option<&str>,
-        app_filter: Option<&str>,
-        search_config: &SearchConfig,
-        keyword_total_timeout: Duration,
-        keyword_variant_timeout: Duration,
-    ) -> Result<Vec<SearchResult>, String> {
-        let variants = profile.keyword_variants(search_config.max_keyword_variants);
-        if variants.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let started = Instant::now();
-        let target_hits = branch_limit.min(18).max(8);
-        let mut by_id: HashMap<String, SearchResult> = HashMap::new();
-
-        for (variant_idx, variant) in variants.iter().enumerate() {
-            if variant_idx > search_config.max_keyword_fallback_variants {
-                break;
-            }
-            if by_id.len() >= target_hits && variant_idx > 0 {
-                break;
-            }
-            if started.elapsed() >= keyword_total_timeout {
-                tracing::warn!(
-                    timeout_ms = keyword_total_timeout.as_millis(),
-                    "hybrid_search:keyword_budget_exhausted"
-                );
-                break;
-            }
-
-            let hits = match timeout(
-                keyword_variant_timeout,
-                store.keyword_search(variant, branch_limit, time_filter, app_filter),
-            )
-            .await
-            {
-                Ok(Ok(hits)) => hits,
-                Ok(Err(err)) => {
-                    tracing::warn!(
-                        variant_idx,
-                        variant = %variant,
-                        err = %err,
-                        "hybrid_search:keyword_variant_failed"
-                    );
-                    continue;
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        variant_idx,
-                        variant = %variant,
-                        timeout_ms = keyword_variant_timeout.as_millis(),
-                        "hybrid_search:keyword_variant_timeout"
-                    );
-                    continue;
-                }
-            };
-
-            let decay = if variant_idx == 0 {
-                1.0
-            } else {
-                (1.0 - (variant_idx as f32 * 0.07)).max(0.84)
-            };
-
-            for mut hit in hits {
-                hit.score *= decay;
-                by_id
-                    .entry(hit.id.clone())
-                    .and_modify(|existing| {
-                        if hit.score > existing.score
-                            || (hit.score == existing.score && hit.timestamp > existing.timestamp)
-                        {
-                            *existing = hit.clone();
-                        }
-                    })
-                    .or_insert(hit);
-            }
-
-            tracing::info!(
-                variant_idx,
-                variant = %variant,
-                dedup_hits = by_id.len(),
-                elapsed_ms = started.elapsed().as_millis(),
-                "hybrid_search:keyword_variant_complete"
-            );
-        }
-
-        let mut deduped = by_id.into_values().collect::<Vec<_>>();
-        deduped.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.timestamp.cmp(&a.timestamp))
-        });
-        deduped.truncate(branch_limit.max(1));
-        Ok(deduped)
     }
 
     /// Merge semantic + keyword candidates, then rerank with the standard policy.
@@ -2565,10 +2342,8 @@ mod tests {
     #[test]
     fn embedding_query_appends_extras() {
         let profile = QueryProfile::from_query("sport");
-        let with_extras = profile.embedding_query_with_extras(&[
-            "sports".to_string(),
-            "athletics".to_string(),
-        ]);
+        let with_extras =
+            profile.embedding_query_with_extras(&["sports".to_string(), "athletics".to_string()]);
         assert!(with_extras.contains("sport"));
         assert!(with_extras.contains("sports"));
         assert!(with_extras.contains("athletics"));

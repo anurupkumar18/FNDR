@@ -17,8 +17,14 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use tauri::Emitter;
 
+pub mod entity_route;
 pub mod graph_plan;
+pub mod graph_route;
+pub mod keyword_route;
 pub mod query_plan;
+pub mod retrieval_routes;
+pub mod temporal_route;
+pub mod vector_route;
 mod wiki_policy;
 
 static URL_RE: Lazy<Regex> =
