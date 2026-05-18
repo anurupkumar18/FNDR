@@ -479,6 +479,63 @@ export type PaletteKey = keyof typeof PALETTES;
 
 const STYLE_TAG_ID = "cinematic-palette-vars";
 
+type RgbTriple = [number, number, number];
+
+/** Parse #rrggbb to linear 0–1 RGB for WebGL / CSS injection. */
+export function hexToRgb(hex: string): RgbTriple {
+    const h = hex.trim().replace("#", "");
+    const n = Number.parseInt(h, 16);
+    if (Number.isNaN(n) || h.length < 6) {
+        return [0, 0, 0];
+    }
+    return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+/** WCAG relative luminance for linear 0–1 RGB. */
+export function relativeLuminance(rgb: RgbTriple): number {
+    const lin = rgb.map((c) =>
+        c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+    ) as RgbTriple;
+    return lin[0] * 0.2126 + lin[1] * 0.7152 + lin[2] * 0.0722;
+}
+
+/** Mean of three linear RGB triples (cinematic swatches 1–3 void). */
+export function linearRgbMix3(a: RgbTriple, b: RgbTriple, c: RgbTriple): RgbTriple {
+    return [(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3];
+}
+
+/** Exact cinematic swatch by index (0–6), same hex as the palette picker. */
+export function getPaletteShadeRgb(paletteKey: PaletteKey, index: number): RgbTriple {
+    const shades = PALETTES[paletteKey].shades;
+    const hex = shades[Math.max(0, Math.min(shades.length - 1, index))];
+    return hexToRgb(hex);
+}
+
+/** Readable ink for hero copy and OS chrome on the motion wallpaper. */
+export function getWallpaperInkColors(
+    paletteKey: PaletteKey,
+    mode: PaletteMode = "dark"
+): {
+    primary: string;
+    secondary: string;
+    fieldLuminance: number;
+} {
+    const palette = PALETTES[paletteKey];
+    const tokens = palette[mode];
+    const { bg } = getWallpaperAuroraColors(paletteKey, mode);
+    const anchorLum = relativeLuminance(bg);
+    return {
+        primary: tokens.textPrimary,
+        secondary: tokens.textSecondary,
+        fieldLuminance: anchorLum,
+    };
+}
+
+/** Wallpaper field triple: void + saturated primary glow. */
+export function getWallpaperFieldColors(paletteKey: PaletteKey, mode: PaletteMode = "dark") {
+    return getWallpaperAuroraColors(paletteKey, mode);
+}
+
 export function isPaletteKey(value: string | null): value is PaletteKey {
     return Boolean(value && value in PALETTES);
 }
@@ -487,7 +544,8 @@ export function applyPalette(paletteKey: PaletteKey, mode: PaletteMode = "dark",
     const palette = PALETTES[paletteKey];
     const tokens = palette[mode];
     const [d1, d2, d3, d4, s1, s2, accent] = palette.shades;
-    const aur = palette.aurora[mode];
+    const aurWall = getWallpaperAuroraColors(paletteKey, mode);
+    const wallInk = getWallpaperInkColors(paletteKey, mode);
 
     const css = `
 ${selector} {
@@ -511,15 +569,20 @@ ${selector} {
   --cp-accent-raw: ${accent};
   --cp-active-palette: "${paletteKey}";
   --cp-active-mode: "${mode}";
-  --cp-aurora-bg-r: ${aur.bg[0]};
-  --cp-aurora-bg-g: ${aur.bg[1]};
-  --cp-aurora-bg-b: ${aur.bg[2]};
-  --cp-aurora-mid-r: ${aur.mid[0]};
-  --cp-aurora-mid-g: ${aur.mid[1]};
-  --cp-aurora-mid-b: ${aur.mid[2]};
-  --cp-aurora-acc-r: ${aur.acc[0]};
-  --cp-aurora-acc-g: ${aur.acc[1]};
-  --cp-aurora-acc-b: ${aur.acc[2]};
+  --cp-wall-text-primary: ${wallInk.primary};
+  --cp-wall-text-secondary: ${wallInk.secondary};
+  --cp-wall-bg: ${d1};
+  --cp-wall-mid: ${d4};
+  --cp-wall-acc: ${accent};
+  --cp-aurora-bg-r: ${aurWall.bg[0]};
+  --cp-aurora-bg-g: ${aurWall.bg[1]};
+  --cp-aurora-bg-b: ${aurWall.bg[2]};
+  --cp-aurora-mid-r: ${aurWall.mid[0]};
+  --cp-aurora-mid-g: ${aurWall.mid[1]};
+  --cp-aurora-mid-b: ${aurWall.mid[2]};
+  --cp-aurora-acc-r: ${aurWall.acc[0]};
+  --cp-aurora-acc-g: ${aurWall.acc[1]};
+  --cp-aurora-acc-b: ${aurWall.acc[2]};
 }`.trim();
 
     let tag = document.getElementById(STYLE_TAG_ID);
@@ -566,6 +629,28 @@ export function getAuroraColors(
     mode: PaletteMode
 ): { bg: [number, number, number]; mid: [number, number, number]; acc: [number, number, number] } {
     return PALETTES[paletteKey].aurora[mode];
+}
+
+/**
+ * Wallpaper shader triple — exact cinematic swatches (same hex as the picker):
+ *   void = mean(shades 1–3), fog = shade 4, pop = shade 7 (accent).
+ */
+export function getWallpaperAuroraColors(paletteKey: PaletteKey, mode: PaletteMode = "dark") {
+    const [d1, d2, d3, d4, , , accent] = PALETTES[paletteKey].shades;
+    const mid = hexToRgb(d4);
+    const acc = hexToRgb(accent);
+    if (mode === "light") {
+        return {
+            bg: hexToRgb(PALETTES[paletteKey].light.bg),
+            mid,
+            acc,
+        };
+    }
+    return {
+        bg: linearRgbMix3(hexToRgb(d1), hexToRgb(d2), hexToRgb(d3)),
+        mid,
+        acc,
+    };
 }
 
 export function listPalettes() {

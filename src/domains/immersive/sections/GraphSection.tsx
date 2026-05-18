@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { StickyScene } from "@/domains/immersive/components/StickyScene";
-import { useSetWallpaperPage } from "@/shared/hooks/useImmersiveWallpaper";
 import { KnowledgeGraph } from "@/domains/memory-vault/KnowledgeGraph";
 import { getFullGraph, type InsightGraphNode, type InsightGraphEdge } from "@/shared/ipc/tauri";
 import "./GraphSection.css";
@@ -12,7 +11,6 @@ const SECTION_ID = "graph";
  * Wraps the full KnowledgeGraph canvas in a sticky scroll budget.
  */
 export function GraphSection() {
-    useSetWallpaperPage("graph", SECTION_ID);
 
     const [nodes, setNodes] = useState<InsightGraphNode[]>([]);
     const [edges, setEdges] = useState<InsightGraphEdge[]>([]);

@@ -31,45 +31,8 @@ import {
     getFunGreeting,
 } from "@/shared/ipc/tauri";
 import { getOnboardingState, saveOnboardingState, type OnboardingState } from "@/shared/ipc/onboarding";
-import { AuroraWallpaper, type AuroraPageId } from "@/shared/components/AuroraWallpaper";
 import { EVAL_UI } from "@/shared/utils/eval-ui";
-import { StatusBar } from "@/shared/components/StatusBar";
 import "./styles/App.css";
-
-/** Map the currently active panel + search state onto one of the 8
- *  aurora wallpaper presets. Each panel surfaces a different aurora
- *  character (graph = stormy, darkroom = quiet, frames = star-dense, …). */
-function getWallpaperPage(activePanel: PanelKey | null, hasQuery: boolean): AuroraPageId {
-    if (hasQuery) return "search";
-    switch (activePanel) {
-        case "memoryCards":
-        case "stats":
-        case "glassesImport":
-        case "searchHistory":
-            return "frames";
-        case "knowledgeGraph":
-            return "graph";
-        case "agent":
-        case "research":
-        case "automation":
-        case "quickSkills":
-            return "smart";
-        case "focusMode":
-        case "focusSession":
-        case "pipeline":
-        case "engineMetrics":
-            return "darkroom";
-        case "todo":
-            return "pinned";
-        case "dailySummary":
-        case "meeting":
-        case "timeTracking":
-            return "timeline";
-        case null:
-        default:
-            return "home";
-    }
-}
 
 function formatHomeDate(now: Date): string {
     const weekday = now.toLocaleDateString(undefined, { weekday: "long" }).toUpperCase();
@@ -551,18 +514,22 @@ function App() {
         );
     }
 
-    const wallpaperPage = getWallpaperPage(activePanel, query.trim().length > 0);
-
     return (
         <div className="app film-grain">
-            <AuroraWallpaper page={wallpaperPage} className="app-aurora-wallpaper" />
             {!EVAL_UI && (
                 <button
-                    className="ui-action-btn sidebar-toggle"
+                    type="button"
+                    className="fndr-os-chrome-btn sidebar-toggle"
                     onClick={() => setIsSidebarOpen((prev) => !prev)}
                     aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
                 >
-                    {isSidebarOpen ? "Close" : "Menu"}
+                    {isSidebarOpen ? (
+                        <span aria-hidden="true">×</span>
+                    ) : (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                            <path d="M4 7h16M4 12h16M4 17h16" strokeLinecap="round" />
+                        </svg>
+                    )}
                 </button>
             )}
 
@@ -650,35 +617,54 @@ function App() {
             )}
 
             <main className={`app-main ${isFocusMode ? "search-centered" : ""}`}>
-                {isFocusMode && (
-                    <div className="home-focus-header">
-                        <div className="home-date-context">{homeDateLabel}</div>
-                        <div className="home-greeting">
-                            <div>{homeGreetingLine1}</div>
-                            <div>Let&apos;s dive into your memories.</div>
-                        </div>
+                {isFocusMode ? (
+                    <div className="home-hero-stage">
+                        <header className="home-focus-header">
+                            <p className="home-date-context">{homeDateLabel}</p>
+                            <h1 className="home-greeting-primary">{homeGreetingLine1}</h1>
+                            <p className="home-greeting-sub">Let&apos;s dive into your memories.</p>
+                        </header>
+                        <section className={`search-shell ${query.trim() ? "is-active" : ""}`}>
+                            <SearchBar
+                                value={queryDraft}
+                                submittedValue={query}
+                                onChange={setQueryDraft}
+                                onSubmit={(v) => void handleSearchSubmit(v)}
+                                timeFilter={timeFilter}
+                                onTimeFilterChange={setTimeFilter}
+                                appFilter={appFilter}
+                                onAppFilterChange={setAppFilter}
+                                onSetMeetingPanelOpen={(open) => setActivePanel(open ? "meeting" : null)}
+                                onSetMemoryCardsPanelOpen={(open) => setActivePanel(open ? "memoryCards" : null)}
+                                onSetKnowledgeGraphPanelOpen={(open) => setActivePanel(open ? "knowledgeGraph" : null)}
+                                appNames={appNames}
+                                resultCount={visibleResults.length}
+                                searchResults={visibleResults}
+                                disabled={!searchAllowed}
+                            />
+                        </section>
                     </div>
+                ) : (
+                    <section className={`search-shell ${query.trim() ? "is-active" : ""}`}>
+                        <SearchBar
+                                value={queryDraft}
+                                submittedValue={query}
+                                onChange={setQueryDraft}
+                                onSubmit={(v) => void handleSearchSubmit(v)}
+                                timeFilter={timeFilter}
+                                onTimeFilterChange={setTimeFilter}
+                                appFilter={appFilter}
+                                onAppFilterChange={setAppFilter}
+                                onSetMeetingPanelOpen={(open) => setActivePanel(open ? "meeting" : null)}
+                                onSetMemoryCardsPanelOpen={(open) => setActivePanel(open ? "memoryCards" : null)}
+                                onSetKnowledgeGraphPanelOpen={(open) => setActivePanel(open ? "knowledgeGraph" : null)}
+                            appNames={appNames}
+                            resultCount={visibleResults.length}
+                            searchResults={visibleResults}
+                            disabled={!searchAllowed}
+                        />
+                    </section>
                 )}
-
-                <section className={`search-shell ${query.trim() ? "is-active" : ""}`}>
-                    <SearchBar
-                        value={queryDraft}
-                        submittedValue={query}
-                        onChange={setQueryDraft}
-                        onSubmit={(v) => void handleSearchSubmit(v)}
-                        timeFilter={timeFilter}
-                        onTimeFilterChange={setTimeFilter}
-                        appFilter={appFilter}
-                        onAppFilterChange={setAppFilter}
-                        onSetMeetingPanelOpen={(open) => setActivePanel(open ? "meeting" : null)}
-                        onSetMemoryCardsPanelOpen={(open) => setActivePanel(open ? "memoryCards" : null)}
-                        onSetKnowledgeGraphPanelOpen={(open) => setActivePanel(open ? "knowledgeGraph" : null)}
-                        appNames={appNames}
-                        resultCount={visibleResults.length}
-                        searchResults={visibleResults}
-                        disabled={!searchAllowed}
-                    />
-                </section>
 
                 {!isFocusMode && (
                     <div className="main-layout">
@@ -733,7 +719,6 @@ function App() {
                 />
             )}
 
-            {!EVAL_UI && <StatusBar status={status} />}
         </div>
     );
 }

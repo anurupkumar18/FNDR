@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { StickyScene } from "@/domains/immersive/components/StickyScene";
-import { useSetWallpaperPage } from "@/shared/hooks/useImmersiveWallpaper";
 import { getBlocklist } from "@/shared/ipc/tauri";
 import "./PrivacySection.css";
 
@@ -59,7 +58,6 @@ function PrivacyColumn({ title, stamp, stampTone, items, delay = 0 }: ColumnProp
  * Blocklist items populate the DISCARDED column.
  */
 export function PrivacySection() {
-    useSetWallpaperPage("darkroom", SECTION_ID);
 
     const [blocklist, setBlocklist] = useState<string[]>([]);
 

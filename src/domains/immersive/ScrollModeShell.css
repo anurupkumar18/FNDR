@@ -13,38 +13,10 @@
     width: 100vw;
     height: 100vh;
     overflow: hidden;
-    background: transparent; /* aurora canvas is the background */
-    color: var(--cp-text-primary);
+    background: transparent;
+    color: var(--cp-wall-text-primary, var(--cp-text-primary));
     font-family: var(--film-font-body);
-    z-index: 10;
-
-    /* Wire film-paper semantic tokens to the active cinematic palette
-       so every child that uses var(--bg), var(--fg), var(--accent), etc.
-       automatically responds to palette changes. */
-    --bg:            var(--cp-bg);
-    --bg-2:          var(--cp-surface);
-    --bg-3:          var(--cp-surface-raised);
-    --bg-4:          var(--cp-surface-raised);
-    --fg:            var(--cp-text-primary);
-    --fg-2:          var(--cp-text-secondary);
-    --fg-3:          var(--cp-text-secondary);
-    --fg-4:          var(--cp-text-secondary);
-    --accent:        var(--cp-accent);
-    --accent-2:      var(--cp-accent-muted);
-    --accent-3:      var(--cp-accent-subtle);
-    --hairline:      var(--cp-border);
-    --hairline-2:    var(--cp-border);
-    --hairline-strong: var(--cp-border-strong);
-}
-
-/* Per-section Aurora wallpaper — sits behind all content */
-.fndr-immersive-wallpaper {
-    position: fixed !important;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    z-index: 0;
-    pointer-events: none;
+    z-index: 1;
 }
 
 .fndr-immersive-scroll {
@@ -90,23 +62,6 @@
 
 .fndr-section--short {
     min-height: 60vh;
-}
-
-/* Section vignette — semi-transparent radial darkening so the aurora
-   shows through while still focusing the eye on the content. Uses
-   color-mix to blend the palette bg at decreasing opacity toward center. */
-.fndr-section::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(
-        ellipse at 50% 40%,
-        color-mix(in srgb, var(--cp-bg) 8%, transparent) 0%,
-        color-mix(in srgb, var(--cp-bg) 28%, transparent) 60%,
-        color-mix(in srgb, var(--cp-bg) 48%, transparent) 100%
-    );
-    z-index: -1;
-    pointer-events: none;
 }
 
 /* Mono label — used at the top of every section ("REEL 0421", "CAPTURE PIPELINE", etc.) */

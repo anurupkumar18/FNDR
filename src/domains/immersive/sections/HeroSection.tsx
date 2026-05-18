@@ -38,25 +38,19 @@ function layerY(spring: MotionValue<number>, px: number) {
     return useTransform(spring, [-1, 1], [-px * 0.6, px * 0.6]);
 }
 
-// ── Ticker ─────────────────────────────────────────────────────────────────
-
-const TICKER_CHUNK = "MEMORY • DEVELOPED • LOCAL • PRIVATE • ENCRYPTED • YOURS • FNDR • ";
-const tickerText = Array(4).fill(TICKER_CHUNK).join("");
-
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const DATE_PX = 6;
 const TITLE_PX = 22;
 const SUB_PX = 16;
 const SEARCH_PX = 10;
-const CTA_PX = 6;
 const SCROLL_PX = 4;
 
 // ── Component ──────────────────────────────────────────────────────────────
 
 export function HeroSection({
-    onEnterReel,
-    onEnterWorkMode,
+    onEnterReel: _onEnterReel,
+    onEnterWorkMode: _onEnterWorkMode,
     onScrollToSearch,
     greeting: greetingProp,
     dateLabel: dateLabelProp,
@@ -81,8 +75,6 @@ export function HeroSection({
     const subTy = layerY(sy, SUB_PX);
     const searchTx = layerX(sx, SEARCH_PX);
     const searchTy = layerY(sy, SEARCH_PX);
-    const ctaTx = layerX(sx, CTA_PX);
-    const ctaTy = layerY(sy, CTA_PX);
     const scrollTx = layerX(sx, SCROLL_PX);
     const scrollTy = layerY(sy, SCROLL_PX);
 
@@ -108,73 +100,47 @@ export function HeroSection({
             onMouseMove={reduced ? undefined : handleMouseMove}
             onMouseLeave={reduced ? undefined : handleMouseLeave}
         >
-            {/* Date chip */}
             <motion.div
-                style={reduced ? {} : { x: dateTx, y: dateTy }}
-                className="fndr-hero-date-wrap"
-                variants={fadeUp}
-                initial="hidden"
-                animate="visible"
-                transition={transition({ delay: s(motionTokens.dur.fast) })}
-            >
-                {dateLabel && <p className="fndr-hero-date">{dateLabel}</p>}
-            </motion.div>
-
-            {/* Main content column */}
-            <motion.div
-                className="fndr-hero-content"
+                className="fndr-hero-stage"
                 variants={staggerContainer}
                 initial="hidden"
                 animate="visible"
                 transition={transition({ delayChildren: s(motionTokens.dur.fast) })}
             >
-                {/* Greeting h1 */}
-                <motion.div
+                {dateLabel && (
+                    <motion.p
+                        className="fndr-hero-date"
+                        style={reduced ? {} : { x: dateTx, y: dateTy }}
+                        variants={fadeUp}
+                    >
+                        {dateLabel}
+                    </motion.p>
+                )}
+
+                <motion.h1
+                    className="fndr-hero-greeting"
                     style={reduced ? {} : { x: titleTx, y: titleTy }}
                     variants={fadeUp}
                 >
-                    <h1 className="fndr-hero-greeting">{greeting}</h1>
-                </motion.div>
+                    {greeting}
+                </motion.h1>
 
-                {/* Subtitle */}
-                <motion.div
+                <motion.p
+                    className="fndr-hero-subtitle"
                     style={reduced ? {} : { x: subTx, y: subTy }}
                     variants={fadeUp}
                 >
-                    <p className="fndr-hero-subtitle">{subtitle}</p>
-                </motion.div>
+                    {subtitle}
+                </motion.p>
 
-                {/* Hero search bar */}
                 <motion.div
+                    className="fndr-hero-search-wrap"
                     style={reduced ? {} : { x: searchTx, y: searchTy }}
                     variants={fadeUp}
                 >
                     <HeroSearchBar onSubmit={handleSearchSubmit} />
                 </motion.div>
-
-                {/* CTAs */}
-                <motion.div
-                    style={reduced ? {} : { x: ctaTx, y: ctaTy }}
-                    className="fndr-hero-ctas"
-                    variants={fadeUp}
-                >
-                    <button
-                        type="button"
-                        className="fndr-btn fndr-btn--primary"
-                        onClick={onEnterReel}
-                    >
-                        Enter the reel
-                    </button>
-                    <button type="button" className="fndr-btn" onClick={onEnterWorkMode}>
-                        Open work mode
-                    </button>
-                </motion.div>
             </motion.div>
-
-            {/* Horizontal ticker */}
-            <div className="fndr-hero-ticker" aria-hidden="true">
-                <div className="fndr-hero-ticker-track">{tickerText}</div>
-            </div>
 
             {/* Scroll indicator */}
             <motion.div
@@ -203,7 +169,7 @@ function HeroSearchBar({ onSubmit }: { onSubmit: (q: string) => void }) {
         if (query.trim()) onSubmit(query.trim());
     };
 
-    const placeholder = "Search your memories...";
+    const placeholder = "What shall we uncover tonight?";
 
     return (
         <form className="fndr-hero-search" onSubmit={handleSubmit} data-aurora-ignore>
@@ -228,6 +194,7 @@ function HeroSearchBar({ onSubmit }: { onSubmit: (q: string) => void }) {
                 spellCheck={false}
                 autoComplete="off"
             />
+            <span className="fndr-hero-voice-divider" aria-hidden="true" />
             <button
                 type="button"
                 className={`fndr-hero-voice-btn${isRecording ? " is-listening" : ""}`}

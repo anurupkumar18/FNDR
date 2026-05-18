@@ -6,6 +6,8 @@
 export const STORAGE_KEYS = {
     theme: "fndr-theme",
     palette: "fndr-palette",
+    /** Interactive motion shader background id (see wallpaper-registry). */
+    wallpaper: "fndr-wallpaper",
     automations: "fndr-automations",
     searchHistory: "fndr-search-history",
     /** Selected top-level shell mode: "immersive" (scroll experience) or "work" (productive). */

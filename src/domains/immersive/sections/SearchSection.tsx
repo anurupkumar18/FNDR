@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { StickyScene } from "@/domains/immersive/components/StickyScene";
 import { useSearch } from "@/shared/hooks/useSearch";
-import { useSetWallpaperPage } from "@/shared/hooks/useImmersiveWallpaper";
 import { MemoryCard } from "@/domains/memory-vault/MemoryCard";
 import "./SearchSection.css";
 
@@ -13,7 +12,6 @@ const SECTION_ID = "search";
  * Cormorant display input, query intent chips, staggered retrieval results.
  */
 export function SearchSection() {
-    useSetWallpaperPage("search", SECTION_ID);
 
     const [query, setQuery] = useState("");
     const inputRef = useRef<HTMLInputElement>(null);

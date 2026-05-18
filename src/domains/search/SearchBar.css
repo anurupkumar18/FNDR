@@ -199,31 +199,8 @@
   margin-top: 1px;
 }
 
-.voice-btn {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-elevated);
-  color: var(--text-primary);
-  padding: 7px 14px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  flex-shrink: 0;
-  min-width: 58px;
-  box-shadow: 0 6px 14px var(--shadow-color);
-}
-
-.voice-btn:hover:not(:disabled) {
-  color: var(--text-inverse);
-  border-color: var(--accent);
-  background: var(--accent);
-}
-
+/* Mic uses global .fndr-os-chrome-btn — only recording pulse here */
 .voice-btn.recording {
-  background: var(--accent);
-  border-color: var(--accent-hover);
-  color: var(--text-inverse);
   animation: pulseRecording 1.5s infinite;
 }
 

@@ -311,11 +311,14 @@
 /* ===== App shell ===== */
 .app {
     display: flex;
-    min-height: 100vh;
-    background: var(--bg);
+    flex-direction: column;
+    height: 100%;
+    min-height: 100dvh;
+    max-height: 100dvh;
+    overflow: hidden;
+    background: transparent;
     position: relative;
-    /* Status bar safe area — 26px tall fixed at bottom. */
-    padding-bottom: 26px;
+    z-index: 1;
 }
 
 /* Aurora wallpaper sits at z-index:0, behind every interactive layer.
@@ -329,12 +332,10 @@
     pointer-events: none;
 }
 
-/* Film grain overlay — applied via .film-grain class on .app. */
+/* Film grain overlay — very subtle so the nebula void stays deep. */
 .app.film-grain::after {
-    /* slightly darker, less saturated than the default helper —
-       the aurora is already vivid enough. */
-    opacity: 0.045;
-    mix-blend-mode: overlay;
+    opacity: 0.022;
+    mix-blend-mode: soft-light;
     z-index: 1;
 }
 
@@ -395,30 +396,6 @@
     top: 12px;
     left: 12px;
     z-index: 80;
-    width: auto;
-    min-width: 64px;
-    height: 36px;
-    font-size: var(--t-label);
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: var(--film-track-stamp);
-    padding: 0 14px;
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--bg-2) 78%, transparent);
-    border: 1px solid var(--hairline-strong);
-    color: var(--fg-2);
-    backdrop-filter: blur(20px) saturate(160%);
-    -webkit-backdrop-filter: blur(20px) saturate(160%);
-    transition: background 0.2s var(--ease-smooth), transform 0.15s var(--ease-spring);
-}
-
-.sidebar-toggle:hover {
-    background: var(--accent-light);
-    transform: scale(1.04);
-}
-
-.sidebar-toggle:active {
-    transform: scale(0.96);
 }
 
 .top-right-control {
@@ -426,17 +403,13 @@
     top: 12px;
     right: 12px;
     z-index: 80;
-    display: flex;
-    align-items: center;
-    gap: 6px;
 }
 
 /* ===== Recording consent banner — removed pointless pulse, stronger hierarchy ===== */
 .recording-consent-banner {
     position: fixed;
     left: 50%;
-    /* Sit above the 26px status bar. */
-    bottom: 42px;
+    bottom: 16px;
     transform: translateX(-50%);
     z-index: 95;
     min-width: min(780px, calc(100vw - 24px));
@@ -666,9 +639,11 @@
 /* ===== Main content ===== */
 .app-main {
     flex: 1;
+    min-height: 0;
     padding: 28px;
     width: 100%;
     max-width: none;
+    overflow: hidden;
 }
 
 .app-main.search-centered {
@@ -676,9 +651,22 @@
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    min-height: 100vh;
-    padding-top: 48px;
-    padding-bottom: 48px;
+    flex: 1;
+    min-height: 0;
+    padding: 0 28px;
+    overflow: hidden;
+}
+
+.home-hero-stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    gap: 0;
 }
 
 .search-shell {
@@ -692,21 +680,62 @@
     margin: 4px 0 18px;
 }
 
-.app-main.search-centered .search-shell {
-    margin: 0 0 16px;
-    width: min(760px, 100%);
+.home-hero-stage .search-shell {
+    margin: 0;
+    width: 100%;
+    max-width: 680px;
 }
 
 .app-main.search-centered .search-panel {
     width: 100%;
 }
 
+.app-main.search-centered .search-bar {
+    height: var(--fndr-os-pill-height, 58px);
+    border-radius: var(--fndr-os-pill-radius, 29px);
+    padding: 0 7px 0 20px;
+    gap: 8px;
+    background: color-mix(in srgb, var(--cp-dominant-2, var(--cp-surface)) 78%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cp-secondary-1, var(--cp-accent)) 48%, transparent);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    box-shadow:
+        0 0 28px color-mix(in srgb, var(--cp-secondary-2, var(--cp-accent)) 14%, transparent),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.app-main.search-centered .search-bar:focus-within {
+    border-color: color-mix(in srgb, var(--cp-secondary-2, var(--cp-accent)) 72%, transparent);
+    box-shadow:
+        0 0 40px color-mix(in srgb, var(--cp-accent-raw, var(--cp-accent)) 22%, transparent),
+        0 0 0 2px color-mix(in srgb, var(--cp-accent-raw, var(--cp-accent)) 16%, transparent);
+}
+
+.app-main.search-centered .search-icon {
+    color: var(--cp-wall-text-secondary, var(--text-secondary));
+}
+
+.app-main.search-centered .search-input {
+    color: var(--cp-wall-text-primary, var(--fg));
+}
+
+.app-main.search-centered .search-input.search-input-cycling::placeholder {
+    color: transparent;
+    opacity: 1;
+}
+
+.app-main.search-centered .search-placeholder-overlay {
+    color: var(--cp-wall-text-secondary, var(--fg-3));
+    opacity: 0.72;
+}
+
 /* ===== Home focus / greeting ===== */
 .home-focus-header {
-    display: grid;
-    gap: 12px;
-    justify-items: center;
-    margin-bottom: 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: var(--s-6);
+    text-align: center;
     animation: greetingIn 0.6s var(--ease-spring) 0.1s both;
 }
 
@@ -722,23 +751,41 @@
     }
 }
 
-.home-greeting {
-    display: grid;
-    gap: 4px;
-    font-size: 1.625rem;
+.home-greeting-primary {
+    font-family: var(--film-font-display);
+    font-size: clamp(44px, 6.5vw, 68px);
     font-weight: 500;
+    line-height: 1.08;
     letter-spacing: -0.02em;
-    color: var(--text-primary);
-    text-align: center;
+    color: var(--cp-wall-text-primary, var(--text-primary));
+    margin: 0 0 var(--s-3);
+    max-width: 18ch;
+    text-shadow:
+        0 1px 2px color-mix(in srgb, var(--cp-dominant-1, #000) 75%, transparent),
+        0 10px 36px color-mix(in srgb, var(--cp-dominant-1, #000) 50%, transparent);
+}
+
+.home-greeting-sub {
+    font-family: var(--film-font-body);
+    font-size: clamp(17px, 2vw, 21px);
+    font-style: italic;
+    font-weight: 400;
+    color: var(--cp-wall-text-secondary, var(--text-secondary));
+    margin: 0;
+    opacity: 0.92;
+    max-width: 28ch;
+    text-shadow: 0 6px 24px color-mix(in srgb, var(--cp-dominant-1, #000) 45%, transparent);
 }
 
 .home-date-context {
-    font-size: 0.8rem;
+    font-family: var(--film-font-mono);
+    font-size: 11px;
     font-weight: 500;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.24em;
     text-transform: uppercase;
-    color: var(--text-secondary);
+    color: var(--cp-wall-text-secondary, var(--text-secondary));
     margin-bottom: 0;
+    opacity: 0.85;
 }
 
 .main-layout {
@@ -974,8 +1021,12 @@
     }
 
     .app-main.search-centered {
-        padding-top: 58px;
+        padding: 0 16px;
         justify-content: center;
+    }
+
+    .home-hero-stage {
+        padding: 0 var(--s-4);
     }
 
     .main-layout.with-reconstruction {
@@ -1028,7 +1079,7 @@
 
 /* ===== Light theme — app shell ===== */
 [data-theme="light"] .app {
-    background: var(--page-bg);
+    background: transparent;
 }
 
 [data-theme="light"] .left-sidebar {
@@ -1043,26 +1094,22 @@
     background: color-mix(in srgb, var(--bg-primary) 62%, transparent);
 }
 
-[data-theme="light"] .sidebar-toggle {
-    background: var(--surface-translucent);
-    border-color: var(--border);
-    box-shadow: 0 2px 8px var(--shadow-color);
-}
-
-[data-theme="light"] .sidebar-toggle:hover {
-    background: var(--surface-hover);
-}
-
 [data-theme="light"] .panel-backdrop {
     background: color-mix(in srgb, var(--bg-primary) 62%, transparent);
 }
 
-[data-theme="light"] .home-greeting {
-    color: var(--text-primary);
+/* Home hero sits on the motion wallpaper — keep wall ink in every UI theme. */
+[data-theme="light"] .home-greeting-primary,
+[data-theme="light"] .home-greeting-sub {
+    color: var(--cp-wall-text-primary, var(--text-primary));
+}
+
+[data-theme="light"] .home-greeting-sub {
+    color: var(--cp-wall-text-secondary, var(--text-secondary));
 }
 
 [data-theme="light"] .home-date-context {
-    color: var(--text-secondary);
+    color: var(--cp-wall-text-secondary, var(--text-secondary));
 }
 
 [data-theme="light"] .recording-consent-banner {

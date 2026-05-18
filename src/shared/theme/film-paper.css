@@ -10,13 +10,19 @@
    tokens in app/styles/index.css.
    ============================================================= */
 
-@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Cutive+Mono&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Cutive+Mono&family=Inter:wght@300;400;500&display=swap");
 
 :root {
     /* Brand fonts */
     --film-font-display: "Cormorant Garamond", "Times New Roman", serif;
     --film-font-body: "EB Garamond", Georgia, serif;
+    --film-font-ui: "Inter", system-ui, -apple-system, sans-serif;
     --film-font-mono: "Cutive Mono", "Courier New", ui-monospace, monospace;
+
+    /* Futuristic OS chrome — circular glass controls + pill inputs */
+    --fndr-os-glass-size: 44px;
+    --fndr-os-pill-height: 58px;
+    --fndr-os-pill-radius: 29px;
 
     /* Motion — easing */
     --film-ease-shutter: cubic-bezier(0.22, 1, 0.36, 1);
@@ -129,43 +135,43 @@
 /* =============================================================
    Semantic FNDR design-system tokens at :root.
 
-   Per the v2 handoff PRIORITY block, --bg / --fg / --accent now
-   apply globally (not just in .fndr-immersive-root) so the warm
-   film palette skins the Work Mode UI as well as the immersive
-   experience. The light variant kicks in via [data-theme="paper"]
-   on the documentElement.
+   --bg / --fg / --accent forward to the active cinematic palette
+   (--cp-*), which applyPalette() injects on :root. The --film-* /
+   --paper-* literals above remain brand references for the "film"
+   palette definition and static helpers; they must not override
+   user-selected palettes.
 
-   The .fndr-immersive-root selector is retained as an alias so
-   immersive components can still scope-override safely.
+   The .fndr-immersive-root block in ScrollModeShell.css repeats
+   this mapping for immersive isolation.
    ============================================================= */
-/* "dark" is the legacy UI-facing label; "film" is the canonical CSS name.
-   Both trigger the same dark film tokens. */
 :root,
 :root[data-theme="film"],
-:root[data-theme="dark"] {
-    /* 60% dominant */
-    --bg: var(--film-bg);
-    --bg-2: var(--film-bg-2);
-    --bg-3: var(--film-bg-3);
-    --bg-4: var(--film-bg-4);
+:root[data-theme="dark"],
+:root[data-theme="paper"],
+:root[data-theme="light"] {
+    /* 60% dominant — fall back to Old Film when --cp-* not yet injected */
+    --bg: var(--cp-bg, var(--film-bg));
+    --bg-2: var(--cp-surface, var(--film-bg-2));
+    --bg-3: var(--cp-surface-raised, var(--film-bg-3));
+    --bg-4: var(--cp-surface-raised, var(--film-bg-4));
 
     /* 30% secondary */
-    --fg: var(--film-paper);
-    --fg-2: var(--film-paper-2);
-    --fg-3: var(--film-paper-3);
-    --fg-4: var(--film-paper-4);
+    --fg: var(--cp-text-primary, var(--film-paper));
+    --fg-2: var(--cp-text-secondary, var(--film-paper-2));
+    --fg-3: var(--cp-text-secondary, var(--film-paper-3));
+    --fg-4: var(--cp-text-secondary, var(--film-paper-4));
 
     /* 10% accent */
-    --accent: var(--film-amber);
-    --accent-2: var(--film-amber-2);
-    --accent-3: var(--film-amber-3);
+    --accent: var(--cp-accent, var(--film-amber));
+    --accent-2: var(--cp-accent-muted, var(--film-amber-2));
+    --accent-3: var(--cp-accent-subtle, var(--film-amber-3));
     --alarm: var(--film-red);
     --alarm-2: var(--film-red-2);
 
     /* Hairlines */
-    --hairline: var(--film-hairline);
-    --hairline-2: var(--film-hairline-2);
-    --hairline-strong: var(--film-hairline-strong);
+    --hairline: var(--cp-border, var(--film-hairline));
+    --hairline-2: var(--cp-border, var(--film-hairline-2));
+    --hairline-strong: var(--cp-border-strong, var(--film-hairline-strong));
 
     /* Immersive-local radius aliases (kept for backward-compat with
        the slice-3 immersive components — they reference --i-radius-*). */
@@ -184,29 +190,6 @@
     --font-display: var(--film-font-display);
     --font-body: var(--film-font-body);
     --font-mono: var(--film-font-mono);
-}
-
-/* Paper variant — light archival mode.
-   "light" is the legacy UI-facing label; "paper" is the canonical CSS name. */
-:root[data-theme="paper"],
-:root[data-theme="light"] {
-    --bg: var(--paper-bg);
-    --bg-2: var(--paper-bg-2);
-    --bg-3: var(--paper-bg-3);
-    --bg-4: var(--paper-bg-4);
-
-    --fg: var(--paper-ink);
-    --fg-2: var(--paper-ink-2);
-    --fg-3: var(--paper-ink-3);
-    --fg-4: var(--paper-ink-4);
-
-    --accent: var(--paper-amber);
-    --accent-2: var(--paper-amber-2);
-    --accent-3: var(--paper-amber-3);
-
-    --hairline: var(--paper-hairline);
-    --hairline-2: var(--paper-hairline-2);
-    --hairline-strong: var(--paper-hairline-strong);
 }
 
 .fndr-immersive-root {

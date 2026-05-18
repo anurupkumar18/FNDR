@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { StickyScene } from "@/domains/immersive/components/StickyScene";
-import { useSetWallpaperPage } from "@/shared/hooks/useImmersiveWallpaper";
 import { useAppShell } from "@/app/AppShell";
 import { MemoryCard } from "@/domains/memory-vault/MemoryCard";
 import { listMemoryCards, listRecentContextPacks, type MemoryCard as MemoryCardData, type ContextPack } from "@/shared/ipc/tauri";
@@ -47,7 +46,6 @@ function EmptyState({ text }: { text: string }) {
  * 2×2 grid: recent memories · context packs (+ CTA to enter work mode).
  */
 export function WorkspaceSection() {
-    useSetWallpaperPage("pinned", SECTION_ID);
 
     const { setMode } = useAppShell();
     const [recentCards, setRecentCards] = useState<MemoryCardData[]>([]);

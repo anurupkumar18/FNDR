@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { StickyScene } from "@/domains/immersive/components/StickyScene";
-import { useSetWallpaperPage } from "@/shared/hooks/useImmersiveWallpaper";
 import { MemoryCard } from "@/domains/memory-vault/MemoryCard";
 import {
     getAgentStatus,
@@ -42,7 +41,6 @@ function SkeletonCard() {
  * Shows the current agent query, retrieved memory cards, and MCP tool trace.
  */
 export function AgentSection() {
-    useSetWallpaperPage("smart", SECTION_ID);
 
     const { status: agentStatus, recentCards: cards } = useLiveAgentStatus();
     const toolTrace: string[] = [];
