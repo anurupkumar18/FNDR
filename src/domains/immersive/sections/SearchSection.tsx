@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { StickyScene } from "@/domains/immersive/components/StickyScene";
 import { useSearch } from "@/shared/hooks/useSearch";
@@ -16,7 +16,20 @@ export function SearchSection() {
     useSetWallpaperPage("search", SECTION_ID);
 
     const [query, setQuery] = useState("");
+    const inputRef = useRef<HTMLInputElement>(null);
     const { results, isLoading } = useSearch(query, null, null);
+
+    useEffect(() => {
+        const handleHeroSearch = (event: Event) => {
+            const query = (event as CustomEvent<{ query?: string }>).detail?.query?.trim();
+            if (!query) return;
+            setQuery(query);
+            window.requestAnimationFrame(() => inputRef.current?.focus());
+        };
+
+        window.addEventListener("fndr-hero-search", handleHeroSearch);
+        return () => window.removeEventListener("fndr-hero-search", handleHeroSearch);
+    }, []);
 
     // Derive intent chips from query words (first 4, capitalized)
     const chips = query
@@ -58,6 +71,7 @@ export function SearchSection() {
                         transition={{ duration: 0.5, delay: 0.16 }}
                     >
                         <input
+                            ref={inputRef}
                             className="fndr-search-field"
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}

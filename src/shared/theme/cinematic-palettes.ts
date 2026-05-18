@@ -8,6 +8,10 @@ export interface CinematicPalette {
     shades: [string, string, string, string, string, string, string];
     dark: PaletteTokens;
     light: PaletteTokens;
+    aurora: {
+        dark:  { bg: [number, number, number]; mid: [number, number, number]; acc: [number, number, number] };
+        light: { bg: [number, number, number]; mid: [number, number, number]; acc: [number, number, number] };
+    };
 }
 
 interface PaletteTokens {
@@ -57,6 +61,10 @@ export const PALETTES = {
             accentMuted: "#c4621e",
             accentSubtle: "#e8dfc8",
         },
+        aurora: {
+            dark:  { bg: [0.102, 0.078, 0.063], mid: [0.769, 0.659, 0.471], acc: [0.831, 0.627, 0.290] },
+            light: { bg: [0.949, 0.918, 0.847], mid: [0.353, 0.290, 0.227], acc: [0.639, 0.353, 0.118] },
+        },
     },
     matrix: {
         name: "The Matrix",
@@ -89,6 +97,10 @@ export const PALETTES = {
             accent: "#1a7a1a",
             accentMuted: "#2d9a2d",
             accentSubtle: "#e8f8e8",
+        },
+        aurora: {
+            dark:  { bg: [0.000, 0.000, 0.000], mid: [0.302, 0.604, 0.302], acc: [0.000, 1.000, 0.255] },
+            light: { bg: [1.000, 1.000, 1.000], mid: [0.200, 0.400, 0.200], acc: [0.102, 0.478, 0.102] },
         },
     },
     bladeRunner2049: {
@@ -123,6 +135,10 @@ export const PALETTES = {
             accentMuted: "#d48e20",
             accentSubtle: "#fdf5e6",
         },
+        aurora: {
+            dark:  { bg: [0.000, 0.000, 0.000], mid: [0.545, 0.412, 0.078], acc: [0.961, 0.651, 0.137] },
+            light: { bg: [1.000, 1.000, 1.000], mid: [0.420, 0.314, 0.063], acc: [0.769, 0.478, 0.063] },
+        },
     },
     madMaxFuryRoad: {
         name: "Mad Max: Fury Road",
@@ -155,6 +171,10 @@ export const PALETTES = {
             accent: "#1a6a8a",
             accentMuted: "#2a7a9a",
             accentSubtle: "#e8f4f8",
+        },
+        aurora: {
+            dark:  { bg: [0.000, 0.000, 0.000], mid: [0.659, 0.471, 0.251], acc: [0.165, 0.604, 0.749] },
+            light: { bg: [1.000, 1.000, 1.000], mid: [0.420, 0.247, 0.082], acc: [0.102, 0.416, 0.541] },
         },
     },
     her: {
@@ -189,6 +209,10 @@ export const PALETTES = {
             accentMuted: "#d84838",
             accentSubtle: "#fdf0ec",
         },
+        aurora: {
+            dark:  { bg: [0.000, 0.000, 0.000], mid: [0.659, 0.471, 0.376], acc: [0.910, 0.325, 0.247] },
+            light: { bg: [1.000, 1.000, 1.000], mid: [0.420, 0.247, 0.180], acc: [0.753, 0.220, 0.157] },
+        },
     },
     moonlight: {
         name: "Moonlight",
@@ -221,6 +245,10 @@ export const PALETTES = {
             accent: "#c07820",
             accentMuted: "#d08830",
             accentSubtle: "#fdf8ef",
+        },
+        aurora: {
+            dark:  { bg: [0.000, 0.000, 0.000], mid: [0.145, 0.478, 0.541], acc: [0.910, 0.627, 0.251] },
+            light: { bg: [1.000, 1.000, 1.000], mid: [0.102, 0.290, 0.353], acc: [0.753, 0.471, 0.125] },
         },
     },
     grandBudapestHotel: {
@@ -255,6 +283,10 @@ export const PALETTES = {
             accentMuted: "#c8a020",
             accentSubtle: "#fdfaed",
         },
+        aurora: {
+            dark:  { bg: [0.000, 0.000, 0.000], mid: [0.710, 0.141, 0.361], acc: [0.961, 0.784, 0.259] },
+            light: { bg: [1.000, 1.000, 1.000], mid: [0.420, 0.188, 0.306], acc: [0.722, 0.565, 0.063] },
+        },
     },
     drive: {
         name: "Drive",
@@ -287,6 +319,10 @@ export const PALETTES = {
             accent: "#cc1058",
             accentMuted: "#e01a6a",
             accentSubtle: "#fff0f5",
+        },
+        aurora: {
+            dark:  { bg: [0.000, 0.000, 0.000], mid: [0.549, 0.063, 0.188], acc: [1.000, 0.176, 0.420] },
+            light: { bg: [1.000, 1.000, 1.000], mid: [0.353, 0.039, 0.102], acc: [0.800, 0.063, 0.345] },
         },
     },
     amelie: {
@@ -321,6 +357,10 @@ export const PALETTES = {
             accentMuted: "#d8ac20",
             accentSubtle: "#fdf8e8",
         },
+        aurora: {
+            dark:  { bg: [0.000, 0.000, 0.000], mid: [0.302, 0.541, 0.302], acc: [0.961, 0.753, 0.157] },
+            light: { bg: [1.000, 1.000, 1.000], mid: [0.180, 0.353, 0.188], acc: [0.784, 0.612, 0.094] },
+        },
     },
     noCountryForOldMen: {
         name: "No Country for Old Men",
@@ -353,6 +393,10 @@ export const PALETTES = {
             accent: "#a01818",
             accentMuted: "#b82020",
             accentSubtle: "#fdf4f4",
+        },
+        aurora: {
+            dark:  { bg: [0.000, 0.000, 0.000], mid: [0.549, 0.471, 0.345], acc: [0.769, 0.125, 0.125] },
+            light: { bg: [1.000, 1.000, 1.000], mid: [0.290, 0.227, 0.149], acc: [0.627, 0.094, 0.094] },
         },
     },
     fndrDark: {
@@ -387,6 +431,10 @@ export const PALETTES = {
             accentMuted: "#ffffff",
             accentSubtle: "rgba(255, 255, 255, 0.1)",
         },
+        aurora: {
+            dark:  { bg: [0.039, 0.039, 0.039], mid: [0.471, 0.471, 0.510], acc: [0.953, 0.953, 0.945] },
+            light: { bg: [0.039, 0.039, 0.039], mid: [0.471, 0.471, 0.510], acc: [0.953, 0.953, 0.945] },
+        },
     },
     fndrLight: {
         name: "Lumen",
@@ -420,6 +468,10 @@ export const PALETTES = {
             accentMuted: "#000000",
             accentSubtle: "rgba(0, 0, 0, 0.06)",
         },
+        aurora: {
+            dark:  { bg: [0.961, 0.961, 0.969], mid: [0.333, 0.333, 0.376], acc: [0.102, 0.102, 0.102] },
+            light: { bg: [0.961, 0.961, 0.969], mid: [0.333, 0.333, 0.376], acc: [0.102, 0.102, 0.102] },
+        },
     },
 } as const satisfies Record<string, CinematicPalette>;
 
@@ -435,6 +487,7 @@ export function applyPalette(paletteKey: PaletteKey, mode: PaletteMode = "dark",
     const palette = PALETTES[paletteKey];
     const tokens = palette[mode];
     const [d1, d2, d3, d4, s1, s2, accent] = palette.shades;
+    const aur = palette.aurora[mode];
 
     const css = `
 ${selector} {
@@ -458,6 +511,15 @@ ${selector} {
   --cp-accent-raw: ${accent};
   --cp-active-palette: "${paletteKey}";
   --cp-active-mode: "${mode}";
+  --cp-aurora-bg-r: ${aur.bg[0]};
+  --cp-aurora-bg-g: ${aur.bg[1]};
+  --cp-aurora-bg-b: ${aur.bg[2]};
+  --cp-aurora-mid-r: ${aur.mid[0]};
+  --cp-aurora-mid-g: ${aur.mid[1]};
+  --cp-aurora-mid-b: ${aur.mid[2]};
+  --cp-aurora-acc-r: ${aur.acc[0]};
+  --cp-aurora-acc-g: ${aur.acc[1]};
+  --cp-aurora-acc-b: ${aur.acc[2]};
 }`.trim();
 
     let tag = document.getElementById(STYLE_TAG_ID);
@@ -497,6 +559,13 @@ export function getPaletteTokens(paletteKey: PaletteKey, mode: PaletteMode = "da
         "--cp-secondary-2": s2,
         "--cp-accent-raw": accent,
     };
+}
+
+export function getAuroraColors(
+    paletteKey: PaletteKey,
+    mode: PaletteMode
+): { bg: [number, number, number]; mid: [number, number, number]; acc: [number, number, number] } {
+    return PALETTES[paletteKey].aurora[mode];
 }
 
 export function listPalettes() {

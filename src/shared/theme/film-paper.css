@@ -210,7 +210,7 @@
 }
 
 .fndr-immersive-root {
-    background: var(--bg);
+    background: transparent;
     color: var(--fg);
     font-family: var(--font-body);
 }

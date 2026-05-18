@@ -14,6 +14,12 @@ import { WorkspaceSection } from "@/domains/immersive/sections/WorkspaceSection"
 import { ImmersiveWallpaperContext } from "@/shared/hooks/useImmersiveWallpaper";
 import type { AuroraPageId } from "@/shared/components/AuroraWallpaper";
 import { AuroraWallpaper } from "@/shared/components/AuroraWallpaper";
+import { getOnboardingState } from "@/shared/ipc/onboarding";
+import { getFunGreeting } from "@/shared/ipc/tauri";
+import { formatHomeDate } from "@/shared/utils/dateFormat";
+import { getAuroraColors, isPaletteKey, type PaletteKey } from "@/shared/theme/cinematic-palettes";
+import { STORAGE_KEYS } from "@/shared/utils/config";
+import { CursorInverter } from "@/shared/components/CursorInverter";
 import "@/domains/immersive/ScrollModeShell.css";
 
 /**
@@ -32,6 +38,50 @@ export function ScrollModeShell() {
     const { setMode } = useAppShell();
     const containerRef = useRef<HTMLDivElement>(null);
     const [wallpaperPage, setWallpaperPage] = useState<AuroraPageId>("home");
+
+    // Active palette + mode (from localStorage, updated via custom event)
+    const [activePalette, setActivePalette] = useState<PaletteKey>(() => {
+        const stored = localStorage.getItem(STORAGE_KEYS.palette);
+        return isPaletteKey(stored) ? stored : "film";
+    });
+    const [activeMode, setActiveMode] = useState<"dark" | "light">(() => {
+        const stored = localStorage.getItem(STORAGE_KEYS.theme);
+        return stored === "light" ? "light" : "dark";
+    });
+
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent<{ palette: PaletteKey; mode: "dark" | "light" }>).detail;
+            if (isPaletteKey(detail?.palette)) setActivePalette(detail.palette);
+            if (detail?.mode === "light" || detail?.mode === "dark") setActiveMode(detail.mode);
+        };
+        window.addEventListener("fndr-appearance-changed", handler);
+        return () => window.removeEventListener("fndr-appearance-changed", handler);
+    }, []);
+
+    // Aurora colors derived from active palette
+    const auroraColors = getAuroraColors(activePalette, activeMode);
+
+    // Greeting + date
+    const [greeting, setGreeting] = useState<string>("");
+    const [dateLabel, setDateLabel] = useState<string>(() => formatHomeDate(new Date()));
+
+    useEffect(() => {
+        let mounted = true;
+        getOnboardingState()
+            .then((state) => getFunGreeting(state.display_name))
+            .then((g) => { if (mounted) setGreeting(g); })
+            .catch(() => { if (mounted) setGreeting("Welcome back to FNDR."); });
+        // Refresh date at midnight
+        const msToMidnight = (() => {
+            const now = new Date();
+            const midnight = new Date(now);
+            midnight.setHours(24, 0, 0, 0);
+            return midnight.getTime() - now.getTime();
+        })();
+        const timer = setTimeout(() => setDateLabel(formatHomeDate(new Date())), msToMidnight);
+        return () => { mounted = false; clearTimeout(timer); };
+    }, []);
 
     // 1–8 jump to section by index. Skip when typing.
     useEffect(() => {
@@ -65,11 +115,15 @@ export function ScrollModeShell() {
 
     return (
         <ImmersiveWallpaperContext.Provider value={setWallpaperPage}>
-            <div className="fndr-immersive-root" data-theme="film">
+            <div className="fndr-immersive-root" data-theme={activeMode}>
+                <CursorInverter />
                 {/* Per-section wallpaper — morphs smoothly on page change */}
                 <AuroraWallpaper
                     page={wallpaperPage}
                     className="fndr-immersive-wallpaper"
+                    auroraBg={auroraColors.bg}
+                    aurMid={auroraColors.mid}
+                    aurAcc={auroraColors.acc}
                 />
                 <ScrollProgressIndicator targetRef={containerRef} />
                 <ChapterRail onEnterWorkMode={() => setMode("work")} />
@@ -80,6 +134,14 @@ export function ScrollModeShell() {
                             el?.scrollIntoView({ behavior: "smooth", block: "start" });
                         }}
                         onEnterWorkMode={() => setMode("work")}
+                        onScrollToSearch={(query) => {
+                            const el = document.getElementById("fndr-section-search");
+                            el?.scrollIntoView({ behavior: "smooth", block: "start" });
+                            // Dispatch a custom event so SearchSection can pre-fill the query
+                            window.dispatchEvent(new CustomEvent("fndr-hero-search", { detail: { query } }));
+                        }}
+                        greeting={greeting}
+                        dateLabel={dateLabel}
                     />
                     <CaptureSection />
                     <PlaceholderSection

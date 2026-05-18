@@ -1,138 +1,327 @@
-/* HeroSection — full viewport opening section. */
+/* HeroSection — full viewport, centered, cinematic */
 
 .fndr-hero-section {
     position: relative;
     overflow: hidden;
-    display: grid;
-    grid-template-columns: 1fr;
-    place-items: stretch;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: var(--s-8) var(--s-7);
+    text-align: center;
+    user-select: none;
 }
 
 .fndr-hero-section::before {
-    background: radial-gradient(
-        ellipse at 50% 40%,
-        var(--bg-2) 0%,
-        var(--bg) 60%,
-        #0e0a07 100%
-    );
-}
-
-.fndr-hero-constellation {
+    content: "";
     position: absolute;
     inset: 0;
-    width: 100%;
-    height: 100%;
-    opacity: 0.7;
+    background: radial-gradient(
+        ellipse at 50% 40%,
+        color-mix(in srgb, var(--cp-bg) 5%, transparent) 0%,
+        color-mix(in srgb, var(--cp-bg) 22%, transparent) 55%,
+        color-mix(in srgb, var(--cp-bg) 42%, transparent) 100%
+    );
     pointer-events: none;
     z-index: 0;
 }
 
-.fndr-constellation-node {
-    transform-origin: center;
+/* ── Date chip ──────────────────────────────────────────────────────────── */
+
+.fndr-hero-date-wrap {
+    position: relative;
+    z-index: 1;
+    margin-bottom: var(--s-3);
 }
 
-/* Five drift patterns — selected per-node by .drift-N class. */
-@keyframes drift0 {
-    0%, 100% { transform: translate(0, 0); }
-    50% { transform: translate(1.4px, -0.8px); }
-}
-@keyframes drift1 {
-    0%, 100% { transform: translate(0, 0); }
-    50% { transform: translate(-1.2px, 1.0px); }
-}
-@keyframes drift2 {
-    0%, 100% { transform: translate(0, 0); }
-    50% { transform: translate(1.6px, 1.2px); }
-}
-@keyframes drift3 {
-    0%, 100% { transform: translate(0, 0); }
-    50% { transform: translate(-0.8px, -1.4px); }
-}
-@keyframes drift4 {
-    0%, 100% { transform: translate(0, 0); }
-    50% { transform: translate(1.0px, -1.6px); }
+.fndr-hero-date {
+    font-family: var(--film-font-mono);
+    font-size: 11px;
+    letter-spacing: 0.24em;
+    color: var(--cp-text-secondary, var(--fg-3));
+    opacity: 0.75;
+    margin: 0;
 }
 
-.fndr-constellation-node.drift-0 { animation: drift0 6.4s ease-in-out infinite alternate; }
-.fndr-constellation-node.drift-1 { animation: drift1 7.2s ease-in-out infinite alternate; }
-.fndr-constellation-node.drift-2 { animation: drift2 8.1s ease-in-out infinite alternate; }
-.fndr-constellation-node.drift-3 { animation: drift3 5.6s ease-in-out infinite alternate; }
-.fndr-constellation-node.drift-4 { animation: drift4 9.0s ease-in-out infinite alternate; }
-
-.fndr-hero-constellation.is-reduced .fndr-constellation-node {
-    animation: none;
-}
+/* ── Content column ─────────────────────────────────────────────────────── */
 
 .fndr-hero-content {
     position: relative;
     z-index: 1;
-    max-width: 720px;
-    align-self: center;
+    width: 100%;
+    max-width: 760px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
 }
 
-.fndr-hero-title {
+.fndr-hero-greeting {
     font-family: var(--film-font-display);
     font-weight: 500;
-    font-size: var(--t-display-1);
-    line-height: 0.96;
-    color: var(--fg);
-    margin: 0 0 var(--s-5) 0;
-    letter-spacing: -0.015em;
-}
-
-.fndr-hero-title em {
-    font-style: italic;
-    color: var(--accent);
-    font-weight: 400;
+    font-size: clamp(52px, 8vw, 88px);
+    line-height: 1.0;
+    color: var(--cp-text-primary, var(--fg));
+    margin: 0 0 var(--s-3) 0;
+    letter-spacing: -0.02em;
 }
 
 .fndr-hero-subtitle {
     font-family: var(--film-font-body);
-    font-size: var(--t-body-lg);
+    font-size: clamp(16px, 2vw, 20px);
     font-style: italic;
-    color: var(--fg-2);
+    color: var(--cp-text-secondary, var(--fg-2));
     margin: 0 0 var(--s-6) 0;
-    max-width: 50ch;
+    opacity: 0.85;
 }
+
+/* ── Search pill ────────────────────────────────────────────────────────── */
+
+.fndr-hero-search {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    max-width: 680px;
+    height: 58px;
+    border-radius: 29px;
+    background: var(--cp-surface, rgba(34, 25, 21, 0.72));
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--cp-border-strong, rgba(232, 223, 200, 0.22));
+    padding: 0 8px 0 20px;
+    gap: 8px;
+    margin-bottom: var(--s-5);
+    transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.fndr-hero-search:focus-within {
+    border-color: var(--cp-accent, var(--accent));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--cp-accent, var(--accent)) 20%, transparent);
+}
+
+.fndr-hero-search-icon {
+    flex-shrink: 0;
+    color: var(--cp-text-secondary, var(--fg-3));
+    display: flex;
+    align-items: center;
+}
+
+.fndr-hero-search-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+.fndr-hero-search-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-family: var(--film-font-body);
+    font-size: 16px;
+    color: var(--cp-text-primary, var(--fg));
+    caret-color: var(--cp-accent, var(--accent));
+}
+
+.fndr-hero-search-input::placeholder {
+    color: var(--cp-text-secondary, var(--fg-3));
+    opacity: 0.6;
+}
+
+.fndr-hero-voice-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--cp-border-strong, rgba(232, 223, 200, 0.22));
+    border-radius: 20px;
+    padding: 6px 14px;
+    color: var(--cp-text-secondary, var(--fg-3));
+    font-family: var(--film-font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: border-color 0.18s ease, color 0.18s ease;
+}
+
+.fndr-hero-voice-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.fndr-hero-voice-btn:hover,
+.fndr-hero-voice-btn.is-listening {
+    border-color: var(--cp-accent, var(--accent));
+    color: var(--cp-accent, var(--accent));
+}
+
+.fndr-hero-voice-btn.is-listening svg {
+    animation: voice-pulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes voice-pulse {
+    from {
+        opacity: 1;
+        transform: scaleY(1);
+    }
+    to {
+        opacity: 0.5;
+        transform: scaleY(1.5);
+    }
+}
+
+.fndr-hero-search-submit {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--cp-accent, var(--accent));
+    border: none;
+    color: var(--cp-text-inverse, var(--bg));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.18s ease, transform 0.12s ease;
+}
+
+.fndr-hero-search-submit:not(:disabled):hover {
+    transform: scale(1.08);
+}
+
+.fndr-hero-search-submit:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.fndr-hero-search-submit svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* ── CTAs ───────────────────────────────────────────────────────────────── */
 
 .fndr-hero-ctas {
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-4);
+    justify-content: center;
 }
 
-.fndr-hero-stat {
+/* ── Ticker ─────────────────────────────────────────────────────────────── */
+
+.fndr-hero-ticker {
     position: absolute;
-    right: var(--s-7);
-    bottom: var(--s-7);
-    text-align: right;
+    bottom: 96px;
+    left: 0;
+    right: 0;
+    overflow: hidden;
+    white-space: nowrap;
     pointer-events: none;
-    z-index: 0;
+    z-index: 1;
+    border-top: 1px solid var(--cp-border, rgba(232, 223, 200, 0.08));
+    border-bottom: 1px solid var(--cp-border, rgba(232, 223, 200, 0.08));
+    padding: 7px 0;
 }
 
-.fndr-hero-stat-num {
-    font-family: var(--film-font-display);
-    font-weight: 500;
-    font-size: 120px;
-    line-height: 1;
-    color: var(--accent);
-    opacity: 0.18;
-    letter-spacing: -0.02em;
-}
-
-.fndr-hero-stat-label {
+.fndr-hero-ticker-track {
+    display: inline-block;
+    animation: ticker-scroll 40s linear infinite;
     font-family: var(--film-font-mono);
-    font-size: var(--t-micro);
-    letter-spacing: var(--film-track-stamp);
-    color: var(--fg-3);
-    margin-top: var(--s-2);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    color: var(--cp-text-secondary, var(--fg-3));
+    opacity: 0.4;
 }
+
+@keyframes ticker-scroll {
+    from {
+        transform: translateX(0);
+    }
+    to {
+        transform: translateX(-50%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fndr-hero-ticker-track {
+        animation: none;
+    }
+}
+
+/* ── Scroll hint ────────────────────────────────────────────────────────── */
+
+.fndr-hero-scroll-hint {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.fndr-hero-scroll-label {
+    font-family: var(--film-font-mono);
+    font-size: 9px;
+    letter-spacing: 0.24em;
+    color: var(--cp-text-secondary, var(--fg-3));
+    opacity: 0.45;
+}
+
+.fndr-hero-scroll-line {
+    width: 1px;
+    height: 40px;
+    background: var(--cp-border-strong, rgba(232, 223, 200, 0.22));
+    position: relative;
+    overflow: hidden;
+}
+
+.fndr-hero-scroll-dot {
+    position: absolute;
+    top: 0;
+    left: -1.5px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--cp-accent, var(--accent));
+    animation: scroll-dot 1.8s ease-in-out infinite;
+}
+
+@keyframes scroll-dot {
+    0% {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    80% {
+        transform: translateY(36px);
+        opacity: 0.3;
+    }
+    100% {
+        transform: translateY(36px);
+        opacity: 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fndr-hero-scroll-dot {
+        animation: none;
+        transform: translateY(18px);
+    }
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
 
 @media (max-width: 900px) {
-    .fndr-hero-title {
-        font-size: 56px;
+    .fndr-hero-greeting {
+        font-size: 48px;
     }
-    .fndr-hero-stat-num {
-        font-size: 80px;
+
+    .fndr-hero-ticker {
+        bottom: 80px;
     }
 }

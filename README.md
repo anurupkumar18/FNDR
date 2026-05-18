@@ -209,7 +209,7 @@ FNDR runs fully local with two models in this setup:
 ./scripts/bootstrap/download-minilm.sh
 ```
 
-Models are stored under `~/Library/Application Support/com.fndr.FNDR/models/`.
+Models are stored under `~/Library/Application Support/com.fndr.app/models/`.
 
 Validate the local embedding and LanceDB path with:
 

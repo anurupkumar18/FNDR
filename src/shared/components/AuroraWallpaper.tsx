@@ -185,14 +185,20 @@ interface AuroraWallpaperProps {
     page: AuroraPageId;
     theme?: AuroraTheme;
     className?: string;
+    auroraBg?: [number, number, number];
+    aurMid?:   [number, number, number];
+    aurAcc?:   [number, number, number];
 }
 
-export function AuroraWallpaper({ page, theme = "film", className }: AuroraWallpaperProps) {
+export function AuroraWallpaper({ page, theme = "film", className, auroraBg, aurMid, aurAcc }: AuroraWallpaperProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     // Latest target page is read from a ref so the rAF loop can lerp toward it
     // without restarting the entire render setup on every page change.
     const targetRef = useRef<AuroraPagePreset>(PAGES[page]);
     const themeRef = useRef<AuroraTheme>(theme);
+    const auroraBgRef = useRef<[number,number,number] | null>(auroraBg ?? null);
+    const aurMidRef   = useRef<[number,number,number] | null>(aurMid   ?? null);
+    const aurAccRef   = useRef<[number,number,number] | null>(aurAcc   ?? null);
 
     useEffect(() => {
         targetRef.current = PAGES[page];
@@ -201,6 +207,10 @@ export function AuroraWallpaper({ page, theme = "film", className }: AuroraWallp
     useEffect(() => {
         themeRef.current = theme;
     }, [theme]);
+
+    useEffect(() => { auroraBgRef.current = auroraBg ?? null; }, [auroraBg]);
+    useEffect(() => { aurMidRef.current   = aurMid   ?? null; }, [aurMid]);
+    useEffect(() => { aurAccRef.current   = aurAcc   ?? null; }, [aurAcc]);
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -331,15 +341,37 @@ export function AuroraWallpaper({ page, theme = "film", className }: AuroraWallp
         let running = true;
         const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
+        // CSS-var snapshot — refreshed every ~400 ms so palette changes from
+        // applyPalette() are picked up without restarting the GL context.
+        let lastCssRead = -1000;
+        let cssAurora: AuroraPalette = { ...PAL[themeRef.current] };
+        const readCssAurora = () => {
+            const s = getComputedStyle(document.documentElement);
+            const n = (k: string) => parseFloat(s.getPropertyValue(k));
+            const bgR = n("--cp-aurora-bg-r");
+            if (!isNaN(bgR)) {
+                cssAurora = {
+                    bg:  [bgR,                    n("--cp-aurora-bg-g"),  n("--cp-aurora-bg-b")],
+                    mid: [n("--cp-aurora-mid-r"),  n("--cp-aurora-mid-g"), n("--cp-aurora-mid-b")],
+                    acc: [n("--cp-aurora-acc-r"),  n("--cp-aurora-acc-g"), n("--cp-aurora-acc-b")],
+                };
+            }
+        };
+
         const tick = (ts: number) => {
             if (!running) return;
             raf = requestAnimationFrame(tick);
 
-            // Apply palette every frame so theme prop changes are picked up.
-            const p = PAL[themeRef.current];
-            gl.uniform3fv(U.uBg, p.bg);
-            gl.uniform3fv(U.uMid, p.mid);
-            gl.uniform3fv(U.uAcc, p.acc);
+            // Refresh CSS palette every ~400 ms.
+            if (ts - lastCssRead > 400) {
+                lastCssRead = ts;
+                readCssAurora();
+            }
+
+            // Explicit props take priority; CSS vars are the live fallback.
+            gl.uniform3fv(U.uBg,  auroraBgRef.current ?? cssAurora.bg);
+            gl.uniform3fv(U.uMid, aurMidRef.current   ?? cssAurora.mid);
+            gl.uniform3fv(U.uAcc, aurAccRef.current   ?? cssAurora.acc);
 
             const rawT = ts / 1000 - baseOffset;
             const t = rawT;

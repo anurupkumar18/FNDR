@@ -266,6 +266,11 @@ export function ControlPanel({
     const selectAppearance = (nextPalette: PaletteKey, nextTheme: Theme) => {
         setPaletteKey(nextPalette);
         setTheme(nextTheme);
+        window.dispatchEvent(
+            new CustomEvent("fndr-appearance-changed", {
+                detail: { palette: nextPalette, mode: nextTheme },
+            })
+        );
     };
 
     useEffect(() => {
