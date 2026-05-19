@@ -6,7 +6,6 @@ import {
     SearchResult,
     deleteMemory,
     findVisuallySimilarMemories,
-    getContextRuntimeStatus,
     getMemoryDebugInspector,
     listMemoryCards,
     reopenMemory,
@@ -180,8 +179,6 @@ export function MemoryCardsPanel({
         }
         return readStoredBrowseMode();
     });
-    const [insightProject, setInsightProject] = useState("");
-    const [graphNodeFilter, setGraphNodeFilter] = useState("");
     const [selectedGraphNode, setSelectedGraphNode] = useState<GraphNode | null>(null);
     const [graphNodeDetail, setGraphNodeDetail] = useState<GraphNode | null>(null);
     const [graphDetailLoading, setGraphDetailLoading] = useState(false);
@@ -198,7 +195,6 @@ export function MemoryCardsPanel({
         load: loadGraph,
         fetchNodeDetail,
         fetchPath,
-        fetchGodNodes,
     } = useGraph();
 
     const [cards, setCards] = useState<MemoryCard[]>([]);
@@ -258,47 +254,6 @@ export function MemoryCardsPanel({
         [cards, timeFilter, perspectiveFilter]
     );
 
-    const uniqueProjects = useMemo(() => {
-        const s = new Set<string>();
-        for (const c of cards) {
-            const p = c.project?.trim();
-            if (p && p.toLowerCase() !== "unknown") {
-                s.add(p);
-            }
-        }
-        return Array.from(s).sort((a, b) => a.localeCompare(b));
-    }, [cards]);
-
-    const [projectPicker, setProjectPicker] = useState("");
-
-    useEffect(() => {
-        if (browseMode === "project" && !projectPicker.trim() && uniqueProjects.length > 0) {
-            setProjectPicker(uniqueProjects[0]);
-        }
-    }, [browseMode, projectPicker, uniqueProjects]);
-
-    useEffect(() => {
-        if (!isVisible) {
-            return;
-        }
-        let cancelled = false;
-        void getContextRuntimeStatus()
-            .then((status) => {
-                if (cancelled) {
-                    return;
-                }
-                const active = status.active_project?.trim();
-                if (active) {
-                    setInsightProject((prev) => (prev.trim() === "" ? active : prev));
-                }
-            })
-            .catch(() => {
-                /* best-effort default project */
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [isVisible]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -307,31 +262,8 @@ export function MemoryCardsPanel({
         if (isVaultFeature) {
             return;
         }
-        if (browseMode === "list") {
-            void loadGraph({ mode: "full" });
-            return;
-        }
-        if (browseMode === "project") {
-            const p = projectPicker.trim() || uniqueProjects[0]?.trim() || "";
-            if (!p) {
-                return;
-            }
-            void loadGraph({ mode: "project", projectLabel: p });
-            return;
-        }
-        const label = insightProject.trim();
-        void loadGraph(
-            label ? { mode: "project", projectLabel: label } : { mode: "full" }
-        );
-    }, [
-        isVisible,
-        browseMode,
-        insightProject,
-        projectPicker,
-        uniqueProjects,
-        loadGraph,
-        isVaultFeature,
-    ]);
+        void loadGraph({ mode: "full" });
+    }, [isVisible, loadGraph, isVaultFeature]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -341,35 +273,12 @@ export function MemoryCardsPanel({
             setPathFromId(null);
             setPathHighlightIds(null);
             setHubHighlightIds(null);
-            setGraphNodeFilter("");
         }
     }, [isVisible]);
 
-    const filteredGraphNodes = useMemo(() => {
-        const q = graphNodeFilter.trim().toLowerCase();
-        const nodes = subgraph?.nodes ?? [];
-        if (!q) {
-            return nodes;
-        }
-        return nodes.filter((n) => n.label.toLowerCase().includes(q));
-    }, [subgraph, graphNodeFilter]);
-
-    const filteredGraphNodeIds = useMemo(
-        () => new Set(filteredGraphNodes.map((n) => n.id)),
-        [filteredGraphNodes]
-    );
-
-    const filteredGraphEdges = useMemo(
-        () =>
-            (subgraph?.edges ?? []).filter(
-                (e) => filteredGraphNodeIds.has(e.source_id) && filteredGraphNodeIds.has(e.target_id)
-            ),
-        [subgraph, filteredGraphNodeIds]
-    );
-
     const vizGraphNodes = useMemo(
-        () => filteredGraphNodes.map(({ embedding: _emb, ...rest }) => rest),
-        [filteredGraphNodes]
+        () => (subgraph?.nodes ?? []).map(({ embedding: _emb, ...rest }) => rest),
+        [subgraph]
     );
 
     const fullVizGraphNodes = useMemo(
@@ -578,18 +487,6 @@ export function MemoryCardsPanel({
         setMemoryInspector(null);
     };
 
-    const handleGraphReload = () => {
-        if (browseMode === "project") {
-            const p = projectPicker.trim() || uniqueProjects[0]?.trim() || "";
-            if (p) {
-                void loadGraph({ mode: "project", projectLabel: p });
-            }
-            return;
-        }
-        const label = insightProject.trim();
-        void loadGraph(label ? { mode: "project", projectLabel: label } : { mode: "full" });
-    };
-
     const handleFindPathToSelected = async () => {
         if (!pathFromId || !selectedGraphNode || pathFromId === selectedGraphNode.id) {
             return;
@@ -598,22 +495,9 @@ export function MemoryCardsPanel({
         setPathHighlightIds(dto?.nodes ?? null);
     };
 
-    const handleToggleHubs = async () => {
-        if (hubHighlightIds?.length) {
-            setHubHighlightIds(null);
-            return;
-        }
-        const g = await fetchGodNodes(16);
-        if (!g?.nodes?.length) {
-            return;
-        }
-        const ids = g.nodes.map((entry) => (Array.isArray(entry) ? entry[0] : String(entry)));
-        setHubHighlightIds(ids);
-    };
-
     const handleGraphBackfill = async () => {
         await backfillGraphFromExistingMemories(2500);
-        handleGraphReload();
+        void loadGraph({ mode: "full" });
     };
 
     if (!isVisible) {
@@ -732,62 +616,6 @@ export function MemoryCardsPanel({
 
                 {showGraphSurface && (
                     <div className="memory-graph-chrome" aria-label="Graph scope">
-                        {browseMode === "project" && (
-                            <label className="memory-graph-project-field">
-                                <span>Memory project</span>
-                                <select
-                                    value={projectPicker}
-                                    onChange={(e) => setProjectPicker(e.target.value)}
-                                >
-                                    {uniqueProjects.map((p) => (
-                                        <option key={p} value={p}>
-                                            {p}
-                                        </option>
-                                    ))}
-                                </select>
-                            </label>
-                        )}
-                        {browseMode === "graph" && (
-                        <label className="memory-graph-project-field">
-                            <span>Insight project</span>
-                            <input
-                                type="text"
-                                value={insightProject}
-                                onChange={(e) => setInsightProject(e.target.value)}
-                                placeholder="Blank = full graph"
-                                spellCheck={false}
-                            />
-                        </label>
-                        )}
-                        <label className="memory-graph-filter-field">
-                            <span>Filter labels</span>
-                            <input
-                                type="search"
-                                value={graphNodeFilter}
-                                onChange={(e) => setGraphNodeFilter(e.target.value)}
-                                placeholder="Substring match"
-                            />
-                        </label>
-                        <div className="memory-graph-chrome-actions">
-                            <button type="button" className="ui-action-btn" onClick={() => handleGraphReload()}>
-                                Reload
-                            </button>
-                            <button type="button" className="ui-action-btn" onClick={() => void handleGraphBackfill()}>
-                                Backfill graph
-                            </button>
-                            <button type="button" className="ui-action-btn" onClick={() => void handleToggleHubs()}>
-                                {hubHighlightIds?.length ? "Clear hubs" : "Hub nodes"}
-                            </button>
-                            {pathHighlightIds && pathHighlightIds.length > 0 && (
-                                <button
-                                    type="button"
-                                    className="ui-action-btn"
-                                    onClick={() => setPathHighlightIds(null)}
-                                >
-                                    Clear path
-                                </button>
-                            )}
-                        </div>
                     </div>
                 )}
             </div>
@@ -910,7 +738,7 @@ export function MemoryCardsPanel({
                                     height="100%"
                                     maxSimulationTicks={GRAPH_SIM_MAX_TICKS}
                                     nodes={vizGraphNodes}
-                                    edges={filteredGraphEdges}
+                                    edges={subgraph?.edges ?? []}
                                     louvainByNodeId={louvainByNodeId}
                                     onNodeClick={(n) => void handleGraphNodeClick(n)}
                                     selectedNodeId={selectedGraphNode?.id ?? null}
