@@ -106,7 +106,11 @@ export function MemoryCard({
                 <span className="fndr-mc-c-source">
                     <em>{card.app_name}</em>
                 </span>
-                <span className="fndr-mc-c-time">{timeLabel}</span>
+                <span className="fndr-mc-c-time">
+                    <span className="fndr-mc-c-day">{dayLabel}</span>
+                    <span className="fndr-mc-c-clock">{timeLabel}</span>
+                </span>
+                <CompactSurfacingGlyph card={card} />
                 <span className="fndr-mc-c-threads">
                     {threads.length > 0
                         ? `${threads.length}`
@@ -133,9 +137,13 @@ export function MemoryCard({
             <DossierCorners />
 
             <header className="fndr-mc-strip">
-                {isDeveloped && (
+                {isDeveloped ? (
                     <Stamp tone="developed" rotate={-1}>
                         DEVELOPED
+                    </Stamp>
+                ) : (
+                    <Stamp tone="muted" rotate={-1}>
+                        RAW
                     </Stamp>
                 )}
                 {confidential && (
@@ -232,9 +240,23 @@ export function MemoryCard({
                             </Button>
                         )}
                         {onDelete && (
-                            <Button mono variant="alarm" onClick={() => onDelete(card.id)}>
-                                Delete
-                            </Button>
+                            <div className="fndr-mc-actions-danger">
+                                <Button
+                                    mono
+                                    variant="ghost"
+                                    onClick={() => {
+                                        const ok =
+                                            typeof window === "undefined"
+                                                ? true
+                                                : window.confirm(
+                                                      `Delete this memory? It will be removed permanently.\n\n"${card.title}"`,
+                                                  );
+                                        if (ok) onDelete(card.id);
+                                    }}
+                                >
+                                    Delete
+                                </Button>
+                            </div>
                         )}
                     </div>
                 </>
@@ -283,12 +305,55 @@ function formatTime(timestamp: number): string {
 function formatDay(timestamp: number): string {
     const d = new Date(timestamp);
     const now = new Date();
-    const isToday =
-        d.getFullYear() === now.getFullYear() &&
-        d.getMonth() === now.getMonth() &&
-        d.getDate() === now.getDate();
-    if (isToday) return "TODAY";
+    // Compare calendar-day distance, not raw 24-hour buckets — a capture
+    // from yesterday at 23:00 should read "YESTERDAY", not "TODAY", even if
+    // it's less than 24 hours old.
+    const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const dayDiff = Math.round((startOf(now) - startOf(d)) / (24 * 60 * 60 * 1000));
+    if (dayDiff === 0) return "TODAY";
+    if (dayDiff === 1) return "YESTERDAY";
+    if (dayDiff > 1 && dayDiff < 7) return `${dayDiff}D AGO`;
+    if (dayDiff >= 7 && dayDiff < 14) {
+        const wd = d.toLocaleDateString(undefined, { weekday: "short" }).toUpperCase();
+        return `LAST ${wd}`;
+    }
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }).toUpperCase();
+}
+
+/** Maps a surfacing-reason route to a single-letter glyph for the compact row.
+ *  Keeps the contract that *every place a memory surfaces, the why is shown*
+ *  without bloating the row layout. */
+const ROUTE_GLYPHS: Record<string, string> = {
+    BM25: "B",
+    bm25: "B",
+    semantic: "S",
+    entity_link: "E",
+    entity: "E",
+    recency: "R",
+    synthesis: "Y",
+};
+
+function CompactSurfacingGlyph({ card }: { card: MemoryCardData }) {
+    const reason = card.surfacing_reason;
+    if (!reason || !reason.routes || reason.routes.length === 0) {
+        return <span className="fndr-mc-c-route" aria-hidden="true" />;
+    }
+    const primary = reason.routes[0];
+    const glyph = ROUTE_GLYPHS[primary] ?? primary.slice(0, 1).toUpperCase();
+    const tooltipLines = [
+        reason.headline,
+        `Routes: ${reason.routes.join(", ")}`,
+        reason.anchor_terms_hit && reason.anchor_terms_hit.length > 0
+            ? `Anchors: ${reason.anchor_terms_hit.join(", ")}`
+            : null,
+    ]
+        .filter(Boolean)
+        .join("\n");
+    return (
+        <span className="fndr-mc-c-route" title={tooltipLines} data-route={primary}>
+            {glyph}
+        </span>
+    );
 }
 
 export default MemoryCard;

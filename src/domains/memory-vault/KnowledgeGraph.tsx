@@ -76,6 +76,15 @@ export function KnowledgeGraph({
     const [filterState, setFilterState] = useState<GraphFilterState>(EMPTY_FILTERS);
 
     const view = useMemo(() => applyFilters(fullView, filterState), [fullView, filterState]);
+    const filterActive = useMemo(
+        () =>
+            filterState.nodeTypes !== null ||
+            filterState.projects !== null ||
+            filterState.topics !== null ||
+            filterState.edgeKinds !== null ||
+            filterState.minConfidence > 0,
+        [filterState],
+    );
 
     const nodeIndex = useMemo(() => new Map(view.nodes.map((n) => [n.id, n])), [view.nodes]);
     const legendRows = useMemo(() => buildLegend(view), [view]);
@@ -195,6 +204,7 @@ export function KnowledgeGraph({
                     pathNodeIds={pathSet}
                     hubNodeIds={hubSet}
                     maxTicks={maxSimulationTicks}
+                    filterActive={filterActive}
                     onHover={setHoveredId}
                     onSelect={handleSelect}
                 />

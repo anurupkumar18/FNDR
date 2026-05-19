@@ -1,0 +1,68 @@
+<h2>3D Neural Network Design Overview</h2>
+<p class="subtitle">Hybrid orbital-community layout with local force simulation</p>
+
+<div class="mockup">
+  <div class="mockup-header">Architecture Diagram</div>
+  <div class="mockup-body" style="font-family: monospace; background: #0a0e27; color: #00ff88; padding: 20px; border-radius: 8px; line-height: 1.6;">
+    <div style="font-weight: bold; color: #00ffff; margin-bottom: 10px;">LEVEL 1: Active Query/Context</div>
+    <div style="margin-left: 20px; margin-bottom: 15px;">Central sphere representing current query, project, or memory focus</div>
+
+    <div style="font-weight: bold; color: #00ffff; margin-bottom: 10px;">LEVEL 2: Semantic Communities (Orbital Rings)</div>
+    <div style="margin-left: 20px; margin-bottom: 15px;">
+      • Work/Code, Research, Design, Meetings<br/>
+      • Errors/Debugging, People, Files, Decisions<br/>
+      • Todos, Concepts, Past Searches, Agent Context<br/>
+      <span style="color: #888;">→ Stable 3D positions in spherical arrangement</span>
+    </div>
+
+    <div style="font-weight: bold; color: #00ffff; margin-bottom: 10px;">LEVEL 3: Memory Cards &amp; Entities (Local Clusters)</div>
+    <div style="margin-left: 20px; margin-bottom: 15px;">
+      Lightweight force simulation inside each community<br/>
+      <span style="color: #888;">→ Nodes repel within their region, attract to region anchor</span>
+    </div>
+
+    <div style="font-weight: bold; color: #00ffff; margin-bottom: 10px;">LEVEL 4: Evidence/Provenance (On Hover/Click)</div>
+    <div style="margin-left: 20px; margin-bottom: 15px;">
+      Source memories, confidence scores, relationships<br/>
+      <span style="color: #888;">→ Progressive disclosure, not cluttering the base graph</span>
+    </div>
+
+    <div style="font-weight: bold; color: #00ffff; margin-bottom: 10px;">LEVEL 5: Agent Actions (Side Panel)</div>
+    <div style="margin-left: 20px;">
+      Send to agent, refine, filter, export<br/>
+      <span style="color: #888;">→ Separate from graph visualization</span>
+    </div>
+  </div>
+</div>
+
+<div class="mockup" style="margin-top: 20px;">
+  <div class="mockup-header">Z-Depth Semantics</div>
+  <div class="mockup-body" style="font-family: monospace; background: #0a0e27; color: #00ff88; padding: 20px; border-radius: 8px; line-height: 1.8;">
+    <span style="color: #ffff00;">Z forward (toward camera):</span><br/>
+    • High query relevance<br/>
+    • High importance (frequently used)<br/>
+    • Recent memories<br/>
+    <br/>
+    <span style="color: #ff6b6b;">Z backward (away from camera):</span><br/>
+    • Low query relevance<br/>
+    • Low importance (rarely used)<br/>
+    • Old memories (drift back unless reused)<br/>
+    <br/>
+    <span style="color: #888; font-size: 0.9em;">Smooth transitions as relevance and time change</span>
+  </div>
+</div>
+
+<div class="mockup" style="margin-top: 20px;">
+  <div class="mockup-header">Visual Behaviors</div>
+  <div class="mockup-body" style="background: #0a0e27; padding: 20px; color: #ddd;">
+    <p><strong style="color: #00ff88;">On Search/Query:</strong> Relevant clusters move forward and brighten. Unrelated fade back but stay visible.</p>
+    <p><strong style="color: #00ff88;">Node Sizing:</strong> Proportional to importance, frequency of access, or connection count.</p>
+    <p><strong style="color: #00ff88;">Node Color:</strong> Community-based (semantic region color), with brightness by importance.</p>
+    <p><strong style="color: #00ff88;">Edges:</strong> Sparse by default (only strongest connections). Progressive reveal on hover/filter.</p>
+    <p><strong style="color: #00ff88;">Interaction:</strong> Orbit/pan/zoom feels like moving through a brain map. Dragging is smooth.</p>
+  </div>
+</div>
+
+<div style="margin-top: 30px; padding: 20px; background: #f0f0f0; border-radius: 8px; text-align: center;">
+  <p style="margin: 0; color: #333;"><strong>Does this design align with your vision?</strong></p>
+</div>

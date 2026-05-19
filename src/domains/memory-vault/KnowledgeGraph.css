@@ -121,7 +121,10 @@
     opacity: 0.18;
 }
 
-/* Node labels */
+/* Node labels.
+   Visible when: hovered/selected (always), weight ≥ 3, recent (≤7d), zoomed in,
+   or the rendered view is the result of an active filter (every node matters
+   then). Dimmed nodes always lose their label so the focus pop is preserved. */
 .kg-node-label {
     opacity: 0;
     transition: opacity var(--film-dur-fast) var(--film-ease-shutter);
@@ -130,8 +133,22 @@
 .kg-node[data-state="selected"] .kg-node-label {
     opacity: 1;
 }
-.kg-node-label[data-weight-high="true"] {
+.kg-node-label[data-weight-high="true"],
+.kg-node-label[data-recent="true"] {
     opacity: 0.55;
+}
+.kg-canvas-root[data-zoom-tier="in"] .kg-node-label,
+.kg-canvas-root[data-filter-active="true"] .kg-node-label {
+    opacity: 0.55;
+}
+.kg-canvas-root[data-zoom-tier="in"] .kg-node-label[data-weight-high="true"],
+.kg-canvas-root[data-zoom-tier="in"] .kg-node-label[data-recent="true"],
+.kg-canvas-root[data-filter-active="true"] .kg-node-label[data-weight-high="true"],
+.kg-canvas-root[data-filter-active="true"] .kg-node-label[data-recent="true"] {
+    opacity: 0.78;
+}
+.kg-node[data-state="dimmed"] .kg-node-label {
+    opacity: 0 !important;
 }
 
 /* Performance: disable drift on large graphs (JS sets data-perf-reduced) */

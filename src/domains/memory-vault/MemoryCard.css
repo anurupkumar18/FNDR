@@ -124,9 +124,10 @@
 }
 
 /* ── COMPACT variant ───────────────────────────────────────── */
+/* Grid columns: FRAME · TITLE · SOURCE · TIME · ROUTE · THREADS */
 .fndr-mc--compact {
     display: grid;
-    grid-template-columns: 78px minmax(0, 1fr) minmax(0, 220px) 84px 36px;
+    grid-template-columns: 78px minmax(0, 1fr) minmax(0, 220px) 110px 22px 36px;
     align-items: center;
     gap: 14px;
     min-height: 60px;
@@ -136,6 +137,67 @@
     background: transparent;
     color: var(--fg);
     transition: background var(--film-dur-fast) var(--film-ease-shutter);
+}
+/* Narrow viewports — collapse the SOURCE column to give the title room to
+   breathe. Long second-brain titles ("Why we abandoned BM25-only retrieval")
+   need that space more than the app-name does. */
+@media (max-width: 960px) {
+    .fndr-mc--compact {
+        grid-template-columns: 78px minmax(0, 1fr) 0 110px 22px 36px;
+        gap: 10px;
+    }
+    .fndr-mc--compact .fndr-mc-c-source {
+        display: none;
+    }
+}
+
+/* Surfacing-reason glyph — one-letter signal for *why* this row came back.
+   Empty span reserves the grid slot so rows align even when reason is absent. */
+.fndr-mc-c-route {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--fg-3);
+    width: 18px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    border-radius: 999px;
+    border: 1px solid var(--hairline-strong);
+    background: transparent;
+    align-self: center;
+    justify-self: center;
+    transition: background var(--film-dur-fast) var(--film-ease-shutter),
+        color var(--film-dur-fast) var(--film-ease-shutter);
+    cursor: help;
+}
+.fndr-mc-c-route:empty {
+    border-color: transparent;
+    cursor: default;
+}
+.fndr-mc-c-route[data-route="BM25"],
+.fndr-mc-c-route[data-route="bm25"] {
+    color: var(--fg-2);
+    border-color: var(--hairline-strong);
+}
+.fndr-mc-c-route[data-route="semantic"] {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+.fndr-mc-c-route[data-route="entity_link"],
+.fndr-mc-c-route[data-route="entity"] {
+    color: var(--accent-2, var(--accent));
+    border-color: var(--accent-2, var(--accent));
+}
+.fndr-mc-c-route[data-route="recency"] {
+    color: var(--accent);
+    border-color: var(--accent);
+    opacity: 0.7;
+}
+.fndr-mc-c-route[data-route="synthesis"] {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .fndr-mc--compact .fndr-mc-bar {
@@ -203,6 +265,18 @@
     text-transform: uppercase;
     text-align: right;
     white-space: nowrap;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: flex-end;
+    line-height: 1.1;
+}
+.fndr-mc-c-day {
+    font-weight: 500;
+}
+.fndr-mc-c-clock {
+    color: var(--fg-4, var(--fg-3));
+    opacity: 0.7;
 }
 
 .fndr-mc-c-threads {
@@ -245,10 +319,25 @@
 .fndr-mc-actions {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 10px;
     margin-top: 22px;
     padding-top: 18px;
     border-top: 1px solid var(--hairline);
+}
+/* Danger zone — Delete is pushed to the far right and visually muted so it
+   can't be mistaken for a navigation action like "See in graph". */
+.fndr-mc-actions-danger {
+    margin-left: auto;
+    padding-left: 14px;
+    border-left: 1px solid var(--hairline);
+}
+.fndr-mc-actions-danger .fndr-button {
+    color: var(--fg-3);
+}
+.fndr-mc-actions-danger .fndr-button:hover {
+    color: var(--alarm);
+    background: color-mix(in srgb, var(--alarm) 10%, transparent);
 }
 
 /* ── IMMERSIVE variant (scroll hero) ───────────────────────── */

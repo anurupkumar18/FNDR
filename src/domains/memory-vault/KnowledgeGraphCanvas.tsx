@@ -17,8 +17,25 @@ export interface KnowledgeGraphCanvasProps {
     pathNodeIds: ReadonlySet<string>;
     hubNodeIds: ReadonlySet<string>;
     maxTicks: number;
+    /** When true, the rendered view is a non-empty filter result — show all labels. */
+    filterActive?: boolean;
     onHover: (id: string | null) => void;
     onSelect: (node: GraphNodeView) => void;
+}
+
+/** Nodes whose source was created/updated within this many days get their label
+ *  unconditionally — fresh memories are the ones users are most likely to be
+ *  looking for, and they're also least likely to have a high connectionCount yet. */
+const RECENT_DAYS = 7;
+const RECENT_MS = RECENT_DAYS * 24 * 60 * 60 * 1000;
+
+function isRecent(view: GraphNodeView, nowMs: number): boolean {
+    const raw = view.raw;
+    const ts = raw?.created_at ?? raw?.updated_at;
+    if (!ts) return false;
+    const parsed = Date.parse(ts);
+    if (Number.isNaN(parsed)) return false;
+    return nowMs - parsed <= RECENT_MS;
 }
 
 export interface KnowledgeGraphCanvasHandle {
@@ -42,6 +59,7 @@ export const KnowledgeGraphCanvas = forwardRef<
         pathNodeIds,
         hubNodeIds,
         maxTicks,
+        filterActive = false,
         onHover,
         onSelect,
     },
@@ -90,9 +108,14 @@ export const KnowledgeGraphCanvas = forwardRef<
             .scaleExtent([0.35, 4])
             .on("zoom", (event) => {
                 gRoot.attr("transform", event.transform.toString());
+                const k = event.transform.k as number;
+                // Coarse zoom tier drives a CSS rule that opens up label visibility
+                // when the user has leaned in (k ≥ 1.5×).
+                gRoot.attr("data-zoom-tier", k >= 1.5 ? "in" : k >= 0.7 ? "mid" : "out");
             });
         root.call(zoom);
         zoomRef.current = zoom;
+        gRoot.attr("data-zoom-tier", "mid");
 
         if (simNodes.length === 0) {
             gRoot
@@ -199,7 +222,11 @@ export const KnowledgeGraphCanvas = forwardRef<
                     : "var(--accent-2)",
             );
 
-        // Label: show for weight≥3 or hovered/selected (CSS toggles visibility)
+        // Label: shown when weight ≥ 3 OR node is recent OR hovered/selected.
+        // Filter-active state and high zoom tier add CSS-driven overrides so
+        // every visible node can be identified when the user has narrowed scope
+        // or zoomed in. Truncation at 16 chars keeps the canvas legible.
+        const nowMs = Date.now();
         nodeSel
             .append("text")
             .attr("class", "kg-node-label")
@@ -209,11 +236,16 @@ export const KnowledgeGraphCanvas = forwardRef<
             .style("font", `11px var(--font-mono)`)
             .style("text-transform", "lowercase")
             .style("pointer-events", "none")
-            .attr("data-weight-high", (d) => ((d.view.connectionCount ?? 0) >= 3 ? "true" : "false"))
+            .attr("data-weight-high", (d) =>
+                (d.view.connectionCount ?? 0) >= 3 ? "true" : "false",
+            )
+            .attr("data-recent", (d) => (isRecent(d.view, nowMs) ? "true" : "false"))
             .text((d) => {
                 const label = d.view.label ?? "";
                 return label.length > 16 ? label.slice(0, 15) + "…" : label;
             });
+
+        gRoot.attr("data-filter-active", filterActive ? "true" : "false");
 
         let ticks = 0;
         sim.on("tick", () => {
@@ -243,6 +275,7 @@ export const KnowledgeGraphCanvas = forwardRef<
         width,
         height,
         maxTicks,
+        filterActive,
         onHover,
         onSelect,
     ]);

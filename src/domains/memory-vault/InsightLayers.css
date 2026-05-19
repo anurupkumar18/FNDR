@@ -41,6 +41,19 @@
   line-height: 1.45;
 }
 
+.insight-row--empty {
+  opacity: 0.6;
+}
+
+.insight-value--placeholder {
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+[data-theme="light"] .insight-value--placeholder {
+  color: rgba(0, 0, 0, 0.4);
+}
+
 .insight-spans-debug {
   margin-top: 8px;
   font-size: 0.78rem;

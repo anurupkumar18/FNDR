@@ -1,0 +1,40 @@
+<h2>3D Graph Architecture Options</h2>
+<p class="subtitle">Choose the rendering approach for the neural network visualization</p>
+
+<div class="cards">
+  <div class="card" data-choice="threejs" onclick="toggleSelect(this)">
+    <div class="card-image" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center; font-weight: bold; color: white;">Three.js</div>
+    <div class="card-body">
+      <h3>Three.js + Cannon-es Physics</h3>
+      <p><strong>Rendering:</strong> WebGL 3D with full control over camera, lighting, shaders</p>
+      <p><strong>Interaction:</strong> Orbit controls (pan, rotate, zoom) out of the box</p>
+      <p><strong>Data flow:</strong> Migrate force simulation from D3 to custom graph layout or use D3 for 2D projection, then lift to 3D</p>
+      <p><strong>Pros:</strong> Full 3D control, mature library, excellent documentation, custom shaders for node styling</p>
+      <p><strong>Cons:</strong> New library to bundle, steeper learning curve, must rewrite force simulation</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="babylon" onclick="toggleSelect(this)">
+    <div class="card-image" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; text-align: center; font-weight: bold; color: white;">Babylon.js</div>
+    <div class="card-body">
+      <h3>Babylon.js with Built-in Physics</h3>
+      <p><strong>Rendering:</strong> WebGL with procedural geometry and materials</p>
+      <p><strong>Interaction:</strong> Universal Camera with built-in orbit/pan/zoom</p>
+      <p><strong>Data flow:</strong> Similar to Three.js, but with native physics engine integration</p>
+      <p><strong>Pros:</strong> Similar power to Three.js, slightly easier API, better physics out of box</p>
+      <p><strong>Cons:</strong> Larger bundle size, less popular than Three.js</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="hybrid" onclick="toggleSelect(this)">
+    <div class="card-image" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); padding: 20px; text-align: center; font-weight: bold; color: white;">Canvas 3D</div>
+    <div class="card-body">
+      <h3>Custom Canvas + WebGL (Minimal Deps)</h3>
+      <p><strong>Rendering:</strong> Custom WebGL shaders + Canvas positioning</p>
+      <p><strong>Interaction:</strong> Custom mouse/touch handlers for pan/rotate/zoom</p>
+      <p><strong>Data flow:</strong> Keep D3 force simulation, project 3D positions to 2D for rendering</p>
+      <p><strong>Pros:</strong> Minimal dependencies, precise control, lighter bundle</p>
+      <p><strong>Cons:</strong> More code to write, must implement interaction handling</p>
+    </div>
+  </div>
+</div>

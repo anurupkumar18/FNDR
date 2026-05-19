@@ -1,36 +1,22 @@
 import type { MemoryCard } from "@/shared/ipc/tauri";
 import "./InsightLayers.css";
 
-function hasInsight(card: MemoryCard): boolean {
-    return Boolean(
-        card.insight_what_happened?.trim() ||
-            card.insight_why_mattered?.trim() ||
-            card.insight_what_changed?.trim() ||
-            card.insight_context_thread?.trim(),
-    );
-}
+/** The 4 canonical insight slots — always rendered in order so the *shape*
+ *  of a memory is legible even when fields are still empty. Sparse memories
+ *  show "— not yet extracted" placeholders instead of collapsing the block. */
+const SLOTS = [
+    { label: "What happened", field: "insight_what_happened" },
+    { label: "Why it mattered", field: "insight_why_mattered" },
+    { label: "What changed", field: "insight_what_changed" },
+    { label: "Thread", field: "insight_context_thread" },
+] as const;
 
-/** Renders persisted insight rows when present; optional eval debug for span JSON. */
+/** Renders the canonical 4-row insight block. Empty rows show a placeholder
+ *  so the structure is visible and the user understands the memory hasn't
+ *  been fully synthesized yet. */
 export function InsightLayers({ card, evalUi = false }: { card: MemoryCard; evalUi?: boolean }) {
     const ic = card.insight_card_confidence ?? 0;
     const low = ic > 0 && ic < 0.4;
-    if (!hasInsight(card) && !low) {
-        return null;
-    }
-
-    const rows: { label: string; value: string }[] = [];
-    if (card.insight_what_happened?.trim()) {
-        rows.push({ label: "What happened", value: card.insight_what_happened.trim() });
-    }
-    if (card.insight_why_mattered?.trim()) {
-        rows.push({ label: "Why it mattered", value: card.insight_why_mattered.trim() });
-    }
-    if (card.insight_what_changed?.trim()) {
-        rows.push({ label: "What changed", value: card.insight_what_changed.trim() });
-    }
-    if (card.insight_context_thread?.trim()) {
-        rows.push({ label: "Thread", value: card.insight_context_thread.trim() });
-    }
 
     const categories = card.topic_categories?.filter((c) => c.trim()) ?? [];
 
@@ -47,12 +33,26 @@ export function InsightLayers({ card, evalUi = false }: { card: MemoryCard; eval
                     </span>
                 )}
             </div>
-            {rows.map((row) => (
-                <div className="insight-row" key={row.label}>
-                    <span className="insight-label">{row.label}</span>
-                    <p className="insight-value">{row.value}</p>
-                </div>
-            ))}
+            {SLOTS.map((slot) => {
+                const raw = (card as unknown as Record<string, unknown>)[slot.field];
+                const value = typeof raw === "string" ? raw.trim() : "";
+                const empty = value.length === 0;
+                return (
+                    <div
+                        className={`insight-row${empty ? " insight-row--empty" : ""}`}
+                        key={slot.label}
+                    >
+                        <span className="insight-label">{slot.label}</span>
+                        {empty ? (
+                            <p className="insight-value insight-value--placeholder">
+                                — not yet extracted
+                            </p>
+                        ) : (
+                            <p className="insight-value">{value}</p>
+                        )}
+                    </div>
+                );
+            })}
             {categories.length > 0 && (
                 <div className="insight-categories">
                     {categories.slice(0, 6).map((c) => (
