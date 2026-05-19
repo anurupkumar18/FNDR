@@ -8,7 +8,6 @@ pub fn derive_communities(nodes: &[GraphNode]) -> Vec<GraphCommunity> {
     for node in nodes {
         let community_id = derive_community_id(node);
         let entry = community_map.entry(community_id).or_insert(CommunityStats {
-            label: "".to_string(),
             nodes: Vec::new(),
             total_importance: 0.0,
             node_count: 0,
@@ -37,8 +36,18 @@ pub fn derive_communities(nodes: &[GraphNode]) -> Vec<GraphCommunity> {
         "Uncategorized",
     ];
 
+    // Sort communities deterministically: canonical first, then by label, to ensure stable anchor assignment
+    let mut community_ids: Vec<String> = community_map.keys().cloned().collect();
+    community_ids.sort_by_key(|id| {
+        // Primary sort: canonical rank (if in canonical_order, position; else last)
+        let canonical_rank = canonical_order.iter().position(|&label| label == id).unwrap_or(usize::MAX);
+        // Secondary sort: alphabetical by label (for determinism with non-canonical communities)
+        (canonical_rank, id.clone())
+    });
+
     let mut communities = Vec::new();
-    for (idx, (community_id, stats)) in community_map.iter().enumerate() {
+    for (idx, community_id) in community_ids.iter().enumerate() {
+        let stats = &community_map[community_id];
         let canonical_label = canonical_order.iter()
             .find(|&&label| label == community_id)
             .copied()
@@ -137,7 +146,6 @@ fn compute_community_color(label: &str) -> String {
 }
 
 struct CommunityStats {
-    label: String,
     nodes: Vec<String>,
     total_importance: f64,
     node_count: usize,
