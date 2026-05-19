@@ -42,19 +42,19 @@ export const useGraphStore = create<GraphUIState & GraphStoreActions>()(
       setLoading: (loading: boolean) => set({ isLoading: loading }),
       setError: (error: string | null) => set({ error }),
       toggleNodeType: (type: NodeType) =>
-        set((state) => {
+        set((state: GraphUIState & GraphStoreActions) => {
           const next = new Set(state.enabledNodeTypes)
           next.has(type) ? next.delete(type) : next.add(type)
           return { enabledNodeTypes: next }
         }),
       toggleEdgeType: (type: EdgeType) =>
-        set((state) => {
+        set((state: GraphUIState & GraphStoreActions) => {
           const next = new Set(state.enabledEdgeTypes)
           next.has(type) ? next.delete(type) : next.add(type)
           return { enabledEdgeTypes: next }
         }),
       toggleCommunityFilter: (communityId: string) =>
-        set((state) => {
+        set((state: GraphUIState & GraphStoreActions) => {
           const next = new Set(state.selectedCommunityIds)
           next.has(communityId) ? next.delete(communityId) : next.add(communityId)
           return { selectedCommunityIds: next }
@@ -65,8 +65,8 @@ export const useGraphStore = create<GraphUIState & GraphStoreActions>()(
           expandedNodeIds: new Set(),
           selectedNodeId: null,
         }),
-      toggleShowEvidence: () => set((state) => ({ showEvidence: !state.showEvidence })),
-      toggleShowLabels: () => set((state) => ({ showLabels: !state.showLabels })),
+      toggleShowEvidence: () => set((state: GraphUIState & GraphStoreActions) => ({ showEvidence: !state.showEvidence })),
+      toggleShowLabels: () => set((state: GraphUIState & GraphStoreActions) => ({ showLabels: !state.showLabels })),
     }),
     { name: "GraphStore" }
   )
