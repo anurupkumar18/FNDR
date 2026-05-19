@@ -1,5 +1,7 @@
-import React, { useEffect, useState, useCallback } from "react"
+import React, { useEffect, useState, useCallback, useMemo } from "react"
+import type { InsightGraphSubgraph } from "@/shared/ipc/tauri"
 import { graphDataAdapter } from "../data/adapter"
+import { normalizeInsightGraph } from "../data/normalizeInsightGraph"
 import { useGraphStore } from "../state/graphStore"
 import type { GraphData } from "../types"
 import { FocusType } from "../types"
@@ -10,11 +12,22 @@ import { GraphHoverCard } from "./GraphHoverCard"
 
 interface KnowledgeGraph3DProps {
   onClose?: () => void
+  /** Optional bridged data from the 2D graph. When provided with nodes, used in place of the
+   *  (currently stubbed) backend atlas command. */
+  subgraph?: InsightGraphSubgraph | null
+  louvain?: Record<string, number> | null
 }
 
-export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({ onClose }) => {
+type DataSource = "bridged_2d_subgraph" | "backend_atlas" | "empty" | "error"
+
+export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
+  onClose,
+  subgraph,
+  louvain,
+}) => {
   const [graphData, setGraphData] = useState<GraphData | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [dataSource, setDataSource] = useState<DataSource>("empty")
 
   const mode = useGraphStore((s) => s.mode)
   const setMode = useGraphStore((s) => s.setMode)
@@ -32,35 +45,65 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({ onClose }) =
     }
   }, [])
 
-  // Load initial graph data
+  // Stable reference to the subgraph identity so we don't re-normalize on every render.
+  // We only care when the size of the underlying data actually changes.
+  const subgraphKey = useMemo(() => {
+    if (!subgraph) return null
+    return `${subgraph.nodes.length}:${subgraph.edges.length}:${subgraph.cluster_0_name ?? ""}`
+  }, [subgraph])
+
+  // Load graph data — priority: bridged subgraph > backend atlas command > error
   useEffect(() => {
-    const loadGraphData = async () => {
+    let cancelled = false
+
+    const load = async () => {
       setLoading(true)
       setError(null)
 
+      // Priority 1: bridged 2D subgraph
+      if (subgraph && subgraph.nodes.length > 0) {
+        const data = normalizeInsightGraph(subgraph, louvain ?? null)
+        if (cancelled) return
+        console.debug(
+          `[KnowledgeGraph3D] data source: bridged 2D subgraph ${data.nodes.length} nodes`
+        )
+        setDataSource("bridged_2d_subgraph")
+        setGraphData(data)
+        setLoading(false)
+        return
+      }
+
+      // Priority 2: backend atlas command (currently stubbed; will work when implemented)
       try {
-        if (mode === "atlas") {
-          const data = await graphDataAdapter.loadAtlasGraph()
-          setGraphData(data)
-        } else if (mode === "context") {
-          // For context mode, use default focus if available
-          const data = await graphDataAdapter.loadContextGraph({
-            focus_type: FocusType.Atlas,
-            label: "Full Memory Atlas",
-          })
-          setGraphData(data)
-        }
+        const data =
+          mode === "context"
+            ? await graphDataAdapter.loadContextGraph({
+                focus_type: FocusType.Atlas,
+                label: "Full Memory Atlas",
+              })
+            : await graphDataAdapter.loadAtlasGraph()
+        if (cancelled) return
+        console.debug(
+          `[KnowledgeGraph3D] data source: backend get_memory_graph_atlas ${data.nodes.length} nodes`
+        )
+        setDataSource(data.nodes.length > 0 ? "backend_atlas" : "empty")
+        setGraphData(data)
       } catch (err) {
+        if (cancelled) return
         const message = err instanceof Error ? err.message : "Failed to load graph"
         setError(message)
-        console.error("Graph load error:", err)
+        setDataSource("error")
+        console.error("[KnowledgeGraph3D] graph load error:", err)
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
-    loadGraphData()
-  }, [mode, setLoading])
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [subgraphKey, subgraph, louvain, mode, setLoading])
 
   const handleModeChange = useCallback(
     (newMode: "atlas" | "context") => {
@@ -101,12 +144,21 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({ onClose }) =
   }
 
   if (!graphData.nodes || graphData.nodes.length === 0) {
+    const enabledNodeTypeCount = enabledNodeTypes.size
+    const enabledEdgeTypeCount = enabledEdgeTypes.size
+    const looksFilteredOut = enabledNodeTypeCount < 3 || enabledEdgeTypeCount < 7
     return (
       <div className="flex items-center justify-center w-full h-full bg-slate-900 rounded-lg">
         <div className="text-center">
-          <p className="text-slate-400 mb-4">No memories to visualize</p>
+          <p className="text-slate-400 mb-4">
+            {looksFilteredOut
+              ? "No visible graph nodes match the current filters."
+              : "No graph data available."}
+          </p>
           <p className="text-xs text-slate-500">
-            Start capturing or searching to build your memory graph
+            {looksFilteredOut
+              ? "Try resetting filters from the controls panel."
+              : "Capture some memories to build your knowledge graph."}
           </p>
           {onClose && (
             <button
@@ -145,9 +197,7 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({ onClose }) =
             <div className="space-y-1">
               <div>
                 <span className="text-slate-500">Data Source:</span>{" "}
-                <span className="text-cyan-400">
-                  {graphData.nodes.length > 0 ? "backend_graph" : "empty"}
-                </span>
+                <span className="text-cyan-400">{dataSource}</span>
               </div>
               <div>
                 <span className="text-slate-500">Mode:</span> <span className="text-blue-400">{mode}</span>

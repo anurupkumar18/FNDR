@@ -1,6 +1,7 @@
 import React, { useMemo } from "react"
 import type { GraphNode } from "../types"
 import { format } from "date-fns"
+import { getDisplayLabel } from "../utils/displayTitle"
 
 interface GraphHoverCardProps {
   node: GraphNode
@@ -29,7 +30,7 @@ export const GraphHoverCard: React.FC<GraphHoverCardProps> = ({ node }) => {
     >
       {/* Title */}
       <div className="font-semibold text-sm text-white mb-2 line-clamp-2">
-        {node.title}
+        {getDisplayLabel(node)}
       </div>
 
       {/* Metadata row */}

@@ -736,21 +736,56 @@ export function MemoryCardsPanel({
                         )}
                         {(subgraph?.nodes?.length ?? 0) > 0 && (
                             <div className="memory-graph-stage" style={{ position: "relative" }}>
-                                {/* 2D/3D toggle button */}
-                                <div style={{ position: "absolute", top: 10, right: 10, zIndex: 20 }}>
+                                {/* 2D / 3D mode switch — explicit segmented control */}
+                                <div
+                                    style={{
+                                        position: "absolute",
+                                        top: 10,
+                                        right: 10,
+                                        zIndex: 20,
+                                        display: "flex",
+                                        gap: 0,
+                                        border: "1px solid #444",
+                                        borderRadius: 4,
+                                        overflow: "hidden",
+                                    }}
+                                    role="tablist"
+                                    aria-label="Graph view mode"
+                                >
                                     <button
                                         type="button"
-                                        className="ui-action-btn"
-                                        onClick={() => setUse3DGraph(!use3DGraph)}
+                                        role="tab"
+                                        aria-selected={!use3DGraph}
+                                        onClick={() => setUse3DGraph(false)}
                                         style={{
-                                            backgroundColor: use3DGraph ? "#0066cc" : "transparent",
-                                            border: "1px solid #444",
-                                            padding: "6px 12px",
+                                            background: !use3DGraph ? "#0066cc" : "transparent",
+                                            color: !use3DGraph ? "#fff" : "#ccc",
+                                            border: "none",
+                                            padding: "6px 14px",
                                             fontSize: "12px",
                                             cursor: "pointer",
+                                            fontWeight: !use3DGraph ? 600 : 400,
                                         }}
                                     >
-                                        {use3DGraph ? "📊 2D" : "🎨 3D"}
+                                        2D
+                                    </button>
+                                    <button
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={use3DGraph}
+                                        onClick={() => setUse3DGraph(true)}
+                                        style={{
+                                            background: use3DGraph ? "#0066cc" : "transparent",
+                                            color: use3DGraph ? "#fff" : "#ccc",
+                                            border: "none",
+                                            borderLeft: "1px solid #444",
+                                            padding: "6px 14px",
+                                            fontSize: "12px",
+                                            cursor: "pointer",
+                                            fontWeight: use3DGraph ? 600 : 400,
+                                        }}
+                                    >
+                                        3D
                                     </button>
                                 </div>
 
@@ -771,6 +806,8 @@ export function MemoryCardsPanel({
                                 ) : (
                                     <KnowledgeGraph3D
                                         onClose={() => setUse3DGraph(false)}
+                                        subgraph={subgraph}
+                                        louvain={louvainByNodeId}
                                     />
                                 )}
                                 {selectedGraphNode && (

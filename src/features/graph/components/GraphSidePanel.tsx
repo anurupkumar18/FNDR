@@ -2,6 +2,7 @@ import React, { useMemo } from "react"
 import { format } from "date-fns"
 import type { GraphNode, GraphData } from "../types"
 import { useGraphStore } from "../state/graphStore"
+import { getDisplayLabel } from "../utils/displayTitle"
 
 interface GraphSidePanelProps {
   node: GraphNode
@@ -39,7 +40,7 @@ export const GraphSidePanel: React.FC<GraphSidePanelProps> = ({ node, graphData 
       {/* Header */}
       <div className="sticky top-0 bg-slate-900 border-b border-slate-700 p-4 flex justify-between items-start">
         <h2 className="text-lg font-bold text-white flex-1 pr-2 line-clamp-2">
-          {node.title}
+          {getDisplayLabel(node)}
         </h2>
         <button
           onClick={() => setSelectedNodeId(null)}
@@ -184,7 +185,7 @@ export const GraphSidePanel: React.FC<GraphSidePanelProps> = ({ node, graphData 
                   onClick={() => setSelectedNodeId(connected.id)}
                   className="w-full text-left p-2 bg-slate-800 hover:bg-slate-700 rounded text-xs text-slate-300 hover:text-slate-100 transition-colors"
                 >
-                  <div className="line-clamp-2">{connected.title}</div>
+                  <div className="line-clamp-2">{getDisplayLabel(connected)}</div>
                   {connected.project && (
                     <div className="text-slate-500 text-xs mt-1">{connected.project}</div>
                   )}

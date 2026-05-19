@@ -19,7 +19,7 @@ src-tauri/models/*.gguf
 *.lancedb/
 *.db/
 *.lance/
-data/
+/data/
 meetings/
 *.wav
 *.mp3

@@ -2,6 +2,7 @@ import type { InsightGraphSubgraph } from "@/shared/ipc/tauri";
 import type { GraphCluster, GraphEdgeView, GraphNodeView, GraphView } from "./types";
 import { assignCommunityColors } from "./graphPalette";
 import { edgeKindFor, explainEdge } from "./graphRelationshipResolver";
+import { getDisplayLabel } from "@/features/graph/utils/displayTitle";
 
 const MIN_RADIUS = 6;
 const MAX_RADIUS = 18;
@@ -45,7 +46,7 @@ export function buildGraphView(subgraph: InsightGraphSubgraph): GraphView {
         return {
             id: raw.id,
             raw,
-            label: truncateLabel(raw.label),
+            label: truncateLabel(getDisplayLabel(raw)),
             nodeType: raw.node_type,
             community,
             connectionCount,
