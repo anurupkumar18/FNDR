@@ -21,6 +21,9 @@ pub mod projection_scoring;
 pub mod projection_privacy;
 pub mod projection_commands;
 
+#[cfg(test)]
+mod integration_test;
+
 pub use types::{
     NodeType, EdgeType, GraphNode, GraphEdge, GraphCommunity, Anchor3D,
     FocusType, ActiveFocus, GraphData
