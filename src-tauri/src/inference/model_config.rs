@@ -12,18 +12,29 @@ pub const MULTIMODAL_MODEL_RAM_GB: f32 = 3.5;
 /// Minimum on-disk size to accept as a real Qwen3-VL-2B GGUF (rejects LFS pointers).
 pub const QWEN3_VL_2B_MAIN_GGUF_MIN_BYTES: u64 = 900_000_000;
 
-// ── Embedding contract (single source of truth) ─────────────────────────────
+// ── Embedding contracts (single source of truth) ────────────────────────────
 //
-// The constants below describe the *current durable text-embedding write path*
-// (v4, MiniLM 384). Every embedding-aware module — `src-tauri/src/config.rs`,
-// `src-tauri/src/embedding/onnx.rs`, `src-tauri/src/storage/lance_store/*`,
-// `src-tauri/src/embed/embedding_gemma.rs` — references these constants
-// (directly or via the thin re-exports in `config.rs`) so the model name, file
-// name, tokenizer, vector dimension, and Lance table name cannot drift apart.
-//
-// `MEMORIES_V5_TABLE` is reserved as a forward-intent placeholder for the
-// planned BGE 1024-d upgrade. It is NOT wired into any read/write path yet —
-// Subagent 6 will switch the write path over and add the matching schema.
+// v4 is the current durable runtime contract. v5 is the explicit BGE target
+// used by the migration/reindex path. Keeping both contracts named here avoids
+// silent model/schema dimension drift while v4 remains readable.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingContractVersion {
+    V4MiniLm384,
+    V5Bge1024,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextEmbeddingContract {
+    pub version: EmbeddingContractVersion,
+    pub model_id: &'static str,
+    pub model_filename: &'static str,
+    pub tokenizer_filename: &'static str,
+    pub dimensions: usize,
+    pub max_sequence_length: usize,
+    pub max_batch_size: usize,
+    pub table_name: &'static str,
+}
 
 pub const EMBEDDING_MODEL_ID: &str = "sentence-transformers/all-MiniLM-L6-v2";
 pub const EMBEDDING_MODEL_FILENAME: &str = "all-MiniLM-L6-v2.onnx";
@@ -32,6 +43,16 @@ pub const EMBEDDING_TOKENIZER_FILENAME: &str = "tokenizer.json";
 pub const EMBEDDING_DIMENSIONS: usize = 384;
 pub const EMBEDDING_DIMENSIONS_I32: i32 = EMBEDDING_DIMENSIONS as i32;
 pub const EMBEDDING_MAX_SEQ_LEN: usize = 512;
+pub const EMBEDDING_MAX_BATCH_SIZE: usize = 16;
+
+pub const BGE_V5_MODEL_ID: &str = "BAAI/bge-large-en-v1.5";
+pub const BGE_V5_MODEL_FILENAME: &str = "bge-large-en-v1.5-quantized.onnx";
+pub const BGE_V5_TOKENIZER_FILENAME: &str = "tokenizer.json";
+pub const BGE_V5_DIMENSIONS: usize = 1024;
+pub const BGE_V5_DIMENSIONS_I32: i32 = BGE_V5_DIMENSIONS as i32;
+pub const BGE_V5_MAX_SEQ_LEN: usize = 512;
+/// Keep explicit BGE reindex batches small on the default 8GB-safe profile.
+pub const BGE_V5_MAX_BATCH_SIZE: usize = 4;
 
 pub const MAX_CONCURRENT_MULTIMODAL_JOBS: usize = 1;
 pub const QWEN_IDLE_UNLOAD_SECONDS: u64 = 90;
@@ -53,6 +74,67 @@ pub const MEMORIES_V4_TABLE: &str = "memories_v4_minilm_384";
 /// and write path together. The name is reserved here so doc references stay
 /// consistent and no other slice accidentally claims the table name.
 pub const MEMORIES_V5_TABLE: &str = "memories_v5_bge_1024";
+
+pub const fn embedding_v4_contract() -> TextEmbeddingContract {
+    TextEmbeddingContract {
+        version: EmbeddingContractVersion::V4MiniLm384,
+        model_id: EMBEDDING_MODEL_ID,
+        model_filename: EMBEDDING_MODEL_FILENAME,
+        tokenizer_filename: EMBEDDING_TOKENIZER_FILENAME,
+        dimensions: EMBEDDING_DIMENSIONS,
+        max_sequence_length: EMBEDDING_MAX_SEQ_LEN,
+        max_batch_size: EMBEDDING_MAX_BATCH_SIZE,
+        table_name: MEMORIES_V4_TABLE,
+    }
+}
+
+pub const fn embedding_v5_contract() -> TextEmbeddingContract {
+    TextEmbeddingContract {
+        version: EmbeddingContractVersion::V5Bge1024,
+        model_id: BGE_V5_MODEL_ID,
+        model_filename: BGE_V5_MODEL_FILENAME,
+        tokenizer_filename: BGE_V5_TOKENIZER_FILENAME,
+        dimensions: BGE_V5_DIMENSIONS,
+        max_sequence_length: BGE_V5_MAX_SEQ_LEN,
+        max_batch_size: BGE_V5_MAX_BATCH_SIZE,
+        table_name: MEMORIES_V5_TABLE,
+    }
+}
+
+pub const fn active_embedding_contract() -> TextEmbeddingContract {
+    embedding_v4_contract()
+}
+
+pub fn validate_embedding_config_against_contract(
+    config: &crate::config::EmbeddingConfig,
+    contract: TextEmbeddingContract,
+) -> Result<(), String> {
+    if config.dimension != contract.dimensions {
+        return Err(format!(
+            "Embedding contract drift for {}: config dimension is {}, but contract expects {}.",
+            contract.table_name, config.dimension, contract.dimensions
+        ));
+    }
+    if config.model_filename != contract.model_filename {
+        return Err(format!(
+            "Embedding contract drift for {}: config model_filename is '{}', but contract expects '{}'.",
+            contract.table_name, config.model_filename, contract.model_filename
+        ));
+    }
+    if config.tokenizer_filename != contract.tokenizer_filename {
+        return Err(format!(
+            "Embedding contract drift for {}: config tokenizer_filename is '{}', but contract expects '{}'.",
+            contract.table_name, config.tokenizer_filename, contract.tokenizer_filename
+        ));
+    }
+    if config.model_name != contract.model_id {
+        return Err(format!(
+            "Embedding contract drift for {}: config model_name is '{}', but contract expects '{}'.",
+            contract.table_name, config.model_name, contract.model_id
+        ));
+    }
+    Ok(())
+}
 
 /// Old model directories to list in cleanup dry-run (not deleted automatically).
 pub const CLEANUP_OLD_MODEL_DIRS: &[&str] = &[
@@ -113,5 +195,47 @@ mod tests {
 
         // storage::MEMORIES_TABLE re-exports the same write target
         assert_eq!(crate::storage::MEMORIES_TABLE, MEMORIES_V4_TABLE);
+    }
+
+    #[test]
+    fn bge_v5_contract_is_explicit_and_separate_from_v4() {
+        let v4 = embedding_v4_contract();
+        let v5 = embedding_v5_contract();
+
+        assert_eq!(v4.table_name, MEMORIES_V4_TABLE);
+        assert_eq!(v4.dimensions, 384);
+        assert_eq!(v5.table_name, MEMORIES_V5_TABLE);
+        assert_eq!(v5.dimensions, 1024);
+        assert_eq!(v5.model_filename, "bge-large-en-v1.5-quantized.onnx");
+        assert_eq!(v5.tokenizer_filename, "tokenizer.json");
+        assert_ne!(v4.model_id, v5.model_id);
+        assert_ne!(v4.table_name, v5.table_name);
+    }
+
+    #[test]
+    fn contract_validation_rejects_dimension_and_asset_drift() {
+        let v5 = embedding_v5_contract();
+        let bad_dimension = crate::config::EmbeddingConfig {
+            model_name: v5.model_id.to_string(),
+            model_filename: v5.model_filename.to_string(),
+            tokenizer_filename: v5.tokenizer_filename.to_string(),
+            dimension: 384,
+            max_sequence_length: v5.max_sequence_length,
+            cache_capacity: 128,
+            max_batch_size: 1,
+        };
+
+        let err = validate_embedding_config_against_contract(&bad_dimension, v5)
+            .expect_err("384-d config must not validate against v5");
+        assert!(err.contains("1024"));
+
+        let bad_model = crate::config::EmbeddingConfig {
+            dimension: v5.dimensions,
+            model_filename: "all-MiniLM-L6-v2.onnx".to_string(),
+            ..bad_dimension
+        };
+        let err = validate_embedding_config_against_contract(&bad_model, v5)
+            .expect_err("MiniLM file must not validate against BGE v5");
+        assert!(err.contains("model_filename"));
     }
 }

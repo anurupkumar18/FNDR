@@ -633,6 +633,7 @@ fn main() {
             ipc::commands::get_storage_health,
             ipc::commands::clean_dev_build_cache,
             ipc::commands::run_memory_repair_backfill,
+            ipc::commands::reindex_memories_v5,
             ipc::commands::get_memory_repair_progress,
             ipc::commands::get_memory_debug_inspector,
             ipc::commands::debug::inspect_memory_pipeline,

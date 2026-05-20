@@ -30,6 +30,10 @@ fn default_support_embedding() -> Vec<f32> {
     vec![0.0; DEFAULT_TEXT_EMBEDDING_DIM]
 }
 
+fn default_bge_embedding() -> Vec<f32> {
+    vec![0.0; crate::inference::model_config::BGE_V5_DIMENSIONS]
+}
+
 fn default_decay_score() -> f32 {
     1.0
 }
@@ -126,6 +130,47 @@ pub struct MemoryActionItem {
     pub created_at: i64,
     #[serde(default)]
     pub updated_at: i64,
+}
+
+/// A BGE-v5 child chunk derived from a parent memory's sanitized `clean_text`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryChunkRecord {
+    pub id: String,
+    pub memory_id: String,
+    pub chunk_index: u32,
+    #[serde(default)]
+    pub line_kind: String,
+    pub text: String,
+    #[serde(default = "default_bge_embedding")]
+    pub embedding: Vec<f32>,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub app_name: String,
+    #[serde(default)]
+    pub window_title: String,
+    #[serde(default)]
+    pub day_bucket: String,
+    #[serde(default = "default_content_hash")]
+    pub content_hash: String,
+}
+
+impl Default for MemoryChunkRecord {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            memory_id: String::new(),
+            chunk_index: 0,
+            line_kind: String::new(),
+            text: String::new(),
+            embedding: default_bge_embedding(),
+            created_at: 0,
+            app_name: String::new(),
+            window_title: String::new(),
+            day_bucket: String::new(),
+            content_hash: default_content_hash(),
+        }
+    }
 }
 
 /// A single memory record stored in the database

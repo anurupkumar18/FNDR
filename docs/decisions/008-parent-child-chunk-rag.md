@@ -26,9 +26,9 @@ A `parent_id` on every child chunk points back to the `MemoryRecord.id` in the p
 | Contract | Model | Dimensions | Table | Status |
 |---|---|---|---|---|
 | v4 MiniLM | `all-MiniLM-L6-v2` (ONNX) | 384 | `memories_v4_minilm_384` | **Current durable write path.** All captures, search, and ingestion target this table today. Source of truth: `src-tauri/src/inference/model_config.rs` (`MEMORIES_V4_TABLE`). |
-| v5 BGE | `BAAI/bge-large-en-v1.5` (ONNX) | 1024 | `memories_v5_bge_1024` | **Forward target only.** Placeholder constant `MEMORIES_V5_TABLE` reserved in `model_config.rs`; not yet wired into any read/write path. Subagent 6 will add schema + write path. |
+| v5 BGE | `BAAI/bge-large-en-v1.5` (ONNX) | 1024 | `memories_v5_bge_1024` | **Additive parent target.** Schema and explicit `reindex_memories_v5` path are wired; live capture/search still use v4 until the retrieval cutover lands. |
 
-The child-chunk table (`memory_chunks_v1_bge_1024`) targets the v5 BGE model and will be introduced together with the v5 parent table cutover. Until then no chunk rows are written.
+The child-chunk table (`memory_chunks_v1_bge_1024`) targets the v5 BGE model. Subagent 7 adds the additive table and explicit v5 reindex chunk writes; live search remains on v4 until the chunk-first retrieval cutover lands.
 
 ---
 
@@ -80,8 +80,8 @@ Both tables share the same model and dimension contract so a single ONNX model s
 1. **No destructive reset.** The v4 parent table (`memories_v4_minilm_384`) remains readable and searchable until a full v5 backfill is verified complete. Users are not asked to wipe their database.
 2. **Idempotent reindex.** The migration worker (Subagent 11) iterates existing parent records and writes child chunks only for rows whose `content_hash` is not yet present in the chunk table. Re-running the worker is safe.
 3. **`content_hash` skip.** Each child-chunk write checks whether a row with matching `parent_id` + `content_hash` already exists before inserting. Duplicate chunk rows are never written.
-4. **Forward writes only.** Once the v5 write path ships (Subagent 6), new captures write to both v5 parent and chunk tables. Old v4-only rows remain until backfill completes.
-5. **Dual-table search.** During the transition, search queries fan out to both v4 parent and v5 chunk tables; results are merged and deduplicated by parent `id` before card synthesis.
+4. **Explicit parent reindex first.** Subagent 6 writes v5 parent rows only through `reindex_memories_v5`. New live captures continue to write v4 until the later cutover slice.
+5. **Dual-table search later.** During the retrieval transition, search queries will fan out to both v4 parent and v5 chunk tables; results are merged and deduplicated by parent `id` before card synthesis.
 
 ---
 

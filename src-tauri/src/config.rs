@@ -151,6 +151,8 @@ pub struct ChunkingConfig {
     pub ocr_target_min_chars: usize,
     #[serde(default = "default_chunk_ocr_target_max_chars")]
     pub ocr_target_max_chars: usize,
+    #[serde(default = "default_max_chunks_per_memory")]
+    pub max_chunks_per_memory: usize,
 }
 
 impl Default for ChunkingConfig {
@@ -162,6 +164,7 @@ impl Default for ChunkingConfig {
             chars_per_token: default_chars_per_token(),
             ocr_target_min_chars: default_chunk_ocr_target_min_chars(),
             ocr_target_max_chars: default_chunk_ocr_target_max_chars(),
+            max_chunks_per_memory: default_max_chunks_per_memory(),
         }
     }
 }
@@ -176,6 +179,7 @@ impl ChunkingConfig {
         self.ocr_target_max_chars = self
             .ocr_target_max_chars
             .clamp(self.ocr_target_min_chars, 8_000);
+        self.max_chunks_per_memory = self.max_chunks_per_memory.clamp(1, 64);
         self
     }
 }
@@ -705,6 +709,10 @@ fn default_chunk_ocr_target_min_chars() -> usize {
 
 fn default_chunk_ocr_target_max_chars() -> usize {
     DEFAULT_CHUNK_OCR_TARGET_MAX_CHARS
+}
+
+fn default_max_chunks_per_memory() -> usize {
+    12
 }
 
 fn default_search_candidate_multiplier() -> usize {

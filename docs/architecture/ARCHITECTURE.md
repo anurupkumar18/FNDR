@@ -11,7 +11,7 @@ capture -> OCR -> chunking -> embedding -> LanceDB storage -> hybrid search -> M
 1. Capture samples the foreground screen, skips private contexts, deduplicates frames, and keeps raw pixels off the persisted memory path.
 2. OCR extracts screen text with Apple Vision and applies app-aware cleanup for browser and desktop noise.
 3. Chunking turns cleaned OCR text into high-signal memory chunks with overlap and repeated-line suppression.
-4. Embedding generates 384-dimensional local text vectors (all-MiniLM-L6-v2 via ONNX) for the full memory text, snippet text, and representative support text. The embedding contract — model name, file, tokenizer, dimension, and Lance table name — lives in `src-tauri/src/inference/model_config.rs`. A BGE 1024-d upgrade is staged as the next forward contract (see ADR 002).
+4. Embedding generates 384-dimensional local text vectors (all-MiniLM-L6-v2 via ONNX) for the live full-memory, snippet, and representative support vectors. The embedding contract — model name, file, tokenizer, dimension, and Lance table name — lives in `src-tauri/src/inference/model_config.rs`. The additive BGE 1024-d v5 parent target is available through explicit reindexing, not startup or live search.
 5. LanceDB storage persists compact memory records, metadata, and vector columns for retrieval.
 6. Hybrid search runs semantic vector retrieval and lexical keyword retrieval, then fuses, gates, and reranks candidates.
 7. MemoryCards group related search hits into grounded cards with deterministic fallbacks.
@@ -46,7 +46,7 @@ The code keeps public Tauri command names stable, while internal names make the 
 
 Pipeline knobs live in `src-tauri/src/config.rs` rather than scattered literals:
 
-- `EmbeddingConfig`: model contract, 384-dimensional vector size (current durable contract; planned forward target is 1024-d BGE), sequence length, cache, batch size.
+- `EmbeddingConfig`: live v4 MiniLM model contract, 384-dimensional vector size, sequence length, cache, batch size. The v5 BGE 1024-d target is a separate code contract rather than the default runtime config.
 - `ChunkingConfig`: OCR chunk length, overlap, and target text windows.
 - `SearchConfig`: branch limits, timeouts, fusion weights, relevance floors, and rerank pool size.
 - `CapturePipelineConfig`: batching, semantic dedupe, idle behavior, and focus-drift thresholds.
@@ -68,10 +68,10 @@ At query time the chunk index is searched first for precision; matched chunks' p
 | Contract | Table | Status |
 |---|---|---|
 | v4 MiniLM 384-d | `memories_v4_minilm_384` | Current durable write path |
-| v5 BGE 1024-d | `memories_v5_bge_1024` | Forward target — not yet wired (Subagent 6) |
-| v1 BGE chunks 1024-d | `memory_chunks_v1_bge_1024` | Forward target — not yet wired (Subagent 7) |
+| v5 BGE 1024-d | `memories_v5_bge_1024` | Additive parent target table and explicit reindex path |
+| v1 BGE chunks 1024-d | `memory_chunks_v1_bge_1024` | Additive child chunk table for explicit v5 reindex; not searched yet |
 
-The v5 forward targets are **not** the current path. Any description of 1024-d as "current" would be incorrect. See ADR 002 (amended) and ADR 008.
+The v5 parent table is available as a migration target, but 1024-d is still **not** the current live search path. v4 remains readable and v5 writes refuse wrong-dimension fallback. See ADR 002 (amended) and ADR 008.
 
 ## Stable vs Experimental
 

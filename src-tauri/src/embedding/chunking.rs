@@ -389,6 +389,43 @@ pub fn chunk_screen_text(
         .collect()
 }
 
+/// Shared parent-child RAG selector: chunk sanitized OCR with the configured
+/// chunker, then choose the highest-salience chunks for child embedding.
+pub fn select_salient_memory_chunks(
+    chunking: &ChunkingConfig,
+    app_name: &str,
+    window_title: &str,
+    clean_text: &str,
+    max_chunks: usize,
+) -> Vec<TextChunk> {
+    let cap = max_chunks.max(1);
+    let chunker = TextChunker::from_config(chunking);
+    let mut scored = chunker
+        .chunk_ocr_text_with_metadata(app_name, window_title, clean_text)
+        .into_iter()
+        .filter(|chunk| !chunk.text.trim().is_empty())
+        .map(|chunk| {
+            let score = text_cleanup::rank_salient_spans(&chunk.text, app_name)
+                .into_iter()
+                .map(|span| span.score)
+                .fold(0.0_f32, f32::max);
+            (chunk, score)
+        })
+        .collect::<Vec<_>>();
+
+    scored.sort_by(|(left, left_score), (right, right_score)| {
+        right_score
+            .partial_cmp(left_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.chunk_index.cmp(&right.chunk_index))
+    });
+    scored
+        .into_iter()
+        .take(cap)
+        .map(|(chunk, _)| chunk)
+        .collect()
+}
+
 fn line_kind_label(kind: LineKind) -> &'static str {
     match kind {
         LineKind::Title => "title",
@@ -777,6 +814,38 @@ mod tests {
             has_url_chunk,
             "expected a chunk with dominant_line_kind=Url"
         );
+    }
+
+    #[test]
+    fn salient_memory_chunk_selection_enforces_cap() {
+        use crate::config::ChunkingConfig;
+
+        let mut cfg = ChunkingConfig::default();
+        cfg.max_tokens = 32;
+        cfg.overlap_tokens = 4;
+        cfg.min_tokens = 1;
+        cfg.ocr_target_min_chars = 40;
+        cfg.ocr_target_max_chars = 140;
+        cfg.max_chunks_per_memory = 2;
+        let text = (0..12)
+            .map(|i| {
+                format!(
+                    "Implement memory chunk pipeline item {i}. This should preserve parent context and fix retrieval precision."
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let selected = select_salient_memory_chunks(
+            &cfg,
+            "Code",
+            "Parent child RAG notes",
+            &text,
+            cfg.max_chunks_per_memory,
+        );
+
+        assert_eq!(selected.len(), 2);
+        assert!(selected.iter().all(|chunk| !chunk.text.trim().is_empty()));
     }
 
     #[test]

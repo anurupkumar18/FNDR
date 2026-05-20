@@ -40,9 +40,11 @@ use super::text_kw::{
 use super::{
     ACTIVITY_EVENTS_TABLE, CONTEXT_DELTAS_TABLE, CONTEXT_PACKS_TABLE, DECISION_LEDGER_TABLE,
     EDGES_TABLE, ENTITY_ALIASES_TABLE, GRAPH_EDGES_TABLE, GRAPH_NODES_TABLE, IMAGE_EMBED_DIM,
-    INDEX_NOISE_HOSTS, KNOWLEDGE_PAGES_TABLE, MEETINGS_TABLE, MEMORIES_TABLE, NODES_TABLE,
-    PROJECT_CONTEXTS_TABLE, SEARCH_RESULT_COLUMNS, SEGMENTS_TABLE, TASKS_TABLE, TEXT_EMBED_DIM,
+    INDEX_NOISE_HOSTS, KNOWLEDGE_PAGES_TABLE, MEETINGS_TABLE, MEMORIES_TABLE, MEMORY_CHUNKS_TABLE,
+    NODES_TABLE, PROJECT_CONTEXTS_TABLE, SEARCH_RESULT_COLUMNS, SEGMENTS_TABLE, TASKS_TABLE,
+    TEXT_EMBED_DIM,
 };
+use crate::inference::model_config::{BGE_V5_DIMENSIONS, MEMORIES_V5_TABLE};
 
 pub(super) fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
     if terms.is_empty() {
@@ -1400,6 +1402,8 @@ pub(super) async fn open_all_tables(
         Table,
         Table,
         Table,
+        Table,
+        Table,
     ),
     lancedb::Error,
 > {
@@ -1407,46 +1411,40 @@ pub(super) async fn open_all_tables(
     let conn: Connection = lancedb::connect(&uri).execute().await?;
     let names = conn.table_names().execute().await?;
 
-    let (table, legacy_table) = if names.contains(&"memories_v2_1024".to_string()) {
-        let table = conn.open_table("memories_v2_1024").execute().await?;
-        let legacy_table = if names.contains(&MEMORIES_TABLE.to_string()) {
-            Some(conn.open_table(MEMORIES_TABLE).execute().await?)
-        } else {
-            None
-        };
-        (table, legacy_table)
-    } else if names.contains(&MEMORIES_TABLE.to_string()) {
-        let existing = conn.open_table(MEMORIES_TABLE).execute().await?;
-        let schema = existing.schema().await?;
-        let is_384 = schema.fields().iter().any(|f| {
-            if f.name() == "embedding" {
-                if let DataType::FixedSizeList(_, dim) = f.data_type() {
-                    return *dim == 384;
-                }
-            }
-            false
-        });
-
-        if is_384 && TEXT_EMBED_DIM == 1024 {
-            let table = open_or_create_named_table(
-                &conn,
-                &names,
-                "memories_v2_1024",
-                Arc::new(memory_schema()),
-            )
+    let table =
+        open_or_create_named_table(&conn, &names, MEMORIES_TABLE, Arc::new(memory_schema()))
             .await?;
-            (table, Some(existing))
-        } else {
-            (existing, None)
-        }
+    let legacy_table = if names.contains(&"memories_v2_1024".to_string()) {
+        Some(conn.open_table("memories_v2_1024").execute().await?)
     } else {
-        (
-            open_or_create_named_table(&conn, &names, MEMORIES_TABLE, Arc::new(memory_schema()))
-                .await?,
-            None,
-        )
+        None
     };
     ensure_memory_schema_columns(&table).await?;
+    ensure_memory_table_vector_dim(&table, TEXT_EMBED_DIM, MEMORIES_TABLE).await?;
+
+    let memories_v5 = open_or_create_named_table(
+        &conn,
+        &names,
+        MEMORIES_V5_TABLE,
+        Arc::new(memory_v5_schema()),
+    )
+    .await?;
+    ensure_memory_table_vector_dim(&memories_v5, BGE_V5_DIMENSIONS as i32, MEMORIES_V5_TABLE)
+        .await?;
+
+    let memory_chunks = open_or_create_named_table(
+        &conn,
+        &names,
+        MEMORY_CHUNKS_TABLE,
+        Arc::new(memory_chunk_schema()),
+    )
+    .await?;
+    ensure_memory_table_vector_dim(
+        &memory_chunks,
+        BGE_V5_DIMENSIONS as i32,
+        MEMORY_CHUNKS_TABLE,
+    )
+    .await?;
 
     let tasks =
         open_or_create_named_table(&conn, &names, TASKS_TABLE, Arc::new(task_schema())).await?;
@@ -1527,6 +1525,8 @@ pub(super) async fn open_all_tables(
     Ok((
         table,
         legacy_table,
+        memories_v5,
+        memory_chunks,
         tasks,
         meetings,
         segments,
@@ -1906,11 +1906,19 @@ fn null_string_sql() -> String {
 }
 
 pub(super) async fn validate_memory_vector_schema(table: &Table) -> Result<(), lancedb::Error> {
+    ensure_memory_table_vector_dim(table, TEXT_EMBED_DIM, MEMORIES_TABLE).await
+}
+
+pub(super) async fn ensure_memory_table_vector_dim(
+    table: &Table,
+    text_embed_dim: i32,
+    table_name: &str,
+) -> Result<(), lancedb::Error> {
     let schema = table.schema().await?;
     for (column, expected_dim) in [
-        ("embedding", TEXT_EMBED_DIM),
-        ("snippet_embedding", TEXT_EMBED_DIM),
-        ("support_embedding", TEXT_EMBED_DIM),
+        ("embedding", text_embed_dim),
+        ("snippet_embedding", text_embed_dim),
+        ("support_embedding", text_embed_dim),
         ("image_embedding", IMAGE_EMBED_DIM),
     ] {
         let Some(field) = schema.field_with_name(column).ok() else {
@@ -1921,14 +1929,11 @@ pub(super) async fn validate_memory_vector_schema(table: &Table) -> Result<(), l
             return Err(lancedb::Error::Schema {
                 message: format!(
                     "LanceDB table '{}' column '{}' has vector dimension {:?}, but FNDR is configured for {}. \
-                     The current durable contract is {}-d (all-MiniLM-L6-v2). \
-                     If you upgraded from an older prototype with a different dimension, back up and reset the local Lance store: \
-                     stop FNDR and run `make reset-lancedb` (or remove the LanceDB directory under the app data folder).",
-                    MEMORIES_TABLE,
+                     FNDR never falls back across embedding dimensions; keep v4 MiniLM 384 and v5 BGE 1024 in separate versioned tables.",
+                    table_name,
                     column,
                     actual_dim,
                     expected_dim,
-                    DEFAULT_TEXT_EMBEDDING_DIM,
                 ),
             });
         }
