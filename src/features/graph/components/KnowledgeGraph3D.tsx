@@ -128,6 +128,15 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
     [setMode]
   )
 
+  // Compute layout for labels BEFORE any early returns (Rules of Hooks)
+  // This must be called unconditionally on every render
+  const { communities, nodePositions } = useMemo(() => {
+    if (!graphData) return { communities: [], nodePositions: [] }
+    const communities = computeCommunityAnchors(graphData.communities)
+    const nodePositions = computeLocalNodePositions(graphData.nodes, communities)
+    return { communities, nodePositions }
+  }, [graphData])
+
   if (error) {
     return (
       <div className="flex items-center justify-center w-full h-full bg-slate-900 rounded-lg">
@@ -190,13 +199,6 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
 
   const selectedNode = graphData.nodes.find((n) => n.id === selectedNodeId)
   const hoveredNode = graphData.nodes.find((n) => n.id === hoveredNodeId)
-
-  // Compute layout for labels (same as in GraphScene, but needed here for GraphLabels outside Canvas)
-  const { communities, nodePositions } = useMemo(() => {
-    const communities = computeCommunityAnchors(graphData.communities)
-    const nodePositions = computeLocalNodePositions(graphData.nodes, communities)
-    return { communities, nodePositions }
-  }, [graphData.nodes, graphData.communities])
 
   return (
     <div className="relative w-full h-full bg-slate-950 rounded-lg overflow-hidden flex flex-col">
