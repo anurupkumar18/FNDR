@@ -222,12 +222,13 @@ fn should_skip_ungrounded_low_ram_visual_capture(
     observed_text_len: usize,
     observed_confidence: f32,
     observed_block_count: usize,
-    source_low_signal: bool,
     min_text_length: usize,
 ) -> bool {
+    // Only drop truly ungrounded visual-only frames on low-RAM hosts. Thin OCR
+    // (below the main pipeline gate) can still ground an LLM/fusion fallback —
+    // `source_low_signal` must not force a hard skip when chars are present.
     vlm_route.fallback_reason() == Some("vlm_blocked_low_ram")
-        && (source_low_signal
-            || observed_text_len < min_text_length
+        && (observed_text_len < min_text_length
             || (observed_block_count == 0 && observed_confidence <= 0.05))
 }
 
@@ -291,10 +292,10 @@ async fn compose_visual_capture_record(
     bundle_id: Option<&str>,
     window_title: &str,
     url: Option<&str>,
+    observed_text: &str,
     observed_text_len: usize,
     observed_confidence: f32,
     observed_block_count: usize,
-    source_low_signal: bool,
     novelty: f32,
 ) -> Result<MemoryRecord, String> {
     let now = Local::now();
@@ -329,9 +330,17 @@ async fn compose_visual_capture_record(
     // nothing useful. Stays inside the existing async context (already
     // serialized by the model pipeline lock the caller holds).
     let llm_engine = state.inference_engine();
-    let llm_fallback_context = format!(
-        "App: {app_name}\nWindow: {window_title}\n(visual-only frame; OCR was below the storage gate)"
-    );
+    let trimmed_observed = observed_text.trim();
+    let llm_fallback_context = if trimmed_observed.is_empty() {
+        format!(
+            "App: {app_name}\nWindow: {window_title}\n(visual-only frame; OCR was below the storage gate)"
+        )
+    } else {
+        format!(
+            "App: {app_name}\nWindow: {window_title}\nOCR excerpt:\n{}",
+            trimmed_observed.chars().take(4000).collect::<String>()
+        )
+    };
     let try_llm_fallback = || async {
         let engine = llm_engine.clone()?;
         engine
@@ -345,11 +354,11 @@ async fn compose_visual_capture_record(
         observed_text_len,
         observed_confidence,
         observed_block_count,
-        source_low_signal,
         config.min_text_length,
     ) {
         tracing::info!(
             app = %app_name,
+            observed_chars = observed_text_len,
             "compose_visual_capture_record: skipping ungrounded visual-only frame because VLM is blocked by low RAM and OCR/browser text is below the storage gate"
         );
         return Err(VISUAL_UNGROUNDED_LOW_RAM_REASON.to_string());
@@ -2305,10 +2314,10 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         app_context.bundle_id.as_deref(),
                         &window_title,
                         url.as_deref(),
+                        &text,
                         text.len(),
                         observed_confidence,
                         observed_block_count,
-                        source_low_signal,
                         novelty,
                     )
                     .await
@@ -5379,23 +5388,22 @@ Activity patterns and insights dashboard
         };
 
         assert!(should_skip_ungrounded_low_ram_visual_capture(
-            &route, 0, 0.0, 0, false, 20
+            &route, 0, 0.0, 0, 20
         ));
         assert!(!should_skip_ungrounded_low_ram_visual_capture(
-            &route, 64, 0.42, 6, false, 20
+            &route, 64, 0.42, 6, 20
         ));
         assert!(should_skip_ungrounded_low_ram_visual_capture(
-            &route, 9, 0.42, 6, false, 20
+            &route, 9, 0.42, 6, 20
         ));
-        assert!(should_skip_ungrounded_low_ram_visual_capture(
-            &route, 64, 0.42, 6, true, 20
+        assert!(!should_skip_ungrounded_low_ram_visual_capture(
+            &route, 83, 0.48, 8, 20
         ));
         assert!(!should_skip_ungrounded_low_ram_visual_capture(
             &VlmRouteDecision::RunQwenVlm,
             0,
             0.0,
             0,
-            false,
             20
         ));
     }

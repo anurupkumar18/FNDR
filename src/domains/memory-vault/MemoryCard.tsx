@@ -102,7 +102,14 @@ export function MemoryCard({
             >
                 <span className="fndr-mc-bar" aria-hidden="true" />
                 <span className="fndr-mc-c-frame">FRAME {frameId}</span>
-                <span className="fndr-mc-c-title">{card.title}</span>
+                <div className="fndr-mc-c-main">
+                    <span className="fndr-mc-c-title">{card.title}</span>
+                    {previewText ? (
+                        <span className="fndr-mc-c-preview" title={previewText}>
+                            {previewText}
+                        </span>
+                    ) : null}
+                </div>
                 <span className="fndr-mc-c-source">
                     <em>{card.app_name}</em>
                 </span>
@@ -276,12 +283,24 @@ function deriveFrameId(id: string): string {
 }
 
 function pickPreviewText(card: MemoryCardData): string {
-    return (
+    const fromFields =
         card.display_summary?.trim() ||
         card.summary?.trim() ||
         card.internal_context?.trim() ||
-        ""
-    );
+        "";
+    if (fromFields) {
+        return fromFields;
+    }
+    if (Array.isArray(card.context)) {
+        const joined = card.context
+            .map((line) => line?.trim())
+            .filter((line): line is string => Boolean(line))
+            .join(" · ");
+        if (joined) {
+            return joined;
+        }
+    }
+    return "";
 }
 
 function deriveThreads(card: MemoryCardData): string[] {

@@ -255,6 +255,25 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
     if let Some(domain) = url.as_deref().and_then(card_domain) {
         context.push(format!("Site: {}", domain));
     }
+    if !result.activity_type.trim().is_empty() && result.activity_type != "other" {
+        context.push(format!("Activity: {}", result.activity_type.trim()));
+    }
+    for file in result.files_touched.iter().take(3) {
+        let trimmed = file.trim();
+        if !trimmed.is_empty() {
+            context.push(format!("File: {}", trimmed));
+        }
+    }
+    let memory_context = result.memory_context.trim();
+    if !memory_context.is_empty() {
+        let excerpt: String = memory_context.chars().take(220).collect();
+        if !context.iter().any(|line| line.contains(&excerpt)) {
+            context.push(excerpt);
+        }
+    } else if !result.internal_context.trim().is_empty() {
+        let excerpt: String = result.internal_context.chars().take(220).collect();
+        context.push(excerpt);
+    }
 
     let fallback_snippet = summary.clone();
     let action = if result.url.is_some() {
