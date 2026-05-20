@@ -2,7 +2,7 @@ import React, { useMemo } from "react"
 import * as THREE from "three"
 import type { GraphData, EdgeType } from "../types"
 import { useGraphStore } from "../state/graphStore"
-import { selectVisibleEdges, getEdgeColor, getEdgeWidth } from "../layout/edgeVisibility"
+import { selectVisibleEdges, getEdgeColor } from "../layout/edgeVisibility"
 
 interface NodeLayout {
   nodeId: string
@@ -17,91 +17,90 @@ interface GraphEdgesProps {
   nodePositions: NodeLayout[]
 }
 
-function EdgeLine({
-  source,
-  target,
-  edgeType,
-  weight,
-  confidence,
-}: {
-  source: { x: number; y: number; z: number }
-  target: { x: number; y: number; z: number }
+/** Per-edge-type, per-state lineSegments grouped into one geometry. Drawing
+ *  all edges with a single BufferGeometry per (type, state) keeps the draw
+ *  call count tiny — even at 500+ edges. */
+interface EdgeGroupInput {
   edgeType: EdgeType
-  weight: number
-  confidence?: number
-}) {
-  const color = useMemo(() => getEdgeColor(edgeType), [edgeType])
-  const width = useMemo(() => getEdgeWidth(edgeType, weight), [edgeType, weight])
-  const opacity = useMemo(() => (confidence ?? weight) * 0.6, [confidence, weight])
+  positions: number[]
+  isFocused: boolean
+}
 
+function EdgeGroupLines({ edgeType, positions, isFocused }: EdgeGroupInput) {
   const geometry = useMemo(() => {
-    const geometry = new THREE.BufferGeometry()
-    const positions = new Float32Array([source.x, source.y, source.z, target.x, target.y, target.z])
-    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3))
-    return geometry
-  }, [source, target])
+    const g = new THREE.BufferGeometry()
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3))
+    return g
+  }, [positions])
 
   const material = useMemo(() => {
     return new THREE.LineBasicMaterial({
-      color,
-      opacity: Math.min(opacity, 1),
+      color: getEdgeColor(edgeType),
       transparent: true,
-      linewidth: width,
+      opacity: isFocused ? 0.75 : 0.22,
+      blending: isFocused ? THREE.AdditiveBlending : THREE.NormalBlending,
+      depthWrite: false,
       fog: true,
     })
-  }, [color, opacity, width])
+  }, [edgeType, isFocused])
 
+  if (positions.length === 0) return null
   return <lineSegments geometry={geometry} material={material} />
 }
 
 export const GraphEdges: React.FC<GraphEdgesProps> = ({ graphData, nodePositions }) => {
   const selectedNodeId = useGraphStore((s) => s.selectedNodeId)
+  const hoveredNodeId = useGraphStore((s) => s.hoveredNodeId)
   const enabledEdgeTypes = useGraphStore((s) => s.enabledEdgeTypes)
 
-  // Create position map for fast lookup
-  const nodePositionMap = useMemo(() => {
-    return new Map(nodePositions.map((p) => [p.nodeId, p.position]))
-  }, [nodePositions])
+  const nodePositionMap = useMemo(
+    () => new Map(nodePositions.map((p) => [p.nodeId, p.position])),
+    [nodePositions],
+  )
 
-  // Select visible edges with very conservative filtering
+  // Show all enabled-type edges, capped at maxVisibleEdges. Bias selection
+  // toward edges incident to the currently selected/hovered node so the
+  // user can always see context.
   const visibleEdges = useMemo(() => {
-    // Only show edges for selected/hovered nodes to avoid visual noise
-    const selectedSet = new Set<string>()
-    if (selectedNodeId) selectedSet.add(selectedNodeId)
+    const focusSet = new Set<string>()
+    if (selectedNodeId) focusSet.add(selectedNodeId)
+    if (hoveredNodeId) focusSet.add(hoveredNodeId)
+    return selectVisibleEdges(graphData.edges, focusSet, enabledEdgeTypes, 500)
+  }, [graphData.edges, selectedNodeId, hoveredNodeId, enabledEdgeTypes])
 
-    // Very sparse default: only show selected node edges, max 8 total
-    const maxEdges = selectedNodeId ? 8 : 0
-    return selectVisibleEdges(graphData.edges, selectedSet, enabledEdgeTypes, maxEdges)
-  }, [graphData.edges, selectedNodeId, enabledEdgeTypes])
-
-  // Filter to only edges with valid positions
-  const renderedEdges = useMemo(() => {
-    return visibleEdges.filter((edge) => {
-      const sourcePos = nodePositionMap.get(edge.source)
-      const targetPos = nodePositionMap.get(edge.target)
-      return sourcePos && targetPos
-    })
-  }, [visibleEdges, nodePositionMap])
+  // Bucket edges by (edgeType, focused?) — focused = either endpoint matches
+  // the selected/hovered node.
+  const groups = useMemo(() => {
+    const focusSet = new Set<string>()
+    if (selectedNodeId) focusSet.add(selectedNodeId)
+    if (hoveredNodeId) focusSet.add(hoveredNodeId)
+    const map = new Map<string, EdgeGroupInput>()
+    for (const edge of visibleEdges) {
+      const s = nodePositionMap.get(edge.source)
+      const t = nodePositionMap.get(edge.target)
+      if (!s || !t) continue
+      const focused = focusSet.has(edge.source) || focusSet.has(edge.target)
+      const key = `${edge.edge_type}::${focused ? "f" : "n"}`
+      let group = map.get(key)
+      if (!group) {
+        group = { edgeType: edge.edge_type, positions: [], isFocused: focused }
+        map.set(key, group)
+      }
+      group.positions.push(s.x, s.y, s.z, t.x, t.y, t.z)
+    }
+    return Array.from(map.entries()).map(([key, group]) => ({ key, ...group }))
+  }, [visibleEdges, nodePositionMap, selectedNodeId, hoveredNodeId])
 
   return (
     <group>
-      {renderedEdges.map((edge) => {
-        const sourcePos = nodePositionMap.get(edge.source)
-        const targetPos = nodePositionMap.get(edge.target)
-
-        if (!sourcePos || !targetPos) return null
-
-        return (
-          <EdgeLine
-            key={edge.id}
-            source={sourcePos}
-            target={targetPos}
-            edgeType={edge.edge_type}
-            weight={edge.weight}
-            confidence={edge.confidence}
-          />
-        )
-      })}
+      {groups.map((g) => (
+        <EdgeGroupLines
+          key={g.key}
+          edgeType={g.edgeType}
+          positions={g.positions}
+          isFocused={g.isFocused}
+        />
+      ))}
     </group>
   )
 }

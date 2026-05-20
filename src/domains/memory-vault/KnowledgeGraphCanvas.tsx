@@ -67,6 +67,19 @@ export const KnowledgeGraphCanvas = forwardRef<
 ) {
     const svgRef = useRef<SVGSVGElement | null>(null);
     const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+    // Latest hover/select handlers — read through refs so callback identity changes
+    // from the parent don't retrigger the simulation effect (which clears the SVG
+    // and resets pan/zoom).
+    const onHoverRef = useRef(onHover);
+    const onSelectRef = useRef(onSelect);
+    useEffect(() => {
+        onHoverRef.current = onHover;
+    }, [onHover]);
+    useEffect(() => {
+        onSelectRef.current = onSelect;
+    }, [onSelect]);
+    // Persist the user's pan/zoom transform across simulation rebuilds.
+    const savedTransformRef = useRef<d3.ZoomTransform | null>(null);
 
     const simNodes = useMemo<LayoutSimNode[]>(
         () =>
@@ -96,9 +109,19 @@ export const KnowledgeGraphCanvas = forwardRef<
     useEffect(() => {
         const svg = svgRef.current;
         if (!svg) return;
+        // Capture the current pan/zoom before tearing the SVG down so we can
+        // restore it after the rebuild. Falls back to null on first mount.
+        const priorTransform = zoomRef.current
+            ? (d3.zoomTransform(svg) ?? null)
+            : savedTransformRef.current;
         svg.innerHTML = "";
 
+        // Prefer the SVG's actual pixel size — the height prop is 0 when the
+        // parent passes "100%" (a string), which would collapse the
+        // forceCenter / forceY targets to y=0 and stack every node on the
+        // SVG's top edge.
         const actualWidth = svg.clientWidth || width || 800;
+        const actualHeight = svg.clientHeight || height || 480;
 
         const root = d3.select(svg);
         const gRoot = root.append("g").attr("class", "kg-canvas-root");
@@ -112,16 +135,20 @@ export const KnowledgeGraphCanvas = forwardRef<
                 // Coarse zoom tier drives a CSS rule that opens up label visibility
                 // when the user has leaned in (k ≥ 1.5×).
                 gRoot.attr("data-zoom-tier", k >= 1.5 ? "in" : k >= 0.7 ? "mid" : "out");
+                savedTransformRef.current = event.transform;
             });
         root.call(zoom);
         zoomRef.current = zoom;
         gRoot.attr("data-zoom-tier", "mid");
+        if (priorTransform && priorTransform !== d3.zoomIdentity) {
+            root.call(zoom.transform, priorTransform);
+        }
 
         if (simNodes.length === 0) {
             gRoot
                 .append("text")
                 .attr("x", actualWidth / 2)
-                .attr("y", height / 2)
+                .attr("y", actualHeight / 2)
                 .attr("text-anchor", "middle")
                 .attr("class", "kg-empty")
                 .text("nothing to develop yet.");
@@ -130,7 +157,7 @@ export const KnowledgeGraphCanvas = forwardRef<
 
         const sim = buildSimulation(simNodes, simLinks, view.clusters, {
             width: actualWidth,
-            height,
+            height: actualHeight,
             maxTicks,
         });
 
@@ -164,7 +191,7 @@ export const KnowledgeGraphCanvas = forwardRef<
         // Add ambient dust layer (30 fixed background circles)
         const dustG = gRoot.append("g").attr("class", "kg-dust");
         const centerX = (actualWidth || 800) / 2;
-        const centerY = height / 2;
+        const centerY = (actualHeight || 480) / 2;
         const dustRadius = Math.min(centerX, centerY) * 1.1;
         for (let i = 0; i < 30; i++) {
             const angle = (Math.PI * 2 * i) / 30 + Math.sin(i * 1.7) * 0.4;
@@ -188,17 +215,27 @@ export const KnowledgeGraphCanvas = forwardRef<
             .selectAll<SVGGElement, LayoutSimNode>("g")
             .data(simNodes, (d) => d.id)
             .join("g")
-            .attr("class", (d) => `kg-node kg-drift-${d.id.charCodeAt(0) % 5}`)
+            .attr("class", "kg-node")
             .attr("data-node-id", (d) => d.id)
             .style("cursor", "pointer")
-            .style("animation-delay", (d) => `${(d.id.charCodeAt(0) % 6) * 0.5}s`)
-            .on("mouseenter", (_e, d) => onHover(d.id))
-            .on("mouseleave", () => onHover(null))
-            .on("click", (_e, d) => onSelect(d.view))
+            .on("mouseenter", (_e, d) => onHoverRef.current(d.id))
+            .on("mouseleave", () => onHoverRef.current(null))
+            .on("click", (_e, d) => onSelectRef.current(d.view))
             .call(drag);
 
+        // Inner wrapper carries the CSS drift animation. Keeping drift on this
+        // inner <g> means its CSS `transform` composes with the outer <g>'s
+        // sim-driven `transform=` attribute, instead of overriding it (per
+        // SVG2 / CSS Transforms 1).
+        const nodeInner = nodeSel
+            .selectAll<SVGGElement, LayoutSimNode>(":scope > g.kg-node-inner")
+            .data((d) => [d], (d) => d.id)
+            .join("g")
+            .attr("class", (d) => `kg-node-inner kg-drift-${d.id.charCodeAt(0) % 5}`)
+            .style("animation-delay", (d) => `${(d.id.charCodeAt(0) % 6) * 0.5}s`);
+
         // Outer halation ring (large, faint)
-        nodeSel
+        nodeInner
             .append("circle")
             .attr("class", "kg-node-halo kg-node-halo-outer")
             .attr("r", (d) => d.size + 14)
@@ -207,12 +244,12 @@ export const KnowledgeGraphCanvas = forwardRef<
             .style("transition", "opacity var(--film-dur-fast) var(--film-ease-shutter)");
 
         // Inner halation ring
-        nodeSel
+        nodeInner
             .append("circle")
             .attr("class", "kg-node-halo")
             .attr("r", (d) => d.size + 8);
 
-        nodeSel
+        nodeInner
             .append("circle")
             .attr("class", "kg-node-core")
             .attr("r", (d) => d.size)
@@ -227,7 +264,7 @@ export const KnowledgeGraphCanvas = forwardRef<
         // every visible node can be identified when the user has narrowed scope
         // or zoomed in. Truncation at 16 chars keeps the canvas legible.
         const nowMs = Date.now();
-        nodeSel
+        nodeInner
             .append("text")
             .attr("class", "kg-node-label")
             .attr("text-anchor", "middle")
@@ -276,8 +313,6 @@ export const KnowledgeGraphCanvas = forwardRef<
         height,
         maxTicks,
         filterActive,
-        onHover,
-        onSelect,
     ]);
 
     // Apply dim/highlight classes whenever selection / hover / neighborhood changes (no relayout).

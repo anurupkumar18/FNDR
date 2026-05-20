@@ -1,13 +1,17 @@
 import * as THREE from "three"
 
-export function createNodeMaterial(color: string, emissive: string): THREE.MeshPhongMaterial {
-  return new THREE.MeshPhongMaterial({
+export function createNodeMaterial(color: string, emissive: string): THREE.MeshPhysicalMaterial {
+  return new THREE.MeshPhysicalMaterial({
     color,
     emissive,
-    emissiveIntensity: 0.4,
-    shininess: 100,
-    wireframe: false,
-    flatShading: false,
+    emissiveIntensity: 0.7,
+    roughness: 0.32,
+    metalness: 0.08,
+    clearcoat: 0.55,
+    clearcoatRoughness: 0.25,
+    reflectivity: 0.4,
+    sheen: 0.4,
+    sheenColor: new THREE.Color(color),
   })
 }
 
@@ -68,7 +72,9 @@ export function createGlowMaterial(color: string, intensity: number): THREE.Mesh
   return new THREE.MeshBasicMaterial({
     color,
     transparent: true,
-    opacity: 0.3 * intensity,
+    opacity: Math.min(0.55 * intensity, 0.85),
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
     fog: false,
   })
 }
@@ -83,7 +89,7 @@ export function createCommunityAnchorMaterial(color: string): THREE.MeshBasicMat
 }
 
 export function updateNodeMaterialColor(
-  material: THREE.MeshPhongMaterial,
+  material: THREE.MeshPhysicalMaterial,
   color: string,
   emissive: string,
   opacity: number

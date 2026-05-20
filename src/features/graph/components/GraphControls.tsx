@@ -2,6 +2,7 @@ import React from "react"
 import type { GraphData } from "../types"
 import { useGraphStore } from "../state/graphStore"
 import { NodeType, EdgeType } from "../types"
+import { EDGE_COLORS } from "../constants"
 
 interface GraphControlsProps {
   onModeChange: (mode: "atlas" | "context") => void
@@ -32,127 +33,112 @@ export const GraphControls: React.FC<GraphControlsProps> = ({ onModeChange, grap
   ]
 
   return (
-    <div className="absolute top-4 left-4 flex gap-2 z-30">
-      {/* Mode toggle */}
-      <div className="flex gap-2 bg-slate-800 bg-opacity-80 rounded-lg p-1">
+    <div className="g3d-toolbar">
+      <div className="g3d-segmented" role="tablist" aria-label="Graph mode">
         <button
+          type="button"
+          className="g3d-pill"
+          data-active={mode === "atlas"}
+          role="tab"
+          aria-selected={mode === "atlas"}
           onClick={() => onModeChange("atlas")}
-          className={`px-3 py-2 rounded text-xs font-medium transition-colors ${
-            mode === "atlas"
-              ? "bg-blue-600 text-white"
-              : "text-slate-300 hover:text-slate-100"
-          }`}
         >
           Atlas
         </button>
         <button
+          type="button"
+          className="g3d-pill"
+          data-active={mode === "context"}
+          role="tab"
+          aria-selected={mode === "context"}
           onClick={() => onModeChange("context")}
-          className={`px-3 py-2 rounded text-xs font-medium transition-colors ${
-            mode === "context"
-              ? "bg-green-600 text-white"
-              : "text-slate-300 hover:text-slate-100"
-          }`}
         >
           Context
         </button>
       </div>
 
-      {/* Labels toggle */}
       <button
+        type="button"
+        className="g3d-pill"
+        data-active={showLabels}
         onClick={toggleShowLabels}
-        className={`px-3 py-2 rounded text-xs font-medium transition-colors ${
-          showLabels
-            ? "bg-blue-600 text-white"
-            : "bg-slate-800 bg-opacity-80 text-slate-300 hover:text-slate-100"
-        }`}
         title="Toggle labels"
       >
         Labels
       </button>
 
-      {/* Filters button */}
-      <button
-        onClick={() => setShowFilters(!showFilters)}
-        className="px-3 py-2 rounded text-xs font-medium bg-slate-800 bg-opacity-80 text-slate-300 hover:text-slate-100 transition-colors"
-      >
-        Filters {showFilters ? "▼" : "▶"}
-      </button>
+      <div style={{ position: "relative" }}>
+        <button
+          type="button"
+          className="g3d-pill"
+          data-active={showFilters}
+          onClick={() => setShowFilters((v) => !v)}
+          aria-expanded={showFilters}
+        >
+          Filters {showFilters ? "▾" : "▸"}
+        </button>
 
-      {/* Filters panel */}
-      {showFilters && (
-        <div className="absolute top-12 left-0 bg-slate-900 border border-slate-700 rounded-lg p-3 w-72 shadow-xl">
-          <div className="space-y-4">
-            {/* Node type filters */}
+        {showFilters && (
+          <div className="g3d-popover" role="dialog" aria-label="Graph filters">
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase mb-2">Node Types</p>
-              <div className="space-y-1">
-                {nodeTypes.map((nodeType) => (
-                  <label
-                    key={nodeType}
-                    className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer hover:text-slate-100"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={enabledNodeTypes.has(nodeType)}
-                      onChange={() => toggleNodeType(nodeType)}
-                      className="w-4 h-4 rounded bg-slate-700 border-slate-600"
-                    />
-                    <span className="capitalize">{nodeType}</span>
-                  </label>
-                ))}
-              </div>
+              <p className="g3d-section-title">Node types</p>
+              {nodeTypes.map((nodeType) => (
+                <label key={nodeType} className="g3d-checkbox-row">
+                  <input
+                    type="checkbox"
+                    className="g3d-checkbox"
+                    checked={enabledNodeTypes.has(nodeType)}
+                    onChange={() => toggleNodeType(nodeType)}
+                  />
+                  <span>{nodeType}</span>
+                </label>
+              ))}
             </div>
 
-            {/* Edge type filters */}
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase mb-2">Edge Types</p>
-              <div className="space-y-1">
-                {edgeTypes.map((edgeType) => (
-                  <label
-                    key={edgeType}
-                    className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer hover:text-slate-100"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={enabledEdgeTypes.has(edgeType)}
-                      onChange={() => toggleEdgeType(edgeType)}
-                      className="w-4 h-4 rounded bg-slate-700 border-slate-600"
-                    />
-                    <span className="capitalize">{edgeType.replace(/_/g, " ")}</span>
-                  </label>
-                ))}
-              </div>
+              <p className="g3d-section-title">Edge types</p>
+              {edgeTypes.map((edgeType) => (
+                <label key={edgeType} className="g3d-checkbox-row">
+                  <input
+                    type="checkbox"
+                    className="g3d-checkbox"
+                    checked={enabledEdgeTypes.has(edgeType)}
+                    onChange={() => toggleEdgeType(edgeType)}
+                  />
+                  <span
+                    className="g3d-edge-swatch"
+                    style={{
+                      background: EDGE_COLORS[edgeType] ?? "var(--g3d-violet)",
+                      color: EDGE_COLORS[edgeType] ?? "var(--g3d-violet)",
+                    }}
+                  />
+                  <span>{edgeType.replace(/_/g, " ")}</span>
+                </label>
+              ))}
             </div>
 
-            {/* Evidence toggle */}
-            <div>
-              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer hover:text-slate-100">
-                <input
-                  type="checkbox"
-                  checked={showEvidence}
-                  onChange={toggleShowEvidence}
-                  className="w-4 h-4 rounded bg-slate-700 border-slate-600"
-                />
-                <span>Show evidence nodes</span>
-              </label>
-            </div>
+            <label className="g3d-checkbox-row">
+              <input
+                type="checkbox"
+                className="g3d-checkbox"
+                checked={showEvidence}
+                onChange={toggleShowEvidence}
+              />
+              <span>Show evidence nodes</span>
+            </label>
 
-            {/* Reset button */}
-            <button
-              onClick={resetFilters}
-              className="w-full px-3 py-2 mt-2 bg-slate-700 hover:bg-slate-600 rounded text-xs text-slate-300 hover:text-slate-100 transition-colors"
-            >
+            <button type="button" className="g3d-popover-reset" onClick={resetFilters}>
               Reset filters
             </button>
 
-            {/* Info */}
-            <div className="text-xs text-slate-500 border-t border-slate-700 pt-2">
-              <div>Nodes: {graphData.nodes.length}</div>
-              <div>Edges: {graphData.edges.length}</div>
+            <div className="g3d-popover-footer">
+              <span>
+                {graphData.nodes.length} nodes · {graphData.edges.length} edges
+              </span>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }

@@ -1,7 +1,8 @@
 import React, { useMemo } from "react"
+import * as THREE from "three"
 import type { GraphNode, GraphCommunity } from "../types"
 import { useGraphStore } from "../state/graphStore"
-import { COMMUNITY_COLORS } from "../constants"
+import { useViewportStore } from "../state/viewportStore"
 import { getNodeDisplayTitle } from "../utils/displayTitle"
 
 interface NodeLayout {
@@ -12,13 +13,13 @@ interface NodeLayout {
   z: number
 }
 
+type LabelKind = "community" | "selected" | "hovered" | "node"
+
 interface Label {
   id: string
   text: string
   position: { x: number; y: number; z: number }
-  color: string
-  isSelected: boolean
-  isCommunity: boolean
+  kind: LabelKind
 }
 
 interface GraphLabelsProps {
@@ -26,6 +27,8 @@ interface GraphLabelsProps {
   nodePositions: NodeLayout[]
   communities: GraphCommunity[]
 }
+
+const PROJECT_VEC = new THREE.Vector3()
 
 export const GraphLabels: React.FC<GraphLabelsProps> = ({
   graphData,
@@ -36,22 +39,25 @@ export const GraphLabels: React.FC<GraphLabelsProps> = ({
   const hoveredNodeId = useGraphStore((s) => s.hoveredNodeId)
   const showLabels = useGraphStore((s) => s.showLabels)
 
-  // Compute labels unconditionally to keep hook order stable across renders.
-  // The early `return null` below skips rendering but does not skip the hook.
-  const labels = useMemo(() => {
+  // Subscribe to the per-frame tick so we re-render at ~60fps while the
+  // camera moves. The matrix itself lives on a stable instance, mutated in
+  // place by ViewportSync — reading it doesn't need to trigger React.
+  const tick = useViewportStore((s) => s.tick)
+  const width = useViewportStore((s) => s.width)
+  const height = useViewportStore((s) => s.height)
+
+  const labels = useMemo<Label[]>(() => {
     const result: Label[] = []
     const nodeMap = new Map(graphData.nodes.map((n) => [n.id, n]))
-    const maxLabels = 10 // Very aggressive cap
+    const maxLabels = 14
 
-    // 1. Community labels (always shown, up to 5)
-    communities.slice(0, 5).forEach((community) => {
+    // 1. Community headlines (always shown, up to 6)
+    communities.slice(0, 6).forEach((community) => {
       result.push({
         id: `community-${community.id}`,
         text: community.label,
         position: community.anchor,
-        color: COMMUNITY_COLORS[community.label] || "#D4AF37", // Muted gold default
-        isSelected: false,
-        isCommunity: true,
+        kind: "community",
       })
     })
 
@@ -60,58 +66,51 @@ export const GraphLabels: React.FC<GraphLabelsProps> = ({
       const selectedNode = nodeMap.get(selectedNodeId)
       const selectedPos = nodePositions.find((p) => p.nodeId === selectedNodeId)
       if (selectedNode && selectedPos) {
-        const displayTitle = getNodeDisplayTitle(selectedNode)
+        const title = getNodeDisplayTitle(selectedNode)
         result.push({
           id: `node-${selectedNodeId}`,
-          text: displayTitle.length > 32 ? displayTitle.substring(0, 32) + "…" : displayTitle,
+          text: title.length > 32 ? title.slice(0, 32) + "…" : title,
           position: selectedPos.position,
-          color: "#F5F5DC", // Off-white
-          isSelected: true,
-          isCommunity: false,
+          kind: "selected",
         })
       }
     }
 
-    // 3. Hovered node label (only if different from selected)
+    // 3. Hovered node label (when different from selected)
     if (hoveredNodeId && hoveredNodeId !== selectedNodeId && result.length < maxLabels) {
       const hoveredNode = nodeMap.get(hoveredNodeId)
       const hoveredPos = nodePositions.find((p) => p.nodeId === hoveredNodeId)
       if (hoveredNode && hoveredPos) {
-        const displayTitle = getNodeDisplayTitle(hoveredNode)
+        const title = getNodeDisplayTitle(hoveredNode)
         result.push({
           id: `node-${hoveredNodeId}`,
-          text: displayTitle.length > 32 ? displayTitle.substring(0, 32) + "…" : displayTitle,
+          text: title.length > 32 ? title.slice(0, 32) + "…" : title,
           position: hoveredPos.position,
-          color: "#FFD700", // Bright gold for hover
-          isSelected: false,
-          isCommunity: false,
+          kind: "hovered",
         })
       }
     }
 
-    // 4. Very few top important nodes (max 2-3 total, already have community + selected)
+    // 4. Top important nodes
     const importantNodes = graphData.nodes
       .filter(
         (n) =>
           n.id !== selectedNodeId &&
           n.id !== hoveredNodeId &&
-          n.importance_score &&
-          n.importance_score > 0.8
+          (n.importance_score ?? 0) > 0.75,
       )
       .sort((a, b) => (b.importance_score ?? 0) - (a.importance_score ?? 0))
-      .slice(0, Math.max(0, maxLabels - result.length - 1))
+      .slice(0, Math.max(0, maxLabels - result.length))
 
     importantNodes.forEach((node) => {
       const pos = nodePositions.find((p) => p.nodeId === node.id)
       if (pos && result.length < maxLabels) {
-        const displayTitle = getNodeDisplayTitle(node)
+        const title = getNodeDisplayTitle(node)
         result.push({
           id: `node-${node.id}`,
-          text: displayTitle.length > 28 ? displayTitle.substring(0, 28) + "…" : displayTitle,
+          text: title.length > 24 ? title.slice(0, 24) + "…" : title,
           position: pos.position,
-          color: "#B8B8B8", // Dim off-white
-          isSelected: false,
-          isCommunity: false,
+          kind: "node",
         })
       }
     })
@@ -119,45 +118,60 @@ export const GraphLabels: React.FC<GraphLabelsProps> = ({
     return result.slice(0, maxLabels)
   }, [selectedNodeId, hoveredNodeId, nodePositions, communities, graphData.nodes])
 
-  // Safe to early-return AFTER all hooks have run.
   if (!showLabels) return null
+  // Hide labels until ViewportSync has reported a real size — projecting
+  // against a 0×0 viewport would put everything in the corner.
+  if (width === 0 || height === 0) return null
+
+  // Pull a fresh reference to the matrix on every render (the underlying
+  // matrix is mutated in place by ViewportSync). `tick` is the dep that
+  // re-runs us each frame.
+  const matrix = useViewportStore.getState().matrix
+  void tick // ensure render is bound to the per-frame tick
+
+  // Project each label.
+  const projected = labels.map((label) => {
+    PROJECT_VEC.set(label.position.x, label.position.y, label.position.z)
+    PROJECT_VEC.applyMatrix4(matrix)
+    // After projection: clip space. If w<=0, the point is behind the camera.
+    // applyMatrix4 already does the perspective divide, so we have NDC in x/y.
+    const behindCamera = PROJECT_VEC.z < -1 || PROJECT_VEC.z > 1
+    const screenX = (PROJECT_VEC.x * 0.5 + 0.5) * width
+    const screenY = (1 - (PROJECT_VEC.y * 0.5 + 0.5)) * height
+    return {
+      ...label,
+      screenX,
+      screenY,
+      visible:
+        !behindCamera &&
+        screenX >= -80 &&
+        screenY >= -40 &&
+        screenX <= width + 80 &&
+        screenY <= height + 40,
+    }
+  })
 
   return (
     <div className="absolute inset-0 pointer-events-none">
-      {labels.map((label) => (
-        <div
-          key={label.id}
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: "50%",
-            pointerEvents: "none",
-            transform: "translate(-50%, -50%)",
-            zIndex: label.isSelected ? 100 : label.isCommunity ? 60 : 50,
-          }}
-          className="whitespace-nowrap"
-        >
+      {projected.map((label) => {
+        if (!label.visible) return null
+        return (
           <div
+            key={label.id}
+            className="g3d-label"
+            data-kind={label.kind}
             style={{
-              padding: label.isCommunity ? "4px 8px" : "2px 6px",
-              borderRadius: "4px",
-              fontSize: label.isCommunity ? "12px" : "11px",
-              fontWeight: label.isCommunity ? "600" : "500",
-              color: label.color,
-              backgroundColor: "rgba(10, 14, 39, 0.92)",
-              border: `1px solid ${label.color}40`,
-              maxWidth: "140px",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              opacity: label.isSelected ? 1 : 0.8,
-              transition: "opacity 150ms",
-              fontFamily: "system-ui, -apple-system, sans-serif",
+              position: "absolute",
+              left: `${label.screenX}px`,
+              top: `${label.screenY}px`,
+              zIndex:
+                label.kind === "selected" ? 100 : label.kind === "community" ? 60 : 50,
             }}
           >
             {label.text}
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

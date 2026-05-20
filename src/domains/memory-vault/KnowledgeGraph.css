@@ -43,19 +43,26 @@
     font-style: italic;
 }
 
-/* Nodes */
+/* Nodes.
+   Outer <g class="kg-node"> carries the sim-driven `transform=` attribute.
+   Inner <g class="kg-node-inner"> carries the CSS drift animation so its
+   `transform` composes with the parent's translate rather than overriding
+   it (per SVG2 / CSS Transforms 1, CSS `transform` replaces the SVG
+   `transform=` attribute on the same element). */
 .kg-node {
     transition: opacity var(--film-dur-fast) var(--film-ease-shutter);
+}
+.kg-node-inner {
     transform-box: fill-box;
     /* drift class (kg-drift-0…4) assigned per node from JS */
 }
-.kg-node.kg-drift-0 { animation: kg-drift-0 5s ease-in-out infinite alternate; }
-.kg-node.kg-drift-1 { animation: kg-drift-1 6s ease-in-out infinite alternate; }
-.kg-node.kg-drift-2 { animation: kg-drift-2 7s ease-in-out infinite alternate; }
-.kg-node.kg-drift-3 { animation: kg-drift-3 8s ease-in-out infinite alternate; }
-.kg-node.kg-drift-4 { animation: kg-drift-4 9s ease-in-out infinite alternate; }
-.kg-node[data-state="hovered"],
-.kg-node[data-state="selected"] {
+.kg-node-inner.kg-drift-0 { animation: kg-drift-0 5s ease-in-out infinite alternate; }
+.kg-node-inner.kg-drift-1 { animation: kg-drift-1 6s ease-in-out infinite alternate; }
+.kg-node-inner.kg-drift-2 { animation: kg-drift-2 7s ease-in-out infinite alternate; }
+.kg-node-inner.kg-drift-3 { animation: kg-drift-3 8s ease-in-out infinite alternate; }
+.kg-node-inner.kg-drift-4 { animation: kg-drift-4 9s ease-in-out infinite alternate; }
+.kg-node[data-state="hovered"] .kg-node-inner,
+.kg-node[data-state="selected"] .kg-node-inner {
     animation-play-state: paused;
 }
 @keyframes kg-drift-0 {
@@ -83,7 +90,7 @@
     50%       { r: calc(var(--_kr) * 1.05); }
 }
 @media (prefers-reduced-motion: reduce) {
-    .kg-node {
+    .kg-node-inner {
         animation: none !important;
     }
 }
@@ -152,7 +159,7 @@
 }
 
 /* Performance: disable drift on large graphs (JS sets data-perf-reduced) */
-.kg-nodes[data-perf-reduced="true"] .kg-node {
+.kg-nodes[data-perf-reduced="true"] .kg-node-inner {
     animation: none !important;
 }
 .kg-node-path .kg-node-core {

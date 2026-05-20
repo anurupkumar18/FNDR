@@ -1,4 +1,5 @@
-import React, { useMemo, useCallback } from "react"
+import React, { useMemo, useCallback, useRef } from "react"
+import { useFrame } from "@react-three/fiber"
 import * as THREE from "three"
 import type { GraphData } from "../types"
 import { useGraphStore } from "../state/graphStore"
@@ -25,6 +26,19 @@ interface GraphNodesProps {
   nodePositions: NodeLayout[]
 }
 
+interface NodeMeshProps {
+  node: any
+  position: { x: number; y: number; z: number }
+  depthOffset: number
+  isSelected: boolean
+  isHovered: boolean
+  onClick: () => void
+  onPointerEnter: () => void
+  onPointerLeave: () => void
+}
+
+const TARGET_SCALE = new THREE.Vector3()
+
 function NodeMesh({
   node,
   position,
@@ -34,65 +48,101 @@ function NodeMesh({
   onPointerLeave,
   isSelected,
   isHovered,
-}: any) {
-  const meshRef = React.useRef<THREE.Mesh>(null)
+}: NodeMeshProps) {
+  const groupRef = useRef<THREE.Group>(null)
+  const meshRef = useRef<THREE.Mesh>(null)
+  const haloRef = useRef<THREE.Mesh>(null)
 
   const size = useMemo(() => getNodeSize(node), [node])
   const glowIntensity = useMemo(() => getNodeGlowIntensity(node), [node])
   const opacity = useMemo(() => getNodeOpacity(node), [node])
 
-  // Get color based on community or node type
   const color = useMemo(() => {
     if (node.community_id && COMMUNITY_COLORS[node.community_id]) {
       return COMMUNITY_COLORS[node.community_id]
     }
-    // Fallback colors by type
     const typeColors: Record<string, string> = {
-      memory: "#5B7FFF",
-      entity: "#7FFF5B",
-      community: "#FFD700",
-      evidence: "#FF6B6B",
-      agent_context: "#A855F7",
+      memory: "#7c5cff",
+      entity: "#5ce0ff",
+      community: "#ffc36b",
+      evidence: "#ff6aa1",
+      agent_context: "#b6a4ff",
     }
-    return typeColors[node.node_type] || "#CCCCCC"
+    return typeColors[node.node_type] || "#aea7d4"
   }, [node.community_id, node.node_type])
 
   const geometry = useMemo(() => getNodeGeometry(size), [size])
 
   const material = useMemo(() => {
     const baseMaterial = createNodeMaterial(color, color)
-    baseMaterial.emissiveIntensity = isSelected ? 0.8 : glowIntensity
     baseMaterial.opacity = opacity
     baseMaterial.transparent = opacity < 1
     return baseMaterial
-  }, [color, glowIntensity, isSelected, opacity])
+  }, [color, opacity])
 
-  const glowMaterial = useMemo(() => {
-    const mat = createGlowMaterial(color, glowIntensity)
-    if (isSelected) {
-      mat.opacity = 0.6
-    }
-    return mat
-  }, [color, glowIntensity, isSelected])
+  const glowMaterial = useMemo(
+    () => createGlowMaterial(color, Math.max(0.6, glowIntensity)),
+    [color, glowIntensity],
+  )
+
+  // Animate scale + emissive intensity each frame so hover/select feel responsive
+  // without re-rendering the React tree on every transition.
+  useFrame((_state, delta) => {
+    const group = groupRef.current
+    const mesh = meshRef.current
+    const halo = haloRef.current
+    if (!group || !mesh || !halo) return
+
+    const targetScale = isSelected ? 1.18 : isHovered ? 1.1 : 1.0
+    TARGET_SCALE.setScalar(targetScale)
+    group.scale.lerp(TARGET_SCALE, Math.min(1, delta * 9))
+
+    const m = mesh.material as THREE.MeshPhysicalMaterial
+    const targetEmissive = isSelected ? 1.7 : isHovered ? 1.2 : 0.7 * glowIntensity
+    m.emissiveIntensity += (targetEmissive - m.emissiveIntensity) * Math.min(1, delta * 9)
+
+    const g = halo.material as THREE.MeshBasicMaterial
+    const targetHaloOpacity = isSelected
+      ? 0.85
+      : isHovered
+      ? 0.7
+      : Math.min(0.55 * glowIntensity, 0.55)
+    g.opacity += (targetHaloOpacity - g.opacity) * Math.min(1, delta * 9)
+  })
 
   const adjustedZ = position.z + depthOffset
+  const haloScale = isSelected || isHovered ? 2.6 : 2.2
 
   return (
-    <group position={[position.x, position.y, adjustedZ]}>
-      {/* Main node sphere */}
+    <group ref={groupRef} position={[position.x, position.y, adjustedZ]}>
       <mesh
         ref={meshRef}
         geometry={geometry}
         material={material}
-        onClick={onClick}
-        onPointerEnter={onPointerEnter}
-        onPointerLeave={onPointerLeave}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClick()
+        }}
+        onPointerEnter={(e) => {
+          e.stopPropagation()
+          onPointerEnter()
+          document.body.style.cursor = "pointer"
+        }}
+        onPointerLeave={(e) => {
+          e.stopPropagation()
+          onPointerLeave()
+          document.body.style.cursor = ""
+        }}
       />
 
-      {/* Glow layer (larger, behind main) */}
-      {(isSelected || isHovered) && (
-        <mesh geometry={geometry} material={glowMaterial} scale={1.2} position={[0, 0, -0.1]} />
-      )}
+      {/* Always-on additive halo — picked up by Bloom for the nebula glow. */}
+      <mesh
+        ref={haloRef}
+        geometry={geometry}
+        material={glowMaterial}
+        scale={haloScale}
+        raycast={() => null}
+      />
     </group>
   )
 }
@@ -105,11 +155,9 @@ export const GraphNodes: React.FC<GraphNodesProps> = ({ graphData, nodePositions
   const enabledNodeTypes = useGraphStore((s) => s.enabledNodeTypes)
   const showEvidence = useGraphStore((s) => s.showEvidence)
 
-  // Compute depths once
   const depths = useMemo(() => computeNodeDepths(graphData), [graphData])
   const depthMap = useMemo(() => new Map(depths.map((d) => [d.nodeId, d])), [depths])
 
-  // Filter nodes based on settings
   const visibleNodes = useMemo(() => {
     return graphData.nodes.filter((node) => {
       if (!enabledNodeTypes.has(node.node_type)) return false
@@ -122,14 +170,14 @@ export const GraphNodes: React.FC<GraphNodesProps> = ({ graphData, nodePositions
     (nodeId: string) => {
       setSelectedNodeId(nodeId === selectedNodeId ? null : nodeId)
     },
-    [selectedNodeId, setSelectedNodeId]
+    [selectedNodeId, setSelectedNodeId],
   )
 
   const handleNodeHover = useCallback(
     (nodeId: string) => {
       setHoveredNodeId(nodeId)
     },
-    [setHoveredNodeId]
+    [setHoveredNodeId],
   )
 
   const handleNodeHoverOut = useCallback(() => {

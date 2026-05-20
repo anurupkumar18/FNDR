@@ -174,10 +174,12 @@
 }
 
 /* Make the KnowledgeGraph shell fill the stage */
-.memory-graph-stage .knowledge-graph-shell {
+.memory-graph-stage .knowledge-graph-shell,
+.memory-graph-stage .knowledge-graph-3d-shell {
     flex: 1;
     min-height: 0;
     height: 100%;
+    width: 100%;
     border-radius: 0;
     border: none;
     border-top: 1px solid var(--hairline);

@@ -1,0 +1,735 @@
+/* ------------------------------------------------------------------
+   Cosmic palette for the 3D Knowledge Graph.
+
+   Scoped under `.graph3d-root` so it doesn't bleed into the rest of
+   FNDR. Inherits spacing / type / easing primitives from
+   `film-paper.css`; defines its own colors so the 3D view reads as
+   "deep space" instead of "warm film paper".
+------------------------------------------------------------------ */
+
+.graph3d-root {
+    /* Palette */
+    --g3d-bg: #050714;
+    --g3d-bg-haze: radial-gradient(
+        ellipse at 50% 38%,
+        #1c1953 0%,
+        #0b0d2a 42%,
+        #060816 78%,
+        #03040d 100%
+    );
+    --g3d-violet: #7c5cff;
+    --g3d-violet-2: #b6a4ff;
+    --g3d-cyan: #5ce0ff;
+    --g3d-cyan-2: #a8efff;
+    --g3d-rose: #ff6aa1;
+    --g3d-amber: #ffc36b;
+    --g3d-paper: #e8e4fb;
+    --g3d-paper-2: #aea7d4;
+    --g3d-paper-3: #7a749a;
+    --g3d-hairline: rgba(160, 150, 230, 0.18);
+    --g3d-hairline-strong: rgba(190, 175, 255, 0.32);
+    --g3d-pill-bg: rgba(14, 16, 38, 0.62);
+    --g3d-pill-bg-hover: rgba(28, 24, 62, 0.78);
+    --g3d-pill-bg-active: linear-gradient(
+        180deg,
+        rgba(124, 92, 255, 0.32) 0%,
+        rgba(124, 92, 255, 0.18) 100%
+    );
+    --g3d-panel-bg: rgba(8, 10, 26, 0.78);
+    --g3d-panel-bg-strong: rgba(8, 10, 26, 0.92);
+    --g3d-glow: 0 0 22px -4px color-mix(in srgb, var(--g3d-violet) 70%, transparent);
+    --g3d-glow-soft: 0 0 16px -6px color-mix(in srgb, var(--g3d-cyan) 60%, transparent);
+
+    color: var(--g3d-paper);
+    background: var(--g3d-bg-haze);
+    font-family: var(--film-font-ui, "Inter", "Helvetica Neue", sans-serif);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* The 3D Canvas itself — sits beneath all overlays. */
+.graph3d-root canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* ------------------------------------------------------------------
+   Toolbar primitives — pills, segmented controls, icon buttons.
+------------------------------------------------------------------ */
+
+.g3d-toolbar {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    z-index: 30;
+}
+
+.g3d-pill {
+    appearance: none;
+    border: 1px solid var(--g3d-hairline);
+    background: var(--g3d-pill-bg);
+    color: var(--g3d-paper-2);
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 7px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition:
+        background var(--film-dur-fast, 180ms) var(--film-ease-shutter, ease-out),
+        color var(--film-dur-fast, 180ms) var(--film-ease-shutter, ease-out),
+        border-color var(--film-dur-fast, 180ms) var(--film-ease-shutter, ease-out),
+        box-shadow var(--film-dur-base, 320ms) var(--film-ease-shutter, ease-out);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.g3d-pill:hover {
+    background: var(--g3d-pill-bg-hover);
+    color: var(--g3d-paper);
+    border-color: var(--g3d-hairline-strong);
+}
+
+.g3d-pill[data-active="true"] {
+    background: var(--g3d-pill-bg-active);
+    color: var(--g3d-paper);
+    border-color: color-mix(in srgb, var(--g3d-violet) 50%, transparent);
+    box-shadow: var(--g3d-glow);
+}
+
+/* Segmented (Atlas / Context, or 2D / 3D) — wraps pills with no gap. */
+.g3d-segmented {
+    display: inline-flex;
+    background: var(--g3d-pill-bg);
+    border: 1px solid var(--g3d-hairline);
+    border-radius: 999px;
+    padding: 3px;
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.g3d-segmented .g3d-pill {
+    border: 1px solid transparent;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    padding: 6px 14px;
+}
+
+.g3d-segmented .g3d-pill[data-active="true"] {
+    background: var(--g3d-pill-bg-active);
+    border-color: color-mix(in srgb, var(--g3d-violet) 40%, transparent);
+}
+
+/* Round icon button (close, etc) */
+.g3d-icon-btn {
+    appearance: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 999px;
+    border: 1px solid var(--g3d-hairline);
+    background: var(--g3d-pill-bg);
+    color: var(--g3d-paper-2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    transition:
+        background var(--film-dur-fast, 180ms) ease-out,
+        color var(--film-dur-fast, 180ms) ease-out,
+        border-color var(--film-dur-fast, 180ms) ease-out;
+}
+
+.g3d-icon-btn:hover {
+    background: var(--g3d-pill-bg-hover);
+    color: var(--g3d-paper);
+    border-color: var(--g3d-hairline-strong);
+}
+
+.g3d-icon-btn[data-variant="close"] {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 50;
+}
+
+/* ------------------------------------------------------------------
+   Filters popover / drawer.
+------------------------------------------------------------------ */
+
+.g3d-popover {
+    position: absolute;
+    top: 52px;
+    left: 0;
+    width: 280px;
+    padding: 16px;
+    border-radius: 14px;
+    border: 1px solid var(--g3d-hairline);
+    background: var(--g3d-panel-bg-strong);
+    backdrop-filter: blur(22px) saturate(140%);
+    -webkit-backdrop-filter: blur(22px) saturate(140%);
+    box-shadow:
+        0 24px 48px -16px rgba(0, 0, 0, 0.7),
+        var(--g3d-glow);
+    color: var(--g3d-paper);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    z-index: 35;
+}
+
+.g3d-section-title {
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--g3d-paper-3);
+    margin: 0 0 8px 0;
+}
+
+.g3d-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--g3d-paper-2);
+    cursor: pointer;
+    padding: 4px 0;
+    transition: color var(--film-dur-fast, 180ms) ease-out;
+    text-transform: capitalize;
+}
+
+.g3d-checkbox-row:hover {
+    color: var(--g3d-paper);
+}
+
+.g3d-checkbox {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    border: 1px solid var(--g3d-hairline-strong);
+    background: var(--g3d-pill-bg);
+    cursor: pointer;
+    position: relative;
+    transition: background var(--film-dur-fast, 180ms) ease-out;
+    flex-shrink: 0;
+}
+
+.g3d-checkbox:checked {
+    background: var(--g3d-violet);
+    border-color: var(--g3d-violet-2);
+    box-shadow: 0 0 10px -2px color-mix(in srgb, var(--g3d-violet) 70%, transparent);
+}
+
+.g3d-checkbox:checked::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 4px;
+    height: 8px;
+    border-right: 2px solid #fff;
+    border-bottom: 2px solid #fff;
+    transform: rotate(45deg);
+}
+
+.g3d-edge-swatch {
+    width: 14px;
+    height: 2px;
+    border-radius: 2px;
+    flex-shrink: 0;
+    box-shadow: 0 0 6px currentColor;
+}
+
+.g3d-popover-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px solid var(--g3d-hairline);
+    padding-top: 12px;
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 11px;
+    color: var(--g3d-paper-3);
+}
+
+.g3d-popover-reset {
+    appearance: none;
+    border: 1px solid var(--g3d-hairline);
+    background: transparent;
+    color: var(--g3d-paper-2);
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all var(--film-dur-fast, 180ms) ease-out;
+}
+
+.g3d-popover-reset:hover {
+    border-color: var(--g3d-hairline-strong);
+    color: var(--g3d-paper);
+    background: var(--g3d-pill-bg-hover);
+}
+
+/* ------------------------------------------------------------------
+   Side panel (selected node detail).
+------------------------------------------------------------------ */
+
+.g3d-side-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 340px;
+    background: var(--g3d-panel-bg-strong);
+    backdrop-filter: blur(22px) saturate(140%);
+    -webkit-backdrop-filter: blur(22px) saturate(140%);
+    border-left: 1px solid var(--g3d-hairline);
+    overflow-y: auto;
+    z-index: 40;
+    color: var(--g3d-paper);
+}
+
+.g3d-side-header {
+    position: sticky;
+    top: 0;
+    background: linear-gradient(
+        180deg,
+        var(--g3d-panel-bg-strong) 0%,
+        var(--g3d-panel-bg-strong) 70%,
+        rgba(8, 10, 26, 0.5) 100%
+    );
+    backdrop-filter: blur(22px);
+    -webkit-backdrop-filter: blur(22px);
+    padding: 20px 20px 16px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    border-bottom: 1px solid var(--g3d-hairline);
+    z-index: 1;
+}
+
+.g3d-side-title {
+    font-family: var(--film-font-display, "Cormorant Garamond", serif);
+    font-size: 22px;
+    font-weight: 500;
+    line-height: 1.15;
+    color: var(--g3d-paper);
+    margin: 0;
+    flex: 1;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.g3d-side-body {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.g3d-side-summary {
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--g3d-paper-2);
+    margin: 0;
+}
+
+.g3d-side-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+}
+
+.g3d-side-meta-row {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+}
+
+.g3d-side-meta-key {
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--g3d-paper-3);
+    min-width: 72px;
+    flex-shrink: 0;
+}
+
+.g3d-side-meta-val {
+    color: var(--g3d-paper);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+}
+
+.g3d-score-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.g3d-score-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 11px;
+    color: var(--g3d-paper-2);
+    letter-spacing: 0.04em;
+}
+
+.g3d-score-bar {
+    height: 4px;
+    background: rgba(160, 150, 230, 0.12);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.g3d-score-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--g3d-violet), var(--g3d-cyan));
+    border-radius: 999px;
+    box-shadow: 0 0 10px -2px color-mix(in srgb, var(--g3d-violet) 80%, transparent);
+    transition: width 600ms var(--film-ease-shutter, ease-out);
+}
+
+.g3d-score-fill[data-tone="rose"] {
+    background: linear-gradient(90deg, var(--g3d-rose), var(--g3d-amber));
+    box-shadow: 0 0 10px -2px color-mix(in srgb, var(--g3d-rose) 70%, transparent);
+}
+
+.g3d-score-fill[data-tone="cyan"] {
+    background: linear-gradient(90deg, var(--g3d-cyan), var(--g3d-violet-2));
+    box-shadow: 0 0 10px -2px color-mix(in srgb, var(--g3d-cyan) 70%, transparent);
+}
+
+.g3d-related-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.g3d-related-item {
+    appearance: none;
+    text-align: left;
+    background: rgba(20, 22, 48, 0.5);
+    border: 1px solid var(--g3d-hairline);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--g3d-paper-2);
+    cursor: pointer;
+    transition: all var(--film-dur-fast, 180ms) ease-out;
+    font-size: 13px;
+    line-height: 1.35;
+}
+
+.g3d-related-item:hover {
+    background: rgba(40, 36, 80, 0.6);
+    border-color: var(--g3d-hairline-strong);
+    color: var(--g3d-paper);
+    box-shadow: var(--g3d-glow-soft);
+}
+
+.g3d-related-sub {
+    margin-top: 4px;
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 10px;
+    color: var(--g3d-paper-3);
+    letter-spacing: 0.04em;
+}
+
+.g3d-side-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px solid var(--g3d-hairline);
+    padding-top: 16px;
+}
+
+.g3d-side-action {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--g3d-hairline);
+    color: var(--g3d-paper-2);
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all var(--film-dur-fast, 180ms) ease-out;
+}
+
+.g3d-side-action:hover {
+    border-color: var(--g3d-hairline-strong);
+    color: var(--g3d-paper);
+    background: var(--g3d-pill-bg-hover);
+}
+
+.g3d-disclosure {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--g3d-paper-3);
+    cursor: pointer;
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0;
+    transition: color var(--film-dur-fast, 180ms) ease-out;
+}
+
+.g3d-disclosure:hover {
+    color: var(--g3d-paper);
+}
+
+.g3d-evidence-block {
+    margin-top: 10px;
+    border: 1px solid var(--g3d-hairline);
+    border-radius: 8px;
+    background: rgba(5, 7, 18, 0.6);
+    padding: 10px;
+    max-height: 200px;
+    overflow: auto;
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 11px;
+    color: var(--g3d-paper-2);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* ------------------------------------------------------------------
+   Hover card.
+------------------------------------------------------------------ */
+
+.g3d-hover-card {
+    position: fixed;
+    pointer-events: none;
+    z-index: 45;
+    left: 50%;
+    top: 24%;
+    transform: translate(-50%, 0);
+    max-width: 280px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: var(--g3d-panel-bg-strong);
+    border: 1px solid var(--g3d-hairline-strong);
+    backdrop-filter: blur(22px) saturate(140%);
+    -webkit-backdrop-filter: blur(22px) saturate(140%);
+    box-shadow:
+        0 20px 40px -12px rgba(0, 0, 0, 0.7),
+        var(--g3d-glow-soft);
+    color: var(--g3d-paper);
+}
+
+.g3d-hover-title {
+    font-family: var(--film-font-display, "Cormorant Garamond", serif);
+    font-size: 17px;
+    font-weight: 500;
+    line-height: 1.2;
+    margin: 0 0 8px 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.g3d-hover-meta {
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: var(--g3d-paper-3);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.g3d-hover-summary {
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--g3d-paper-2);
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* ------------------------------------------------------------------
+   3D label overlay (positioned via Canvas projection in GraphLabels).
+------------------------------------------------------------------ */
+
+.g3d-label {
+    pointer-events: none;
+    white-space: nowrap;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-family: var(--film-font-ui, "Inter", sans-serif);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: var(--g3d-paper);
+    background: rgba(5, 7, 18, 0.72);
+    border: 1px solid var(--g3d-hairline);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.92;
+    text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
+    transform: translate(-50%, -50%);
+    transition: opacity 200ms ease-out;
+}
+
+.g3d-label[data-kind="community"] {
+    font-family: var(--film-font-display, "Cormorant Garamond", serif);
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding: 4px 10px;
+    background: rgba(5, 7, 18, 0.55);
+    text-transform: lowercase;
+    box-shadow: var(--g3d-glow-soft);
+}
+
+.g3d-label[data-kind="selected"] {
+    color: var(--g3d-amber);
+    border-color: color-mix(in srgb, var(--g3d-amber) 50%, transparent);
+    box-shadow: 0 0 16px -4px color-mix(in srgb, var(--g3d-amber) 60%, transparent);
+    opacity: 1;
+}
+
+.g3d-label[data-kind="hovered"] {
+    color: var(--g3d-cyan-2);
+    border-color: color-mix(in srgb, var(--g3d-cyan) 50%, transparent);
+    opacity: 1;
+}
+
+/* ------------------------------------------------------------------
+   Empty / loading / error states.
+------------------------------------------------------------------ */
+
+.g3d-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    text-align: center;
+    padding: 32px;
+    z-index: 5;
+}
+
+.g3d-state-title {
+    font-family: var(--film-font-display, "Cormorant Garamond", serif);
+    font-size: 28px;
+    font-weight: 500;
+    line-height: 1.15;
+    color: var(--g3d-paper);
+    margin: 0;
+    max-width: 28ch;
+}
+
+.g3d-state-text {
+    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--g3d-paper-3);
+    margin: 0;
+    max-width: 36ch;
+}
+
+.g3d-spinner {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 1.5px solid rgba(160, 150, 230, 0.18);
+    border-top-color: var(--g3d-amber);
+    animation: g3d-spin 900ms linear infinite;
+}
+
+@keyframes g3d-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ------------------------------------------------------------------
+   Mode switch in MemoryCardsPanel (2D / 3D segmented control).
+
+   Lives outside .graph3d-root so it shows in both modes; uses film
+   tokens so it blends with the rest of FNDR.
+------------------------------------------------------------------ */
+
+.mg-mode-segmented {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
+    display: inline-flex;
+    background: color-mix(in srgb, var(--bg, #1a1410) 70%, transparent);
+    border: 1px solid var(--hairline, rgba(255, 255, 255, 0.12));
+    border-radius: 999px;
+    padding: 3px;
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    font-family: var(--film-font-mono, var(--font-mono, "JetBrains Mono", monospace));
+}
+
+.mg-mode-segmented button {
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--fg-2, #aea7d4);
+    font: inherit;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 6px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition:
+        background var(--film-dur-fast, 180ms) ease-out,
+        color var(--film-dur-fast, 180ms) ease-out,
+        border-color var(--film-dur-fast, 180ms) ease-out;
+}
+
+.mg-mode-segmented button:hover {
+    color: var(--fg, #e8dfc8);
+}
+
+.mg-mode-segmented button[aria-selected="true"] {
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--accent, #d4a04a) 30%, transparent) 0%,
+        color-mix(in srgb, var(--accent, #d4a04a) 14%, transparent) 100%
+    );
+    color: var(--fg, #ffffff);
+    border-color: color-mix(in srgb, var(--accent, #d4a04a) 45%, transparent);
+}

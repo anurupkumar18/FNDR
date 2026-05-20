@@ -47,17 +47,17 @@ export function selectVisibleEdges(
 }
 
 export function getEdgeColor(edgeType: EdgeType): string {
-  // Map edge types to colors from FNDR palette
+  // Cosmic palette — keeps the 3D graph reading as deep space.
   const colorMap: Record<EdgeType, string> = {
-    semantic_similarity: "#7F8D8D", // gray
-    explicit_reference: "#5B7FFF", // blue
-    temporal_adjacency: "#7FFF5B", // green
-    same_project: "#FFD700", // gold
-    same_session: "#FFA500", // orange
-    agent_inferred: "#A855F7", // purple
-    provenance: "#FF6B6B", // red
+    semantic_similarity: "#7c5cff", // violet
+    explicit_reference: "#5ce0ff", // cyan
+    temporal_adjacency: "#ff6aa1", // rose
+    same_project: "#ffc36b", // amber
+    same_session: "#a8efff", // pale cyan
+    agent_inferred: "#b6a4ff", // pale violet
+    provenance: "#e8e4fb", // paper
   }
-  return colorMap[edgeType] || "#FFFFFF"
+  return colorMap[edgeType] || "#aea7d4"
 }
 
 export function getEdgeWidth(edgeType: EdgeType, weight: number): number {

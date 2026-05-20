@@ -11,6 +11,7 @@ import { GraphControls } from "./GraphControls"
 import { GraphSidePanel } from "./GraphSidePanel"
 import { GraphHoverCard } from "./GraphHoverCard"
 import { GraphLabels } from "./GraphLabels"
+import "./graph3d.css"
 
 interface KnowledgeGraph3DProps {
   onClose?: () => void
@@ -20,8 +21,6 @@ interface KnowledgeGraph3DProps {
   louvain?: Record<string, number> | null
 }
 
-type DataSource = "bridged_2d_subgraph" | "backend_atlas" | "empty" | "error"
-
 export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
   onClose,
   subgraph,
@@ -29,7 +28,6 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
 }) => {
   const [graphData, setGraphData] = useState<GraphData | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [dataSource, setDataSource] = useState<DataSource>("empty")
 
   const mode = useGraphStore((s) => s.mode)
   const setMode = useGraphStore((s) => s.setMode)
@@ -38,14 +36,6 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
   const hoveredNodeId = useGraphStore((s) => s.hoveredNodeId)
   const enabledNodeTypes = useGraphStore((s) => s.enabledNodeTypes)
   const enabledEdgeTypes = useGraphStore((s) => s.enabledEdgeTypes)
-
-  // Track mount/unmount
-  useEffect(() => {
-    console.debug("[KnowledgeGraph3D] 🎬 Component mounted")
-    return () => {
-      console.debug("[KnowledgeGraph3D] 🎬 Component unmounted")
-    }
-  }, [])
 
   // Stable reference to the subgraph identity so we don't re-normalize on every render.
   // We only care when the size of the underlying data actually changes.
@@ -79,10 +69,6 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
       if (subgraphRef.current && subgraphRef.current.nodes.length > 0) {
         const data = normalizeInsightGraph(subgraphRef.current, louvainRef.current)
         if (cancelled) return
-        console.debug(
-          `[KnowledgeGraph3D] data source: bridged 2D subgraph ${data.nodes.length} nodes`
-        )
-        setDataSource("bridged_2d_subgraph")
         setGraphData(data)
         setLoading(false)
         return
@@ -98,16 +84,11 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
               })
             : await graphDataAdapter.loadAtlasGraph()
         if (cancelled) return
-        console.debug(
-          `[KnowledgeGraph3D] data source: backend get_memory_graph_atlas ${data.nodes.length} nodes`
-        )
-        setDataSource(data.nodes.length > 0 ? "backend_atlas" : "empty")
         setGraphData(data)
       } catch (err) {
         if (cancelled) return
         const message = err instanceof Error ? err.message : "Failed to load graph"
         setError(message)
-        setDataSource("error")
         console.error("[KnowledgeGraph3D] graph load error:", err)
       } finally {
         if (!cancelled) setLoading(false)
@@ -139,16 +120,13 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
 
   if (error) {
     return (
-      <div className="flex items-center justify-center w-full h-full bg-slate-900 rounded-lg">
-        <div className="text-center">
-          <p className="text-red-400 mb-4">Error loading graph</p>
-          <p className="text-sm text-slate-400">{error}</p>
+      <div className="knowledge-graph-3d-shell graph3d-root relative w-full h-full overflow-hidden">
+        <div className="g3d-state">
+          <h2 className="g3d-state-title">The graph couldn't load.</h2>
+          <p className="g3d-state-text">{error}</p>
           {onClose && (
-            <button
-              onClick={onClose}
-              className="mt-4 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm"
-            >
-              Close
+            <button type="button" className="g3d-pill" onClick={onClose}>
+              Back to 2D
             </button>
           )}
         </div>
@@ -158,38 +136,31 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
 
   if (!graphData) {
     return (
-      <div className="flex items-center justify-center w-full h-full bg-slate-900 rounded-lg">
-        <div className="text-center">
-          <div className="w-8 h-8 border-2 border-slate-600 border-t-slate-300 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-slate-400">Loading graph...</p>
+      <div className="knowledge-graph-3d-shell graph3d-root relative w-full h-full overflow-hidden">
+        <div className="g3d-state">
+          <div className="g3d-spinner" />
+          <p className="g3d-state-text">Developing the constellation…</p>
         </div>
       </div>
     )
   }
 
   if (!graphData.nodes || graphData.nodes.length === 0) {
-    const enabledNodeTypeCount = enabledNodeTypes.size
-    const enabledEdgeTypeCount = enabledEdgeTypes.size
-    const looksFilteredOut = enabledNodeTypeCount < 3 || enabledEdgeTypeCount < 7
+    const looksFilteredOut = enabledNodeTypes.size < 3 || enabledEdgeTypes.size < 7
     return (
-      <div className="flex items-center justify-center w-full h-full bg-slate-900 rounded-lg">
-        <div className="text-center">
-          <p className="text-slate-400 mb-4">
+      <div className="knowledge-graph-3d-shell graph3d-root relative w-full h-full overflow-hidden">
+        <div className="g3d-state">
+          <h2 className="g3d-state-title">
+            {looksFilteredOut ? "No nodes match the active filters." : "Nothing to map yet."}
+          </h2>
+          <p className="g3d-state-text">
             {looksFilteredOut
-              ? "No visible graph nodes match the current filters."
-              : "No graph data available."}
-          </p>
-          <p className="text-xs text-slate-500">
-            {looksFilteredOut
-              ? "Try resetting filters from the controls panel."
-              : "Capture some memories to build your knowledge graph."}
+              ? "Loosen the filters or reset them to see the full graph."
+              : "Capture some memories and the graph will start to form."}
           </p>
           {onClose && (
-            <button
-              onClick={onClose}
-              className="mt-4 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm"
-            >
-              Close
+            <button type="button" className="g3d-pill" onClick={onClose}>
+              Back to 2D
             </button>
           )}
         </div>
@@ -201,7 +172,7 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
   const hoveredNode = graphData.nodes.find((n) => n.id === hoveredNodeId)
 
   return (
-    <div className="relative w-full h-full bg-slate-950 rounded-lg overflow-hidden flex flex-col">
+    <div className="knowledge-graph-3d-shell graph3d-root relative w-full h-full overflow-hidden flex flex-col">
       {/* Main graph canvas */}
       <div className="flex-1 relative">
         <GraphScene graphData={graphData} />
@@ -222,53 +193,6 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
 
         {/* Controls */}
         <GraphControls onModeChange={handleModeChange} graphData={graphData} />
-
-        {/* Dev diagnostics */}
-        {typeof window !== "undefined" && (
-          <div className="absolute bottom-4 right-4 bg-slate-900 bg-opacity-95 border border-slate-700 p-3 rounded text-xs text-slate-300 font-mono max-w-xs">
-            <div className="font-bold text-slate-100 mb-2">📊 Graph Diagnostics</div>
-            <div className="space-y-1">
-              <div>
-                <span className="text-slate-500">Data Source:</span>{" "}
-                <span className="text-cyan-400">{dataSource}</span>
-              </div>
-              <div>
-                <span className="text-slate-500">Mode:</span> <span className="text-blue-400">{mode}</span>
-              </div>
-              <div className="border-t border-slate-700 pt-1 mt-1">
-                <div>
-                  <span className="text-slate-500">Nodes:</span> {graphData.nodes.length}
-                </div>
-                <div>
-                  <span className="text-slate-500">Total Edges:</span> {graphData.edges.length}
-                </div>
-                <div>
-                  <span className="text-slate-500">Communities:</span> {graphData.communities.length}
-                </div>
-              </div>
-              <div className="border-t border-slate-700 pt-1 mt-1">
-                <div>
-                  <span className="text-slate-500">Node Filters:</span> {enabledNodeTypes.size}/3
-                </div>
-                <div>
-                  <span className="text-slate-500">Edge Filters:</span> {enabledEdgeTypes.size}/7
-                </div>
-              </div>
-              {selectedNodeId && (
-                <div className="border-t border-slate-700 pt-1 mt-1">
-                  <div>
-                    <span className="text-slate-500">Selected:</span> {selectedNodeId.slice(0, 8)}
-                  </div>
-                </div>
-              )}
-              {hoveredNodeId && (
-                <div>
-                  <span className="text-slate-500">Hovered:</span> {hoveredNodeId.slice(0, 8)}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Side panel */}
@@ -277,12 +201,15 @@ export const KnowledgeGraph3D: React.FC<KnowledgeGraph3DProps> = ({
       {/* Close button */}
       {onClose && (
         <button
+          type="button"
+          className="g3d-icon-btn"
+          data-variant="close"
           onClick={onClose}
-          className="absolute top-4 right-4 z-50 p-2 bg-slate-800 hover:bg-slate-700 rounded"
+          aria-label="Close 3D graph"
           title="Close graph"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
       )}

@@ -28,6 +28,17 @@ export const EDGE_CONFIG = {
   },
 } as const
 
+// Edge colors — cosmic palette, used by overlays + 3D line tinting.
+export const EDGE_COLORS: Record<string, string> = {
+  semantic_similarity: "#7c5cff", // violet
+  explicit_reference: "#5ce0ff", // cyan
+  same_project: "#ffc36b", // amber
+  temporal_adjacency: "#ff6aa1", // rose
+  same_session: "#a8efff", // pale cyan
+  agent_inferred: "#b6a4ff", // pale violet
+  provenance: "#e8e4fb", // paper
+}
+
 // Labels
 export const LABEL_CONFIG = {
   maxLabelsVisible: 20,

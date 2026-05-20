@@ -98,9 +98,10 @@ describe("Graph Layout & Rendering", () => {
     })
 
     it("should assign correct edge colors by type", () => {
-      expect(getEdgeColor(ET.SemanticSimilarity)).toBe("#7F8D8D")
-      expect(getEdgeColor(ET.ExplicitReference)).toBe("#5B7FFF")
-      expect(getEdgeColor(ET.SameProject)).toBe("#FFD700")
+      // Cosmic palette — colors live in src/features/graph/layout/edgeVisibility.ts
+      expect(getEdgeColor(ET.SemanticSimilarity)).toBe("#7c5cff")
+      expect(getEdgeColor(ET.ExplicitReference)).toBe("#5ce0ff")
+      expect(getEdgeColor(ET.SameProject)).toBe("#ffc36b")
     })
 
     it("should compute edge width based on type and weight", () => {
