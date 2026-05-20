@@ -54,6 +54,25 @@ Pipeline knobs live in `src-tauri/src/config.rs` rather than scattered literals:
 - `StoreConfig`: LanceDB retrieval expansion and keyword scan limits.
 - `ProactiveConfig`: background similarity suggestion cadence, lookback, result limit, seen cache, and threshold.
 
+## Parent-child chunk RAG (forward architecture)
+
+The current pipeline embeds each `MemoryRecord` as a single vector. The planned upgrade introduces a **parent-child RAG** model governed by ADR 008:
+
+- **Parent**: `MemoryRecord` — the full capture unit, holds all metadata, insight fields, and OCR text. Current durable write path targets `memories_v4_minilm_384` (384-d MiniLM).
+- **Child chunk**: `MemoryChunkRecord` (Subagent 7) — an overlapping text window derived from the parent's `clean_text`, carrying its own BGE 1024-d embedding and a `parent_id` foreign key. Target table: `memory_chunks_v1_bge_1024`.
+
+At query time the chunk index is searched first for precision; matched chunks' parent records are fetched for card synthesis. The parent rollup vector is the embedding of the highest-salience child chunk, aligned with the existing `rank_salient_spans` strategy.
+
+**Embedding contract timeline:**
+
+| Contract | Table | Status |
+|---|---|---|
+| v4 MiniLM 384-d | `memories_v4_minilm_384` | Current durable write path |
+| v5 BGE 1024-d | `memories_v5_bge_1024` | Forward target — not yet wired (Subagent 6) |
+| v1 BGE chunks 1024-d | `memory_chunks_v1_bge_1024` | Forward target — not yet wired (Subagent 7) |
+
+The v5 forward targets are **not** the current path. Any description of 1024-d as "current" would be incorrect. See ADR 002 (amended) and ADR 008.
+
 ## Stable vs Experimental
 
 The stable search path is OCR text plus local text embeddings. Screen captures and imported photos additionally write a 512-d CLIP `image_embedding`, exposed through `find_visually_similar_memories` for image-to-image retrieval over the same LanceDB column. Cross-modal text->image retrieval, meeting diarization, external graph services, and autonomous agent surfaces remain adjacent or experimental features unless wired through the core path above.
