@@ -14,7 +14,7 @@ use crate::inference::{
 };
 use crate::memory_compaction::{
     build_lexical_shadow, compact_summary_embedding_text, mean_pool_embeddings,
-    support_embedding_texts,
+    support_embedding_texts_with_config,
 };
 use crate::models;
 use crate::ocr::OcrEngine;
@@ -293,7 +293,14 @@ pub async fn import_meta_glasses_photo(
     let lexical_shadow = build_lexical_shadow(APP_LABEL, &snippet, &clean_text, None);
     let compact_summary_text =
         compact_summary_embedding_text("import", &snippet, &clean_text, &lexical_shadow);
-    let support_texts = support_embedding_texts(APP_LABEL, &filename, &clean_text, &lexical_shadow);
+    let chunking_config = state.config.read().chunking.clone();
+    let support_texts = support_embedding_texts_with_config(
+        APP_LABEL,
+        &filename,
+        &clean_text,
+        &lexical_shadow,
+        Some(&chunking_config),
+    );
 
     let embedder = shared_embedder()?;
     let mut contexts = vec![

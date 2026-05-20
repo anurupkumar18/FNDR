@@ -6,7 +6,7 @@ use crate::capture::{
     passes_merge_threshold, score_memory_candidate,
 };
 use crate::memory_compaction::{
-    best_embedding_text, best_snippet_embedding_text, best_support_embedding_texts,
+    best_embedding_text, best_snippet_embedding_text, best_support_embedding_texts_with_config,
     compact_memory_record_payload, is_low_signal_embedding, mean_pool_embeddings,
 };
 use crate::storage::MemoryRecord;
@@ -502,7 +502,9 @@ async fn run_memory_repair_backfill_for_state(
         }
 
         if is_low_signal_embedding(&memory.support_embedding) {
-            let support_inputs = best_support_embedding_texts(memory);
+            let chunking_config = state.config.read().chunking.clone();
+            let support_inputs =
+                best_support_embedding_texts_with_config(memory, Some(&chunking_config));
             if !support_inputs.is_empty() {
                 let contexts = support_inputs
                     .into_iter()
@@ -1161,7 +1163,9 @@ async fn reclaim_memory_storage_for_state(
         }
 
         if is_low_signal_embedding(&compacted.support_embedding) {
-            let support_inputs = best_support_embedding_texts(&compacted);
+            let chunking_config = state.config.read().chunking.clone();
+            let support_inputs =
+                best_support_embedding_texts_with_config(&compacted, Some(&chunking_config));
             if !support_inputs.is_empty() {
                 support_embedding_jobs.push((
                     rewritten_memories.len(),

@@ -41,7 +41,7 @@ use crate::inference::{
 use crate::memory::reopen::build_reopen_target;
 use crate::memory_compaction::{
     build_lexical_shadow, build_lexical_shadow_with_aliases, compact_summary_embedding_text,
-    mean_pool_embeddings, support_embedding_texts,
+    mean_pool_embeddings, support_embedding_texts_with_config,
 };
 use crate::memory_quality::{deterministic_dedup_fingerprint, is_supported_dedup_fingerprint};
 use crate::models;
@@ -463,11 +463,13 @@ async fn compose_visual_capture_record(
         &composed.memory_context,
         &lexical_shadow,
     );
-    let support_texts = support_embedding_texts(
+    let chunking_config = state.config.read().chunking.clone();
+    let support_texts = support_embedding_texts_with_config(
         app_name,
         window_title,
         &composed.memory_context,
         &lexical_shadow,
+        Some(&chunking_config),
     );
 
     let mut embedding_inputs = vec![composed.embedding_text.clone(), compact_summary.clone()];
@@ -1828,7 +1830,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
     // process. The first stored frame absorbs the ~80-200 ms session load; every
     // subsequent embed is ~30-80 ms on Apple Silicon CPU.
     let models_dir = models::models_dir(state.app_data_dir.as_path());
-    let text_embedder = match Embedder::new() {
+    let chunking_config = state.config.read().chunking.clone();
+    let text_embedder = match Embedder::with_chunking_config(&chunking_config) {
         Ok(embedder) => Some(embedder),
         Err(err) => {
             tracing::warn!("Semantic embeddings unavailable in capture loop: {}", err);
@@ -2982,11 +2985,12 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &enriched_clean_text,
             &lexical_shadow,
         );
-        let support_texts = support_embedding_texts(
+        let support_texts = support_embedding_texts_with_config(
             &app_name,
             &window_title,
             &enriched_clean_text,
             &lexical_shadow,
+            Some(&config.chunking),
         );
 
         let mut embedding_inputs = vec![primary_embed_input.clone(), snippet_embed_input.clone()];
@@ -4073,11 +4077,12 @@ pub(crate) async fn merge_memory_records_with_policy(
         &merged_clean_text,
         &merged_lexical_shadow,
     );
-    let support_texts = support_embedding_texts(
+    let support_texts = support_embedding_texts_with_config(
         &incoming.app_name,
         &merged_window_title,
         &merged_clean_text,
         &merged_lexical_shadow,
+        None,
     );
 
     let merged_embedding = if recompute_embedding && semantic_embeddings_enabled(text_embedder) {

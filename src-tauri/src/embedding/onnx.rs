@@ -2,8 +2,8 @@
 
 use super::{chunk_screen_text, TextChunker};
 use crate::config::{
-    DEFAULT_EMBEDDING_CACHE_CAPACITY, DEFAULT_EMBEDDING_MAX_BATCH, DEFAULT_EMBEDDING_MAX_SEQ_LEN,
-    DEFAULT_EMBEDDING_MODEL_FILENAME, DEFAULT_EMBEDDING_MODEL_NAME,
+    ChunkingConfig, DEFAULT_EMBEDDING_CACHE_CAPACITY, DEFAULT_EMBEDDING_MAX_BATCH,
+    DEFAULT_EMBEDDING_MAX_SEQ_LEN, DEFAULT_EMBEDDING_MODEL_FILENAME, DEFAULT_EMBEDDING_MODEL_NAME,
     DEFAULT_EMBEDDING_TOKENIZER_FILENAME, DEFAULT_TEXT_EMBEDDING_DIM,
 };
 use ndarray::Array2;
@@ -143,7 +143,14 @@ impl EmbeddingCache {
 
 impl Embedder {
     pub fn new() -> Result<Self, String> {
-        let chunker = TextChunker::new();
+        Self::with_chunking_config(&ChunkingConfig::default())
+    }
+
+    /// Create an `Embedder` whose internal `TextChunker` uses runtime config
+    /// values instead of compiled-in defaults. Prefer this at all sites that
+    /// already hold a loaded `Config`.
+    pub fn with_chunking_config(chunking: &ChunkingConfig) -> Result<Self, String> {
+        let chunker = TextChunker::from_config(chunking);
 
         match RealEmbedder::new() {
             Ok(real) => {
@@ -880,7 +887,10 @@ pub enum EmbeddingPreflight {
     ContractDrift { detail: String },
     /// No usable model directory could be located on disk. Embedding
     /// will fall back to mock if `FNDR_ALLOW_MOCK_EMBEDDER=1`.
-    MissingModelDir { searched: Vec<String>, detail: String },
+    MissingModelDir {
+        searched: Vec<String>,
+        detail: String,
+    },
     /// Found the directory but the ONNX model file is missing.
     MissingModelFile { model_dir: PathBuf, detail: String },
     /// Found the directory but the tokenizer file is missing.
