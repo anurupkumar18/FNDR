@@ -1,5 +1,8 @@
 # 002: Embedding Dimension
 
+> **Status (2026-05-20): partially superseded by the staged contract.**
+> The current durable text embedding contract is **384-d (all-MiniLM-L6-v2 via ONNX)** — see `src-tauri/src/inference/model_config.rs` for the single source of truth (`EMBEDDING_DIMENSIONS`, `EMBEDDING_MODEL_ID`, `MEMORIES_V4_TABLE`). The 1024-d BGE description below was the previous contract and is now staged as the **forward target** under the placeholder `MEMORIES_V5_TABLE`. A separate ADR will document the v5 cutover when it ships. The "validates in two places" paragraph still holds in shape — the dimension being validated is now 384, not 1024.
+
 FNDR's stable text embedding contract is 1024 dimensions. The current embedding path uses a local ONNX BGE-style model downloaded by `download_embedding_model.sh`, and the LanceDB text vector columns are created and validated against that dimension.
 
 The dimension is intentionally treated as an application contract, not a casual runtime preference. Capture, meeting ingestion, downloads ingestion, search queries, snippet embeddings, support embeddings, and LanceDB schema validation all need to agree. If one subsystem silently writes 384-dimensional vectors while another expects 1024-dimensional vectors, vector search either fails at query time or returns misleading results.

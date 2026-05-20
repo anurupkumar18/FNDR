@@ -1920,11 +1920,15 @@ pub(super) async fn validate_memory_vector_schema(table: &Table) -> Result<(), l
         if actual_dim != Some(expected_dim) {
             return Err(lancedb::Error::Schema {
                 message: format!(
-                    "LanceDB table '{}' column '{}' has vector dimension {:?}, but FNDR is configured for {}. Existing 384-dimensional tables must be migrated or reset before using the 1024-dimensional embedding path. To reset local prototype data, stop FNDR and remove the app data LanceDB directory.",
+                    "LanceDB table '{}' column '{}' has vector dimension {:?}, but FNDR is configured for {}. \
+                     The current durable contract is {}-d (all-MiniLM-L6-v2). \
+                     If you upgraded from an older prototype with a different dimension, back up and reset the local Lance store: \
+                     stop FNDR and run `make reset-lancedb` (or remove the LanceDB directory under the app data folder).",
                     MEMORIES_TABLE,
                     column,
                     actual_dim,
-                    expected_dim
+                    expected_dim,
+                    DEFAULT_TEXT_EMBEDDING_DIM,
                 ),
             });
         }

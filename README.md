@@ -139,7 +139,7 @@ Complete onboarding in the desktop app to grant macOS permissions. FNDR uses two
 
 ### Meta AI glasses (manual import MVP)
 
-Photos captured on Meta AI glasses typically sync to your phone first, then you can AirDrop or add them to Photos and move them to your Mac. In FNDR, use **Command Palette → Import Meta glasses photo** to index a JPEG/PNG/HEIC: Apple Vision OCR plus BGE text embeddings power search today; a small CLIP vision encoder stores a 512-d vector for future image-aware retrieval.
+Photos captured on Meta AI glasses typically sync to your phone first, then you can AirDrop or add them to Photos and move them to your Mac. In FNDR, use **Command Palette → Import Meta glasses photo** to index a JPEG/PNG/HEIC: Apple Vision OCR plus the local all-MiniLM-L6-v2 text embeddings (384-d) power search today; a small CLIP vision encoder stores a 512-d vector for future image-aware retrieval.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -217,11 +217,13 @@ Validate the local embedding and LanceDB path with:
 make diagnostic
 ```
 
-If an older prototype database was created with a different vector dimension, back it up and let FNDR recreate the 1024-dimensional schema with:
+If an older prototype database was created with a different vector dimension, back it up and let FNDR recreate the current 384-d MiniLM schema with:
 
 ```bash
 make reset-lancedb
 ```
+
+A planned future contract upgrade (BGE 1024-d) is tracked separately and will ship behind a versioned LanceDB table — no manual reset will be required when it lands.
 
 Generated Rust/Tauri artifacts can become large during repeated local builds. Clear only
 build outputs with:

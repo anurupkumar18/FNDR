@@ -15,6 +15,9 @@ use crate::config::{
     DEFAULT_TEXT_EMBEDDING_DIM,
 };
 use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
+// Re-exported so `lance_store::tests` can call the shared quality helpers via
+// `use super::*;`. These are not used directly in this file.
+#[allow(unused_imports)]
 use crate::memory_quality::{
     classify_storage_outcome, default_memory_quality_config, deterministic_dedup_fingerprint,
     is_supported_dedup_fingerprint, quality_gate_reason as shared_quality_gate_reason,
@@ -35,7 +38,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const MEMORIES_TABLE: &str = "memories_v4_minilm_384";
+/// Active LanceDB table for memory records.
+///
+/// **Current durable write path:** v4 = all-MiniLM-L6-v2, 384-d vectors.
+/// This re-exports `inference::model_config::MEMORIES_V4_TABLE` so the
+/// embedding contract has exactly one source of truth (see `model_config.rs`).
+pub const MEMORIES_TABLE: &str = crate::inference::model_config::MEMORIES_V4_TABLE;
 pub const TASKS_TABLE: &str = "tasks";
 pub const MEETINGS_TABLE: &str = "meetings";
 pub const SEGMENTS_TABLE: &str = "segments";
@@ -2069,83 +2077,6 @@ impl Store {
         Ok(results)
     }
 
-    /// Open (or create) the EmbeddingGemma 256-dim memories table on demand.
-    pub async fn open_or_create_memories_v3(&self) -> Result<lancedb::Table, lancedb::Error> {
-        use crate::inference::model_config::MEMORIES_V3_TABLE;
-        let db_path = self.data_dir.join("lancedb");
-        let uri = db_path.to_string_lossy();
-        let conn = lancedb::connect(&uri).execute().await?;
-        let names = conn.table_names().execute().await?;
-        open_or_create_named_table(
-            &conn,
-            &names,
-            MEMORIES_V3_TABLE,
-            std::sync::Arc::new(memories_v3_schema()),
-        )
-        .await
-    }
-
-    /// ANN search over the `memories_v3_egemma_256` table (256-dim EmbeddingGemma).
-    /// Opens the connection and table on each call (lazy — no warm table reference stored).
-    /// Returns empty vec if table doesn't exist or has no indexed rows.
-    pub async fn vector_search_v3(
-        &self,
-        query_embedding: &[f32],
-        limit: usize,
-        time_filter: Option<&str>,
-        app_filter: Option<&str>,
-    ) -> Result<Vec<crate::storage::SearchResult>, Box<dyn std::error::Error>> {
-        let v3_table = match self.open_or_create_memories_v3().await {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::debug!("vector_search_v3: cannot open v3 table: {e}");
-                return Ok(Vec::new());
-            }
-        };
-
-        let row_count = v3_table.count_rows(None).await.unwrap_or(0);
-        if row_count == 0 {
-            return Ok(Vec::new());
-        }
-
-        let filter = build_filter(time_filter, app_filter);
-        let query_vec: Vec<f32> = query_embedding.to_vec();
-        let base_limit = limit.max(1);
-        let retrieval_limit = base_limit.saturating_mul(VECTOR_QUERY_MULTIPLIER).min(300);
-
-        let mut vq = v3_table
-            .vector_search(query_vec)?
-            .column("embedding")
-            .limit(retrieval_limit);
-
-        if let Some(f) = filter {
-            vq = vq.only_if(f);
-        }
-
-        let batches: Vec<RecordBatch> = vq.execute().await?.try_collect().await?;
-        let mut results = Vec::new();
-        for batch in &batches {
-            results.extend(batch_to_search_results(batch));
-        }
-        Ok(dedup_search_results(results, limit))
-    }
-
-    /// One-time migration stub: re-embeds existing records into `memories_v3_egemma_256`.
-    /// Returns the count of records processed.
-    /// Currently a stub — real implementation runs in the maintenance command.
-    pub async fn reindex_memories_to_embeddinggemma_256(
-        &self,
-        _embedder: &crate::embedding::Embedder,
-    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-        use crate::inference::model_config::MEMORIES_V3_TABLE;
-        // Ensure v3 table exists
-        let _ = self
-            .open_or_create_memories_v3()
-            .await
-            .map_err(|e| format!("cannot open v3 table: {e}"))?;
-        tracing::info!("reindex_memories_to_embeddinggemma_256: v3 table ({MEMORIES_V3_TABLE}) ready; full reindex not yet implemented");
-        Ok(0)
-    }
 }
 
 #[cfg(test)]

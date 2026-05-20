@@ -548,7 +548,10 @@ impl RealEmbedder {
         let actual_dim = probe.first().map(|vector| vector.len()).unwrap_or(0);
         if actual_dim != EMBEDDING_DIM {
             return Err(format!(
-                "Embedding dimension mismatch for {MODEL_NAME}: model returned {actual_dim}, configured schema expects {EMBEDDING_DIM}. Use the 1024-dimensional model from download_embedding_model.sh or reset the embedding configuration and LanceDB schema together."
+                "Embedding dimension mismatch for {MODEL_NAME}: model file at {} returned {actual_dim}-d vectors but the FNDR contract expects {EMBEDDING_DIM}-d. \
+                 The current durable contract is all-MiniLM-L6-v2 (384-d). Re-run scripts/bootstrap/download-minilm.sh to install the matching model, \
+                 or ensure FNDR_MODEL_DIR points at a directory containing {MODEL_FILENAME} + {TOKENIZER_FILENAME}.",
+                onnx_path.display()
             ));
         }
         if probe
@@ -862,6 +865,126 @@ fn model_assets_present(dir: &PathBuf) -> bool {
     dir.join(MODEL_FILENAME).exists() && dir.join(TOKENIZER_FILENAME).exists()
 }
 
+/// Outcome of an embedding-environment preflight check.
+///
+/// Distinguishes "model files on disk + matching contract" from the
+/// well-known failure modes so the caller can log an actionable warning
+/// before any heavy ONNX load is attempted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbeddingPreflight {
+    /// All assets present and the contract constants are internally
+    /// consistent (config dim == module dim == central contract dim).
+    Ready { model_dir: PathBuf },
+    /// Contract constants disagree across modules. Caller should treat
+    /// as a hard build error; production should never see this.
+    ContractDrift { detail: String },
+    /// No usable model directory could be located on disk. Embedding
+    /// will fall back to mock if `FNDR_ALLOW_MOCK_EMBEDDER=1`.
+    MissingModelDir { searched: Vec<String>, detail: String },
+    /// Found the directory but the ONNX model file is missing.
+    MissingModelFile { model_dir: PathBuf, detail: String },
+    /// Found the directory but the tokenizer file is missing.
+    MissingTokenizer { model_dir: PathBuf, detail: String },
+}
+
+impl EmbeddingPreflight {
+    pub fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
+
+    /// Human-readable, actionable summary suitable for tracing / startup logs.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Ready { model_dir } => format!(
+                "Embedding preflight OK: model={MODEL_NAME} dim={EMBEDDING_DIM} dir={}",
+                model_dir.display()
+            ),
+            Self::ContractDrift { detail } => detail.clone(),
+            Self::MissingModelDir { detail, .. } => detail.clone(),
+            Self::MissingModelFile { detail, .. } => detail.clone(),
+            Self::MissingTokenizer { detail, .. } => detail.clone(),
+        }
+    }
+}
+
+/// Cheap, non-blocking validation of the embedding contract + on-disk assets.
+///
+/// Run this once at startup (after `Config::load_or_create()`) so the user
+/// sees a clear actionable error in the log before any silent mock-fallback
+/// engages. This does NOT load the ONNX model — that still happens lazily on
+/// the first `Embedder::new()` and probes the actual output dimension there.
+pub fn preflight_embedding_environment(
+    config: &crate::config::EmbeddingConfig,
+) -> EmbeddingPreflight {
+    // 1. Contract consistency — config + module + central all agree.
+    if config.dimension != EMBEDDING_DIM {
+        return EmbeddingPreflight::ContractDrift {
+            detail: format!(
+                "Embedding contract drift: config.embedding.dimension = {}, embedding module = {}. \
+                 These must match. Update config.toml back to the default or rebuild against a matching dim.",
+                config.dimension, EMBEDDING_DIM
+            ),
+        };
+    }
+    if config.model_filename != MODEL_FILENAME {
+        return EmbeddingPreflight::ContractDrift {
+            detail: format!(
+                "Embedding contract drift: config model_filename = '{}', embedding module expects '{}'. \
+                 Reset config.toml or change the central contract together.",
+                config.model_filename, MODEL_FILENAME
+            ),
+        };
+    }
+    if config.tokenizer_filename != TOKENIZER_FILENAME {
+        return EmbeddingPreflight::ContractDrift {
+            detail: format!(
+                "Embedding contract drift: config tokenizer_filename = '{}', embedding module expects '{}'.",
+                config.tokenizer_filename, TOKENIZER_FILENAME
+            ),
+        };
+    }
+
+    // 2. Locate the model directory on disk.
+    let Some(model_dir) = resolve_model_dir() else {
+        let searched: Vec<String> = candidate_embedding_model_dirs()
+            .into_iter()
+            .map(|(label, dir)| format!("{label}: {}", dir.display()))
+            .collect();
+        let detail = format!(
+            "No embedding model directory found. Run `./scripts/bootstrap/download-minilm.sh` to install \
+             {MODEL_FILENAME} + {TOKENIZER_FILENAME} ({EMBEDDING_DIM}-d all-MiniLM-L6-v2). \
+             Searched: [{}].",
+            searched.join("; ")
+        );
+        return EmbeddingPreflight::MissingModelDir { searched, detail };
+    };
+
+    // 3. Confirm both required files exist.
+    let onnx_path = model_dir.join(MODEL_FILENAME);
+    if !onnx_path.exists() {
+        return EmbeddingPreflight::MissingModelFile {
+            model_dir: model_dir.clone(),
+            detail: format!(
+                "Embedding ONNX model missing at {}. Re-run scripts/bootstrap/download-minilm.sh \
+                 to install the current {EMBEDDING_DIM}-d MiniLM contract.",
+                onnx_path.display()
+            ),
+        };
+    }
+    let tokenizer_path = model_dir.join(TOKENIZER_FILENAME);
+    if !tokenizer_path.exists() {
+        return EmbeddingPreflight::MissingTokenizer {
+            model_dir: model_dir.clone(),
+            detail: format!(
+                "Embedding tokenizer missing at {}. Re-run scripts/bootstrap/download-minilm.sh.",
+                tokenizer_path.display()
+            ),
+        };
+    }
+
+    EmbeddingPreflight::Ready { model_dir }
+}
+
 fn stable_hash(input: &str) -> usize {
     stable_hash_bytes(input.as_bytes())
 }
@@ -911,6 +1034,35 @@ mod tests {
 
     fn cosine(a: &[f32], b: &[f32]) -> f32 {
         a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    }
+
+    #[test]
+    fn preflight_flags_config_dimension_drift() {
+        let mut config = crate::config::EmbeddingConfig::default();
+        config.dimension = 256;
+        let outcome = preflight_embedding_environment(&config);
+        assert!(!outcome.is_ready());
+        match outcome {
+            EmbeddingPreflight::ContractDrift { detail } => {
+                assert!(detail.contains("contract drift"));
+                assert!(detail.contains("256"));
+            }
+            other => panic!("expected ContractDrift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn preflight_flags_config_filename_drift() {
+        let mut config = crate::config::EmbeddingConfig::default();
+        config.model_filename = "bge-large-en-v1.5-quantized.onnx".to_string();
+        let outcome = preflight_embedding_environment(&config);
+        match outcome {
+            EmbeddingPreflight::ContractDrift { detail } => {
+                assert!(detail.contains("model_filename"));
+                assert!(detail.contains("bge-large-en-v1.5"));
+            }
+            other => panic!("expected ContractDrift for filename, got {other:?}"),
+        }
     }
 
     #[test]
