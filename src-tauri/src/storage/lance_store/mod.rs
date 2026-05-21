@@ -6,8 +6,8 @@
 use super::schema::{
     ActivityEvent, AppCount, ContextDelta, ContextPack, DayCount, DaypartCount,
     DecisionLedgerEntry, DomainCount, EdgeType, EntityAliasRecord, GraphEdge, GraphNode, HourCount,
-    KnowledgePage, MeetingSegment, MeetingSession, MemoryChunkRecord, MemoryRecord, NodeType,
-    ProjectContext, SearchResult, Stats, Task, TaskType, WeekdayCount,
+    KnowledgePage, MeetingSegment, MeetingSession, MemoryChunkRecord, MemoryChunkSearchResult,
+    MemoryRecord, NodeType, ProjectContext, SearchResult, Stats, Task, TaskType, WeekdayCount,
 };
 use crate::config::{
     DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_STORE_KEYWORD_QUERY_MULTIPLIER,
@@ -1113,7 +1113,7 @@ impl Store {
         &self,
         query_embedding: &[f32],
         limit: usize,
-    ) -> Result<Vec<MemoryChunkRecord>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<MemoryChunkSearchResult>, Box<dyn std::error::Error>> {
         if query_embedding.len() != BGE_V5_DIMENSIONS {
             return Err(format!(
                 "Refusing chunk vector search on {MEMORY_CHUNKS_TABLE}: query is {}-d, expected {}-d BGE. No fallback across embedding dimensions is allowed.",
@@ -1133,9 +1133,55 @@ impl Store {
             .await?;
         let mut chunks = Vec::new();
         for batch in &batches {
-            chunks.extend(batch_to_memory_chunks(batch));
+            chunks.extend(batch_to_memory_chunk_search_results(batch));
         }
         Ok(chunks)
+    }
+
+    pub async fn has_chunk_retrieval_index(&self) -> Result<bool, Box<dyn std::error::Error>> {
+        let parent_count = self.memories_v5_table.count_rows(None).await?;
+        if parent_count == 0 {
+            return Ok(false);
+        }
+        let chunk_count = self.memory_chunks_table.count_rows(None).await?;
+        Ok(chunk_count > 0)
+    }
+
+    pub async fn get_v5_search_results_by_ids(
+        &self,
+        memory_ids: &[String],
+        time_filter: Option<&str>,
+        app_filter: Option<&str>,
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        let ids = memory_ids
+            .iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(id_filter) = build_string_match_filter("id", &ids) else {
+            return Ok(Vec::new());
+        };
+        let filter = match build_filter(time_filter, app_filter) {
+            Some(extra) => format!("({id_filter}) AND ({extra})"),
+            None => id_filter,
+        };
+        let batches: Vec<RecordBatch> = self
+            .memories_v5_table
+            .query()
+            .select(Select::columns(SEARCH_RESULT_COLUMNS))
+            .only_if(filter)
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
+        let mut results = Vec::new();
+        for batch in &batches {
+            results.extend(batch_to_search_results(batch));
+        }
+        Ok(results)
     }
 
     pub async fn list_v5_reindex_identities(

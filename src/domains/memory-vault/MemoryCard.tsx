@@ -363,6 +363,8 @@ const ROUTE_GLYPHS: Record<string, string> = {
     BM25: "B",
     bm25: "B",
     semantic: "S",
+    Chunk: "C",
+    chunk: "C",
     entity_link: "E",
     entity: "E",
     recency: "R",

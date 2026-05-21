@@ -155,6 +155,45 @@ pub struct MemoryChunkRecord {
     pub content_hash: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, specta::Type)]
+pub struct MatchedChunkEvidence {
+    pub chunk_id: String,
+    pub memory_id: String,
+    pub chunk_index: u32,
+    pub text: String,
+    pub score: f32,
+    pub distance: f32,
+    #[serde(default)]
+    pub app_name: String,
+    #[serde(default)]
+    pub window_title: String,
+    #[serde(default)]
+    pub day_bucket: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryChunkSearchResult {
+    pub chunk: MemoryChunkRecord,
+    pub score: f32,
+    pub distance: f32,
+}
+
+impl MemoryChunkSearchResult {
+    pub fn evidence(&self) -> MatchedChunkEvidence {
+        MatchedChunkEvidence {
+            chunk_id: self.chunk.id.clone(),
+            memory_id: self.chunk.memory_id.clone(),
+            chunk_index: self.chunk.chunk_index,
+            text: self.chunk.text.clone(),
+            score: self.score,
+            distance: self.distance,
+            app_name: self.chunk.app_name.clone(),
+            window_title: self.chunk.window_title.clone(),
+            day_bucket: self.chunk.day_bucket.clone(),
+        }
+    }
+}
+
 impl Default for MemoryChunkRecord {
     fn default() -> Self {
         Self {
@@ -689,6 +728,15 @@ pub struct SearchResult {
     /// Broad semantic category labels.
     #[serde(default)]
     pub topic_categories: Vec<String>,
+    /// Retrieval routes that contributed to this result, e.g. "Chunk".
+    #[serde(default)]
+    pub matched_routes: Vec<String>,
+    /// Matched child chunk ids when this result came through parent-child RAG.
+    #[serde(default)]
+    pub matched_chunk_ids: Vec<String>,
+    /// Short textual evidence from the winning child chunk(s).
+    #[serde(default)]
+    pub chunk_evidence: Vec<MatchedChunkEvidence>,
 }
 
 impl Default for SearchResult {
@@ -760,6 +808,9 @@ impl Default for SearchResult {
             insight_card_confidence: 0.0,
             synthesis_branch: String::new(),
             topic_categories: Vec::new(),
+            matched_routes: Vec::new(),
+            matched_chunk_ids: Vec::new(),
+            chunk_evidence: Vec::new(),
         }
     }
 }

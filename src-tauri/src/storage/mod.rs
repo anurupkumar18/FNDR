@@ -18,8 +18,8 @@ pub use schema::{
     EdgeType, EntityAliasRecord, EntityRef, ErrorEvent, EvidenceRef, ExcludedContextItem,
     ExtractedEntity, FailureSummary, GraphEdge, GraphNode, HealthStatus, IntentAnalysis,
     IntentCandidate, IssueSummary, KnowledgePage, KnowledgePageType, KnowledgeStability,
-    MeetingBreakdown, MeetingSegment, MeetingSession, MemoryActionItem, MemoryChunkRecord,
-    MemoryRecord, NodeType, PrivacyClass, ProjectContext, RelevantFile, SearchResult, Stats, Task,
-    TaskType, WorkingState,
+    MatchedChunkEvidence, MeetingBreakdown, MeetingSegment, MeetingSession, MemoryActionItem,
+    MemoryChunkRecord, MemoryChunkSearchResult, MemoryRecord, NodeType, PrivacyClass,
+    ProjectContext, RelevantFile, SearchResult, Stats, Task, TaskType, WorkingState,
 };
 pub use state_store::StateStore;

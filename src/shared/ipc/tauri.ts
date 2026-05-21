@@ -18,6 +18,21 @@ export interface SearchResult {
     anchor_coverage_score?: number;
     extracted_entities?: string[];
     content_hash?: string;
+    matched_routes?: string[];
+    matched_chunk_ids?: string[];
+    chunk_evidence?: MatchedChunkEvidence[];
+}
+
+export interface MatchedChunkEvidence {
+    chunk_id: string;
+    memory_id: string;
+    chunk_index: number;
+    text: string;
+    score: number;
+    distance: number;
+    app_name?: string;
+    window_title?: string;
+    day_bucket?: string;
 }
 
 export interface MemoryCard {
@@ -69,6 +84,9 @@ export interface MemoryCard {
     topic_categories?: string[];
     /** Semantic search aliases / synonyms */
     search_aliases?: string[];
+    matched_routes?: string[];
+    matched_chunk_ids?: string[];
+    chunk_evidence?: MatchedChunkEvidence[];
     /** Phase 3 — deterministic "Why this surfaced" attached by the
      *  agentic-graph-rag composer. Absent on legacy code paths. */
     surfacing_reason?: SurfacingReason;

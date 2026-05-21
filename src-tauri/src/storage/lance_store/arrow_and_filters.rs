@@ -17,8 +17,8 @@ use crate::memory::reopen::{ReopenKind, ReopenValidationStatus};
 use crate::storage::schema::{
     ActivityEvent, ContextDelta, ContextPack, DecisionLedgerEntry, EdgeType, EntityAliasRecord,
     GraphEdge, GraphNode, KnowledgePage, KnowledgePageType, KnowledgeStability, MeetingSegment,
-    MeetingSession, MemoryChunkRecord, MemoryRecord, NodeType, PrivacyClass, ProjectContext,
-    SearchResult, Task, TaskType,
+    MeetingSession, MemoryChunkRecord, MemoryChunkSearchResult, MemoryRecord, NodeType,
+    PrivacyClass, ProjectContext, SearchResult, Task, TaskType,
 };
 
 use super::schemas::{
@@ -508,6 +508,27 @@ pub(super) fn batch_to_memory_chunks(batch: &RecordBatch) -> Vec<MemoryChunkReco
         .collect()
 }
 
+pub(super) fn batch_to_memory_chunk_search_results(
+    batch: &RecordBatch,
+) -> Vec<MemoryChunkSearchResult> {
+    let distances = batch
+        .column_by_name("_distance")
+        .and_then(|c| c.as_any().downcast_ref::<Float32Array>().cloned());
+
+    batch_to_memory_chunks(batch)
+        .into_iter()
+        .enumerate()
+        .map(|(idx, chunk)| {
+            let distance = distances.as_ref().map(|c| c.value(idx)).unwrap_or(0.0);
+            MemoryChunkSearchResult {
+                chunk,
+                score: vector_distance_to_similarity(distance),
+                distance,
+            }
+        })
+        .collect()
+}
+
 pub(super) fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> {
     let n = batch.num_rows();
     let ids = str_col(batch, "id");
@@ -975,6 +996,9 @@ pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> 
                 insight_card_confidence: get_f32(&insight_conf, i),
                 synthesis_branch: get_str(&search_synthesis_branches, i),
                 topic_categories: extract_str_list(&search_topic_categories, i),
+                matched_routes: Vec::new(),
+                matched_chunk_ids: Vec::new(),
+                chunk_evidence: Vec::new(),
             }
         })
         .collect()

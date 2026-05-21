@@ -39,6 +39,7 @@ pub const DEFAULT_SEARCH_SEMANTIC_TIMEOUT_MS: u64 = 950;
 pub const DEFAULT_SEARCH_SNIPPET_TIMEOUT_MS: u64 = 760;
 pub const DEFAULT_SEARCH_KEYWORD_TIMEOUT_MS: u64 = 900;
 pub const DEFAULT_SEARCH_KEYWORD_VARIANT_TIMEOUT_MS: u64 = 320;
+pub const DEFAULT_SEARCH_USE_CHUNK_FIRST_RETRIEVAL: bool = true;
 
 pub const DEFAULT_CAPTURE_FLUSH_INTERVAL_SECS: u64 = 30;
 pub const DEFAULT_CAPTURE_MAX_BATCH_SIZE: usize = 100;
@@ -227,6 +228,8 @@ pub struct SearchConfig {
     pub keyword_timeout_ms: u64,
     #[serde(default = "default_search_keyword_variant_timeout_ms")]
     pub keyword_variant_timeout_ms: u64,
+    #[serde(default = "default_search_use_chunk_first_retrieval")]
+    pub use_chunk_first_retrieval: bool,
 }
 
 impl Default for SearchConfig {
@@ -252,6 +255,7 @@ impl Default for SearchConfig {
             snippet_timeout_ms: default_search_snippet_timeout_ms(),
             keyword_timeout_ms: default_search_keyword_timeout_ms(),
             keyword_variant_timeout_ms: default_search_keyword_variant_timeout_ms(),
+            use_chunk_first_retrieval: default_search_use_chunk_first_retrieval(),
         }
     }
 }
@@ -793,6 +797,10 @@ fn default_search_keyword_timeout_ms() -> u64 {
 
 fn default_search_keyword_variant_timeout_ms() -> u64 {
     DEFAULT_SEARCH_KEYWORD_VARIANT_TIMEOUT_MS
+}
+
+fn default_search_use_chunk_first_retrieval() -> bool {
+    DEFAULT_SEARCH_USE_CHUNK_FIRST_RETRIEVAL
 }
 
 fn default_capture_flush_interval_secs() -> u64 {

@@ -229,6 +229,12 @@
     color: var(--accent);
     border-color: var(--accent);
 }
+.fndr-mc-c-route[data-route="Chunk"],
+.fndr-mc-c-route[data-route="chunk"] {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
 .fndr-mc-c-route[data-route="entity_link"],
 .fndr-mc-c-route[data-route="entity"] {
     color: var(--accent-2, var(--accent));

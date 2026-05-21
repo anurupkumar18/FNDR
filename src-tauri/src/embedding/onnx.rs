@@ -160,6 +160,14 @@ impl Embedder {
         )
     }
 
+    pub fn new_bge_v5_for_query() -> Result<Self, String> {
+        Self::with_contract_and_chunking_config(
+            embedding_v5_contract(),
+            &ChunkingConfig::default(),
+            false,
+        )
+    }
+
     /// Create an `Embedder` whose internal `TextChunker` uses runtime config
     /// values instead of compiled-in defaults. Prefer this at all sites that
     /// already hold a loaded `Config`.

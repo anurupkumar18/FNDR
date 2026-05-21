@@ -4685,6 +4685,9 @@ fn memory_to_search_result(memory: &crate::storage::MemoryRecord) -> crate::stor
         insight_card_confidence: memory.insight_card_confidence,
         synthesis_branch: memory.synthesis_branch.clone(),
         topic_categories: memory.topic_categories.clone(),
+        matched_routes: Vec::new(),
+        matched_chunk_ids: Vec::new(),
+        chunk_evidence: Vec::new(),
     }
 }
 

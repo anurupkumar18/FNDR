@@ -392,6 +392,61 @@ async fn memory_chunks_upsert_list_and_parent_delete_are_linked() {
     assert!(listed_after.is_empty());
 }
 
+#[tokio::test]
+async fn chunk_vector_search_ranks_chunks_and_returns_scores() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().to_path_buf();
+    let store = tokio::task::spawn_blocking(move || Store::new(&path).unwrap())
+        .await
+        .unwrap();
+
+    let chunks = vec![
+        MemoryChunkRecord {
+            text: "Needle chunk: parent child RAG retrieval".to_string(),
+            embedding: vec![1.0; BGE_V5_DIMENSIONS],
+            ..memory_chunk("chunk-a", "memory-a", BGE_V5_DIMENSIONS)
+        },
+        MemoryChunkRecord {
+            text: "Distractor chunk about unrelated planning".to_string(),
+            embedding: vec![0.0; BGE_V5_DIMENSIONS],
+            ..memory_chunk("chunk-b", "memory-b", BGE_V5_DIMENSIONS)
+        },
+    ];
+    store
+        .upsert_memory_chunks(&chunks)
+        .await
+        .expect("upsert chunks");
+
+    let results = store
+        .chunk_vector_search(&vec![1.0; BGE_V5_DIMENSIONS], 2)
+        .await
+        .expect("chunk vector search");
+
+    assert_eq!(results[0].chunk.id, "chunk-a");
+    assert_eq!(results[0].chunk.memory_id, "memory-a");
+    assert!(results[0].score > results[1].score);
+    assert!(results[0].distance <= results[1].distance);
+}
+
+#[tokio::test]
+async fn chunk_vector_search_rejects_wrong_dimension_query() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().to_path_buf();
+    let store = tokio::task::spawn_blocking(move || Store::new(&path).unwrap())
+        .await
+        .unwrap();
+
+    let err = store
+        .chunk_vector_search(&vec![0.0; DEFAULT_TEXT_EMBEDDING_DIM], 4)
+        .await
+        .expect_err("384-d chunk query must be rejected");
+
+    assert!(err.to_string().contains("expected 1024-d BGE"));
+    assert!(err
+        .to_string()
+        .contains("No fallback across embedding dimensions"));
+}
+
 #[test]
 fn normalize_record_for_index_strips_low_confidence_markers() {
     let mut source = record(
