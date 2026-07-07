@@ -103,7 +103,17 @@ flowchart LR
 
 ## 5. Installation and Run (macOS)
 
-### Prerequisites
+### Install from a release (recommended)
+
+1. Download the latest DMG from [GitHub Releases](https://github.com/anurupkumar18/FNDR/releases).
+2. Drag FNDR into Applications.
+3. First launch only: right-click the app and choose **Open** (builds are ad-hoc signed, not notarized).
+4. Onboarding downloads the required search embedding model in-app; the multimodal Qwen model is optional.
+5. Later releases install automatically through Settings → Updates.
+
+### Build from source
+
+#### Prerequisites
 
 - macOS 13.0+ (from `src-tauri/tauri.conf.json`)
 - Xcode Command Line Tools
@@ -112,15 +122,14 @@ flowchart LR
 - Python 3 (for bootstrap/sidecar helpers)
 - `ffmpeg` (meeting capture path)
 
-### Quickstart
+#### Quickstart
 
 ```bash
 npm install
-./scripts/bootstrap/download-minilm.sh
 npm run tauri dev
 ```
 
-Optional: if you want the multimodal local model available for richer memory synthesis/import flows, download the Qwen3-VL assets into the same models directory.
+Onboarding downloads the required MiniLM embedder in-app (or run `./scripts/bootstrap/download-minilm.sh` beforehand). Optional: if you want the multimodal local model available for richer memory synthesis/import flows, download the Qwen3-VL assets into the same models directory.
 
 ### First run
 
@@ -238,4 +247,12 @@ fndr/
 - `docs/architecture/graph-schema.md`
 - `docs/decisions/`
 - `docs/mcp.md`
+
+---
+
+## 13. License
+
+FNDR follows an open-core model. The code in this repository is licensed under the [Apache License 2.0](LICENSE).
+
+Copyright 2026 Anurup Kumar.
 
