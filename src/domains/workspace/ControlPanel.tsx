@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 
 type Theme = "dark" | "light";
 import {
@@ -752,6 +754,11 @@ export function ControlPanel({
                                 <CapturePipelineSummary status={status} />
                             </section>
 
+                            <section className="panel-section">
+                                <h3>Updates</h3>
+                                <UpdateChecker />
+                            </section>
+
                             {qualityStatus && (
                                 <section className="panel-section">
                                     <h3>Memory Quality</h3>
@@ -1014,6 +1021,12 @@ export function ControlPanel({
                                     : "unknown"}.
                                 {status?.embedding_detail ? ` ${status.embedding_detail}` : ""}
                             </p>
+                            {status?.embedding_backend === "unavailable" && (
+                                <p className="model-error">
+                                    Capture is paused until the embedding model is available, so
+                                    memories are never stored with unusable embeddings.
+                                </p>
+                            )}
 
                             {modelError && <div className="model-error">{modelError}</div>}
 
@@ -1366,6 +1379,71 @@ export function ControlPanel({
  * could be discarded (surface policy, low signal, noise, grounding, …)
  * was previously invisible to the UI.
  */
+function UpdateChecker() {
+    const [busy, setBusy] = useState(false);
+    const [message, setMessage] = useState<string | null>(null);
+    const pendingUpdate = useRef<Update | null>(null);
+    const [updateReady, setUpdateReady] = useState(false);
+
+    async function handleCheck() {
+        setBusy(true);
+        setMessage(null);
+        setUpdateReady(false);
+        try {
+            const update = await checkForUpdate();
+            if (update) {
+                pendingUpdate.current = update;
+                setUpdateReady(true);
+                setMessage(`FNDR ${update.version} is available.`);
+            } else {
+                setMessage("FNDR is up to date.");
+            }
+        } catch (e) {
+            setMessage(`Update check failed: ${String(e)}`);
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleInstall() {
+        const update = pendingUpdate.current;
+        if (!update) return;
+        setBusy(true);
+        setMessage("Downloading and installing the update…");
+        try {
+            await update.downloadAndInstall();
+            await relaunch();
+        } catch (e) {
+            setMessage(`Update failed: ${String(e)}`);
+            setBusy(false);
+        }
+    }
+
+    return (
+        <>
+            <div className="profile-row">
+                <button
+                    className="ui-action-btn btn-secondary"
+                    onClick={() => void handleCheck()}
+                    disabled={busy}
+                >
+                    {busy ? "…" : "Check for updates"}
+                </button>
+                {updateReady && (
+                    <button
+                        className="ui-action-btn btn-primary"
+                        onClick={() => void handleInstall()}
+                        disabled={busy}
+                    >
+                        Install and restart
+                    </button>
+                )}
+            </div>
+            {message && <p className="section-hint">{message}</p>}
+        </>
+    );
+}
+
 function CapturePipelineSummary({ status }: { status: CaptureStatus | null }) {
     const pipeline = status?.pipeline;
     if (!pipeline) {
@@ -1391,6 +1469,7 @@ function CapturePipelineSummary({ status }: { status: CaptureStatus | null }) {
         { key: "visual_compose_failed", label: "visual fail", value: pipeline.skipped_visual_compose_failed },
         { key: "ocr_failed", label: "ocr fail", value: pipeline.skipped_ocr_failed },
         { key: "screen_capture_failed", label: "screen fail", value: pipeline.skipped_screen_capture_failed },
+        { key: "embedder_unavailable", label: "no embedding model", value: pipeline.skipped_embedder_unavailable ?? 0 },
     ].filter((r) => r.value > 0);
     const lastSkipLabel = pipeline.last_skip_reason
         ? `Last skip: ${pipeline.last_skip_reason}${pipeline.last_skip_app ? ` (${pipeline.last_skip_app})` : ""}`

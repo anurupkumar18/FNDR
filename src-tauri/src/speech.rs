@@ -726,7 +726,10 @@ pub async fn synthesize_speech(
 
     let sidecar = resolve_sidecar("orpheus_tts_runner.py")
         .ok_or_else(|| "Could not locate orpheus_tts_runner.py".to_string())?;
-    let python = python_for_sidecar().unwrap_or_else(|| PathBuf::from("python3"));
+    let python = python_for_sidecar().or_else(find_python3).ok_or_else(|| {
+        "No usable python3 found for Orpheus TTS. Install with: brew install python@3.13"
+            .to_string()
+    })?;
     let model = model_path.clone();
     let output = output_path.clone();
     let text = text.to_string();

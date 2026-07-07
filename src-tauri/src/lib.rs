@@ -124,6 +124,7 @@ pub struct CapturePipelineStats {
     pub skipped_visual_compose_failed: AtomicU64,
     /// Screen-capture syscall itself failed.
     pub skipped_screen_capture_failed: AtomicU64,
+    pub skipped_embedder_unavailable: AtomicU64,
     /// Memory stored via the OCR-narrative path.
     pub stored_ocr_path: AtomicU64,
     /// Memory stored via the visual-narrative path.
@@ -164,6 +165,9 @@ pub enum SkipReason {
     VisualNovelty,
     VisualComposeFailed,
     ScreenCaptureFailed,
+    /// Text embedder unavailable; the frame is blocked so zero-vector memory
+    /// rows never reach storage.
+    EmbedderUnavailable,
 }
 
 impl SkipReason {
@@ -183,6 +187,7 @@ impl SkipReason {
             SkipReason::VisualNovelty => "visual_novelty",
             SkipReason::VisualComposeFailed => "visual_compose_failed",
             SkipReason::ScreenCaptureFailed => "screen_capture_failed",
+            SkipReason::EmbedderUnavailable => "embedder_unavailable",
         }
     }
 }
@@ -212,6 +217,7 @@ impl Default for CapturePipelineStats {
             skipped_visual_novelty: AtomicU64::new(0),
             skipped_visual_compose_failed: AtomicU64::new(0),
             skipped_screen_capture_failed: AtomicU64::new(0),
+            skipped_embedder_unavailable: AtomicU64::new(0),
             stored_ocr_path: AtomicU64::new(0),
             stored_visual_path: AtomicU64::new(0),
             stored_url_only: AtomicU64::new(0),
@@ -237,6 +243,7 @@ impl CapturePipelineStats {
             SkipReason::VisualNovelty => &self.skipped_visual_novelty,
             SkipReason::VisualComposeFailed => &self.skipped_visual_compose_failed,
             SkipReason::ScreenCaptureFailed => &self.skipped_screen_capture_failed,
+            SkipReason::EmbedderUnavailable => &self.skipped_embedder_unavailable,
         };
         counter.fetch_add(1, Ordering::Relaxed);
         *self.last_skip.write() = Some(LastSkipEntry {
@@ -275,6 +282,7 @@ impl CapturePipelineStats {
             + self.skipped_visual_novelty.load(Ordering::Relaxed)
             + self.skipped_visual_compose_failed.load(Ordering::Relaxed)
             + self.skipped_screen_capture_failed.load(Ordering::Relaxed)
+            + self.skipped_embedder_unavailable.load(Ordering::Relaxed)
     }
 
     /// Sum of every `stored_*` counter.

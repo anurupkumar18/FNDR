@@ -1,11 +1,22 @@
 use crate::config::Config;
 use crate::inference::model_config::{
-    MULTIMODAL_MODEL_DOWNLOAD_URL, MULTIMODAL_MODEL_FILENAME, MULTIMODAL_MODEL_ID,
-    MULTIMODAL_MODEL_RAM_GB, MULTIMODAL_MODEL_SIZE_BYTES, QWEN3_VL_2B_MAIN_GGUF_MIN_BYTES,
+    EMBEDDING_MODEL_DOWNLOAD_URL, EMBEDDING_MODEL_FILENAME, EMBEDDING_MODEL_SHA256,
+    EMBEDDING_MODEL_SIZE_BYTES, EMBEDDING_TOKENIZER_DOWNLOAD_URL, EMBEDDING_TOKENIZER_FILENAME,
+    EMBEDDING_TOKENIZER_SHA256, MULTIMODAL_MODEL_DOWNLOAD_URL, MULTIMODAL_MODEL_FILENAME,
+    MULTIMODAL_MODEL_ID, MULTIMODAL_MODEL_RAM_GB, MULTIMODAL_MODEL_SIZE_BYTES,
+    QWEN3_VL_2B_MAIN_GGUF_MIN_BYTES,
 };
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+/// Additional file a model needs beyond its main weights (e.g. a tokenizer).
+#[derive(Debug, Clone, Copy)]
+pub struct ExtraModelFile {
+    pub filename: &'static str,
+    pub download_url: &'static str,
+    pub sha256: Option<&'static str>,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ModelDefinition {
@@ -18,23 +29,57 @@ pub struct ModelDefinition {
     pub speed_label: &'static str,
     pub ram_gb: f32,
     pub recommended: bool,
+    /// Required models are auto-installed by onboarding rather than offered
+    /// as a choice; core features stay gated until they are on disk.
+    pub required: bool,
     pub filename: &'static str,
     pub download_url: &'static str,
+    /// Pinned hex digest for `filename`; `None` skips verification.
+    pub sha256: Option<&'static str>,
+    /// Every extra file must be present for the model to count as available.
+    pub extra_files: &'static [ExtraModelFile],
 }
 
-pub const MODEL_CATALOG: [ModelDefinition; 1] = [ModelDefinition {
-    id: MULTIMODAL_MODEL_ID,
-    name: "Qwen3-VL · 2B",
-    description: "Multimodal memory model for 8 GB M1 Mac. Reads screenshots, OCR text, and GUI context to create structured memory records.",
-    size_bytes: MULTIMODAL_MODEL_SIZE_BYTES,
-    size_label: "~1.5 GB",
-    quality_label: "Excellent",
-    speed_label: "Balanced",
-    ram_gb: MULTIMODAL_MODEL_RAM_GB,
-    recommended: true,
-    filename: MULTIMODAL_MODEL_FILENAME,
-    download_url: MULTIMODAL_MODEL_DOWNLOAD_URL,
-}];
+pub const MINILM_EMBEDDER_MODEL_ID: &str = "minilm-l6-v2";
+
+pub const MODEL_CATALOG: [ModelDefinition; 2] = [
+    ModelDefinition {
+        id: MULTIMODAL_MODEL_ID,
+        name: "Qwen3-VL · 2B",
+        description: "Multimodal memory model for 8 GB M1 Mac. Reads screenshots, OCR text, and GUI context to create structured memory records.",
+        size_bytes: MULTIMODAL_MODEL_SIZE_BYTES,
+        size_label: "~1.5 GB",
+        quality_label: "Excellent",
+        speed_label: "Balanced",
+        ram_gb: MULTIMODAL_MODEL_RAM_GB,
+        recommended: true,
+        required: false,
+        filename: MULTIMODAL_MODEL_FILENAME,
+        download_url: MULTIMODAL_MODEL_DOWNLOAD_URL,
+        sha256: None,
+        extra_files: &[],
+    },
+    ModelDefinition {
+        id: MINILM_EMBEDDER_MODEL_ID,
+        name: "MiniLM · Search Embedder",
+        description: "Required search embedding model (384-d). Capture stays paused until this model is installed.",
+        size_bytes: EMBEDDING_MODEL_SIZE_BYTES,
+        size_label: "~90 MB",
+        quality_label: "Required",
+        speed_label: "Fast",
+        ram_gb: 0.5,
+        recommended: false,
+        required: true,
+        filename: EMBEDDING_MODEL_FILENAME,
+        download_url: EMBEDDING_MODEL_DOWNLOAD_URL,
+        sha256: Some(EMBEDDING_MODEL_SHA256),
+        extra_files: &[ExtraModelFile {
+            filename: EMBEDDING_TOKENIZER_FILENAME,
+            download_url: EMBEDDING_TOKENIZER_DOWNLOAD_URL,
+            sha256: Some(EMBEDDING_TOKENIZER_SHA256),
+        }],
+    },
+];
 
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
@@ -197,12 +242,48 @@ fn resolve_specific_model(model_id: &str, app_data_dir: Option<&Path>) -> Option
     for dir in candidate_model_dirs(app_data_dir) {
         for search_dir in [dir.clone(), dir.join(model_id)] {
             let path = search_dir.join(definition.filename);
-            if path.is_file() {
+            let extras_present = definition
+                .extra_files
+                .iter()
+                .all(|extra| search_dir.join(extra.filename).is_file());
+            if path.is_file() && extras_present {
                 return Some(ResolvedModel { definition, path });
             }
         }
     }
     None
+}
+
+/// Pinned digest for one of a model's files, whether main weights or extra.
+pub fn expected_sha256_for(model_id: &str, filename: &str) -> Option<&'static str> {
+    let definition = model_by_id(model_id)?;
+    if definition.filename == filename {
+        return definition.sha256;
+    }
+    definition
+        .extra_files
+        .iter()
+        .find(|extra| extra.filename == filename)
+        .and_then(|extra| extra.sha256)
+}
+
+/// Streams `path` through SHA-256 and compares against `expected_hex`.
+pub fn verify_file_sha256(path: &Path, expected_hex: &str) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let actual = format!("{:x}", hasher.finalize());
+    if actual.eq_ignore_ascii_case(expected_hex) {
+        Ok(())
+    } else {
+        Err(format!(
+            "sha256 mismatch for {}: expected {expected_hex}, got {actual}",
+            path.display()
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -353,5 +434,88 @@ mod tests {
             configured_vlm_model_id(&cfg).as_deref(),
             Some("qwen3-vl-2b")
         );
+    }
+
+    fn assert_sha256_hex(digest: &str) {
+        assert_eq!(digest.len(), 64, "sha256 hex digest must be 64 chars");
+        assert!(
+            digest.chars().all(|c| c.is_ascii_hexdigit()),
+            "sha256 digest must be hex: {digest}"
+        );
+    }
+
+    #[test]
+    fn embedder_is_required_and_qwen_is_optional() {
+        // The onboarding flow auto-installs required models and only offers
+        // optional ones as user choices.
+        assert!(model_by_id("minilm-l6-v2").unwrap().required);
+        assert!(!model_by_id("qwen3-vl-2b").unwrap().required);
+    }
+
+    #[test]
+    fn minilm_embedder_is_in_catalog_with_pinned_checksums() {
+        let model = model_by_id("minilm-l6-v2").expect("embedder must be in MODEL_CATALOG");
+        assert_eq!(model.filename, "all-MiniLM-L6-v2.onnx");
+        assert_sha256_hex(model.sha256.expect("embedder weights must pin a sha256"));
+
+        let [tokenizer] = model.extra_files else {
+            panic!("embedder must declare exactly its tokenizer as an extra file");
+        };
+        assert_eq!(tokenizer.filename, "tokenizer.json");
+        assert_sha256_hex(tokenizer.sha256.expect("tokenizer must pin a sha256"));
+    }
+
+    #[test]
+    fn expected_sha256_lookup_covers_main_and_extra_files() {
+        assert!(expected_sha256_for("minilm-l6-v2", "all-MiniLM-L6-v2.onnx").is_some());
+        assert!(expected_sha256_for("minilm-l6-v2", "tokenizer.json").is_some());
+        // Qwen has no pinned digest yet; downloads must keep working without one.
+        assert!(expected_sha256_for("qwen3-vl-2b", "Qwen3VL-2B-Instruct-Q4_K_M.gguf").is_none());
+        assert!(expected_sha256_for("unknown-model", "whatever.bin").is_none());
+    }
+
+    #[test]
+    fn verify_file_sha256_accepts_matching_content() {
+        let temp_dir = make_temp_dir();
+        let path = temp_dir.join("blob.bin");
+        std::fs::write(&path, b"hello").unwrap();
+        verify_file_sha256(
+            &path,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        )
+        .expect("matching digest must verify");
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn verify_file_sha256_rejects_corrupted_content() {
+        let temp_dir = make_temp_dir();
+        let path = temp_dir.join("blob.bin");
+        std::fs::write(&path, b"hell0").unwrap();
+        let err = verify_file_sha256(
+            &path,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        )
+        .expect_err("corrupted content must fail verification");
+        assert!(err.contains("sha256"), "{err}");
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn embedder_availability_requires_tokenizer_too() {
+        let temp_dir = make_temp_dir();
+        let model_dir = models_dir(&temp_dir);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("all-MiniLM-L6-v2.onnx"), b"weights").unwrap();
+
+        assert!(
+            !is_model_available("minilm-l6-v2", Some(temp_dir.as_path())),
+            "weights without tokenizer must not count as available"
+        );
+
+        std::fs::write(model_dir.join("tokenizer.json"), b"tok").unwrap();
+        assert!(is_model_available("minilm-l6-v2", Some(temp_dir.as_path())));
+
+        std::fs::remove_dir_all(temp_dir).unwrap();
     }
 }

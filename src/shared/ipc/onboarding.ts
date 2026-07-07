@@ -64,6 +64,8 @@ export interface ModelInfo {
     speed_label: string;
     ram_gb: number;
     recommended: boolean;
+    /** Required models are auto-installed by onboarding; core features stay gated until they exist. */
+    required: boolean;
     filename: string;
     download_url: string;
 }

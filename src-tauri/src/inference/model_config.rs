@@ -39,6 +39,16 @@ pub struct TextEmbeddingContract {
 pub const EMBEDDING_MODEL_ID: &str = "sentence-transformers/all-MiniLM-L6-v2";
 pub const EMBEDDING_MODEL_FILENAME: &str = "all-MiniLM-L6-v2.onnx";
 pub const EMBEDDING_TOKENIZER_FILENAME: &str = "tokenizer.json";
+
+/// Pinned download source for the v4 MiniLM contract, revision-locked so the
+/// artifact cannot drift under the sha256 pins below.
+pub const EMBEDDING_MODEL_DOWNLOAD_URL: &str = "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/onnx/model.onnx";
+pub const EMBEDDING_MODEL_SHA256: &str =
+    "759c3cd2b7fe7e93933ad23c4c9181b7396442a2ed746ec7c1d46192c469c46e";
+pub const EMBEDDING_MODEL_SIZE_BYTES: u64 = 90_387_606;
+pub const EMBEDDING_TOKENIZER_DOWNLOAD_URL: &str = "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/tokenizer.json";
+pub const EMBEDDING_TOKENIZER_SHA256: &str =
+    "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0";
 /// all-MiniLM-L6-v2 produces 384-dimensional sentence embeddings.
 pub const EMBEDDING_DIMENSIONS: usize = 384;
 pub const EMBEDDING_DIMENSIONS_I32: i32 = EMBEDDING_DIMENSIONS as i32;

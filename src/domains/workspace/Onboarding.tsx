@@ -329,11 +329,31 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
         listAvailableModels()
             .then((ms) => {
                 setModels(ms);
-                const preferred = ms.find((m) => m.recommended) ?? ms[0];
+                const choices = ms.filter((m) => !m.required);
+                const preferred = choices.find((m) => m.recommended) ?? choices[0];
                 setSelected(preferred ?? null);
             })
             .catch((e) => setError(`Failed to load models: ${String(e)}`));
     }, []);
+
+    const embedder = models.find((m) => m.required) ?? null;
+    const embedderMissing = embedder !== null && embedder.download_url !== "already_downloaded";
+    const choiceModels = models.filter((m) => !m.required);
+
+    // The required search embedder is not a user choice: fetch it as soon as
+    // the step opens so capture can start once onboarding finishes.
+    const embedderAutoStartRef = useRef(false);
+    useEffect(() => {
+        if (!embedder || !embedderMissing || embedderAutoStartRef.current) {
+            return;
+        }
+        embedderAutoStartRef.current = true;
+        setPendingModelId(embedder.id);
+        downloadModel(embedder.id, embedder.download_url, embedder.filename).catch((e: unknown) => {
+            setError(String(e));
+            setPendingModelId(null);
+        });
+    }, [embedder, embedderMissing]);
 
     useEffect(() => {
         if (!pendingModelId || downloadStatus.model_id !== pendingModelId) {
@@ -347,6 +367,16 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
         }
 
         if (downloadStatus.state !== "completed" || downloadStatus.error) {
+            return;
+        }
+
+        // A finished embedder download refreshes the registry and stays on
+        // this step; only the user's chosen model advances onboarding.
+        if (embedder && downloadStatus.model_id === embedder.id) {
+            setPendingModelId(null);
+            listAvailableModels()
+                .then(setModels)
+                .catch((e) => setError(`Failed to refresh models: ${String(e)}`));
             return;
         }
 
@@ -381,7 +411,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
         return () => {
             cancelled = true;
         };
-    }, [downloadStatus.error, downloadStatus.model_id, downloadStatus.state, onSave, pendingModelId, state]);
+    }, [downloadStatus.error, downloadStatus.model_id, downloadStatus.state, embedder, onSave, pendingModelId, state]);
 
     const activeDownloadStatus =
         pendingModelId && downloadStatus.model_id === pendingModelId ? downloadStatus : null;
@@ -439,7 +469,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
 
             {!isDownloading && (
                 <div className="ob-model-cards">
-                    {models.map((m) => (
+                    {choiceModels.map((m) => (
                         <button
                             key={m.id}
                             id={`ob-model-${m.id}`}
@@ -569,7 +599,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                         className="ob-btn-ghost"
                         onClick={() => onSave({ ...state, step: "permissions" })}
                     >
-                        Skip for now
+                        {embedderMissing
+                            ? "Skip for now (capture stays paused until the search model is installed)"
+                            : "Skip for now"}
                     </button>
                 </>
             )}
@@ -579,7 +611,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                     className="ob-btn-ghost"
                     onClick={() => onSave({ ...state, step: "permissions" })}
                 >
-                    Skip for now
+                    Skip for now (downloads continue in the background)
                 </button>
             )}
         </>

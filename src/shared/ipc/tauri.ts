@@ -425,6 +425,8 @@ export interface CapturePipelineBreakdown {
     skipped_visual_novelty: number;
     skipped_visual_compose_failed: number;
     skipped_screen_capture_failed: number;
+    /** Text embedder unavailable; capture blocked so no zero-vector rows are written. */
+    skipped_embedder_unavailable: number;
     skipped_total: number;
     last_skip_reason: string | null;
     last_skip_app: string | null;

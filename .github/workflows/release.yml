@@ -1,0 +1,56 @@
+name: release
+
+on:
+  push:
+    tags: [ "v*" ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build and publish macOS release
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Ad-hoc signed build (no Apple Developer account): first launch
+      # requires right-click -> Open. Updater artifacts are minisign-signed
+      # with TAURI_SIGNING_PRIVATE_KEY, independent of Apple signing.
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "FNDR ${{ github.ref_name }}"
+          releaseBody: |
+            macOS (Apple Silicon) build.
+
+            This build is ad-hoc signed: on first launch, right-click the app
+            and choose "Open" to pass Gatekeeper. Subsequent releases install
+            automatically through the in-app updater (Settings -> Updates).
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

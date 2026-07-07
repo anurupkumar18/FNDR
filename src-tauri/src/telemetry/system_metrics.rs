@@ -1026,8 +1026,8 @@ mod tests {
     }
 
     #[test]
-    fn vlm_safe_min_is_twelve_gib() {
-        assert_eq!(VLM_SAFE_MIN_HOST_RAM_BYTES, 12 * 1024 * 1024 * 1024);
+    fn vlm_safe_min_is_eight_gib() {
+        assert_eq!(VLM_SAFE_MIN_HOST_RAM_BYTES, 8 * 1024 * 1024 * 1024);
     }
 
     #[test]

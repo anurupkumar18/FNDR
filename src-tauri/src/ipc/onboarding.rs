@@ -375,6 +375,7 @@ pub struct ModelInfo {
     pub speed_label: String,
     pub ram_gb: f32,
     pub recommended: bool,
+    pub required: bool,
     pub filename: String,
     pub download_url: String,
 }
@@ -400,6 +401,7 @@ pub async fn list_available_models(app: AppHandle) -> Result<Vec<ModelInfo>, Str
                 speed_label: model.speed_label.to_string(),
                 ram_gb: model.ram_gb,
                 recommended: model.recommended,
+                required: model.required,
                 filename: model.filename.to_string(),
                 download_url: if downloaded {
                     "already_downloaded".to_string()
@@ -621,7 +623,8 @@ pub async fn download_model(
     let model_id_clone = model_id.clone();
 
     tokio::spawn(async move {
-        let result = do_download(&app_clone, &model_id_clone, &download_url, &filename).await;
+        let result =
+            download_model_files(&app_clone, &model_id_clone, &download_url, &filename).await;
 
         if let Err(ref e) = result {
             emit_download_failure(&app_clone, &model_id_clone, e.clone());
@@ -630,6 +633,44 @@ pub async fn download_model(
     });
 
     Ok(())
+}
+
+/// Download every file a model needs: pinned extra files first (they are
+/// small), then the main weights file last so its completion event marks the
+/// whole model ready.
+async fn download_model_files(
+    app: &AppHandle,
+    model_id: &str,
+    download_url: &str,
+    filename: &str,
+) -> Result<(), String> {
+    if let Some(definition) = models::model_by_id(model_id) {
+        let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let models_dir = models::models_dir(app_data_dir.as_path());
+        for extra in definition.extra_files {
+            let dest = models_dir.join(extra.filename);
+            let already_valid = dest.is_file()
+                && match extra.sha256 {
+                    Some(expected) => models::verify_file_sha256(&dest, expected).is_ok(),
+                    None => true,
+                };
+            if already_valid {
+                continue;
+            }
+            if dest.is_file() {
+                emit_download_log(
+                    app,
+                    &format!(
+                        "Existing {} does not match the pinned checksum; re-downloading.",
+                        extra.filename
+                    ),
+                );
+                let _ = tokio::fs::remove_file(&dest).await;
+            }
+            do_download(app, model_id, extra.download_url, extra.filename, false).await?;
+        }
+    }
+    do_download(app, model_id, download_url, filename, true).await
 }
 
 #[tauri::command]
@@ -700,6 +741,7 @@ async fn do_download(
     model_id: &str,
     url: &str,
     filename: &str,
+    is_final_file: bool,
 ) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
 
@@ -734,7 +776,7 @@ async fn do_download(
                 bytes_downloaded: file_size,
                 total_bytes: file_size,
                 percent: 100.0,
-                done: true,
+                done: is_final_file,
                 error: None,
             },
         );
@@ -868,6 +910,25 @@ async fn do_download(
     emit_download_log(app, "Flushing model file to disk...");
     file.flush().await.map_err(|e| e.to_string())?;
     drop(file);
+
+    if let Some(expected) = models::expected_sha256_for(model_id, filename) {
+        emit_download_log(app, "Verifying SHA-256 checksum...");
+        let verify_path = partial_path.clone();
+        let expected = expected.to_string();
+        let verified = tokio::task::spawn_blocking(move || {
+            models::verify_file_sha256(&verify_path, &expected)
+        })
+        .await
+        .map_err(|e| format!("Checksum task failed: {e}"))?;
+        if let Err(err) = verified {
+            // A complete-but-corrupt partial can never be repaired by resume.
+            let _ = tokio::fs::remove_file(&partial_path).await;
+            emit_download_log(app, &format!("Checksum verification failed: {err}"));
+            return Err(err);
+        }
+        emit_download_log(app, "Checksum verified.");
+    }
+
     emit_download_log(
         app,
         "Promoting partial download into the live models directory...",
@@ -884,7 +945,7 @@ async fn do_download(
             bytes_downloaded,
             total_bytes,
             percent: 100.0,
-            done: true,
+            done: is_final_file,
             error: None,
         },
     );

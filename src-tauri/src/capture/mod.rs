@@ -1865,13 +1865,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
     // subsequent embed is ~30-80 ms on Apple Silicon CPU.
     let models_dir = models::models_dir(state.app_data_dir.as_path());
     let chunking_config = state.config.read().chunking.clone();
-    let text_embedder = match Embedder::with_chunking_config(&chunking_config) {
+    let mut text_embedder = match Embedder::with_chunking_config(&chunking_config) {
         Ok(embedder) => Some(embedder),
         Err(err) => {
             tracing::warn!("Semantic embeddings unavailable in capture loop: {}", err);
             None
         }
     };
+    let mut last_embedder_init_attempt = Instant::now();
     let initial_capture_config = state.config.read().capture_pipeline.clone();
 
     // Batch buffer
@@ -2008,6 +2009,36 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let app_context = macos::get_frontmost_app_info();
         let app_name = app_context.app_name.clone();
         let window_title = app_context.window_title.clone();
+
+        // A missing text embedder blocks the frame instead of letting
+        // zero-vector memory rows reach storage; periodic re-init lets capture
+        // resume without a restart once the embedding model is on disk.
+        let embedder_gate = embedder_gate_action(
+            text_embedder.is_some(),
+            last_embedder_init_attempt.elapsed(),
+            EMBEDDER_INIT_RETRY_INTERVAL,
+        );
+        if embedder_gate == EmbedderGateAction::RetryInit {
+            last_embedder_init_attempt = Instant::now();
+            let chunking_config = state.config.read().chunking.clone();
+            match Embedder::with_chunking_config(&chunking_config) {
+                Ok(embedder) => {
+                    tracing::info!("Text embedder initialized on retry; capture resumed");
+                    text_embedder = Some(embedder);
+                }
+                Err(err) => {
+                    tracing::warn!("Text embedder still unavailable; capture blocked: {}", err);
+                }
+            }
+        }
+        if embedder_gate != EmbedderGateAction::Proceed && text_embedder.is_none() {
+            state
+                .capture_stats
+                .record_skip(crate::SkipReason::EmbedderUnavailable, &app_name);
+            tokio::time::sleep(sleep_duration).await;
+            continue;
+        }
+
         let force_capture =
             last_forced_capture.elapsed().as_secs() >= config.forced_capture_interval;
 
@@ -4674,6 +4705,40 @@ fn semantic_embeddings_enabled(text_embedder: Option<&Embedder>) -> bool {
     )
 }
 
+/// How often the capture loop retries text-embedder initialization while blocked.
+const EMBEDDER_INIT_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Tick decision for the capture loop when the text embedder may be missing.
+///
+/// A missing embedder blocks frame processing so zero-vector memory rows never
+/// reach storage; once the retry interval elapses (e.g. after the embedding
+/// model finishes downloading) the loop attempts re-initialization so capture
+/// resumes without an app restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmbedderGateAction {
+    /// Embedder available: process the frame normally.
+    Proceed,
+    /// Embedder missing and the retry interval elapsed: attempt re-init, then
+    /// block if still unavailable.
+    RetryInit,
+    /// Embedder missing and retry not yet due: block this frame.
+    Block,
+}
+
+fn embedder_gate_action(
+    embedder_present: bool,
+    elapsed_since_init_attempt: Duration,
+    retry_interval: Duration,
+) -> EmbedderGateAction {
+    if embedder_present {
+        EmbedderGateAction::Proceed
+    } else if elapsed_since_init_attempt >= retry_interval {
+        EmbedderGateAction::RetryInit
+    } else {
+        EmbedderGateAction::Block
+    }
+}
+
 fn choose_story_title(existing: &str, incoming: &str) -> String {
     let existing_trim = existing.trim();
     let incoming_trim = incoming.trim();
@@ -6269,5 +6334,34 @@ Activity patterns and insights dashboard
     fn text_heavy_override_blocked_for_tiny_text() {
         // 50 chars doesn't qualify
         assert!(!should_text_heavy_override(50, 0.49, 5, 0.20, 0.50, false));
+    }
+
+    #[test]
+    fn embedder_gate_proceeds_when_embedder_present() {
+        // A live embedder always admits the frame, even long past the retry interval.
+        assert_eq!(
+            embedder_gate_action(true, Duration::from_secs(3600), Duration::from_secs(30)),
+            EmbedderGateAction::Proceed
+        );
+    }
+
+    #[test]
+    fn embedder_gate_blocks_when_embedder_missing_and_retry_not_due() {
+        // A missing embedder blocks frame processing so zero-vector memory
+        // rows never reach storage.
+        assert_eq!(
+            embedder_gate_action(false, Duration::from_secs(5), Duration::from_secs(30)),
+            EmbedderGateAction::Block
+        );
+    }
+
+    #[test]
+    fn embedder_gate_retries_init_when_embedder_missing_and_interval_elapsed() {
+        // Once the retry interval passes (e.g. after the model download
+        // completes), the loop attempts to re-initialize before blocking.
+        assert_eq!(
+            embedder_gate_action(false, Duration::from_secs(30), Duration::from_secs(30)),
+            EmbedderGateAction::RetryInit
+        );
     }
 }
