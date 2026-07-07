@@ -1,4 +1,4 @@
-# Decision 011: Release Channel and Auto-Update
+# Decision 013: Release Channel and Auto-Update
 
 ## Status
 

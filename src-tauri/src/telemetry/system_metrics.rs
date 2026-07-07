@@ -505,8 +505,8 @@ mod imp {
             let info = info.assume_init();
             let rusage = sample_rusage();
             ProcessMemorySnapshot {
-                rss_bytes: info.resident_size as u64,
-                virtual_bytes: info.virtual_size as u64,
+                rss_bytes: info.resident_size,
+                virtual_bytes: info.virtual_size,
                 phys_footprint_bytes: rusage.map(|r| r.ri_phys_footprint).unwrap_or(0),
                 lifetime_max_phys_footprint_bytes: rusage
                     .map(|r| r.ri_lifetime_max_phys_footprint)

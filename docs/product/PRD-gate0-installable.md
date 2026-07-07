@@ -128,7 +128,7 @@ Order of shipping (each independently mergeable): LICENSE → CI test gate → F
 
 ## ADR candidates
 
-- **ADR 011 — Signed release and auto-update channel:** GitHub Actions as the sole release path; Tauri updater with signed manifests; aarch64-first.
+- **ADR 013 — Signed release and auto-update channel:** GitHub Actions as the sole release path; Tauri updater with signed manifests; aarch64-first.
 - **ADR 012 — Required-model gating and graceful degradation:** embedder is a hard capture prerequisite (supersedes degrade-to-mock for the durable write path); optional features declare runtime dependencies and degrade visibly.
 
 ## Suggested issues (vertical slices, in shipping order)

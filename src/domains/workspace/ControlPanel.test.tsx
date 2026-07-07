@@ -13,6 +13,8 @@ vi.mock("@tauri-apps/plugin-process", () => ({
 }));
 
 vi.mock("@/shared/ipc/tauri", () => ({
+    PRIVACY_ALERTS_EVENT: "privacy://alerts",
+    CAPTURE_STATUS_EVENT: "capture://status",
     deleteAllData: vi.fn(),
     deleteOlderThan: vi.fn(),
     getBlocklist: vi.fn().mockResolvedValue([]),
