@@ -49,10 +49,16 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
 
       # lance-encoding's build script requires protoc.
       - name: Install protobuf
         run: brew install protobuf
+
+      # tauri::generate_context! in the fndr bin requires frontendDist
+      # ("../dist") to exist; tests don't need real frontend assets.
+      - name: Create empty frontend dist
+        run: mkdir -p dist
 
       - name: Rust tests
         run: cargo test --locked
