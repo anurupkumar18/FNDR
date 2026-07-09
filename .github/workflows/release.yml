@@ -30,6 +30,10 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # lance-encoding's build script requires protoc.
+      - name: Install protobuf
+        run: brew install protobuf
+
       - name: Install dependencies
         run: npm ci
 

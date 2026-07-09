@@ -50,6 +50,10 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # lance-encoding's build script requires protoc.
+      - name: Install protobuf
+        run: brew install protobuf
+
       - name: Rust tests
         run: cargo test --locked
         working-directory: src-tauri
