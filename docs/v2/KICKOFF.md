@@ -1,5 +1,13 @@
 # FNDR v2 implementation kickoff
 
+> **Superseded 2026-08-21.** The bootstrap this file describes is done. The v2
+> repo is live at https://github.com/anurupkumar18/FNDR-2.0 (local checkout:
+> `~/FNDR-2.0`); open implementation sessions there. Its `docs/` carries the
+> plan (with a progress ledger in `ROADMAP-TICKETS.md`), its `CLAUDE.md` and
+> engineering skill route every task, and this v1 history is imported there
+> as the read-only `reference/v1` branch. This file stays as the historical
+> kickoff record.
+
 For the first implementation session. Planning is complete, reviewed, and merged; nothing in `docs/v2/` needs re-deriving. This file tells a fresh session exactly where things stand and what to do first.
 
 ## State as of 2026-08-20
