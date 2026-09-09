@@ -660,8 +660,8 @@
 }
 
 .app-main.search-centered .search-bar {
-    height: var(--fndr-os-pill-height, 58px);
-    border-radius: var(--fndr-os-pill-radius, 29px);
+    height: var(--fndr-os-pill-height, 40px);
+    border-radius: var(--fndr-os-pill-radius, 20px);
     padding: 0 7px 0 20px;
     gap: 8px;
     background: color-mix(in srgb, var(--cp-dominant-2, var(--cp-surface)) 78%, transparent);
@@ -669,15 +669,14 @@
     backdrop-filter: blur(18px);
     -webkit-backdrop-filter: blur(18px);
     box-shadow:
-        0 0 28px color-mix(in srgb, var(--cp-secondary-2, var(--cp-accent)) 14%, transparent),
+        0 8px 20px rgba(0, 0, 0, 0.18),
         inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .app-main.search-centered .search-bar:focus-within {
     border-color: color-mix(in srgb, var(--cp-secondary-2, var(--cp-accent)) 72%, transparent);
     box-shadow:
-        0 0 40px color-mix(in srgb, var(--cp-accent-raw, var(--cp-accent)) 22%, transparent),
-        0 0 0 2px color-mix(in srgb, var(--cp-accent-raw, var(--cp-accent)) 16%, transparent);
+        0 0 0 3px color-mix(in srgb, var(--cp-accent-raw, var(--cp-accent)) 20%, transparent);
 }
 
 .app-main.search-centered .search-icon {

@@ -83,15 +83,15 @@
     display: flex;
     align-items: center;
     gap: 0;
-    height: 56px;
-    border-radius: 28px;
+    height: 48px;
+    border-radius: 24px;
     padding: 0 8px 0 20px;
     background: color-mix(in srgb, var(--cp-dominant-2, var(--cp-surface)) 78%, transparent);
     border: 1px solid color-mix(in srgb, var(--cp-secondary-1, var(--cp-accent)) 48%, transparent);
     backdrop-filter: blur(16px) saturate(140%);
     -webkit-backdrop-filter: blur(16px) saturate(140%);
     box-shadow:
-        0 0 28px color-mix(in srgb, var(--cp-secondary-2, var(--cp-accent)) 14%, transparent),
+        0 10px 24px rgba(0, 0, 0, 0.18),
         inset 0 1px 0 rgba(255, 255, 255, 0.05);
     transition:
         border-color 0.2s ease,
@@ -102,8 +102,7 @@
 .home-hero__search-pill.is-recording {
     border-color: color-mix(in srgb, var(--cp-secondary-2, var(--cp-accent)) 72%, transparent);
     box-shadow:
-        0 0 40px color-mix(in srgb, var(--cp-accent-raw, var(--cp-accent)) 22%, transparent),
-        0 0 0 2px color-mix(in srgb, var(--cp-accent-raw, var(--cp-accent)) 16%, transparent);
+        0 0 0 3px color-mix(in srgb, var(--cp-accent-raw, var(--cp-accent)) 20%, transparent);
 }
 
 /* ─── Search icon ─────────────────────────────────────────────────────────── */
@@ -146,9 +145,9 @@
     display: flex;
     align-items: center;
     gap: 5px;
-    height: 38px;
+    height: 34px;
     padding: 0 12px;
-    border-radius: 19px;
+    border-radius: 17px;
     border: 1px solid color-mix(in srgb, var(--cp-secondary-1, var(--cp-border)) 50%, transparent);
     background: color-mix(in srgb, var(--cp-dominant-1, var(--cp-surface)) 60%, transparent);
     color: var(--cp-wall-text-secondary, var(--text-secondary));

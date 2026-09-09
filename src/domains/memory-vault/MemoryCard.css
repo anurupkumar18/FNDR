@@ -271,7 +271,6 @@
 .fndr-mc--compact:hover .fndr-mc-bar,
 .fndr-mc--compact:focus-visible .fndr-mc-bar {
     background: var(--accent);
-    box-shadow: 0 0 8px var(--accent);
 }
 
 .fndr-mc-c-frame {
