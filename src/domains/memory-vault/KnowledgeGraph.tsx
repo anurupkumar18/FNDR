@@ -176,7 +176,7 @@ export function KnowledgeGraph({
             style={{ height }}
             tabIndex={0}
         >
-            <div className="knowledge-graph-canvas-wrap film-grain">
+            <div className="knowledge-graph-canvas-wrap">
                 {showFilters && (
                     <KnowledgeGraphTopBar
                         options={filterOptions}
