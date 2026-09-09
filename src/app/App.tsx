@@ -518,7 +518,7 @@ function App() {
     }
 
     return (
-        <div className="app film-grain">
+        <div className="app">
             {!EVAL_UI && (
                 <button
                     type="button"

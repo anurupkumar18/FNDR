@@ -97,7 +97,7 @@
     text-align: center;
     max-width: 380px;
     padding: 52px 44px 40px;
-    border-radius: 28px;
+    border-radius: var(--radius-xl, 16px);
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.09);
     backdrop-filter: blur(40px) saturate(180%);
@@ -148,25 +148,9 @@
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: var(--radius-md);
     margin-bottom: 28px;
-    animation: lockPulse 3s var(--ease-smooth) infinite;
-    box-shadow: 
-        0 20px 40px rgba(0, 0, 0, 0.4),
+    box-shadow:
+        0 8px 20px rgba(0, 0, 0, 0.3),
         inset 0 1px 1px rgba(255, 255, 255, 0.1);
-    filter: drop-shadow(0 0 24px rgba(140, 160, 255, 0.25));
-}
-
-@keyframes lockPulse {
-
-    0%,
-    100% {
-        transform: scale(1);
-        opacity: 0.92;
-    }
-
-    50% {
-        transform: scale(1.06);
-        opacity: 1;
-    }
 }
 
 .biometric-lock-title {
@@ -231,26 +215,25 @@
         linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 60%),
         linear-gradient(135deg, #5a6cf0, #7a5ae0);
     border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 14px;
+    border-radius: var(--radius-md, 10px);
     cursor: pointer;
     overflow: hidden;
-    transition: transform 0.18s var(--ease-spring), box-shadow 0.25s var(--ease-smooth);
+    transition: transform 0.1s ease-out, box-shadow 0.2s var(--ease-smooth);
     box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.18) inset,
-        0 4px 12px rgba(90, 108, 240, 0.3),
+        0 2px 8px rgba(90, 108, 240, 0.25),
         0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 .biometric-lock-btn:hover:not(:disabled) {
-    transform: translateY(-1px);
     box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.22) inset,
-        0 8px 24px rgba(90, 108, 240, 0.45),
-        0 2px 6px rgba(0, 0, 0, 0.25);
+        0 4px 14px rgba(90, 108, 240, 0.35),
+        0 1px 3px rgba(0, 0, 0, 0.22);
 }
 
 .biometric-lock-btn:active:not(:disabled) {
-    transform: translateY(0);
+    transform: scale(0.97);
     transition-duration: 0.08s;
 }
 
@@ -323,20 +306,12 @@
 
 /* Aurora wallpaper sits at z-index:0, behind every interactive layer.
    The static page-bg gradient is removed — the WebGL canvas owns the
-   background. A faint film-grain overlay is layered via .film-grain
-   on the .app wrapper. */
+   background. */
 .app-aurora-wallpaper {
     position: fixed;
     inset: 0;
     z-index: 0;
     pointer-events: none;
-}
-
-/* Film grain overlay — very subtle so the nebula void stays deep. */
-.app.film-grain::after {
-    opacity: 0.022;
-    mix-blend-mode: soft-light;
-    z-index: 1;
 }
 
 /* ===== Left sidebar — genuine glass material ===== */
@@ -555,9 +530,9 @@
 
 .sidebar-actions .ui-action-btn.active {
     background: var(--accent-light);
-    border-color: var(--accent);
+    border-color: transparent;
     color: var(--text-primary);
-    box-shadow: 0 8px 18px var(--shadow-color);
+    box-shadow: none;
 }
 
 [data-theme="light"] .sidebar-actions .ui-action-btn {
@@ -575,8 +550,8 @@
 
 [data-theme="light"] .sidebar-actions .ui-action-btn.active {
     background: var(--accent-light);
-    border-color: var(--accent);
-    box-shadow: 0 8px 16px var(--shadow-color);
+    border-color: transparent;
+    box-shadow: none;
 }
 
 /* ── Sidebar reel footer ─────────────────────────────────────────────────── */
@@ -613,7 +588,7 @@
     top: 0;
     left: 0;
     height: 100%;
-    width: 200%;
+    width: 100%;
     background-image: repeating-linear-gradient(
         90deg,
         transparent 0px,
@@ -627,13 +602,7 @@
         transparent 13px,
         transparent 20px
     );
-    opacity: 0.35;
-    animation: reelScroll 4s linear infinite;
-}
-
-@keyframes reelScroll {
-    from { transform: translateX(0); }
-    to   { transform: translateX(-50%); }
+    opacity: 0.22;
 }
 
 /* ===== Main content ===== */
@@ -825,11 +794,10 @@
 
 .sidebar-brand::before {
     content: "";
-    width: 5px;
-    height: 5px;
+    width: 6px;
+    height: 6px;
     border-radius: 999px;
     background: var(--accent);
-    box-shadow: 0 0 8px var(--accent), 0 0 16px rgba(212, 160, 74, 0.4);
     flex-shrink: 0;
 }
 
@@ -856,22 +824,10 @@
     margin-bottom: 6px;
 }
 
-/* Active nav item — amber left bar with halation. */
-.sidebar-actions .ui-action-btn.active {
-    position: relative;
-}
-.sidebar-actions .ui-action-btn.active::after {
-    content: "";
-    position: absolute;
-    left: -4px;
-    top: 6px;
-    bottom: 6px;
-    width: 2px;
-    background: var(--accent);
-    border-radius: 0 2px 2px 0;
-    box-shadow: 0 0 8px var(--accent);
-    pointer-events: none;
-}
+/* Active nav item — a rounded-rect, accent-tinted fill (see the
+   .sidebar-actions .ui-action-btn.active rule above), the same way
+   macOS sidebars (Finder, System Settings) highlight the selected row
+   instead of a glowing accent bar. */
 
 /* ===== App toast stack ===== */
 .app-toast-stack {
@@ -1191,9 +1147,5 @@
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
-    }
-
-    .biometric-lock-icon {
-        animation: none;
     }
 }
