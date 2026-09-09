@@ -8,6 +8,10 @@ Privacy exclusions are checked before screen capture and OCR. Blocklisted apps, 
 
 The LanceDB schema still contains screenshot/image-related fields for compatibility with older records and adjacent experimental work. Capture records set `screenshot_path` to `None`. Store compaction also clears screenshot paths before indexing compact memory payloads. Visual semantic search can be reintroduced later only with an explicit privacy design.
 
+## Update 2026-09-08: explicit Screen Guide captures
+
+Screen Guide may capture the current display only after an explicit user request. The privacy policy is evaluated before pixels are obtained, Screen Guide's own panel and overlay are hidden before capture, and the resulting image exists only in process memory long enough for OCR and local inference. It must not be assigned a `screenshot_path`, written to a file, or converted into a `MemoryRecord`.
+
 ## Update 2026-05-13: CLIP image vectors on screen captures
 
 Screen captures now compute and store a 512-d CLIP image embedding alongside the existing text embeddings. The vector is derived from the same pixel buffer that already passes through Apple Vision OCR; **no raw pixels are persisted** (`screenshot_path` remains `None`). The vector is a compact, L2-normalized float32 representation — not a screenshot.

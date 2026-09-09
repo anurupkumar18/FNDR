@@ -7,6 +7,8 @@ const OMNIBAR_LABEL: &str = "omnibar";
 const OMNIBAR_WIDTH: f64 = 680.0;
 const OMNIBAR_HEIGHT: f64 = 480.0;
 pub const OMNIBAR_SHORTCUT: &str = "Alt+Space";
+static OMNIBAR_REGISTERED_SHORTCUT_ID: once_cell::sync::Lazy<parking_lot::Mutex<Option<u32>>> =
+    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
 
 /// Pre-create the omnibar window at startup (hidden) so it is fully loaded
 /// before the first hotkey press. Called once from main.rs setup.
@@ -29,12 +31,20 @@ pub fn create_omnibar_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Register the omnibar global shortcut. Must be re-invoked after any
-/// `global_shortcut().unregister_all()` (see `register_autofill_shortcut`).
+/// Register the Omnibar-owned shortcut without accepting another feature's
+/// registration as success.
 pub fn register_omnibar_shortcut<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let shortcut: Shortcut = OMNIBAR_SHORTCUT
         .parse()
         .map_err(|err| format!("Invalid omnibar shortcut '{OMNIBAR_SHORTCUT}': {err}"))?;
+    if app.global_shortcut().is_registered(shortcut) {
+        if *OMNIBAR_REGISTERED_SHORTCUT_ID.lock() == Some(shortcut.id()) {
+            return Ok(());
+        }
+        return Err(format!(
+            "Omnibar shortcut '{OMNIBAR_SHORTCUT}' is already used by another FNDR feature."
+        ));
+    }
 
     let handle = app.clone();
     app.global_shortcut()
@@ -44,7 +54,9 @@ pub fn register_omnibar_shortcut<R: tauri::Runtime>(app: &AppHandle<R>) -> Resul
             }
             toggle_omnibar(&handle);
         })
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    *OMNIBAR_REGISTERED_SHORTCUT_ID.lock() = Some(shortcut.id());
+    Ok(())
 }
 
 fn toggle_omnibar<R: tauri::Runtime>(app: &AppHandle<R>) {
@@ -57,10 +69,25 @@ fn toggle_omnibar<R: tauri::Runtime>(app: &AppHandle<R>) {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
         } else {
-            let _ = window.center();
-            let _ = window.show();
-            let _ = window.set_focus();
-            let _ = handle.emit_to(OMNIBAR_LABEL, "omnibar://focus", ());
+            super::screen_guide::schedule_fndr_window_activation_after_screen_guide_cancel_with_work(
+                &handle,
+                move |work_handle| {
+                    super::autofill::cancel_autofill_for_sibling_activation(&work_handle)
+                },
+                move |handle, autofill_cancelled| {
+                    if let Err(err) = autofill_cancelled {
+                        tracing::warn!("Omnibar could not safely stop Autofill: {err}");
+                        return;
+                    }
+                    let Some(window) = handle.get_webview_window(OMNIBAR_LABEL) else {
+                        return;
+                    };
+                    let _ = window.center();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = handle.emit_to(OMNIBAR_LABEL, "omnibar://focus", ());
+                },
+            );
         }
     });
 }
@@ -78,15 +105,24 @@ pub async fn dismiss_omnibar(app: AppHandle) -> Result<(), String> {
 /// and tell it to open the vault on the given memory.
 #[tauri::command]
 pub async fn omnibar_open_memory(app: AppHandle, memory_id: String) -> Result<(), String> {
-    if let Some(omnibar) = app.get_webview_window(OMNIBAR_LABEL) {
-        let _ = omnibar.hide();
-    }
-    let main = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?;
-    main.show().map_err(|e| e.to_string())?;
-    main.set_focus().map_err(|e| e.to_string())?;
-    app.emit_to("main", "omnibar://open-memory", memory_id)
-        .map_err(|e| e.to_string())?;
+    super::screen_guide::schedule_fndr_window_activation_after_screen_guide_cancel_with_work(
+        &app,
+        move |work_handle| super::autofill::cancel_autofill_for_sibling_activation(&work_handle),
+        move |app, autofill_cancelled| {
+            if let Err(err) = autofill_cancelled {
+                tracing::warn!("Omnibar could not safely stop Autofill: {err}");
+                return;
+            }
+            if let Some(omnibar) = app.get_webview_window(OMNIBAR_LABEL) {
+                let _ = omnibar.hide();
+            }
+            let Some(main) = app.get_webview_window("main") else {
+                return;
+            };
+            let _ = main.show();
+            let _ = main.set_focus();
+            let _ = app.emit_to("main", "omnibar://open-memory", memory_id);
+        },
+    );
     Ok(())
 }

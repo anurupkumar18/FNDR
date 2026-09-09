@@ -55,6 +55,7 @@ const SIDEBAR_GROUPS = [
             { key: "meeting", text: "Meetings" },
             { key: "dailySummary", text: "Daily Summary" },
             { key: "agent", text: "Agent" },
+            { key: "screenGuide", text: "Screen Guide" },
             { key: "pipeline", text: "Pipeline Inspector" },
         ],
     },

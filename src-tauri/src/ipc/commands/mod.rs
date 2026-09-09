@@ -67,6 +67,9 @@ pub use retrieval::{
 mod companion;
 pub use companion::*;
 
+mod screen_guide;
+pub use screen_guide::*;
+
 #[cfg(test)]
 mod daily_summary_tests {
     use crate::embedding::{Embedder, EmbeddingBackend};

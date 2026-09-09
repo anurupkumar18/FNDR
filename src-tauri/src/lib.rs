@@ -302,6 +302,15 @@ pub struct AppState {
     pub graph: GraphStore,
     pub is_paused: AtomicBool,
     pub is_incognito: AtomicBool,
+    /// Non-zero while a Screen Guide generation owns an ephemeral on-screen
+    /// interaction. The ordinary memory capture loop must not sample during
+    /// that interval, including the brief moments when the guide hides itself
+    /// to inspect the underlying display.
+    pub screen_guide_capture_generation: AtomicU64,
+    /// Monotonic boundary marker for Screen Guide suppression transitions.
+    /// The capture loop compares this around the OS screenshot call so a full
+    /// start/finish cycle cannot masquerade as the inactive state (ABA).
+    pub screen_guide_capture_epoch: AtomicU64,
     pub frames_captured: AtomicU64,
     pub frames_dropped: AtomicU64,
     pub last_capture_time: AtomicU64,
@@ -382,6 +391,8 @@ impl AppState {
             graph,
             is_paused: AtomicBool::new(false),
             is_incognito: AtomicBool::new(false),
+            screen_guide_capture_generation: AtomicU64::new(0),
+            screen_guide_capture_epoch: AtomicU64::new(0),
             frames_captured: AtomicU64::new(0),
             frames_dropped: AtomicU64::new(0),
             last_capture_time: AtomicU64::new(0),

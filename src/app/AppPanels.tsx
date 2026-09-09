@@ -16,6 +16,7 @@ import { SearchHistoryPanel } from "@/domains/workspace/SearchHistoryPanel";
 import { StatsPanel } from "@/domains/workspace/StatsPanel";
 import { TimeTrackingPanel } from "@/domains/workspace/TimeTrackingPanel";
 import { TodoPanel } from "@/domains/workspace/TodoPanel";
+import { ScreenGuidePanel } from "@/domains/screen-guide/ScreenGuidePanel";
 import { AppToasts } from "./AppToasts";
 import { PanelErrorBoundary } from "./PanelErrorBoundary";
 import type { AppToast } from "./types";
@@ -138,6 +139,7 @@ export function AppPanels({
                 onSearchApp={onSearchApp}
             />
             <FocusModePanel isVisible={activePanel === "focusMode"} onClose={onClosePanel} />
+            <ScreenGuidePanel isVisible={activePanel === "screenGuide"} onClose={onClosePanel} />
             <CommandPalette
                 isOpen={showCommandPalette}
                 onClose={onCloseCommandPalette}

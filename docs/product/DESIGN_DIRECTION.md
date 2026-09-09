@@ -60,6 +60,10 @@ FNDR is a **local-first, privacy-focused memory assistant** for macOS. It contin
 4. **Graph as Insight**: The knowledge graph is not just storage—it's a visualization tool for understanding your digital life patterns.
 5. **Privacy Visible**: Capture status, blocklist controls, and incognito mode are always accessible.
 
+### Screen Guide overlay
+
+Screen Guide should feel like a small native FNDR affordance, not a second app. Its panel uses the existing warm surfaces and typography; its transient point cue uses a restrained blue marker so it remains distinct from orange primary actions. The answer is always available as text, speech is optional, the overlay never intercepts clicks, and Reduce Motion replaces travel animation with a simple appearance at the target.
+
 ### Color System
 
 - **Background**: Warm white (#FAF9F6) with subtle grain

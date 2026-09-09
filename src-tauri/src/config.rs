@@ -83,6 +83,7 @@ pub const DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN: f32 = 0.60;
 pub const DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX: f32 = 0.50;
 pub const DEFAULT_MEMORY_CONTEXT_MIN_CHARS: u32 = 220;
 pub const DEFAULT_MEMORY_CONTEXT_MAX_CHARS: u32 = 1800;
+pub const DEFAULT_SCREEN_GUIDE_SHORTCUT: &str = "Control+Alt+Space";
 
 /// Local text embedding configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -593,6 +594,60 @@ impl AutofillConfig {
     }
 }
 
+/// Local, ephemeral guidance over the screen currently visible to the user.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScreenGuideConfig {
+    /// Screen Guide is opt-in because it can use screen and microphone access.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Push-to-talk shortcut handled by the native global-shortcut plugin.
+    #[serde(default = "default_screen_guide_shortcut")]
+    pub shortcut: String,
+    /// Read locally generated answers through the macOS `say` process.
+    #[serde(default = "default_true")]
+    pub speak_responses: bool,
+    /// Animate the pointer from its current location to a grounded screen cue.
+    #[serde(default = "default_true")]
+    pub show_cursor: bool,
+}
+
+impl Default for ScreenGuideConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            shortcut: default_screen_guide_shortcut(),
+            speak_responses: true,
+            show_cursor: true,
+        }
+    }
+}
+
+impl ScreenGuideConfig {
+    pub fn normalized(mut self) -> Self {
+        self.shortcut = self.shortcut.trim().to_string();
+        if self.shortcut.is_empty() {
+            self.shortcut = default_screen_guide_shortcut();
+        }
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        let shortcut = self
+            .shortcut
+            .parse::<tauri_plugin_global_shortcut::Shortcut>()
+            .map_err(|err| format!("Invalid Screen Guide shortcut '{}': {err}", self.shortcut))?;
+        let safe_modifiers = tauri_plugin_global_shortcut::Modifiers::CONTROL
+            | tauri_plugin_global_shortcut::Modifiers::ALT
+            | tauri_plugin_global_shortcut::Modifiers::SUPER;
+        if !shortcut.mods.intersects(safe_modifiers) {
+            return Err(
+                "Screen Guide shortcut must include Control, Alt/Option, or Command.".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -639,6 +694,9 @@ pub struct Config {
     /// Intelligent Screen Auto-Fill configuration.
     #[serde(default)]
     pub autofill: AutofillConfig,
+    /// Click-through, local-only Screen Guide configuration.
+    #[serde(default)]
+    pub screen_guide: ScreenGuideConfig,
     /// Authoritative local embedding model contract.
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -985,6 +1043,14 @@ fn default_autofill_max_candidates() -> usize {
     4
 }
 
+fn default_screen_guide_shortcut() -> String {
+    DEFAULT_SCREEN_GUIDE_SHORTCUT.to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -1010,6 +1076,7 @@ impl Default for Config {
             proactive_surface_enabled: true,
             decay_half_life_days: 21,
             autofill: AutofillConfig::default(),
+            screen_guide: ScreenGuideConfig::default(),
             embedding: EmbeddingConfig::default(),
             chunking: ChunkingConfig::default(),
             search: SearchConfig::default(),
@@ -1027,6 +1094,7 @@ impl Config {
         self.blocklist = dedupe_trimmed(self.blocklist);
         self.dismissed_privacy_alerts = dedupe_trimmed(self.dismissed_privacy_alerts);
         self.autofill = self.autofill.normalized();
+        self.screen_guide = self.screen_guide.normalized();
         self.embedding = self.embedding.normalized();
         self.chunking = self.chunking.normalized();
         self.search = self.search.normalized();
@@ -1050,6 +1118,12 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        // Screen Guide is optional. A stale or manually edited shortcut must
+        // not prevent FNDR's core capture/search runtime from starting while
+        // the feature is disabled; enabling or saving it validates strictly.
+        if self.screen_guide.enabled {
+            self.screen_guide.validate()?;
+        }
         if self.embedding.dimension == 0 {
             return Err("Embedding dimension must be greater than zero".to_string());
         }
@@ -1147,6 +1221,67 @@ mod tests {
             .normalized()
             .validate()
             .expect("default config should stay internally consistent");
+    }
+
+    #[test]
+    fn screen_guide_defaults_are_private_and_ready_for_local_guidance() {
+        let config = Config::default().normalized();
+
+        assert!(!config.screen_guide.enabled);
+        assert_eq!(config.screen_guide.shortcut, "Control+Alt+Space");
+        assert!(config.screen_guide.speak_responses);
+        assert!(config.screen_guide.show_cursor);
+    }
+
+    #[test]
+    fn screen_guide_normalizes_blank_shortcut_and_rejects_invalid_shortcut() {
+        let normalized = ScreenGuideConfig {
+            shortcut: "   ".to_string(),
+            ..ScreenGuideConfig::default()
+        }
+        .normalized();
+        assert_eq!(normalized.shortcut, "Control+Alt+Space");
+
+        let invalid = ScreenGuideConfig {
+            shortcut: "not a shortcut".to_string(),
+            ..ScreenGuideConfig::default()
+        };
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn screen_guide_rejects_typing_keys_and_shift_only_shortcuts() {
+        for shortcut in ["A", "Space", "Shift+A"] {
+            let config = ScreenGuideConfig {
+                shortcut: shortcut.to_string(),
+                ..ScreenGuideConfig::default()
+            };
+
+            assert!(
+                config.validate().is_err(),
+                "{shortcut} must not become a global Screen Guide trigger"
+            );
+        }
+
+        for shortcut in ["Control+A", "Alt+Space", "Super+Shift+G"] {
+            let config = ScreenGuideConfig {
+                shortcut: shortcut.to_string(),
+                ..ScreenGuideConfig::default()
+            };
+
+            assert!(config.validate().is_ok(), "{shortcut} should be safe");
+        }
+    }
+
+    #[test]
+    fn disabled_screen_guide_with_invalid_shortcut_does_not_block_startup() {
+        let mut config = Config::default();
+        config.screen_guide.shortcut = "not a shortcut".to_string();
+
+        assert!(config.clone().normalized().validate().is_ok());
+
+        config.screen_guide.enabled = true;
+        assert!(config.normalized().validate().is_err());
     }
 
     #[test]

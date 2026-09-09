@@ -62,7 +62,8 @@ export type PanelKey =
     | "automation"
     | "research"
     | "timeTracking"
-    | "focusMode";
+    | "focusMode"
+    | "screenGuide";
 
 // ── Command registry ──────────────────────────────────────────────────────────
 
@@ -75,6 +76,14 @@ const COMMANDS: Command[] = [
         category: "navigate",
         keywords: ["context", "current", "active", "now"],
         run: ({ onOpenPanel }) => onOpenPanel("focusSession"),
+    },
+    {
+        id: "screen-guide",
+        label: "Screen Guide",
+        description: "Ask about the main display with voice or text",
+        category: "navigate",
+        keywords: ["screen", "voice", "cursor", "help", "guide"],
+        run: ({ onOpenPanel }) => onOpenPanel("screenGuide"),
     },
     {
         id: "memory-cards",

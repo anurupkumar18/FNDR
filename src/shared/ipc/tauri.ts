@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 
 export interface SearchResult {
     id: string;
@@ -1929,6 +1929,158 @@ export async function getFocusStatus(): Promise<FocusStatus> {
     return invoke<FocusStatus>("get_focus_status");
 }
 
+// Screen Guide
+export interface ScreenGuideSettings {
+    enabled: boolean;
+    shortcut: string;
+    speak_responses: boolean;
+    show_cursor: boolean;
+}
+
+export interface ScreenGuideHistoryEntry {
+    role: "user" | "assistant";
+    content: string;
+}
+
+export interface ScreenGuidePointCue {
+    /** Horizontal position normalized to the current screen (0..1). */
+    x: number;
+    /** Vertical position normalized to the current screen (0..1). */
+    y: number;
+    label?: string | null;
+}
+
+export interface ScreenGuideAnswer {
+    answer: string;
+    point_cue: ScreenGuidePointCue | null;
+}
+
+export interface ScreenGuideCursorPosition {
+    /** Overlay-local logical pixels. */
+    x: number;
+    /** Overlay-local logical pixels. */
+    y: number;
+}
+
+export type ScreenGuidePhase =
+    | "idle"
+    | "listening"
+    | "transcribing"
+    | "thinking"
+    | "answer"
+    | "error";
+
+export interface ScreenGuideStateEvent {
+    phase: ScreenGuidePhase;
+    message?: string | null;
+}
+
+export interface ScreenGuideShortcutEvent {
+    action: "press" | "release" | "cancel";
+    generation: number;
+}
+
+export interface ScreenGuideSubmitEvent {
+    text: string;
+    generation: number;
+}
+
+export const SCREEN_GUIDE_SHORTCUT_EVENT = "screen-guide://shortcut";
+export const SCREEN_GUIDE_SUBMIT_EVENT = "screen-guide://submit";
+export const SCREEN_GUIDE_STATE_EVENT = "screen-guide://state";
+
+export async function getScreenGuideSettings(): Promise<ScreenGuideSettings> {
+    return invoke<ScreenGuideSettings>("get_screen_guide_settings");
+}
+
+export async function setScreenGuideSettings(
+    settings: ScreenGuideSettings,
+): Promise<ScreenGuideSettings> {
+    return invoke<ScreenGuideSettings>("set_screen_guide_settings", { settings });
+}
+
+export async function screenGuidePress(): Promise<number> {
+    return invoke<number>("screen_guide_press");
+}
+
+export async function screenGuideRelease(generation: number): Promise<void> {
+    return invoke<void>("screen_guide_release", { generation });
+}
+
+export async function submitScreenGuideText(text: string): Promise<void> {
+    return invoke<void>("submit_screen_guide_text", { text });
+}
+
+export async function transcribeScreenGuideVoiceInput(
+    audioBytes: number[],
+    mimeType: string,
+    requestId: number,
+): Promise<VoiceTranscriptionResult> {
+    return invoke<VoiceTranscriptionResult>("transcribe_screen_guide_voice_input", {
+        audioBytes,
+        mimeType,
+        requestId,
+    });
+}
+
+export async function setScreenGuideOverlayReady(ready: boolean): Promise<void> {
+    return invoke<void>("set_screen_guide_overlay_ready", { ready });
+}
+
+export async function screenGuideMicrophoneStarted(generation: number): Promise<void> {
+    return invoke<void>("screen_guide_microphone_started", { generation });
+}
+
+export async function acknowledgeScreenGuideMicrophoneStopped(
+    generation: number,
+): Promise<boolean> {
+    return invoke<boolean>("acknowledge_screen_guide_microphone_stopped", { generation });
+}
+
+export async function askScreenGuide(
+    question: string,
+    requestId: number,
+    history: ScreenGuideHistoryEntry[] = [],
+): Promise<ScreenGuideAnswer> {
+    return invoke<ScreenGuideAnswer>("ask_screen_guide", { question, history, requestId });
+}
+
+export async function getScreenGuideCursorPosition(): Promise<ScreenGuideCursorPosition> {
+    return invoke<ScreenGuideCursorPosition>("get_screen_guide_cursor_position");
+}
+
+export async function finishScreenGuideVisual(requestId: number): Promise<boolean> {
+    return invoke<boolean>("finish_screen_guide_visual", { requestId });
+}
+
+export function onScreenGuideShortcut(
+    handler: (payload: ScreenGuideShortcutEvent) => void,
+): Promise<() => void> {
+    return listen<ScreenGuideShortcutEvent>(SCREEN_GUIDE_SHORTCUT_EVENT, (event) => {
+        handler(event.payload);
+    });
+}
+
+export function onScreenGuideSubmit(
+    handler: (payload: ScreenGuideSubmitEvent) => void,
+): Promise<() => void> {
+    return listen<ScreenGuideSubmitEvent>(SCREEN_GUIDE_SUBMIT_EVENT, (event) => {
+        handler(event.payload);
+    });
+}
+
+export function onScreenGuideState(
+    handler: (payload: ScreenGuideStateEvent) => void,
+): Promise<() => void> {
+    return listen<ScreenGuideStateEvent>(SCREEN_GUIDE_STATE_EVENT, (event) => {
+        handler(event.payload);
+    });
+}
+
+export async function emitScreenGuideState(state: ScreenGuideStateEvent): Promise<void> {
+    return emit(SCREEN_GUIDE_STATE_EVENT, state);
+}
+
 // Auto-fill
 export interface FieldContext {
     label: string;
@@ -1981,6 +2133,11 @@ export type AutofillOverlayPayload =
     | { error: string }
     | AutofillScanningState;
 
+export interface AutofillOverlayEvent {
+    requestId: number;
+    payload: AutofillOverlayPayload;
+}
+
 export async function getAutofillSettings(): Promise<AutofillSettings> {
     return invoke<AutofillSettings>("get_autofill_settings");
 }
@@ -1996,12 +2153,12 @@ export async function resolveAutofill(
     return invoke<AutofillResolution>("resolve_autofill", { context, queryOverride });
 }
 
-export async function injectText(text: string): Promise<void> {
-    return invoke("inject_text", { text });
+export async function injectText(text: string, requestId: number): Promise<void> {
+    return invoke("inject_text", { text, requestId });
 }
 
-export async function dismissAutofill(): Promise<void> {
-    return invoke("dismiss_autofill");
+export async function dismissAutofill(requestId?: number | null): Promise<boolean> {
+    return invoke<boolean>("dismiss_autofill", { requestId: requestId ?? null });
 }
 
 export const OMNIBAR_FOCUS_EVENT = "omnibar://focus";
@@ -2040,11 +2197,11 @@ export async function pasteClipboardEntry(text: string): Promise<void> {
 
 export async function setAutofillOverlayReady(
     ready: boolean,
-): Promise<AutofillOverlayPayload | null> {
+): Promise<AutofillOverlayEvent | null> {
     return invoke("set_autofill_overlay_ready", { ready });
 }
 
-export async function takePendingAutofillPayload(): Promise<AutofillOverlayPayload | null> {
+export async function takePendingAutofillPayload(): Promise<AutofillOverlayEvent | null> {
     return invoke("take_pending_autofill_payload");
 }
 

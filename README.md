@@ -48,6 +48,7 @@ FNDR addresses this by building a local, inspectable memory layer:
 | Semantic embeddings | Local ONNX embedder (`all-MiniLM-L6-v2`, 384-d) | Stable |
 | Hybrid retrieval | Semantic + keyword fusion and reranking (`src-tauri/src/search/`) | Stable |
 | Retrieval-grounded Q&A | `fndr_answer` / context runtime pipeline (`src-tauri/src/context_runtime/`) | Stable |
+| Screen Guide | Opt-in, local question answering over an ephemeral main-display capture, with text/speech and an OCR-grounded point cue | Experimental |
 | Local vector store | LanceDB-backed memory + graph tables | Stable |
 | Visual similarity retrieval | CLIP-based `image_embedding` + `find_visually_similar_memories` | Stable |
 | Insight knowledge graph | Typed node/edge tables + graph UI hooks | Stable |
@@ -142,8 +143,9 @@ Grant required macOS permissions during onboarding (screen capture/accessibility
 1. Keep FNDR running while working normally across apps.
 2. Use Search or Memory Vault to retrieve previous context.
 3. Use Ask-style queries (`fndr_answer`) for grounded recall over stored memories.
-4. Use workspace controls to pause/resume capture, manage blocklists, and inspect status.
-5. Optionally start MCP for external agent access to local memory tools.
+4. Open the Screen Guide panel, enable it, then use its shortcut or panel to ask about what is visible on the main display. The capture is ephemeral and the guide never clicks for you.
+5. Use workspace controls to pause/resume capture, manage blocklists, and inspect status.
+6. Optionally start MCP for external agent access to local memory tools.
 
 ---
 
@@ -255,4 +257,3 @@ fndr/
 FNDR follows an open-core model. The code in this repository is licensed under the [Apache License 2.0](LICENSE).
 
 Copyright 2026 Anurup Kumar.
-

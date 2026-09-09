@@ -1,7 +1,11 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex as StdMutex, OnceLock};
+use std::time::{Duration, Instant};
 
+use tokio::process::Command as AsyncCommand;
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
@@ -58,6 +62,14 @@ const ORPHEUS_MODEL: SpeechModelDefinition = SpeechModelDefinition {
 
 static SPEECH_DOWNLOAD_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
 static SPEECH_BOOTSTRAP_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+static SPEECH_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+static ACTIVE_TRANSCRIPTION_COMMANDS: AtomicUsize = AtomicUsize::new(0);
+static ACTIVE_VOICE_INPUTS: OnceLock<StdMutex<HashSet<PathBuf>>> = OnceLock::new();
+const TRANSCRIPTION_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn active_voice_inputs() -> &'static StdMutex<HashSet<PathBuf>> {
+    ACTIVE_VOICE_INPUTS.get_or_init(|| StdMutex::new(HashSet::new()))
+}
 
 fn download_lock() -> &'static AsyncMutex<()> {
     SPEECH_DOWNLOAD_LOCK.get_or_init(|| AsyncMutex::new(()))
@@ -106,6 +118,123 @@ pub fn make_tts_output_path(app_data_dir: &Path) -> PathBuf {
     voice_cache_dir(app_data_dir)
         .join("tts")
         .join(format!("speech-{}.wav", Uuid::new_v4()))
+}
+
+/// Owns a transient microphone recording and removes it on normal completion,
+/// error, timeout, or async task cancellation.
+struct TemporaryVoiceInput {
+    path: PathBuf,
+}
+
+impl TemporaryVoiceInput {
+    fn new(path: PathBuf) -> Self {
+        if let Ok(mut active) = active_voice_inputs().lock() {
+            active.insert(path.clone());
+        }
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryVoiceInput {
+    fn drop(&mut self) {
+        if let Ok(mut active) = active_voice_inputs().lock() {
+            active.remove(&self.path);
+        }
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("Failed to remove temporary voice input: {}", error);
+            }
+        }
+    }
+}
+
+struct ActiveTranscriptionCommand;
+
+impl ActiveTranscriptionCommand {
+    fn new() -> Self {
+        ACTIVE_TRANSCRIPTION_COMMANDS.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for ActiveTranscriptionCommand {
+    fn drop(&mut self) {
+        ACTIVE_TRANSCRIPTION_COMMANDS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+async fn wait_for_speech_shutdown() {
+    while !SPEECH_SHUTTING_DOWN.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Stop transient speech work before the desktop process exits. FNDR installs
+/// a deliberately process-lifetime Tokio runtime, so normal runtime drop cannot
+/// be relied on to cancel child processes or delete current microphone input.
+pub fn shutdown_speech() {
+    SPEECH_SHUTTING_DOWN.store(true, Ordering::SeqCst);
+    if let Ok(active) = active_voice_inputs().lock() {
+        for path in active.iter() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while ACTIVE_TRANSCRIPTION_COMMANDS.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if let Ok(active) = active_voice_inputs().lock() {
+        for path in active.iter() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// Removes microphone recordings left behind by an interrupted previous app
+/// process. Call this during startup, before a new transcription can begin.
+pub fn cleanup_stale_voice_inputs(app_data_dir: &Path) -> Result<usize, String> {
+    let input_dir = voice_cache_dir(app_data_dir).join("input");
+    let entries = match std::fs::read_dir(&input_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect temporary voice input directory: {}",
+                error
+            ))
+        }
+    };
+
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("Failed to inspect temporary voice input entry: {}", error))?;
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("voice-input-")
+        {
+            continue;
+        }
+
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Failed to inspect temporary voice input: {}", error))?;
+        if !file_type.is_file() && !file_type.is_symlink() {
+            continue;
+        }
+
+        std::fs::remove_file(entry.path())
+            .map_err(|error| format!("Failed to remove temporary voice input: {}", error))?;
+        removed += 1;
+    }
+
+    Ok(removed)
 }
 
 pub async fn ensure_model_downloaded(
@@ -293,9 +422,38 @@ fn find_python3() -> Option<PathBuf> {
     None
 }
 
+async fn run_transcription_command(
+    mut command: AsyncCommand,
+    timeout: Duration,
+    label: &str,
+) -> Result<Output, String> {
+    let _active = ActiveTranscriptionCommand::new();
+    if SPEECH_SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err(format!("{} cancelled during shutdown", label));
+    }
+    command.kill_on_drop(true);
+    let execution = tokio::time::timeout(timeout, command.output());
+    tokio::pin!(execution);
+    let result = tokio::select! {
+        result = &mut execution => result,
+        () = wait_for_speech_shutdown() => {
+            return Err(format!("{} cancelled during shutdown", label));
+        }
+    };
+    match result {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => Err(format!("{} failed to start: {}", label, error)),
+        Err(_) => Err(format!(
+            "{} timed out after {} seconds",
+            label,
+            timeout.as_secs()
+        )),
+    }
+}
+
 /// Try to run whisper via the `whisper-cli` binary (from `brew install whisper-cpp`).
 /// Returns the transcript on success, or None if the binary is unavailable / fails.
-fn try_whisper_cli_binary(model_path: &Path, audio_path: &Path) -> Option<String> {
+async fn try_whisper_cli_binary(model_path: &Path, audio_path: &Path) -> Option<String> {
     // whisper-cpp installs as `whisper-cli` on Homebrew
     let cli_paths: &[&str] = &[
         "/opt/homebrew/bin/whisper-cli",
@@ -303,19 +461,16 @@ fn try_whisper_cli_binary(model_path: &Path, audio_path: &Path) -> Option<String
         "whisper-cli",
     ];
     for &cli in cli_paths {
-        let output = Command::new(cli)
-            .args([
-                "-m",
-                &model_path.to_string_lossy(),
-                "-f",
-                &audio_path.to_string_lossy(),
-                "-l",
-                "en",
-                "--no-timestamps",
-                "-nt",
-            ])
-            .output();
-        if let Ok(out) = output {
+        let mut command = AsyncCommand::new(cli);
+        command
+            .arg("-m")
+            .arg(model_path)
+            .arg("-f")
+            .arg(audio_path)
+            .args(["-l", "en", "--no-timestamps", "-nt"]);
+        if let Ok(out) =
+            run_transcription_command(command, TRANSCRIPTION_COMMAND_TIMEOUT, "whisper-cli").await
+        {
             if out.status.success() {
                 let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if !text.is_empty() {
@@ -557,6 +712,9 @@ pub async fn transcribe_audio_bytes(
     if audio_bytes.is_empty() {
         return Err("Cannot transcribe empty audio input".to_string());
     }
+    if SPEECH_SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("Voice transcription is shutting down.".to_string());
+    }
 
     let extension = extension_from_mime(mime_type);
     let input_path = make_voice_input_path(app_data_dir, extension);
@@ -566,15 +724,17 @@ pub async fn transcribe_audio_bytes(
             .map_err(|e| format!("Failed to create voice input cache directory: {}", e))?;
     }
 
-    tokio::fs::write(&input_path, audio_bytes)
-        .await
+    let input = TemporaryVoiceInput::new(input_path);
+    // Voice inputs are short. Keeping this write synchronous ensures no detached
+    // filesystem task can recreate the path after cancellation drops the guard.
+    std::fs::write(input.path(), audio_bytes)
         .map_err(|e| format!("Failed to persist voice input: {}", e))?;
+    if SPEECH_SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("Voice transcription is shutting down.".to_string());
+    }
 
-    let result =
-        transcribe_audio_file_with_hint(app_data_dir, &input_path, TranscriptionHint::VoiceCommand)
-            .await;
-    let _ = tokio::fs::remove_file(&input_path).await;
-    result
+    transcribe_audio_file_with_hint(app_data_dir, input.path(), TranscriptionHint::VoiceCommand)
+        .await
 }
 
 pub async fn transcribe_audio_file(
@@ -599,43 +759,29 @@ async fn transcribe_audio_file_with_hint(
     let model_path = ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperBaseEn).await?;
 
     // Fast path: use the whisper-cli binary (brew install whisper-cpp) — no Python needed.
-    {
-        let model = model_path.clone();
-        let audio = audio_path.to_path_buf();
-        if let Some(text) =
-            tokio::task::spawn_blocking(move || try_whisper_cli_binary(&model, &audio))
-                .await
-                .ok()
-                .flatten()
-        {
-            let cleaned = normalize_transcript_text(&text);
-            if !cleaned.is_empty() {
-                return Ok(cleaned);
-            }
+    if let Some(text) = try_whisper_cli_binary(&model_path, audio_path).await {
+        let cleaned = normalize_transcript_text(&text);
+        if !cleaned.is_empty() {
+            return Ok(cleaned);
         }
     }
 
     ensure_whisper_backend().await?;
 
     if let Ok(custom_cmd) = std::env::var("FNDR_WHISPER_GGUF_COMMAND") {
-        let audio = audio_path.to_path_buf();
-        let model = model_path.clone();
-        let hint_value = hint.env_value().to_string();
-        let output = tokio::task::spawn_blocking(move || {
-            Command::new("sh")
-                .arg("-c")
-                .arg(custom_cmd)
-                .env("FNDR_AUDIO_PATH", audio.to_string_lossy().to_string())
-                .env(
-                    "FNDR_WHISPER_MODEL_PATH",
-                    model.to_string_lossy().to_string(),
-                )
-                .env("FNDR_TRANSCRIBE_HINT", hint_value)
-                .output()
-        })
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| format!("FNDR_WHISPER_GGUF_COMMAND failed to start: {}", e))?;
+        let mut command = AsyncCommand::new("sh");
+        command
+            .arg("-c")
+            .arg(custom_cmd)
+            .env("FNDR_AUDIO_PATH", audio_path)
+            .env("FNDR_WHISPER_MODEL_PATH", &model_path)
+            .env("FNDR_TRANSCRIBE_HINT", hint.env_value());
+        let output = run_transcription_command(
+            command,
+            TRANSCRIPTION_COMMAND_TIMEOUT,
+            "FNDR_WHISPER_GGUF_COMMAND",
+        )
+        .await?;
 
         if output.status.success() {
             let text = normalize_transcript_text(&String::from_utf8_lossy(&output.stdout));
@@ -651,22 +797,17 @@ async fn transcribe_audio_file_with_hint(
     let python = python_for_sidecar()
         .or_else(find_python3)
         .ok_or_else(|| "No usable python3 found for Whisper transcription. Install with: brew install python@3.13".to_string())?;
-    let audio = audio_path.to_path_buf();
-    let model = model_path.clone();
-    let sidecar_flag = hint.sidecar_flag().map(str::to_string);
-    let output = tokio::task::spawn_blocking(move || {
-        let mut cmd = Command::new(python);
-        cmd.arg(sidecar)
-            .arg(model.to_string_lossy().to_string())
-            .arg(audio.to_string_lossy().to_string());
-        if let Some(flag) = sidecar_flag {
-            cmd.arg(flag);
-        }
-        cmd.output()
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| format!("Failed launching Whisper GGUF runner: {}", e))?;
+    let mut command = AsyncCommand::new(python);
+    command.arg(sidecar).arg(&model_path).arg(audio_path);
+    if let Some(flag) = hint.sidecar_flag() {
+        command.arg(flag);
+    }
+    let output = run_transcription_command(
+        command,
+        TRANSCRIPTION_COMMAND_TIMEOUT,
+        "Whisper GGUF runner",
+    )
+    .await?;
 
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -757,4 +898,100 @@ pub async fn synthesize_speech(
     }
 
     Ok(output_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancelling_an_async_task_removes_its_temporary_voice_input() {
+        let app_data = tempfile::tempdir().expect("temporary app data directory");
+        let input_path = make_voice_input_path(app_data.path(), "wav");
+        std::fs::create_dir_all(input_path.parent().expect("voice input parent"))
+            .expect("create voice input directory");
+        std::fs::write(&input_path, b"private voice input").expect("write voice input");
+        let input = TemporaryVoiceInput::new(input_path.clone());
+
+        let task = tokio::spawn(async move {
+            std::future::pending::<()>().await;
+            drop(input);
+        });
+        tokio::task::yield_now().await;
+        task.abort();
+        let _ = task.await;
+
+        assert!(!input_path.exists());
+    }
+
+    #[test]
+    fn startup_cleanup_removes_only_abandoned_voice_inputs() {
+        let app_data = tempfile::tempdir().expect("temporary app data directory");
+        let input_dir = voice_cache_dir(app_data.path()).join("input");
+        std::fs::create_dir_all(&input_dir).expect("create voice input directory");
+        let abandoned = input_dir.join("voice-input-crashed.webm");
+        let unrelated = input_dir.join("keep-me.txt");
+        std::fs::write(&abandoned, b"private voice input").expect("write abandoned input");
+        std::fs::write(&unrelated, b"not managed by speech cleanup").expect("write unrelated file");
+
+        let removed = cleanup_stale_voice_inputs(app_data.path()).expect("clean stale inputs");
+
+        assert_eq!(removed, 1);
+        assert!(!abandoned.exists());
+        assert!(unrelated.exists());
+    }
+
+    #[tokio::test]
+    async fn transcription_command_times_out_without_finishing_later() {
+        let temp = tempfile::tempdir().expect("temporary command directory");
+        let marker = temp.path().join("finished");
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("sleep 1; touch \"$FNDR_TEST_MARKER\"")
+            .env("FNDR_TEST_MARKER", &marker);
+
+        let error = run_transcription_command(
+            command,
+            std::time::Duration::from_millis(25),
+            "test transcription",
+        )
+        .await
+        .expect_err("command should time out");
+
+        assert!(error.contains("timed out"));
+        tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+        assert!(!marker.exists(), "timed-out command kept running");
+    }
+
+    #[tokio::test]
+    async fn transcription_command_stops_when_its_async_task_is_cancelled() {
+        let temp = tempfile::tempdir().expect("temporary command directory");
+        let started = temp.path().join("started");
+        let finished = temp.path().join("finished");
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("touch \"$FNDR_TEST_STARTED\"; sleep 1; touch \"$FNDR_TEST_FINISHED\"")
+            .env("FNDR_TEST_STARTED", &started)
+            .env("FNDR_TEST_FINISHED", &finished);
+
+        let task = tokio::spawn(run_transcription_command(
+            command,
+            std::time::Duration::from_secs(5),
+            "test transcription",
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !started.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("test command should start");
+
+        task.abort();
+        let _ = task.await;
+        tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+        assert!(!finished.exists(), "cancelled command kept running");
+    }
 }

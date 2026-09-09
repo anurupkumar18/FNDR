@@ -1211,7 +1211,9 @@ fn validate_structured_memory_extraction(
         issues.push("activity_type_multi_option_dump".to_string());
     } else if !original_activity_type.trim().is_empty()
         && extraction.activity_type == "unknown"
-        && !original_activity_type.trim().eq_ignore_ascii_case("unknown")
+        && !original_activity_type
+            .trim()
+            .eq_ignore_ascii_case("unknown")
     {
         issues.push("activity_type_invalid".to_string());
     }
@@ -1406,8 +1408,7 @@ fn pad_with_structured(
         if !mem.user_intent.trim().is_empty() {
             extras.push(format!("Intent: {}", mem.user_intent.trim()));
         }
-        if !mem.workflow.trim().is_empty() && !mem.workflow.trim().eq_ignore_ascii_case("unknown")
-        {
+        if !mem.workflow.trim().is_empty() && !mem.workflow.trim().eq_ignore_ascii_case("unknown") {
             extras.push(format!("Workflow: {}", mem.workflow.trim()));
         }
         if !mem.files_touched.is_empty() {
@@ -1852,6 +1853,21 @@ fn emit_extraction_quality_anomaly(state: &AppState, payload: serde_json::Value)
     );
 }
 
+fn capture_is_suppressed_by_screen_guide(generation: u64) -> bool {
+    generation != 0
+}
+
+fn capture_overlapped_screen_guide(
+    epoch_before: u64,
+    epoch_after: u64,
+    epoch_confirmed: u64,
+    generation_after: u64,
+) -> bool {
+    capture_is_suppressed_by_screen_guide(generation_after)
+        || epoch_before != epoch_after
+        || epoch_after != epoch_confirmed
+}
+
 /// Run the main capture loop
 pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Initializing capture pipeline...");
@@ -2013,6 +2029,18 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
+        // Screen Guide is deliberately ephemeral. Do not let the ordinary
+        // memory pipeline sample either its overlay or the underlying target
+        // while a guide turn owns the screen, even while that overlay is
+        // briefly hidden for its own privacy-checked capture.
+        let screen_guide_capture_epoch = state.screen_guide_capture_epoch.load(Ordering::SeqCst);
+        if capture_is_suppressed_by_screen_guide(
+            state.screen_guide_capture_generation.load(Ordering::SeqCst),
+        ) {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+
         // Calculate sleep duration based on FPS
         let fps = sampler.get_current_fps(&config);
         if fps <= 0.0 {
@@ -2065,6 +2093,18 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let url = macos::get_browser_url(&app_name);
         if let Some(ref u) = url {
             tracing::info!("Frontmost browser URL: {}", u);
+        }
+
+        // Close the race where Screen Guide starts after the loop-level gate
+        // but before a URL-only record or pixel capture is admitted.
+        if capture_overlapped_screen_guide(
+            screen_guide_capture_epoch,
+            state.screen_guide_capture_epoch.load(Ordering::SeqCst),
+            state.screen_guide_capture_epoch.load(Ordering::SeqCst),
+            state.screen_guide_capture_generation.load(Ordering::SeqCst),
+        ) {
+            tokio::time::sleep(sleep_duration).await;
+            continue;
         }
 
         if let Some(reason) = capture_context_skip_reason(
@@ -2212,6 +2252,18 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             };
             record.dedup_fingerprint =
                 deterministic_dedup_fingerprint(&record, Some(&record.memory_context));
+            let screen_guide_epoch_after = state.screen_guide_capture_epoch.load(Ordering::SeqCst);
+            let screen_guide_generation_after =
+                state.screen_guide_capture_generation.load(Ordering::SeqCst);
+            if capture_overlapped_screen_guide(
+                screen_guide_capture_epoch,
+                screen_guide_epoch_after,
+                state.screen_guide_capture_epoch.load(Ordering::SeqCst),
+                screen_guide_generation_after,
+            ) {
+                tokio::time::sleep(sleep_duration).await;
+                continue;
+            }
             batch.push(record);
             batch_outcomes.push(crate::StoreOutcome::UrlOnly);
             if force_capture {
@@ -2238,7 +2290,16 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
-        // Capture screen
+        // Capture screen. Check on both sides of the synchronous OS call: if
+        // Screen Guide appeared while the call was in flight, discard these
+        // bytes before hashing, OCR, inference, or storage can observe them.
+        let screen_guide_capture_epoch = state.screen_guide_capture_epoch.load(Ordering::SeqCst);
+        if capture_is_suppressed_by_screen_guide(
+            state.screen_guide_capture_generation.load(Ordering::SeqCst),
+        ) {
+            tokio::time::sleep(sleep_duration).await;
+            continue;
+        }
         let capture_result = macos::capture_screen();
         let image_data = match capture_result {
             Ok(data) => data,
@@ -2251,6 +2312,20 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 continue;
             }
         };
+        let screen_guide_capture_epoch_after =
+            state.screen_guide_capture_epoch.load(Ordering::SeqCst);
+        let screen_guide_generation_after =
+            state.screen_guide_capture_generation.load(Ordering::SeqCst);
+        if capture_overlapped_screen_guide(
+            screen_guide_capture_epoch,
+            screen_guide_capture_epoch_after,
+            state.screen_guide_capture_epoch.load(Ordering::SeqCst),
+            screen_guide_generation_after,
+        ) {
+            drop(image_data);
+            tokio::time::sleep(sleep_duration).await;
+            continue;
+        }
 
         // Deduplication check
         let is_duplicate = hasher.is_duplicate(&image_data, config.dedupe_threshold);
@@ -5501,6 +5576,17 @@ fn should_text_heavy_override(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screen_guide_generation_suppresses_durable_capture() {
+        assert!(!capture_is_suppressed_by_screen_guide(0));
+        assert!(capture_is_suppressed_by_screen_guide(1));
+        assert!(capture_is_suppressed_by_screen_guide(u64::MAX));
+        assert!(!capture_overlapped_screen_guide(4, 4, 4, 0));
+        assert!(capture_overlapped_screen_guide(4, 5, 5, 0));
+        assert!(capture_overlapped_screen_guide(4, 4, 5, 0));
+        assert!(capture_overlapped_screen_guide(4, 4, 4, 12));
+    }
 
     fn merge_test_record(id: &str) -> MemoryRecord {
         MemoryRecord {

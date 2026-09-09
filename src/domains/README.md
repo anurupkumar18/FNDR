@@ -8,6 +8,7 @@ FNDR UI is grouped by **product domain** (search, memory vault, timeline, worksp
 | **`search/`** | Search bar, placeholders, search tests. |
 | **`timeline/`** | Timeline stream, `timelineConfig`, timeline tests. |
 | **`command-palette/`** | Command palette + exported `PanelKey`. |
+| **`screen-guide/`** | Local, ephemeral on-screen guidance panel, overlay, interaction state, and tests. |
 | **`workspace/`** | Full-screen panels (agent, meetings, stats, onboarding, etc.). |
 
 Cross-cutting code lives under **`src/shared/`** (`ipc` for Tauri invokes, `hooks`, `utils`, `theme`). The app shell lives under **`src/app/`**. Use the **`@/`** path alias (`tsconfig.json`) instead of deep relative imports.

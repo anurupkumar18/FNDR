@@ -6,11 +6,14 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, msg_send_id};
-use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
+use objc2_foundation::{CGRect, NSArray, NSData, NSDictionary, NSString};
 use regex::Regex;
 
 use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
+
+const OCR_DROP_THRESHOLD: f32 = 0.40;
+const OCR_LOW_CONF_THRESHOLD: f32 = 0.65;
 
 /// Errors that can occur during OCR operations
 #[derive(Debug, thiserror::Error)]
@@ -176,6 +179,46 @@ impl RecognizedText {
     }
 }
 
+/// One Apple Vision OCR line that is safe to use as a Screen Guide point target.
+/// Coordinates are normalized to the captured image with a top-left origin.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScreenGuideOcrLine {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Transient OCR evidence for Screen Guide.
+///
+/// `plain_text` intentionally includes every non-empty recognized candidate so
+/// the privacy safety gate can inspect more than the higher-confidence lines
+/// that are eligible to drive a point cue.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScreenGuideOcr {
+    pub plain_text: String,
+    pub lines: Vec<ScreenGuideOcrLine>,
+}
+
+impl ScreenGuideOcr {
+    /// Render evidence for the local model. `[LOC]` is deliberately distinct
+    /// from the model's `[POINT]` output contract, and the structured `lines`
+    /// remain available for validating any returned coordinates.
+    pub fn position_annotated_text(&self) -> String {
+        self.lines
+            .iter()
+            .map(|line| format!("[LOC:{:.4},{:.4}] {}", line.x, line.y, line.text))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RawOcrLine {
+    text: String,
+    confidence: f32,
+    bounds: CGRect,
+}
+
 /// OCR Engine using Apple Vision framework
 pub struct OcrEngine {
     config: Arc<OcrConfig>,
@@ -233,25 +276,22 @@ impl OcrEngine {
         image_data: &[u8],
     ) -> Result<(RecognizedText, String), OcrError> {
         unsafe {
-            let ns_data =
-                NSData::dataWithBytes_length(image_data.as_ptr() as *mut c_void, image_data.len());
-
-            let handler = self.create_image_request_handler(&ns_data)?;
-            let request = self.create_text_request()?;
-            self.perform_request(&handler, &request)?;
-
             // Collect all per-line data transiently (never stored).
-            let raw_lines = self.extract_raw_lines(&request)?;
+            let raw_lines = self.recognize_raw_lines(image_data)?;
 
             // Compute true average confidence from ALL lines.
             let avg_confidence_all = if raw_lines.is_empty() {
                 0.0
             } else {
-                raw_lines.iter().map(|(_, c)| c).sum::<f32>() / raw_lines.len() as f32
+                raw_lines.iter().map(|line| line.confidence).sum::<f32>() / raw_lines.len() as f32
             };
 
             // Build normalized text and compute aggregate stats from all lines.
-            let (cleaned_text, ocr_stats_from_all) = preprocess_ocr_for_qwen(&raw_lines);
+            let text_and_confidence = raw_lines
+                .iter()
+                .map(|line| (line.text.clone(), line.confidence))
+                .collect::<Vec<_>>();
+            let (cleaned_text, ocr_stats_from_all) = preprocess_ocr_for_qwen(&text_and_confidence);
 
             // For the text field, apply noise filter on top of the preprocessed output.
             let normalized = self.normalize_text(&cleaned_text);
@@ -269,6 +309,49 @@ impl OcrEngine {
                 cleaned_text,
             ))
         }
+    }
+
+    /// Recognize transient Screen Guide evidence with one Vision request.
+    ///
+    /// Plain text is retained for privacy inspection. Only finite observations
+    /// at or above the existing OCR confidence floor receive point coordinates.
+    pub fn recognize_screen_guide(&self, image_data: &[u8]) -> Result<ScreenGuideOcr, OcrError> {
+        unsafe {
+            let raw_lines = self.recognize_raw_lines(image_data)?;
+            let plain_text = raw_lines
+                .iter()
+                .map(|line| line.text.trim())
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let mut lines = Vec::with_capacity(raw_lines.len());
+            let mut previous_key: Option<String> = None;
+            for raw_line in raw_lines {
+                let Some(line) =
+                    screen_guide_line(&raw_line.text, raw_line.confidence, raw_line.bounds)
+                else {
+                    continue;
+                };
+                let key = line.text.to_lowercase();
+                if previous_key.as_deref() == Some(&key) {
+                    continue;
+                }
+                previous_key = Some(key);
+                lines.push(line);
+            }
+
+            Ok(ScreenGuideOcr { plain_text, lines })
+        }
+    }
+
+    unsafe fn recognize_raw_lines(&self, image_data: &[u8]) -> Result<Vec<RawOcrLine>, OcrError> {
+        let ns_data =
+            NSData::dataWithBytes_length(image_data.as_ptr() as *mut c_void, image_data.len());
+        let handler = self.create_image_request_handler(&ns_data)?;
+        let request = self.create_text_request()?;
+        self.perform_request(&handler, &request)?;
+        self.extract_raw_lines(&request)
     }
 
     unsafe fn create_image_request_handler(
@@ -337,10 +420,7 @@ impl OcrEngine {
 
     /// Extract per-line (text, confidence) pairs from Apple Vision results.
     /// Collects ALL lines (including low-confidence) so averages are accurate.
-    unsafe fn extract_raw_lines(
-        &self,
-        request: &AnyObject,
-    ) -> Result<Vec<(String, f32)>, OcrError> {
+    unsafe fn extract_raw_lines(&self, request: &AnyObject) -> Result<Vec<RawOcrLine>, OcrError> {
         let results: *const AnyObject = msg_send![request, results];
         if results.is_null() {
             return Ok(Vec::new());
@@ -375,12 +455,17 @@ impl OcrEngine {
             }
 
             let confidence: f32 = msg_send![candidate, confidence];
+            let bounds: CGRect = msg_send![observation, boundingBox];
 
             let ns_string: *const NSString = msg_send![candidate, string];
             if !ns_string.is_null() {
                 let text = (*ns_string).to_string();
                 if !text.trim().is_empty() {
-                    lines.push((text, confidence));
+                    lines.push(RawOcrLine {
+                        text,
+                        confidence,
+                        bounds,
+                    });
                 }
             }
         }
@@ -434,6 +519,48 @@ impl OcrEngine {
 
         result
     }
+}
+
+fn normalized_top_left_center(bounds: CGRect) -> Option<(f64, f64)> {
+    let values = [
+        bounds.origin.x,
+        bounds.origin.y,
+        bounds.size.width,
+        bounds.size.height,
+    ];
+    if values.iter().any(|value| !value.is_finite())
+        || bounds.size.width <= 0.0
+        || bounds.size.height <= 0.0
+    {
+        return None;
+    }
+
+    let center_x = bounds.origin.x + bounds.size.width / 2.0;
+    let center_y_from_bottom = bounds.origin.y + bounds.size.height / 2.0;
+    if !center_x.is_finite() || !center_y_from_bottom.is_finite() {
+        return None;
+    }
+
+    Some((
+        center_x.clamp(0.0, 1.0),
+        (1.0 - center_y_from_bottom).clamp(0.0, 1.0),
+    ))
+}
+
+fn normalize_ocr_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn screen_guide_line(text: &str, confidence: f32, bounds: CGRect) -> Option<ScreenGuideOcrLine> {
+    if !confidence.is_finite() || !(OCR_DROP_THRESHOLD..=1.0).contains(&confidence) {
+        return None;
+    }
+    let text = normalize_ocr_line(text);
+    if text.is_empty() {
+        return None;
+    }
+    let (x, y) = normalized_top_left_center(bounds)?;
+    Some(ScreenGuideOcrLine { text, x, y })
 }
 
 impl Default for OcrEngine {
@@ -640,9 +767,6 @@ pub fn text_volume_qualifies(char_count: usize, ocr_confidence: f32, block_count
 /// - Applies basic normalization (de-duplicate consecutive whitespace)
 /// - Returns aggregate-only stats (safe to persist); cleaned text is transient
 pub fn preprocess_ocr_for_qwen(lines: &[(String, f32)]) -> (String, OcrAggregateStats) {
-    const DROP_THRESHOLD: f32 = 0.40;
-    const LOW_CONF_THRESHOLD: f32 = 0.65;
-
     // DEBUG: Log raw OCR lines before filtering
     let confidence_dist = lines.iter().map(|(_, c)| c).cloned().collect::<Vec<_>>();
     if !confidence_dist.is_empty() {
@@ -659,7 +783,7 @@ pub fn preprocess_ocr_for_qwen(lines: &[(String, f32)]) -> (String, OcrAggregate
             lines.len(),
             min_conf,
             max_conf,
-            DROP_THRESHOLD
+            OCR_DROP_THRESHOLD
         );
     }
 
@@ -674,13 +798,13 @@ pub fn preprocess_ocr_for_qwen(lines: &[(String, f32)]) -> (String, OcrAggregate
     let mut prev_key: Option<String> = None;
 
     for (text, conf) in lines {
-        if *conf < DROP_THRESHOLD {
+        if *conf < OCR_DROP_THRESHOLD {
             lines_dropped += 1;
             continue;
         }
 
         // Normalize whitespace inline
-        let normalized: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let normalized = normalize_ocr_line(text);
         if normalized.is_empty() {
             lines_dropped += 1;
             continue;
@@ -693,7 +817,7 @@ pub fn preprocess_ocr_for_qwen(lines: &[(String, f32)]) -> (String, OcrAggregate
         }
         prev_key = Some(key);
 
-        let line = if *conf < LOW_CONF_THRESHOLD {
+        let line = if *conf < OCR_LOW_CONF_THRESHOLD {
             low_conf_count += 1;
             format!("[LOW_CONF] {}", normalized)
         } else {
@@ -847,5 +971,56 @@ mod tests {
     fn test_minimum_text_height_default() {
         let config = OcrConfig::default();
         assert_eq!(config.minimum_text_height, 0.02);
+    }
+
+    #[test]
+    fn screen_guide_center_flips_vision_y_to_top_left() {
+        let bounds = objc2_foundation::CGRect::new(
+            objc2_foundation::CGPoint::new(0.20, 0.60),
+            objc2_foundation::CGSize::new(0.20, 0.20),
+        );
+
+        let (x, y) = normalized_top_left_center(bounds).expect("valid Vision bounds");
+
+        assert!((x - 0.30).abs() < f64::EPSILON);
+        assert!((y - 0.30).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn screen_guide_center_clamps_finite_out_of_range_observations() {
+        let bounds = objc2_foundation::CGRect::new(
+            objc2_foundation::CGPoint::new(-0.30, 1.10),
+            objc2_foundation::CGSize::new(0.10, 0.10),
+        );
+
+        assert_eq!(normalized_top_left_center(bounds), Some((0.0, 0.0)));
+
+        let invalid = objc2_foundation::CGRect::new(
+            objc2_foundation::CGPoint::new(f64::NAN, 0.10),
+            objc2_foundation::CGSize::new(0.10, 0.10),
+        );
+        assert_eq!(normalized_top_left_center(invalid), None);
+    }
+
+    #[test]
+    fn screen_guide_lines_filter_low_confidence_and_format_copyable_evidence() {
+        let bounds = objc2_foundation::CGRect::new(
+            objc2_foundation::CGPoint::new(0.20, 0.60),
+            objc2_foundation::CGSize::new(0.10, 0.20),
+        );
+
+        assert!(screen_guide_line("Ignore me", 0.39, bounds).is_none());
+        let line =
+            screen_guide_line("  Save   changes  ", 0.90, bounds).expect("eligible OCR line");
+        let result = ScreenGuideOcr {
+            plain_text: "Save changes".to_string(),
+            lines: vec![line],
+        };
+
+        assert_eq!(result.lines[0].text, "Save changes");
+        assert_eq!(
+            result.position_annotated_text(),
+            "[LOC:0.2500,0.3000] Save changes"
+        );
     }
 }

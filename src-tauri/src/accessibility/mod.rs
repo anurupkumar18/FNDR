@@ -191,7 +191,37 @@ struct AutofillTarget {
     element_role: String,
 }
 
-static AUTOFILL_TARGET: Lazy<Mutex<Option<AutofillTarget>>> = Lazy::new(|| Mutex::new(None));
+#[derive(Debug, Clone)]
+struct StoredAutofillTarget {
+    request_id: Option<u64>,
+    target: AutofillTarget,
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingAutofillTarget(Option<AutofillTarget>);
+
+pub(crate) fn clear_autofill_target() {
+    *AUTOFILL_TARGET.lock() = None;
+}
+
+pub(crate) fn clear_autofill_target_for_request(request_id: u64) {
+    let mut stored = AUTOFILL_TARGET.lock();
+    if stored
+        .as_ref()
+        .is_some_and(|target| target.request_id == Some(request_id))
+    {
+        *stored = None;
+    }
+}
+
+pub(crate) fn commit_autofill_target(request_id: u64, pending: PendingAutofillTarget) {
+    *AUTOFILL_TARGET.lock() = pending.0.map(|target| StoredAutofillTarget {
+        request_id: Some(request_id),
+        target,
+    });
+}
+
+static AUTOFILL_TARGET: Lazy<Mutex<Option<StoredAutofillTarget>>> = Lazy::new(|| Mutex::new(None));
 
 fn truncate_chars(input: &str, max_chars: usize) -> String {
     let mut chars = input.chars();
@@ -323,15 +353,17 @@ fn infer_label_from_screen_context(text: &str) -> String {
     }
 }
 
-fn capture_screen_context() -> String {
-    let image = match crate::capture::macos::capture_screen() {
-        Ok(image) => image,
+fn capture_screen_context_image() -> Option<Vec<u8>> {
+    match crate::capture::macos::capture_screen() {
+        Ok(image) => Some(image),
         Err(err) => {
             tracing::debug!("autofill: screen OCR capture failed: {err}");
-            return String::new();
+            None
         }
-    };
+    }
+}
 
+fn recognize_screen_context(image: &[u8]) -> String {
     let engine = match OcrEngine::with_config(OcrConfig::high_quality()) {
         Ok(engine) => engine,
         Err(err) => {
@@ -443,7 +475,18 @@ end tell"#
 }
 
 pub fn restore_target_app_focus() {
-    if let Some(target) = AUTOFILL_TARGET.lock().clone() {
+    if let Some(stored) = AUTOFILL_TARGET.lock().clone() {
+        let _ = activate_target_app(stored.target.pid);
+    }
+}
+
+pub(crate) fn restore_target_app_focus_for_request(request_id: u64) {
+    let target = AUTOFILL_TARGET
+        .lock()
+        .as_ref()
+        .filter(|stored| stored.request_id == Some(request_id))
+        .map(|stored| stored.target.clone());
+    if let Some(target) = target {
         let _ = activate_target_app(target.pid);
     }
 }
@@ -503,7 +546,8 @@ pub fn has_accessibility_permission() -> bool {
 ///
 /// Must be called while the target field still has focus (i.e., in the hotkey handler
 /// before the FNDR window is raised).
-pub fn capture_focused_context() -> Result<FieldContext, String> {
+pub(crate) fn capture_focused_context_snapshot(
+) -> Result<(FieldContext, Option<Vec<u8>>, PendingAutofillTarget), String> {
     if !has_accessibility_permission() {
         return Err("Accessibility permission not granted. Enable FNDR in System Settings → Privacy → Accessibility.".to_string());
     }
@@ -587,49 +631,95 @@ pub fn capture_focused_context() -> Result<FieldContext, String> {
 
         CFRelease(focused_el);
 
-        // 5. Persist target identity for inject_text — used to detect focus drift.
-        *AUTOFILL_TARGET.lock() = pid_opt.map(|p| AutofillTarget {
+        // 5. Return target identity for an epoch-guarded commit by the caller.
+        // A superseded capture must never overwrite the field owned by a
+        // newer Autofill request.
+        let pending_target = PendingAutofillTarget(pid_opt.map(|p| AutofillTarget {
             pid: p,
             element_role: element_role.clone(),
-        });
+        }));
 
-        // Only run OCR when AX metadata is absent — it costs 3-5 seconds.
-        // When the AX tree gave us a usable label, return immediately without OCR.
-        let (screen_context, inferred_label) = if label.is_empty() {
-            let ctx = capture_screen_context();
-            let inferred = infer_label_from_screen_context(&ctx);
-            (ctx, inferred)
-        } else {
-            (String::new(), String::new())
-        };
+        // Snapshot pixels only when AX metadata is absent. OCR is deliberately
+        // deferred so callers can release short native window-exclusion gates
+        // before the 3-5 second Vision pass.
+        let screen_image = label
+            .is_empty()
+            .then(capture_screen_context_image)
+            .flatten();
 
         // label may be empty for web content (Chrome, Electron) — callers handle that case.
-        Ok(FieldContext {
-            label: if !label.is_empty() {
-                label
-            } else {
-                placeholder.clone()
+        Ok((
+            FieldContext {
+                label: if !label.is_empty() {
+                    label
+                } else {
+                    placeholder.clone()
+                },
+                placeholder,
+                app_name: frontmost.app_name,
+                bundle_id: frontmost.bundle_id,
+                window_title: frontmost.window_title,
+                current_value,
+                screen_context: String::new(),
+                inferred_label: String::new(),
             },
-            placeholder,
-            app_name: frontmost.app_name,
-            bundle_id: frontmost.bundle_id,
-            window_title: frontmost.window_title,
-            current_value,
-            screen_context,
-            inferred_label,
-        })
+            screen_image,
+            pending_target,
+        ))
     }
+}
+
+pub(crate) fn finish_focused_context_ocr(
+    mut context: FieldContext,
+    screen_image: Option<Vec<u8>>,
+) -> FieldContext {
+    if let Some(image) = screen_image {
+        context.screen_context = recognize_screen_context(&image);
+        context.inferred_label = infer_label_from_screen_context(&context.screen_context);
+    }
+    context
+}
+
+pub fn capture_focused_context() -> Result<FieldContext, String> {
+    clear_autofill_target();
+    let (context, screen_image, pending_target) = capture_focused_context_snapshot()?;
+    *AUTOFILL_TARGET.lock() = pending_target.0.map(|target| StoredAutofillTarget {
+        request_id: None,
+        target,
+    });
+    Ok(finish_focused_context_ocr(context, screen_image))
 }
 
 /// Inject text into the field that was focused at trigger time.
 /// Prefers system-style typing when the target app is still frontmost, with an
 /// AX value-set fallback for cases where FNDR had to take focus for preview.
 pub fn inject_text_into_field(text: &str, prefer_typed: bool) -> Result<(), String> {
-    let target = AUTOFILL_TARGET
+    let stored = AUTOFILL_TARGET
         .lock()
         .clone()
         .ok_or_else(|| "No autofill target stored — trigger Option+F first".to_string())?;
+    inject_text_into_target(text, prefer_typed, stored.target)
+}
 
+pub(crate) fn inject_text_into_field_for_request(
+    request_id: u64,
+    text: &str,
+    prefer_typed: bool,
+) -> Result<(), String> {
+    let target = AUTOFILL_TARGET
+        .lock()
+        .as_ref()
+        .filter(|stored| stored.request_id == Some(request_id))
+        .map(|stored| stored.target.clone())
+        .ok_or_else(|| "This Autofill request is no longer active.".to_string())?;
+    inject_text_into_target(text, prefer_typed, target)
+}
+
+fn inject_text_into_target(
+    text: &str,
+    prefer_typed: bool,
+    target: AutofillTarget,
+) -> Result<(), String> {
     let target_is_frontmost = unsafe { frontmost_pid() == Some(target.pid) };
     let mut typed_error: Option<String> = None;
 

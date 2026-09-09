@@ -19,25 +19,28 @@ pub async fn set_blocklist(
     state: State<'_, Arc<AppState>>,
     apps: Vec<String>,
 ) -> Result<(), String> {
-    let mut config = state.inner().config.write();
-    config.blocklist = apps;
-    config.blocklist = config
-        .blocklist
-        .iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .fold(Vec::new(), |mut acc, value| {
-            if !acc
-                .iter()
-                .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
-            {
-                acc.push(value);
-            }
-            acc
-        });
-    config
-        .save()
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    {
+        let mut config = state.inner().config.write();
+        config.blocklist = apps;
+        config.blocklist = config
+            .blocklist
+            .iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .fold(Vec::new(), |mut acc, value| {
+                if !acc
+                    .iter()
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
+                {
+                    acc.push(value);
+                }
+                acc
+            });
+        config
+            .save()
+            .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    }
+    cancel_screen_guide_after_blocklist_change(state.inner());
     Ok(())
 }
 
@@ -143,6 +146,10 @@ pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> 
             .retain(|value| !privacy_site_matches(value, &site_key));
         config.save().map_err(|e| e.to_string())?;
     }
+    // Treat a newly persisted exclusion as an immediate privacy boundary.
+    // In-flight OCR/model/speech from the formerly allowed context must not
+    // survive while the slower retroactive memory deletion runs below.
+    cancel_screen_guide_after_blocklist_change(state.inner());
 
     // 3. Retroactively delete memories with this site if we grabbed it during the alert period
     if let Err(e) = state.store.delete_memories_by_domain(&site_key).await {
@@ -157,6 +164,12 @@ pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> 
 
     emit_privacy_alerts(state.inner());
     Ok(())
+}
+
+fn cancel_screen_guide_after_blocklist_change(state: &AppState) {
+    if let Some(app_handle) = state.app_handle.read().clone() {
+        super::screen_guide::cancel_screen_guide_for_privacy(&app_handle);
+    }
 }
 
 fn privacy_site_key(site: &str) -> String {

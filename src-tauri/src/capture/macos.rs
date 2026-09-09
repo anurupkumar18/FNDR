@@ -4,14 +4,19 @@
 
 use image::ImageEncoder;
 use objc2_app_kit::NSWorkspace;
+use std::io::Read;
+use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+const PRIVACY_LOOKUP_TIMEOUT: Duration = Duration::from_millis(900);
 
 #[derive(Debug, Clone)]
 pub struct FrontmostAppContext {
     pub app_name: String,
     pub bundle_id: Option<String>,
     pub window_title: String,
+    pub window_title_verified: bool,
 }
 
 #[derive(Clone)]
@@ -173,6 +178,15 @@ fn image_to_png(image: &core_graphics::image::CGImage) -> Result<Vec<u8>, String
 
 /// Get information about the frontmost application
 pub fn get_frontmost_app_info() -> FrontmostAppContext {
+    get_frontmost_app_info_with_cache(true)
+}
+
+/// Get uncached app/window context for privacy-sensitive capture decisions.
+pub fn get_frontmost_app_info_fresh() -> FrontmostAppContext {
+    get_frontmost_app_info_with_cache(false)
+}
+
+fn get_frontmost_app_info_with_cache(allow_cache: bool) -> FrontmostAppContext {
     unsafe {
         let workspace = NSWorkspace::sharedWorkspace();
         let app = workspace.frontmostApplication();
@@ -188,7 +202,9 @@ pub fn get_frontmost_app_info() -> FrontmostAppContext {
             .and_then(|a| a.bundleIdentifier())
             .map(|s| s.to_string());
 
-        let window_title = get_front_window_title(&app_name)
+        let verified_window_title = get_front_window_title(&app_name, allow_cache);
+        let window_title_verified = verified_window_title.is_some();
+        let window_title = verified_window_title
             .or_else(|| bundle_id.clone())
             .unwrap_or_default();
 
@@ -196,13 +212,17 @@ pub fn get_frontmost_app_info() -> FrontmostAppContext {
             app_name,
             bundle_id,
             window_title,
+            window_title_verified,
         }
     }
 }
 
 /// Best-effort active window title via AppleScript (requires Accessibility permissions for generic fallback).
-fn get_front_window_title(app_name: &str) -> Option<String> {
-    if let Some(cached) = cache_get(&WINDOW_TITLE_CACHE, app_name, Duration::from_millis(900)) {
+fn get_front_window_title(app_name: &str, allow_cache: bool) -> Option<String> {
+    if let Some(cached) = privacy_sensitive_cache_hit(
+        allow_cache,
+        cache_get(&WINDOW_TITLE_CACHE, app_name, Duration::from_millis(900)),
+    ) {
         return Some(cached);
     }
 
@@ -227,21 +247,7 @@ fn get_front_window_title(app_name: &str) -> Option<String> {
             end tell"#
     };
 
-    let result = match std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if title.is_empty() {
-                None
-            } else {
-                Some(title)
-            }
-        }
-        _ => None,
-    };
+    let result = run_bounded_osascript(script).filter(|title| !title.is_empty());
 
     cache_put(&WINDOW_TITLE_CACHE, app_name, result.clone());
     result
@@ -249,7 +255,23 @@ fn get_front_window_title(app_name: &str) -> Option<String> {
 
 /// Get the current URL from the frontmost browser window using AppleScript
 pub fn get_browser_url(app_name: &str) -> Option<String> {
-    if let Some(cached) = cache_get(&URL_CACHE, app_name, Duration::from_millis(1200)) {
+    get_browser_url_with_cache(app_name, true)
+}
+
+/// Get an uncached browser URL for privacy-sensitive capture decisions.
+pub fn get_browser_url_fresh(app_name: &str) -> Option<String> {
+    get_browser_url_with_cache(app_name, false)
+}
+
+pub fn is_browser_app(app_name: &str) -> bool {
+    super::admission::is_browser_app(app_name)
+}
+
+fn get_browser_url_with_cache(app_name: &str, allow_cache: bool) -> Option<String> {
+    if let Some(cached) = privacy_sensitive_cache_hit(
+        allow_cache,
+        cache_get(&URL_CACHE, app_name, Duration::from_millis(1200)),
+    ) {
         return Some(cached);
     }
 
@@ -274,28 +296,45 @@ pub fn get_browser_url(app_name: &str) -> Option<String> {
     };
 
     // Run osascript to get the URL
-    let result = match std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-    {
-        Ok(output) => {
-            if output.status.success() {
-                let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    Some(url)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-        Err(_) => None,
-    };
+    let result = run_bounded_osascript(script)
+        .filter(|url| url.starts_with("http://") || url.starts_with("https://"));
 
     cache_put(&URL_CACHE, app_name, result.clone());
     result
+}
+
+fn privacy_sensitive_cache_hit(allow_cache: bool, cached: Option<String>) -> Option<String> {
+    allow_cache.then_some(cached).flatten()
+}
+
+fn run_bounded_osascript(script: &str) -> Option<String> {
+    let mut child = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + PRIVACY_LOOKUP_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    if !status.success() {
+        return None;
+    }
+    let mut output = String::new();
+    child.stdout.take()?.read_to_string(&mut output).ok()?;
+    Some(output.trim().to_string())
 }
 
 pub fn get_browser_semantic_content(app_name: &str) -> Option<BrowserSemanticContent> {
@@ -609,6 +648,25 @@ mod core_graphics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn privacy_sensitive_lookup_never_accepts_a_cached_value() {
+        let stale = Some("https://allowed.example".to_string());
+
+        assert_eq!(privacy_sensitive_cache_hit(false, stale.clone()), None);
+        assert_eq!(
+            privacy_sensitive_cache_hit(true, stale),
+            Some("https://allowed.example".to_string())
+        );
+    }
+
+    #[test]
+    fn privacy_sensitive_browser_detection_includes_unsupported_firefox() {
+        assert!(is_browser_app("Firefox"));
+        assert!(is_browser_app("Opera"));
+        assert!(is_browser_app("Google Chrome"));
+        assert!(!is_browser_app("Finder"));
+    }
 
     #[test]
     fn parses_browser_semantic_payload() {

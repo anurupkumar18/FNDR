@@ -93,6 +93,17 @@ The review pipeline is local-only and pressure-gated:
 
 The vault surfaces lifecycle status through a chip on each card (`DEVELOPED` / `PENDING` / `RAW` / `REVIEW_FAILED` / `VISUAL_FAILED`) and prefers reviewed summaries over raw OCR for the preview text. See `src/domains/memory-vault/MemoryCard.tsx` for the derivation rules.
 
+## Live Screen Guide
+
+Screen Guide is a separate, user-initiated path for asking about the display that is visible now:
+
+```text
+shortcut / panel -> text or local transcription -> privacy gate -> ephemeral capture
+                  -> OCR + local inference -> answer + optional point cue -> overlay / local speech
+```
+
+The path reuses FNDR's capture, OCR, model lock, local inference, event, and hidden-window primitives, but it does not enter the capture-to-LanceDB pipeline. Raw pixels and guide turns remain ephemeral. Point cues must match normalized Apple Vision text-line centers supplied to the model; invented coordinates are discarded. The first implementation targets the primary display, while mixed-display capture and coordinate mapping remain an explicit follow-up rather than an implicit change to the stable capture loop. See ADR 014 and `docs/product/screen-guide.md`.
+
 ## Stable vs Experimental
 
 The stable search path is OCR text plus local text embeddings. Screen captures and imported photos additionally write a 512-d CLIP `image_embedding`, exposed through `find_visually_similar_memories` for image-to-image retrieval over the same LanceDB column. Cross-modal text->image retrieval, meeting diarization, external graph services, and autonomous agent surfaces remain adjacent or experimental features unless wired through the core path above.

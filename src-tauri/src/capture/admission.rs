@@ -34,7 +34,7 @@ pub(super) fn classify_capture_surface_policy(
     CaptureSurfacePolicy::Normal
 }
 
-fn is_browser_app(app_name: &str) -> bool {
+pub(super) fn is_browser_app(app_name: &str) -> bool {
     let app = app_name.to_ascii_lowercase();
     [
         "chrome", "safari", "firefox", "arc", "edge", "brave", "opera",

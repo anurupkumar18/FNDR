@@ -80,7 +80,7 @@ fn main() {
     let rt_ref: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
     tauri::async_runtime::set(rt_ref.handle().clone());
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -113,6 +113,16 @@ fn main() {
             // an existing Lance table's vector dimension diverges from the
             // current contract.
             let data_dir = app.path().app_data_dir()?;
+            match fndr_lib::speech::cleanup_stale_voice_inputs(&data_dir) {
+                Ok(removed) if removed > 0 => {
+                    tracing::info!(removed, "Removed abandoned temporary voice inputs")
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    "Could not clean abandoned temporary voice inputs: {}",
+                    error
+                ),
+            }
             let store = Store::new(&data_dir)?;
             let store_arc = Arc::new(store);
             tracing::info!("Consolidated store initialized at {:?}", data_dir);
@@ -605,6 +615,10 @@ fn main() {
                 tracing::warn!("Meeting runtime initialization failed: {}", err);
             }
 
+            // Pre-create the full-screen, click-through Screen Guide overlay
+            // before shortcuts can make it visible.
+            ipc::commands::create_screen_guide_overlay_window(app.handle());
+
             // Pre-create the autofill overlay window so it's loaded and ready
             // by the time the user first presses the hotkey.
             ipc::commands::create_autofill_overlay_window(app.handle());
@@ -622,8 +636,7 @@ fn main() {
             }
 
             // Pre-create the omnibar window (hidden) and register its hotkey.
-            // register_autofill_shortcut already re-registers the omnibar
-            // shortcut after its unregister_all, so order does not matter here.
+            // Each feature owns only its own shortcut registration.
             ipc::commands::create_omnibar_window(app.handle());
             if let Err(err) = ipc::commands::register_omnibar_shortcut(app.handle()) {
                 tracing::warn!("Omnibar shortcut registration failed: {err}");
@@ -631,6 +644,38 @@ fn main() {
                 tracing::info!(
                     "Omnibar global shortcut registered: {}",
                     ipc::commands::OMNIBAR_SHORTCUT
+                );
+            }
+
+            if let Err(err) = ipc::commands::register_screen_guide_shortcut(
+                app.handle(),
+                &state.config.read().screen_guide.clone(),
+            ) {
+                tracing::warn!("Screen Guide shortcut registration failed: {err}");
+                if let Err(save_err) =
+                    ipc::commands::reconcile_screen_guide_startup_failure(state.as_ref())
+                {
+                    tracing::warn!(
+                        "Screen Guide could not persist its disabled startup state: {save_err}"
+                    );
+                }
+
+                // Auto-fill is registered first, so a persisted shortcut
+                // collision can initially reject both features. Once Screen
+                // Guide has been disabled in memory, give Auto-fill its
+                // original shortcut back during this launch as well.
+                if let Err(retry_err) = ipc::commands::register_autofill_shortcut(
+                    app.handle(),
+                    &state.config.read().autofill.clone(),
+                ) {
+                    tracing::warn!(
+                        "Auto-fill shortcut registration still failed after Screen Guide was disabled: {retry_err}"
+                    );
+                }
+            } else if state.config.read().screen_guide.enabled {
+                tracing::info!(
+                    "Screen Guide global shortcut registered: {}",
+                    state.config.read().screen_guide.shortcut
                 );
             }
 
@@ -771,6 +816,19 @@ fn main() {
             // Omnibar
             ipc::commands::dismiss_omnibar,
             ipc::commands::omnibar_open_memory,
+            // Screen Guide
+            ipc::commands::get_screen_guide_settings,
+            ipc::commands::set_screen_guide_settings,
+            ipc::commands::screen_guide_press,
+            ipc::commands::screen_guide_release,
+            ipc::commands::submit_screen_guide_text,
+            ipc::commands::transcribe_screen_guide_voice_input,
+            ipc::commands::set_screen_guide_overlay_ready,
+            ipc::commands::screen_guide_microphone_started,
+            ipc::commands::acknowledge_screen_guide_microphone_stopped,
+            ipc::commands::ask_screen_guide,
+            ipc::commands::get_screen_guide_cursor_position,
+            ipc::commands::finish_screen_guide_visual,
             // Clipboard history
             ipc::commands::get_clipboard_history,
             ipc::commands::copy_clipboard_entry,
@@ -797,6 +855,15 @@ fn main() {
             fndr_lib::graph::projection_commands::get_graph_node_neighborhood,
             fndr_lib::graph::projection_commands::get_graph_communities,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            ipc::commands::shutdown_screen_guide(app_handle);
+            fndr_lib::speech::shutdown_speech();
+        }
+    });
 }

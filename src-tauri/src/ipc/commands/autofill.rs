@@ -1,8 +1,6 @@
 //! Autofill overlay, shortcut, resolution, injection.
 
-use super::common::{
-    normalize_autofill_phrase, push_unique_case_insensitive, truncate_chars,
-};
+use super::common::{normalize_autofill_phrase, push_unique_case_insensitive, truncate_chars};
 use super::search::run_search_query;
 use crate::config::AutofillConfig;
 use crate::storage::SearchResult;
@@ -23,6 +21,180 @@ static AUTOFILL_OVERLAY_READY: once_cell::sync::Lazy<parking_lot::Mutex<bool>> =
 static PENDING_AUTOFILL_PAYLOAD: once_cell::sync::Lazy<
     parking_lot::Mutex<Option<serde_json::Value>>,
 > = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
+static AUTOFILL_SHORTCUT_REGISTRATION: once_cell::sync::Lazy<
+    parking_lot::Mutex<AutofillShortcutRegistration>,
+> = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(AutofillShortcutRegistration::default()));
+static AUTOFILL_REQUEST_STATE: once_cell::sync::Lazy<parking_lot::Mutex<AutofillRequestState>> =
+    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(AutofillRequestState::default()));
+static AUTOFILL_INJECTION_LIFECYCLE: once_cell::sync::Lazy<parking_lot::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(()));
+
+#[derive(Debug, Default)]
+struct AutofillRequestState {
+    epoch: u64,
+}
+
+impl AutofillRequestState {
+    fn claim(&mut self) -> u64 {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.epoch
+    }
+
+    fn is_current(&self, request_epoch: u64) -> bool {
+        self.epoch == request_epoch
+    }
+
+    fn cancel_if_current(&mut self, expected_request: Option<u64>) -> Option<(u64, u64)> {
+        let cancelled_request = self.epoch;
+        if expected_request.is_some_and(|expected| expected != cancelled_request) {
+            return None;
+        }
+        let cancellation_epoch = self.claim();
+        Some((cancelled_request, cancellation_epoch))
+    }
+}
+
+fn autofill_request_is_current(request_epoch: u64) -> bool {
+    AUTOFILL_REQUEST_STATE.lock().is_current(request_epoch)
+}
+
+fn with_current_autofill_request<T>(request_epoch: u64, commit: impl FnOnce() -> T) -> Option<T> {
+    let state = AUTOFILL_REQUEST_STATE.lock();
+    if !state.is_current(request_epoch) {
+        return None;
+    }
+    Some(commit())
+}
+
+fn autofill_overlay_owns_focus(is_visible: bool, is_focused: bool) -> bool {
+    is_visible && is_focused
+}
+
+fn autofill_overlay_event(request_epoch: u64, payload: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "requestId": request_epoch,
+        "payload": payload,
+    })
+}
+
+fn clear_autofill_payload_for_request(
+    pending: &mut Option<serde_json::Value>,
+    request_epoch: u64,
+) -> bool {
+    let owns_payload = pending
+        .as_ref()
+        .and_then(|payload| payload.get("requestId"))
+        .and_then(serde_json::Value::as_u64)
+        == Some(request_epoch);
+    if owns_payload {
+        pending.take();
+    }
+    owns_payload
+}
+
+fn retire_failed_autofill_request(request_epoch: u64) -> bool {
+    let retired = {
+        let mut requests = AUTOFILL_REQUEST_STATE.lock();
+        if requests.cancel_if_current(Some(request_epoch)).is_none() {
+            false
+        } else {
+            clear_autofill_payload_for_request(&mut PENDING_AUTOFILL_PAYLOAD.lock(), request_epoch);
+            true
+        }
+    };
+    crate::accessibility::clear_autofill_target_for_request(request_epoch);
+    retired
+}
+
+fn hide_autofill_overlay_synchronously_if<R, F>(
+    app: &AppHandle<R>,
+    should_hide: F,
+) -> Result<(bool, bool), String>
+where
+    R: tauri::Runtime,
+    F: FnOnce() -> bool + Send + 'static,
+{
+    let Some(focus_probe_window) = app.get_webview_window(AUTOFILL_OVERLAY_LABEL) else {
+        return Ok((true, false));
+    };
+    let owned_focus = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let callback_owned_focus = Arc::clone(&owned_focus);
+    let hidden = super::screen_guide::hide_webview_window_synchronously_if(
+        app,
+        AUTOFILL_OVERLAY_LABEL,
+        move || {
+            if !should_hide() {
+                return false;
+            }
+            callback_owned_focus.store(
+                autofill_overlay_owns_focus(
+                    focus_probe_window.is_visible().unwrap_or(false),
+                    focus_probe_window.is_focused().unwrap_or(false),
+                ),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            true
+        },
+    )?;
+    Ok((
+        hidden,
+        owned_focus.load(std::sync::atomic::Ordering::SeqCst),
+    ))
+}
+
+/// Stop pending Autofill work before another FNDR surface inspects the display
+/// or takes focus. An injection already past its final ownership check finishes
+/// first, so the sibling surface cannot redirect typed injection into itself.
+pub(super) fn cancel_autofill_for_sibling_activation<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<(), String> {
+    let cancelled_request = {
+        let mut requests = AUTOFILL_REQUEST_STATE.lock();
+        let cancelled_request = requests.epoch;
+        requests.claim();
+        PENDING_AUTOFILL_PAYLOAD.lock().take();
+        cancelled_request
+    };
+    let _injection = AUTOFILL_INJECTION_LIFECYCLE.lock();
+    let (_, owned_focus) = hide_autofill_overlay_synchronously_if(app, || true)?;
+    if owned_focus {
+        crate::accessibility::restore_target_app_focus_for_request(cancelled_request);
+    }
+    crate::accessibility::clear_autofill_target();
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct AutofillShortcutRegistration {
+    owned: Option<Shortcut>,
+}
+
+impl AutofillShortcutRegistration {
+    /// Only the shortcut this module registered is eligible for removal.
+    fn shortcut_to_remove(&self, desired: Option<Shortcut>) -> Option<Shortcut> {
+        self.owned.filter(|owned| Some(*owned) != desired)
+    }
+}
+
+fn validate_autofill_reserved_shortcut(config: &AutofillConfig) -> Result<(), String> {
+    if !config.enabled {
+        return Ok(());
+    }
+    let autofill: Shortcut = config
+        .shortcut
+        .parse()
+        .map_err(|err| format!("Invalid auto-fill shortcut '{}': {err}", config.shortcut))?;
+    let omnibar: Shortcut = super::omnibar::OMNIBAR_SHORTCUT
+        .parse()
+        .map_err(|err| format!("Invalid Omnibar shortcut: {err}"))?;
+    if autofill == omnibar {
+        return Err(format!(
+            "Auto-fill shortcut '{}' conflicts with Omnibar.",
+            config.shortcut
+        ));
+    }
+    Ok(())
+}
 
 /// Return the logical (x, y) bottom-right position for the autofill overlay on
 /// the monitor the mouse cursor currently occupies. Falls back to primary monitor.
@@ -115,6 +287,10 @@ pub async fn set_autofill_overlay_ready(ready: bool) -> Option<serde_json::Value
     if ready {
         PENDING_AUTOFILL_PAYLOAD.lock().take()
     } else {
+        let mut requests = AUTOFILL_REQUEST_STATE.lock();
+        requests.claim();
+        PENDING_AUTOFILL_PAYLOAD.lock().take();
+        crate::accessibility::clear_autofill_target();
         None
     }
 }
@@ -128,23 +304,48 @@ pub fn register_autofill_shortcut<R: tauri::Runtime>(
     app: &AppHandle<R>,
     config: &AutofillConfig,
 ) -> Result<(), String> {
-    if let Err(err) = app.global_shortcut().unregister_all() {
-        tracing::debug!("autofill: failed clearing existing shortcuts: {err}");
-    }
-    // unregister_all also dropped the omnibar hotkey — put it back.
-    if let Err(err) = super::omnibar::register_omnibar_shortcut(app) {
-        tracing::warn!("autofill: failed re-registering omnibar shortcut: {err}");
+    validate_autofill_reserved_shortcut(config)?;
+    if let Some(state) = app.try_state::<Arc<AppState>>() {
+        let screen_guide = state.config.read().screen_guide.clone();
+        super::screen_guide::validate_screen_guide_shortcut_conflicts(&screen_guide, config)?;
     }
 
-    if !config.enabled {
+    let desired =
+        if config.enabled {
+            Some(config.shortcut.parse::<Shortcut>().map_err(|err| {
+                format!("Invalid auto-fill shortcut '{}': {err}", config.shortcut)
+            })?)
+        } else {
+            None
+        };
+    let mut registration = AUTOFILL_SHORTCUT_REGISTRATION.lock();
+
+    if desired == registration.owned
+        && desired.is_some_and(|shortcut| app.global_shortcut().is_registered(shortcut))
+    {
+        return Ok(());
+    }
+
+    if desired.is_none() {
+        if let Some(owned) = registration.shortcut_to_remove(None) {
+            if app.global_shortcut().is_registered(owned) {
+                app.global_shortcut()
+                    .unregister(owned)
+                    .map_err(|err| format!("Auto-fill could not unregister its shortcut: {err}"))?;
+            }
+        }
+        registration.owned = None;
         tracing::info!("autofill: shortcut disabled in settings");
         return Ok(());
     }
 
-    let shortcut: Shortcut = config
-        .shortcut
-        .parse()
-        .map_err(|err| format!("Invalid auto-fill shortcut '{}': {err}", config.shortcut))?;
+    let shortcut = desired.expect("enabled Auto-fill has a parsed shortcut");
+    if registration.owned != Some(shortcut) && app.global_shortcut().is_registered(shortcut) {
+        return Err(format!(
+            "Auto-fill shortcut '{}' is already used by another FNDR feature.",
+            config.shortcut
+        ));
+    }
 
     let handle = app.clone();
     app.global_shortcut()
@@ -155,69 +356,188 @@ pub fn register_autofill_shortcut<R: tauri::Runtime>(
 
             tracing::info!("Auto-fill hotkey fired");
             let handle = handle.clone();
-            tauri::async_runtime::spawn(async move {
-                // Capture the focused field before FNDR steals focus, otherwise we may
-                // end up describing the overlay window instead of the target form input.
-                let payload = match crate::accessibility::capture_focused_context() {
-                    Ok(ctx) => {
+            let request_epoch = {
+                let mut requests = AUTOFILL_REQUEST_STATE.lock();
+                let request_epoch = requests.claim();
+                PENDING_AUTOFILL_PAYLOAD.lock().take();
+                request_epoch
+            };
+            // Field OCR must run after Screen Guide is synchronously hidden;
+            // same-process screenshots are not protected by NSWindowSharingNone.
+            // The lifecycle gate also keeps a newer guide from appearing in
+            // the middle of this fallback capture. FNDR does not take focus
+            // until the captured target context is ready.
+            super::screen_guide::schedule_fndr_window_activation_after_screen_guide_cancel_with_work(
+                &handle,
+                move |work_handle| {
+                    let _autofill_lifecycle = AUTOFILL_INJECTION_LIFECYCLE.lock();
+                    if !autofill_request_is_current(request_epoch) {
+                        return (None, find_cursor_monitor(&work_handle));
+                    }
+
+                    // A repeated hotkey can arrive while the prior Autofill
+                    // overlay owns focus. Restore only in that case so the
+                    // fresh accessibility snapshot still belongs to the
+                    // user's field; never pull focus away from an app the user
+                    // selected after opening Autofill.
+                    if let Some(window) = work_handle.get_webview_window(AUTOFILL_OVERLAY_LABEL) {
+                        let visible = window.is_visible().unwrap_or(false);
+                        let focused = window.is_focused().unwrap_or(false);
+                        if autofill_overlay_owns_focus(visible, focused) {
+                            crate::accessibility::restore_target_app_focus();
+                        }
+                    }
+                    if let Err(err) = super::screen_guide::hide_webview_window_synchronously(
+                        &work_handle,
+                        AUTOFILL_OVERLAY_LABEL,
+                    ) {
+                        tracing::warn!(
+                            "Auto-fill stopped before context capture because its prior overlay could not hide: {err}"
+                        );
+                        crate::accessibility::clear_autofill_target();
+                        return (None, find_cursor_monitor(&work_handle));
+                    }
+                    crate::accessibility::clear_autofill_target();
+                    std::thread::sleep(std::time::Duration::from_millis(80));
+                    if !autofill_request_is_current(request_epoch) {
+                        return (None, find_cursor_monitor(&work_handle));
+                    }
+                    (
+                        Some(crate::accessibility::capture_focused_context_snapshot()),
+                        find_cursor_monitor(&work_handle),
+                    )
+                },
+                move |h1, (snapshot, cursor_monitor)| {
+                    let Some(snapshot) = snapshot else {
+                        return;
+                    };
+                    let (initial_payload, pending_ocr, pending_target) = match snapshot {
+                        Ok((context, Some(image), target)) => (
+                            serde_json::json!({
+                                "scanning": true,
+                                "message": "Reading the focused field"
+                            }),
+                            Some((context, image)),
+                            Some(target),
+                        ),
+                        Ok((context, None, target)) => {
+                            tracing::info!(
+                                "Auto-fill field context captured: label='{}' app='{}' window='{}'",
+                                context.label,
+                                context.app_name,
+                                context.window_title
+                            );
+                            (
+                                serde_json::to_value(&context).unwrap_or_default(),
+                                None,
+                                Some(target),
+                            )
+                        }
+                        Err(err) => {
+                            tracing::info!("Auto-fill context capture failed: {err}");
+                            (serde_json::json!({ "error": err }), None, None)
+                        }
+                    };
+                    let committed = with_current_autofill_request(request_epoch, || {
+                        if let Some(target) = pending_target {
+                            crate::accessibility::commit_autofill_target(request_epoch, target);
+                        }
+                        *PENDING_AUTOFILL_PAYLOAD.lock() = Some(autofill_overlay_event(
+                            request_epoch,
+                            initial_payload,
+                        ));
+                        true
+                    })
+                    .unwrap_or(false);
+                    if !committed {
+                        return;
+                    }
+
+                    let Some(win) = h1.get_webview_window(AUTOFILL_OVERLAY_LABEL) else {
+                        tracing::warn!("autofill: overlay window not found at hotkey time");
+                        retire_failed_autofill_request(request_epoch);
+                        return;
+                    };
+                    if let Some((x, y)) = cursor_monitor {
+                        let _ = win.set_position(tauri::LogicalPosition::new(x, y));
+                    }
+                    tracing::info!("autofill: showing overlay window");
+                    let show_result = win.show().and_then(|_| win.set_focus());
+                    if let Err(err) = show_result {
+                        tracing::warn!("autofill: overlay show/focus failed: {err}");
+                        if win.hide().is_err() {
+                            let _ = win.destroy();
+                        }
+                        retire_failed_autofill_request(request_epoch);
+                        return;
+                    }
+                    if !autofill_request_is_current(request_epoch) {
+                        if win.hide().is_err() {
+                            let _ = win.destroy();
+                        }
+                        retire_failed_autofill_request(request_epoch);
+                        return;
+                    }
+
+                    // OCR runs from the already-protected pixel snapshot after
+                    // the short window lifecycle gate has been released.
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                        with_current_autofill_request(request_epoch, || {
+                            if *AUTOFILL_OVERLAY_READY.lock() {
+                                if let Some(payload) = PENDING_AUTOFILL_PAYLOAD.lock().clone() {
+                                    let _ = h1.emit("autofill-triggered", payload);
+                                }
+                            }
+                        });
+                        let Some((context, image)) = pending_ocr else {
+                            return;
+                        };
+                        let completed = tokio::task::spawn_blocking(move || {
+                            crate::accessibility::finish_focused_context_ocr(
+                                context,
+                                Some(image),
+                            )
+                        })
+                        .await;
+                        let Ok(context) = completed else {
+                            return;
+                        };
                         tracing::info!(
                             "Auto-fill field context captured: label='{}' app='{}' window='{}'",
-                            ctx.label,
-                            ctx.app_name,
-                            ctx.window_title
+                            context.label,
+                            context.app_name,
+                            context.window_title
                         );
-                        serde_json::to_value(&ctx).unwrap_or_default()
-                    }
-                    Err(err) => {
-                        tracing::info!("Auto-fill context capture failed: {err}");
-                        serde_json::json!({ "error": err })
-                    }
-                };
-
-                *PENDING_AUTOFILL_PAYLOAD.lock() = Some(payload);
-
-                // Reposition to the monitor the cursor is currently on before showing,
-                // so the overlay appears near the user's active working context.
-                let cursor_monitor = find_cursor_monitor(&handle);
-
-                let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-                let h1 = handle.clone();
-                let _ = handle.run_on_main_thread(move || {
-                    if let Some(win) = h1.get_webview_window(AUTOFILL_OVERLAY_LABEL) {
-                        // Reposition to the active monitor's bottom-right corner.
-                        if let Some((x, y)) = cursor_monitor {
-                            let _ = win.set_position(tauri::LogicalPosition::new(x, y));
-                        }
-                        tracing::info!("autofill: showing overlay window");
-                        let _ = win.show();
-                        let _ = win.set_focus();
-                    } else {
-                        tracing::warn!("autofill: overlay window not found at hotkey time");
-                    }
-                    let _ = tx.send(());
-                });
-
-                // Wait for show() to complete, then give WKWebView a beat to resume
-                // before delivering the payload. Emit the actual captured payload so
-                // the frontend can start resolution immediately without polling.
-                let _ = rx.await;
-                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                if *AUTOFILL_OVERLAY_READY.lock() {
-                    // Emit the real payload directly — frontend handles FieldContext,
-                    // error objects, and { scanning } objects the same way.
-                    let payload_to_emit = PENDING_AUTOFILL_PAYLOAD.lock().clone();
-                    if let Some(payload) = payload_to_emit {
-                        let _ = handle.emit("autofill-triggered", payload);
-                    } else {
-                        let _ = handle.emit(
-                            "autofill-triggered",
-                            serde_json::json!({ "scanning": true, "message": "Preparing autofill" }),
-                        );
-                    }
-                }
-            });
+                        let payload = serde_json::to_value(&context).unwrap_or_default();
+                        with_current_autofill_request(request_epoch, || {
+                            let event = autofill_overlay_event(request_epoch, payload);
+                            *PENDING_AUTOFILL_PAYLOAD.lock() = Some(event.clone());
+                            if *AUTOFILL_OVERLAY_READY.lock() {
+                                let _ = h1.emit("autofill-triggered", event);
+                            }
+                        });
+                    });
+                },
+            );
         })
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+
+    if let Some(previous) = registration.shortcut_to_remove(Some(shortcut)) {
+        if app.global_shortcut().is_registered(previous) {
+            if let Err(err) = app.global_shortcut().unregister(previous) {
+                let rollback_error = app.global_shortcut().unregister(shortcut).err();
+                return Err(match rollback_error {
+                    Some(rollback_error) => format!(
+                        "Auto-fill could not replace its previous shortcut: {err}; the new shortcut also could not be rolled back: {rollback_error}"
+                    ),
+                    None => format!("Auto-fill could not replace its previous shortcut: {err}"),
+                });
+            }
+        }
+    }
+    registration.owned = Some(shortcut);
+    Ok(())
 }
 
 /// A single candidate memory value FNDR can inject into the active field.
@@ -969,15 +1289,33 @@ pub async fn set_autofill_settings(
     })?;
     normalized.shortcut = shortcut.into_string();
 
-    {
+    let screen_guide = state.inner().config.read().screen_guide.clone();
+    super::screen_guide::validate_screen_guide_shortcut_conflicts(&screen_guide, &normalized)?;
+
+    let previous = state.inner().config.read().autofill.clone().normalized();
+    register_autofill_shortcut(&app, &normalized)?;
+
+    let save_result = {
         let mut config = state.inner().config.write();
+        let persisted_previous = config.autofill.clone();
         config.autofill = normalized.clone();
-        config
+        let result = config
             .save()
-            .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+            .map_err(|e: Box<dyn std::error::Error>| e.to_string());
+        if result.is_err() {
+            config.autofill = persisted_previous;
+        }
+        result
+    };
+    if let Err(err) = save_result {
+        return match register_autofill_shortcut(&app, &previous) {
+            Ok(()) => Err(err),
+            Err(rollback_err) => Err(format!(
+                "{err} Previous Auto-fill shortcut also could not be restored: {rollback_err}"
+            )),
+        };
     }
 
-    register_autofill_shortcut(&app, &normalized)?;
     Ok(normalized)
 }
 
@@ -1044,6 +1382,7 @@ pub async fn inject_text(
     _app: AppHandle,
     state: State<'_, Arc<AppState>>,
     text: String,
+    request_id: u64,
 ) -> Result<(), String> {
     // Do NOT hide the overlay here. The frontend shows "injecting" → "done" / "error"
     // toast states that are only visible if the window stays open during injection.
@@ -1053,9 +1392,16 @@ pub async fn inject_text(
     // CGEvent APIs on macOS can crash or silently fail when called from async runtime threads.
     let prefer_typed = state.inner().config.read().autofill.prefer_typed_injection;
     tokio::task::spawn_blocking(move || {
-        crate::accessibility::restore_target_app_focus();
+        let _injection = AUTOFILL_INJECTION_LIFECYCLE.lock();
+        if !autofill_request_is_current(request_id) {
+            return Err("This Autofill request is no longer active.".to_string());
+        }
+        crate::accessibility::restore_target_app_focus_for_request(request_id);
         std::thread::sleep(std::time::Duration::from_millis(60));
-        crate::accessibility::inject_text_into_field(&text, prefer_typed)
+        if !autofill_request_is_current(request_id) {
+            return Err("This Autofill request is no longer active.".to_string());
+        }
+        crate::accessibility::inject_text_into_field_for_request(request_id, &text, prefer_typed)
     })
     .await
     .map_err(|e| format!("Injection task failed to join: {e}"))?
@@ -1063,11 +1409,144 @@ pub async fn inject_text(
 
 /// Hide the autofill overlay window.
 #[tauri::command]
-pub async fn dismiss_autofill(app: AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window(AUTOFILL_OVERLAY_LABEL) {
-        win.hide().map_err(|e| e.to_string())?;
+pub async fn dismiss_autofill(app: AppHandle, request_id: Option<u64>) -> Result<bool, String> {
+    let Some((cancelled_request, cancellation_epoch)) = ({
+        let mut requests = AUTOFILL_REQUEST_STATE.lock();
+        let cancellation = requests.cancel_if_current(request_id);
+        if cancellation.is_some() {
+            PENDING_AUTOFILL_PAYLOAD.lock().take();
+        }
+        cancellation
+    }) else {
+        return Ok(false);
+    };
+
+    let _injection = AUTOFILL_INJECTION_LIFECYCLE.lock();
+    let (hidden, restore_target_focus) = hide_autofill_overlay_synchronously_if(&app, move || {
+        autofill_request_is_current(cancellation_epoch)
+    })?;
+    if hidden {
+        // Restore only when this request still owned a focused overlay at the
+        // acknowledged hide. A completion timer must not pull focus away from
+        // an app the user selected while the overlay was merely visible.
+        if restore_target_focus {
+            crate::accessibility::restore_target_app_focus_for_request(cancelled_request);
+        }
+        crate::accessibility::clear_autofill_target_for_request(cancelled_request);
     }
-    PENDING_AUTOFILL_PAYLOAD.lock().take();
-    crate::accessibility::restore_target_app_focus();
-    Ok(())
+    Ok(hidden)
+}
+
+#[cfg(test)]
+mod shortcut_registration_tests {
+    use super::*;
+
+    fn shortcut(raw: &str) -> Shortcut {
+        raw.parse().expect("test shortcut should parse")
+    }
+
+    #[test]
+    fn newer_autofill_request_supersedes_delayed_ocr() {
+        let mut state = AutofillRequestState::default();
+        let delayed = state.claim();
+        assert!(state.is_current(delayed));
+
+        let replacement = state.claim();
+        assert!(!state.is_current(delayed));
+        assert!(state.is_current(replacement));
+
+        state.claim();
+        assert!(!state.is_current(replacement));
+    }
+
+    #[test]
+    fn stale_autofill_dismiss_cannot_cancel_a_newer_request() {
+        let mut state = AutofillRequestState::default();
+        let stale = state.claim();
+        let current = state.claim();
+
+        assert_eq!(state.cancel_if_current(Some(stale)), None);
+        assert!(state.is_current(current));
+        let (cancelled, cancellation_epoch) = state
+            .cancel_if_current(Some(current))
+            .expect("current request should dismiss");
+        assert_eq!(cancelled, current);
+        assert!(state.is_current(cancellation_epoch));
+    }
+
+    #[test]
+    fn failed_show_cleanup_removes_only_its_request_payload() {
+        let mut failed_payload = Some(autofill_overlay_event(
+            7,
+            serde_json::json!({ "current_value": "private field value" }),
+        ));
+        assert!(clear_autofill_payload_for_request(&mut failed_payload, 7));
+        assert!(failed_payload.is_none());
+
+        let mut newer_payload = Some(autofill_overlay_event(
+            8,
+            serde_json::json!({ "current_value": "newer value" }),
+        ));
+        assert!(!clear_autofill_payload_for_request(&mut newer_payload, 7));
+        assert_eq!(
+            newer_payload
+                .as_ref()
+                .and_then(|payload| payload.get("requestId"))
+                .and_then(serde_json::Value::as_u64),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn repeated_autofill_restores_the_target_only_while_its_overlay_owns_focus() {
+        assert!(autofill_overlay_owns_focus(true, true));
+        assert!(!autofill_overlay_owns_focus(true, false));
+        assert!(!autofill_overlay_owns_focus(false, true));
+        assert!(!autofill_overlay_owns_focus(false, false));
+    }
+
+    #[test]
+    fn replacement_plan_removes_only_the_owned_autofill_shortcut() {
+        let autofill = shortcut("Alt+F");
+        let omnibar = shortcut(super::super::omnibar::OMNIBAR_SHORTCUT);
+        let replacement = shortcut("Control+Shift+F");
+        let registration = AutofillShortcutRegistration {
+            owned: Some(autofill),
+        };
+
+        assert_eq!(
+            registration.shortcut_to_remove(Some(replacement)),
+            Some(autofill)
+        );
+        assert_ne!(
+            registration.shortcut_to_remove(Some(replacement)),
+            Some(omnibar)
+        );
+    }
+
+    #[test]
+    fn unchanged_shortcut_is_not_unregistered_but_disabling_removes_it() {
+        let autofill = shortcut("Alt+F");
+        let registration = AutofillShortcutRegistration {
+            owned: Some(autofill),
+        };
+
+        assert_eq!(registration.shortcut_to_remove(Some(autofill)), None);
+        assert_eq!(registration.shortcut_to_remove(None), Some(autofill));
+        assert_eq!(
+            AutofillShortcutRegistration::default().shortcut_to_remove(None),
+            None
+        );
+    }
+
+    #[test]
+    fn omnibar_shortcut_is_reserved_even_before_omnibar_registers() {
+        let config = AutofillConfig {
+            enabled: true,
+            shortcut: super::super::omnibar::OMNIBAR_SHORTCUT.to_string(),
+            ..AutofillConfig::default()
+        };
+
+        assert!(validate_autofill_reserved_shortcut(&config).is_err());
+    }
 }

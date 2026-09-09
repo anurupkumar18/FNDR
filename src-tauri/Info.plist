@@ -17,7 +17,7 @@
     
     <!-- Screen Recording Permission -->
     <key>NSScreenCaptureUsageDescription</key>
-    <string>FNDR needs screen recording access to capture and index your screen content for intelligent search.</string>
+    <string>FNDR needs screen recording access to index your screen content for search and provide Screen Guide assistance.</string>
     
     <!-- Accessibility Permission -->
     <key>NSAccessibilityUsageDescription</key>
@@ -25,7 +25,7 @@
 
     <!-- Microphone Permission -->
     <key>NSMicrophoneUsageDescription</key>
-    <string>FNDR needs microphone access for voice search and meeting transcription.</string>
+    <string>FNDR needs microphone access for voice search, Screen Guide, and meeting transcription.</string>
     
     <!-- Run as background agent (menu bar app) -->
     <key>LSUIElement</key>

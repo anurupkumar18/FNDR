@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
     type AutofillCandidate,
+    type AutofillOverlayEvent,
     type AutofillOverlayPayload,
     type AutofillResolution,
     type FieldContext,
@@ -109,6 +110,7 @@ export function AutofillOverlay() {
     const queryInputRef = useRef<HTMLInputElement>(null);
     const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const resolveTokenRef = useRef(0);
+    const activeRequestRef = useRef<number | null>(null);
 
     function clearDismissTimer() {
         if (dismissTimer.current) {
@@ -117,23 +119,31 @@ export function AutofillOverlay() {
         }
     }
 
-    function hideOverlay() {
-        void dismissAutofill().catch(() => {});
+    function hideOverlay(requestId: number | null) {
+        void dismissAutofill(requestId).catch(() => {});
     }
 
-    function resetAndHide() {
+    function resetAndHide(expectedRequest = activeRequestRef.current) {
+        if (
+            expectedRequest !== null
+            && activeRequestRef.current !== expectedRequest
+        ) {
+            return;
+        }
         clearDismissTimer();
         resolveTokenRef.current += 1;
+        activeRequestRef.current = null;
         setOverlayVisible(false);
         setPhase({ kind: "idle" });
         setQuery("");
-        hideOverlay();
+        hideOverlay(expectedRequest);
     }
 
     function scheduleDismiss(delayMs: number) {
         clearDismissTimer();
+        const requestId = activeRequestRef.current;
         dismissTimer.current = setTimeout(() => {
-            resetAndHide();
+            resetAndHide(requestId);
         }, delayMs);
     }
 
@@ -149,16 +159,26 @@ export function AutofillOverlay() {
     }
 
     async function acceptCandidate(label: string, candidate: AutofillCandidate) {
+        const requestId = activeRequestRef.current;
+        if (requestId === null) {
+            return;
+        }
         clearDismissTimer();
         resolveTokenRef.current += 1;
         setOverlayVisible(true);
 
         try {
             setPhase({ kind: "injecting", label, candidate });
-            await injectText(candidate.value);
+            await injectText(candidate.value, requestId);
+            if (activeRequestRef.current !== requestId) {
+                return;
+            }
             setPhase({ kind: "done", label, candidate });
             scheduleDismiss(SUCCESS_TOAST_MS);
         } catch (error) {
+            if (activeRequestRef.current !== requestId) {
+                return;
+            }
             setPhase({ kind: "error", message: String(error) });
             scheduleDismiss(ERROR_TOAST_MS);
         }
@@ -256,22 +276,30 @@ export function AutofillOverlay() {
         return false;
     }
 
-    async function handlePayload(payload: AutofillOverlayPayload) {
+    async function handlePayload(event: AutofillOverlayEvent) {
+        const activeRequest = activeRequestRef.current;
+        if (activeRequest !== null && event.requestId < activeRequest) {
+            return;
+        }
+        if (activeRequest !== event.requestId) {
+            resolveTokenRef.current += 1;
+            contextRef.current = null;
+            setPhase({ kind: "idle" });
+            setQuery("");
+        }
+        activeRequestRef.current = event.requestId;
         clearDismissTimer();
         setOverlayVisible(true);
+        const payload: AutofillOverlayPayload = event.payload;
 
         if (isScanningPayload(payload)) {
-            setPhase((current) =>
-                current.kind === "idle"
-                    ? {
-                        kind: "searching",
-                        label: payload.message || "Searching memories",
-                        appName: "FNDR",
-                        windowTitle: "",
-                        contextHint: "",
-                    }
-                    : current,
-            );
+            setPhase({
+                kind: "searching",
+                label: payload.message || "Searching memories",
+                appName: "FNDR",
+                windowTitle: "",
+                contextHint: "",
+            });
             void syncPendingPayload(false);
             return;
         }
@@ -306,7 +334,7 @@ export function AutofillOverlay() {
             }
         });
 
-        listen<AutofillOverlayPayload>("autofill-triggered", (event) => {
+        listen<AutofillOverlayEvent>("autofill-triggered", (event) => {
             void handlePayload(event.payload);
         }).then((fn) => {
             unlisten = fn;
@@ -493,7 +521,7 @@ export function AutofillOverlay() {
                         </div>
                         <button
                             className="af-close"
-                            onClick={resetAndHide}
+                            onClick={() => resetAndHide()}
                             aria-label="Dismiss"
                             type="button"
                         >
@@ -652,7 +680,7 @@ export function AutofillOverlay() {
                                     Insert Selected
                                     <kbd>↵</kbd>
                                 </button>
-                                <button type="button" className="af-secondary" onClick={resetAndHide}>
+                                <button type="button" className="af-secondary" onClick={() => resetAndHide()}>
                                     Dismiss
                                     <kbd>Esc</kbd>
                                 </button>
@@ -687,7 +715,7 @@ export function AutofillOverlay() {
                             {phase.kind === "error" && phase.message}
                         </span>
                     </div>
-                    <button className="af-close" onClick={resetAndHide} aria-label="Dismiss" type="button">
+                    <button className="af-close" onClick={() => resetAndHide()} aria-label="Dismiss" type="button">
                         ×
                     </button>
                 </div>

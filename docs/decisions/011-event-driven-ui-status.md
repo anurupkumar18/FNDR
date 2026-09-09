@@ -35,3 +35,4 @@ Pollers deliberately left alone:
 - Status reaction time improves: pause/resume and incognito reflect immediately (direct emit) instead of up to 2 s later; loop-driven changes reflect within one capture tick (500 ms when paused).
 - The capture-loop fingerprint must include any field whose change should reach the UI; today that is the frame/pipeline counters, pause/incognito flags, and `ai_model_loaded`. Embedding backend changes only reach the UI on the next counter change — acceptable because backend swaps coincide with capture activity.
 - New always-on UI state should follow this pattern (emit at change points) rather than adding pollers.
+- Screen Guide follows the same boundary: shortcut, request-state, response, point-cue, and dismissal changes are emitted at their change points. Its overlay may animate locally in the renderer, but it must not poll the backend at animation frequency.
