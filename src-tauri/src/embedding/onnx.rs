@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Authoritative text embedding dimension for the primary semantic index.
 pub const EMBEDDING_DIM: usize = DEFAULT_TEXT_EMBEDDING_DIM;
@@ -48,6 +48,49 @@ struct EmbeddingRuntimeState {
 }
 
 static EMBEDDING_RUNTIME_STATE: OnceLock<Mutex<EmbeddingRuntimeState>> = OnceLock::new();
+static SHARED_BGE_QUERY_EMBEDDER: OnceLock<SharedBgeQueryEmbedder> = OnceLock::new();
+
+#[derive(Default)]
+struct SharedBgeQueryEmbedder {
+    embedder: Mutex<Option<Arc<Embedder>>>,
+}
+
+impl SharedBgeQueryEmbedder {
+    fn get_or_try_init<F>(&self, factory: F) -> Result<Arc<Embedder>, String>
+    where
+        F: FnOnce() -> Result<Embedder, String>,
+    {
+        let mut guard = self
+            .embedder
+            .lock()
+            .map_err(|err| format!("BGE query embedder lock poisoned: {err}"))?;
+        if let Some(embedder) = guard.as_ref() {
+            return Ok(Arc::clone(embedder));
+        }
+
+        let embedder = Arc::new(factory()?);
+        *guard = Some(Arc::clone(&embedder));
+        Ok(embedder)
+    }
+}
+
+/// Lazily initialize and reuse the process-wide BGE query embedder.
+///
+/// Failed initialization is deliberately not cached so installing the model
+/// assets while FNDR is running can recover on the next chunk-search request.
+pub fn shared_bge_v5_query_embedder() -> Result<Arc<Embedder>, String> {
+    SHARED_BGE_QUERY_EMBEDDER
+        .get_or_init(SharedBgeQueryEmbedder::default)
+        .get_or_try_init(|| {
+            let started = std::time::Instant::now();
+            let result = Embedder::new_bge_v5_for_query();
+            crate::telemetry::runtime_metrics::record_ms(
+                "embedding.bge_query_init_ms",
+                started.elapsed().as_millis() as u64,
+            );
+            result
+        })
+}
 
 fn runtime_state() -> &'static Mutex<EmbeddingRuntimeState> {
     EMBEDDING_RUNTIME_STATE.get_or_init(|| {
@@ -1094,6 +1137,7 @@ fn normalize(vec: &mut [f32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn cosine(a: &[f32], b: &[f32]) -> f32 {
         a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
@@ -1156,6 +1200,48 @@ mod tests {
             MockEmbedder::new(EMBEDDING_DIM).embed_batch(&["dimension probe".to_string()]);
         assert_eq!(vectors.len(), 1);
         assert_eq!(vectors[0].len(), EMBEDDING_DIM);
+    }
+
+    #[test]
+    fn shared_bge_query_embedder_reuses_success_and_retries_failure() {
+        let shared = SharedBgeQueryEmbedder::default();
+        let initializations = AtomicUsize::new(0);
+        let factory = || {
+            initializations.fetch_add(1, Ordering::Relaxed);
+            Ok(Embedder {
+                contract: embedding_v5_contract(),
+                chunker: TextChunker::new(),
+                backend: Backend::Mock(MockEmbedder::new(embedding_v5_contract().dimensions)),
+                degraded_to_mock: AtomicBool::new(false),
+                allow_mock_fallback: false,
+                embedding_cache: Mutex::new(EmbeddingCache::new(8)),
+            })
+        };
+
+        let first = shared
+            .get_or_try_init(factory)
+            .expect("first initialization");
+        let second = shared
+            .get_or_try_init(factory)
+            .expect("cached initialization");
+
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(initializations.load(Ordering::Relaxed), 1);
+
+        let retryable = SharedBgeQueryEmbedder::default();
+        let attempts = AtomicUsize::new(0);
+        let result = retryable.get_or_try_init(|| {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            Err("model missing".to_string())
+        });
+        assert_eq!(result.err().as_deref(), Some("model missing"));
+        assert!(retryable
+            .get_or_try_init(|| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                Err("model still missing".to_string())
+            })
+            .is_err());
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
     }
 
     #[test]

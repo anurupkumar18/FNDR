@@ -4,7 +4,7 @@ use crate::context_runtime::retrieval_routes::{
     RouteHits,
 };
 use crate::embedding::prefixes::prefix_query_for_search;
-use crate::embedding::Embedder;
+use crate::embedding::shared_bge_v5_query_embedder;
 use crate::inference::model_config::BGE_V5_DIMENSIONS;
 use crate::storage::{MemoryChunkSearchResult, SearchResult, Store};
 use futures::future::BoxFuture;
@@ -44,7 +44,7 @@ impl RetrievalRoute for ChunkRoute {
                 }
             }
 
-            let bge = match Embedder::new_bge_v5_for_query() {
+            let bge = match shared_bge_v5_query_embedder() {
                 Ok(embedder) => embedder,
                 Err(err) => {
                     tracing::warn!(
