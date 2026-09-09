@@ -183,9 +183,28 @@ def _transcribe_profiles(voice_command_mode: bool) -> list[dict[str, object]]:
     return with_prompt + common
 
 
+def _resolve_ffmpeg() -> str | None:
+    candidates = (
+        os.environ.get("FNDR_FFMPEG_PATH"),
+        shutil.which("ffmpeg"),
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/opt/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+    )
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return os.path.abspath(candidate)
+    return None
+
+
 def _run_ffmpeg_convert(src: str, dst: str, filters: str | None = None) -> bool:
+    ffmpeg = _resolve_ffmpeg()
+    if not ffmpeg:
+        return False
+
     cmd = [
-        "ffmpeg",
+        ffmpeg,
         "-nostdin",
         "-y",
         "-i",
@@ -205,12 +224,15 @@ def _run_ffmpeg_convert(src: str, dst: str, filters: str | None = None) -> bool:
         dst,
     ])
 
-    completed = subprocess.run(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return False
     return completed.returncode == 0 and os.path.isfile(dst)
 
 

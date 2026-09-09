@@ -15,7 +15,11 @@ vi.mock("@/shared/ipc/tauri", () => mocks);
 import { ScreenGuidePanel } from "../ScreenGuidePanel";
 
 describe("ScreenGuidePanel", () => {
-    let stateHandler: ((status: { phase: string; message: string | null }) => void) | null;
+    let stateHandler: ((status: {
+        phase: string;
+        message: string | null;
+        generation: number;
+    }) => void) | null;
 
     beforeEach(() => {
         stateHandler = null;
@@ -44,8 +48,13 @@ describe("ScreenGuidePanel", () => {
         expect(screen.getByText("Screen Guide is off")).toBeInTheDocument();
         expect(screen.getByText(/stay on this Mac/i)).toBeInTheDocument();
         expect(screen.getByText(/only listens while you hold/i)).toBeInTheDocument();
+        expect(
+            screen.getByText(/file names in Documents, Desktop, and Downloads/i),
+        ).toBeInTheDocument();
         expect(screen.getByRole("checkbox", { name: "Enable Screen Guide" })).not.toBeChecked();
-        expect(screen.getByRole("textbox", { name: "Ask about your main display" })).toBeDisabled();
+        expect(
+            screen.getByRole("textbox", { name: "Ask FNDR about this screen or your files" }),
+        ).toBeDisabled();
         expect(screen.getByRole("button", { name: "Ask Screen Guide" })).toBeDisabled();
         expect(screen.getByRole("button", { name: /hold to talk/i })).toBeDisabled();
         expect(screen.getByText(/Option\+Space/)).toBeInTheDocument();
@@ -65,7 +74,9 @@ describe("ScreenGuidePanel", () => {
                 show_cursor: true,
             }),
         );
-        expect(screen.getByRole("textbox", { name: "Ask about your main display" })).toBeEnabled();
+        expect(
+            screen.getByRole("textbox", { name: "Ask FNDR about this screen or your files" }),
+        ).toBeEnabled();
         expect(screen.getByText("Enabled")).toBeInTheDocument();
     });
 
@@ -79,11 +90,11 @@ describe("ScreenGuidePanel", () => {
         const { rerender } = render(<ScreenGuidePanel isVisible onClose={() => {}} />);
         await waitFor(() => expect(stateHandler).not.toBeNull());
 
-        act(() => stateHandler?.({ phase: "listening", message: "Listening…" }));
+        act(() => stateHandler?.({ phase: "listening", message: "Listening…", generation: 1 }));
         expect(screen.getByText("Listening…")).toBeInTheDocument();
 
         rerender(<ScreenGuidePanel isVisible={false} onClose={() => {}} />);
-        act(() => stateHandler?.({ phase: "idle", message: null }));
+        act(() => stateHandler?.({ phase: "idle", message: null, generation: 1 }));
         rerender(<ScreenGuidePanel isVisible onClose={() => {}} />);
 
         expect(await screen.findByText("Enabled")).toBeInTheDocument();

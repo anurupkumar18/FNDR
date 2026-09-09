@@ -1,7 +1,8 @@
 //! Native runtime for the local-only Screen Guide overlay.
 //!
-//! Screen pixels, OCR, questions, and conversation history remain transient:
-//! this module never calls the memory store or writes an artifact to disk.
+//! Screen pixels, OCR, questions, conversation history, and explicitly
+//! requested file-name matches remain transient: this module never calls the
+//! memory store, reads matched file contents, or writes an artifact to disk.
 
 use crate::capture::macos::FrontmostAppContext;
 use crate::config::{AutofillConfig, ScreenGuideConfig};
@@ -14,18 +15,23 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tokio::io::AsyncReadExt;
 
 pub const SCREEN_GUIDE_OVERLAY_LABEL: &str = "screen-guide-overlay";
 const SCREEN_GUIDE_SHORTCUT_EVENT: &str = "screen-guide://shortcut";
 const SCREEN_GUIDE_SUBMIT_EVENT: &str = "screen-guide://submit";
+const SCREEN_GUIDE_STATE_EVENT: &str = "screen-guide://state";
+const SCREEN_GUIDE_NOTCH_ID: &str = "fndr-screen-guide-notch";
 const MAX_SCREEN_GUIDE_QUESTION_CHARS: usize = 800;
 const MAX_SCREEN_GUIDE_HISTORY_CHARS: usize = 1_200;
 const MAX_SCREEN_GUIDE_OCR_CHARS: usize = 4_000;
@@ -37,9 +43,36 @@ const SCREEN_GUIDE_MICROPHONE_STOP_ACK_TIMEOUT: Duration = Duration::from_millis
 const SCREEN_GUIDE_MICROPHONE_MAX_DURATION: Duration = Duration::from_secs(65);
 const SCREEN_GUIDE_HIDDEN_LEASE: Duration = Duration::from_secs(150);
 const SCREEN_GUIDE_INFERENCE_TIMEOUT: Duration = Duration::from_secs(45);
+const MAX_SCREEN_GUIDE_STATE_MESSAGE_CHARS: usize = 280;
+const SCREEN_GUIDE_FILE_SEARCH_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_SCREEN_GUIDE_FILE_QUERY_CHARS: usize = 80;
+const MAX_SCREEN_GUIDE_FILE_QUERY_WORDS: usize = 8;
+const MAX_SCREEN_GUIDE_FILE_SEARCH_BYTES: usize = 64 * 1024;
+const MAX_SCREEN_GUIDE_FILE_CANDIDATES: usize = 64;
+const MAX_SCREEN_GUIDE_FILE_MATCHES: usize = 5;
+const MAX_SCREEN_GUIDE_FILE_ANSWER_MATCHES: usize = 3;
+const SCREEN_GUIDE_FILE_ROOT_COUNT: usize = 3;
 
 static POINT_TAG_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\[POINT:[^\]\r\n]*\]").expect("valid point tag regex"));
+static SCREEN_GUIDE_FILE_VERB_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(?:find|locate|look\s+for|search\s+for)\b(?P<terms>.+)$")
+        .expect("valid Screen Guide file verb regex")
+});
+static SCREEN_GUIDE_FILE_SCOPE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\s+(?:on\s+my\s+mac|in\s+(?:my\s+)?(?:finder|documents?|desktop|downloads?))\s*[?.!,;:]*$",
+    )
+    .expect("valid Screen Guide file scope regex")
+});
+static SCREEN_GUIDE_FILE_OWNER_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^\s*(?:the\s+)?my\s+").expect("valid Screen Guide owner regex"));
+static SCREEN_GUIDE_FILE_TYPE_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)(?:^|\s+)(?:files?|docs?|documents?|pdfs?|spreadsheets?|sheets?|presentations?|slides?|excel|powerpoint)\s*[?.!,;:]*$",
+    )
+    .expect("valid Screen Guide file type suffix regex")
+});
 static SCREEN_GUIDE_SAY_PROCESS: Lazy<Mutex<Option<Child>>> = Lazy::new(|| Mutex::new(None));
 static SCREEN_GUIDE_REGISTERED_SHORTCUT_ID: Lazy<Mutex<Option<u32>>> =
     Lazy::new(|| Mutex::new(None));
@@ -53,6 +86,7 @@ static SCREEN_GUIDE_OVERLAY_DELIVERY: Lazy<Mutex<ScreenGuideOverlayDelivery>> =
     Lazy::new(|| Mutex::new(ScreenGuideOverlayDelivery::default()));
 static SCREEN_GUIDE_MICROPHONE_SAFETY: Lazy<Mutex<ScreenGuideMicrophoneSafety>> =
     Lazy::new(|| Mutex::new(ScreenGuideMicrophoneSafety::default()));
+static SCREEN_GUIDE_STATE_PUBLISH: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 /// Serializes overlay visibility and the short, synchronous capture phase.
 /// Global shortcut callbacks cannot await, so this stays a parking_lot lock
 /// and no guard is ever held across an async suspension point.
@@ -141,6 +175,7 @@ struct ScreenGuideRuntime {
     generation: u64,
     lease_epoch: u64,
     turn_cancel: Option<Arc<AtomicBool>>,
+    ui_phase: ScreenGuideUiPhase,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,6 +509,25 @@ pub struct ScreenGuideHistoryEntry {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ScreenGuideUiPhase {
+    #[default]
+    Idle,
+    Listening,
+    Transcribing,
+    Thinking,
+    Answer,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScreenGuideStatePayload {
+    pub phase: ScreenGuideUiPhase,
+    pub message: Option<String>,
+    pub generation: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ScreenGuideShortcutPayload {
     action: ScreenGuideShortcutAction,
@@ -484,6 +538,753 @@ struct ScreenGuideShortcutPayload {
 struct ScreenGuideSubmitPayload {
     text: String,
     generation: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScreenGuideFileKind {
+    Document,
+    Spreadsheet,
+    Presentation,
+    AnyFile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScreenGuideFileLookup {
+    name_terms: String,
+    kind: ScreenGuideFileKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ScreenGuideFileRank {
+    ExactStem,
+    Prefix,
+    Substring,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScreenGuideFileMatch {
+    name: String,
+    location: String,
+    rank: ScreenGuideFileRank,
+}
+
+#[derive(Debug, Clone)]
+struct ScreenGuideFileRoot {
+    path: PathBuf,
+    label: &'static str,
+}
+
+#[derive(Debug)]
+struct ScreenGuideRawFileMatch {
+    path: PathBuf,
+    root: ScreenGuideFileRoot,
+}
+
+fn screen_guide_file_lookup(question: &str) -> Option<ScreenGuideFileLookup> {
+    let lowercase = question.to_lowercase();
+    let visible_context = [
+        "this screen",
+        "the screen",
+        "on screen",
+        "on the screen",
+        "this page",
+        "the page",
+        "current page",
+    ]
+    .iter()
+    .any(|phrase| lowercase.contains(phrase))
+        || lowercase
+            .split(|character: char| !character.is_alphanumeric())
+            .any(|word| matches!(word, "button" | "menu" | "field" | "link" | "icon"));
+    if visible_context {
+        return None;
+    }
+
+    let captures = SCREEN_GUIDE_FILE_VERB_RE.captures(question)?;
+    let raw_terms = captures.name("terms")?.as_str();
+    let scoped_to_mac = SCREEN_GUIDE_FILE_SCOPE_RE.is_match(raw_terms);
+    let owned = SCREEN_GUIDE_FILE_OWNER_RE.is_match(raw_terms);
+    let declared_kind = screen_guide_declared_file_kind(raw_terms);
+    if !scoped_to_mac && !(owned && declared_kind.is_some()) {
+        return None;
+    }
+
+    let mut name_terms = SCREEN_GUIDE_FILE_SCOPE_RE
+        .replace(raw_terms, "")
+        .trim()
+        .to_string();
+    name_terms = SCREEN_GUIDE_FILE_OWNER_RE
+        .replace(&name_terms, "")
+        .trim()
+        .to_string();
+    if name_terms
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("the "))
+    {
+        name_terms = name_terms[4..].trim().to_string();
+    }
+    loop {
+        let stripped = SCREEN_GUIDE_FILE_TYPE_SUFFIX_RE
+            .replace(&name_terms, "")
+            .trim()
+            .to_string();
+        if stripped == name_terms {
+            break;
+        }
+        name_terms = stripped;
+    }
+    name_terms = collapse_whitespace(name_terms.trim_matches(|character: char| {
+        character.is_whitespace() || matches!(character, '?' | '!' | ',' | ';' | ':')
+    }));
+    if !screen_guide_file_terms_are_safe(&name_terms) {
+        return None;
+    }
+
+    let kind = screen_guide_file_kind_from_extension(&name_terms)
+        .or(declared_kind)
+        .unwrap_or(ScreenGuideFileKind::AnyFile);
+    Some(ScreenGuideFileLookup { name_terms, kind })
+}
+
+fn screen_guide_declared_file_kind(raw: &str) -> Option<ScreenGuideFileKind> {
+    let words = raw
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    if words.iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "spreadsheet" | "spreadsheets" | "sheet" | "sheets" | "excel"
+        )
+    }) {
+        return Some(ScreenGuideFileKind::Spreadsheet);
+    }
+    if words.iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "presentation" | "presentations" | "slide" | "slides" | "powerpoint"
+        )
+    }) {
+        return Some(ScreenGuideFileKind::Presentation);
+    }
+    if words.iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "document" | "documents" | "doc" | "docs" | "pdf" | "pdfs"
+        )
+    }) {
+        return Some(ScreenGuideFileKind::Document);
+    }
+    if words
+        .iter()
+        .any(|word| matches!(word.as_str(), "file" | "files"))
+    {
+        return Some(ScreenGuideFileKind::AnyFile);
+    }
+    screen_guide_file_kind_from_extension(raw)
+}
+
+fn screen_guide_file_kind_from_extension(raw: &str) -> Option<ScreenGuideFileKind> {
+    let extension = Path::new(raw)
+        .extension()?
+        .to_str()?
+        .trim_matches(|character: char| !character.is_alphanumeric())
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "pdf" | "doc" | "docx" | "rtf" | "txt" | "md" | "odt" | "pages" => {
+            Some(ScreenGuideFileKind::Document)
+        }
+        "xls" | "xlsx" | "csv" | "tsv" | "ods" | "numbers" => {
+            Some(ScreenGuideFileKind::Spreadsheet)
+        }
+        "ppt" | "pptx" | "odp" | "key" => Some(ScreenGuideFileKind::Presentation),
+        _ => None,
+    }
+}
+
+fn screen_guide_file_terms_are_safe(terms: &str) -> bool {
+    if terms.is_empty()
+        || terms.chars().count() > MAX_SCREEN_GUIDE_FILE_QUERY_CHARS
+        || terms.split_whitespace().count() > MAX_SCREEN_GUIDE_FILE_QUERY_WORDS
+        || terms.starts_with(['-', '.'])
+        || terms.contains("..")
+    {
+        return false;
+    }
+    terms.chars().all(|character| {
+        character.is_alphanumeric()
+            || character.is_whitespace()
+            || matches!(character, '-' | '_' | '.')
+    })
+}
+
+fn screen_guide_file_roots() -> Vec<ScreenGuideFileRoot> {
+    screen_guide_file_roots_from_candidates([
+        (dirs::document_dir(), "Documents"),
+        (dirs::desktop_dir(), "Desktop"),
+        (dirs::download_dir(), "Downloads"),
+    ])
+}
+
+fn screen_guide_file_roots_from_candidates(
+    candidates: [(Option<PathBuf>, &'static str); SCREEN_GUIDE_FILE_ROOT_COUNT],
+) -> Vec<ScreenGuideFileRoot> {
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter_map(|(path, label)| {
+            let path = path?.canonicalize().ok()?;
+            if !path.is_dir() || !seen.insert(path.clone()) {
+                return None;
+            }
+            Some(ScreenGuideFileRoot { path, label })
+        })
+        .collect()
+}
+
+async fn read_bounded_mdfind_output(
+    mut stdout: tokio::process::ChildStdout,
+    byte_budget: usize,
+) -> Result<(Vec<u8>, bool), String> {
+    let mut stored = Vec::with_capacity(byte_budget.min(8 * 1024));
+    let mut chunk = [0_u8; 8 * 1024];
+    loop {
+        let read = stdout.read(&mut chunk).await.map_err(|_| {
+            "FNDR's local file search could not read Spotlight results.".to_string()
+        })?;
+        if read == 0 {
+            break;
+        }
+        let remaining = byte_budget.saturating_sub(stored.len());
+        stored.extend_from_slice(&chunk[..read.min(remaining)]);
+        if read > remaining {
+            return Ok((stored, true));
+        }
+    }
+    Ok((stored, false))
+}
+
+async fn run_mdfind_for_screen_guide(
+    root: &ScreenGuideFileRoot,
+    name_terms: &str,
+    byte_budget: usize,
+) -> Result<Vec<u8>, String> {
+    let mut command = tokio::process::Command::new("/usr/bin/mdfind");
+    command
+        .arg("-0")
+        .arg("-onlyin")
+        .arg(&root.path)
+        .arg("-name")
+        .arg(name_terms)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .map_err(|_| "FNDR's local file search is unavailable on this Mac.".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "FNDR's local file search could not start.".to_string())?;
+    let mut output_future = Box::pin(read_bounded_mdfind_output(stdout, byte_budget));
+    enum FirstCompletion {
+        Output(Result<(Vec<u8>, bool), String>),
+        Process(std::io::Result<std::process::ExitStatus>),
+    }
+    let first = {
+        let mut wait_future = Box::pin(child.wait());
+        tokio::select! {
+            output = &mut output_future => FirstCompletion::Output(output),
+            status = &mut wait_future => FirstCompletion::Process(status),
+        }
+    };
+    let (output, status, limit_reached) = match first {
+        FirstCompletion::Output(output) => {
+            let (output, limit_reached) = output?;
+            if limit_reached {
+                let _ = child.start_kill();
+            }
+            (output, child.wait().await, limit_reached)
+        }
+        FirstCompletion::Process(status) => {
+            let (output, limit_reached) = output_future.await?;
+            (output, status, limit_reached)
+        }
+    };
+    let status =
+        status.map_err(|_| "FNDR's local file search stopped unexpectedly.".to_string())?;
+    if !status.success() && !limit_reached {
+        return Err("FNDR's local file search could not query Spotlight.".to_string());
+    }
+    Ok(output)
+}
+
+async fn collect_screen_guide_file_candidates(
+    lookup: ScreenGuideFileLookup,
+) -> Result<Vec<ScreenGuideFileMatch>, String> {
+    let roots = screen_guide_file_roots();
+    if roots.is_empty() {
+        return Err(
+            "FNDR could not access Documents, Desktop, or Downloads for local file search."
+                .to_string(),
+        );
+    }
+    let searchable_root_count = roots.len();
+
+    let byte_budget_per_root = MAX_SCREEN_GUIDE_FILE_SEARCH_BYTES / searchable_root_count.max(1);
+    let searches = roots.into_iter().map(|root| {
+        let name_terms = lookup.name_terms.clone();
+        async move {
+            let output = tokio::time::timeout(
+                SCREEN_GUIDE_FILE_SEARCH_TIMEOUT,
+                run_mdfind_for_screen_guide(&root, &name_terms, byte_budget_per_root),
+            )
+            .await;
+            (root, output)
+        }
+    });
+
+    let mut raw_matches = Vec::new();
+    let mut completed_roots = 0;
+    let mut timed_out_roots = 0;
+    for (root, output) in futures::future::join_all(searches).await {
+        let output = match output {
+            Ok(Ok(output)) => {
+                completed_roots += 1;
+                output
+            }
+            Ok(Err(_)) => continue,
+            Err(_) => {
+                timed_out_roots += 1;
+                continue;
+            }
+        };
+        for encoded_path in output.split(|byte| *byte == 0) {
+            if encoded_path.is_empty() || raw_matches.len() >= MAX_SCREEN_GUIDE_FILE_CANDIDATES {
+                continue;
+            }
+            let Ok(path) = std::str::from_utf8(encoded_path) else {
+                continue;
+            };
+            raw_matches.push(ScreenGuideRawFileMatch {
+                path: PathBuf::from(path),
+                root: root.clone(),
+            });
+        }
+    }
+    if completed_roots == 0 {
+        if timed_out_roots > 0 {
+            return Err(
+                "FNDR's local file search timed out. Try a more specific file name.".to_string(),
+            );
+        }
+        return Err("FNDR's local file search is unavailable on this Mac.".to_string());
+    }
+
+    let matches = tokio::task::spawn_blocking(move || {
+        validate_screen_guide_file_matches(&lookup, raw_matches)
+    })
+    .await
+    .map_err(|_| "FNDR's local file search stopped unexpectedly.".to_string())?;
+    if matches.is_empty() {
+        if let Some(message) = incomplete_screen_guide_file_search_message(
+            SCREEN_GUIDE_FILE_ROOT_COUNT,
+            completed_roots,
+            timed_out_roots,
+        ) {
+            return Err(message.to_string());
+        }
+    }
+    Ok(matches)
+}
+
+fn incomplete_screen_guide_file_search_message(
+    root_count: usize,
+    completed_roots: usize,
+    timed_out_roots: usize,
+) -> Option<&'static str> {
+    if completed_roots >= root_count {
+        return None;
+    }
+    if timed_out_roots > 0 {
+        return Some(
+            "FNDR could not finish checking every folder. Try again or use a more specific file name.",
+        );
+    }
+    Some(
+        "FNDR could not access every file-search folder. Check Files and Folders permission, then try again.",
+    )
+}
+
+async fn find_screen_guide_files(
+    lookup: ScreenGuideFileLookup,
+    cancel: Arc<AtomicBool>,
+) -> Result<Vec<ScreenGuideFileMatch>, String> {
+    tokio::select! {
+        _ = wait_for_screen_guide_turn_cancellation(cancel) => {
+            Err(screen_guide_cancelled_message())
+        }
+        result = collect_screen_guide_file_candidates(lookup) => result,
+    }
+}
+
+fn validate_screen_guide_file_matches(
+    lookup: &ScreenGuideFileLookup,
+    raw_matches: Vec<ScreenGuideRawFileMatch>,
+) -> Vec<ScreenGuideFileMatch> {
+    let query_key = normalized_screen_guide_file_key(
+        Path::new(&lookup.name_terms)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(&lookup.name_terms),
+    );
+    if query_key.is_empty() {
+        return Vec::new();
+    }
+
+    let mut seen = HashSet::new();
+    let mut matches = raw_matches
+        .into_iter()
+        .filter_map(|candidate| {
+            validate_screen_guide_file_match(lookup.kind, &query_key, candidate, &mut seen)
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        left.rank
+            .cmp(&right.rank)
+            .then_with(|| left.name.chars().count().cmp(&right.name.chars().count()))
+            .then_with(|| {
+                left.name
+                    .to_ascii_lowercase()
+                    .cmp(&right.name.to_ascii_lowercase())
+            })
+            .then_with(|| left.location.cmp(&right.location))
+    });
+    matches.truncate(MAX_SCREEN_GUIDE_FILE_MATCHES);
+    matches
+}
+
+fn validate_screen_guide_file_match(
+    kind: ScreenGuideFileKind,
+    query_key: &str,
+    candidate: ScreenGuideRawFileMatch,
+    seen: &mut HashSet<PathBuf>,
+) -> Option<ScreenGuideFileMatch> {
+    let canonical = candidate.path.canonicalize().ok()?;
+    if !canonical.starts_with(&candidate.root.path) || !seen.insert(canonical.clone()) {
+        return None;
+    }
+    let metadata = canonical.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 != 0 {
+            return None;
+        }
+    }
+
+    let relative = canonical.strip_prefix(&candidate.root.path).ok()?;
+    let components = relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(component) => component.to_str(),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if components.is_empty()
+        || components.iter().any(|component| {
+            component.starts_with('.')
+                || component.chars().any(char::is_control)
+                || screen_guide_path_component_is_package(component)
+        })
+    {
+        return None;
+    }
+
+    let name = components.last()?.to_string();
+    if name.chars().count() > 160 || !screen_guide_extension_is_allowed(kind, &name) {
+        return None;
+    }
+    let candidate_key =
+        normalized_screen_guide_file_key(canonical.file_stem().and_then(|stem| stem.to_str())?);
+    let rank = if candidate_key == query_key {
+        ScreenGuideFileRank::ExactStem
+    } else if candidate_key.starts_with(query_key) {
+        ScreenGuideFileRank::Prefix
+    } else if candidate_key.contains(query_key) {
+        ScreenGuideFileRank::Substring
+    } else {
+        return None;
+    };
+
+    let parent_components = &components[..components.len() - 1];
+    let location = if parent_components.is_empty() {
+        candidate.root.label.to_string()
+    } else {
+        format!("{}/{}", candidate.root.label, parent_components.join("/"))
+    };
+    if location.chars().count() > 180 {
+        return None;
+    }
+    Some(ScreenGuideFileMatch {
+        name,
+        location,
+        rank,
+    })
+}
+
+fn screen_guide_path_component_is_package(component: &str) -> bool {
+    let extension = Path::new(component)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    matches!(
+        extension.as_deref(),
+        Some(
+            "app" | "appex" | "bundle" | "framework" | "kext" | "pkg" | "plugin" | "photoslibrary"
+        )
+    )
+}
+
+fn screen_guide_extension_is_allowed(kind: ScreenGuideFileKind, name: &str) -> bool {
+    let extension = Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    let Some(extension) = extension.as_deref() else {
+        return false;
+    };
+    let document = matches!(
+        extension,
+        "pdf" | "doc" | "docx" | "rtf" | "txt" | "md" | "odt" | "pages" | "epub"
+    );
+    let spreadsheet = matches!(
+        extension,
+        "xls" | "xlsx" | "csv" | "tsv" | "ods" | "numbers"
+    );
+    let presentation = matches!(extension, "ppt" | "pptx" | "odp" | "key");
+    let other_safe_file = matches!(
+        extension,
+        "jpg" | "jpeg" | "png" | "gif" | "heic" | "webp" | "svg"
+    );
+    match kind {
+        ScreenGuideFileKind::Document => document,
+        ScreenGuideFileKind::Spreadsheet => spreadsheet,
+        ScreenGuideFileKind::Presentation => presentation,
+        ScreenGuideFileKind::AnyFile => document || spreadsheet || presentation || other_safe_file,
+    }
+}
+
+fn normalized_screen_guide_file_key(raw: &str) -> String {
+    raw.chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn format_screen_guide_file_answer(
+    matches: &[ScreenGuideFileMatch],
+    kind: ScreenGuideFileKind,
+) -> String {
+    let singular = match kind {
+        ScreenGuideFileKind::Document => "document",
+        ScreenGuideFileKind::Spreadsheet => "spreadsheet",
+        ScreenGuideFileKind::Presentation => "presentation",
+        ScreenGuideFileKind::AnyFile => "file",
+    };
+    if matches.is_empty() {
+        return format!(
+            "I couldn't find a matching {singular} in Documents, Desktop, or Downloads."
+        );
+    }
+    if matches.len() == 1 {
+        return format!("I found “{}” in {}.", matches[0].name, matches[0].location);
+    }
+
+    let displayed = matches
+        .iter()
+        .take(MAX_SCREEN_GUIDE_FILE_ANSWER_MATCHES)
+        .map(|candidate| format!("“{}” in {}", candidate.name, candidate.location))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let plural = format!("{singular}s");
+    if matches.len() > MAX_SCREEN_GUIDE_FILE_ANSWER_MATCHES {
+        format!(
+            "I found {} matching {plural}; the best {} are: {displayed}.",
+            matches.len(),
+            MAX_SCREEN_GUIDE_FILE_ANSWER_MATCHES
+        )
+    } else {
+        format!("I found {} matching {plural}: {displayed}.", matches.len())
+    }
+}
+
+fn screen_guide_notch_copy(
+    enabled: bool,
+    phase: ScreenGuideUiPhase,
+) -> (Option<&'static str>, &'static str) {
+    if !enabled {
+        return (None, "FNDR — Screen Guide is off");
+    }
+    match phase {
+        ScreenGuideUiPhase::Idle => (None, "FNDR — ready"),
+        ScreenGuideUiPhase::Listening => (Some("  ◉"), "FNDR is listening"),
+        ScreenGuideUiPhase::Transcribing => (Some("  ···"), "FNDR is transcribing on this Mac"),
+        ScreenGuideUiPhase::Thinking => (Some("  ⌁"), "FNDR is finding things on this Mac"),
+        ScreenGuideUiPhase::Answer => (Some("  ✓"), "FNDR found an answer"),
+        ScreenGuideUiPhase::Error => (Some("  !"), "FNDR needs attention"),
+    }
+}
+
+fn screen_guide_phase_can_advance(current: ScreenGuideUiPhase, next: ScreenGuideUiPhase) -> bool {
+    if matches!(
+        current,
+        ScreenGuideUiPhase::Answer | ScreenGuideUiPhase::Error
+    ) {
+        return current == next;
+    }
+    let rank = |phase| match phase {
+        ScreenGuideUiPhase::Idle => 0,
+        ScreenGuideUiPhase::Listening => 1,
+        ScreenGuideUiPhase::Transcribing => 2,
+        ScreenGuideUiPhase::Thinking => 3,
+        ScreenGuideUiPhase::Answer | ScreenGuideUiPhase::Error => 4,
+    };
+    rank(next) >= rank(current)
+}
+
+fn update_screen_guide_notch<R: tauri::Runtime>(app: &AppHandle<R>, phase: ScreenGuideUiPhase) {
+    let _publish = SCREEN_GUIDE_STATE_PUBLISH.lock();
+    let enabled = {
+        let mut runtime = SCREEN_GUIDE_RUNTIME.lock();
+        if !screen_guide_phase_can_advance(runtime.ui_phase, phase) {
+            return;
+        }
+        runtime.ui_phase = phase;
+        runtime.enabled
+    };
+    update_screen_guide_notch_with_enabled(app, enabled, phase);
+}
+
+fn update_screen_guide_notch_with_enabled<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    enabled: bool,
+    phase: ScreenGuideUiPhase,
+) {
+    let Some(tray) = app.tray_by_id(SCREEN_GUIDE_NOTCH_ID) else {
+        return;
+    };
+    let (title, tooltip) = screen_guide_notch_copy(enabled, phase);
+    if let Err(err) = tray.set_title(title) {
+        tracing::warn!("Screen Guide notch title update failed: {err}");
+    }
+    if let Err(err) = tray.set_tooltip(Some(tooltip)) {
+        tracing::warn!("Screen Guide notch tooltip update failed: {err}");
+    }
+}
+
+fn publish_screen_guide_state<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    payload: ScreenGuideStatePayload,
+) -> Result<(), String> {
+    let _publish = SCREEN_GUIDE_STATE_PUBLISH.lock();
+    let enabled = {
+        let mut runtime = SCREEN_GUIDE_RUNTIME.lock();
+        if runtime.generation != payload.generation
+            || !screen_guide_phase_can_advance(runtime.ui_phase, payload.phase)
+        {
+            return Ok(());
+        }
+        runtime.ui_phase = payload.phase;
+        runtime.enabled
+    };
+    update_screen_guide_notch_with_enabled(app, enabled, payload.phase);
+    app.emit(SCREEN_GUIDE_STATE_EVENT, payload)
+        .map_err(|err| err.to_string())
+}
+
+fn reset_screen_guide_state<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let _publish = SCREEN_GUIDE_STATE_PUBLISH.lock();
+    let (generation, enabled) = {
+        let mut runtime = SCREEN_GUIDE_RUNTIME.lock();
+        runtime.ui_phase = ScreenGuideUiPhase::Idle;
+        (runtime.generation, runtime.enabled)
+    };
+    update_screen_guide_notch_with_enabled(app, enabled, ScreenGuideUiPhase::Idle);
+    let _ = app.emit(
+        SCREEN_GUIDE_STATE_EVENT,
+        ScreenGuideStatePayload {
+            phase: ScreenGuideUiPhase::Idle,
+            message: None,
+            generation,
+        },
+    );
+}
+
+fn reset_screen_guide_state_after_terminal<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    owner_generation: u64,
+) {
+    let should_reset = {
+        let runtime = SCREEN_GUIDE_RUNTIME.lock();
+        runtime.generation == owner_generation || runtime.turn_cancel.is_none()
+    };
+    if should_reset {
+        reset_screen_guide_state(app);
+    }
+}
+
+/// Create the passive OS-managed companion beside the Mac notch. The icon is
+/// always present while FNDR runs; only bounded state glyphs and fixed copy are
+/// shown so questions, answers, file names, and errors never enter menu-bar UI.
+pub fn create_screen_guide_notch_companion<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    if app.tray_by_id(SCREEN_GUIDE_NOTCH_ID).is_some() {
+        return true;
+    }
+
+    let mut builder = TrayIconBuilder::with_id(SCREEN_GUIDE_NOTCH_ID)
+        .tooltip("FNDR — Screen Guide is off")
+        .show_menu_on_left_click(false);
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon).icon_as_template(true);
+    } else {
+        builder = builder.title("FNDR");
+    }
+
+    match builder.build(app) {
+        Ok(_) => {
+            update_screen_guide_notch(app, ScreenGuideUiPhase::Idle);
+            true
+        }
+        Err(err) => {
+            tracing::warn!("Screen Guide notch companion could not start: {err}");
+            false
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn report_screen_guide_state(
+    app: AppHandle,
+    mut state: ScreenGuideStatePayload,
+) -> Result<(), String> {
+    let current = SCREEN_GUIDE_RUNTIME.lock();
+    if !screen_guide_request_is_current(state.generation, current.generation, current.enabled) {
+        return Err(screen_guide_cancelled_message());
+    }
+    drop(current);
+    state.message = state
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .map(|message| truncate_chars(message, MAX_SCREEN_GUIDE_STATE_MESSAGE_CHARS));
+    publish_screen_guide_state(&app, state)
 }
 
 /// Pre-create a full-main-display transparent overlay. It cannot take focus or
@@ -576,6 +1377,7 @@ pub fn create_screen_guide_overlay_window<R: tauri::Runtime>(app: &AppHandle<R>)
                         };
                         if screen_guide_destroy_cleanup_can_release(true, cleanup_result.is_ok()) {
                             release_memory_capture_for_generation(&restore_handle, capture_owner);
+                            reset_screen_guide_state_after_terminal(&restore_handle, capture_owner);
                             break;
                         }
                         tokio::time::sleep(retry_delay).await;
@@ -635,6 +1437,7 @@ pub fn register_screen_guide_shortcut<R: tauri::Runtime>(
     if !config.enabled {
         SCREEN_GUIDE_RUNTIME.lock().enabled = false;
         *SCREEN_GUIDE_REGISTERED_SHORTCUT_ID.lock() = None;
+        update_screen_guide_notch(app, ScreenGuideUiPhase::Idle);
         return Ok(());
     }
     config.validate()?;
@@ -643,6 +1446,7 @@ pub fn register_screen_guide_shortcut<R: tauri::Runtime>(
         app.get_webview_window(SCREEN_GUIDE_OVERLAY_LABEL).is_some(),
     ) {
         SCREEN_GUIDE_RUNTIME.lock().enabled = false;
+        update_screen_guide_notch(app, ScreenGuideUiPhase::Idle);
         return Err(
             "Screen Guide overlay is unavailable or not safely click-through; restart FNDR and try again."
                 .to_string(),
@@ -660,6 +1464,7 @@ pub fn register_screen_guide_shortcut<R: tauri::Runtime>(
     if app.global_shortcut().is_registered(shortcut) {
         if *SCREEN_GUIDE_REGISTERED_SHORTCUT_ID.lock() == Some(shortcut.id()) {
             SCREEN_GUIDE_RUNTIME.lock().enabled = true;
+            update_screen_guide_notch(app, ScreenGuideUiPhase::Idle);
             return Ok(());
         }
         return Err(format!(
@@ -697,6 +1502,7 @@ pub fn register_screen_guide_shortcut<R: tauri::Runtime>(
         .map_err(|err| err.to_string())?;
     *SCREEN_GUIDE_REGISTERED_SHORTCUT_ID.lock() = Some(shortcut.id());
     SCREEN_GUIDE_RUNTIME.lock().enabled = true;
+    update_screen_guide_notch(app, ScreenGuideUiPhase::Idle);
     Ok(())
 }
 
@@ -717,6 +1523,7 @@ fn handle_screen_guide_shortcut_transition<R: tauri::Runtime>(
                 return;
             };
             *active_generation = Some(generation);
+            update_screen_guide_notch(app, ScreenGuideUiPhase::Listening);
             schedule_screen_guide_hidden_lease(app, generation);
             let _lifecycle = SCREEN_GUIDE_LIFECYCLE.lock();
             if !screen_guide_runtime_generation_is_current(generation) {
@@ -764,6 +1571,9 @@ fn handle_screen_guide_shortcut_transition<R: tauri::Runtime>(
             let Some(generation) = active_generation.take() else {
                 return;
             };
+            if screen_guide_runtime_generation_is_current(generation) {
+                update_screen_guide_notch(app, ScreenGuideUiPhase::Transcribing);
+            }
             if dispatch_screen_guide_event(
                 app,
                 PendingScreenGuideEvent::Shortcut {
@@ -975,6 +1785,7 @@ pub async fn screen_guide_press(app: AppHandle) -> Result<u64, String> {
         return Err(private_screen_message());
     }
     let generation = begin_screen_guide_input()?;
+    update_screen_guide_notch(&app, ScreenGuideUiPhase::Listening);
     schedule_screen_guide_hidden_lease(&app, generation);
     let _lifecycle = SCREEN_GUIDE_LIFECYCLE.lock();
     if !screen_guide_runtime_generation_is_current(generation) {
@@ -1024,6 +1835,9 @@ pub async fn screen_guide_press(app: AppHandle) -> Result<u64, String> {
 
 #[tauri::command]
 pub async fn screen_guide_release(app: AppHandle, generation: u64) -> Result<(), String> {
+    if screen_guide_runtime_generation_is_current(generation) {
+        update_screen_guide_notch(&app, ScreenGuideUiPhase::Transcribing);
+    }
     if let Err(err) = dispatch_screen_guide_event(
         &app,
         PendingScreenGuideEvent::Shortcut {
@@ -1313,6 +2127,27 @@ pub async fn ask_screen_guide(
         schedule_screen_guide_hidden_lease(&app, generation);
         (generation, cancel)
     };
+
+    // Explicit file-finding requests use Spotlight's filename index and never
+    // need Screen Recording access. The narrow route is intentionally before
+    // capture preflight; ambiguous "find" questions continue through visible
+    // screen guidance instead.
+    if let Some(lookup) = screen_guide_file_lookup(&question) {
+        let matches = find_screen_guide_files(lookup.clone(), turn_cancel).await?;
+        ensure_screen_guide_request_current(state.inner(), request_generation)?;
+        if state.inner().is_incognito.load(Ordering::SeqCst) {
+            return Err(private_screen_message());
+        }
+        return finish_screen_guide_answer(
+            state.inner(),
+            &settings,
+            request_generation,
+            ScreenGuideAnswer {
+                answer: format_screen_guide_file_answer(&matches, lookup.kind),
+                point_cue: None,
+            },
+        );
+    }
 
     let (has_capture_access, permission_detail) =
         crate::capture::permissions::preflight_screen_capture_access();
@@ -2217,6 +3052,7 @@ fn finish_screen_guide_surface_cleanup<R: tauri::Runtime>(
     let result = cleanup_screen_guide_surfaces(app);
     if result.is_ok() {
         release_memory_capture_for_generation(app, owner_generation);
+        reset_screen_guide_state_after_terminal(app, owner_generation);
     } else if owner_generation != 0 {
         cancel_screen_guide_request_and_notify(app, owner_generation);
         schedule_deferred_fndr_restore_retry(app, owner_generation);
@@ -2276,6 +3112,7 @@ fn schedule_deferred_fndr_restore_retry<R: tauri::Runtime>(
             };
             if cleanup_result.is_ok() {
                 release_memory_capture_for_generation(&handle, owner_generation);
+                reset_screen_guide_state_after_terminal(&handle, owner_generation);
                 break;
             }
             delay = (delay * 2).min(Duration::from_secs(5));
@@ -2536,6 +3373,7 @@ fn invalidate_screen_guide_turn(
     let cancelled_generation = runtime.generation;
     cancel_screen_guide_turn_work(runtime);
     runtime.generation = runtime.generation.wrapping_add(1);
+    runtime.ui_phase = ScreenGuideUiPhase::Idle;
     delivery.discard_submits_for_generation(cancelled_generation);
     runtime.generation
 }
@@ -3219,6 +4057,220 @@ mod tests {
     }
 
     #[test]
+    fn notch_microcopy_tracks_only_bounded_guide_phases() {
+        assert_eq!(
+            screen_guide_notch_copy(false, ScreenGuideUiPhase::Listening),
+            (None, "FNDR — Screen Guide is off")
+        );
+        assert_eq!(
+            screen_guide_notch_copy(true, ScreenGuideUiPhase::Idle),
+            (None, "FNDR — ready")
+        );
+        assert_eq!(
+            screen_guide_notch_copy(true, ScreenGuideUiPhase::Listening),
+            (Some("  ◉"), "FNDR is listening")
+        );
+        assert_eq!(
+            screen_guide_notch_copy(true, ScreenGuideUiPhase::Transcribing),
+            (Some("  ···"), "FNDR is transcribing on this Mac")
+        );
+        assert_eq!(
+            screen_guide_notch_copy(true, ScreenGuideUiPhase::Thinking),
+            (Some("  ⌁"), "FNDR is finding things on this Mac")
+        );
+        assert_eq!(
+            screen_guide_notch_copy(true, ScreenGuideUiPhase::Answer),
+            (Some("  ✓"), "FNDR found an answer")
+        );
+        assert_eq!(
+            screen_guide_notch_copy(true, ScreenGuideUiPhase::Error),
+            (Some("  !"), "FNDR needs attention")
+        );
+    }
+
+    #[test]
+    fn same_turn_notch_state_cannot_move_backward_or_replace_a_terminal_state() {
+        assert!(screen_guide_phase_can_advance(
+            ScreenGuideUiPhase::Listening,
+            ScreenGuideUiPhase::Transcribing,
+        ));
+        assert!(screen_guide_phase_can_advance(
+            ScreenGuideUiPhase::Thinking,
+            ScreenGuideUiPhase::Answer,
+        ));
+        assert!(!screen_guide_phase_can_advance(
+            ScreenGuideUiPhase::Thinking,
+            ScreenGuideUiPhase::Listening,
+        ));
+        assert!(!screen_guide_phase_can_advance(
+            ScreenGuideUiPhase::Answer,
+            ScreenGuideUiPhase::Thinking,
+        ));
+        assert!(!screen_guide_phase_can_advance(
+            ScreenGuideUiPhase::Error,
+            ScreenGuideUiPhase::Answer,
+        ));
+    }
+
+    #[test]
+    fn routes_only_explicit_file_requests_away_from_visible_screen_guidance() {
+        assert_eq!(
+            screen_guide_file_lookup("Can you find my I-20 doc?"),
+            Some(ScreenGuideFileLookup {
+                name_terms: "I-20".to_string(),
+                kind: ScreenGuideFileKind::Document,
+            })
+        );
+        assert_eq!(
+            screen_guide_file_lookup("locate budget.xlsx in Documents"),
+            Some(ScreenGuideFileLookup {
+                name_terms: "budget.xlsx".to_string(),
+                kind: ScreenGuideFileKind::Spreadsheet,
+            })
+        );
+
+        assert_eq!(screen_guide_file_lookup("find the Save button"), None);
+        assert_eq!(screen_guide_file_lookup("search this page for I-20"), None);
+        assert_eq!(screen_guide_file_lookup("find I-20"), None);
+    }
+
+    #[test]
+    fn rejects_unsafe_or_unbounded_file_lookup_terms() {
+        for question in [
+            "find my ../../secret file",
+            "find my * passport document",
+            "find my -delete file",
+            "find my \u{0} passport PDF",
+            "find my file",
+        ] {
+            assert_eq!(screen_guide_file_lookup(question), None, "{question:?}");
+        }
+    }
+
+    #[test]
+    fn file_lookup_answer_never_exposes_the_home_path() {
+        let matches = vec![
+            ScreenGuideFileMatch {
+                name: "I-20.pdf".to_string(),
+                location: "Documents/Immigration".to_string(),
+                rank: ScreenGuideFileRank::ExactStem,
+            },
+            ScreenGuideFileMatch {
+                name: "old-i20.pdf".to_string(),
+                location: "Downloads".to_string(),
+                rank: ScreenGuideFileRank::Substring,
+            },
+        ];
+
+        let answer = format_screen_guide_file_answer(&matches, ScreenGuideFileKind::Document);
+
+        assert_eq!(
+            answer,
+            "I found 2 matching documents: “I-20.pdf” in Documents/Immigration; “old-i20.pdf” in Downloads."
+        );
+        assert!(!answer.contains("/Users/"));
+    }
+
+    #[test]
+    fn partial_file_search_never_claims_every_folder_was_checked() {
+        assert_eq!(
+            incomplete_screen_guide_file_search_message(3, 1, 1),
+            Some(
+                "FNDR could not finish checking every folder. Try again or use a more specific file name."
+            )
+        );
+        assert_eq!(
+            incomplete_screen_guide_file_search_message(3, 2, 0),
+            Some(
+                "FNDR could not access every file-search folder. Check Files and Folders permission, then try again."
+            )
+        );
+        assert_eq!(incomplete_screen_guide_file_search_message(3, 3, 0), None);
+    }
+
+    #[test]
+    fn unresolved_file_root_is_counted_as_an_incomplete_search() {
+        let temp = tempfile::tempdir().expect("temporary file-search roots");
+        let documents = temp.path().join("Documents");
+        let desktop = temp.path().join("Desktop");
+        std::fs::create_dir_all(&documents).expect("create Documents fixture");
+        std::fs::create_dir_all(&desktop).expect("create Desktop fixture");
+
+        let roots = screen_guide_file_roots_from_candidates([
+            (Some(documents), "Documents"),
+            (Some(desktop), "Desktop"),
+            (Some(temp.path().join("missing Downloads")), "Downloads"),
+        ]);
+
+        assert_eq!(roots.len(), 2);
+        assert!(incomplete_screen_guide_file_search_message(
+            SCREEN_GUIDE_FILE_ROOT_COUNT,
+            roots.len(),
+            0,
+        )
+        .is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_lookup_validation_rejects_hidden_executable_and_root_escape_matches() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let temp = tempfile::tempdir().expect("temporary file-search roots");
+        let documents = temp.path().join("Documents");
+        let immigration = documents.join("Immigration");
+        let hidden = documents.join(".private");
+        let outside = temp.path().join("Outside");
+        std::fs::create_dir_all(&immigration).expect("create allowed folder");
+        std::fs::create_dir_all(&hidden).expect("create hidden folder");
+        std::fs::create_dir_all(&outside).expect("create outside folder");
+
+        let allowed = immigration.join("I-20.pdf");
+        let hidden_file = hidden.join("I-20.pdf");
+        let executable = documents.join("I-20-executable.pdf");
+        let outside_file = outside.join("I-20.pdf");
+        let escape_link = documents.join("I-20-linked.pdf");
+        for path in [&allowed, &hidden_file, &executable, &outside_file] {
+            std::fs::write(path, b"fixture").expect("write fixture");
+        }
+        let mut executable_permissions = std::fs::metadata(&executable)
+            .expect("executable metadata")
+            .permissions();
+        executable_permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, executable_permissions)
+            .expect("mark fixture executable");
+        symlink(&outside_file, &escape_link).expect("create escaping symlink");
+
+        let root = ScreenGuideFileRoot {
+            path: documents.canonicalize().expect("canonical Documents"),
+            label: "Documents",
+        };
+        let raw_matches = [allowed, hidden_file, executable, escape_link]
+            .into_iter()
+            .map(|path| ScreenGuideRawFileMatch {
+                path,
+                root: root.clone(),
+            })
+            .collect();
+        let matches = validate_screen_guide_file_matches(
+            &ScreenGuideFileLookup {
+                name_terms: "I-20".to_string(),
+                kind: ScreenGuideFileKind::Document,
+            },
+            raw_matches,
+        );
+
+        assert_eq!(
+            matches,
+            vec![ScreenGuideFileMatch {
+                name: "I-20.pdf".to_string(),
+                location: "Documents/Immigration".to_string(),
+                rank: ScreenGuideFileRank::ExactStem,
+            }]
+        );
+    }
+
+    #[test]
     fn runtime_accepts_only_an_exact_ocr_location_and_uses_its_label() {
         let evidence = vec![ScreenGuideOcrLine {
             text: "Save changes".to_string(),
@@ -3541,6 +4593,7 @@ mod tests {
             generation: 8,
             lease_epoch: 0,
             turn_cancel: Some(Arc::new(AtomicBool::new(false))),
+            ui_phase: ScreenGuideUiPhase::Thinking,
         };
         let mut delivery = ScreenGuideOverlayDelivery::default();
         delivery.deliver_or_queue(PendingScreenGuideEvent::Submit {
@@ -3553,6 +4606,7 @@ mod tests {
         });
 
         assert_eq!(invalidate_screen_guide_turn(&mut runtime, &mut delivery), 9);
+        assert_eq!(runtime.ui_phase, ScreenGuideUiPhase::Idle);
         assert_eq!(
             delivery.set_ready(true),
             vec![PendingScreenGuideEvent::Submit {

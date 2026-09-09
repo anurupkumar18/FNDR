@@ -17,14 +17,33 @@ default.
 FNDR already has local screen capture and OCR, local Whisper transcription,
 local text/vision inference, optional local TTS, global shortcuts, hidden Tauri
 windows, and event-driven UI status. The missing capability is a bounded live
-interaction coordinator.
+interaction coordinator. The next vertical slice must also make packaged speech
+input dependable, answer explicit file-location questions without reading the
+documents, and give the background app a subtle presence near the Mac's notch.
 
 ## Decision
 
 Implement the experience as an FNDR-owned **Screen Guide** domain.
 
 - The feature is opt-in and read-only.
-- Voice and typed questions share one transient interaction path.
+- Holding the configured shortcut or panel microphone records only for the
+  duration of the press. Voice and typed questions share one transient
+  interaction coordinator.
+- Recorded WebView audio is normalized for the bundled local Whisper runtime.
+  Transcription remains on-device with no cloud fallback; optional answers use
+  the existing local macOS speech boundary.
+- The coordinator routes only explicit requests to find or locate a named file
+  into a separate filename lookup branch. Ambiguous "find" language continues
+  through visible-screen guidance rather than widening filesystem access.
+- Filename lookup invokes macOS metadata search directly, without a shell, and
+  with fixed Documents, Desktop, and Downloads roots plus time, output,
+  candidate, and result bounds. Canonicalized matches must remain within one of
+  those roots. The branch never searches the full home directory, Library, or
+  an arbitrary additional root.
+- File lookup reads metadata needed to return a filename and relative parent
+  folder only. It does not read document contents, open or reveal a result,
+  request Full Disk Access, or expose an absolute home path to UI or speech.
+  Incognito prevents the metadata process from starting.
 - Privacy policy runs before screen pixels are obtained. The guide refuses
   incognito, internal FNDR, and blocklisted contexts.
 - Display pixels, OCR, questions, answers, and the in-memory conversation ring
@@ -52,6 +71,12 @@ Implement the experience as an FNDR-owned **Screen Guide** domain.
   on independent handlers after `unregister_all()`.
 - UI state is emitted at state changes, following ADR 011; no status poller is
   introduced.
+- FNDR owns one OS-managed status item in the menu-bar/notch region. It maps the
+  guide lifecycle to a small fixed vocabulary (off/ready, listening,
+  transcribing, finding, found, or attention needed). It never renders the
+  question, transcript, screen text, filename, path, answer, or error detail.
+  macOS controls its exact placement; FNDR does not draw over the physical notch
+  or use a private placement API.
 - “Companion” remains reserved for FNDR's iPhone/Watch Companion API.
 
 ## Consequences
@@ -60,6 +85,14 @@ Implement the experience as an FNDR-owned **Screen Guide** domain.
   model, without three required cloud accounts or a second app.
 - The initial implementation can reuse existing services and add no storage
   schema or production dependency.
+- Explicit file questions can be answered without capturing the screen or
+  granting Full Disk Access, but match completeness depends on the macOS
+  metadata index and the user's Files and Folders permissions.
+- A file answer is informational only. Opening, previewing, revealing, reading,
+  or modifying the document remains outside Screen Guide's authority.
+- The status item gives immediate micro-feedback without creating another
+  capture-visible always-on window. It cannot guarantee a precise position
+  relative to every Mac notch or menu-bar layout.
 - Local model availability affects answers and semantic target selection; a
   grounded text fallback remains available. Icon-only targets have no point cue.
 - Exact public-Clicky parity for modifier-only shortcuts and multi-monitor

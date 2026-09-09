@@ -48,7 +48,7 @@ FNDR addresses this by building a local, inspectable memory layer:
 | Semantic embeddings | Local ONNX embedder (`all-MiniLM-L6-v2`, 384-d) | Stable |
 | Hybrid retrieval | Semantic + keyword fusion and reranking (`src-tauri/src/search/`) | Stable |
 | Retrieval-grounded Q&A | `fndr_answer` / context runtime pipeline (`src-tauri/src/context_runtime/`) | Stable |
-| Screen Guide | Opt-in, local question answering over an ephemeral main-display capture, with text/speech and an OCR-grounded point cue | Experimental |
+| Screen Guide | Hold-to-talk, on-device screen guidance and scoped filename lookup, with local speech, a click-through answer overlay, and fixed-state notch/menu-bar feedback | Experimental |
 | Local vector store | LanceDB-backed memory + graph tables | Stable |
 | Visual similarity retrieval | CLIP-based `image_embedding` + `find_visually_similar_memories` | Stable |
 | Insight knowledge graph | Typed node/edge tables + graph UI hooks | Stable |
@@ -121,7 +121,7 @@ flowchart LR
 - Node.js + npm
 - Rust toolchain
 - Python 3 (for bootstrap/sidecar helpers)
-- `ffmpeg` (meeting capture path)
+- `ffmpeg` (meeting capture and recorded Screen Guide audio normalization)
 
 #### Quickstart
 
@@ -134,7 +134,12 @@ Onboarding downloads the required MiniLM embedder in-app (or run `./scripts/boot
 
 ### First run
 
-Grant required macOS permissions during onboarding (screen capture/accessibility as prompted). FNDR stores app data under the Tauri app identifier path (`com.fndr.app`).
+Grant required macOS permissions during onboarding (screen capture,
+accessibility, and microphone as prompted). An explicit Screen Guide file lookup
+may also prompt for Documents, Desktop, or Downloads access; FNDR does not ask
+for Full Disk Access. FNDR stores app data under the Tauri app identifier path
+(`com.fndr.app`). Existing installs may access Documents once to move FNDR's
+older on-device speech runtime into that private app-data location.
 
 ---
 
@@ -143,7 +148,11 @@ Grant required macOS permissions during onboarding (screen capture/accessibility
 1. Keep FNDR running while working normally across apps.
 2. Use Search or Memory Vault to retrieve previous context.
 3. Use Ask-style queries (`fndr_answer`) for grounded recall over stored memories.
-4. Open the Screen Guide panel, enable it, then use its shortcut or panel to ask about what is visible on the main display. The capture is ephemeral and the guide never clicks for you.
+4. Open the Screen Guide panel and enable it. Hold its shortcut or microphone
+   button to ask about the visible main display, or explicitly ask it to find a
+   named file such as “find my I-20 document.” Transcription and optional speech
+   stay on-device; file lookup checks filenames only in Documents, Desktop, and
+   Downloads and never opens a result.
 5. Use workspace controls to pause/resume capture, manage blocklists, and inspect status.
 6. Optionally start MCP for external agent access to local memory tools.
 
@@ -160,6 +169,11 @@ Implemented controls include:
 - MCP auth/origin policies for non-local deployment modes
 
 FNDR is local-first by default. Optional environment variables can enable external integrations; review `.env.example` before enabling them.
+
+Screen Guide does not persist its audio, transcript, screen turn, filename
+query, or file matches. Its explicit file route uses macOS metadata only inside
+Documents, Desktop, and Downloads; it does not read file contents, scan the full
+home directory, or require Full Disk Access.
 
 ---
 

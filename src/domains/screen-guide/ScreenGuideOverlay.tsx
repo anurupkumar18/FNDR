@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
     type ScreenGuideCursorPosition,
+    type ScreenGuidePhase,
     type ScreenGuideSettings,
     acknowledgeScreenGuideMicrophoneStopped,
     askScreenGuide,
-    emitScreenGuideState,
     finishScreenGuideVisual,
     getScreenGuideCursorPosition,
     getScreenGuideSettings,
     onScreenGuideShortcut,
     onScreenGuideSubmit,
+    reportScreenGuideState,
     screenGuideMicrophoneStarted,
     setScreenGuideOverlayReady,
     transcribeScreenGuideVoiceInput,
@@ -53,6 +54,23 @@ function recorderOptions(): MediaRecorderOptions | undefined {
         }
     }
     return undefined;
+}
+
+function notchStatus(phase: ScreenGuidePhase): { label: string; copy: string } {
+    switch (phase) {
+        case "listening":
+            return { label: "FNDR is listening", copy: "Listening" };
+        case "transcribing":
+            return { label: "FNDR is transcribing", copy: "On-device" };
+        case "thinking":
+            return { label: "FNDR is thinking", copy: "Finding" };
+        case "answer":
+            return { label: "FNDR has an answer", copy: "Found it" };
+        case "error":
+            return { label: "FNDR needs attention", copy: "Try again" };
+        case "idle":
+            return { label: "FNDR is ready", copy: "FNDR" };
+    }
 }
 
 export function ScreenGuideOverlay() {
@@ -551,12 +569,15 @@ export function ScreenGuideOverlay() {
 
     useEffect(() => {
         const message = state.phase === "answer" ? "Answer ready" : state.message;
-        void emitScreenGuideState({ phase: state.phase, message }).catch(() => undefined);
+        void reportScreenGuideState({
+            phase: state.phase,
+            message,
+            generation: requestIdRef.current,
+        }).catch(() => undefined);
     }, [state.message, state.phase]);
 
-    if (state.phase === "idle") return null;
-
     const cue = state.pointCue;
+    const notch = notchStatus(state.phase);
     const target = cue
         ? {
               x: cue.x * window.innerWidth,
@@ -568,26 +589,35 @@ export function ScreenGuideOverlay() {
 
     return (
         <div className={`sg-overlay sg-overlay--${state.phase}`} aria-live="polite" aria-atomic="true">
-            <div className="sg-overlay-card" role="status">
-                {state.phase === "listening" && (
-                    <span className="sg-overlay-wave" aria-hidden="true">
-                        <i /><i /><i /><i />
-                    </span>
-                )}
-                {(state.phase === "transcribing" || state.phase === "thinking") && (
-                    <span className="sg-overlay-spinner" aria-hidden="true" />
-                )}
-                <div className="sg-overlay-copy">
-                    {state.phase === "answer" ? (
-                        <>
-                            <span className="sg-overlay-eyebrow">SCREEN GUIDE</span>
-                            <p>{state.answer}</p>
-                        </>
-                    ) : (
-                        <strong>{state.message}</strong>
-                    )}
-                </div>
+            <div className="sg-notch" aria-label={notch.label} role="status">
+                <span className="sg-notch-mark" aria-hidden="true">
+                    <i /><i /><i />
+                </span>
+                <span className="sg-notch-copy">{notch.copy}</span>
             </div>
+
+            {state.phase !== "idle" && (
+                <div className="sg-overlay-card" role="status">
+                    {state.phase === "listening" && (
+                        <span className="sg-overlay-wave" aria-hidden="true">
+                            <i /><i /><i /><i />
+                        </span>
+                    )}
+                    {(state.phase === "transcribing" || state.phase === "thinking") && (
+                        <span className="sg-overlay-spinner" aria-hidden="true" />
+                    )}
+                    <div className="sg-overlay-copy">
+                        {state.phase === "answer" ? (
+                            <>
+                                <span className="sg-overlay-eyebrow">FNDR</span>
+                                <p>{state.answer}</p>
+                            </>
+                        ) : (
+                            <strong>{state.message}</strong>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {target && (
                 <div

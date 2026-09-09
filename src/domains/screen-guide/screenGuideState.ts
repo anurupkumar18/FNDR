@@ -75,7 +75,7 @@ export function screenGuideReducer(
                 phase: "thinking",
                 question: action.question,
                 answer: null,
-                message: "Looking at this screen…",
+                message: "Finding the answer on this Mac…",
                 pointCue: null,
             };
         case "answered": {

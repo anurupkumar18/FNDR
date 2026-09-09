@@ -4,7 +4,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 const mocks = vi.hoisted(() => ({
     acknowledgeScreenGuideMicrophoneStopped: vi.fn(),
     askScreenGuide: vi.fn(),
-    emitScreenGuideState: vi.fn(),
+    reportScreenGuideState: vi.fn(),
     finishScreenGuideVisual: vi.fn(),
     getScreenGuideCursorPosition: vi.fn(),
     getScreenGuideSettings: vi.fn(),
@@ -124,7 +124,7 @@ describe("ScreenGuideOverlay", () => {
         mocks.screenGuideMicrophoneStarted.mockResolvedValue(undefined);
         mocks.acknowledgeScreenGuideMicrophoneStopped.mockResolvedValue(true);
         mocks.setScreenGuideOverlayReady.mockResolvedValue(undefined);
-        mocks.emitScreenGuideState.mockResolvedValue(undefined);
+        mocks.reportScreenGuideState.mockResolvedValue(undefined);
     });
 
     afterEach(() => cleanup());
@@ -138,6 +138,13 @@ describe("ScreenGuideOverlay", () => {
 
         unmount();
         await waitFor(() => expect(mocks.setScreenGuideOverlayReady).toHaveBeenCalledWith(false));
+    });
+
+    it("keeps a subtle FNDR presence available at the notch while idle", async () => {
+        render(<ScreenGuideOverlay />);
+
+        expect(await screen.findByLabelText("FNDR is ready")).toBeInTheDocument();
+        expect(screen.queryByText("Listening…")).not.toBeInTheDocument();
     });
 
     it("stops an active track before marking an unmounted overlay not ready", async () => {
@@ -175,7 +182,7 @@ describe("ScreenGuideOverlay", () => {
 
             act(() => shortcutHandler?.({ action: "press", generation: 1 }));
             await waitFor(() => expect(FakeMediaRecorder.instances[0]?.state).toBe("recording"));
-            mocks.emitScreenGuideState.mockClear();
+            mocks.reportScreenGuideState.mockClear();
 
             act(() => shortcutHandler?.({ action: "cancel", generation: 1 }));
 
@@ -188,9 +195,10 @@ describe("ScreenGuideOverlay", () => {
             );
             expect(mocks.transcribeScreenGuideVoiceInput).not.toHaveBeenCalled();
             await waitFor(() =>
-                expect(mocks.emitScreenGuideState).toHaveBeenCalledWith({
+                expect(mocks.reportScreenGuideState).toHaveBeenCalledWith({
                     phase: "idle",
                     message: null,
+                    generation: 1,
                 }),
             );
         } finally {
@@ -329,7 +337,7 @@ describe("ScreenGuideOverlay", () => {
             await waitFor(() =>
                 expect(mocks.transcribeScreenGuideVoiceInput).toHaveBeenCalledTimes(1),
             );
-            mocks.emitScreenGuideState.mockClear();
+            mocks.reportScreenGuideState.mockClear();
 
             act(() => shortcutHandler?.({ action: "cancel", generation: 1 }));
             await act(async () => {
@@ -339,9 +347,10 @@ describe("ScreenGuideOverlay", () => {
 
             expect(mocks.askScreenGuide).not.toHaveBeenCalled();
             await waitFor(() =>
-                expect(mocks.emitScreenGuideState).toHaveBeenCalledWith({
+                expect(mocks.reportScreenGuideState).toHaveBeenCalledWith({
                     phase: "idle",
                     message: null,
+                    generation: 1,
                 }),
             );
         } finally {

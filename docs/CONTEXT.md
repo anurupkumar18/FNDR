@@ -31,9 +31,11 @@ A macOS Tauri application that builds a **searchable local memory** from screen 
 - **Parent-child RAG**: retrieval pattern where child chunks are searched first for precision, then matched chunks' parent records are fetched for full-context card synthesis. Governed by ADR 008.
 - **Sidecar**: Python helpers under `src-tauri/sidecars/` for transcription, agent, graph, TTS, etc.
 - **Status events**: backend → renderer push channels (`capture://status`, `privacy://alerts`, `meeting://status`, `proactive_suggestion`, model-download events). Always-on UI state subscribes via `useTauriEvent` after one initial fetch instead of polling. See ADR 011.
-- **Screen Guide**: FNDR's opt-in, read-only assistant for asking about the current main display. A guide turn uses ephemeral pixels and local inference, may present an OCR-grounded visual point cue, and is not written to memory. See ADR 014.
+- **Screen Guide**: FNDR's opt-in, read-only assistant for asking about the current main display or explicitly locating a named local file. A guide turn uses on-device transcription and local speech, and is not written to memory. Screen questions may use ephemeral pixels and an OCR-grounded point cue; file questions use scoped metadata only. See ADR 014.
 - **Ephemeral display capture**: a screen image held only in process memory for one explicit Screen Guide request. It never becomes a screenshot file or `MemoryRecord` attachment.
 - **Point cue**: an optional, non-interactive overlay marker at the normalized center of a text line Apple Vision actually observed. It explains where to look; it does not click or control another app.
+- **Scoped file lookup**: an explicit filename-only macOS metadata query limited to Documents, Desktop, and Downloads. It never reads or opens a match, scans the full home directory, or persists its query/results.
+- **Notch status item**: FNDR's OS-managed menu-bar presence beside the notch. It exposes only fixed Screen Guide phases and never user questions, filenames, paths, screen text, answers, or detailed errors.
 - **Companion API**: the existing local-network API for FNDR's iPhone and Watch clients. Do not use “Companion” as the product or code name for Screen Guide.
 
 ## Default quality bar

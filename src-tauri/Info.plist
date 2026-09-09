@@ -26,6 +26,14 @@
     <!-- Microphone Permission -->
     <key>NSMicrophoneUsageDescription</key>
     <string>FNDR needs microphone access for voice search, Screen Guide, and meeting transcription.</string>
+
+    <!-- Files and Folders Permissions -->
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>FNDR searches file names in Documents only when you ask Screen Guide, and may move an older FNDR speech runtime from Documents into private app storage once.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>FNDR searches file names on Desktop only when you ask Screen Guide to find a file.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>FNDR searches file names in Downloads only when you ask Screen Guide to find a file.</string>
     
     <!-- Run as background agent (menu bar app) -->
     <key>LSUIElement</key>

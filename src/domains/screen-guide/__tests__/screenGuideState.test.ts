@@ -8,6 +8,15 @@ import {
 } from "../screenGuideState";
 
 describe("screenGuideState", () => {
+    it("uses processing copy that is truthful for both screen and file questions", () => {
+        const state = screenGuideReducer(initialScreenGuideState, {
+            type: "thinking",
+            question: "Find my I-20 document",
+        });
+
+        expect(state.message).toBe("Finding the answer on this Mac…");
+    });
+
     it("moves from listening to an answer and keeps only the latest ten exchanges", () => {
         let state = screenGuideReducer(initialScreenGuideState, { type: "listening" });
         expect(state.phase).toBe("listening");

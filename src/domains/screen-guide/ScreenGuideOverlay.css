@@ -28,6 +28,80 @@ body,
     user-select: none;
 }
 
+.sg-notch {
+    position: absolute;
+    /* The native status item owns the menu-bar/notch area. Keep transient
+       feedback visibly below it so no display cutout can obscure the state. */
+    top: max(42px, calc(env(safe-area-inset-top, 0px) + 8px));
+    left: 50%;
+    min-width: 92px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 13px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 15px;
+    color: rgba(244, 249, 255, 0.9);
+    background: rgba(3, 6, 10, 0.96);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.26);
+    transform: translateX(-50%);
+    transition: min-width 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.sg-notch-mark {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 10px;
+}
+
+.sg-notch-mark i {
+    width: 3px;
+    height: 5px;
+    border-radius: 999px;
+    background: #70b7ff;
+    opacity: 0.8;
+}
+
+.sg-notch-mark i:nth-child(2) { height: 9px; }
+
+.sg-notch-copy {
+    font-size: 0.66rem;
+    font-weight: 720;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.sg-overlay--listening .sg-notch,
+.sg-overlay--transcribing .sg-notch,
+.sg-overlay--thinking .sg-notch {
+    min-width: 132px;
+    border-color: rgba(112, 183, 255, 0.34);
+}
+
+.sg-overlay--listening .sg-notch-mark i {
+    animation: sg-notch-wave 560ms ease-in-out infinite alternate;
+}
+
+.sg-overlay--listening .sg-notch-mark i:nth-child(2) { animation-delay: 100ms; }
+.sg-overlay--listening .sg-notch-mark i:nth-child(3) { animation-delay: 200ms; }
+
+.sg-overlay--answer .sg-notch {
+    color: #ddffed;
+    border-color: rgba(100, 226, 158, 0.38);
+}
+
+.sg-overlay--answer .sg-notch-mark i { background: #64e29e; }
+
+.sg-overlay--error .sg-notch {
+    color: #ffdada;
+    border-color: rgba(255, 133, 133, 0.42);
+}
+
+.sg-overlay--error .sg-notch-mark i { background: #ff8585; }
+
 .sg-overlay-card {
     position: absolute;
     left: 50%;
@@ -169,6 +243,10 @@ body,
     to { transform: scaleY(0.4); opacity: 0.55; }
 }
 
+@keyframes sg-notch-wave {
+    to { transform: scaleY(0.45); opacity: 0.48; }
+}
+
 @keyframes sg-spin {
     to { transform: rotate(360deg); }
 }
@@ -184,6 +262,8 @@ body,
 
 @media (prefers-reduced-motion: reduce) {
     .sg-overlay-card,
+    .sg-notch,
+    .sg-notch-mark i,
     .sg-overlay-wave i,
     .sg-overlay-spinner,
     .sg-guidance-cursor {

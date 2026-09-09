@@ -17,7 +17,7 @@ interface ScreenGuidePanelProps {
     onClose: () => void;
 }
 
-const IDLE_STATUS: ScreenGuideStateEvent = { phase: "idle", message: null };
+const IDLE_STATUS: ScreenGuideStateEvent = { phase: "idle", message: null, generation: 0 };
 
 function statusCopy(
     settings: ScreenGuideSettings | null,
@@ -33,7 +33,7 @@ function statusCopy(
         case "transcribing":
             return "Transcribing on this Mac…";
         case "thinking":
-            return "Looking at this screen…";
+            return "Finding the answer on this Mac…";
         case "answer":
             return "Answer ready";
         case "error":
@@ -200,9 +200,12 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
         <div className="sg-panel-page">
             <header className="sg-panel-header">
                 <div>
-                    <p className="sg-panel-kicker">ON-SCREEN ASSISTANCE</p>
+                    <p className="sg-panel-kicker">FNDR VOICE</p>
                     <h2>Screen Guide</h2>
-                    <p>Ask what is on your main display and get a concise, grounded next step.</p>
+                    <p>
+                        Hold your shortcut, talk naturally, and FNDR can guide what is on screen or
+                        find a file by name.
+                    </p>
                 </div>
                 <button
                     type="button"
@@ -231,7 +234,7 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                     <label className="sg-setting-row">
                         <span>
                             <strong>Enable Screen Guide</strong>
-                            <small>Make the hold-to-ask shortcut available</small>
+                            <small>Keep FNDR ready beside the notch for hold-to-talk</small>
                         </span>
                         <input
                             type="checkbox"
@@ -310,14 +313,14 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                 </section>
 
                 <section className="sg-ask-card">
-                    <label htmlFor="sg-question">Ask about your main display</label>
+                    <label htmlFor="sg-question">Ask FNDR about this screen or your files</label>
                     <div className="sg-question-row">
                         <input
                             id="sg-question"
                             type="text"
                             value={question}
                             disabled={questionDisabled}
-                            placeholder="Where is the setting I need?"
+                            placeholder="Where is Save? or Find my I-20 document"
                             onChange={(event) => setQuestion(event.target.value)}
                             onKeyDown={(event) => {
                                 if (event.key === "Enter") {
@@ -370,8 +373,10 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                 <aside className="sg-privacy-note">
                     <strong>Private by design</strong>
                     <p>
-                        Your question, voice transcription, and main-display context stay on this
-                        Mac. Screen Guide only listens while you hold the button or shortcut.
+                        Your question, voice transcription, and screen context stay on this Mac.
+                        FNDR only listens while you hold the button or shortcut. File search checks
+                        only file names in Documents, Desktop, and Downloads; it does not read or
+                        open the files.
                     </p>
                 </aside>
 

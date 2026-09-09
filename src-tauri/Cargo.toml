@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Tauri
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-shell = "2"
 
 # Async runtime
@@ -128,10 +128,22 @@ codegen-units = 16
 panic = "abort"
 strip = true
 
+# macOS 27 rejects stripped proc-macro dylibs whose LINKEDIT string table is
+# emitted with four-byte alignment. Build dependencies never ship in the app,
+# so keep them unstripped while retaining stripping for the release binary.
+[profile.release.build-override]
+strip = false
+
 [profile.dev]
 debug = 0
 split-debuginfo = "off"
 
+[profile.dev.build-override]
+strip = false
+
 [profile.test]
 debug = 0
 split-debuginfo = "off"
+
+[profile.test.build-override]
+strip = false
