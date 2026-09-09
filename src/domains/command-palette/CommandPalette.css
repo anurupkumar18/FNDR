@@ -73,8 +73,8 @@
     background: none;
     border: none;
     outline: none;
-    font-family: var(--font-display);
-    font-style: italic;
+    font-family: var(--font-body);
+    font-style: normal;
     font-weight: 400;
     font-size: 22px;
     line-height: 1.2;
@@ -84,7 +84,7 @@
 
 .cp-input::placeholder {
     color: var(--fg-3);
-    font-style: italic;
+    font-style: normal;
 }
 
 .cp-esc-hint {
@@ -339,7 +339,7 @@
 
 .cp-item-desc {
     font-family: var(--font-body);
-    font-style: italic;
+    font-style: normal;
     font-size: 11px;
     color: var(--fg-3);
     overflow: hidden;
