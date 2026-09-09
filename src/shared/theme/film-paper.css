@@ -1,8 +1,12 @@
 /* =============================================================
    FNDR brand-only tokens layered on top of cinematic-palettes.ts.
    The --cp-* vars (bg, accent, fg) come from applyPalette("film").
-   Tokens here are brand atmospherics (halation, eases, fonts,
-   font-family) and live in :root because they're palette-invariant.
+   Tokens here are brand atmospherics (eases, fonts, font-family)
+   and live in :root because they're palette-invariant.
+
+   Apple-native pass: typography follows the system font stack per
+   Apple HIG (San Francisco), radii/motion follow macOS control
+   conventions. See docs/product/DESIGN_DIRECTION.md.
 
    Immersive design system tokens (--bg/--fg/--accent semantic vars
    and the type/spacing scale) are scoped to .fndr-immersive-root so
@@ -10,58 +14,49 @@
    tokens in app/styles/index.css.
    ============================================================= */
 
-/* Self-hosted fonts, latin subset only (local-first: no network fetch). */
-@import "@fontsource/cormorant-garamond/latin-400.css";
-@import "@fontsource/cormorant-garamond/latin-500.css";
-@import "@fontsource/cormorant-garamond/latin-600.css";
-@import "@fontsource/cormorant-garamond/latin-700.css";
-@import "@fontsource/cormorant-garamond/latin-400-italic.css";
-@import "@fontsource/cormorant-garamond/latin-500-italic.css";
-@import "@fontsource/cormorant-garamond/latin-600-italic.css";
-@import "@fontsource/eb-garamond/latin-400.css";
-@import "@fontsource/eb-garamond/latin-500.css";
-@import "@fontsource/eb-garamond/latin-600.css";
-@import "@fontsource/eb-garamond/latin-400-italic.css";
-@import "@fontsource/eb-garamond/latin-500-italic.css";
-@import "@fontsource/cutive-mono/latin-400.css";
-@import "@fontsource/inter/latin-300.css";
-@import "@fontsource/inter/latin-400.css";
-@import "@fontsource/inter/latin-500.css";
-
 :root {
-    /* Brand fonts */
-    --film-font-display: "Cormorant Garamond", "Times New Roman", serif;
-    --film-font-body: "EB Garamond", Georgia, serif;
-    --film-font-ui: "Inter", system-ui, -apple-system, sans-serif;
-    --film-font-mono: "Cutive Mono", "Courier New", ui-monospace, monospace;
+    /* System font stack — Apple HIG: default to the platform font (San
+       Francisco) rather than a bundled webfont. One family covers both
+       "display" and "body" roles; San Francisco optically resizes itself,
+       so hierarchy comes from weight/size/leading, not a serif/sans split. */
+    --film-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+    --film-font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    --film-font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    --film-font-mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", monospace;
 
-    /* Futuristic OS chrome — circular glass controls + pill inputs */
-    --fndr-os-glass-size: 44px;
-    --fndr-os-pill-height: 58px;
-    --fndr-os-pill-radius: 29px;
+    /* OS chrome — macOS-scale glass controls + pill inputs. The hero
+       search pill is intentionally a bit taller than a standard 28-32px
+       control (it's the app's one "hero" surface), but no longer the
+       oversized 58px/29px cinematic pill. */
+    --fndr-os-glass-size: 32px;
+    --fndr-os-pill-height: 40px;
+    --fndr-os-pill-radius: 20px;
 
-    /* Motion — easing */
-    --film-ease-shutter: cubic-bezier(0.22, 1, 0.36, 1);
-    --film-ease-develop: cubic-bezier(0.65, 0, 0.35, 1);
-    --film-ease-iris: cubic-bezier(0.34, 1.56, 0.64, 1);
+    /* Motion — easing. Critically-damped-feeling curves by default
+       (no overshoot); reserve iris (slight overshoot) for momentum/
+       gesture-release moments per the fluid-interfaces spring model. */
+    --film-ease-shutter: cubic-bezier(0.32, 0.72, 0, 1);
+    --film-ease-develop: cubic-bezier(0.4, 0, 0.2, 1);
+    --film-ease-iris: cubic-bezier(0.34, 1.28, 0.64, 1);
 
-    /* Motion — duration */
-    --film-dur-fast: 180ms;
-    --film-dur-base: 320ms;
-    --film-dur-hover: 220ms;
-    --film-dur-slow: 680ms;
-    --film-dur-cinema: 1200ms;
+    /* Motion — duration. Response-time scale, not cinematic dissolve
+       timing: fast feedback, no interaction takes longer than ~500ms. */
+    --film-dur-fast: 120ms;
+    --film-dur-base: 220ms;
+    --film-dur-hover: 150ms;
+    --film-dur-slow: 320ms;
+    --film-dur-cinema: 420ms;
 
     /* Mono/stamp letter tracking */
-    --film-track-label: 0.16em;
-    --film-track-stamp: 0.24em;
+    --film-track-label: 0.08em;
+    --film-track-stamp: 0.1em;
 
-    /* Brand radii (kept separate from app-wide --radius-* in index.css
-       which uses larger 16/22/28px values for the existing UI). */
-    --film-radius-xs: 2px;
-    --film-radius-sm: 4px;
+    /* Brand radii — macOS control (8-10px) / card-sheet (10-14px) scale. */
+    --film-radius-xs: 4px;
+    --film-radius-sm: 6px;
     --film-radius-md: 8px;
     --film-radius-lg: 12px;
+    --film-radius-xl: 16px;
     --film-radius-pill: 999px;
 
     /* Old Film palette — raw brand values (palette-invariant, safe at :root) */
@@ -130,22 +125,26 @@
 }
 
 /* Halation derives from --cp-accent so it follows whichever palette is active. */
+/* These custom properties keep their historical "halation" names so the
+   dozen+ components that already reference var(--halation-soft) etc. don't
+   need individual edits, but the values are now a restrained, native-style
+   accent ring/elevation instead of a neon glow — a hairline of accent-tinted
+   contrast plus a soft, tight shadow, the way macOS hints selection and
+   focus rather than emitting light. */
 :root {
-    --film-halation: 0 0 24px -2px color-mix(in srgb, var(--cp-accent) 45%, transparent),
-        0 0 48px -8px color-mix(in srgb, var(--cp-accent) 28%, transparent);
-    --film-halation-soft: 0 0 16px -4px color-mix(in srgb, var(--cp-accent) 30%, transparent);
-    --film-halation-strong: 0 0 0 1px color-mix(in srgb, var(--cp-accent) 45%, transparent),
-        0 0 28px -2px color-mix(in srgb, var(--cp-accent) 55%, transparent),
-        0 0 64px -8px color-mix(in srgb, var(--cp-accent) 35%, transparent);
+    --film-halation: 0 0 0 1px color-mix(in srgb, var(--cp-accent) 22%, transparent),
+        0 6px 16px -6px color-mix(in srgb, var(--cp-accent) 20%, transparent);
+    --film-halation-soft: 0 0 0 1px color-mix(in srgb, var(--cp-accent) 14%, transparent);
+    --film-halation-strong: 0 0 0 1px color-mix(in srgb, var(--cp-accent) 32%, transparent),
+        0 8px 20px -8px color-mix(in srgb, var(--cp-accent) 28%, transparent);
 
-    /* Halation pinned to amber — used by the immersive scroll mode where
-       the archival aesthetic should always be amber regardless of palette. */
-    --halation: 0 0 24px -2px rgba(212, 160, 74, 0.45),
-        0 0 48px -8px rgba(212, 160, 74, 0.28);
-    --halation-soft: 0 0 16px -4px rgba(212, 160, 74, 0.30);
-    --halation-strong: 0 0 0 1px rgba(212, 160, 74, 0.45),
-        0 0 28px -2px rgba(212, 160, 74, 0.55),
-        0 0 64px -8px rgba(212, 160, 74, 0.35);
+    /* Pinned-amber variants — used by the immersive scroll mode where the
+       archival aesthetic should always be amber regardless of palette. */
+    --halation: 0 0 0 1px rgba(212, 160, 74, 0.22),
+        0 6px 16px -6px rgba(212, 160, 74, 0.20);
+    --halation-soft: 0 0 0 1px rgba(212, 160, 74, 0.14);
+    --halation-strong: 0 0 0 1px rgba(212, 160, 74, 0.32),
+        0 8px 20px -8px rgba(212, 160, 74, 0.28);
 }
 
 /* =============================================================
@@ -233,26 +232,4 @@
         transition-duration: 0.001ms !important;
         scroll-behavior: auto !important;
     }
-}
-
-/* Film grain helper — opt in by adding `.film-grain` to a positioned element. */
-.film-grain {
-    position: relative;
-    isolation: isolate;
-}
-.film-grain::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image: radial-gradient(
-            circle at 30% 20%,
-            rgba(232, 223, 200, 0.07) 0,
-            transparent 60%
-        ),
-        radial-gradient(circle at 80% 70%, rgba(232, 223, 200, 0.05) 0, transparent 55%);
-    background-size: 220px 220px;
-    opacity: 0.6;
-    mix-blend-mode: overlay;
-    pointer-events: none;
-    z-index: 2;
 }
