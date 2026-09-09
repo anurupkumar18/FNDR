@@ -56,7 +56,6 @@
 
 .fndr-mc-preview {
     font-family: var(--font-body);
-    font-style: italic;
     font-weight: 400;
     font-size: 13px;
     line-height: 1.55;
@@ -67,7 +66,6 @@
 
 .fndr-mc-source {
     font-family: var(--font-body);
-    font-style: italic;
     font-size: 11px;
     color: var(--fg-3);
     margin-top: 8px;
@@ -310,7 +308,6 @@
 
 .fndr-mc-c-preview {
     font-family: var(--font-body);
-    font-style: italic;
     font-size: 11px;
     line-height: 1.35;
     color: var(--fg-3);
@@ -332,7 +329,6 @@
 
 .fndr-mc-c-source-app {
     font-family: var(--font-body);
-    font-style: italic;
     font-size: 11px;
     color: var(--fg-3);
     overflow: hidden;

@@ -40,7 +40,6 @@
 .kg-empty {
     font: 400 14px/1.4 var(--font-body);
     fill: var(--fg-2);
-    font-style: italic;
 }
 
 /* Nodes.
@@ -214,7 +213,6 @@
 }
 .kg-side-panel-empty-text {
     color: var(--fg-2);
-    font-style: italic;
     font-family: var(--font-body);
 }
 .kg-side-panel-head {
@@ -247,7 +245,6 @@
 .kg-side-panel-preview {
     font: 400 14px/1.6 var(--font-body);
     color: color-mix(in srgb, var(--fg) 80%, var(--fg-2));
-    font-style: italic;
     margin: 0;
 }
 .kg-side-panel-preview-muted {

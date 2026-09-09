@@ -737,7 +737,6 @@
 .home-greeting-sub {
     font-family: var(--film-font-body);
     font-size: clamp(17px, 2vw, 21px);
-    font-style: italic;
     font-weight: 400;
     color: var(--cp-wall-text-secondary, var(--text-secondary));
     margin: 0;

@@ -356,7 +356,6 @@
 .fm-toast-task {
     font-size: 0.78rem;
     color: var(--text-muted);
-    font-style: italic;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

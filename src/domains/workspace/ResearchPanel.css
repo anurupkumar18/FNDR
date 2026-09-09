@@ -349,7 +349,6 @@
 .rp-done-hint {
     font-size: 0.74rem;
     color: var(--text-muted);
-    font-style: italic;
 }
 
 /* ── Empty state ─────────────────────────────────────────────────────────── */
