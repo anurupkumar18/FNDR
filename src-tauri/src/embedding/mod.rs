@@ -12,6 +12,6 @@ pub use clip_vision::{
     clip_session_loaded, embed_imported_image, last_clip_infer_ms, resolve_clip_onnx_path,
 };
 pub use onnx::{
-    embedding_runtime_status, preflight_embedding_environment, Embedder, EmbeddingBackend,
-    EmbeddingPreflight, EmbeddingRuntimeStatus, EMBEDDING_DIM,
+    embedding_runtime_status, preflight_embedding_environment, shared_bge_v5_query_embedder,
+    Embedder, EmbeddingBackend, EmbeddingPreflight, EmbeddingRuntimeStatus, EMBEDDING_DIM,
 };
