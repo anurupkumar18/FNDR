@@ -4,4 +4,5 @@
 //! because they require a local LLM model to be loaded. Run with:
 //! `cargo test --lib -p fndr eval_ -- --ignored --nocapture`
 
+pub mod bge_v5_index;
 pub mod memory_quality;
