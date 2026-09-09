@@ -10,7 +10,8 @@ interface Props {
  * Single-line headline with a click/hover tooltip that exposes the route
  * mix, the graph path (when present), and the anchor terms that matched.
  *
- * Styled to match the warm palette used throughout the memory vault.
+ * Styled off the shared design tokens (--fg/--bg/--accent) so it follows
+ * the active theme and palette instead of a fixed color.
  */
 export function SurfacingReason({ reason }: Props) {
     const [open, setOpen] = useState(false);
@@ -30,9 +31,10 @@ export function SurfacingReason({ reason }: Props) {
                 borderRadius: 999,
                 fontSize: 11,
                 lineHeight: "16px",
-                color: "#3E2723",
-                background: "#FAF9F6",
-                border: "1px solid rgba(62, 39, 35, 0.16)",
+                fontFamily: "var(--font-body)",
+                color: "var(--fg-2)",
+                background: "var(--surface-translucent, var(--bg-2))",
+                border: "1px solid var(--border)",
                 cursor: reason.routes.length > 0 ? "help" : "default",
                 position: "relative",
             }}
@@ -59,7 +61,7 @@ export function SurfacingReason({ reason }: Props) {
                     width: 6,
                     height: 6,
                     borderRadius: 999,
-                    background: "#E65100",
+                    background: "var(--accent)",
                     display: "inline-block",
                 }}
             />
@@ -73,13 +75,15 @@ export function SurfacingReason({ reason }: Props) {
                         left: 0,
                         marginTop: 6,
                         padding: "6px 10px",
-                        background: "#3E2723",
-                        color: "#FAF9F6",
-                        borderRadius: 8,
+                        background: "var(--bg-3)",
+                        color: "var(--fg)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius-md, 8px)",
                         fontSize: 11,
+                        fontFamily: "var(--font-body)",
                         whiteSpace: "nowrap",
                         zIndex: 50,
-                        boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+                        boxShadow: "0 8px 24px var(--shadow-color, rgba(0,0,0,0.25))",
                     }}
                 >
                     {reason.routes.join(" + ")}

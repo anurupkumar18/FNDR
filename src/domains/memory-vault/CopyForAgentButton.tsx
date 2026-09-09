@@ -37,11 +37,12 @@ export function CopyForAgentButton({ query, project }: Props) {
             data-testid="fndr-copy-for-agent"
             style={{
                 padding: "8px 14px",
-                background: status === "copied" ? "#388E3C" : "#3E2723",
-                color: "#FAF9F6",
-                borderRadius: 8,
+                background: status === "copied" ? "var(--success, var(--accent))" : "var(--accent)",
+                color: "var(--bg)",
+                borderRadius: "var(--radius-md, 8px)",
                 border: "none",
                 fontSize: 13,
+                fontFamily: "var(--font-body)",
                 cursor: status === "copying" ? "wait" : "pointer",
             }}
         >
