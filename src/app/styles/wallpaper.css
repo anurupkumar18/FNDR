@@ -108,6 +108,15 @@
     color: var(--cp-wall-text-primary, var(--cp-text-primary));
 }
 
+/* Top chrome keeps a dark glass surface in light mode, so its icons use the
+   light inverse ink for readable contrast. */
+[data-theme="light"] .fndr-os-chrome-btn.sidebar-toggle,
+[data-theme="paper"] .fndr-os-chrome-btn.sidebar-toggle,
+[data-theme="light"] .top-right-control .fndr-os-chrome-btn,
+[data-theme="paper"] .top-right-control .fndr-os-chrome-btn {
+    color: var(--cp-text-inverse, #ffffff) !important;
+}
+
 .fndr-os-chrome-btn:active {
     transform: scale(0.96);
 }
