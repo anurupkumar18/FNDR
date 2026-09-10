@@ -27,7 +27,7 @@
 
 .home-hero__date {
     font-family: var(--film-font-mono);
-    font-size: 11px;
+    font-size: 15px;
     font-weight: 500;
     letter-spacing: var(--film-track-stamp);
     text-transform: uppercase;
