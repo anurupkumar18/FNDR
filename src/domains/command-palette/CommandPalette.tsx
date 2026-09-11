@@ -52,6 +52,7 @@ export type PanelKey =
     | "todo"
     | "meeting"
     | "dailySummary"
+    | "wrapped"
     | "pipeline"
     | "engineMetrics"
     | "glassesImport"

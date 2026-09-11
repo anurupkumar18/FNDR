@@ -802,6 +802,7 @@ fn main() {
             ipc::commands::generate_daily_briefing,
             ipc::commands::generate_daily_summary_for_date,
             ipc::commands::get_daily_summary_overview,
+            ipc::commands::get_weekly_wrapped,
             // Time tracking & Focus Mode
             ipc::commands::get_time_tracking,
             ipc::commands::set_focus_task,

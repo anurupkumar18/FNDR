@@ -1,0 +1,232 @@
+.wrapped-page {
+    position: fixed;
+    inset: 0;
+    z-index: 1045;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-bg);
+    color: var(--text-primary);
+}
+
+.wrapped-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.wrapped-header h2 {
+    margin: 0;
+    font-size: 1.2rem;
+}
+
+.wrapped-header p {
+    margin: 4px 0 0;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.wrapped-header-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.wrapped-refresh-btn,
+.wrapped-close-btn {
+    font-size: 0.78rem;
+}
+
+.wrapped-body {
+    width: min(100%, 1080px);
+    box-sizing: border-box;
+    flex: 1;
+    overflow-y: auto;
+    margin: 0 auto;
+    padding: 34px 24px 48px;
+}
+
+.wrapped-state {
+    min-height: 360px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.wrapped-error p {
+    color: var(--danger);
+}
+
+.wrapped-hero {
+    padding: 36px;
+    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+    border-radius: var(--film-radius-lg);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent-light) 72%, var(--surface-elevated)), var(--surface-translucent));
+}
+
+.wrapped-eyebrow,
+.wrapped-card-label {
+    color: var(--accent);
+    font-family: var(--font-mono, monospace);
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+}
+
+.wrapped-hero h3 {
+    max-width: 780px;
+    margin: 14px 0 8px;
+    font-family: var(--font-display, inherit);
+    font-size: clamp(1.8rem, 4vw, 3rem);
+    font-weight: 500;
+    line-height: 1.08;
+}
+
+.wrapped-hero p {
+    margin: 0;
+    color: var(--text-secondary);
+}
+
+.wrapped-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin: 18px 0;
+}
+
+.wrapped-stat-card,
+.wrapped-card {
+    border: 1px solid var(--border);
+    border-radius: var(--film-radius-lg);
+    background: var(--surface-translucent);
+}
+
+.wrapped-stat-card {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 20px;
+}
+
+.wrapped-stat-card strong {
+    font-size: 1.7rem;
+    font-weight: 500;
+}
+
+.wrapped-stat-card span {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.wrapped-two-column {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+    margin-top: 18px;
+}
+
+.wrapped-card {
+    padding: 24px;
+}
+
+.wrapped-rank-list,
+.wrapped-topic-list,
+.wrapped-superlatives {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 18px;
+}
+
+.wrapped-rank-row,
+.wrapped-topic-row,
+.wrapped-superlatives > div {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.wrapped-rank-number {
+    color: var(--text-muted);
+    font-family: var(--font-mono, monospace);
+    font-size: 0.72rem;
+}
+
+.wrapped-rank-name,
+.wrapped-topic-row span {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wrapped-rank-time,
+.wrapped-topic-row strong {
+    color: var(--accent);
+    font-size: 0.82rem;
+}
+
+.wrapped-superlatives > div {
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+}
+
+.wrapped-superlatives > div:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.wrapped-superlatives span {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.wrapped-superlatives strong {
+    max-width: 55%;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.86rem;
+    font-weight: 500;
+}
+
+.wrapped-empty-list {
+    margin: 18px 0 0;
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+}
+
+@media (max-width: 720px) {
+    .wrapped-header {
+        padding: 14px 16px;
+    }
+
+    .wrapped-body {
+        padding: 20px 16px 36px;
+    }
+
+    .wrapped-hero {
+        padding: 24px;
+    }
+
+    .wrapped-stat-grid,
+    .wrapped-two-column {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 480px) {
+    .wrapped-stat-grid,
+    .wrapped-two-column {
+        grid-template-columns: 1fr;
+    }
+}

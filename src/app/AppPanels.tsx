@@ -3,6 +3,7 @@ import { AgentPanel } from "@/domains/workspace/AgentPanel";
 import { AutomationPanel } from "@/domains/workspace/AutomationPanel";
 import { CommandPalette, type PanelKey } from "@/domains/command-palette/CommandPalette";
 import { DailySummaryPanel } from "@/domains/workspace/DailySummaryPanel";
+import { FndrWrappedPanel } from "@/domains/workspace/FndrWrappedPanel";
 import { FocusModePanel } from "@/domains/workspace/FocusModePanel";
 import { FocusSessionPanel } from "@/domains/workspace/FocusSessionPanel";
 import { MeetingRecorderPanel } from "@/domains/workspace/MeetingRecorderPanel";
@@ -99,6 +100,7 @@ export function AppPanels({
             <StatsPanel isVisible={activePanel === "stats"} onClose={onClosePanel} />
             <TodoPanel isVisible={activePanel === "todo"} onClose={onClosePanel} />
             <DailySummaryPanel isVisible={activePanel === "dailySummary"} onClose={onClosePanel} />
+            <FndrWrappedPanel isVisible={activePanel === "wrapped"} onClose={onClosePanel} />
             <EngineMetricsPanel
                 isVisible={activePanel === "engineMetrics"}
                 onClose={onClosePanel}

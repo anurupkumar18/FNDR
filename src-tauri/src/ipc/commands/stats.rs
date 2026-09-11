@@ -12,7 +12,7 @@ use crate::privacy::Blocklist;
 use crate::speech;
 use crate::storage::{SearchResult, Stats, TaskType};
 use crate::AppState;
-use chrono::TimeZone;
+use chrono::{TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
@@ -805,6 +805,233 @@ pub async fn get_daily_summary_overview(
         .count();
 
     Ok(build_daily_summary_overview(&records, open_followups))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WrappedRank {
+    pub name: String,
+    pub captures: usize,
+    pub duration_minutes: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WrappedCount {
+    pub name: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WrappedDay {
+    pub day: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WeeklyWrapped {
+    pub start_date: String,
+    pub end_date: String,
+    pub total_captures: usize,
+    pub active_days: usize,
+    pub total_minutes: usize,
+    pub apps: Vec<WrappedRank>,
+    pub websites: Vec<WrappedRank>,
+    pub projects_and_topics: Vec<WrappedCount>,
+    pub meeting_count: usize,
+    pub document_count: usize,
+    pub open_followups: usize,
+    pub busiest_day: Option<WrappedDay>,
+    pub busiest_hour: Option<u8>,
+    pub most_revisited_file: Option<String>,
+}
+
+fn wrapped_rankings(groups: HashMap<String, Vec<i64>>) -> Vec<WrappedRank> {
+    let mut rankings = groups
+        .into_iter()
+        .map(|(name, mut timestamps)| {
+            timestamps.sort_unstable();
+            let duration_ms = timestamps
+                .windows(2)
+                .map(|window| (window[1] - window[0]).clamp(30_000, 5 * 60_000))
+                .sum::<i64>()
+                .max(30_000);
+            WrappedRank {
+                name,
+                captures: timestamps.len(),
+                duration_minutes: ((duration_ms + 59_999) / 60_000).max(1) as usize,
+            }
+        })
+        .collect::<Vec<_>>();
+    rankings.sort_by(|a, b| {
+        b.duration_minutes
+            .cmp(&a.duration_minutes)
+            .then_with(|| b.captures.cmp(&a.captures))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    rankings
+}
+
+fn wrapped_display_file(path: &str) -> String {
+    path.rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
+#[tauri::command]
+pub async fn get_weekly_wrapped(
+    state: State<'_, Arc<AppState>>,
+) -> Result<WeeklyWrapped, String> {
+    let now = chrono::Local::now();
+    let end_day = now.date_naive();
+    let start_day = end_day - chrono::Duration::days(6);
+    let start = start_day
+        .and_hms_opt(0, 0, 0)
+        .ok_or("Failed to create weekly start time")?;
+    let start_ms = chrono::Local
+        .from_local_datetime(&start)
+        .earliest()
+        .unwrap_or_else(|| chrono::Local.from_local_datetime(&start).latest().unwrap())
+        .timestamp_millis();
+    let end_ms = now.timestamp_millis();
+
+    let records = state
+        .store
+        .get_search_results_in_range(start_ms, end_ms)
+        .await
+        .map_err(|e| e.to_string())?;
+    let records = strip_internal_fndr_results(records);
+
+    let mut app_groups: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut website_groups: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut context_counts: HashMap<String, usize> = HashMap::new();
+    let mut day_counts: HashMap<String, usize> = HashMap::new();
+    let mut hour_counts: HashMap<u8, usize> = HashMap::new();
+    let mut document_counts: HashMap<String, usize> = HashMap::new();
+
+    for record in &records {
+        let app = record.app_name.trim();
+        if !app.is_empty() {
+            app_groups
+                .entry(app.to_string())
+                .or_default()
+                .push(record.timestamp);
+        }
+
+        if let Some(domain) = record
+            .url
+            .as_deref()
+            .and_then(card_domain)
+            .filter(|domain| !domain.trim().is_empty())
+        {
+            website_groups
+                .entry(domain)
+                .or_default()
+                .push(record.timestamp);
+        }
+
+        for label in [record.project.trim(), record.topic.trim()] {
+            if !label.is_empty() && !label.eq_ignore_ascii_case("unknown") {
+                *context_counts.entry(label.to_string()).or_insert(0) += 1;
+            }
+        }
+        for category in &record.topic_categories {
+            let label = category.trim();
+            if !label.is_empty() && !label.eq_ignore_ascii_case("unknown") {
+                *context_counts.entry(label.to_string()).or_insert(0) += 1;
+            }
+        }
+
+        if let Some(local_timestamp) = chrono::Local.timestamp_millis_opt(record.timestamp).single() {
+            let day = local_timestamp.date_naive().format("%a, %b %-d").to_string();
+            *day_counts.entry(day).or_insert(0) += 1;
+            *hour_counts.entry(local_timestamp.hour() as u8).or_insert(0) += 1;
+        }
+
+        for path in &record.files_touched {
+            let path = path.trim();
+            if !path.is_empty() {
+                *document_counts.entry(path.to_string()).or_insert(0) += 1;
+            }
+        }
+        if let Some(path) = record.reopen_file_path.as_deref() {
+            let path = path.trim();
+            if !path.is_empty() {
+                *document_counts.entry(path.to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let mut apps = wrapped_rankings(app_groups);
+    let total_minutes = apps.iter().map(|entry| entry.duration_minutes).sum();
+    apps.truncate(5);
+    let mut websites = wrapped_rankings(website_groups);
+    websites.truncate(5);
+    let mut projects_and_topics = context_counts
+        .into_iter()
+        .map(|(name, count)| WrappedCount { name, count })
+        .collect::<Vec<_>>();
+    projects_and_topics.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+    projects_and_topics.truncate(5);
+
+    let busiest_day = day_counts
+        .into_iter()
+        .max_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(day, count)| WrappedDay { day, count });
+    let busiest_hour = hour_counts
+        .into_iter()
+        .max_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(hour, _)| hour);
+    let document_count = document_counts.len();
+    let most_revisited_file = document_counts
+        .into_iter()
+        .max_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)))
+        .map(|(path, _)| wrapped_display_file(&path));
+
+    let meeting_count = state
+        .store
+        .list_meetings()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|meeting| meeting.start_timestamp >= start_ms && meeting.start_timestamp <= end_ms)
+        .count();
+    let open_followups = state
+        .store
+        .list_tasks()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|task| {
+            task.task_type == TaskType::Followup && !task.is_completed && !task.is_dismissed
+        })
+        .count();
+
+    Ok(WeeklyWrapped {
+        start_date: start_day.format("%Y-%m-%d").to_string(),
+        end_date: end_day.format("%Y-%m-%d").to_string(),
+        total_captures: records.len(),
+        active_days: records
+            .iter()
+            .filter_map(|record| {
+                chrono::Local
+                    .timestamp_millis_opt(record.timestamp)
+                    .single()
+                    .map(|timestamp| timestamp.date_naive())
+            })
+            .collect::<HashSet<_>>()
+            .len(),
+        total_minutes,
+        apps,
+        websites,
+        projects_and_topics,
+        meeting_count,
+        document_count,
+        open_followups,
+        busiest_day,
+        busiest_hour,
+        most_revisited_file,
+    })
 }
 
 // ────────────────────────────────────────────────────────────────────────────

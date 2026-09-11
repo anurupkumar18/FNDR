@@ -1862,6 +1862,43 @@ export async function getDailySummaryOverview(dateStr: string): Promise<string> 
     return invoke<string>("get_daily_summary_overview", { dateStr });
 }
 
+export interface WrappedRank {
+    name: string;
+    captures: number;
+    duration_minutes: number;
+}
+
+export interface WrappedCount {
+    name: string;
+    count: number;
+}
+
+export interface WrappedDay {
+    day: string;
+    count: number;
+}
+
+export interface WeeklyWrapped {
+    start_date: string;
+    end_date: string;
+    total_captures: number;
+    active_days: number;
+    total_minutes: number;
+    apps: WrappedRank[];
+    websites: WrappedRank[];
+    projects_and_topics: WrappedCount[];
+    meeting_count: number;
+    document_count: number;
+    open_followups: number;
+    busiest_day: WrappedDay | null;
+    busiest_hour: number | null;
+    most_revisited_file: string | null;
+}
+
+export async function getWeeklyWrapped(): Promise<WeeklyWrapped> {
+    return invoke<WeeklyWrapped>("get_weekly_wrapped");
+}
+
 export async function exportDailySummaryPdf(dateStr: string, summaryText: string): Promise<string> {
     return invoke<string>("export_daily_summary_pdf", { dateStr, summaryText });
 }
