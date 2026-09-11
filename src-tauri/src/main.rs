@@ -801,6 +801,7 @@ fn main() {
             ipc::commands::quick_setup_ollama,
             ipc::commands::generate_daily_briefing,
             ipc::commands::generate_daily_summary_for_date,
+            ipc::commands::get_daily_summary_overview,
             // Time tracking & Focus Mode
             ipc::commands::get_time_tracking,
             ipc::commands::set_focus_task,

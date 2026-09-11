@@ -1,5 +1,10 @@
 import { useState, useEffect } from "react";
-import { generateDailySummaryForDate, exportDailySummaryPdf, openExportedPdf } from "@/shared/ipc/tauri";
+import {
+    generateDailySummaryForDate,
+    getDailySummaryOverview,
+    exportDailySummaryPdf,
+    openExportedPdf,
+} from "@/shared/ipc/tauri";
 import "./DailySummaryPanel.css";
 
 interface DailySummaryPanelProps {
@@ -10,6 +15,7 @@ interface DailySummaryPanelProps {
 export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps) {
     const [dateStr, setDateStr] = useState<string>("");
     const [summary, setSummary] = useState<string | null>(null);
+    const [overview, setOverview] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [exporting, setExporting] = useState(false);
@@ -28,6 +34,11 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
 
     const handleGenerate = async () => {
         if (!dateStr) return;
+
+        setOverview(null);
+        void getDailySummaryOverview(dateStr)
+            .then((rawOverview) => setOverview(rawOverview.trim() || null))
+            .catch(() => setOverview(null));
 
         if (cache.has(dateStr)) {
             setSummary(cache.get(dateStr) ?? null);
@@ -141,19 +152,22 @@ export function DailySummaryPanel({ isVisible, onClose }: DailySummaryPanelProps
                     )}
 
                     {!loading && !error && summary && (
-                        <div className="summary-bullets">
-                            {summary.split("\n").map((line, idx) => {
-                                const trim = line.trim();
-                                if (!trim) return null;
-                                return (
-                                    <p key={idx} className="summary-bullet">
-                                        {trim.startsWith("-") || trim.startsWith("•") || trim.startsWith("*") 
-                                            ? trim 
-                                            : `• ${trim}`}
-                                    </p>
-                                );
-                            })}
-                        </div>
+                        <>
+                            {overview && <p className="daily-summary-overview">{overview}</p>}
+                            <div className="summary-bullets">
+                                {summary.split("\n").map((line, idx) => {
+                                    const trim = line.trim();
+                                    if (!trim) return null;
+                                    return (
+                                        <p key={idx} className="summary-bullet">
+                                            {trim.startsWith("-") || trim.startsWith("•") || trim.startsWith("*")
+                                                ? trim
+                                                : `• ${trim}`}
+                                        </p>
+                                    );
+                                })}
+                            </div>
+                        </>
                     )}
 
                     {!loading && !error && !summary && cache.size === 0 && (

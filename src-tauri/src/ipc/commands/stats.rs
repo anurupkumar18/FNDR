@@ -10,11 +10,11 @@ use crate::embedding::{embedding_runtime_status, Embedder, EmbeddingBackend};
 use crate::mcp::{self, McpServerStatus};
 use crate::privacy::Blocklist;
 use crate::speech;
-use crate::storage::{SearchResult, Stats};
+use crate::storage::{SearchResult, Stats, TaskType};
 use crate::AppState;
 use chrono::TimeZone;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -586,6 +586,134 @@ fn daily_summary_day_label(target_day: chrono::NaiveDate) -> String {
     }
 }
 
+fn format_overview_list(values: &HashSet<String>) -> String {
+    let mut values = values.iter().cloned().collect::<Vec<_>>();
+    values.sort_by_key(|value| value.to_lowercase());
+
+    const MAX_NAMES: usize = 4;
+    if values.len() > MAX_NAMES {
+        let remaining = values.len() - MAX_NAMES;
+        values.truncate(MAX_NAMES);
+        values.push(format!("{remaining} more"));
+    }
+
+    match values.len() {
+        0 => String::new(),
+        1 => values[0].clone(),
+        2 => format!("{} and {}", values[0], values[1]),
+        _ => {
+            let last = values.pop().unwrap_or_default();
+            format!("{}, and {last}", values.join(", "))
+        }
+    }
+}
+
+fn format_overview_duration(duration_ms: i64) -> String {
+    let minutes = ((duration_ms.max(0) + 59_999) / 60_000).max(1);
+    if minutes < 60 {
+        format!(
+            "about {minutes} minute{}",
+            if minutes == 1 { "" } else { "s" }
+        )
+    } else {
+        let hours = minutes / 60;
+        let rest = minutes % 60;
+        if rest == 0 {
+            format!("about {hours} hour{}", if hours == 1 { "" } else { "s" })
+        } else {
+            format!(
+                "about {hours} hour{} {rest} minute{}",
+                if hours == 1 { "" } else { "s" },
+                if rest == 1 { "" } else { "s" }
+            )
+        }
+    }
+}
+
+fn build_daily_summary_overview(records: &[SearchResult], open_followups: usize) -> String {
+    if records.is_empty() {
+        return String::new();
+    }
+
+    let mut apps = HashSet::new();
+    let mut websites = HashSet::new();
+    let mut activity_timestamps: HashMap<String, Vec<i64>> = HashMap::new();
+
+    for record in records {
+        let website = record
+            .url
+            .as_deref()
+            .and_then(card_domain)
+            .filter(|domain| !domain.trim().is_empty());
+        let activity = if let Some(domain) = website {
+            let domain = domain.to_string();
+            websites.insert(domain.clone());
+            domain
+        } else {
+            let app = record.app_name.trim();
+            if app.is_empty() {
+                continue;
+            }
+            apps.insert(app.to_string());
+            app.to_string()
+        };
+        activity_timestamps
+            .entry(activity)
+            .or_default()
+            .push(record.timestamp);
+    }
+
+    let mut durations = activity_timestamps
+        .into_iter()
+        .map(|(activity, mut timestamps)| {
+            timestamps.sort_unstable();
+            let duration_ms = timestamps
+                .windows(2)
+                .map(|window| (window[1] - window[0]).clamp(30_000, 5 * 60_000))
+                .sum::<i64>()
+                .max(30_000);
+            (activity, duration_ms)
+        })
+        .collect::<Vec<_>>();
+    durations.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let activity_sentence = match (apps.is_empty(), websites.is_empty()) {
+        (false, false) => format!(
+            "You used {} and visited {}.",
+            format_overview_list(&apps),
+            format_overview_list(&websites)
+        ),
+        (false, true) => format!("You used {}.", format_overview_list(&apps)),
+        (true, false) => format!("You visited {}.", format_overview_list(&websites)),
+        (true, true) => String::new(),
+    };
+
+    let most_time_sentence = durations
+        .first()
+        .map(|(activity, duration_ms)| {
+            format!(
+                "You spent the most time in “{activity}” ({}).",
+                format_overview_duration(*duration_ms)
+            )
+        })
+        .unwrap_or_default();
+
+    let followup_sentence = if open_followups == 0 {
+        "You have no open follow-ups to carry into tomorrow.".to_string()
+    } else {
+        format!(
+            "You have {open_followups} open follow-up{} to carry into tomorrow.",
+            if open_followups == 1 { "" } else { "s" }
+        )
+    };
+
+    [activity_sentence, most_time_sentence, followup_sentence]
+        .into_iter()
+        .filter(|sentence| !sentence.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[tauri::command]
 pub async fn generate_daily_summary_for_date(
     state: State<'_, Arc<AppState>>,
@@ -627,6 +755,56 @@ pub async fn generate_daily_summary_for_date(
         &records,
         &daily_summary_day_label(target_day),
     ))
+}
+
+#[tauri::command]
+pub async fn get_daily_summary_overview(
+    state: State<'_, Arc<AppState>>,
+    date_str: String,
+) -> Result<String, String> {
+    let target_day = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid date format: {}", e))?;
+    let start = target_day
+        .and_hms_opt(0, 0, 0)
+        .ok_or("Failed to create start time")?;
+    let end = (target_day + chrono::Duration::days(1))
+        .and_hms_opt(0, 0, 0)
+        .ok_or("Failed to create end time")?;
+
+    let start_ms = chrono::Local
+        .from_local_datetime(&start)
+        .earliest()
+        .unwrap_or_else(|| chrono::Local.from_local_datetime(&start).latest().unwrap())
+        .timestamp_millis();
+    let end_ms = chrono::Local
+        .from_local_datetime(&end)
+        .earliest()
+        .unwrap_or_else(|| chrono::Local.from_local_datetime(&end).latest().unwrap())
+        .timestamp_millis()
+        - 1;
+
+    let records = state
+        .store
+        .get_search_results_in_range(start_ms, end_ms)
+        .await
+        .map_err(|e| e.to_string())?;
+    let records = strip_internal_fndr_results(records);
+    if records.is_empty() {
+        return Ok(String::new());
+    }
+
+    let open_followups = state
+        .store
+        .list_tasks()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|task| {
+            task.task_type == TaskType::Followup && !task.is_completed && !task.is_dismissed
+        })
+        .count();
+
+    Ok(build_daily_summary_overview(&records, open_followups))
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -1858,6 +1858,10 @@ export async function generateDailySummaryForDate(dateStr: string): Promise<stri
     return invoke<string>("generate_daily_summary_for_date", { dateStr });
 }
 
+export async function getDailySummaryOverview(dateStr: string): Promise<string> {
+    return invoke<string>("get_daily_summary_overview", { dateStr });
+}
+
 export async function exportDailySummaryPdf(dateStr: string, summaryText: string): Promise<string> {
     return invoke<string>("export_daily_summary_pdf", { dateStr, summaryText });
 }
