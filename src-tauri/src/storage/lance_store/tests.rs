@@ -457,6 +457,50 @@ async fn memory_chunks_upsert_list_and_parent_delete_are_linked() {
 }
 
 #[tokio::test]
+async fn memory_chunks_delete_multiple_parents_in_one_bounded_operation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().to_path_buf();
+    let store = tokio::task::spawn_blocking(move || Store::new(&path).unwrap())
+        .await
+        .unwrap();
+    let chunks = vec![
+        memory_chunk("chunk-a1", "memory-a", BGE_V5_DIMENSIONS),
+        memory_chunk("chunk-a2", "memory-a", BGE_V5_DIMENSIONS),
+        memory_chunk("chunk-b1", "memory-b", BGE_V5_DIMENSIONS),
+        memory_chunk("chunk-c1", "memory-c", BGE_V5_DIMENSIONS),
+    ];
+    store
+        .upsert_memory_chunks(&chunks)
+        .await
+        .expect("upsert chunks");
+
+    let removed = store
+        .delete_chunks_for_memories(&["memory-a".to_string(), "memory-b".to_string()])
+        .await
+        .expect("delete chunks for parent batch");
+
+    assert_eq!(removed, 3);
+    assert!(store
+        .list_chunks_for_memory("memory-a")
+        .await
+        .expect("list memory-a")
+        .is_empty());
+    assert!(store
+        .list_chunks_for_memory("memory-b")
+        .await
+        .expect("list memory-b")
+        .is_empty());
+    assert_eq!(
+        store
+            .list_chunks_for_memory("memory-c")
+            .await
+            .expect("list memory-c")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn chunk_vector_search_ranks_chunks_and_returns_scores() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().to_path_buf();

@@ -1132,11 +1132,25 @@ impl Store {
         &self,
         memory_id: &str,
     ) -> Result<usize, Box<dyn std::error::Error>> {
+        self.delete_chunks_for_memories(&[memory_id.to_string()])
+            .await
+    }
+
+    /// Delete child chunks for a bounded parent batch with one pair of count
+    /// probes instead of repeating both probes for every parent.
+    pub async fn delete_chunks_for_memories(
+        &self,
+        memory_ids: &[String],
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        if memory_ids.is_empty() {
+            return Ok(0);
+        }
         let before = self.memory_chunks_table.count_rows(None).await?;
-        let escaped = sql_escape(memory_id);
-        self.memory_chunks_table
-            .delete(&format!("memory_id = '{escaped}'"))
-            .await?;
+        for id_batch in memory_ids.chunks(128) {
+            if let Some(filter) = build_string_match_filter("memory_id", id_batch) {
+                self.memory_chunks_table.delete(&filter).await?;
+            }
+        }
         let after = self.memory_chunks_table.count_rows(None).await?;
         Ok(before.saturating_sub(after))
     }
