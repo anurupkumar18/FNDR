@@ -79,24 +79,42 @@
     border: 1px solid var(--border);
 }
 
+.daily-date-navigation {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
 .date-picker-wrapper {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 5px;
     flex: 1;
+    min-width: 0;
 }
 
 .date-picker-wrapper label {
-    font-size: 13px;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 14px;
     color: var(--text-secondary);
     font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.daily-date-input-wrap {
+    position: relative;
 }
 
 .date-picker-wrapper input[type="date"] {
+    width: 100%;
     background: var(--bg-3);
     border: 1px solid var(--border);
     color: var(--text-primary);
-    padding: 10px 14px;
+    padding: 8px 38px 8px 12px;
     border-radius: var(--film-radius-md);
     font-size: 14px;
     font-family: inherit;
@@ -106,6 +124,62 @@
 
 .date-picker-wrapper input[type="date"]:focus {
     border-color: var(--border-strong);
+}
+
+.daily-date-calendar-icon {
+    position: absolute;
+    top: 50%;
+    right: 10px;
+    z-index: 1;
+    width: 17px;
+    height: 17px;
+    color: var(--text-secondary);
+    pointer-events: none;
+    transform: translateY(-50%);
+}
+
+.daily-date-calendar-icon svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.daily-date-nav-btn,
+.daily-today-btn {
+    height: 35px;
+    border: 1px solid var(--border);
+    border-radius: var(--film-radius-md);
+    background: var(--bg-3);
+    color: var(--text-primary);
+    cursor: pointer;
+    font: inherit;
+}
+
+.daily-date-nav-btn {
+    display: grid;
+    width: 35px;
+    padding: 0;
+    place-items: center;
+    font-size: 26px;
+    line-height: 1;
+}
+
+.daily-today-btn {
+    padding: 0 12px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.daily-date-nav-btn:hover:not(:disabled),
+.daily-today-btn:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    background: var(--surface-hover);
+}
+
+.daily-date-nav-btn:disabled,
+.daily-today-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
 }
 
 .generate-btn {
@@ -182,6 +256,203 @@
     font-size: 14px;
     color: var(--text-primary);
     padding-left: 20px;
+}
+
+.daily-followups-card {
+    background: var(--surface-translucent);
+    border: 1px solid var(--border);
+    padding: 20px;
+    border-radius: var(--film-radius-lg);
+}
+
+.daily-followups-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.daily-followups-eyebrow {
+    margin: 0 0 4px;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.daily-followups-header h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 16px;
+}
+
+.daily-followups-count {
+    display: grid;
+    place-items: center;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--bg-3);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.daily-followups-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.daily-followup-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--film-radius-md);
+    background: color-mix(in srgb, var(--bg-3) 55%, transparent);
+}
+
+.daily-followup-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    min-width: 0;
+    grid-column: 1;
+}
+
+.daily-followup-title {
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.4;
+    text-align: left;
+}
+
+.daily-followup-expand-icon {
+    color: var(--text-secondary);
+    font-size: 16px;
+    line-height: 1;
+    margin-left: 12px;
+}
+
+.daily-followup-completion {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    grid-column: 2;
+    grid-row: 1;
+}
+
+.daily-followup-completion input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.daily-followup-completion input:disabled {
+    cursor: wait;
+}
+
+.daily-followup-item.completed .daily-followup-title {
+    color: var(--text-secondary);
+    text-decoration: line-through;
+}
+
+.daily-followup-expanded {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 2px;
+}
+
+.daily-followup-details {
+    display: grid;
+    grid-template-columns: minmax(110px, 0.6fr) minmax(180px, 1.4fr);
+    gap: 10px 18px;
+    width: 100%;
+    margin: 0;
+}
+
+.daily-followup-details div {
+    min-width: 0;
+}
+
+.daily-followup-details dt {
+    margin-bottom: 3px;
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.daily-followup-details dd {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.daily-followup-detail-wide {
+    grid-column: 1 / -1;
+}
+
+.daily-followup-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.daily-followup-link {
+    border: 1px solid var(--border);
+    border-radius: var(--film-radius-pill);
+    padding: 7px 10px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+}
+
+.daily-followup-link:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+
+.daily-followup-link:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+.daily-followups-empty,
+.daily-followups-error {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.daily-followups-error {
+    color: var(--danger);
+    margin-bottom: 10px;
 }
 
 /* ── Toast Notification ── */
@@ -277,6 +548,31 @@
 }
 
 @media (max-width: 640px) {
+    .daily-summary-controls {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .daily-date-navigation {
+        width: 100%;
+    }
+
+    .daily-followup-item {
+        grid-template-columns: 1fr;
+    }
+
+    .daily-followup-actions {
+        justify-content: flex-start;
+    }
+
+    .daily-followup-details {
+        grid-template-columns: 1fr;
+    }
+
+    .daily-followup-detail-wide {
+        grid-column: auto;
+    }
+
     .daily-toast {
         min-width: auto;
         width: calc(100vw - 24px);

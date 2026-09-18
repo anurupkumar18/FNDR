@@ -580,6 +580,48 @@ pub async fn dismiss_todo(
     }
 }
 
+/// Mark an existing task as completed.
+#[tauri::command]
+pub async fn complete_todo(
+    state: State<'_, Arc<AppState>>,
+    task_id: String,
+) -> Result<bool, String> {
+    let mut tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
+    if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
+        task.is_completed = true;
+        state
+            .store
+            .upsert_tasks(&tasks)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Set completion state so a completed task can be restored without creating a
+/// duplicate task record.
+#[tauri::command]
+pub async fn set_todo_completed(
+    state: State<'_, Arc<AppState>>,
+    task_id: String,
+    is_completed: bool,
+) -> Result<bool, String> {
+    let mut tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
+    if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
+        task.is_completed = is_completed;
+        state
+            .store
+            .upsert_tasks(&tasks)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Update an existing task's title and/or type
 #[tauri::command]
 pub async fn update_todo(

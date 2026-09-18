@@ -774,6 +774,8 @@ fn main() {
             ipc::commands::get_todos,
             ipc::commands::update_todo,
             ipc::commands::dismiss_todo,
+            ipc::commands::complete_todo,
+            ipc::commands::set_todo_completed,
             // Agent SDK
             ipc::commands::start_agent_task,
             ipc::commands::get_agent_status,
@@ -802,6 +804,7 @@ fn main() {
             ipc::commands::generate_daily_briefing,
             ipc::commands::generate_daily_summary_for_date,
             ipc::commands::get_daily_summary_overview,
+            ipc::commands::get_daily_summary_followups,
             ipc::commands::get_weekly_wrapped,
             // Time tracking & Focus Mode
             ipc::commands::get_time_tracking,

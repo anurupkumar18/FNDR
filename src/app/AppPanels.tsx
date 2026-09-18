@@ -99,7 +99,11 @@ export function AppPanels({
             />
             <StatsPanel isVisible={activePanel === "stats"} onClose={onClosePanel} />
             <TodoPanel isVisible={activePanel === "todo"} onClose={onClosePanel} />
-            <DailySummaryPanel isVisible={activePanel === "dailySummary"} onClose={onClosePanel} />
+            <DailySummaryPanel
+                isVisible={activePanel === "dailySummary"}
+                onClose={onClosePanel}
+                onOpenMemoryById={onOpenMemoryById}
+            />
             <FndrWrappedPanel isVisible={activePanel === "wrapped"} onClose={onClosePanel} />
             <EngineMetricsPanel
                 isVisible={activePanel === "engineMetrics"}

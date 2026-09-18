@@ -1684,6 +1684,14 @@ export async function dismissTodo(taskId: string): Promise<boolean> {
     return invoke<boolean>("dismiss_todo", { taskId });
 }
 
+export async function completeTodo(taskId: string): Promise<boolean> {
+    return invoke<boolean>("complete_todo", { taskId });
+}
+
+export async function setTodoCompleted(taskId: string, isCompleted: boolean): Promise<boolean> {
+    return invoke<boolean>("set_todo_completed", { taskId, isCompleted });
+}
+
 export async function updateTodo(
     taskId: string,
     title: string,
@@ -1860,6 +1868,10 @@ export async function generateDailySummaryForDate(dateStr: string): Promise<stri
 
 export async function getDailySummaryOverview(dateStr: string): Promise<string> {
     return invoke<string>("get_daily_summary_overview", { dateStr });
+}
+
+export async function getDailySummaryFollowups(): Promise<Task[]> {
+    return invoke<Task[]>("get_daily_summary_followups");
 }
 
 export interface WrappedRank {

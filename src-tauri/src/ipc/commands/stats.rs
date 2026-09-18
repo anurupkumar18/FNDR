@@ -10,7 +10,7 @@ use crate::embedding::{embedding_runtime_status, Embedder, EmbeddingBackend};
 use crate::mcp::{self, McpServerStatus};
 use crate::privacy::Blocklist;
 use crate::speech;
-use crate::storage::{SearchResult, Stats, TaskType};
+use crate::storage::{SearchResult, Stats, Task, TaskType};
 use crate::AppState;
 use chrono::{TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
@@ -712,6 +712,25 @@ fn build_daily_summary_overview(records: &[SearchResult], open_followups: usize)
         .filter(|sentence| !sentence.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Return the exact open follow-ups counted in the daily summary overview.
+/// The task-panel query applies additional quality filters, which can hide an
+/// otherwise valid follow-up from this actionable daily-summary surface.
+#[tauri::command]
+pub async fn get_daily_summary_followups(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<Task>, String> {
+    Ok(state
+        .store
+        .list_tasks()
+        .await
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .filter(|task| {
+            task.task_type == TaskType::Followup && !task.is_completed && !task.is_dismissed
+        })
+        .collect())
 }
 
 #[tauri::command]
