@@ -5,7 +5,7 @@ use crate::config::{
     DEFAULT_PRIMARY_MEMORY_AGENT_USEFULNESS_MIN, DEFAULT_PRIMARY_MEMORY_INTENT_MIN,
     DEFAULT_PRIMARY_MEMORY_OCR_NOISE_MAX, DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN,
 };
-use crate::storage::MemoryRecord;
+use crate::storage::{MemoryRecord, SearchResult};
 use serde_json::Value;
 
 pub const VISUAL_SEMANTICS_FAILED_OUTCOME: &str = "visual_semantics_failed";
@@ -94,6 +94,182 @@ pub fn quality_gate_reason(record: &MemoryRecord) -> String {
         record.evidence_confidence,
         record.ocr_noise_score
     )
+}
+
+/// Minimum alphanumeric characters of on-screen text (excluding the app name,
+/// image filenames, and "Screen capture (visual)" boilerplate) for a visual
+/// fallback capture to count as a real memory.
+pub const LOW_SIGNAL_TEXT_MIN_CHARS: usize = 40;
+
+/// Why a stored memory is kept out of Search, Home, the default Vault list,
+/// and Ask FNDR. The record stays stored and is listed only in the Vault's
+/// "Needs more signal" view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LowSignalReason {
+    VisualSemanticsFailed,
+    ImageOnly,
+    Ungrounded,
+}
+
+impl LowSignalReason {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::VisualSemanticsFailed => "visual_semantics_failed",
+            Self::ImageOnly => "image_only",
+            Self::Ungrounded => "ungrounded_summary",
+        }
+    }
+
+    /// Plain-language reason shown in the Vault "Needs more signal" list.
+    pub fn user_message(self) -> &'static str {
+        match self {
+            Self::VisualSemanticsFailed => {
+                "FNDR couldn't read this screen, so it was kept out of search."
+            }
+            Self::ImageOnly => {
+                "Image only: no readable text was on screen, so it was kept out of search."
+            }
+            Self::Ungrounded => {
+                "The summary couldn't be matched to on-screen text, so it was kept out of search."
+            }
+        }
+    }
+}
+
+/// Read-side fields shared by `MemoryRecord` and `SearchResult`.
+pub struct SurfaceSignals<'a> {
+    pub storage_outcome: &'a str,
+    pub enrichment_status: &'a str,
+    pub synthesis_branch: &'a str,
+    pub ocr_block_count: u32,
+    pub ocr_confidence: f32,
+    pub clean_text: &'a str,
+    pub display_summary: &'a str,
+    pub app_name: &'a str,
+}
+
+impl<'a> SurfaceSignals<'a> {
+    pub fn from_record(r: &'a MemoryRecord) -> Self {
+        Self {
+            storage_outcome: &r.storage_outcome,
+            enrichment_status: &r.enrichment_status,
+            synthesis_branch: &r.synthesis_branch,
+            ocr_block_count: r.ocr_block_count,
+            ocr_confidence: r.ocr_confidence,
+            clean_text: &r.clean_text,
+            display_summary: &r.display_summary,
+            app_name: &r.app_name,
+        }
+    }
+
+    pub fn from_result(r: &'a SearchResult) -> Self {
+        Self {
+            storage_outcome: &r.storage_outcome,
+            enrichment_status: &r.enrichment_status,
+            synthesis_branch: &r.synthesis_branch,
+            ocr_block_count: r.ocr_block_count,
+            ocr_confidence: r.ocr_confidence,
+            clean_text: &r.clean_text,
+            display_summary: &r.display_summary,
+            app_name: &r.app_name,
+        }
+    }
+}
+
+fn is_image_filename_token(token: &str) -> bool {
+    const EXTS: [&str; 6] = [".png", ".jpg", ".jpeg", ".heic", ".gif", ".webp"];
+    EXTS.iter().any(|ext| token.ends_with(ext))
+        || (!token.is_empty() && token.chars().all(|c| c.is_ascii_digit() || c == '_'))
+}
+
+/// Counts alphanumeric characters that carry meaning beyond the app name,
+/// image filenames, and FNDR's own visual-fallback boilerplate.
+pub fn meaningful_text_chars(text: &str, app_name: &str) -> usize {
+    let app_tokens: Vec<String> = app_name
+        .split_whitespace()
+        .map(|t| t.to_lowercase())
+        .collect();
+    text.split_whitespace()
+        .map(|t| {
+            t.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '_')
+                .trim_end_matches('.')
+                .to_lowercase()
+        })
+        .filter(|t| !t.is_empty())
+        .filter(|t| !is_image_filename_token(t))
+        .filter(|t| !app_tokens.iter().any(|a| a == t))
+        .filter(|t| !matches!(t.as_str(), "screen" | "capture" | "visual" | "also"))
+        .map(|t| t.chars().filter(|c| c.is_alphanumeric()).count())
+        .sum()
+}
+
+/// The single read-side admission policy for Search, Home, Vault, and Ask FNDR.
+pub fn low_signal_reason(s: &SurfaceSignals<'_>) -> Option<LowSignalReason> {
+    let outcome = s.storage_outcome.trim();
+    if outcome.eq_ignore_ascii_case(VISUAL_SEMANTICS_FAILED_OUTCOME) {
+        return Some(LowSignalReason::VisualSemanticsFailed);
+    }
+    if outcome.starts_with("quarantine_") {
+        return Some(LowSignalReason::Ungrounded);
+    }
+
+    let thin_text = s.ocr_block_count == 0
+        || s.ocr_confidence <= 0.01
+        || meaningful_text_chars(s.clean_text, s.app_name) < LOW_SIGNAL_TEXT_MIN_CHARS;
+    let branch = s.synthesis_branch.trim();
+    let visual_fallback = s
+        .enrichment_status
+        .trim()
+        .eq_ignore_ascii_case("visual_metadata_fallback")
+        || branch.eq_ignore_ascii_case("visual_metadata_fallback")
+        || branch.eq_ignore_ascii_case("llm_ocr_grounded_visual_fallback");
+    let filename_summary = s
+        .display_summary
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("screen capture (visual)");
+
+    if (visual_fallback || filename_summary) && thin_text {
+        return Some(LowSignalReason::ImageOnly);
+    }
+    None
+}
+
+pub fn result_low_signal_reason(r: &SearchResult) -> Option<LowSignalReason> {
+    low_signal_reason(&SurfaceSignals::from_result(r))
+}
+
+/// Record variant: also consults `raw_evidence`-based detectors that
+/// `SearchResult` can't see.
+pub fn record_low_signal_reason(r: &MemoryRecord) -> Option<LowSignalReason> {
+    if let Some(reason) = low_signal_reason(&SurfaceSignals::from_record(r)) {
+        return Some(reason);
+    }
+    if is_visual_semantics_failed_record(r) {
+        return Some(LowSignalReason::VisualSemanticsFailed);
+    }
+    let thin_text = meaningful_text_chars(&r.clean_text, &r.app_name) < LOW_SIGNAL_TEXT_MIN_CHARS;
+    if is_low_evidence_visual_fallback_record(r)
+        || (is_visual_metadata_fallback_record(r) && thin_text)
+    {
+        return Some(LowSignalReason::ImageOnly);
+    }
+    None
+}
+
+/// Splits results into (surfaceable, low-signal-with-reason), preserving order.
+pub fn partition_surfaceable(
+    results: Vec<SearchResult>,
+) -> (Vec<SearchResult>, Vec<(SearchResult, LowSignalReason)>) {
+    let mut kept = Vec::with_capacity(results.len());
+    let mut hidden = Vec::new();
+    for result in results {
+        match result_low_signal_reason(&result) {
+            Some(reason) => hidden.push((result, reason)),
+            None => kept.push(result),
+        }
+    }
+    (kept, hidden)
 }
 
 pub fn is_supported_dedup_fingerprint(value: &str) -> bool {
@@ -667,5 +843,179 @@ mod tests {
             ..Default::default()
         };
         assert!(!hard_gate_fluff_insight(&record));
+    }
+
+    fn surface_result(
+        storage_outcome: &str,
+        enrichment_status: &str,
+        synthesis_branch: &str,
+        ocr_block_count: u32,
+        ocr_confidence: f32,
+        clean_text: &str,
+        display_summary: &str,
+    ) -> SearchResult {
+        SearchResult {
+            id: "m-1".to_string(),
+            app_name: "ChatGPT".to_string(),
+            storage_outcome: storage_outcome.to_string(),
+            enrichment_status: enrichment_status.to_string(),
+            synthesis_branch: synthesis_branch.to_string(),
+            ocr_block_count,
+            ocr_confidence,
+            clean_text: clean_text.to_string(),
+            display_summary: display_summary.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn low_signal_flags_filename_only_visual_fallback_from_rehearsal() {
+        let r = surface_result(
+            "low_quality_evidence",
+            "",
+            "llm_ocr_grounded_visual_fallback",
+            1,
+            0.62,
+            "ChatGPT:",
+            "Screen capture (visual) ChatGPT_1789709739566.png. ChatGPT. Also Screen capture (visual) ChatGPT_1789709551930.png. ChatGPT",
+        );
+        assert_eq!(
+            result_low_signal_reason(&r),
+            Some(LowSignalReason::ImageOnly)
+        );
+    }
+
+    #[test]
+    fn low_signal_flags_visual_metadata_fallback_without_text() {
+        let r = surface_result(
+            "low_quality_evidence",
+            "visual_metadata_fallback",
+            "visual_metadata_fallback",
+            0,
+            0.0,
+            "",
+            "",
+        );
+        assert_eq!(
+            result_low_signal_reason(&r),
+            Some(LowSignalReason::ImageOnly)
+        );
+    }
+
+    #[test]
+    fn low_signal_flags_visual_semantics_failed_and_quarantine() {
+        let failed = surface_result(VISUAL_SEMANTICS_FAILED_OUTCOME, "", "", 0, 0.0, "", "");
+        assert_eq!(
+            result_low_signal_reason(&failed),
+            Some(LowSignalReason::VisualSemanticsFailed)
+        );
+        let quarantined = surface_result(
+            "quarantine_low_grounding",
+            "",
+            "llm_ocr_grounded",
+            6,
+            0.9,
+            "error[E0502]: cannot borrow `self.buffer` as mutable because it is also borrowed as immutable",
+            "Fixed borrow error",
+        );
+        assert_eq!(
+            result_low_signal_reason(&quarantined),
+            Some(LowSignalReason::Ungrounded)
+        );
+    }
+
+    #[test]
+    fn low_signal_keeps_high_signal_ocr_memory() {
+        let r = surface_result(
+            "primary_memory_card",
+            "",
+            "llm_ocr_grounded",
+            9,
+            0.94,
+            "error[E0502]: cannot borrow `self.frame_buffer` as mutable because it is also borrowed as immutable --> src/capture/mod.rs:412:9",
+            "Debugged E0502 borrow error in capture/mod.rs",
+        );
+        assert_eq!(result_low_signal_reason(&r), None);
+    }
+
+    #[test]
+    fn low_signal_keeps_ocr_grounded_visual_fallback_with_real_text() {
+        let r = surface_result(
+            "low_quality_evidence",
+            "",
+            "llm_ocr_grounded_visual_fallback",
+            7,
+            0.88,
+            "Parent-child chunking with 512-token parents and 128-token children gave the best recall at 10 in our experiments",
+            "Read chunking results",
+        );
+        assert_eq!(result_low_signal_reason(&r), None);
+    }
+
+    #[test]
+    fn low_signal_keeps_reviewed_and_review_failed_text_memories() {
+        let text = "Canvas CS 4500 Alpha Release rubric: most rank 1 features complete, framework for rank 2";
+        let reviewed = surface_result(
+            "primary_memory_card",
+            "reviewed_local",
+            "llm_ocr_grounded",
+            5,
+            0.9,
+            text,
+            "Read the Alpha rubric",
+        );
+        assert_eq!(result_low_signal_reason(&reviewed), None);
+        let failed_review = surface_result(
+            "enriched_memory_card",
+            "review_failed",
+            "llm_ocr_grounded",
+            5,
+            0.9,
+            text,
+            "Read the Alpha rubric",
+        );
+        assert_eq!(result_low_signal_reason(&failed_review), None);
+    }
+
+    #[test]
+    fn low_signal_does_not_hide_plain_low_quality_text_memory() {
+        let r = surface_result(
+            "low_quality_evidence",
+            "",
+            "llm_ocr_grounded",
+            4,
+            0.8,
+            "Jordan Lee: can we move the alpha dry run to Thursday at 4pm in the MEB lab? I booked room 3147",
+            "Dry run moved to Thursday",
+        );
+        assert_eq!(result_low_signal_reason(&r), None);
+    }
+
+    #[test]
+    fn partition_surfaceable_splits_and_preserves_order() {
+        let good = surface_result(
+            "primary_memory_card",
+            "",
+            "llm_ocr_grounded",
+            9,
+            0.94,
+            "error[E0502]: cannot borrow `self.frame_buffer` as mutable because it is also borrowed as immutable",
+            "E0502",
+        );
+        let bad = surface_result(
+            "",
+            "visual_metadata_fallback",
+            "visual_metadata_fallback",
+            0,
+            0.0,
+            "",
+            "",
+        );
+        let (kept, hidden) = partition_surfaceable(vec![bad.clone(), good.clone(), bad]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(hidden.len(), 2);
+        assert!(hidden
+            .iter()
+            .all(|(_, reason)| *reason == LowSignalReason::ImageOnly));
     }
 }
