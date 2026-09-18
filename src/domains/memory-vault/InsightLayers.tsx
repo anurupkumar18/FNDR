@@ -23,37 +23,21 @@ export function InsightLayers({ card, evalUi = false }: { card: MemoryCard; eval
 
     return (
         <div className={`insight-layers${low ? " insight-layers--low-conf" : ""}`}>
-            <div className="insight-meta-row">
-                {low && <div className="insight-low-badge">Low insight confidence</div>}
-                {card.synthesis_branch && card.synthesis_branch !== "" && (
-                    <span
-                        className="insight-branch-chip"
-                        title={`Synthesized via: ${card.synthesis_branch}`}
-                    >
-                        {card.synthesis_branch}
-                    </span>
-                )}
-            </div>
+            {low && <div className="insight-meta-row"><div className="insight-low-badge">Low insight confidence</div></div>}
             {SLOTS.map((slot) => {
                 const raw = (card as unknown as Record<string, unknown>)[slot.field];
                 const trimmed = typeof raw === "string" ? raw.trim() : "";
                 // Strip meta-OCR narration ("The OCR text indicates…") so the
                 // panel never dresses up a noisy raw extraction as an insight.
                 const value = trimmed && !isMetaOcrNarration(trimmed) ? trimmed : "";
-                const empty = value.length === 0;
+                if (!value) return null;
                 return (
                     <div
-                        className={`insight-row${empty ? " insight-row--empty" : ""}`}
+                        className="insight-row"
                         key={slot.label}
                     >
                         <span className="insight-label">{slot.label}</span>
-                        {empty ? (
-                            <p className="insight-value insight-value--placeholder">
-                                — not yet extracted
-                            </p>
-                        ) : (
-                            <p className="insight-value">{value}</p>
-                        )}
+                        <p className="insight-value">{value}</p>
                     </div>
                 );
             })}

@@ -15,6 +15,7 @@ import {
     isMetaOcrNarration,
 } from "../MemoryCard";
 import { MemoryProvenanceStrip } from "../MemoryProvenanceStrip";
+import { InsightLayers } from "../InsightLayers";
 
 afterEach(() => {
     cleanup();
@@ -229,6 +230,27 @@ describe("MemoryCard — compact preview priority", () => {
         expect(
             screen.queryByTitle("The screen shows a New Tab page with toolbar buttons."),
         ).toBeNull();
+    });
+});
+
+describe("InsightLayers", () => {
+    it("hides empty insight rows and internal synthesis identifiers", () => {
+        render(
+            <InsightLayers
+                card={makeCard({
+                    insight_what_happened: "Resolved the retrieval router borrow error.",
+                    insight_why_mattered: "The capture pipeline can continue safely.",
+                    synthesis_branch: "llm_ocr_grounded_visual_fallback",
+                })}
+            />,
+        );
+
+        expect(screen.getByText("What happened")).toBeTruthy();
+        expect(screen.getByText("Why it mattered")).toBeTruthy();
+        expect(screen.queryByText("What changed")).toBeNull();
+        expect(screen.queryByText("Thread")).toBeNull();
+        expect(screen.queryByText("llm_ocr_grounded_visual_fallback")).toBeNull();
+        expect(screen.queryByText(/not yet extracted/i)).toBeNull();
     });
 });
 

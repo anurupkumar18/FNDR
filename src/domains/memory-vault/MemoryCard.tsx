@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { motion } from "framer-motion";
 import type { MemoryCard as MemoryCardData } from "@/shared/ipc/tauri";
 import { DossierCorners, Stamp, Pill, Button } from "@/shared/components/atoms";
@@ -74,11 +74,10 @@ export function MemoryCard({
     className,
     threadCountHint,
 }: MemoryCardProps) {
-    const frameId = useMemo(() => deriveFrameId(card.id), [card.id]);
     const previewText = pickPreviewText(card);
-    const threads = useMemo(() => deriveThreads(card), [card]);
-    const timeLabel = useMemo(() => formatTime(card.timestamp), [card.timestamp]);
-    const dayLabel = useMemo(() => formatDay(card.timestamp), [card.timestamp]);
+    const threads = deriveThreads(card);
+    const timeLabel = formatTime(card.timestamp);
+    const dayLabel = formatDay(card.timestamp);
     const status: LifecycleStatus = lifecycleStatus ?? deriveLifecycleStatus(card);
     const stampMeta = STAMP_META[status];
 
@@ -111,7 +110,6 @@ export function MemoryCard({
                 }}
             >
                 <span className="fndr-mc-bar" aria-hidden="true" />
-                <span className="fndr-mc-c-frame">FRAME {frameId}</span>
                 <div className="fndr-mc-c-main">
                     <span className="fndr-mc-c-title">{card.title}</span>
                     {previewText ? (
@@ -184,7 +182,6 @@ export function MemoryCard({
                         CONFIDENTIAL
                     </Stamp>
                 )}
-                <span className="fndr-mc-frame-no">FRAME {frameId}</span>
                 <span className="fndr-mc-ts">
                     {dayLabel} · {timeLabel}
                 </span>
@@ -301,12 +298,6 @@ export function MemoryCard({
 }
 
 /* ── helpers ──────────────────────────────────────────────── */
-
-function deriveFrameId(id: string): string {
-    // Stable 4-char uppercase from the trailing characters of the id.
-    const trimmed = id.replace(/[^a-zA-Z0-9]/g, "");
-    return trimmed.slice(-4).toUpperCase().padStart(4, "0");
-}
 
 /** Lifecycle stamp metadata: tone + label keyed by status. */
 const STAMP_META: Record<LifecycleStatus, { tone: "developed" | "muted" | "amber" | "alarm"; label: string }> = {

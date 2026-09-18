@@ -83,10 +83,9 @@ describe("MemoryCard — compact variant (narrow container)", () => {
         expect(within(sourceEl).getByText("VS Code")).toBeTruthy();
     });
 
-    it("renders the frame id cell", () => {
+    it("does not expose an internal frame id", () => {
         renderCompact(makeCard());
-        // deriveFrameId trims the id and takes the last 4 chars
-        expect(screen.getByText(/FRAME/)).toBeTruthy();
+        expect(screen.queryByText(/FRAME/)).toBeNull();
     });
 
     it("renders the preview text when summary is provided", () => {
@@ -101,7 +100,6 @@ describe("MemoryCard — compact variant (narrow container)", () => {
         const article = container.querySelector("[data-testid='memory-card']") as HTMLElement;
         // Verify none of the key cells have display:none via inline style
         const criticalSelectors = [
-            ".fndr-mc-c-frame",
             ".fndr-mc-c-main",
             ".fndr-mc-c-time",
         ];
