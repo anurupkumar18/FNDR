@@ -104,7 +104,10 @@ export function AppPanels({
                 onClose={onClosePanel}
                 onOpenMemoryById={onOpenMemoryById}
             />
-            <FndrWrappedPanel isVisible={activePanel === "wrapped"} onClose={onClosePanel} />
+            <FndrWrappedPanel
+                isVisible={activePanel === "wrapped"}
+                onClose={onClosePanel}
+            />
             <EngineMetricsPanel
                 isVisible={activePanel === "engineMetrics"}
                 onClose={onClosePanel}

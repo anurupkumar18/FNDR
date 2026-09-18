@@ -12,7 +12,7 @@ use crate::privacy::Blocklist;
 use crate::speech;
 use crate::storage::{SearchResult, Stats, Task, TaskType};
 use crate::AppState;
-use chrono::{TimeZone, Timelike};
+use chrono::{Datelike, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
@@ -849,6 +849,7 @@ pub struct WrappedDay {
 pub struct WeeklyWrapped {
     pub start_date: String,
     pub end_date: String,
+    pub generated_at_ms: i64,
     pub total_captures: usize,
     pub active_days: usize,
     pub total_minutes: usize,
@@ -858,6 +859,7 @@ pub struct WeeklyWrapped {
     pub meeting_count: usize,
     pub document_count: usize,
     pub open_followups: usize,
+    pub open_tasks: usize,
     pub busiest_day: Option<WrappedDay>,
     pub busiest_hour: Option<u8>,
     pub most_revisited_file: Option<String>,
@@ -900,10 +902,31 @@ fn wrapped_display_file(path: &str) -> String {
 #[tauri::command]
 pub async fn get_weekly_wrapped(
     state: State<'_, Arc<AppState>>,
+    start_date: Option<String>,
+    end_date: Option<String>,
 ) -> Result<WeeklyWrapped, String> {
     let now = chrono::Local::now();
-    let end_day = now.date_naive();
-    let start_day = end_day - chrono::Duration::days(6);
+    let today = now.date_naive();
+    let start_day = match start_date.filter(|value| !value.trim().is_empty()) {
+        Some(value) => chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+            .map_err(|err| format!("Invalid week start date: {err}"))?,
+        None => today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64),
+    };
+    if start_day.weekday() != chrono::Weekday::Mon {
+        return Err("Wrapped weeks must start on a Monday.".to_string());
+    }
+    if start_day > today {
+        return Err("A Wrapped recap cannot be created for a future week.".to_string());
+    }
+    let expected_end_day = (start_day + chrono::Duration::days(6)).min(today);
+    let end_day = match end_date.filter(|value| !value.trim().is_empty()) {
+        Some(value) => chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+            .map_err(|err| format!("Invalid week end date: {err}"))?,
+        None => expected_end_day,
+    };
+    if end_day != expected_end_day {
+        return Err("Wrapped weeks must end on Sunday, or today for the current week so far.".to_string());
+    }
     let start = start_day
         .and_hms_opt(0, 0, 0)
         .ok_or("Failed to create weekly start time")?;
@@ -912,7 +935,19 @@ pub async fn get_weekly_wrapped(
         .earliest()
         .unwrap_or_else(|| chrono::Local.from_local_datetime(&start).latest().unwrap())
         .timestamp_millis();
-    let end_ms = now.timestamp_millis();
+    let end_ms = if end_day == today {
+        now.timestamp_millis()
+    } else {
+        let next_day_start = (end_day + chrono::Duration::days(1))
+            .and_hms_opt(0, 0, 0)
+            .ok_or("Failed to create weekly end time")?;
+        chrono::Local
+            .from_local_datetime(&next_day_start)
+            .earliest()
+            .unwrap_or_else(|| chrono::Local.from_local_datetime(&next_day_start).latest().unwrap())
+            .timestamp_millis()
+            - 1
+    };
 
     let records = state
         .store
@@ -983,9 +1018,9 @@ pub async fn get_weekly_wrapped(
 
     let mut apps = wrapped_rankings(app_groups);
     let total_minutes = apps.iter().map(|entry| entry.duration_minutes).sum();
-    apps.truncate(5);
+    apps.truncate(10);
     let mut websites = wrapped_rankings(website_groups);
-    websites.truncate(5);
+    websites.truncate(10);
     let mut projects_and_topics = context_counts
         .into_iter()
         .map(|(name, count)| WrappedCount { name, count })
@@ -1015,20 +1050,23 @@ pub async fn get_weekly_wrapped(
         .into_iter()
         .filter(|meeting| meeting.start_timestamp >= start_ms && meeting.start_timestamp <= end_ms)
         .count();
-    let open_followups = state
+    let open_tasks = state
         .store
         .list_tasks()
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|task| {
-            task.task_type == TaskType::Followup && !task.is_completed && !task.is_dismissed
-        })
+        .filter(|task| !task.is_completed && !task.is_dismissed)
+        .collect::<Vec<_>>();
+    let open_followups = open_tasks
+        .iter()
+        .filter(|task| task.task_type == TaskType::Followup)
         .count();
 
     Ok(WeeklyWrapped {
         start_date: start_day.format("%Y-%m-%d").to_string(),
         end_date: end_day.format("%Y-%m-%d").to_string(),
+        generated_at_ms: now.timestamp_millis(),
         total_captures: records.len(),
         active_days: records
             .iter()
@@ -1047,6 +1085,7 @@ pub async fn get_weekly_wrapped(
         meeting_count,
         document_count,
         open_followups,
+        open_tasks: open_tasks.len(),
         busiest_day,
         busiest_hour,
         most_revisited_file,

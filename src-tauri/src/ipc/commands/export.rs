@@ -93,6 +93,46 @@ pub async fn export_daily_summary_pdf(
     Ok(target_path.to_string_lossy().to_string())
 }
 
+/// Export a weekly FNDR Wrapped recap to a PDF in the Downloads folder.
+#[tauri::command]
+pub async fn export_weekly_wrapped_pdf(
+    _app: tauri::AppHandle,
+    start_date: String,
+    end_date: String,
+    recap_text: String,
+) -> Result<String, String> {
+    let downloads_dir = dirs::download_dir()
+        .ok_or_else(|| "Could not find Downloads folder on this system.".to_string())?;
+    let safe_start = start_date.replace('/', "-").replace(' ', "_");
+    let safe_end = end_date.replace('/', "-").replace(' ', "_");
+    let target_path = downloads_dir.join(format!("FNDR_Wrapped_{safe_start}_to_{safe_end}.pdf"));
+
+    let mut doc = genpdf::Document::new(load_pdf_font_family()?);
+    doc.set_title(format!("FNDR Wrapped: {start_date} to {end_date}"));
+    let mut decorator = genpdf::SimplePageDecorator::new();
+    decorator.set_margins(PDF_PAGE_MARGIN);
+    doc.set_page_decorator(decorator);
+
+    doc.push(
+        genpdf::elements::Text::new("FNDR Wrapped")
+            .styled(genpdf::style::Style::new().bold().with_font_size(20)),
+    );
+    doc.push(
+        genpdf::elements::Text::new(format!("Data collected from {start_date} to {end_date}"))
+            .styled(genpdf::style::Style::new().with_font_size(10)),
+    );
+    doc.push(genpdf::elements::Break::new(1.5));
+
+    for line in recap_text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        doc.push(genpdf::elements::Paragraph::new(line.to_string()));
+        doc.push(genpdf::elements::Break::new(0.5));
+    }
+
+    doc.render_to_file(&target_path)
+        .map_err(|err| format!("Failed to generate PDF file: {err}"))?;
+    Ok(target_path.to_string_lossy().to_string())
+}
+
 /// Open a PDF exported by FNDR from the user's Downloads folder.
 #[tauri::command]
 pub async fn open_exported_pdf(path: String) -> Result<(), String> {

@@ -1893,6 +1893,7 @@ export interface WrappedDay {
 export interface WeeklyWrapped {
     start_date: string;
     end_date: string;
+    generated_at_ms: number;
     total_captures: number;
     active_days: number;
     total_minutes: number;
@@ -1902,13 +1903,25 @@ export interface WeeklyWrapped {
     meeting_count: number;
     document_count: number;
     open_followups: number;
+    open_tasks: number;
     busiest_day: WrappedDay | null;
     busiest_hour: number | null;
     most_revisited_file: string | null;
 }
 
-export async function getWeeklyWrapped(): Promise<WeeklyWrapped> {
-    return invoke<WeeklyWrapped>("get_weekly_wrapped");
+export async function getWeeklyWrapped(startDate?: string, endDate?: string): Promise<WeeklyWrapped> {
+    return invoke<WeeklyWrapped>("get_weekly_wrapped", {
+        startDate: startDate ?? null,
+        endDate: endDate ?? null,
+    });
+}
+
+export async function exportWeeklyWrappedPdf(
+    startDate: string,
+    endDate: string,
+    recapText: string
+): Promise<string> {
+    return invoke<string>("export_weekly_wrapped_pdf", { startDate, endDate, recapText });
 }
 
 export async function exportDailySummaryPdf(dateStr: string, summaryText: string): Promise<string> {

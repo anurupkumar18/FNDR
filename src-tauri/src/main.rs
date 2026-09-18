@@ -726,6 +726,7 @@ fn main() {
             ipc::commands::get_meeting_transcript,
             ipc::commands::retranscribe_meeting,
             ipc::commands::export_daily_summary_pdf,
+            ipc::commands::export_weekly_wrapped_pdf,
             ipc::commands::open_exported_pdf,
             // Voice / Speech
             ipc::commands::transcribe_voice_input,
