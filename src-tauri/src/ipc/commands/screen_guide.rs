@@ -1106,7 +1106,7 @@ pub async fn transcribe_screen_guide_voice_input(
     }
     let cancel = screen_guide_turn_cancel(request_id)?;
     schedule_screen_guide_hidden_lease(&app, request_id);
-    let app_data_dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|err| err.to_string())?;
     let transcription =
         speech::transcribe_audio_bytes(&app_data_dir, &audio_bytes, mime_type.as_deref());
     tokio::pin!(transcription);

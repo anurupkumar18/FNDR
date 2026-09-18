@@ -107,7 +107,7 @@ fn normalize_onboarding_state(mut state: OnboardingState) -> OnboardingState {
 }
 
 fn onboarding_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
     Ok(dir.join("onboarding.json"))
 }
 
@@ -192,7 +192,7 @@ pub async fn set_preferred_inference_model(
     // new model immediately. Otherwise just persist the choice — the
     // next download or restart will pick it up via
     // `models::inference_preferred_model_id`.
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
     let config = state.inner().config.read().clone();
     if models::resolve_model(Some(trimmed.as_str()), Some(app_data_dir.as_path())).is_some() {
         let loaded = load_ai_engines(app_data_dir.as_path(), &config).await;
@@ -379,9 +379,7 @@ pub struct ModelInfo {
 
 #[tauri::command]
 pub async fn list_available_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path())
         .unwrap_or_else(|_| PathBuf::from("."));
 
     Ok(models::catalog()
@@ -589,7 +587,7 @@ pub async fn download_model(
         return Err("A download is already in progress".into());
     }
 
-    let app_data_dir = app.path().app_data_dir().map_err(|e| {
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| {
         // Reset the flag so future downloads are not permanently blocked
         DOWNLOAD_IN_PROGRESS.store(false, Ordering::SeqCst);
         e.to_string()
@@ -642,7 +640,7 @@ async fn download_model_files(
     filename: &str,
 ) -> Result<(), String> {
     if let Some(definition) = models::model_by_id(model_id) {
-        let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
         let models_dir = models::models_dir(app_data_dir.as_path());
         for extra in definition.extra_files {
             let dest = models_dir.join(extra.filename);
@@ -680,7 +678,7 @@ pub async fn refresh_ai_models(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<AiRuntimeStatus, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
     let config = state.inner().config.read().clone();
     let preferred_model_id = models::inference_preferred_model_id(app_data_dir.as_path(), &config);
     let ai_model_available =
@@ -748,7 +746,7 @@ async fn do_download(
     );
     emit_download_log(app, "Checking local app data directories...");
 
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
     let models_dir = models::models_dir(app_data_dir.as_path());
 
     std::fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
@@ -952,7 +950,7 @@ async fn do_download(
 
 #[tauri::command]
 pub async fn check_model_exists(app: AppHandle, filename: String) -> Result<bool, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
     Ok(models::models_dir(app_data_dir.as_path())
         .join(&filename)
         .exists())
@@ -969,7 +967,7 @@ pub async fn delete_ai_model(
     if fname.components().count() != 1 || filename.contains('/') || filename.contains('\\') {
         return Err("Invalid filename".into());
     }
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
     let models_dir = models::models_dir(app_data_dir.as_path());
     let final_path = models_dir.join(fname);
     let partial_path = models::partial_model_path(app_data_dir.as_path(), &filename);

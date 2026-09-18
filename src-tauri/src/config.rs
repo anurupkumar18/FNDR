@@ -1211,6 +1211,29 @@ fn dedupe_trimmed(values: Vec<String>) -> Vec<String> {
     deduped
 }
 
+/// Optional data-directory override used for the seeded demo profile.
+/// Blank values are ignored so a stray `FNDR_DATA_DIR=` never redirects data.
+pub fn data_dir_override() -> Option<std::path::PathBuf> {
+    std::env::var("FNDR_DATA_DIR")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+/// Single resolver for FNDR's app data directory. Every Tauri call site must use
+/// this instead of `app.path().app_data_dir()` so a demo profile can't
+/// split-brain (store in one dir, onboarding/models in another).
+pub fn fndr_app_data_dir<R: tauri::Runtime>(
+    paths: &tauri::path::PathResolver<R>,
+) -> tauri::Result<std::path::PathBuf> {
+    if let Some(dir) = data_dir_override() {
+        std::fs::create_dir_all(&dir)?;
+        return Ok(dir);
+    }
+    paths.app_data_dir()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1341,5 +1364,18 @@ mod tests {
         let config = config.normalized();
         assert_eq!(config.vlm_max_calls_per_minute, 60);
         assert_eq!(config.vlm_timeout_secs, 300);
+    }
+
+    #[test]
+    fn data_dir_override_reads_env_and_ignores_blank() {
+        std::env::set_var("FNDR_DATA_DIR", "   ");
+        assert_eq!(data_dir_override(), None);
+        std::env::set_var("FNDR_DATA_DIR", "/tmp/fndr-demo-test");
+        assert_eq!(
+            data_dir_override(),
+            Some(std::path::PathBuf::from("/tmp/fndr-demo-test"))
+        );
+        std::env::remove_var("FNDR_DATA_DIR");
+        assert_eq!(data_dir_override(), None);
     }
 }

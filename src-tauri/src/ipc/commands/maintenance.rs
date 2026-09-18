@@ -1882,9 +1882,7 @@ use crate::inference::model_config::CLEANUP_OLD_MODEL_DIRS;
 #[tauri::command]
 pub async fn models_cleanup_dry_run(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
     use tauri::Manager;
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
+    let app_data_dir = crate::config::fndr_app_data_dir(app_handle.path())
         .map_err(|e| e.to_string())?;
     let models_dir = app_data_dir.join("models");
     if !models_dir.exists() {
@@ -1919,9 +1917,7 @@ pub async fn models_cleanup_dry_run(app_handle: tauri::AppHandle) -> Result<Vec<
 #[tauri::command]
 pub async fn models_cleanup_confirm(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
     use tauri::Manager;
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
+    let app_data_dir = crate::config::fndr_app_data_dir(app_handle.path())
         .map_err(|e| e.to_string())?;
     let models_dir = app_data_dir.join("models");
     if !models_dir.exists() {

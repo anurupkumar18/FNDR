@@ -112,7 +112,10 @@ fn main() {
             // validate_memory_vector_schema, which surfaces a clear error if
             // an existing Lance table's vector dimension diverges from the
             // current contract.
-            let data_dir = app.path().app_data_dir()?;
+            let data_dir = fndr_lib::config::fndr_app_data_dir(app.path())?;
+            if fndr_lib::config::data_dir_override().is_some() {
+                tracing::warn!(path = %data_dir.display(), "FNDR_DATA_DIR override active (demo profile)");
+            }
             match fndr_lib::speech::cleanup_stale_voice_inputs(&data_dir) {
                 Ok(removed) if removed > 0 => {
                     tracing::info!(removed, "Removed abandoned temporary voice inputs")
@@ -278,6 +281,30 @@ fn main() {
             {
                 let daily_state = state.clone();
                 fndr_lib::memory_review::spawn_daily_scheduler(daily_state);
+            }
+
+            // Demo profile only: queue every stored memory for on-device review
+            // once, so the seeded week is reviewed by the real local model.
+            if std::env::var("FNDR_DEMO_REVIEW_BACKFILL").ok().as_deref() == Some("1") {
+                let backfill_state = state.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Let the model finish loading before queueing review work.
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    match fndr_lib::memory_review::backfill_memory_review_in_range(
+                        &backfill_state,
+                        &backfill_state.store,
+                        0,
+                        now_ms,
+                        now_ms,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(_) => tracing::info!("demo review backfill queued"),
+                        Err(err) => tracing::warn!("demo review backfill failed: {err}"),
+                    }
+                });
             }
 
             let runtime_state = state.clone();
@@ -619,33 +646,9 @@ fn main() {
             // before shortcuts can make it visible.
             ipc::commands::create_screen_guide_overlay_window(app.handle());
 
-            // Pre-create the autofill overlay window so it's loaded and ready
-            // by the time the user first presses the hotkey.
-            ipc::commands::create_autofill_overlay_window(app.handle());
-
-            if let Err(err) = ipc::commands::register_autofill_shortcut(
-                app.handle(),
-                &state.config.read().autofill.clone(),
-            ) {
-                tracing::warn!("Auto-fill shortcut registration failed: {err}");
-            } else {
-                tracing::info!(
-                    "Auto-fill global shortcut registered: {}",
-                    state.config.read().autofill.shortcut
-                );
-            }
-
-            // Pre-create the omnibar window (hidden) and register its hotkey.
-            // Each feature owns only its own shortcut registration.
-            ipc::commands::create_omnibar_window(app.handle());
-            if let Err(err) = ipc::commands::register_omnibar_shortcut(app.handle()) {
-                tracing::warn!("Omnibar shortcut registration failed: {err}");
-            } else {
-                tracing::info!(
-                    "Omnibar global shortcut registered: {}",
-                    ipc::commands::OMNIBAR_SHORTCUT
-                );
-            }
+            // Alpha demo: Auto-Fill and the Alt+Space Omnibar are not part of
+            // the demo surface, so their windows and global shortcuts are not
+            // registered.
 
             if let Err(err) = ipc::commands::register_screen_guide_shortcut(
                 app.handle(),
@@ -657,19 +660,6 @@ fn main() {
                 {
                     tracing::warn!(
                         "Screen Guide could not persist its disabled startup state: {save_err}"
-                    );
-                }
-
-                // Auto-fill is registered first, so a persisted shortcut
-                // collision can initially reject both features. Once Screen
-                // Guide has been disabled in memory, give Auto-fill its
-                // original shortcut back during this launch as well.
-                if let Err(retry_err) = ipc::commands::register_autofill_shortcut(
-                    app.handle(),
-                    &state.config.read().autofill.clone(),
-                ) {
-                    tracing::warn!(
-                        "Auto-fill shortcut registration still failed after Screen Guide was disabled: {retry_err}"
                     );
                 }
             } else if state.config.read().screen_guide.enabled {

@@ -220,7 +220,7 @@ pub async fn transcribe_voice_input(
     audio_bytes: Vec<u8>,
     mime_type: Option<String>,
 ) -> Result<VoiceTranscriptionResult, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
     let text =
         speech::transcribe_audio_bytes(&app_data_dir, &audio_bytes, mime_type.as_deref()).await?;
 
