@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryCardsPanel } from "./MemoryCardsPanel";
-import { listMemoryCards } from "@/shared/ipc/tauri";
+import { listMemoryCards, listNeedsSignalMemoryCards } from "@/shared/ipc/tauri";
 import type { MemoryCard } from "@/shared/ipc/tauri";
 
 vi.mock("@/shared/ipc/tauri", () => ({
     deleteMemory: vi.fn(),
     listMemoryCards: vi.fn(),
+    listNeedsSignalMemoryCards: vi.fn().mockResolvedValue([]),
     getFullGraph: vi.fn().mockResolvedValue({
         nodes: [],
         edges: [],
@@ -74,5 +75,36 @@ describe("MemoryCardsPanel", () => {
             expect(listMemoryCards).toHaveBeenCalledWith(1500, null);
         });
         expect(await screen.findByText("1500 cards")).toBeInTheDocument();
+    });
+
+    it("keeps low-signal captures out of the normal list and reveals only their safe review metadata", async () => {
+        vi.mocked(listMemoryCards).mockResolvedValue([card(1)]);
+        vi.mocked(listNeedsSignalMemoryCards).mockResolvedValue([
+            {
+                card: { ...card(2), app_name: "ChatGPT", title: "ChatGPT_178970.png" },
+                reason_code: "filename_only",
+                reason: "Only a filename or app label was available.",
+            },
+        ]);
+
+        render(
+            <MemoryCardsPanel
+                isVisible={true}
+                onClose={() => {}}
+                appNames={["VS Code", "ChatGPT"]}
+                feature="vault"
+            />,
+        );
+
+        expect(await screen.findByText("Memory 1")).toBeInTheDocument();
+        expect(screen.queryByText("ChatGPT_178970.png")).toBeNull();
+
+        fireEvent.click(await screen.findByRole("button", { name: "Needs more signal (1)" }));
+
+        expect(await screen.findByText("Only a filename or app label was available.")).toBeInTheDocument();
+        expect(
+            within(screen.getByLabelText("Needs more signal review queue")).getByText("ChatGPT"),
+        ).toBeInTheDocument();
+        expect(screen.queryByText("ChatGPT_178970.png")).toBeNull();
     });
 });

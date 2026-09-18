@@ -8,8 +8,10 @@ import {
     findVisuallySimilarMemories,
     getMemoryDebugInspector,
     listMemoryCards,
+    listNeedsSignalMemoryCards,
     reopenMemory,
     type GraphNode,
+    type NeedsSignalCard,
 } from "@/shared/ipc/tauri";
 import "./MemoryCardsPanel.css";
 import { InsightLayers } from "./InsightLayers";
@@ -200,6 +202,8 @@ export function MemoryCardsPanel({
     } = useGraph();
 
     const [cards, setCards] = useState<MemoryCard[]>([]);
+    const [needsSignalCards, setNeedsSignalCards] = useState<NeedsSignalCard[]>([]);
+    const [showNeedsSignal, setShowNeedsSignal] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [appFilter, setAppFilter] = useState<string>(APP_FILTER_ALL);
@@ -340,6 +344,19 @@ export function MemoryCardsPanel({
             cancelled = true;
         };
     }, [isVisible, appFilter]);
+
+    useEffect(() => {
+        if (!isVisible || !isVaultFeature) return;
+        let cancelled = false;
+        void listNeedsSignalMemoryCards(200)
+            .then((items) => {
+                if (!cancelled) setNeedsSignalCards(items);
+            })
+            .catch((err) => console.warn("Unable to load needs-signal memories", err));
+        return () => {
+            cancelled = true;
+        };
+    }, [isVisible, isVaultFeature]);
 
     useEffect(() => {
         if (!isVisible || !focusMemoryId) {
@@ -547,6 +564,16 @@ export function MemoryCardsPanel({
                     {showListSurface && (
                         <div className="memory-cards-count">{filteredCards.length} cards</div>
                     )}
+                    {isVaultFeature && needsSignalCards.length > 0 && (
+                        <button
+                            type="button"
+                            className={`ui-action-btn memory-cards-tab${showNeedsSignal ? " memory-cards-tab--active" : ""}`}
+                            aria-pressed={showNeedsSignal}
+                            onClick={() => setShowNeedsSignal((current) => !current)}
+                        >
+                            Needs more signal ({needsSignalCards.length})
+                        </button>
+                    )}
                     {showGraphSurface && (
                         <div className="memory-cards-count">
                             {(subgraph?.nodes?.length ?? 0)} nodes · {(subgraph?.edges?.length ?? 0)} links
@@ -629,6 +656,20 @@ export function MemoryCardsPanel({
             >
                 {showListSurface && (
                 <>
+                {showNeedsSignal ? (
+                    <section className="memory-cards-state" aria-label="Needs more signal review queue">
+                        <p>These captures are kept for review but excluded from search and Ask FNDR.</p>
+                        <div className="memory-cards-stream">
+                            {needsSignalCards.map(({ card, reason }) => (
+                                <article className="memory-cards-inline-error" key={card.id}>
+                                    <strong>{card.app_name}</strong>
+                                    <span> · {new Date(card.timestamp).toLocaleString()}</span>
+                                    <p>{reason}</p>
+                                </article>
+                            ))}
+                        </div>
+                    </section>
+                ) : <>
                 {showEmbeddedGraphStrip && (
                 <section className="memory-vault-global-graph" aria-label="Global memory graph">
                     {subgraph?.cluster_0_name ? (
@@ -712,6 +753,7 @@ export function MemoryCardsPanel({
                         ))}
                     </div>
                 )}
+                </>}
                 </>
                 )}
 
