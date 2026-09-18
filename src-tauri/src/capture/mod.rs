@@ -656,6 +656,62 @@ pub(crate) fn should_skip_capture_context(
     capture_context_skip_reason(app_name, bundle_id, window_title, url, blocklist).is_some()
 }
 
+/// Queue one alert for a sensitive browser context before the capture flow
+/// branches into URL-only, visual, semantic, or OCR storage paths. The alert
+/// is advisory until the user adds the site to their blocklist.
+fn queue_sensitive_context_alert(
+    state: &AppState,
+    url: Option<&str>,
+    window_title: &str,
+    dismissed_alerts: &[String],
+) {
+    if !Blocklist::is_sensitive_context(url, Some(window_title)) {
+        return;
+    }
+
+    let alert_key =
+        Blocklist::context_key(url, Some(window_title)).unwrap_or_else(|| window_title.to_string());
+    if Blocklist::is_context_blocked(url, Some(window_title), dismissed_alerts) {
+        return;
+    }
+
+    let now = Local::now();
+    let is_snoozed = state
+        .snoozed_privacy_alerts
+        .read()
+        .get(&alert_key)
+        .is_some_and(|expire_time| now.timestamp() < *expire_time);
+    if is_snoozed {
+        return;
+    }
+
+    let pushed = {
+        let mut pending = state.pending_privacy_alerts.write();
+        if pending
+            .iter()
+            .any(|alert| alert.domain_or_title == alert_key)
+        {
+            false
+        } else {
+            // Bound the queue so an unattended alert spike cannot grow it
+            // without limit.
+            if pending.len() >= 50 {
+                pending.remove(0);
+            }
+            pending.push(crate::PrivacyAlert {
+                id: uuid::Uuid::new_v4().to_string(),
+                domain_or_title: alert_key,
+                detected_at: now.timestamp_millis(),
+            });
+            true
+        }
+    };
+    if pushed {
+        tracing::info!("Surfaced proactive privacy alert for sensitive context");
+        crate::ipc::commands::emit_privacy_alerts(state);
+    }
+}
+
 fn extract_ocr_text(app_name: &str, ocr_result: &RecognizedText) -> text_cleanup::HighSignalText {
     text_cleanup::build_high_signal_text_for_app(app_name, &ocr_result.text)
 }
@@ -2126,6 +2182,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
+        queue_sensitive_context_alert(
+            state.as_ref(),
+            url.as_deref(),
+            &window_title,
+            &config.dismissed_privacy_alerts,
+        );
+
         let surface_policy =
             classify_capture_surface_policy(&app_name, &window_title, url.as_deref());
         if surface_policy == CaptureSurfacePolicy::SkipFrame {
@@ -3082,51 +3145,6 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 gap_ms < 60 * 60 * 1000
             })
             .map(|prior| prior.id.clone());
-
-        // --- Proactive Privacy Check ---
-        if Blocklist::is_sensitive_context(url.as_deref(), Some(&window_title)) {
-            let alert_key = Blocklist::context_key(url.as_deref(), Some(&window_title))
-                .unwrap_or_else(|| window_title.clone());
-
-            let is_dismissed = Blocklist::is_context_blocked(
-                url.as_deref(),
-                Some(&window_title),
-                &config.dismissed_privacy_alerts,
-            );
-            let is_snoozed = {
-                let snoozed = state.snoozed_privacy_alerts.read();
-                if let Some(&expire_time) = snoozed.get(&alert_key) {
-                    now.timestamp() < expire_time
-                } else {
-                    false
-                }
-            };
-
-            if !is_dismissed && !is_snoozed {
-                let pushed = {
-                    let mut pending = state.pending_privacy_alerts.write();
-                    if pending.iter().any(|a| a.domain_or_title == alert_key) {
-                        false
-                    } else {
-                        // Bound the queue so an unattended alert spike (many unique
-                        // titles) cannot grow this Vec without limit.
-                        if pending.len() >= 50 {
-                            pending.remove(0);
-                        }
-                        pending.push(crate::PrivacyAlert {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            domain_or_title: alert_key,
-                            detected_at: now.timestamp_millis(),
-                        });
-                        true
-                    }
-                };
-                if pushed {
-                    tracing::info!("Surfaced proactive privacy alert for sensitive context");
-                    crate::ipc::commands::emit_privacy_alerts(state.as_ref());
-                }
-            }
-        }
 
         let session_key = build_session_key(&app_name, &window_title, url.as_deref());
 

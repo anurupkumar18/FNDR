@@ -208,6 +208,14 @@ mod tests {
     }
 
     #[test]
+    fn test_detects_bank_of_america_as_sensitive_context() {
+        assert!(Blocklist::is_sensitive_context(
+            Some("https://www.bankofamerica.com/"),
+            Some("Bank of America - Banking, Credit Cards, Loans and Merrill Investing"),
+        ));
+    }
+
+    #[test]
     fn test_detects_internal_app_by_name() {
         assert!(Blocklist::is_internal_app("FNDR", None));
         assert!(!Blocklist::is_internal_app("FNDR Meetings", None));
