@@ -10,7 +10,6 @@ import { ModelDownloadBanner } from "@/domains/workspace/ModelDownloadBanner";
 import { Onboarding } from "@/domains/workspace/Onboarding";
 import { appendToSearchHistory } from "@/domains/workspace/SearchHistoryPanel";
 import { type PanelKey } from "@/domains/command-palette/CommandPalette";
-import { useAutomationScheduler } from "@/domains/workspace/AutomationPanel";
 import "@/domains/workspace/FocusModePanel.css";
 
 import { useSearch } from "@/shared/hooks/useSearch";
@@ -44,12 +43,22 @@ function nextToastId(): string {
 
 const SIDEBAR_GROUPS = [
     {
-        label: "Alpha demo",
+        label: "Memory",
         items: [
             { key: "memoryCards", text: "Memory Vault" },
-            { key: "engineMetrics", text: "Engine metrics" },
-            { key: "agent", text: "Context" },
+            { key: "ask", text: "Ask FNDR" },
         ],
+    },
+    {
+        label: "Reflect",
+        items: [
+            { key: "dailySummary", text: "Daily Summary" },
+            { key: "wrapped", text: "FNDR Wrapped" },
+        ],
+    },
+    {
+        label: "Assist",
+        items: [{ key: "screenGuide", text: "Screen Guide" }],
     },
 ] as const satisfies ReadonlyArray<{
     label: string;
@@ -72,8 +81,6 @@ function App() {
     const [appToasts, setAppToasts] = useState<AppToast[]>([]);
     const toastTimersRef = useRef<Map<string, number>>(new Map());
 
-    // Background automation scheduler — fires Tauri calls on configured schedules
-    useAutomationScheduler();
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
     const [biometricRequired, setBiometricRequired] = useState<boolean | null>(null);
     const [biometricUnlocked, setBiometricUnlocked] = useState(false);
@@ -259,6 +266,16 @@ function App() {
     }, []);
 
     useTauriEvent<string>(OMNIBAR_OPEN_MEMORY_EVENT, handleOpenMemoryById);
+
+    const goHome = useCallback(() => {
+        setActivePanel(null);
+        setShowCommandPalette(false);
+        setIsSidebarOpen(false);
+        setQuery("");
+        setQueryDraft("");
+        setTimeFilter(null);
+        setAppFilter(null);
+    }, []);
 
     const dismissToast = useCallback((toastId: string) => {
         const timer = toastTimersRef.current.get(toastId);
@@ -530,6 +547,15 @@ function App() {
                 <aside className={`left-sidebar ${isSidebarOpen ? "open" : ""}`}>
                     <div className="sidebar-brand"></div>
 
+                    <div className="sidebar-group sidebar-actions">
+                        <button
+                            className={`ui-action-btn ${activePanel === null && !query.trim() ? "active" : ""}`}
+                            onClick={goHome}
+                        >
+                            Home
+                        </button>
+                    </div>
+
                     {SIDEBAR_GROUPS.map((group) => (
                         <div key={group.label} className="sidebar-group sidebar-actions">
                             <div className="sidebar-label">{group.label}</div>
@@ -673,6 +699,7 @@ function App() {
                     onClosePanel={() => setActivePanel(null)}
                     onDeleteMemory={handleMemoryDeleted}
                     onDismissToast={dismissToast}
+                    onGoHome={goHome}
                     onMemoryDeleted={handleMemoryDeleted}
                     onOpenPanel={handleOpenPanel}
                     onRunQuery={handleSearchSubmit}

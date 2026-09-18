@@ -8,7 +8,6 @@ import {
     deleteMemory,
     pauseCapture,
     resumeCapture,
-    startAgentTask,
 } from "@/shared/ipc/tauri";
 import { Icon } from "@/shared/components/atoms";
 import "./CommandPalette.css";
@@ -41,7 +40,7 @@ interface CommandContext {
     onSearchApp: (app: string) => void;
     onClearSearch: () => void;
     onDeleteMemory: (id: string) => void;
-    onResearch: (memory: MemoryCard) => void;
+    onGoHome: () => void;
     isCapturing: boolean;
 }
 
@@ -53,15 +52,9 @@ export type PanelKey =
     | "meeting"
     | "dailySummary"
     | "wrapped"
-    | "pipeline"
-    | "engineMetrics"
-    | "glassesImport"
     | "searchHistory"
-    | "quickSkills"
     | "focusSession"
-    | "agent"
-    | "automation"
-    | "research"
+    | "ask"
     | "timeTracking"
     | "focusMode"
     | "screenGuide";
@@ -70,9 +63,12 @@ export type PanelKey =
 // registry remains intact for later milestones; this list is the single source
 // of truth for the reduced command palette.
 export const DEMO_COMMAND_IDS = [
+    "go-home",
     "memory-cards",
-    "engine-metrics",
-    "local-context",
+    "ask-fndr",
+    "daily-summary",
+    "wrapped",
+    "screen-guide",
     "pause-capture",
     "resume-capture",
 ] as const;
@@ -85,6 +81,30 @@ export function isDemoCommand(commandId: string): boolean {
 
 const COMMANDS: Command[] = [
     // Navigate
+    {
+        id: "go-home",
+        label: "Home",
+        description: "Back to your greeting, capture status and recent memories",
+        category: "navigate",
+        keywords: ["home", "start", "timeline", "recent"],
+        run: ({ onGoHome }) => onGoHome(),
+    },
+    {
+        id: "ask-fndr",
+        label: "Ask FNDR",
+        description: "Get an answer with cited evidence from your local memories",
+        category: "navigate",
+        keywords: ["ask", "question", "answer", "context"],
+        run: ({ onOpenPanel }) => onOpenPanel("ask"),
+    },
+    {
+        id: "wrapped",
+        label: "FNDR Wrapped",
+        description: "Your week in review",
+        category: "navigate",
+        keywords: ["week", "recap", "wrapped", "review"],
+        run: ({ onOpenPanel }) => onOpenPanel("wrapped"),
+    },
     {
         id: "focus-session",
         label: "Focus Session",
@@ -126,28 +146,12 @@ const COMMANDS: Command[] = [
         run: ({ onOpenPanel }) => onOpenPanel("dailySummary"),
     },
     {
-        id: "quick-skills",
-        label: "Quick Skills",
-        description: "Run a pre-built search shortcut",
-        category: "smart",
-        keywords: ["skill", "shortcut", "preset", "search"],
-        run: ({ onOpenPanel }) => onOpenPanel("quickSkills"),
-    },
-    {
         id: "search-history",
         label: "Search History",
         description: "Re-run a previous query",
         category: "navigate",
         keywords: ["history", "previous", "past", "recent"],
         run: ({ onOpenPanel }) => onOpenPanel("searchHistory"),
-    },
-    {
-        id: "automation",
-        label: "Automation Center",
-        description: "Configure scheduled tasks and auto-digests",
-        category: "smart",
-        keywords: ["schedule", "cron", "auto", "digest", "recurring"],
-        run: ({ onOpenPanel }) => onOpenPanel("automation"),
     },
     {
         id: "time-tracking",
@@ -188,30 +192,6 @@ const COMMANDS: Command[] = [
         category: "navigate",
         keywords: ["record", "transcript", "zoom", "call", "audio"],
         run: ({ onOpenPanel }) => onOpenPanel("meeting"),
-    },
-    {
-        id: "pipeline",
-        label: "Pipeline Inspector",
-        description: "Debug search ranking and embedding pipeline",
-        category: "navigate",
-        keywords: ["debug", "pipeline", "inspect", "ranking"],
-        run: ({ onOpenPanel }) => onOpenPanel("pipeline"),
-    },
-    {
-        id: "engine-metrics",
-        label: "Engine metrics (performance)",
-        description: "Live latency, RSS, hybrid search timings — use while tuning performance",
-        category: "navigate",
-        keywords: ["metrics", "performance", "latency", "cpu", "ram", "rss", "profiler", "timing", "hybrid"],
-        run: ({ onOpenPanel }) => onOpenPanel("engineMetrics"),
-    },
-    {
-        id: "glasses-photo-import",
-        label: "Import glasses / camera photo",
-        description: "Visual semantic extraction + OCR evidence + embeddings (requires Qwen3-VL + mmproj)",
-        category: "navigate",
-        keywords: ["glasses", "meta", "ray-ban", "photo", "image", "import", "camera", "heic", "jpeg"],
-        run: ({ onOpenPanel }) => onOpenPanel("glassesImport"),
     },
     // Smart / search
     {
@@ -273,14 +253,6 @@ const COMMANDS: Command[] = [
         keywords: ["resume", "start", "record"],
         run: async () => { await resumeCapture(); },
     },
-    {
-        id: "import-meta-glasses-photo",
-        label: "Import Meta glasses photo (same as sidebar)",
-        description: "Open the photo import screen with step-by-step instructions",
-        category: "capture",
-        keywords: ["glasses", "meta", "ray-ban", "photo", "image", "import", "camera"],
-        run: ({ onOpenPanel }) => onOpenPanel("glassesImport"),
-    },
     // Memory-specific (only shown when a memory is selected)
     {
         id: "open-url",
@@ -296,17 +268,6 @@ const COMMANDS: Command[] = [
         },
     },
     {
-        id: "research-memory",
-        label: "Research this",
-        description: "Deep-dive with AI agent using this memory's context",
-        category: "smart",
-        memoryOnly: true,
-        keywords: ["research", "agent", "ai", "deep", "analyze"],
-        run: ({ selectedMemory, onResearch }) => {
-            if (selectedMemory) onResearch(selectedMemory);
-        },
-    },
-    {
         id: "find-similar",
         label: "Find similar memories",
         description: "Search for memories related to this one",
@@ -318,31 +279,6 @@ const COMMANDS: Command[] = [
             const terms = selectedMemory.title.split(/\s+/).slice(0, 4).join(" ");
             if (terms) onSearch(terms);
             else onSearchApp(selectedMemory.app_name);
-        },
-    },
-    {
-        id: "local-context",
-        label: "Open local Context",
-        description: "Ask FNDR to build a read-only context pack from local memories",
-        category: "navigate",
-        keywords: ["context", "ask", "memory", "local"],
-        run: ({ onOpenPanel }) => onOpenPanel("agent"),
-    },
-    {
-        id: "agent-analyze",
-        label: "Analyze with AI agent",
-        description: "Run AI agent to extract insights from this memory",
-        category: "smart",
-        memoryOnly: true,
-        keywords: ["agent", "analyze", "ai", "insights"],
-        run: async ({ selectedMemory, onOpenPanel }) => {
-            if (!selectedMemory) return;
-            await startAgentTask(
-                `Analyze this memory and extract key insights: "${selectedMemory.title}" in ${selectedMemory.app_name}. Summary: ${selectedMemory.summary}`,
-                selectedMemory.url ? [selectedMemory.url] : undefined,
-                [selectedMemory.summary]
-            );
-            onOpenPanel("agent");
         },
     },
     {
@@ -540,7 +476,7 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
                     <input
                         ref={inputRef}
                         className="cp-input"
-                        placeholder={selectedMemory ? `Actions for "${selectedMemory.title.slice(0, 40)}…"` : "find a memory"}
+                        placeholder={selectedMemory ? `Actions for "${selectedMemory.title.slice(0, 40)}…"` : "Jump to a view or command…"}
                         value={query}
                         onChange={(e) => { setQuery(e.target.value); setActiveIdx(0); }}
                     />

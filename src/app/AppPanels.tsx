@@ -1,8 +1,10 @@
 import type { MemoryCard } from "@/shared/ipc/tauri";
-import { AgentPanel } from "@/domains/workspace/AgentPanel";
+import { AskPanel } from "@/domains/ask/AskPanel";
 import { CommandPalette, type PanelKey } from "@/domains/command-palette/CommandPalette";
 import { MemoryCardsPanel } from "@/domains/memory-vault/MemoryCardsPanel";
-import { EngineMetricsPanel } from "@/domains/workspace/EngineMetricsPanel";
+import { ScreenGuidePanel } from "@/domains/screen-guide/ScreenGuidePanel";
+import { DailySummaryPanel } from "@/domains/workspace/DailySummaryPanel";
+import { FndrWrappedPanel } from "@/domains/workspace/FndrWrappedPanel";
 import { AppToasts } from "./AppToasts";
 import { PanelErrorBoundary } from "./PanelErrorBoundary";
 import type { AppToast } from "./types";
@@ -21,6 +23,7 @@ interface AppPanelsProps {
     onClosePanel: () => void;
     onDeleteMemory: (memoryId: string) => void;
     onDismissToast: (toastId: string) => void;
+    onGoHome: () => void;
     onMemoryDeleted: (memoryId: string) => void;
     onOpenPanel: (panel: PanelKey) => void;
     onRunQuery: (query: string) => void;
@@ -29,6 +32,8 @@ interface AppPanelsProps {
     onOpenMemoryById: (memoryId: string) => void;
 }
 
+/** Alpha demo surface: Vault, Ask FNDR, Daily Summary, Wrapped, Screen Guide.
+ *  Hidden rank-2 panels stay compiled under src/domains but are not mounted. */
 export function AppPanels({
     activePanel,
     appNames,
@@ -43,6 +48,7 @@ export function AppPanels({
     onClosePanel,
     onDeleteMemory,
     onDismissToast,
+    onGoHome,
     onMemoryDeleted,
     onOpenPanel,
     onRunQuery,
@@ -52,8 +58,8 @@ export function AppPanels({
 }: AppPanelsProps) {
     return (
         <>
-            <PanelErrorBoundary panelName="Agent">
-                <AgentPanel isVisible={activePanel === "agent"} onClose={onClosePanel} mode="context" />
+            <PanelErrorBoundary panelName="Ask FNDR">
+                <AskPanel isVisible={activePanel === "ask"} onClose={onClosePanel} onOpenMemoryById={onOpenMemoryById} />
             </PanelErrorBoundary>
             <MemoryCardsPanel
                 isVisible={activePanel === "memoryCards"}
@@ -64,10 +70,19 @@ export function AppPanels({
                 focusMemoryId={memoryVaultFocusId}
                 onOpenMemoryById={onOpenMemoryById}
             />
-            <EngineMetricsPanel
-                isVisible={activePanel === "engineMetrics"}
-                onClose={onClosePanel}
-            />
+            <PanelErrorBoundary panelName="Daily Summary">
+                <DailySummaryPanel
+                    isVisible={activePanel === "dailySummary"}
+                    onClose={onClosePanel}
+                    onOpenMemoryById={onOpenMemoryById}
+                />
+            </PanelErrorBoundary>
+            <PanelErrorBoundary panelName="FNDR Wrapped">
+                <FndrWrappedPanel isVisible={activePanel === "wrapped"} onClose={onClosePanel} />
+            </PanelErrorBoundary>
+            <PanelErrorBoundary panelName="Screen Guide">
+                <ScreenGuidePanel isVisible={activePanel === "screenGuide"} onClose={onClosePanel} />
+            </PanelErrorBoundary>
             <CommandPalette
                 isOpen={showCommandPalette}
                 onClose={onCloseCommandPalette}
@@ -76,11 +91,11 @@ export function AppPanels({
                 context={{
                     query,
                     onOpenPanel,
+                    onGoHome,
                     onSearch: onRunQuery,
                     onSearchApp,
                     onClearSearch,
                     onDeleteMemory,
-                    onResearch: () => undefined,
                     isCapturing,
                 }}
             />
