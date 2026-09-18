@@ -8,6 +8,8 @@ describe("demo command palette", () => {
             "memory-cards",
             "ask-fndr",
             "daily-summary",
+            "stats",
+            "todo",
             "wrapped",
             "screen-guide",
             "pause-capture",

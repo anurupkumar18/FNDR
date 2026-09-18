@@ -37,14 +37,21 @@ afterEach(() => {
 });
 
 describe("AskPanel", () => {
+    it("frames searching and asking as one local-memory workflow", () => {
+        render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
+        expect(screen.getByRole("heading", { name: "Search & Ask FNDR" })).toBeInTheDocument();
+        expect(screen.getByLabelText("Search or ask FNDR")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Search & Ask" })).toBeInTheDocument();
+    });
+
     it("shows a grounded answer with clickable cited sources", async () => {
         vi.mocked(fndrAnswer).mockResolvedValue(answer({}));
         const onOpen = vi.fn();
         render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={onOpen} />);
-        fireEvent.change(screen.getByLabelText("Ask FNDR a question"), {
+        fireEvent.change(screen.getByLabelText("Search or ask FNDR"), {
             target: { value: "What chunk size did the chunking paper recommend?" },
         });
-        fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+        fireEvent.click(screen.getByRole("button", { name: "Search & Ask" }));
         expect(await screen.findByText(/512-token parents with 128-token children\./)).toBeInTheDocument();
         expect(screen.getByText("Grounded in 1 memory")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: /Chunking paper results/ }));
@@ -60,17 +67,17 @@ describe("AskPanel", () => {
             })
         );
         render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
-        fireEvent.change(screen.getByLabelText("Ask FNDR a question"), {
+        fireEvent.change(screen.getByLabelText("Search or ask FNDR"), {
             target: { value: "What's my bank balance?" },
         });
-        fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+        fireEvent.click(screen.getByRole("button", { name: "Search & Ask" }));
         expect(await screen.findByText("Not in your memories")).toBeInTheDocument();
         expect(screen.getByText(/only answers from what it captured on this Mac/)).toBeInTheDocument();
     });
 
     it("does not call the backend for a blank question", () => {
         render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
-        fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+        fireEvent.click(screen.getByRole("button", { name: "Search & Ask" }));
         expect(fndrAnswer).not.toHaveBeenCalled();
     });
 });

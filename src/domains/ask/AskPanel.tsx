@@ -4,7 +4,7 @@ import "./AskPanel.css";
 
 const ANSWER_TIMEOUT_MS = 60_000;
 const TAKEAWAY =
-    "FNDR remembers what you did on your Mac, privately and on-device, and answers questions about it with cited evidence.";
+    "Search finds memories. Ask FNDR uses that same private, on-device evidence to give a cited answer.";
 const EXAMPLES = [
     "What was the Rust borrow error I fixed this week?",
     "What chunk size did the chunking paper recommend?",
@@ -77,10 +77,10 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
     };
 
     return (
-        <div className="ask-page" role="dialog" aria-label="Ask FNDR">
+        <div className="ask-page" role="dialog" aria-label="Search and Ask FNDR">
             <header className="ask-header">
                 <div className="ask-header-title">
-                    <h2>Ask FNDR</h2>
+                    <h2>Search & Ask FNDR</h2>
                     <span className="ask-badge">On-device · read-only</span>
                 </div>
                 <button type="button" className="ui-action-btn ask-close-btn" onClick={onClose} aria-label="Close Ask FNDR">
@@ -101,8 +101,8 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                     <textarea
                         ref={inputRef}
                         className="ask-input"
-                        aria-label="Ask FNDR a question"
-                        placeholder="Ask about anything you've worked on…"
+                        aria-label="Search or ask FNDR"
+                        placeholder="Search or ask about anything you've worked on…"
                         value={draft}
                         rows={2}
                         onChange={(event) => setDraft(event.target.value)}
@@ -114,7 +114,7 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                         }}
                     />
                     <button type="submit" className="ui-action-btn btn-primary ask-submit" disabled={state.kind === "asking"}>
-                        Ask
+                        Search & Ask
                     </button>
                 </form>
 
@@ -139,7 +139,7 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                 {state.kind === "asking" && (
                     <div className="ask-status" role="status">
                         <div className="thinking-loader" aria-hidden="true" />
-                        <span>Searching your memories…</span>
+                        <span>Searching and checking your memories…</span>
                     </div>
                 )}
 

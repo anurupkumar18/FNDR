@@ -24,7 +24,6 @@ import {
     type FndrNotificationPayload,
     MeetingRecorderStatus,
     MemoryCard,
-    deleteMemory,
     getAppNames,
     getMeetingStatus,
     onMeetingStatus,
@@ -46,13 +45,15 @@ const SIDEBAR_GROUPS = [
         label: "Memory",
         items: [
             { key: "memoryCards", text: "Memory Vault" },
-            { key: "ask", text: "Ask FNDR" },
+            { key: "ask", text: "Search & Ask FNDR" },
         ],
     },
     {
         label: "Reflect",
         items: [
             { key: "dailySummary", text: "Daily Summary" },
+            { key: "stats", text: "Stats" },
+            { key: "todo", text: "To-dos" },
             { key: "wrapped", text: "FNDR Wrapped" },
         ],
     },
@@ -454,18 +455,6 @@ function App() {
         });
     };
 
-    const handleDeleteMemory = async (memoryId: string) => {
-        try {
-            const deleted = await deleteMemory(memoryId);
-            if (!deleted) {
-                return;
-            }
-            handleMemoryDeleted(memoryId);
-        } catch (err) {
-            console.error("Failed to delete memory:", err);
-        }
-    };
-
     if (onboardingDone === null || biometricRequired === null) {
         return null;
     }
@@ -672,7 +661,6 @@ function App() {
                                 query={query}
                                 selectedResultId={selectedResult?.id ?? null}
                                 onSelectResult={setSelectedResult}
-                                onDeleteMemory={(memoryId) => void handleDeleteMemory(memoryId)}
                                 evalUi={EVAL_UI}
                             />
                         </section>

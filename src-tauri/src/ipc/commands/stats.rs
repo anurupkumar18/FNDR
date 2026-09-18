@@ -8,6 +8,7 @@ use super::search::{
 use crate::context_runtime;
 use crate::embedding::{embedding_runtime_status, Embedder, EmbeddingBackend};
 use crate::mcp::{self, McpServerStatus};
+use crate::memory_quality::partition_surfaceable;
 use crate::privacy::Blocklist;
 use crate::speech;
 use crate::storage::{SearchResult, Stats, Task, TaskType};
@@ -458,6 +459,13 @@ pub(crate) fn build_daily_activity_summary(records: &[SearchResult], day_label: 
     lines.join("\n")
 }
 
+/// Daily summaries are another reader of persisted memories, so they must
+/// honor the same low-signal admission policy as Search, Vault, and Ask.
+pub(crate) fn surfaceable_daily_records(records: Vec<SearchResult>) -> Vec<SearchResult> {
+    let (surfaceable, _low_signal) = partition_surfaceable(strip_internal_fndr_results(records));
+    surfaceable
+}
+
 fn daily_activity_key(result: &SearchResult) -> String {
     let label = daily_activity_label(result).to_lowercase();
     format!("{}|{}", result.app_name.to_lowercase(), label)
@@ -764,7 +772,7 @@ pub async fn generate_daily_summary_for_date(
         .get_search_results_in_range(start_ms, end_ms)
         .await
         .map_err(|e| e.to_string())?;
-    let records = strip_internal_fndr_results(records);
+    let records = surfaceable_daily_records(records);
 
     if records.is_empty() {
         return Ok("No memories recorded for this date.".to_string());
@@ -807,7 +815,7 @@ pub async fn get_daily_summary_overview(
         .get_search_results_in_range(start_ms, end_ms)
         .await
         .map_err(|e| e.to_string())?;
-    let records = strip_internal_fndr_results(records);
+    let records = surfaceable_daily_records(records);
     if records.is_empty() {
         return Ok(String::new());
     }

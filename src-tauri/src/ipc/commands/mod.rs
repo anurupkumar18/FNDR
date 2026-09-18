@@ -82,7 +82,9 @@ mod daily_summary_tests {
     };
     use super::quality::classify_storage_outcome_with_config;
     use super::search::memory_card_from_result;
-    use super::stats::{build_daily_activity_summary, build_focus_task_embedding};
+    use super::stats::{
+        build_daily_activity_summary, build_focus_task_embedding, surfaceable_daily_records,
+    };
 
     fn result(
         id: &str,
@@ -157,6 +159,25 @@ mod daily_summary_tests {
             lines.len() <= 4,
             "short spans should not force 6-8 bullets: {summary}"
         );
+    }
+
+    #[test]
+    fn daily_summary_excludes_low_signal_visual_fallbacks() {
+        let mut fallback = result(
+            "fallback",
+            chrono::Utc::now().timestamp_millis(),
+            "ChatGPT",
+            "ChatGPT_1789740602743.png",
+            "ChatGPT",
+            None,
+        );
+        fallback.storage_outcome = "low_quality_evidence".to_string();
+        fallback.synthesis_branch = "llm_ocr_grounded_visual_fallback".to_string();
+        fallback.ocr_block_count = 1;
+
+        let retained = surfaceable_daily_records(vec![fallback]);
+
+        assert!(retained.is_empty());
     }
 
     #[test]

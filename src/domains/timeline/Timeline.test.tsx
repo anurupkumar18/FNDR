@@ -50,4 +50,24 @@ describe("Timeline", () => {
         ).toBeInTheDocument();
         expect(screen.getByText(/score 0\.870/i)).toBeInTheDocument();
     });
+
+    it("does not repeat a summary that says the same thing as its title", () => {
+        const duplicate = {
+            ...sample,
+            title: "Alpha demo script – Google Docs",
+            summary: "Alpha demo script – Google Docs",
+        };
+        render(
+            <Timeline
+                results={[duplicate]}
+                isLoading={false}
+                query="demo"
+                selectedResultId={null}
+                onSelectResult={vi.fn()}
+            />
+        );
+
+        expect(screen.getAllByText(/Alpha demo script – Google Docs/)).toHaveLength(1);
+        expect(screen.queryByRole("button", { name: "Delete this memory" })).not.toBeInTheDocument();
+    });
 });

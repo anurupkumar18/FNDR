@@ -112,6 +112,10 @@ export function Timeline({
                     const cleanSummary = stripLegacySources(result.display_summary ?? result.summary);
                     const displayTitle = preferredTitle(result);
                     const primaryText = cleanSummary || displayTitle || "Captured memory";
+                    const showPrimaryText =
+                        !displayTitle ||
+                        (!isLowSignalPreview(primaryText, result.app_name) &&
+                            tokenOverlap(displayTitle, primaryText) < 0.75);
                     const matchReason = preferredMatchReason(result, query);
                     const domain = domainFromUrl(result.url);
                     const confidence = result.confidence ?? result.score;
@@ -170,11 +174,7 @@ export function Timeline({
                                     {displayTitle}
                                 </h3>
                             )}
-                            <p className="result-primary">
-                                {!isLowSignalPreview(primaryText, result.app_name)
-                                    ? primaryText
-                                    : (displayTitle || "Untitled memory")}
-                            </p>
+                            {showPrimaryText && <p className="result-primary">{primaryText}</p>}
                             <InsightLayers card={result} evalUi={evalUi} />
                             <div className="result-context-chips" aria-label="Match details">
                                 {matchReason && <span className="result-chip">{matchReason}</span>}

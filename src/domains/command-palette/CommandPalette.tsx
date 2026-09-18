@@ -67,6 +67,8 @@ export const DEMO_COMMAND_IDS = [
     "memory-cards",
     "ask-fndr",
     "daily-summary",
+    "stats",
+    "todo",
     "wrapped",
     "screen-guide",
     "pause-capture",
@@ -91,10 +93,10 @@ const COMMANDS: Command[] = [
     },
     {
         id: "ask-fndr",
-        label: "Ask FNDR",
-        description: "Get an answer with cited evidence from your local memories",
+        label: "Search & Ask FNDR",
+        description: "Search local memories or get a cited answer from the same evidence",
         category: "navigate",
-        keywords: ["ask", "question", "answer", "context"],
+        keywords: ["search", "ask", "question", "answer", "context"],
         run: ({ onOpenPanel }) => onOpenPanel("ask"),
     },
     {
