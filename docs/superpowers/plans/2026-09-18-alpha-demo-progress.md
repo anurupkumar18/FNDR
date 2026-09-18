@@ -14,3 +14,4 @@ Note: session idled ~00:45–07:10 at a rejected tool call; overnight window los
 | 07:47 | T5 Ask FNDR panel | 67b12a5 | AskPanel 3 ✅ · typecheck ✅ | |
 | 07:47 | T6 curated surface | (this commit) | palette ✅ · app tests ✅ · typecheck ✅ · demo app booted on com.fndr.app.demo, backfill queued | self-QA via screencapture -l <FNDR window id> |
 | 07:49 | HANDOFF | (this commit) | tree green (typecheck 0 errors); partial T9 Settings edit reverted | pushed alpha-demo and fast-forwarded main per owner request; see 2026-09-18-alpha-demo-HANDOFF.md |
+| 07:57 | T9 Settings clean sheet | pending commit | typecheck ✅ · ControlPanel 3 tests ✅ | replaced tabbed settings with Profile, Capture, Privacy/blocklist, and read-only Local Models; removed update, retention, auto-fill, MCP, model mutation, appearance picker, and Danger Zone UI |

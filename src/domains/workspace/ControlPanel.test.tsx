@@ -17,6 +17,13 @@ vi.mock("@/shared/ipc/tauri", () => ({
     CAPTURE_STATUS_EVENT: "capture://status",
     deleteAllData: vi.fn(),
     deleteOlderThan: vi.fn(),
+    addSiteToBlocklist: vi.fn(),
+    dismissPrivacyAlert: vi.fn(),
+    fndrQualityStatus: vi.fn().mockResolvedValue({
+        stored_count: 0,
+        dropped_count: 0,
+        flagged_count: 0,
+    }),
     getBlocklist: vi.fn().mockResolvedValue([]),
     getAutofillSettings: vi.fn().mockResolvedValue({
         enabled: true,
@@ -106,59 +113,42 @@ afterEach(() => {
 });
 
 describe("ControlPanel", () => {
-    it("exposes privacy alerts inside settings privacy", async () => {
+    it("shows one demo-safe settings sheet without destructive or model-management controls", async () => {
         render(<ControlPanel status={null} compact={true} />);
 
         const settingsButton = screen.getByRole("button", { name: /open settings/i });
-        expect(settingsButton).toBeInTheDocument();
-
         fireEvent.click(settingsButton);
-        fireEvent.click(screen.getByRole("button", { name: /privacy/i }));
 
+        expect(await screen.findByRole("heading", { name: /profile/i })).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: /capture status/i })).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: /privacy alerts/i })).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: /blocked apps & sites/i })).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: /local models/i })).toBeInTheDocument();
         expect(await screen.findByText(/no active privacy alerts/i)).toBeInTheDocument();
+        expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+        expect(screen.queryByText(/danger zone/i)).toBeNull();
+        expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+        expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
+        expect(screen.queryByText(/auto-fill/i)).toBeNull();
+        expect(screen.queryByText(/mcp server/i)).toBeNull();
     });
 
-    it("warns that capture is paused when the embedder is unavailable", async () => {
+    it("shows a read-only warning when capture cannot use its embedding model", async () => {
         render(<ControlPanel status={statusWithEmbedder("unavailable", true)} compact={true} />);
 
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
-        fireEvent.click(screen.getByRole("button", { name: /model/i }));
 
         expect(
             await screen.findByText(/capture is paused until the embedding model/i),
         ).toBeInTheDocument();
     });
 
-    it("reports up to date after checking for updates", async () => {
-        checkUpdateMock.mockResolvedValue(null);
-        render(<ControlPanel status={null} compact={true} />);
-
-        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
-        fireEvent.click(await screen.findByRole("button", { name: /check for updates/i }));
-
-        expect(await screen.findByText(/up to date/i)).toBeInTheDocument();
-    });
-
-    it("offers install and restart when an update is available", async () => {
-        checkUpdateMock.mockResolvedValue({
-            version: "0.9.9",
-            downloadAndInstall: vi.fn().mockResolvedValue(undefined),
-        });
-        render(<ControlPanel status={null} compact={true} />);
-
-        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
-        fireEvent.click(await screen.findByRole("button", { name: /check for updates/i }));
-
-        expect(await screen.findByText(/0\.9\.9/)).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: /install and restart/i })).toBeInTheDocument();
-    });
-
-    it("does not show the capture-paused warning when the embedder is healthy", () => {
+    it("does not show the capture-paused warning when the embedder is healthy", async () => {
         render(<ControlPanel status={statusWithEmbedder("real", false)} compact={true} />);
 
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
-        fireEvent.click(screen.getByRole("button", { name: /model/i }));
 
+        expect(await screen.findByRole("heading", { name: /local models/i })).toBeInTheDocument();
         expect(screen.queryByText(/capture is paused until the embedding model/i)).toBeNull();
     });
 });
