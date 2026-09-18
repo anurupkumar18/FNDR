@@ -10,3 +10,4 @@ Fallback if the session hits the usage limit: stop at the last green, pushed com
 | 07:25 | T2 read boundaries + review-queue cmd | (this commit) | drop_low_signal_hits ✅ · search 46 ✅ · cargo check bin ✅ · typecheck ✅ | |
 Note: session idled ~00:45–07:10 at a rejected tool call; overnight window lost. Re-prioritizing with owner at 07:25.
 | 07:33 | T3 data-dir resolver, backfill hook, no omnibar/autofill hotkeys | (this commit) | data_dir_override ✅ · config 24 ✅ · cargo check bin ✅ | all 14 app_data_dir call sites routed; formatting noise in teammate files avoided |
+| 07:44 | T4 seed corpus + seeder + scripts | (this commit) | seeder gate: 82 stored / 79 surfaced / 3 needs-signal ✅ · make test ✅ (vitest 180, cargo lib 635 + all integration suites) | corpus trimmed to 82 entries (time); real profile untouched |
