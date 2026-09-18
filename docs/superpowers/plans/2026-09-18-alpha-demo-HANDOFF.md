@@ -4,6 +4,15 @@ Paste this whole file into Codex/ChatGPT to continue. The demo is **today, 1–3
 
 ## Where things are
 
+### Continuation update (08:01 MDT)
+
+- `6cb6a1d` is pushed to `alpha-demo` and `main`: Settings is now one demo-safe sheet (Profile, Capture, Privacy/blocklist, read-only Local Models). Danger Zone, updater, retention, auto-fill, MCP, model mutation, and appearance picker UI were removed.
+- `bd885b2` is pushed: Memory cards no longer expose FRAME ids, empty placeholder rows, or raw synthesis branch identifiers.
+- `16f3d2a` is pushed: Vault has a separate **Needs more signal (N)** review queue. It exposes only app, timestamp, and a plain-language reason; normal Search/Vault/Ask still exclude those records.
+- Current verification: `npm run typecheck` and `npm test` are green (34 files, 183 tests). The demo app is running from `./scripts/demo/run-demo.sh`; do not stop it for a Rust-inclusive gate unless the presenter is ready to restart it.
+
+Remaining product work is now Home polish (T10) and optional visual cleanup. The remaining mandatory work is human-operated: Screen Recording permission/live capture, warm Ask FNDR latency, refusal question, and a complete rehearsal. Do not repeat the completed Settings, card, or needs-signal tasks.
+
 - Repo: `/Users/anurupkumar/FNDR` (GitLab `git@capstone.cs.utah.edu:fndr/fndr.git`). **Do not touch `/Users/anurupkumar/FNDR-2.0`.**
 - All work below is committed and pushed to **`main`** (fast-forward from branch `alpha-demo`, which has the same head).
 - Full plan with code for every remaining task: `docs/superpowers/plans/2026-09-18-alpha-demo-hardening.md`. The binding owner decisions are D1–D23 at the top of that file.
