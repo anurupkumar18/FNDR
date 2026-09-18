@@ -686,6 +686,7 @@ fn main() {
             ipc::commands::search::search_raw_results,
             ipc::commands::search::search_memory_cards,
             ipc::commands::search::list_memory_cards,
+            ipc::commands::search::list_needs_signal_memory_cards,
             ipc::commands::search::summarize_search,
             // FNDR agentic-graph-rag namespace (Phase 4)
             ipc::commands::retrieval::fndr_search,

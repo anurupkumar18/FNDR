@@ -1104,6 +1104,17 @@ export async function listMemoryCards(
     });
 }
 
+export interface NeedsSignalCard {
+    card: MemoryCard;
+    reason_code: string;
+    reason: string;
+}
+
+/** Low-signal captures kept out of Search/Home/Vault/Ask (Vault review queue). */
+export async function listNeedsSignalMemoryCards(limit = 200): Promise<NeedsSignalCard[]> {
+    return invoke<NeedsSignalCard[]>("list_needs_signal_memory_cards", { limit });
+}
+
 export async function reopenMemory(memoryId: string): Promise<boolean> {
     return invoke<boolean>("reopen_memory", {
         memoryId,

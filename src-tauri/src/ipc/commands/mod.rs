@@ -4,7 +4,8 @@ mod common;
 pub mod search;
 
 pub use search::{
-    list_memory_cards, search, search_memory_cards, search_raw_results, summarize_search,
+    list_memory_cards, list_needs_signal_memory_cards, search, search_memory_cards,
+    search_raw_results, summarize_search, NeedsSignalCard,
 };
 
 mod memory;

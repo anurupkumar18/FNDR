@@ -3032,6 +3032,26 @@ pub enum ComposeMode {
     Answer,
 }
 
+/// Ask FNDR must never cite captures the read-side policy keeps out of search.
+/// Unknown ids are kept; downstream evidence collection already tolerates them.
+pub(crate) async fn drop_low_signal_hits(
+    fused: Vec<context_pack::FusedHit>,
+    store: &crate::storage::Store,
+) -> Vec<context_pack::FusedHit> {
+    let mut kept = Vec::with_capacity(fused.len());
+    for hit in fused {
+        match store.get_memory_by_id(&hit.memory_id).await {
+            Ok(Some(record))
+                if crate::memory_quality::record_low_signal_reason(&record).is_some() =>
+            {
+                tracing::debug!(memory_id = %hit.memory_id, "context_runtime:drop_low_signal_hit");
+            }
+            _ => kept.push(hit),
+        }
+    }
+    kept
+}
+
 /// Single-call entry point that drives the full Phase 3 pipeline:
 /// plan → RouteRunner::dispatch (5 routes) → fuse → collect_evidence → verify
 /// → compose. Returns the bundled [`ComposedAnswer`] (always carrying cards +
@@ -3072,6 +3092,7 @@ pub async fn run_query(
 
     let route_hits = retrieval_routes::RouteRunner::dispatch(&plan, &ctx).await;
     let fused = fusion::fuse(&plan, route_hits.clone(), &weights);
+    let fused = drop_low_signal_hits(fused, &state.store).await;
     let debug_trace = search_debug_trace(&plan, &route_hits, &fused, &weights);
     let evidence = evidence_pack::collect_evidence(&fused, &state.store).await;
     let outcome = verifier::verify(&plan, &fused, &evidence);
@@ -3350,5 +3371,59 @@ mod tests {
         );
         assert_eq!(trace["fused"][0]["included_with_embedding_warnings"], true);
         assert!(!trace.to_string().contains("RAW_OCR"));
+    }
+
+    #[test]
+    fn drop_low_signal_hits_removes_visual_fallback_memories() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = crate::storage::Store::new(dir.path()).expect("store");
+        let now = chrono::Utc::now().timestamp_millis();
+        let text = "error[E0502]: cannot borrow `self.frame_buffer` as mutable because it is also borrowed as immutable";
+        let good = MemoryRecord {
+            id: "good".into(),
+            timestamp: now,
+            app_name: "Cursor".into(),
+            window_title: "capture/mod.rs".into(),
+            text: text.into(),
+            clean_text: text.into(),
+            ocr_block_count: 6,
+            ocr_confidence: 0.9,
+            specificity_score: 0.8,
+            intent_score: 0.7,
+            agent_usefulness_score: 0.75,
+            evidence_confidence: 0.85,
+            embedding: vec![0.0; crate::embedding::EMBEDDING_DIM],
+            snippet_embedding: vec![0.0; crate::embedding::EMBEDDING_DIM],
+            support_embedding: vec![0.0; crate::embedding::EMBEDDING_DIM],
+            image_embedding: vec![0.0; crate::config::DEFAULT_IMAGE_EMBEDDING_DIM],
+            ..Default::default()
+        };
+        let mut junk = good.clone();
+        junk.id = "junk".into();
+        junk.app_name = "Preview".into();
+        junk.window_title = "IMG_4471.HEIC".into();
+        junk.text = String::new();
+        junk.clean_text = String::new();
+        junk.ocr_block_count = 0;
+        junk.ocr_confidence = 0.0;
+        junk.enrichment_status = "visual_metadata_fallback".into();
+        junk.synthesis_branch = "visual_metadata_fallback".into();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        rt.block_on(store.add_batch_preserving_ids(&[good, junk]))
+            .expect("insert");
+
+        let hit = |id: &str| context_pack::FusedHit {
+            memory_id: id.to_string(),
+            score: 0.9,
+            signals: Default::default(),
+            surfacing_reason: Default::default(),
+            contributing_routes: Vec::new(),
+        };
+        let kept = rt.block_on(drop_low_signal_hits(
+            vec![hit("good"), hit("junk"), hit("missing")],
+            &store,
+        ));
+        let ids: Vec<&str> = kept.iter().map(|h| h.memory_id.as_str()).collect();
+        assert_eq!(ids, vec!["good", "missing"]);
     }
 }

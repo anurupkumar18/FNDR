@@ -5,4 +5,7 @@ Fallback if the session hits the usage limit: stop at the last green, pushed com
 
 | time | task | commit | verification | notes |
 |---|---|---|---|---|
-| 00:58 | T0 branch + baseline | (this commit) | typecheck ✅ · vitest 33 files / 180 tests ✅ | branch from origin/main 715cc8c; cherry-picked 0465dac → 7411402; AppPanels conflict resolved with --theirs; skipped `npm ci` (node_modules present, package.json unchanged) |
+| 07:11 | T0 branch + baseline | (this commit) | typecheck ✅ · vitest 33 files / 180 tests ✅ | branch from origin/main 715cc8c; cherry-picked 0465dac → 7411402; AppPanels conflict resolved with --theirs; skipped `npm ci` (node_modules present, package.json unchanged) |
+| 07:17 | T1 surface policy | eec69a9 | memory_quality 29 ✅ · low_signal_surface ✅ | pushed (GitLab SSH blipped once at 07:11, recovered) |
+| 07:25 | T2 read boundaries + review-queue cmd | (this commit) | drop_low_signal_hits ✅ · search 46 ✅ · cargo check bin ✅ · typecheck ✅ | |
+Note: session idled ~00:45–07:10 at a rejected tool call; overnight window lost. Re-prioritizing with owner at 07:25.

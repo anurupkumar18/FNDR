@@ -2,6 +2,7 @@
 
 use super::common::{shared_embedder, strip_internal_fndr_results, truncate_chars};
 use crate::graph::graph_store::GraphStore;
+use crate::memory_quality::{partition_surfaceable, LowSignalReason};
 use crate::privacy::Blocklist;
 use crate::search::{
     rerank_results, HybridSearcher, MemoryCard, MemoryCardSynthesizer, QueryContext,
@@ -518,6 +519,13 @@ pub async fn search_memory_cards(
     )
     .await?;
     raw_results.truncate(raw_limit);
+    let (raw_results, low_signal) = partition_surfaceable(raw_results);
+    if !low_signal.is_empty() {
+        tracing::info!(
+            hidden = low_signal.len(),
+            "search_memory_cards:low_signal_hidden"
+        );
+    }
     let query_context = QueryContext::from_query(&query);
     let (reranked, rerank_stats) = rerank_results(&query_context, raw_results);
     let mut raw_results = reranked;
@@ -598,13 +606,47 @@ pub async fn list_memory_cards(
         .await
         .map_err(|e| e.to_string())?;
 
-    let mut cards: Vec<MemoryCard> = strip_internal_fndr_results(results)
-        .into_iter()
-        .map(memory_card_from_result)
-        .collect();
+    let (surfaced, _low_signal) = partition_surfaceable(strip_internal_fndr_results(results));
+    let mut cards: Vec<MemoryCard> = surfaced.into_iter().map(memory_card_from_result).collect();
     refine_memory_card_titles(&mut cards);
     enrich_insight_kg_node_counts(state.store.clone(), &mut cards).await;
     Ok(cards)
+}
+
+/// A stored capture kept out of Search/Home/Vault/Ask because it lacks readable
+/// signal. Listed only in the Vault's "Needs more signal" view.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct NeedsSignalCard {
+    pub card: MemoryCard,
+    pub reason_code: String,
+    pub reason: String,
+}
+
+/// Low-signal captures, newest first, with a plain-language reason each.
+#[tauri::command]
+pub async fn list_needs_signal_memory_cards(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<usize>,
+) -> Result<Vec<NeedsSignalCard>, String> {
+    let limit = limit.unwrap_or(200).clamp(1, 1_000);
+    let results = state
+        .inner()
+        .store
+        .list_recent_results(MEMORY_GRAPH_LIMIT.max(limit), None)
+        .await
+        .map_err(|e| e.to_string())?;
+    let (_surfaced, low_signal) = partition_surfaceable(strip_internal_fndr_results(results));
+    Ok(low_signal
+        .into_iter()
+        .take(limit)
+        .map(
+            |(result, reason): (SearchResult, LowSignalReason)| NeedsSignalCard {
+                card: memory_card_from_result(result),
+                reason_code: reason.code().to_string(),
+                reason: reason.user_message().to_string(),
+            },
+        )
+        .collect())
 }
 #[tauri::command]
 pub async fn search_raw_results(
@@ -783,8 +825,7 @@ fn evidence_relevance(
 
 fn clean_summary_fragment(text: &str) -> String {
     truncate_chars(
-        text
-            .replace('\n', " ")
+        text.replace('\n', " ")
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
