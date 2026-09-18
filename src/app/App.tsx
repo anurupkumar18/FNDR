@@ -44,32 +44,11 @@ function nextToastId(): string {
 
 const SIDEBAR_GROUPS = [
     {
-        label: "Features",
+        label: "Alpha demo",
         items: [
             { key: "memoryCards", text: "Memory Vault" },
-            { key: "knowledgeGraph", text: "Knowledge Graph" },
             { key: "engineMetrics", text: "Engine metrics" },
-            { key: "glassesImport", text: "Glasses photo import" },
-            { key: "stats", text: "Stats" },
-            { key: "todo", text: "To Do" },
-            { key: "meeting", text: "Meetings" },
-            { key: "dailySummary", text: "Daily Summary" },
-            { key: "wrapped", text: "FNDR Wrapped" },
-            { key: "agent", text: "Agent" },
-            { key: "screenGuide", text: "Screen Guide" },
-            { key: "pipeline", text: "Pipeline Inspector" },
-        ],
-    },
-    {
-        label: "Smart",
-        items: [
-            { key: "focusSession", text: "Focus Session" },
-            { key: "quickSkills", text: "Quick Skills" },
-            { key: "searchHistory", text: "Search History" },
-            { key: "automation", text: "Automation" },
-            { key: "research", text: "Research" },
-            { key: "timeTracking", text: "Time Tracking" },
-            { key: "focusMode", text: "Focus Mode" },
+            { key: "agent", text: "Context" },
         ],
     },
 ] as const satisfies ReadonlyArray<{
@@ -88,7 +67,6 @@ function App() {
     // Single active-panel state — only one full-screen panel can be open at a time.
     // CommandPalette is kept separate because it layers on top of the current panel.
     const [activePanel, setActivePanel] = useState<PanelKey | null>(null);
-    const [researchSeedMemory, setResearchSeedMemory] = useState<MemoryCard | null>(null);
     const [memoryVaultFocusId, setMemoryVaultFocusId] = useState<string | null>(null);
     const [showCommandPalette, setShowCommandPalette] = useState(false);
     const [appToasts, setAppToasts] = useState<AppToast[]>([]);
@@ -256,14 +234,6 @@ function App() {
         }
     };
 
-    // Run a Quick Skill: set query + optional time filter, then submit
-    const handleRunSkill = (skillQuery: string, timeFilter?: string) => {
-        if (timeFilter) setTimeFilter(timeFilter);
-        setQueryDraft(skillQuery);
-        setQuery(skillQuery);
-        if (skillQuery) appendToSearchHistory(skillQuery);
-    };
-
     // Run a search for a specific app (from Focus Session panel)
     const handleSearchApp = (appName: string) => {
         setAppFilter(appName);
@@ -289,13 +259,6 @@ function App() {
     }, []);
 
     useTauriEvent<string>(OMNIBAR_OPEN_MEMORY_EVENT, handleOpenMemoryById);
-
-    // Research trigger — opens Research panel seeded with a memory
-    const handleResearchMemory = useCallback((memory: MemoryCard) => {
-        setResearchSeedMemory(memory);
-        setActivePanel("research");
-        setShowCommandPalette(false);
-    }, []);
 
     const dismissToast = useCallback((toastId: string) => {
         const timer = toastTimersRef.current.get(toastId);
@@ -324,9 +287,6 @@ function App() {
             dismissToast(toast.id);
             setShowCommandPalette(false);
             setIsSidebarOpen(false);
-            if (toast.targetPanel !== "research") {
-                setResearchSeedMemory(null);
-            }
             if (toast.targetPanel === "memoryCards" && toast.memoryId) {
                 setMemoryVaultFocusId(toast.memoryId);
             }
@@ -578,7 +538,6 @@ function App() {
                                     key={key}
                                     className={`ui-action-btn ${activePanel === key ? "active" : ""}`}
                                     onClick={() => {
-                                        if (key === "research") setResearchSeedMemory(null);
                                         setActivePanel(activePanel === key ? null : key);
                                         setIsSidebarOpen(false);
                                     }}
@@ -698,15 +657,12 @@ function App() {
             {!EVAL_UI && (
                 <AppPanels
                     activePanel={activePanel}
-                    appFilter={appFilter}
                     appNames={appNames}
                     appToasts={appToasts}
                     isCapturing={status?.is_capturing ?? false}
                     query={query}
-                    researchSeedMemory={researchSeedMemory}
                     selectedResult={selectedResult}
                     showCommandPalette={showCommandPalette}
-                    timeFilter={timeFilter}
                     onClearSearch={() => {
                         setQuery("");
                         setQueryDraft("");
@@ -719,9 +675,7 @@ function App() {
                     onDismissToast={dismissToast}
                     onMemoryDeleted={handleMemoryDeleted}
                     onOpenPanel={handleOpenPanel}
-                    onResearchMemory={handleResearchMemory}
                     onRunQuery={handleSearchSubmit}
-                    onRunSkill={handleRunSkill}
                     onSearchApp={handleSearchApp}
                     onToastAction={handleToastAction}
                     memoryVaultFocusId={memoryVaultFocusId}

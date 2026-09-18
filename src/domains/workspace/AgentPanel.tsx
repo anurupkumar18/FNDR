@@ -44,6 +44,7 @@ import "./AgentPanel.css";
 interface AgentPanelProps {
     isVisible: boolean;
     onClose: () => void;
+    mode?: "full" | "context";
 }
 
 type AgentView = "overview" | "hermes";
@@ -137,7 +138,8 @@ function formatTimestamp(timestamp: number | null): string {
     });
 }
 
-export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
+export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProps) {
+    const contextOnly = mode === "context";
     const [activeView, setActiveView] = useState<AgentView>("overview");
     const [status, setStatus] = useState<AgentStatus | null>(null);
     const [hermes, setHermes] = useState<HermesBridgeStatus | null>(null);
@@ -170,12 +172,12 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
 
     const loadAgentWorkspace = useCallback(async (isMounted: () => boolean) => {
         try {
-            const [agentStatus, hermesStatus, runtime, packs, runs] = await Promise.all([
+            const [agentStatus, runtime, packs, runs, hermesStatus] = await Promise.all([
                 getAgentStatus(),
-                getHermesBridgeStatus(),
                 getContextRuntimeStatus(),
                 listRecentContextPacks(2),
                 listAgentAuditRuns(8),
+                contextOnly ? Promise.resolve(null) : getHermesBridgeStatus(),
             ]);
             if (isMounted()) {
                 setStatus(agentStatus);
@@ -187,7 +189,7 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
         } catch (err) {
             console.error("Failed to load agent workspace:", err);
         }
-    }, []);
+    }, [contextOnly]);
     usePolling(loadAgentWorkspace, 4000, isVisible);
 
     useEffect(() => {
@@ -362,7 +364,7 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
         try {
             const response = await runAgentRequest({
                 user_goal: userGoal,
-                mode: agentMode,
+                mode: contextOnly ? "ask" : agentMode,
                 window_minutes: 30,
                 include_raw_evidence: false,
                 budget_tokens: agentMode === "ask" ? 900 : 1400,
@@ -476,6 +478,52 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
         : hermes?.gateway_running || fullAgentConfigured
             ? "ap-dot-starting"
             : "ap-dot-off";
+
+    if (contextOnly) {
+        return (
+            <div className="ap-root">
+                <header className="ap-header">
+                    <div className="ap-header-left">
+                        <span className="ap-header-title">Context</span>
+                        <span className="ap-header-badge">Local · read-only</span>
+                    </div>
+                    <button className="ap-close-btn" onClick={onClose} aria-label="Close Context">×</button>
+                </header>
+                <main className="ap-content">
+                    <OverviewView
+                        contextOnly
+                        status={status}
+                        hermes={null}
+                        runtimeStatus={runtimeStatus}
+                        latestPack={recentPacks[0] ?? null}
+                        lastDelta={lastDelta}
+                        readinessStep={0}
+                        agentGoal={agentGoal}
+                        agentMode="ask"
+                        agentRun={agentRun}
+                        agentRunError={agentRunError}
+                        auditRuns={auditRuns}
+                        selectedAudit={selectedAudit}
+                        retrievalExplanation={retrievalExplanation}
+                        agentDraftSkill={null}
+                        agentDraftEval={null}
+                        agentInspectError={agentInspectError}
+                        agentBusy={busyAction === "agent-run"}
+                        inspectBusy={busyAction === "audit-detail" || busyAction === "feedback"}
+                        onAgentGoalChange={setAgentGoal}
+                        onAgentModeChange={() => undefined}
+                        onRunAgentMode={handleRunAgentMode}
+                        onSelectAuditRun={handleSelectAuditRun}
+                        onRateResult={handleRateResult}
+                        onProposeSkill={() => undefined}
+                        onProposeEval={() => undefined}
+                        onStop={() => undefined}
+                        onOpenHermes={() => undefined}
+                    />
+                </main>
+            </div>
+        );
+    }
 
     return (
         <div className="ap-root">
@@ -610,6 +658,7 @@ export function AgentPanel({ isVisible, onClose }: AgentPanelProps) {
 // ─── Overview View ───────────────────────────────────────────────────────────
 
 interface OverviewViewProps {
+    contextOnly?: boolean;
     status: AgentStatus | null;
     hermes: HermesBridgeStatus | null;
     runtimeStatus: ContextRuntimeStatus | null;
@@ -640,6 +689,7 @@ interface OverviewViewProps {
 }
 
 function OverviewView({
+    contextOnly = false,
     status,
     hermes,
     runtimeStatus,
@@ -693,10 +743,10 @@ function OverviewView({
             <div className="ap-card ap-chat-card">
                 <div className="ap-chat-header">
                     <div>
-                        <div className="ap-card-title">Agent command</div>
+                        <div className="ap-card-title">{contextOnly ? "Build local context" : "Agent command"}</div>
                         <div className="ap-card-subtitle">Local memory context · read-only by default</div>
                     </div>
-                    <select
+                    {!contextOnly && <select
                         className="ap-mode-select"
                         value={agentMode}
                         onChange={(event) => onAgentModeChange(event.target.value as AgentMode)}
@@ -705,11 +755,12 @@ function OverviewView({
                         <option value="plan">Plan</option>
                         <option value="act">Act with approval</option>
                         <option value="learn">Learn from workflow</option>
-                    </select>
+                    </select>}
                 </div>
                 <div className="ap-agent-command-row">
                     <textarea
                         className="ap-chat-textarea"
+                        aria-label="Context question"
                         value={agentGoal}
                         onChange={(event) => onAgentGoalChange(event.target.value)}
                         onKeyDown={(event) => {
@@ -717,14 +768,14 @@ function OverviewView({
                                 onRunAgentMode();
                             }
                         }}
-                        placeholder="What do you want FNDR Agent to help with?"
+                        placeholder={contextOnly ? "Ask about memories captured on this Mac" : "What do you want FNDR Agent to help with?"}
                     />
                     <button
                         className="ap-btn ap-btn-primary"
                         disabled={agentBusy || !agentGoal.trim()}
                         onClick={onRunAgentMode}
                     >
-                        {agentBusy ? "Building..." : agentMode === "ask" ? "Ask" : "Build"}
+                        {agentBusy ? "Building..." : contextOnly ? "Build context" : agentMode === "ask" ? "Ask" : "Build"}
                     </button>
                 </div>
                 {(agentRun || agentRunError) && (
@@ -779,7 +830,7 @@ function OverviewView({
             </div>
 
             <div className="ap-card">
-                <div className="ap-card-title">Recent agent runs</div>
+                <div className="ap-card-title">{contextOnly ? "Recent context runs" : "Recent agent runs"}</div>
                 {auditRuns.length === 0 ? (
                     <p className="ap-card-body">No agent audit runs recorded yet.</p>
                 ) : (
@@ -885,6 +936,7 @@ function OverviewView({
                 </div>
             )}
 
+            {!contextOnly && <>
             {/* Status node */}
             <div className="ap-overview-hero">
                 <div className="ap-overview-node-ring">
@@ -996,6 +1048,7 @@ function OverviewView({
                     </div>
                 </section>
             )}
+            </>}
         </div>
     );
 }

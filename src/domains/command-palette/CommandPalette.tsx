@@ -66,6 +66,21 @@ export type PanelKey =
     | "focusMode"
     | "screenGuide";
 
+// Alpha mode deliberately exposes only the evidence-bearing paths. The full
+// registry remains intact for later milestones; this list is the single source
+// of truth for the reduced command palette.
+export const DEMO_COMMAND_IDS = [
+    "memory-cards",
+    "engine-metrics",
+    "local-context",
+    "pause-capture",
+    "resume-capture",
+] as const;
+
+export function isDemoCommand(commandId: string): boolean {
+    return (DEMO_COMMAND_IDS as readonly string[]).includes(commandId);
+}
+
 // ── Command registry ──────────────────────────────────────────────────────────
 
 const COMMANDS: Command[] = [
@@ -306,6 +321,14 @@ const COMMANDS: Command[] = [
         },
     },
     {
+        id: "local-context",
+        label: "Open local Context",
+        description: "Ask FNDR to build a read-only context pack from local memories",
+        category: "navigate",
+        keywords: ["context", "ask", "memory", "local"],
+        run: ({ onOpenPanel }) => onOpenPanel("agent"),
+    },
+    {
         id: "agent-analyze",
         label: "Analyze with AI agent",
         description: "Run AI agent to extract insights from this memory",
@@ -393,9 +416,10 @@ interface CommandPaletteProps {
     onClose: () => void;
     selectedMemory: MemoryCard | null;
     context: Omit<CommandContext, "selectedMemory">;
+    demoOnly?: boolean;
 }
 
-export function CommandPalette({ isOpen, onClose, selectedMemory, context }: CommandPaletteProps) {
+export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoOnly = false }: CommandPaletteProps) {
     const [query, setQuery] = useState("");
     const [activeIdx, setActiveIdx] = useState(0);
     const [pendingCommand, setPendingCommand] = useState<Command | null>(null);
@@ -408,6 +432,7 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context }: Com
 
     // Filter + sort commands
     const visible = COMMANDS.filter((cmd) => {
+        if (demoOnly && !isDemoCommand(cmd.id)) return false;
         if (cmd.memoryOnly && !selectedMemory) return false;
         const s = score(cmd, query);
         return s > 0;

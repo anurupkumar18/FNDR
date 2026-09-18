@@ -1,38 +1,20 @@
 import type { MemoryCard } from "@/shared/ipc/tauri";
 import { AgentPanel } from "@/domains/workspace/AgentPanel";
-import { AutomationPanel } from "@/domains/workspace/AutomationPanel";
 import { CommandPalette, type PanelKey } from "@/domains/command-palette/CommandPalette";
-import { DailySummaryPanel } from "@/domains/workspace/DailySummaryPanel";
-import { FndrWrappedPanel } from "@/domains/workspace/FndrWrappedPanel";
-import { FocusModePanel } from "@/domains/workspace/FocusModePanel";
-import { FocusSessionPanel } from "@/domains/workspace/FocusSessionPanel";
-import { MeetingRecorderPanel } from "@/domains/workspace/MeetingRecorderPanel";
 import { MemoryCardsPanel } from "@/domains/memory-vault/MemoryCardsPanel";
-import { PipelineInspectorPanel } from "@/domains/workspace/PipelineInspectorPanel";
 import { EngineMetricsPanel } from "@/domains/workspace/EngineMetricsPanel";
-import { GlassesImportPanel } from "@/domains/workspace/GlassesImportPanel";
-import { QuickSkillsPanel } from "@/domains/workspace/QuickSkillsPanel";
-import { ResearchPanel } from "@/domains/workspace/ResearchPanel";
-import { SearchHistoryPanel } from "@/domains/workspace/SearchHistoryPanel";
-import { StatsPanel } from "@/domains/workspace/StatsPanel";
-import { TimeTrackingPanel } from "@/domains/workspace/TimeTrackingPanel";
-import { TodoPanel } from "@/domains/workspace/TodoPanel";
-import { ScreenGuidePanel } from "@/domains/screen-guide/ScreenGuidePanel";
 import { AppToasts } from "./AppToasts";
 import { PanelErrorBoundary } from "./PanelErrorBoundary";
 import type { AppToast } from "./types";
 
 interface AppPanelsProps {
     activePanel: PanelKey | null;
-    appFilter: string | null;
     appNames: string[];
     appToasts: AppToast[];
     isCapturing: boolean;
     query: string;
-    researchSeedMemory: MemoryCard | null;
     selectedResult: MemoryCard | null;
     showCommandPalette: boolean;
-    timeFilter: string | null;
     memoryVaultFocusId: string | null;
     onClearSearch: () => void;
     onCloseCommandPalette: () => void;
@@ -41,9 +23,7 @@ interface AppPanelsProps {
     onDismissToast: (toastId: string) => void;
     onMemoryDeleted: (memoryId: string) => void;
     onOpenPanel: (panel: PanelKey) => void;
-    onResearchMemory: (memory: MemoryCard) => void;
     onRunQuery: (query: string) => void;
-    onRunSkill: (skillQuery: string, timeFilter?: string) => void;
     onSearchApp: (appName: string) => void;
     onToastAction: (toast: AppToast) => void;
     onOpenMemoryById: (memoryId: string) => void;
@@ -51,15 +31,12 @@ interface AppPanelsProps {
 
 export function AppPanels({
     activePanel,
-    appFilter,
     appNames,
     appToasts,
     isCapturing,
     query,
-    researchSeedMemory,
     selectedResult,
     showCommandPalette,
-    timeFilter,
     memoryVaultFocusId,
     onClearSearch,
     onCloseCommandPalette,
@@ -68,9 +45,7 @@ export function AppPanels({
     onDismissToast,
     onMemoryDeleted,
     onOpenPanel,
-    onResearchMemory,
     onRunQuery,
-    onRunSkill,
     onSearchApp,
     onToastAction,
     onOpenMemoryById,
@@ -78,9 +53,8 @@ export function AppPanels({
     return (
         <>
             <PanelErrorBoundary panelName="Agent">
-                <AgentPanel isVisible={activePanel === "agent"} onClose={onClosePanel} />
+                <AgentPanel isVisible={activePanel === "agent"} onClose={onClosePanel} mode="context" />
             </PanelErrorBoundary>
-            <MeetingRecorderPanel isVisible={activePanel === "meeting"} onClose={onClosePanel} />
             <MemoryCardsPanel
                 isVisible={activePanel === "memoryCards"}
                 onClose={onClosePanel}
@@ -90,69 +64,15 @@ export function AppPanels({
                 focusMemoryId={memoryVaultFocusId}
                 onOpenMemoryById={onOpenMemoryById}
             />
-            <MemoryCardsPanel
-                isVisible={activePanel === "knowledgeGraph"}
-                onClose={onClosePanel}
-                appNames={appNames}
-                feature="graph"
-                onOpenMemoryById={onOpenMemoryById}
-            />
-            <StatsPanel isVisible={activePanel === "stats"} onClose={onClosePanel} />
-            <TodoPanel isVisible={activePanel === "todo"} onClose={onClosePanel} />
-            <DailySummaryPanel
-                isVisible={activePanel === "dailySummary"}
-                onClose={onClosePanel}
-                onOpenMemoryById={onOpenMemoryById}
-            />
-            <FndrWrappedPanel
-                isVisible={activePanel === "wrapped"}
-                onClose={onClosePanel}
-            />
             <EngineMetricsPanel
                 isVisible={activePanel === "engineMetrics"}
                 onClose={onClosePanel}
-                onOpenPipelineInspector={() => onOpenPanel("pipeline")}
             />
-            <GlassesImportPanel isVisible={activePanel === "glassesImport"} onClose={onClosePanel} />
-            <PipelineInspectorPanel
-                isVisible={activePanel === "pipeline"}
-                onClose={onClosePanel}
-                currentQuery={query}
-                timeFilter={timeFilter}
-                appFilter={appFilter}
-            />
-            <SearchHistoryPanel
-                isVisible={activePanel === "searchHistory"}
-                onClose={onClosePanel}
-                onRunQuery={onRunQuery}
-            />
-            <QuickSkillsPanel
-                isVisible={activePanel === "quickSkills"}
-                onClose={onClosePanel}
-                onRunSkill={onRunSkill}
-            />
-            <FocusSessionPanel
-                isVisible={activePanel === "focusSession"}
-                onClose={onClosePanel}
-                onSearchApp={onSearchApp}
-            />
-            <AutomationPanel isVisible={activePanel === "automation"} onClose={onClosePanel} />
-            <ResearchPanel
-                isVisible={activePanel === "research"}
-                onClose={onClosePanel}
-                seedMemory={researchSeedMemory}
-            />
-            <TimeTrackingPanel
-                isVisible={activePanel === "timeTracking"}
-                onClose={onClosePanel}
-                onSearchApp={onSearchApp}
-            />
-            <FocusModePanel isVisible={activePanel === "focusMode"} onClose={onClosePanel} />
-            <ScreenGuidePanel isVisible={activePanel === "screenGuide"} onClose={onClosePanel} />
             <CommandPalette
                 isOpen={showCommandPalette}
                 onClose={onCloseCommandPalette}
                 selectedMemory={selectedResult}
+                demoOnly
                 context={{
                     query,
                     onOpenPanel,
@@ -160,7 +80,7 @@ export function AppPanels({
                     onSearchApp,
                     onClearSearch,
                     onDeleteMemory,
-                    onResearch: onResearchMemory,
+                    onResearch: () => undefined,
                     isCapturing,
                 }}
             />

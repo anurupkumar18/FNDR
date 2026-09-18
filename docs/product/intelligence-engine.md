@@ -68,16 +68,16 @@ Known work in progress:
 - fully activity-adaptive capture sampling
 - automatic task extraction from memories (task panel exists, extraction wiring is partial)
 
-## 6. Planned: Chunk-first Retrieval and Reviewed-memory Enrichment
+## 6. Chunk-first Retrieval and Reviewed-memory Enrichment
 
-These flows are not yet wired but are planned as part of the parent-child RAG upgrade (ADR 008):
+Chunk-first retrieval remains planned as part of the parent-child RAG upgrade (ADR 008). Reviewed-memory enrichment below is already wired in the current runtime.
 
 **Chunk-first retrieval** (Subagent 8):
 - At query time, the child-chunk table (`memory_chunks_v1_bge_1024`) is searched first using the BGE query prefix and 1024-d vectors.
 - Matched chunks are grouped by `parent_id`; the top-ranked parent records are fetched from the v5 parent table for full context.
 - During the v4→v5 transition period, search fans out to both the v4 parent table and the v5 chunk table, with results merged and deduplicated by parent `id` before card synthesis.
 
-**Reviewed-memory enrichment** (Subagents 9–11):
-- A background review worker will periodically assess memory quality and relevance, adding or updating enrichment fields on parent records without creating new captures.
-- Enriched fields surface in Vault card presentation (Subagent 10) and feed the daily review and backfill cycle (Subagent 11).
-- No dates are committed for these flows.
+**Reviewed-memory enrichment**:
+- The post-capture Memory Review worker queues eligible stored memories, runs one local-model review at a time under the shared model-pipeline lock, validates grounding and narration, and writes a bounded enriched patch back to the same record.
+- The worker is intentionally pressure-gated: paused capture, unavailable local inference, and resource pressure defer work without losing the queued record. A failed review preserves the original record and records `review_failed` instead of silently replacing it.
+- Vault cards surface the lifecycle (`pending`, `reviewed_local`, `reviewed_daily`, or `review_failed`). The daily and backfill IPC commands support dry runs for QA before any write is requested.

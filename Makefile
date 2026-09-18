@@ -9,6 +9,7 @@ demo: install
 test:
 	npm run typecheck
 	npm test
+	npm run build
 	cd src-tauri && cargo test
 
 rust-test:
