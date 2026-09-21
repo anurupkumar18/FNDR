@@ -44,7 +44,9 @@ The real `extract_structured_memory` was run on eight synthetic captures (fixtur
 
 Cost of the fix: the KV cache for the text engine grows from 224 MiB to 448 MiB. Re-run with `cargo test --lib extraction_fits_default_token_budget -- --ignored --nocapture` (the process aborts at exit afterwards, finding F9; read the `test ... ok` line). Unit tests `extraction_prompt_budget_covers_dense_ocr` and `extraction_output_cap_exceeds_measured_answer_lengths` pin the arithmetic.
 
-Not yet known: the cap-hit rate on real captures (traces now record it), and how much extra capture stall the longer answers cost. Before the fix each failed call already spent 400 tokens of decode for nothing.
+Real captures (the running dev app's `llm_traces.jsonl`, 15 extraction calls plus one repair and one review, mostly a chat-window capture with little text; the app rebuilds on source changes, so the file mixes caps of 400, 900 and 640 from the diagnostic edits): answers ran 200 to 408 tokens. Under the original 400 cap, 1 of 6 calls hit the cap (35.8 s, nothing stored from the LLM) and one call needed the repair pass; one 408 token answer would also have been cut. Text-poor captures understate the problem, so 2 of 15 is a lower bound. In-app decode ran about 25 to 33 tokens per second (200 token answers in 6.7 to 9.1 s), below the 44 measured by the CLI benchmark, consistent with the memory pressure the app itself reported (`host_memory_high`).
+
+Not yet known: the cap-hit rate on text-rich real captures, and how much extra capture stall the longer answers cost. Before the fix each failed call already spent 400 tokens of decode for nothing.
 
 ## Checkpoint results (prediction, then measurement)
 
