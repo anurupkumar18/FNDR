@@ -891,13 +891,17 @@ impl InferenceEngine {
         .map_err(|e| format!("Join error during model load: {}", e))?
         .map_err(|e| format!("Model load failed: {}", e))?;
 
-        // n_ctx / n_batch tuned down for Apple Silicon unified memory (Metal peak working set).
-        // Raise via env only when debugging long-context behaviour (values are clamped to llama.cpp rules).
+        // The window holds prompt plus output, and an overflow is cut from the front of the prompt, where the
+        // rules live. 4,096 (448 MiB of KV cache for the Qwen3-VL-2B text engine) lets a dense 4,000 character
+        // capture fit beside a 640 token answer. Override via env when debugging long-context behaviour.
         let n_ctx = std::env::var("FNDR_INFERENCE_N_CTX")
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
             .and_then(NonZeroU32::new)
-            .unwrap_or_else(|| NonZeroU32::new(2048).expect("2048 is non-zero"));
+            .unwrap_or_else(|| {
+                NonZeroU32::new(model_config::TEXT_ENGINE_DEFAULT_N_CTX)
+                    .expect("default context window is non-zero")
+            });
         let n_batch = std::env::var("FNDR_INFERENCE_N_BATCH")
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
@@ -1402,7 +1406,13 @@ Rules:\n\
         );
 
         let prompt = self.build_prompt(&system_msg, &user_msg).ok()?;
-        let raw = self.complete_task("memory_extraction", &prompt, 400).await;
+        let raw = self
+            .complete_task(
+                "memory_extraction",
+                &prompt,
+                model_config::EXTRACTION_MAX_OUTPUT_TOKENS,
+            )
+            .await;
 
         let candidate = extract_json_object(&raw)?;
         let normalized = normalize_structured_memory_json(&candidate);
@@ -1420,7 +1430,11 @@ Rules:\n\
                 );
                 if let Ok(repair_prompt) = self.build_prompt(&system_msg, &repair_msg) {
                     let repaired_raw = self
-                        .complete_task("memory_extraction_repair", &repair_prompt, 400)
+                        .complete_task(
+                            "memory_extraction_repair",
+                            &repair_prompt,
+                            model_config::EXTRACTION_MAX_OUTPUT_TOKENS,
+                        )
                         .await;
                     if let Some(repaired_candidate) = extract_json_object(&repaired_raw) {
                         let normalized_repair =
@@ -2346,5 +2360,61 @@ mod tests {
         assert!(tasks.contains(&"query_expansion".to_string()), "{tasks:?}");
         assert!(tasks.contains(&"answer".to_string()), "{tasks:?}");
         assert!(!tasks.contains(&"unlabeled".to_string()), "{tasks:?}");
+    }
+
+    /// Manual check (loads the real text model): `cargo test --lib extraction_fits_default_token_budget -- --ignored --nocapture`.
+    /// Eight synthetic captures of different kinds must each yield a parsed extraction that stays under the cap.
+    /// Read the `test ... ok` line: the process aborts at exit afterwards (finding F9).
+    #[tokio::test]
+    #[ignore = "loads the real GGUF from the app data dir; run by hand"]
+    async fn extraction_fits_default_token_budget() {
+        let cases: Vec<(String, String, String, String)> =
+            serde_json::from_str(include_str!("../../tests/fixtures/extraction_cases.json"))
+                .expect("fixtures parse");
+        let app_data_dir = dirs::data_dir().expect("data dir").join("com.fndr.app");
+        let mut engine = InferenceEngine::new(Some(app_data_dir), None)
+            .await
+            .expect("a text model must be installed in the app data dir");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("llm_traces.jsonl");
+        engine.trace_path = Some(path.clone());
+
+        let mut failures = Vec::new();
+        for (name, app, window, text) in cases {
+            let before = std::fs::read_to_string(&path)
+                .map(|t| t.lines().count())
+                .unwrap_or(0);
+            let parsed = engine
+                .extract_structured_memory(&app, &window, &text)
+                .await
+                .is_some();
+            let all = std::fs::read_to_string(&path).unwrap_or_default();
+            let new: Vec<crate::telemetry::llm_trace::LlmTrace> = all
+                .lines()
+                .skip(before)
+                .map(|l| serde_json::from_str(l).expect("trace line parses"))
+                .collect();
+            let capped = new.iter().any(|t| t.output_tokens >= t.max_tokens);
+            let detail: Vec<String> = new
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{}:{}/{} tokens, prompt {}",
+                        t.task, t.output_tokens, t.max_tokens, t.prompt_tokens
+                    )
+                })
+                .collect();
+            println!(
+                "CASE {name:24} parsed={parsed} capped={capped} [{}]",
+                detail.join(" | ")
+            );
+            if !parsed || capped {
+                failures.push(name);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "extraction failed or hit the cap for: {failures:?}"
+        );
     }
 }

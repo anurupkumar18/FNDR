@@ -1,0 +1,50 @@
+[
+ [
+  "terminal_test_failure",
+  "Terminal",
+  "fndr - zsh",
+  "cargo test --lib capture::tests\n   Compiling fndr v0.1.0 (/Users/dev/fndr/src-tauri)\n    Finished `test` profile [unoptimized] target(s) in 41.20s\n     Running unittests src/lib.rs\nrunning 12 tests\ntest capture::tests::skip_reason_counts ... ok\ntest capture::tests::dedup_hash_stable ... ok\ntest capture::tests::flush_ms_recorded ... FAILED\ntest capture::tests::pipeline_stats_reset ... ok\nfailures:\n---- capture::tests::flush_ms_recorded stdout ----\nthread 'capture::tests::flush_ms_recorded' panicked at src/capture/mod.rs:2210:9:\nassertion `left == right` failed: expected flush_ms samples 3, got 2\n  left: 3\n right: 2\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nfailures:\n    capture::tests::flush_ms_recorded\ntest result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\nerror: test failed, to rerun pass `--lib`"
+ ],
+ [
+  "code_editor_rust",
+  "Visual Studio Code",
+  "runtime_metrics.rs - fndr",
+  "use std::collections::HashMap;\nconst MAX_SAMPLES: usize = 512;\npub struct RuntimeMetrics {\n    buckets: HashMap<&'static str, Vec<u64>>,\n}\nimpl RuntimeMetrics {\n    pub fn record_stage_0(&mut self, elapsed_ms: u64) -> Result<(), MetricsError> {\n        let bucket = self.buckets.entry(\"stage_0\").or_default();\n        bucket.push(elapsed_ms);\n        if bucket.len() > MAX_SAMPLES { bucket.remove(0); }\n        Ok(())\n    }\n    pub fn record_stage_1(&mut self, elapsed_ms: u64) -> Result<(), MetricsError> {\n        let bucket = self.buckets.entry(\"stage_1\").or_default();\n        bucket.push(elapsed_ms);\n        if bucket.len() > MAX_SAMPLES { bucket.remove(0); }\n        Ok(())\n    }\n    pub fn record_stage_2(&mut self, elapsed_ms: u64) -> Result<(), MetricsError> {\n        let bucket = self.buckets.entry(\"stage_2\").or_default();\n        bucket.push(elapsed_ms);\n        if bucket.len() > MAX_SAMPLES { bucket.remove(0); }\n        Ok(())\n    }\n    pub fn record_stage_3(&mut self, elapsed_ms: u64) -> Result<(), MetricsError> {\n        let bucket = self.buckets.entry(\"stage_3\").or_default();\n        bucket.push(elapsed_ms);\n        if bucket.len() > MAX_SAMPLES { bucket.remove(0); }\n        Ok(())\n    }\n    pub fn record_stage_4(&mut self, elapsed_ms: u64) -> Result<(), MetricsError> {\n        let bucket = self.buckets.entry(\"stage_4\").or_default();\n        bucket.push(elapsed_ms);\n        if bucket.len() > MAX_SAMPLES { bucket.remove(0); }\n        Ok(())\n    }\n    pub fn record_stage_5(&mut self, elapsed_ms: u64) -> Result<(), MetricsError> {\n        let bucket = self.buckets.entry(\"stage_5\").or_default();\n        bucket.push(elapsed_ms);\n        if bucket.len() > MAX_SAMPLES { bucket.remove(0); }\n        Ok(())\n    }\n    pub fn record_stage_6(&mut self, elapsed_ms: u64) -> Result<(), MetricsError> {\n        let bucket = self.buckets.entry(\"stage_6\").or_default();\n        bucket.push(elapsed_ms);\n        if bucket.len() > MAX_SAMPLES { bucket.remove(0); }\n        Ok(())\n    }\n    pub fn record_stage_7(&mut self, elapsed_ms: u64) -> Result<(), MetricsError> {\n        let bucket = self.buckets.entry(\"stage_7\").or_default();\n        bucket.push(elapsed_ms);\n        if bucket.len() > MAX_SAMPLES { bucket.remove(0); }\n        Ok(())\n    }\n    pub fn record_stage_8(&mut self, elapsed_ms: u64) -> Result<(), MetricsError> {\n        let bucket = self.buckets.entry(\"stage_8\").or_default();\n        bucket.push(elapsed_ms);\n        if bucket.len() > MAX_SAMPLES { bucket.remove(0); }\n        Ok(())\n    }\n}"
+ ],
+ [
+  "web_article",
+  "Safari",
+  "How embedding models work - Example Blog",
+  "How embedding models turn text into numbers. An embedding model reads a piece of text and produces a list of numbers, called a vector, that captures its meaning. Texts with similar meaning end up with vectors that point in similar directions, which is why search systems compare vectors with cosine similarity instead of matching keywords.\n\nWhy dimensions matter. A model such as MiniLM produces 384 numbers per text, while larger models produce 1024 or more. More dimensions can hold more nuance but cost more storage and more time to compare. A store with one hundred thousand chunks at 1024 dimensions in 32 bit floats needs about 410 megabytes for the vectors alone.\n\nQueries and documents. Several models expect a short instruction in front of the query, such as Represent this sentence for searching relevant passages, and no prefix on the documents. Skipping the prefix quietly lowers retrieval quality. Reranking then re-scores the top results with a slower, more accurate model that reads the query and each passage together.\n\nPractical advice. Measure retrieval quality on your own questions before changing models, keep the embedding model fixed for a whole index, and re-embed everything when you switch. Store the model name and version next to each vector so a mismatch is detectable."
+ ],
+ [
+  "chat_thread",
+  "Slack",
+  "#fndr-dev",
+  "alex  10:00 AM\ndid the capture benchmark finish overnight?\nsam  10:01 AM\nyes, p95 for the ocr stage is 310ms on the m1\nalex  10:02 AM\nthat is over the 250 budget, can we try downscaling first?\nsam  10:03 AM\ntried 0.5x already, cer went from 3 to 9 percent\njo  10:04 AM\nwhat about running ocr only on the changed region?\nsam  10:05 AM\nthat is the plan for next week, needs the dhash from CAP-08\nalex  10:06 AM\nok. anyone free to review the privacy proof PR?\njo  10:07 AM\ni can do it after lunch\nalex  10:08 AM\nthanks. also reminder: beta rehearsal thursday 3pm\nsam  10:09 AM\nwill the demo run on the 8gb machine?\nalex  10:10 AM\nyes, same one we benchmark on\njo  10:11 AM\nthen we should close chrome before the demo\nsam  10:12 AM\nagree, and turn off notifications\nalex  10:13 AM\nadding both to the checklist\njo  10:14 AM\ndone reviewing the PR, two comments"
+ ],
+ [
+  "spreadsheet",
+  "Numbers",
+  "Q3 forecast.numbers",
+  "Date  Region  Units  Price  Margin  Renewed\n2020-01  Region A  1200  3.50  0.120  no\n2021-02  Region B  1237  3.71  0.133  yes\n2022-03  Region C  1274  3.92  0.146  yes\n2023-04  Region D  1311  4.13  0.159  no\n2024-05  Region E  1348  4.34  0.172  yes\n2025-06  Region A  1385  4.55  0.185  yes\n2020-07  Region B  1422  4.76  0.198  no\n2021-08  Region C  1459  4.97  0.211  yes\n2022-09  Region D  1496  5.18  0.224  yes\n2023-01  Region E  1533  5.39  0.237  no\n2024-02  Region A  1570  5.60  0.250  yes\n2025-03  Region B  1607  5.81  0.263  yes\n2020-04  Region C  1644  6.02  0.276  no\n2021-05  Region D  1681  6.23  0.289  yes\n2022-06  Region E  1718  6.44  0.302  yes\n2023-07  Region A  1755  6.65  0.315  no\n2024-08  Region B  1792  6.86  0.328  yes\n2025-09  Region C  1829  7.07  0.341  yes\n2020-01  Region D  1866  7.28  0.354  no\n2021-02  Region E  1903  7.49  0.367  yes\n2022-03  Region A  1940  7.70  0.380  yes\n2023-04  Region B  1977  7.91  0.393  no\n2024-05  Region C  2014  8.12  0.406  yes\n2025-06  Region D  2051  8.33  0.419  yes\n2020-07  Region E  2088  8.54  0.432  no\n2021-08  Region A  2125  8.75  0.445  yes\n2022-09  Region B  2162  8.96  0.458  yes\n2023-01  Region C  2199  9.17  0.471  no\n2024-02  Region D  2236  9.38  0.484  yes\n2025-03  Region E  2273  9.59  0.497  yes\n2020-04  Region A  2310  9.80  0.510  no\n2021-05  Region B  2347  10.01  0.523  yes\n2022-06  Region C  2384  10.22  0.536  yes\n2023-07  Region D  2421  10.43  0.549  no\n2024-08  Region E  2458  10.64  0.562  yes\n2025-09  Region A  2495  10.85  0.575  yes\n2020-01  Region B  2532  11.06  0.588  no\n2021-02  Region C  2569  11.27  0.601  yes\n2022-03  Region D  2606  11.48  0.614  yes\n2023-04  Region E  2643  11.69  0.627  no"
+ ],
+ [
+  "email_inbox",
+  "Mail",
+  "Inbox (12 unread)",
+  "GitLab  [fndr/fndr] Pipeline passed for feat/capture-bench  9:41 AM\nProfessor Lin  Beta presentation logistics  9:12 AM\nApple Developer  Your membership renews soon  8:55 AM\nSam  Re: dHash gate numbers  8:30 AM\nCampus Bookstore  Your order has shipped  Yesterday\nJo  Design review notes attached  Yesterday\nRiley  Gold set labels v0  Yesterday\nLibrary  Item due in 3 days  Mon\nGitHub  Security alert for a dependency  Mon\nRegistrar  Fall course confirmation  Sun\nAlex  Standup notes  Sun\nSpotify  Your weekly mix  Sat"
+ ],
+ [
+  "docs_markdown",
+  "Notion",
+  "FNDR Beta plan",
+  "FNDR Beta plan\nGoals\n- Beta demo runs on the 8 GB M1 with FNDR v1\n- Privacy proof panel shows zero outbound requests\n- Every model claim has a measured number in the evidence packet\n\nMilestones\nWeek 1: baseline metrics and gold set v0\nWeek 2: capture stage timings, MCP auth fix\nWeek 3: eval runner and first baseline scores\nWeek 4: model bake-off, Intelligence panel v0\n\nRisks\n- P0 load is 91 percent of team capacity\n- Vision model needs a matching projector file\n- Extraction output can exceed the token cap\n\nOpen questions\nWho owns the hardware inventory?\nDo we demo the photo import path?\nWhich dates are final for Beta and Final?\n\nDecisions\nWe stay on v1 and take findings from v2.\nHosted models never see captured content."
+ ],
+ [
+  "sparse_page",
+  "Safari",
+  "New Tab",
+  "Search or enter website name\nFrequently visited\nGitLab   Gmail   Calendar"
+ ]
+]

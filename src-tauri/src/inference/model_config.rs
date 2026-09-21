@@ -70,6 +70,13 @@ pub const MAX_IMAGE_LONG_EDGE: u32 = 1024;
 pub const MAX_MEMORY_PROMPT_TOKENS: usize = 3500;
 pub const MAX_MEMORY_OUTPUT_TOKENS: usize = 900;
 pub const QWEN_CONTEXT_SIZE: u32 = 4096;
+
+/// Default context window (prompt plus output) of the text engine; `FNDR_INFERENCE_N_CTX` overrides it.
+/// 4,096 costs 448 MiB of KV cache for Qwen3-VL-2B (224 MiB at 2,048); see docs/evidence/W01/LRN-01.md (F3, F10).
+pub const TEXT_ENGINE_DEFAULT_N_CTX: u32 = 4096;
+/// Generation cap for `extract_structured_memory` and its repair pass. Complete answers measured 316 to 573
+/// tokens; a cut-off answer has no closing brace and is discarded.
+pub const EXTRACTION_MAX_OUTPUT_TOKENS: i32 = 640;
 pub const QWEN_TEMPERATURE: f32 = 0.1;
 pub const QWEN_TOP_P: f32 = 0.8;
 
@@ -247,5 +254,37 @@ mod tests {
         let err = validate_embedding_config_against_contract(&bad_model, v5)
             .expect_err("MiniLM file must not validate against BGE v5");
         assert!(err.contains("model_filename"));
+    }
+
+    #[test]
+    fn extraction_prompt_budget_covers_dense_ocr() {
+        // Measured 2026-09-21 with the Qwen3-VL-2B tokenizer: the extraction system prompt is 357 tokens,
+        // dense captures (numbers, URLs, code) run near 2 characters per token, and OCR is capped at 4,000
+        // characters. Prompt and output share one window, and an overflow is cut from the front of the
+        // prompt, which is where the rules live.
+        const SYSTEM_PROMPT_TOKENS: i32 = 357;
+        const MAX_OCR_CHARS: i32 = 4000;
+        const DENSE_CHARS_PER_TOKEN: i32 = 2;
+        const TEMPLATE_AND_WRAPPER_TOKENS: i32 = 64;
+        let budget = TEXT_ENGINE_DEFAULT_N_CTX as i32 - EXTRACTION_MAX_OUTPUT_TOKENS;
+        let needed = SYSTEM_PROMPT_TOKENS
+            + MAX_OCR_CHARS / DENSE_CHARS_PER_TOKEN
+            + TEMPLATE_AND_WRAPPER_TOKENS;
+        assert!(
+            budget >= needed,
+            "prompt budget {budget} tokens is below the {needed} a dense 4,000 character capture needs"
+        );
+    }
+
+    #[test]
+    fn extraction_output_cap_exceeds_measured_answer_lengths() {
+        // Eight synthetic captures of different kinds produced complete answers of 316 to 573 tokens
+        // (median about 426). A cut-off answer has no closing brace and is discarded, so the cap must
+        // sit above the longest natural answer with some headroom.
+        const LONGEST_MEASURED_ANSWER_TOKENS: i32 = 573;
+        assert!(
+            EXTRACTION_MAX_OUTPUT_TOKENS >= LONGEST_MEASURED_ANSWER_TOKENS + 50,
+            "cap {EXTRACTION_MAX_OUTPUT_TOKENS} is too close to or below the longest measured answer"
+        );
     }
 }
