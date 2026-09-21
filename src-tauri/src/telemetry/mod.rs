@@ -1,5 +1,6 @@
 //! Telemetry and logging module
 
+pub mod llm_trace;
 pub mod logging;
 pub mod metrics_dump;
 pub mod quality_logger;

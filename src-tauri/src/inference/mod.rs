@@ -782,6 +782,18 @@ pub struct InferenceEngine {
     chat_template: LlamaChatTemplate,
     model_id: String,
     model_path: PathBuf,
+    /// `<app data dir>/llm_traces.jsonl`; `None` when the engine has no app data dir (tests, evals).
+    trace_path: Option<PathBuf>,
+}
+
+/// Prompt version stamped on every LLM trace. Bump it when a prompt changes so eval and trace rows stay comparable.
+const LLM_PROMPT_VERSION: &str = "v1";
+
+/// Token counts for one completion, filled in by `complete_blocking` and recorded in the LLM trace.
+#[derive(Debug, Default, Clone, Copy)]
+struct TokenUsage {
+    prompt_tokens: u32,
+    output_tokens: u32,
 }
 
 #[derive(Clone)]
@@ -920,6 +932,10 @@ impl InferenceEngine {
             }
         };
 
+        let trace_path = app_data_dir
+            .as_ref()
+            .map(|dir| dir.join("llm_traces.jsonl"));
+
         Ok(Self {
             model: model_ref,
             context: Mutex::new(context),
@@ -927,6 +943,7 @@ impl InferenceEngine {
             chat_template,
             model_id,
             model_path,
+            trace_path,
         })
     }
 
@@ -998,7 +1015,7 @@ impl InferenceEngine {
             "Summarizing OCR text for memory node ({} chars)...",
             ocr_text.len()
         );
-        let raw_summary = self.complete(&prompt, 90).await;
+        let raw_summary = self.complete_task("memory_snippet", &prompt, 90).await;
         let summary = clean_summary_output(&raw_summary);
 
         if !is_usable_summary(&summary) {
@@ -1029,7 +1046,7 @@ impl InferenceEngine {
             }
         };
 
-        self.complete(&prompt, 150).await
+        self.complete_task("answer", &prompt, 150).await
     }
 
     /// Answer against OCR from the currently visible screen. The caller owns
@@ -1056,13 +1073,17 @@ impl InferenceEngine {
             }
         };
 
-        self.complete_with_control(
-            &prompt,
-            96,
-            Some(InferenceRunControl {
-                cancelled,
-                deadline: Instant::now() + timeout,
-            }),
+        crate::telemetry::llm_trace::with_task(
+            "screen_guide",
+            LLM_PROMPT_VERSION,
+            self.complete_with_control(
+                &prompt,
+                96,
+                Some(InferenceRunControl {
+                    cancelled,
+                    deadline: Instant::now() + timeout,
+                }),
+            ),
         )
         .await
     }
@@ -1089,7 +1110,7 @@ impl InferenceEngine {
             Err(_) => return vec![q.to_ascii_lowercase()],
         };
 
-        let raw = self.complete(&prompt, 80).await;
+        let raw = self.complete_task("query_expansion", &prompt, 80).await;
         let mut terms = parse_expansion_terms(&raw);
         let q_lower = q.to_ascii_lowercase();
         if !terms.iter().any(|t| t == &q_lower) {
@@ -1126,7 +1147,7 @@ impl InferenceEngine {
             }
         };
 
-        self.complete(&prompt, 150).await
+        self.complete_task("memory_detail", &prompt, 150).await
     }
 
     /// Generate a structured memory card draft from grouped snippets.
@@ -1172,7 +1193,7 @@ impl InferenceEngine {
             )
             .ok()?;
 
-        let raw = self.complete(&prompt, 180).await;
+        let raw = self.complete_task("card_synthesis", &prompt, 180).await;
         let candidate = extract_json_object(&raw)?;
         let draft: MemoryCardDraft = serde_json::from_str(&candidate).ok()?;
         validate_memory_card_draft(draft)
@@ -1194,7 +1215,7 @@ impl InferenceEngine {
         let prompt = self.build_prompt(system_msg, &user_msg).ok()?;
         let raw = match tokio::time::timeout(
             std::time::Duration::from_millis(timeout_ms),
-            self.complete(&prompt, 80),
+            self.complete_task("query_plan", &prompt, 80),
         )
         .await
         {
@@ -1252,7 +1273,7 @@ impl InferenceEngine {
             Err(_) => return SynthesizedVisionMemory::default(),
         };
 
-        let raw = self.complete(&prompt, 120).await;
+        let raw = self.complete_task("vision_description", &prompt, 120).await;
         let candidate = match extract_json_object(&raw) {
             Some(c) => c,
             None => return SynthesizedVisionMemory::default(),
@@ -1320,7 +1341,7 @@ Rules:\n\
             }
         };
 
-        self.complete(&prompt, 200).await
+        self.complete_task("todo_extraction", &prompt, 200).await
     }
 
     /// Extract structured memory fields natively via Qwen3-VL style JSON prompt.
@@ -1381,7 +1402,7 @@ Rules:\n\
         );
 
         let prompt = self.build_prompt(&system_msg, &user_msg).ok()?;
-        let raw = self.complete(&prompt, 400).await;
+        let raw = self.complete_task("memory_extraction", &prompt, 400).await;
 
         let candidate = extract_json_object(&raw)?;
         let normalized = normalize_structured_memory_json(&candidate);
@@ -1398,7 +1419,9 @@ Rules:\n\
                     candidate
                 );
                 if let Ok(repair_prompt) = self.build_prompt(&system_msg, &repair_msg) {
-                    let repaired_raw = self.complete(&repair_prompt, 400).await;
+                    let repaired_raw = self
+                        .complete_task("memory_extraction_repair", &repair_prompt, 400)
+                        .await;
                     if let Some(repaired_candidate) = extract_json_object(&repaired_raw) {
                         let normalized_repair =
                             normalize_structured_memory_json(&repaired_candidate);
@@ -1494,7 +1517,7 @@ Rules:\n\
         );
 
         let prompt = self.build_prompt(&system_msg, &user_msg).ok()?;
-        let raw = self.complete(&prompt, 320).await;
+        let raw = self.complete_task("memory_review", &prompt, 320).await;
         let candidate = extract_json_object(&raw)?;
         match serde_json::from_str::<MemoryReviewPromptOutput>(&candidate) {
             Ok(mut parsed) => {
@@ -1510,7 +1533,9 @@ Rules:\n\
                     "Fix this invalid JSON to match the strict schema. Output ONLY JSON.\nINVALID JSON:\n{candidate}",
                 );
                 let repair_prompt = self.build_prompt(&system_msg, &repair_msg).ok()?;
-                let repaired_raw = self.complete(&repair_prompt, 320).await;
+                let repaired_raw = self
+                    .complete_task("memory_review_repair", &repair_prompt, 320)
+                    .await;
                 let repaired_candidate = extract_json_object(&repaired_raw)?;
                 serde_json::from_str::<MemoryReviewPromptOutput>(&repaired_candidate)
                     .map(|mut repaired| {
@@ -1556,7 +1581,7 @@ TRANSCRIPT:\n{}",
             )
             .ok()?;
 
-        let raw = self.complete(&prompt, 360).await;
+        let raw = self.complete_task("meeting_breakdown", &prompt, 360).await;
         let candidate = extract_json_object(&raw)?;
         let mut draft: MeetingTaskBreakdownDraft = serde_json::from_str(&candidate).ok()?;
 
@@ -1667,7 +1692,7 @@ TRANSCRIPT:\n{}",
         };
 
         tracing::debug!("Generating daily briefing (mode={})...", mode);
-        let raw = self.complete(&prompt, 160).await;
+        let raw = self.complete_task("daily_briefing", &prompt, 160).await;
 
         raw.trim()
             .trim_matches(|ch| ch == '"' || ch == '\'')
@@ -1706,7 +1731,7 @@ TRANSCRIPT:\n{}",
         };
 
         tracing::debug!("Generating on-demand daily summary...");
-        let raw = self.complete(&prompt, 350).await;
+        let raw = self.complete_task("daily_summary", &prompt, 350).await;
 
         raw.trim()
             .trim_matches(|ch| ch == '"' || ch == '\'')
@@ -1750,6 +1775,16 @@ TRANSCRIPT:\n{}",
         self.complete_with_control(prompt, max_tokens, None).await
     }
 
+    /// `complete` with a task label, so the LLM trace records which job made the call.
+    async fn complete_task(&self, task: &'static str, prompt: &str, max_tokens: i32) -> String {
+        crate::telemetry::llm_trace::with_task(
+            task,
+            LLM_PROMPT_VERSION,
+            self.complete(prompt, max_tokens),
+        )
+        .await
+    }
+
     async fn complete_with_control(
         &self,
         prompt: &str,
@@ -1788,9 +1823,28 @@ TRANSCRIPT:\n{}",
         };
 
         let prompt_owned = prompt.to_string();
+        // Task labels are tokio task-locals and do not cross into `spawn_blocking`, so read them here.
+        let (task, prompt_version) = crate::telemetry::llm_trace::current_task();
+        let started = Instant::now();
 
         tokio::task::spawn_blocking(move || {
-            self_static.complete_blocking(&prompt_owned, max_tokens, control.as_ref())
+            let mut usage = TokenUsage::default();
+            let output = self_static.complete_blocking(
+                &prompt_owned,
+                max_tokens,
+                control.as_ref(),
+                &mut usage,
+            );
+            self_static.record_trace(
+                task,
+                prompt_version,
+                &prompt_owned,
+                &output,
+                usage,
+                max_tokens,
+                started,
+            );
+            output
         })
         .await
         .unwrap_or_else(|e| {
@@ -1799,12 +1853,48 @@ TRANSCRIPT:\n{}",
         })
     }
 
+    /// Append one line to `llm_traces.jsonl` (hash and lengths only unless `FNDR_TRACE_CONTENT=1`).
+    fn record_trace(
+        &self,
+        task: &'static str,
+        prompt_version: &'static str,
+        prompt: &str,
+        output: &str,
+        usage: TokenUsage,
+        max_tokens: i32,
+        started: Instant,
+    ) {
+        let Some(path) = self.trace_path.as_deref() else {
+            return;
+        };
+        let trace = crate::telemetry::llm_trace::build_trace(
+            &crate::telemetry::llm_trace::TraceInput {
+                ts_ms: chrono::Utc::now().timestamp_millis(),
+                task,
+                prompt_version,
+                model_id: &self.model_id,
+                prompt_tokens: usage.prompt_tokens,
+                output_tokens: usage.output_tokens,
+                max_tokens: max_tokens.max(0) as u32,
+                latency_ms: started.elapsed().as_millis() as u64,
+                prompt,
+                output,
+                validator: "not_validated",
+            },
+            std::env::var("FNDR_TRACE_CONTENT").as_deref() == Ok("1"),
+        );
+        if let Err(err) = crate::telemetry::llm_trace::append_trace(path, &trace) {
+            tracing::debug!("llm trace write failed: {err}");
+        }
+    }
+
     /// Synchronous generation core. Called from inside `spawn_blocking`.
     fn complete_blocking(
         &self,
         prompt: &str,
         max_tokens: i32,
         control: Option<&InferenceRunControl>,
+        usage: &mut TokenUsage,
     ) -> String {
         let t0 = std::time::Instant::now();
         let ctx = loop {
@@ -1855,6 +1945,7 @@ TRANSCRIPT:\n{}",
         }
 
         let prompt_len = tokens_list.len();
+        usage.prompt_tokens = prompt_len as u32;
         // llama.cpp asserts n_tokens_all <= n_batch for each decode; chunk the prefill.
         let mut batch = LlamaBatch::new(n_batch, 1);
         let mut offset = 0usize;
@@ -1914,6 +2005,7 @@ TRANSCRIPT:\n{}",
                 .token_to_str(token, Special::Plaintext)
                 .unwrap_or_default();
             result.push_str(&piece);
+            usage.output_tokens += 1;
 
             batch.clear();
             let _ = batch.add(token, n_cur, &[0], true);
@@ -2191,5 +2283,68 @@ mod tests {
     fn parse_expansion_terms_empty_input_returns_empty() {
         assert_eq!(parse_expansion_terms(""), Vec::<String>::new());
         assert_eq!(parse_expansion_terms("   "), Vec::<String>::new());
+    }
+
+    /// Manual check (loads the real text model): `cargo test --lib complete_writes_labeled -- --ignored --nocapture`.
+    ///
+    /// Read the `test ... ok` line, not the process exit code: after the test passes the process aborts at
+    /// exit (`GGML_ASSERT([rsets->data count] == 0)`), because the model is leaked on purpose and ggml's
+    /// Metal teardown finds it still alive. This is existing behavior (finding F9), not caused by tracing.
+    #[tokio::test]
+    #[ignore = "loads the real GGUF from the app data dir; run by hand"]
+    async fn complete_writes_labeled_trace_lines_with_token_counts() {
+        let app_data_dir = dirs::data_dir().expect("data dir").join("com.fndr.app");
+        let mut engine = InferenceEngine::new(Some(app_data_dir), None)
+            .await
+            .expect("a text model must be installed in the app data dir");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("llm_traces.jsonl");
+        engine.trace_path = Some(path.clone());
+
+        let prompt = engine
+            .build_prompt("You answer in one short sentence.", "Say hello.")
+            .expect("prompt");
+        let output = crate::telemetry::llm_trace::with_task(
+            "trace_smoke_test",
+            "v9",
+            engine.complete(&prompt, 8),
+        )
+        .await;
+        assert!(!output.is_empty(), "the model produced no text");
+
+        let text = std::fs::read_to_string(&path).expect("trace file written");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 1, "one call must write exactly one line");
+        let trace: crate::telemetry::llm_trace::LlmTrace =
+            serde_json::from_str(lines[0]).expect("trace line parses");
+        assert_eq!(trace.task, "trace_smoke_test");
+        assert_eq!(trace.prompt_version, "v9");
+        assert_eq!(trace.model_id, engine.model_id());
+        assert!(trace.prompt_tokens > 0, "prompt tokens must be counted");
+        assert!(
+            trace.output_tokens > 0 && trace.output_tokens <= 8,
+            "output tokens {} must be within 1..=8",
+            trace.output_tokens
+        );
+        assert_eq!(trace.max_tokens, 8);
+        assert_eq!(trace.prompt_sha256.len(), 64);
+        println!("TRACE LINE: {}", lines[0]);
+
+        // Real engine methods must stamp their own task id, with no explicit `with_task` by the caller.
+        let _ = engine.expand_search_query("rust async runtime").await;
+        let _ = engine.answer("What is 2 plus 2?", "2 plus 2 is 4.").await;
+        let text = std::fs::read_to_string(&path).expect("trace file still readable");
+        let tasks: Vec<String> = text
+            .lines()
+            .map(|l| {
+                serde_json::from_str::<crate::telemetry::llm_trace::LlmTrace>(l)
+                    .expect("trace line parses")
+                    .task
+            })
+            .collect();
+        println!("TASKS: {tasks:?}");
+        assert!(tasks.contains(&"query_expansion".to_string()), "{tasks:?}");
+        assert!(tasks.contains(&"answer".to_string()), "{tasks:?}");
+        assert!(!tasks.contains(&"unlabeled".to_string()), "{tasks:?}");
     }
 }
