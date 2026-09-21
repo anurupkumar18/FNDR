@@ -2,7 +2,7 @@
 
 Every job that calls the local text model, with the task id it stamps on its trace line in `<app data dir>/llm_traces.jsonl` (see `src-tauri/src/telemetry/llm_trace.rs`). A trace line with `output_tokens >= max_tokens` means the answer was cut off (see finding F10). Task ids and the prompt version (`LLM_PROMPT_VERSION`, currently `v1`) are set in `src-tauri/src/inference/mod.rs`; bump the version when a prompt changes so eval and trace rows stay comparable.
 
-The live text model is Qwen3-VL-2B Q4_K_M (`models.rs:181` hard-wires it). Facts below come from reading the code on 2026-09-21. The column "Runs per day" is left for numbers taken from real traces after a day of use; nothing in it is an estimate.
+The live text model is Qwen3-VL-2B Q4_K_M (`models.rs:181` hard-wires it). The text engine's context window is 4,096 tokens (`TEXT_ENGINE_DEFAULT_N_CTX`) and holds prompt plus output; extraction's cap is `EXTRACTION_MAX_OUTPUT_TOKENS` (640). Facts below come from reading the code on 2026-09-21. The column "Runs per day" is left for numbers taken from real traces after a day of use; nothing in it is an estimate.
 
 Run this after a day of use to fill it:
 
@@ -25,8 +25,8 @@ EOF
 
 | Task id | Engine method | Line | max_tokens | Input cap | Expected output | Validation and fallback | Class | Triggered by | Runs per day |
 |---|---|---|---|---|---|---|---|---|---|
-| `memory_extraction` | `extract_structured_memory` | `inference/mod.rs:1348` | 400 | OCR text up to 4,000 chars | JSON with 24 fields (schema in the system prompt) | `normalize_structured_memory_json`, `normalize_activity_type`, then `validate_structured_memory_extraction` (grounding) in the capture loop; browser-semantics seed fills gaps | live | Capture loop (`capture/mod.rs:2721`, holds `model_pipeline_lock`), visual-only fallback (`capture/mod.rs:335`) | from traces |
-| `memory_extraction_repair` | same method, second call | `inference/mod.rs:1348` | 400 | the invalid JSON candidate | corrected JSON | one repair pass; `None` if it still fails to parse | live | Only when the first parse fails | from traces |
+| `memory_extraction` | `extract_structured_memory` | `inference/mod.rs:1348` | 640 | OCR text up to 4,000 chars | JSON with 24 fields (schema in the system prompt) | `normalize_structured_memory_json`, `normalize_activity_type`, then `validate_structured_memory_extraction` (grounding) in the capture loop; browser-semantics seed fills gaps | live | Capture loop (`capture/mod.rs:2721`, holds `model_pipeline_lock`), visual-only fallback (`capture/mod.rs:335`) | from traces |
+| `memory_extraction_repair` | same method, second call | `inference/mod.rs:1348` | 640 | the invalid JSON candidate | corrected JSON | one repair pass; `None` if it still fails to parse | live | Only when the first parse fails | from traces |
 | `memory_snippet` | `summarize_memory_node` | `inference/mod.rs:964` | 90 | OCR up to `MAX_OCR_SUMMARY_CHARS` | 1 to 2 sentences, 16 to 34 words | empty string on failure | live | Merging memory records (`capture/mod.rs:4316`, only when `allow_llm_summary`) | from traces |
 | `todo_extraction` | `extract_todos` | `inference/mod.rs:1312` | 200 | memory text up to 2,000 chars | lines of todos or exactly `NONE` | empty string on failure | live | `capture/mod.rs:5385` (`maybe_create_tasks_from_memory`), meetings | from traces |
 | `memory_review` | `review_memory_record` | `inference/mod.rs:1452` | 320 | clean text up to 4,000 chars, 12 same-day candidates | JSON (`MemoryReviewPromptOutput`) | `None` if unparseable after one repair; caller records `review_failed` | live | Background review worker (`memory_review/inference_provider.rs`), pressure gated per its doc comment | from traces |

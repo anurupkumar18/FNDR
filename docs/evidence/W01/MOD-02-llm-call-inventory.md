@@ -8,7 +8,7 @@ Cost column: worst-case decode seconds if the model emits the full `max_tokens` 
 
 | Method | Method line in `inference/mod.rs` | max_tokens | Worst-case decode | Class | Called from | Trigger |
 |---|---|---|---|---|---|---|
-| `extract_structured_memory` | 1348 | 400 (x2 with repair) | 9.1 s (18.1 s with repair) | live | `capture/mod.rs:2721` (capture loop), `capture/mod.rs:335`, parked: `glasses_import.rs` | Capture hot path |
+| `extract_structured_memory` | 1348 | 640 (x2 with repair), was 400 | 14.5 s (29.0 s with repair) | live | `capture/mod.rs:2721` (capture loop), `capture/mod.rs:335`, parked: `glasses_import.rs` | Capture hot path |
 | `summarize_memory_node` | 964 | 90 | 2.0 s | live | `capture/mod.rs:4316` (merge, gated by `allow_llm_summary`) | Capture, when merging records |
 | `extract_todos` | 1312 | 200 | 4.5 s | live | `capture/mod.rs:5385` (`maybe_create_tasks_from_memory`), `meeting/mod.rs` x2 | Capture and meetings |
 | `review_memory_record` | 1452 | 320 (x2 with repair) | 7.2 s (14.5 s with repair) | live | `memory_review/inference_provider.rs` | Background, pressure gated per its doc comment |
@@ -39,6 +39,8 @@ Two methods are dead by this scan; confirm by hand before deleting because the s
 4. How often the prompt is truncated (LRN-01 finding F3).
 5. Who passes `allow_llm_summary = true` to `merge_memory_records_with_policy`.
 
-## Update: the 400-token cap (finding F10)
+## Update: the extraction cap (finding F10, fixed)
 
 On the live model a short synthetic capture produced a 449 to 456 token answer, over the 400 cap. A truncated answer has no closing brace, `extract_json_object` returns `None`, and `extract_structured_memory` returns `None` through the `?` at the call site without trying the repair pass. Traces now record `max_tokens`, so cap hits are `output_tokens >= max_tokens` per task.
+
+Fixed on branch `fix/extraction-token-budget`: cap 640 and a 4,096 token window; 8 of 8 synthetic captures now parse (was 2 of 8). See LRN-01.md.
