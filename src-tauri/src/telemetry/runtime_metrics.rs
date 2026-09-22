@@ -178,6 +178,17 @@ pub fn bump(counter: &'static str) {
     global().bump(counter);
 }
 
+/// Return the current value of a named counter without changing it.
+pub fn counter(name: &str) -> u64 {
+    global()
+        .inner
+        .lock()
+        .counters
+        .get(name)
+        .copied()
+        .unwrap_or(0)
+}
+
 /// Record the wall time elapsed since `started` under `op` (for example `capture.ocr_ms`).
 pub fn since_ms(op: &'static str, started: std::time::Instant) {
     record_ms(op, started.elapsed().as_millis() as u64);
@@ -401,5 +412,15 @@ mod tests {
         m.bump("c1");
         let (_, c, _) = m.snapshot_inner();
         assert_eq!(c.get("c1"), Some(&2));
+    }
+
+    #[test]
+    fn counter_reads_the_global_counter_without_resetting_it() {
+        const COUNTER: &str = "test.runtime_metrics_counter_reads_global";
+        let before = counter(COUNTER);
+
+        bump(COUNTER);
+
+        assert_eq!(counter(COUNTER), before + 1);
     }
 }

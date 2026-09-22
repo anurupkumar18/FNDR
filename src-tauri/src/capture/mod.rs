@@ -339,6 +339,7 @@ async fn compose_visual_capture_record(
 
     // Removed ungrounded low-RAM visual capture gate: store captures even without OCR/VLM grounding
 
+    let structure_started = Instant::now();
     let insight = if !vlm_route.runs_pixel_vlm() {
         let reason = vlm_route
             .fallback_reason()
@@ -388,6 +389,7 @@ async fn compose_visual_capture_record(
             }
         }
     };
+    runtime_metrics::since_ms("mem.structure_ms", structure_started);
 
     let composed = compose_import_memory_context_with_title(
         &synthetic_filename,
@@ -481,10 +483,13 @@ async fn compose_visual_capture_record(
         ..Default::default()
     };
     crate::memory_insight::derive_insight_for_record(&mut embedding_seed);
+    let compose_started = Instant::now();
     let embedding_document =
         compose_memory_embedding_document(&embedding_seed, Some(&chunking_config));
+    runtime_metrics::since_ms("mem.compose_ms", compose_started);
 
     let embedding_inputs = embedding_document.text_embedding_inputs();
+    let embed_started = Instant::now();
     let vectors = embed_text_inputs_with_memo(
         text_embedder,
         embedding_memo,
@@ -492,6 +497,7 @@ async fn compose_visual_capture_record(
         window_title,
         &embedding_inputs,
     );
+    runtime_metrics::since_ms("mem.embed_ms", embed_started);
     let primary = vectors
         .first()
         .cloned()
@@ -2681,6 +2687,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         // reported when multiple model engines hit Metal concurrently.
         let _pipeline_guard = state.model_pipeline_lock.lock().await;
 
+        let structure_started = Instant::now();
         let mut structured_memory = if let Some(engine) = engine.as_ref() {
             let mut s = engine
                 .extract_structured_memory(&app_name, &window_title, &qwen_cleaned_text)
@@ -2694,6 +2701,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         } else {
             None
         };
+        runtime_metrics::since_ms("mem.structure_ms", structure_started);
         if structured_memory.is_none() {
             structured_memory = browser_structured_seed.clone();
         } else if let (Some(existing), Some(seed)) =
@@ -2720,12 +2728,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     .max((seed.confidence * 0.9).clamp(0.0, 1.0));
             }
         }
+        let validate_started = Instant::now();
         let (mut extraction_grounding_confidence, mut extraction_issues) =
             if let Some(memory) = structured_memory.as_mut() {
                 validate_structured_memory_extraction(memory, &app_name, &window_title, &text)
             } else {
                 (0.0, vec!["structured_extraction_unavailable".to_string()])
             };
+        runtime_metrics::since_ms("mem.validate_ms", validate_started);
         let mut semantic_fusion_diagnostics = json!({
             "applied": false,
             "reason": null,
@@ -2751,11 +2761,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     fusion,
                     extraction_grounding_confidence < 0.55,
                 );
+                let validate_started = Instant::now();
                 let validated = if let Some(memory) = structured_memory.as_mut() {
                     validate_structured_memory_extraction(memory, &app_name, &window_title, &text)
                 } else {
                     (0.0, vec!["structured_extraction_unavailable".to_string()])
                 };
+                runtime_metrics::since_ms("mem.validate_ms", validate_started);
                 extraction_grounding_confidence = validated.0.max(extraction_grounding_confidence);
                 extraction_issues = validated.1;
             }
@@ -3191,8 +3203,10 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             ..Default::default()
         };
         crate::memory_insight::derive_insight_for_record(&mut embedding_seed);
+        let compose_started = Instant::now();
         let embedding_document =
             compose_memory_embedding_document(&embedding_seed, Some(&config.chunking));
+        runtime_metrics::since_ms("mem.compose_ms", compose_started);
         let primary_embed_input = embedding_document.primary_text.clone();
 
         let embedding_inputs = embedding_document.text_embedding_inputs();
@@ -3207,6 +3221,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         );
         let embed_latency = embed_start.elapsed();
         runtime_metrics::since_ms("capture.embed_ms", embed_start);
+        runtime_metrics::since_ms("mem.embed_ms", embed_start);
         let primary_embedding = embedding_vectors
             .first()
             .cloned()
@@ -3858,6 +3873,7 @@ async fn merge_or_append_memory_record(
             continuity_index.insert(anchor, incoming.id.clone());
         }
         batch.push(incoming.clone());
+        runtime_metrics::bump("mem.outcome.new");
         return Ok(incoming);
     }
 
@@ -3868,6 +3884,7 @@ async fn merge_or_append_memory_record(
     if let Some(anchor) = incoming_anchor.as_ref() {
         if let Some(anchor_id) = continuity_index.get(anchor).cloned() {
             if let Some(batch_idx) = batch.iter().position(|record| record.id == anchor_id) {
+                let merge_write_started = Instant::now();
                 let merged = merge_memory_records(
                     batch[batch_idx].clone(),
                     incoming.clone(),
@@ -3886,15 +3903,20 @@ async fn merge_or_append_memory_record(
                 }
                 batch[batch_idx] = merged.clone();
                 continuity_index.insert(anchor.clone(), merged.id.clone());
+                runtime_metrics::since_ms("mem.merge_write_ms", merge_write_started);
+                runtime_metrics::bump("mem.outcome.merged_batch");
                 return Ok(merged);
             }
 
-            if let Some(existing) = state
+            let merge_search_started = Instant::now();
+            let existing = state
                 .store
                 .get_memory_by_id(&anchor_id)
                 .await
-                .map_err(|e| e.to_string())?
-            {
+                .map_err(|e| e.to_string())?;
+            runtime_metrics::since_ms("mem.merge_search_ms", merge_search_started);
+            if let Some(existing) = existing {
+                let merge_write_started = Instant::now();
                 let merged =
                     merge_memory_records(existing.clone(), incoming.clone(), text_embedder, engine)
                         .await;
@@ -3925,13 +3947,19 @@ async fn merge_or_append_memory_record(
                     cleanup_screenshot_path(incoming.screenshot_path.clone());
                 }
                 continuity_index.insert(anchor.clone(), merged.id.clone());
+                runtime_metrics::since_ms("mem.merge_write_ms", merge_write_started);
+                runtime_metrics::bump("mem.outcome.merged_persisted");
                 return Ok(merged);
             }
         }
     }
 
     if semantic_merge_enabled {
-        if let Some(batch_idx) = best_batch_merge_target(batch, &incoming) {
+        let merge_search_started = Instant::now();
+        let batch_target = best_batch_merge_target(batch, &incoming);
+        runtime_metrics::since_ms("mem.merge_search_ms", merge_search_started);
+        if let Some(batch_idx) = batch_target {
+            let merge_write_started = Instant::now();
             let merged = merge_memory_records(
                 batch[batch_idx].clone(),
                 incoming.clone(),
@@ -3951,10 +3979,16 @@ async fn merge_or_append_memory_record(
             if let Some(anchor) = incoming_anchor.as_ref() {
                 continuity_index.insert(anchor.clone(), merged.id.clone());
             }
+            runtime_metrics::since_ms("mem.merge_write_ms", merge_write_started);
+            runtime_metrics::bump("mem.outcome.merged_batch");
             return Ok(merged);
         }
 
-        if let Some(existing) = best_persisted_merge_target(state, &incoming).await? {
+        let merge_search_started = Instant::now();
+        let persisted_target = best_persisted_merge_target(state, &incoming).await?;
+        runtime_metrics::since_ms("mem.merge_search_ms", merge_search_started);
+        if let Some(existing) = persisted_target {
+            let merge_write_started = Instant::now();
             let merged =
                 merge_memory_records(existing.clone(), incoming.clone(), text_embedder, engine)
                     .await;
@@ -3986,10 +4020,16 @@ async fn merge_or_append_memory_record(
             if let Some(anchor) = continuity_anchor_for_memory(&merged) {
                 continuity_index.insert(anchor, merged.id.clone());
             }
+            runtime_metrics::since_ms("mem.merge_write_ms", merge_write_started);
+            runtime_metrics::bump("mem.outcome.merged_persisted");
             return Ok(merged);
         }
     } else {
-        if let Some(batch_idx) = best_batch_lexical_merge_target(batch, &incoming) {
+        let merge_search_started = Instant::now();
+        let batch_target = best_batch_lexical_merge_target(batch, &incoming);
+        runtime_metrics::since_ms("mem.merge_search_ms", merge_search_started);
+        if let Some(batch_idx) = batch_target {
+            let merge_write_started = Instant::now();
             let merged = merge_memory_records(
                 batch[batch_idx].clone(),
                 incoming.clone(),
@@ -4009,10 +4049,16 @@ async fn merge_or_append_memory_record(
             if let Some(anchor) = incoming_anchor.as_ref() {
                 continuity_index.insert(anchor.clone(), merged.id.clone());
             }
+            runtime_metrics::since_ms("mem.merge_write_ms", merge_write_started);
+            runtime_metrics::bump("mem.outcome.merged_batch");
             return Ok(merged);
         }
 
-        if let Some(existing) = best_persisted_lexical_merge_target(state, &incoming).await? {
+        let merge_search_started = Instant::now();
+        let persisted_target = best_persisted_lexical_merge_target(state, &incoming).await?;
+        runtime_metrics::since_ms("mem.merge_search_ms", merge_search_started);
+        if let Some(existing) = persisted_target {
+            let merge_write_started = Instant::now();
             let merged =
                 merge_memory_records(existing.clone(), incoming.clone(), text_embedder, engine)
                     .await;
@@ -4042,6 +4088,8 @@ async fn merge_or_append_memory_record(
             if let Some(anchor) = continuity_anchor_for_memory(&merged) {
                 continuity_index.insert(anchor, merged.id.clone());
             }
+            runtime_metrics::since_ms("mem.merge_write_ms", merge_write_started);
+            runtime_metrics::bump("mem.outcome.merged_persisted");
             return Ok(merged);
         }
     }
@@ -4050,6 +4098,7 @@ async fn merge_or_append_memory_record(
         continuity_index.insert(anchor, incoming_id);
     }
     batch.push(incoming.clone());
+    runtime_metrics::bump("mem.outcome.new");
     Ok(incoming)
 }
 
@@ -5539,6 +5588,58 @@ mod tests {
             last_accessed_at: 0,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn persisted_continuity_merge_counts_its_outcome() {
+        let dir = tempfile::tempdir().expect("temporary store");
+        let store = Arc::new(crate::storage::Store::new(dir.path()).expect("store"));
+        let state_store =
+            Arc::new(crate::storage::StateStore::new(dir.path()).expect("state store"));
+        let graph = crate::graph::GraphStore::new(store.clone());
+        let state = AppState::new(
+            dir.path().to_path_buf(),
+            crate::config::Config::default(),
+            store.clone(),
+            state_store,
+            graph,
+            None,
+            None,
+        );
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(async {
+                let existing = merge_test_record("persisted-existing");
+                store
+                    .add_batch(&[existing.clone()])
+                    .await
+                    .expect("seed store");
+                let mut incoming = merge_test_record("incoming");
+                incoming.timestamp = 2;
+
+                let anchor = continuity_anchor_for_memory(&incoming).expect("continuity anchor");
+                let mut continuity_index = HashMap::from([(anchor, existing.id.clone())]);
+                let before = runtime_metrics::counter("mem.outcome.merged_persisted");
+
+                let merged = merge_or_append_memory_record(
+                    &state,
+                    &mut Vec::new(),
+                    &mut continuity_index,
+                    incoming,
+                    None,
+                    None,
+                )
+                .await
+                .expect("persisted continuity merge");
+
+                assert_eq!(merged.id, existing.id);
+                assert_eq!(
+                    runtime_metrics::counter("mem.outcome.merged_persisted"),
+                    before + 1
+                );
+            });
     }
 
     #[test]
