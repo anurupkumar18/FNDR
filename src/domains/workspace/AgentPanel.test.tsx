@@ -54,15 +54,18 @@ describe("AgentPanel act mode actions", () => {
     it("proposes, approves, and executes a read-only command action in act mode", async () => {
         vi.mocked(proposeAgentAction).mockResolvedValue({
             id: "a1", run_id: "r1", title: "Check status", description: "Check status",
-            kind: "run_read_only_command", status: "needs_approval", result: null,
+            kind: "run_read_only_command", input: { command: "git", args: ["status"] },
+            status: "needs_approval", result: null,
         });
         vi.mocked(approveAgentAction).mockResolvedValue({
             id: "a1", run_id: "r1", title: "Check status", description: "Check status",
-            kind: "run_read_only_command", status: "approved", result: null,
+            kind: "run_read_only_command", input: { command: "git", args: ["status"] },
+            status: "approved", result: null,
         });
         vi.mocked(executeAgentAction).mockResolvedValue({
             id: "a1", run_id: "r1", title: "Check status", description: "Check status",
-            kind: "run_read_only_command", status: "succeeded",
+            kind: "run_read_only_command", input: { command: "git", args: ["status"] },
+            status: "succeeded",
             result: { success: true, output: "On branch main", error: null, duration_ms: 42 },
         });
 
@@ -95,5 +98,51 @@ describe("AgentPanel act mode actions", () => {
         );
         expect(approveAgentAction).toHaveBeenCalledWith("a1");
         expect(executeAgentAction).toHaveBeenCalledWith("a1");
+    });
+
+    it("keeps showing the originally proposed command after the dropdown selection is changed", async () => {
+        vi.mocked(proposeAgentAction).mockResolvedValue({
+            id: "a2", run_id: "r2", title: "Check the compiler", description: "Check the compiler",
+            kind: "run_read_only_command", input: { command: "cargo", args: ["check"] },
+            status: "needs_approval", result: null,
+        });
+
+        render(<AgentPanel isVisible onClose={() => {}} />);
+
+        fireEvent.change(screen.getByRole("combobox"), { target: { value: "act" } });
+        fireEvent.change(screen.getByRole("combobox", { name: "Read-only command" }), {
+            target: { value: "1" }, // cargo check
+        });
+        fireEvent.change(screen.getByRole("textbox", { name: "Action goal" }), {
+            target: { value: "Check the compiler" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Propose" }));
+
+        await screen.findByRole("button", { name: "Approve" });
+        const commandLine = screen.getByText(/Proposed command:/);
+        expect(commandLine).toHaveTextContent("cargo check");
+
+        // The command dropdown must be locked while the action is pending, and even if its
+        // value is forced away programmatically, the approval card must keep showing the
+        // command that was actually proposed and stored server-side, not the live dropdown.
+        expect(screen.getByRole("combobox", { name: "Read-only command" })).toBeDisabled();
+        fireEvent.change(screen.getByRole("combobox", { name: "Read-only command" }), {
+            target: { value: "2" }, // npm run typecheck
+        });
+
+        expect(commandLine).toHaveTextContent("cargo check");
+        expect(commandLine).not.toHaveTextContent("npm run typecheck");
+    });
+});
+
+describe("AgentPanel propose-action visibility", () => {
+    it("does not render the propose-an-action card outside act mode", () => {
+        render(<AgentPanel isVisible onClose={() => {}} />);
+
+        // Default agent mode is "ask"; the combobox is present but the action-proposal
+        // form must stay hidden until the user explicitly switches to act mode.
+        expect(screen.getByRole("combobox")).toHaveValue("ask");
+        expect(screen.queryByText("Propose an action")).not.toBeInTheDocument();
+        expect(screen.queryByRole("textbox", { name: "Action goal" })).not.toBeInTheDocument();
     });
 });

@@ -8,6 +8,7 @@ import { FndrWrappedPanel } from "@/domains/workspace/FndrWrappedPanel";
 import { StatsPanel } from "@/domains/workspace/StatsPanel";
 import { TodoPanel } from "@/domains/workspace/TodoPanel";
 import { EngineMetricsPanel } from "@/domains/workspace/EngineMetricsPanel";
+import { PrivacyProofPanel } from "@/domains/privacy-proof/PrivacyProof";
 import { AppToasts } from "./AppToasts";
 import { PanelErrorBoundary } from "./PanelErrorBoundary";
 import type { AppToast } from "./types";
@@ -95,6 +96,9 @@ export function AppPanels({
             </PanelErrorBoundary>
             <PanelErrorBoundary panelName="Engine Metrics">
                 <EngineMetricsPanel isVisible={activePanel === "engineMetrics"} onClose={onClosePanel} />
+            </PanelErrorBoundary>
+            <PanelErrorBoundary panelName="Privacy Proof">
+                <PrivacyProofPanel isVisible={activePanel === "privacyProof"} onClose={onClosePanel} />
             </PanelErrorBoundary>
             <CommandPalette
                 isOpen={showCommandPalette}

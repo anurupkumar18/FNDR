@@ -1330,6 +1330,7 @@ export interface AgentAction {
     title: string;
     description: string;
     kind: string;
+    input: Record<string, unknown>;
     status: "proposed" | "needs_approval" | "approved" | "running" | "succeeded" | "failed" | "blocked" | "cancelled";
     result: { success: boolean; output: string; error: string | null; duration_ms: number } | null;
 }
@@ -1499,6 +1500,18 @@ export async function dismissPrivacyAlert(site: string): Promise<void> {
 
 export async function addSiteToBlocklist(site: string): Promise<void> {
     return invoke("add_to_blocklist", { site });
+}
+
+export interface PrivacyProof {
+    evaluated: number;
+    stored: number;
+    skipped_by_reason: Record<string, number>;
+    egress_requests: number;
+    egress_hosts: string[];
+}
+
+export async function getPrivacyProof(): Promise<PrivacyProof> {
+    return invoke<PrivacyProof>("get_privacy_proof");
 }
 
 // Stats
