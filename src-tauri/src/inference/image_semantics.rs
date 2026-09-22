@@ -55,6 +55,24 @@ impl ImageImportSource {
             ImageImportSource::ScreenCapture => "Screen capture (visual)",
         }
     }
+
+    /// Fallback `topic` when the model returned no topics and no scene type.
+    fn default_topic(&self) -> &'static str {
+        match self {
+            ImageImportSource::MetaGlasses => "glasses capture",
+            ImageImportSource::FilePicker => "imported photo",
+            ImageImportSource::ScreenCapture => "screen activity",
+        }
+    }
+
+    /// Fallback `user_intent` when the model returned none.
+    fn default_intent(&self) -> &'static str {
+        match self {
+            ImageImportSource::MetaGlasses => "capturing a moment with Meta glasses",
+            ImageImportSource::FilePicker => "documenting an imported photo",
+            ImageImportSource::ScreenCapture => "using an app or reading the screen",
+        }
+    }
 }
 
 /// Which MTMD model family is loaded in the singleton runtime.
@@ -335,7 +353,7 @@ pub fn compose_import_memory_context_with_title(
     } else if !insight.scene_type.is_empty() {
         insight.scene_type.clone()
     } else {
-        "imported photo".to_string()
+        source.default_topic().to_string()
     };
 
     let activity = insight
@@ -345,7 +363,7 @@ pub fn compose_import_memory_context_with_title(
     let intent = insight
         .user_intent
         .clone()
-        .unwrap_or_else(|| "documenting an imported photo".to_string());
+        .unwrap_or_else(|| source.default_intent().to_string());
 
     let mut alias_set: HashSet<String> = HashSet::new();
     for a in &insight.search_aliases {
@@ -1492,6 +1510,43 @@ mod tests {
         let joined = composed.search_aliases.join(" ").to_ascii_lowercase();
         assert!(joined.contains("pitch"));
         assert!(joined.contains("demo") || joined.contains("feedback"));
+    }
+
+    #[test]
+    fn screen_capture_fallback_topic_and_intent_are_not_photo_import_labels() {
+        let insight = ImageSemanticInsight {
+            summary_short: String::new(),
+            summary_detailed: String::new(),
+            scene_type: String::new(),
+            setting: None,
+            activity_type: None,
+            user_intent: None,
+            visible_objects: vec![],
+            people_roles: vec![],
+            entities: vec![],
+            actions: vec![],
+            topics: vec![],
+            search_aliases: vec![],
+            confidence: 0.0,
+            model_id: "ocr_only".to_string(),
+        };
+        let composed = compose_import_memory_context(
+            "screen.png",
+            &insight,
+            None,
+            ImageImportSource::ScreenCapture,
+        );
+        assert_ne!(composed.topic, "imported photo");
+        assert_ne!(composed.user_intent, "documenting an imported photo");
+
+        let photo_composed = compose_import_memory_context(
+            "photo.jpg",
+            &insight,
+            None,
+            ImageImportSource::FilePicker,
+        );
+        assert_eq!(photo_composed.topic, "imported photo");
+        assert_eq!(photo_composed.user_intent, "documenting an imported photo");
     }
 
     #[test]
