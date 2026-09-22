@@ -4,6 +4,8 @@
 //! The cascade accepts the first tier that reaches its configured confidence
 //! threshold. Every other outcome remains unresolved for review or a person.
 
+pub mod laya_bridge;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecisionOutcome {
     pub choice: usize,
@@ -62,6 +64,73 @@ pub fn cascade(tiers: &[Tier], evidence: &str) -> Option<Resolution> {
         best_guess,
         tried: escalated,
     })
+}
+
+pub struct LayaDecider {
+    pub question_key: &'static str,
+    pub instructions: &'static str,
+    pub criteria: &'static [(&'static str, &'static str)],
+    pub options: &'static [&'static str],
+}
+
+impl Decider for LayaDecider {
+    fn name(&self) -> &'static str {
+        "laya"
+    }
+
+    fn options(&self) -> &'static [&'static str] {
+        self.options
+    }
+
+    fn decide(&self, evidence: &str) -> DecisionOutcome {
+        let state = serde_json::json!({"text": evidence});
+        let criteria: serde_json::Map<String, serde_json::Value> = self
+            .criteria
+            .iter()
+            .map(|(key, value)| {
+                (
+                    (*key).to_string(),
+                    serde_json::Value::String((*value).to_string()),
+                )
+            })
+            .collect();
+        let questions = serde_json::json!({
+            self.question_key: {
+                "type": "choice",
+                "instructions": self.instructions,
+                "criteria": criteria,
+            }
+        });
+
+        match laya_bridge::run_laya_predict(&state, &questions) {
+            Ok(result) => {
+                let answer = &result["answers"][self.question_key];
+                let choice_label = answer["choice"].as_str().unwrap_or("");
+                let confidence = answer["confidence"].as_f64().unwrap_or(0.0) as f32;
+                let choice = self
+                    .options
+                    .iter()
+                    .position(|option| *option == choice_label)
+                    .unwrap_or(0);
+                let mut probs = vec![0.0; self.options.len()];
+                if choice < probs.len() {
+                    probs[choice] = confidence;
+                }
+                DecisionOutcome {
+                    choice,
+                    probs,
+                    confidence,
+                    tier: "laya",
+                }
+            }
+            Err(_) => DecisionOutcome {
+                choice: 0,
+                probs: vec![0.0; self.options.len()],
+                confidence: 0.0,
+                tier: "laya",
+            },
+        }
+    }
 }
 
 #[cfg(test)]
