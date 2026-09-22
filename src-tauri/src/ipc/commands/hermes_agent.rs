@@ -595,6 +595,7 @@ async fn detect_ollama_state() -> (bool, bool, Vec<String>) {
     let mut models: Vec<String> = Vec::new();
 
     if let Ok(client) = local_service_client() {
+        crate::privacy_proof::record_egress("localhost");
         if let Ok(response) = client.get(OLLAMA_API_TAGS_URL).send().await {
             if response.status().is_success() {
                 reachable = true;
@@ -833,6 +834,7 @@ async fn hermes_api_ready() -> bool {
     let Ok(client) = local_service_client() else {
         return false;
     };
+    crate::privacy_proof::record_egress("localhost");
     match client
         .get(format!("{}/health", hermes_api_url()))
         .send()
