@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_RECENT: usize = 256;
+const MAX_SAMPLES: usize = 512;
 const EWMA_ALPHA: f64 = 0.125;
 
 #[derive(Default, Clone)]
@@ -17,6 +18,7 @@ struct Agg {
     sum_ms: u64,
     max_ms: u64,
     ewma_ms: f64,
+    samples: VecDeque<u64>,
 }
 
 impl Agg {
@@ -29,6 +31,21 @@ impl Agg {
         } else {
             EWMA_ALPHA * ms as f64 + (1.0 - EWMA_ALPHA) * self.ewma_ms
         };
+        if self.samples.len() == MAX_SAMPLES {
+            self.samples.pop_front();
+        }
+        self.samples.push_back(ms);
+    }
+
+    /// Nearest-rank percentile over the most recent `MAX_SAMPLES` samples.
+    fn percentile(&self, p: f64) -> u64 {
+        if self.samples.is_empty() {
+            return 0;
+        }
+        let mut sorted: Vec<u64> = self.samples.iter().copied().collect();
+        sorted.sort_unstable();
+        let rank = ((p * sorted.len() as f64).ceil() as usize).clamp(1, sorted.len());
+        sorted[rank - 1]
     }
 
     fn to_snapshot(&self) -> AggregateSnapshot {
@@ -43,6 +60,8 @@ impl Agg {
             max_ms: self.max_ms,
             avg_ms,
             ewma_ms: self.ewma_ms,
+            p50_ms: self.percentile(0.50),
+            p95_ms: self.percentile(0.95),
         }
     }
 }
@@ -159,6 +178,11 @@ pub fn bump(counter: &'static str) {
     global().bump(counter);
 }
 
+/// Record the wall time elapsed since `started` under `op` (for example `capture.ocr_ms`).
+pub fn since_ms(op: &'static str, started: std::time::Instant) {
+    record_ms(op, started.elapsed().as_millis() as u64);
+}
+
 // --- RSS cache (macOS) -----------------------------------------------------
 
 static RSS_CACHED_AT_MS: AtomicI64 = AtomicI64::new(0);
@@ -220,6 +244,8 @@ pub struct AggregateSnapshot {
     pub max_ms: u64,
     pub avg_ms: f64,
     pub ewma_ms: f64,
+    pub p50_ms: u64,
+    pub p95_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -298,6 +324,41 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::thread;
+
+    #[test]
+    fn percentiles_use_nearest_rank_over_the_recent_window() {
+        let mut agg = Agg::default();
+        for ms in 1..=100u64 {
+            agg.record(ms);
+        }
+        let snap = agg.to_snapshot();
+        assert_eq!(snap.p50_ms, 50);
+        assert_eq!(snap.p95_ms, 95);
+        assert_eq!(snap.n, 100);
+        assert_eq!(snap.max_ms, 100);
+    }
+
+    #[test]
+    fn sample_window_is_bounded() {
+        let mut agg = Agg::default();
+        for ms in 0..(MAX_SAMPLES as u64 + 100) {
+            agg.record(ms);
+        }
+        assert_eq!(agg.samples.len(), MAX_SAMPLES);
+        assert_eq!(agg.percentile(1.0), MAX_SAMPLES as u64 + 99);
+    }
+
+    #[test]
+    fn empty_aggregate_reports_zero_percentiles() {
+        assert_eq!(Agg::default().percentile(0.95), 0);
+    }
+
+    #[test]
+    fn since_ms_records_one_sample_for_the_op() {
+        since_ms("test.since_ms_unique", std::time::Instant::now());
+        let (aggregates, _, _) = global().snapshot_inner();
+        assert_eq!(aggregates["test.since_ms_unique"].n, 1);
+    }
 
     #[test]
     fn aggregate_tracks_max_and_count() {
