@@ -57,7 +57,10 @@ pub async fn compose_answer(
     let answer_text = if let Some(engine) = engine {
         let raw = engine.answer(&plan.raw, &context_str).await;
         let raw_trim = raw.trim();
-        if raw_trim.is_empty() || !citations_valid(raw_trim, evidence) {
+        if raw_trim.is_empty()
+            || !has_minimum_substance(raw_trim)
+            || !citations_valid(raw_trim, evidence)
+        {
             compose_partial_answer(evidence, &verify)
         } else {
             raw_trim.to_string()
@@ -161,6 +164,17 @@ async fn render_context(fused: &[FusedHit], evidence: &EvidencePack, store: &Sto
     out
 }
 
+/// Minimum word count for a raw LLM answer to ship verbatim. A degraded local
+/// model under memory pressure can echo back a single salient token (e.g. a
+/// bare "ChatGPT.") instead of an actual sentence; that has no unverified
+/// file/command tokens for `citations_valid` to catch, so it needs its own
+/// gate. Below this, fall back to the deterministic partial-answer composer.
+const MIN_ANSWER_WORDS: usize = 3;
+
+fn has_minimum_substance(answer: &str) -> bool {
+    answer.split_whitespace().count() >= MIN_ANSWER_WORDS
+}
+
 /// Post-hoc cite check: every file/command/decision the answer references must
 /// appear in the evidence pack. Returns false when the answer mentions a path
 /// or command that wasn't grounded.
@@ -211,6 +225,20 @@ mod tests {
         let text = compose_partial_answer(&evidence_with_file("plan.ts"), &outcome);
         assert!(text.contains("plan.ts"));
         assert!(text.contains("missing"));
+    }
+
+    #[test]
+    fn has_minimum_substance_rejects_bare_single_word_answer() {
+        assert!(!has_minimum_substance("ChatGPT."));
+        assert!(!has_minimum_substance(""));
+        assert!(!has_minimum_substance("Yes."));
+    }
+
+    #[test]
+    fn has_minimum_substance_accepts_a_real_sentence() {
+        assert!(has_minimum_substance(
+            "The plan.ts file defines the query plan."
+        ));
     }
 
     #[test]
