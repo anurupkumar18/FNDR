@@ -1,6 +1,7 @@
 //! Telemetry and logging module
 
 pub mod logging;
+pub mod metrics_dump;
 pub mod quality_logger;
 pub mod runtime_metrics;
 pub mod system_metrics;

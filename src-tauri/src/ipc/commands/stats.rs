@@ -1275,11 +1275,12 @@ pub fn get_focus_status(state: State<'_, Arc<AppState>>) -> Result<FocusStatus, 
     })
 }
 
-/// Engine latency counters, capture counters, optional process RSS (macOS). No PII.
-#[tauri::command]
-pub async fn get_runtime_metrics(
-    state: State<'_, Arc<AppState>>,
-) -> Result<crate::telemetry::runtime_metrics::RuntimeMetricsSnapshot, String> {
+/// Same snapshot `get_runtime_metrics` returns over IPC, extracted so the
+/// metrics dump task (`telemetry::metrics_dump`) can build one without an
+/// IPC round trip.
+pub fn current_runtime_snapshot(
+    state: &Arc<AppState>,
+) -> crate::telemetry::runtime_metrics::RuntimeMetricsSnapshot {
     let emb = embedding_runtime_status();
     let embedding = crate::telemetry::runtime_metrics::EmbeddingMetricsSnapshot {
         backend: emb.backend,
@@ -1291,13 +1292,17 @@ pub async fn get_runtime_metrics(
         last_clip_infer_ms: crate::embedding::last_clip_infer_ms(),
     };
     let inference = crate::telemetry::runtime_metrics::InferenceMetricsSnapshot {
-        ai_model_available: state.inner().ai_model_available(),
-        ai_model_loaded: state.inner().ai_model_loaded(),
-        loaded_model_id: state.inner().loaded_model_id(),
+        ai_model_available: state.ai_model_available(),
+        ai_model_loaded: state.ai_model_loaded(),
+        loaded_model_id: state.loaded_model_id(),
     };
-    Ok(crate::telemetry::runtime_metrics::build_snapshot(
-        state.inner(),
-        embedding,
-        inference,
-    ))
+    crate::telemetry::runtime_metrics::build_snapshot(state, embedding, inference)
+}
+
+/// Engine latency counters, capture counters, optional process RSS (macOS). No PII.
+#[tauri::command]
+pub async fn get_runtime_metrics(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::telemetry::runtime_metrics::RuntimeMetricsSnapshot, String> {
+    Ok(current_runtime_snapshot(state.inner()))
 }

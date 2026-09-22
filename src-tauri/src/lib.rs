@@ -266,6 +266,47 @@ impl CapturePipelineStats {
         self.evaluated.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn evaluated_total(&self) -> u64 {
+        self.evaluated.load(Ordering::Relaxed)
+    }
+
+    /// Per-reason skip counts keyed by `SkipReason::as_str()`. Cheap (atomic reads only).
+    pub fn skip_counts(&self) -> std::collections::BTreeMap<&'static str, u64> {
+        let pairs: [(SkipReason, &AtomicU64); 15] = [
+            (SkipReason::SelfApp, &self.skipped_self_app),
+            (SkipReason::Blocklist, &self.skipped_blocklist),
+            (SkipReason::SurfacePolicy, &self.skipped_surface_policy),
+            (SkipReason::PerceptualDup, &self.skipped_perceptual_dup),
+            (SkipReason::SemanticDup, &self.skipped_semantic_dup),
+            (SkipReason::OcrFailed, &self.skipped_ocr_failed),
+            (SkipReason::LowSignalText, &self.skipped_low_signal_text),
+            (SkipReason::Noise, &self.skipped_noise),
+            (SkipReason::Grounding, &self.skipped_grounding),
+            (
+                SkipReason::StackedExtraction,
+                &self.skipped_stacked_extraction,
+            ),
+            (SkipReason::VisualSmall, &self.skipped_visual_small),
+            (SkipReason::VisualNovelty, &self.skipped_visual_novelty),
+            (
+                SkipReason::VisualComposeFailed,
+                &self.skipped_visual_compose_failed,
+            ),
+            (
+                SkipReason::ScreenCaptureFailed,
+                &self.skipped_screen_capture_failed,
+            ),
+            (
+                SkipReason::EmbedderUnavailable,
+                &self.skipped_embedder_unavailable,
+            ),
+        ];
+        pairs
+            .iter()
+            .map(|(reason, counter)| (reason.as_str(), counter.load(Ordering::Relaxed)))
+            .collect()
+    }
+
     /// Sum of every `skipped_*` counter. Cheap (atomic reads only).
     pub fn total_skipped(&self) -> u64 {
         self.skipped_blocklist.load(Ordering::Relaxed)
@@ -690,5 +731,24 @@ mod tests {
         assert_eq!(stats.skipped_self_app.load(Ordering::Relaxed), 2);
         assert_eq!(stats.skipped_blocklist.load(Ordering::Relaxed), 1);
         assert_eq!(stats.total_skipped(), 3);
+    }
+
+    #[test]
+    fn skip_counts_and_totals_reflect_recorded_events() {
+        let stats = CapturePipelineStats::default();
+        stats.record_evaluated();
+        stats.record_evaluated();
+        stats.record_evaluated();
+        stats.record_skip(SkipReason::Blocklist, "Example");
+        stats.record_skip(SkipReason::PerceptualDup, "Example");
+        stats.record_store(StoreOutcome::OcrPath);
+        let counts = stats.skip_counts();
+        assert_eq!(counts["blocklist"], 1);
+        assert_eq!(counts["perceptual_dup"], 1);
+        assert_eq!(counts["noise"], 0);
+        assert_eq!(counts.len(), 15);
+        assert_eq!(stats.evaluated_total(), 3);
+        assert_eq!(stats.total_skipped(), 2);
+        assert_eq!(stats.total_stored(), 1);
     }
 }
