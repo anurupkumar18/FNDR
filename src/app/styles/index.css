@@ -189,7 +189,7 @@ body {
     font-size: var(--t-body);
 }
 
-/* Display-font headings — Cormorant Garamond. Components that need
+/* Display-font headings — the system stack. Components that need
    the body font on a heading can opt out via `font-family: inherit`. */
 h1, h2, h3, h4 {
     font-family: var(--font-display);

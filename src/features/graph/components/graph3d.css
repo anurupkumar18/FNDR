@@ -320,7 +320,7 @@
 }
 
 .g3d-side-title {
-    font-family: var(--film-font-display, "Cormorant Garamond", serif);
+    font-family: var(--film-font-display);
     font-size: 22px;
     font-weight: 500;
     line-height: 1.15;
@@ -545,7 +545,7 @@
 }
 
 .g3d-hover-title {
-    font-family: var(--film-font-display, "Cormorant Garamond", serif);
+    font-family: var(--film-font-display);
     font-size: 17px;
     font-weight: 500;
     line-height: 1.2;
@@ -605,7 +605,7 @@
 }
 
 .g3d-label[data-kind="community"] {
-    font-family: var(--film-font-display, "Cormorant Garamond", serif);
+    font-family: var(--film-font-display);
     font-size: 15px;
     font-weight: 500;
     letter-spacing: 0.02em;
@@ -646,7 +646,7 @@
 }
 
 .g3d-state-title {
-    font-family: var(--film-font-display, "Cormorant Garamond", serif);
+    font-family: var(--film-font-display);
     font-size: 28px;
     font-weight: 500;
     line-height: 1.15;
