@@ -319,6 +319,10 @@ fn main() {
                 });
             }
 
+            // Background: optional NDJSON metrics dump for baseline/soak reports
+            // (CAP-02). No-op unless FNDR_METRICS_DUMP names a file.
+            fndr_lib::telemetry::metrics_dump::spawn_if_enabled(state.clone());
+
             // Background task: Track downloads folder
             let uploads_state = state.clone();
             tauri::async_runtime::spawn(async move {
