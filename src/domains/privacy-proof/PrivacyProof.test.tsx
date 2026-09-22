@@ -55,7 +55,8 @@ describe("PrivacyProofPanel", () => {
 
         render(<PrivacyProofPanel isVisible onClose={() => {}} />);
 
-        expect(await screen.findByText(/10 frames evaluated/i)).toBeInTheDocument();
+        expect(await screen.findByText("Frames evaluated")).toBeInTheDocument();
+        expect(screen.getByText("10")).toBeInTheDocument();
         await waitFor(() => expect(getPrivacyProof).toHaveBeenCalled());
     });
 

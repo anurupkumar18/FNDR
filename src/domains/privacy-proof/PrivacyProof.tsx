@@ -16,21 +16,40 @@ const label = (reason: string) => reason.replace(/_/g, " ");
 export function PrivacyProof({ proof }: { proof: Proof }) {
     const reasons = Object.entries(proof.skipped_by_reason).filter(([, count]) => count > 0);
     return (
-        <section aria-label="Privacy proof">
-            <h2>Privacy proof</h2>
-            <p>{proof.evaluated} frames evaluated, {proof.stored} stored</p>
-            <ul>
-                {reasons.map(([reason, count]) => (
-                    <li key={reason}>{label(reason)}: {count}</li>
-                ))}
-            </ul>
-            <p>{proof.egress_requests} direct network requests from FNDR</p>
-            <p className="pipeline-muted">
+        <section aria-label="Privacy proof" className="pipeline-panel-card">
+            <div className="pipeline-engine-kv">
+                <span>Frames evaluated</span>
+                <strong>{proof.evaluated}</strong>
+                <span>Frames stored</span>
+                <strong>{proof.stored}</strong>
+            </div>
+            <p className="pipeline-egress-summary">
+                {proof.egress_requests} direct network requests from FNDR
+            </p>
+
+            {reasons.length > 0 && (
+                <>
+                    <h4>Skipped before storage</h4>
+                    <ul className="pipeline-skip-reasons">
+                        {reasons.map(([reason, count]) => (
+                            <li key={reason}>
+                                <span>{label(reason)}</span>
+                                <strong>{count}</strong>
+                            </li>
+                        ))}
+                    </ul>
+                </>
+            )}
+
+            {proof.egress_hosts.length > 0 && (
+                <p className="pipeline-egress-hosts">Hosts: {proof.egress_hosts.join(", ")}</p>
+            )}
+
+            <p className="pipeline-muted pipeline-privacy-note">
                 Counts only FNDR's own outbound calls. It does not include model downloads, the Hermes
                 subprocess talking to a configured cloud provider, or network use by allowlisted commands
                 like cargo check or npm run typecheck.
             </p>
-            {proof.egress_hosts.length > 0 && <p>Hosts: {proof.egress_hosts.join(", ")}</p>}
         </section>
     );
 }
