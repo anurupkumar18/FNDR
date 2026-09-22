@@ -470,6 +470,20 @@ impl GraphStore {
         // For now, we omit individual clear in favor of consolidated store management.
         Ok(())
     }
+
+    /// Deletes this memory's own graph node and any edge touching it, so
+    /// deleting a memory does not leave its graph contribution behind
+    /// (MEM-07 invariant 10). Shared nodes it was linked to (its session,
+    /// a visited url) are left in place: other memories may still need
+    /// them, and only the edge from this memory is gone once its node is.
+    pub async fn delete_memory_node(
+        &self,
+        memory_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.store
+            .delete_graph_nodes(&[memory_node_id(memory_id)])
+            .await
+    }
 }
 
 fn trim_label(value: &str, max_chars: usize) -> String {

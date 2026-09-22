@@ -152,14 +152,38 @@ pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> 
     cancel_screen_guide_after_blocklist_change(state.inner());
 
     // 3. Retroactively delete memories with this site if we grabbed it during the alert period
-    if let Err(e) = state.store.delete_memories_by_domain(&site_key).await {
-        tracing::error!(
-            "Failed to retroactively delete memories for blocked site {}: {}",
-            site_key,
-            e
-        );
-    } else {
-        state.invalidate_memory_derived_caches();
+    let deleted_ids: Vec<String> = match state
+        .store
+        .delete_memories_by_domain(&site_key)
+        .await
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())
+    {
+        Err(e) => {
+            tracing::error!(
+                "Failed to retroactively delete memories for blocked site {}: {}",
+                site_key,
+                e
+            );
+            Vec::new()
+        }
+        Ok(deleted_ids) => {
+            state.invalidate_memory_derived_caches();
+            deleted_ids
+        }
+    };
+    for memory_id in &deleted_ids {
+        if let Err(e) = state
+            .graph
+            .delete_memory_node(memory_id)
+            .await
+            .map_err(|e: Box<dyn std::error::Error>| e.to_string())
+        {
+            tracing::warn!(
+                "Failed to delete graph node for retroactively deleted memory {}: {}",
+                memory_id,
+                e
+            );
+        }
     }
 
     emit_privacy_alerts(state.inner());

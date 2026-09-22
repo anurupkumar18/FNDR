@@ -1,28 +1,30 @@
 //! Single-memory Tauri commands.
 
+use crate::graph::GraphStore;
 use crate::memory::reopen::ReopenKind;
+use crate::storage::Store;
 use crate::AppState;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use tauri::State;
 
-#[tauri::command]
-pub async fn delete_memory(
-    state: State<'_, Arc<AppState>>,
-    memory_id: String,
+/// Deletes one memory and everything it owns: the row, its chunks (inside
+/// `Store::delete_memory_by_id`), its screenshot artifact if any, and any
+/// graph nodes/edges it produced (MEM-07 invariant 10 — a deletion must not
+/// leave graph nodes orphaned).
+pub(crate) async fn delete_memory_logic(
+    store: &Store,
+    graph: &GraphStore,
+    memory_id: &str,
 ) -> Result<bool, String> {
-    let existing = state
-        .inner()
-        .store
-        .get_memory_by_id(&memory_id)
+    let existing = store
+        .get_memory_by_id(memory_id)
         .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
-    let deleted = state
-        .inner()
-        .store
-        .delete_memory_by_id(&memory_id)
+    let deleted = store
+        .delete_memory_by_id(memory_id)
         .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
 
@@ -30,17 +32,13 @@ pub async fn delete_memory(
         return Ok(false);
     }
 
-    if let Err(err) =
-        super::todos::apply_memory_deletion_to_tasks(&state.inner().store, &memory_id).await
-    {
+    if let Err(err) = super::todos::apply_memory_deletion_to_tasks(store, memory_id).await {
         tracing::warn!(
             "Task cleanup after deleting memory {} failed: {}",
             memory_id,
             err
         );
     }
-
-    state.invalidate_memory_derived_caches();
 
     if let Some(record) = existing {
         if let Some(path) = record.screenshot_path {
@@ -50,8 +48,29 @@ pub async fn delete_memory(
         }
     }
 
+    if let Err(err) = graph.delete_memory_node(memory_id).await {
+        tracing::warn!(
+            "Failed to delete graph node for memory {}: {}",
+            memory_id,
+            err
+        );
+    }
+
     tracing::info!("Deleted memory record {}", memory_id);
     Ok(true)
+}
+
+#[tauri::command]
+pub async fn delete_memory(
+    state: State<'_, Arc<AppState>>,
+    memory_id: String,
+) -> Result<bool, String> {
+    let deleted =
+        delete_memory_logic(&state.inner().store, &state.inner().graph, &memory_id).await?;
+    if deleted {
+        state.invalidate_memory_derived_caches();
+    }
+    Ok(deleted)
 }
 
 #[tauri::command]
@@ -286,6 +305,81 @@ fn open_app_bundle(bundle_id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn deletable_record(id: &str) -> crate::storage::MemoryRecord {
+        crate::storage::MemoryRecord {
+            id: id.to_string(),
+            timestamp: 1_700_000_000_000,
+            app_name: "Chrome".to_string(),
+            window_title: "Roadmap review".to_string(),
+            session_id: "session-1".to_string(),
+            day_bucket: "2026-09-22".to_string(),
+            clean_text: "Reviewed the quarterly roadmap document with the team".to_string(),
+            snippet: "Reviewed the quarterly roadmap document with the team".to_string(),
+            embedding: vec![0.01; crate::embedding::EMBEDDING_DIM],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_memory_logic_removes_the_memory_graph_node_but_keeps_the_shared_session_node()
+    {
+        // MEM-07 invariant 10: deleting a memory must not leave its own
+        // graph node and edges behind. A session node it shares with other
+        // memories is left alone, since deleting one memory should not sever
+        // another memory's graph connectivity.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let store = tokio::task::spawn_blocking(move || Store::new(&path).unwrap())
+            .await
+            .unwrap();
+        let store = std::sync::Arc::new(store);
+        let graph = GraphStore::new(store.clone());
+
+        let record = deletable_record("mem-1");
+        store.add_batch(&[record.clone()]).await.expect("add memory");
+        graph.ingest_memory(&record).await.expect("ingest into graph");
+
+        let nodes_before = store.get_all_nodes().await.expect("nodes before");
+        assert!(
+            nodes_before.iter().any(|n| n.id == "memory:mem-1"),
+            "expected a memory:mem-1 node before deletion, got {nodes_before:?}"
+        );
+        let session_node_id = nodes_before
+            .iter()
+            .find(|n| n.id != "memory:mem-1")
+            .map(|n| n.id.clone())
+            .expect("a session node should also have been created");
+
+        let deleted = delete_memory_logic(&store, &graph, "mem-1")
+            .await
+            .expect("delete");
+        assert!(deleted);
+
+        assert!(store
+            .get_memory_by_id("mem-1")
+            .await
+            .expect("query")
+            .is_none());
+
+        let nodes_after = store.get_all_nodes().await.expect("nodes after");
+        assert!(
+            !nodes_after.iter().any(|n| n.id == "memory:mem-1"),
+            "memory:mem-1 node should be gone, got {nodes_after:?}"
+        );
+        assert!(
+            nodes_after.iter().any(|n| n.id == session_node_id),
+            "shared session node {session_node_id} should survive, got {nodes_after:?}"
+        );
+
+        let edges_after = store.get_all_edges().await.expect("edges after");
+        assert!(
+            !edges_after
+                .iter()
+                .any(|e| e.source == "memory:mem-1" || e.target == "memory:mem-1"),
+            "no edge should still reference memory:mem-1, got {edges_after:?}"
+        );
+    }
 
     #[test]
     fn resolve_reopen_target_prefers_typed_url() {
