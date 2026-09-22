@@ -37,6 +37,7 @@ password managers during the run. At least two metric lines are required, and
 Stop the app normally, then generate the aggregate-only report:
 
 ```bash
+make capture-baseline-verify METRICS="$FNDR_METRICS_DUMP"
 make capture-baseline \
   METRICS="$FNDR_METRICS_DUMP" \
   OUT=docs/evidence/W03/cap-05-context-baseline.md \
