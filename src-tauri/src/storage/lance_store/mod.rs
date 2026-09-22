@@ -1155,6 +1155,33 @@ impl Store {
         Ok(before.saturating_sub(after))
     }
 
+    /// Delete graph nodes by id, plus any edge that touches one of them.
+    /// Used when a memory is deleted so its graph contribution does not
+    /// outlive it (MEM-07 invariant 10).
+    pub async fn delete_graph_nodes(
+        &self,
+        node_ids: &[String],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if node_ids.is_empty() {
+            return Ok(());
+        }
+        if let Some(filter) = build_string_match_filter("id", node_ids) {
+            self.nodes_table.delete(&filter).await?;
+        }
+        let source_filter = build_string_match_filter("source", node_ids);
+        let target_filter = build_string_match_filter("target", node_ids);
+        let edge_filter = match (source_filter, target_filter) {
+            (Some(s), Some(t)) => Some(format!("({s}) OR ({t})")),
+            (Some(s), None) => Some(s),
+            (None, Some(t)) => Some(t),
+            (None, None) => None,
+        };
+        if let Some(filter) = edge_filter {
+            self.edges_table.delete(&filter).await?;
+        }
+        Ok(())
+    }
+
     pub async fn list_chunks_for_memory(
         &self,
         memory_id: &str,
@@ -1521,10 +1548,12 @@ impl Store {
     }
 
     /// Retroactively delete all memories whose URL or window title matches the blocklist domain
+    /// Returns the ids of the deleted memories, so a caller with access to
+    /// the graph store can also drop their graph nodes (MEM-07 invariant 10).
     pub async fn delete_memories_by_domain(
         &self,
         domain: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let escaped = sql_escape(&domain.to_lowercase());
         let filter = format!(
             "LOWER(window_title) LIKE '%{}%' OR LOWER(url) LIKE '%{}%'",
@@ -1532,10 +1561,10 @@ impl Store {
         );
         let ids = self.memory_ids_for_filter(&filter).await?;
         self.table.delete(&filter).await?;
-        for id in ids {
-            self.delete_chunks_for_memory(&id).await?;
+        for id in &ids {
+            self.delete_chunks_for_memory(id).await?;
         }
-        Ok(())
+        Ok(ids)
     }
 
     /// Return the path to the frames directory (for screenshot eviction).
@@ -2206,6 +2235,25 @@ impl Store {
             .await?;
 
         for batch in &batches {
+            let records = batch_to_memory_records(batch);
+            if let Some(r) = records.into_iter().next() {
+                return Ok(Some(r));
+            }
+        }
+
+        // A frame merged away into another memory keeps its old id in the
+        // survivor's consolidated_from (MEM-07 invariant 8). Fall back to
+        // that so an earlier citation of the now-gone id still resolves.
+        let redirect_batches: Vec<RecordBatch> = self
+            .table
+            .query()
+            .only_if(format!("array_contains(consolidated_from, '{id}')"))
+            .limit(1)
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
+        for batch in &redirect_batches {
             let records = batch_to_memory_records(batch);
             if let Some(r) = records.into_iter().next() {
                 return Ok(Some(r));

@@ -828,3 +828,44 @@ async fn similar_by_image_embedding_returns_empty_for_missing_seed() {
         .expect("similar");
     assert!(hits.is_empty(), "missing seed must yield no neighbors");
 }
+
+#[tokio::test]
+async fn get_memory_by_id_redirects_through_consolidated_from_after_a_merge() {
+    // MEM-07 invariant 8: a frame that got merged away keeps its old id in
+    // the survivor's consolidated_from. get_memory_by_id must still resolve
+    // that old id, so an earlier citation to it doesn't 404.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().to_path_buf();
+    let store = tokio::task::spawn_blocking(move || Store::new(&path).unwrap())
+        .await
+        .unwrap();
+
+    let mut survivor = record(
+        Some("https://example.com/survivor"),
+        "Survivor window",
+        "Body text for the memory that survived the merge",
+    );
+    survivor.id = "survivor-id".to_string();
+    survivor.consolidated_from = vec!["merged-away-id".to_string()];
+    store.add_batch(&[survivor]).await.expect("add survivor");
+
+    let direct = store
+        .get_memory_by_id("survivor-id")
+        .await
+        .expect("query")
+        .expect("direct lookup should still work");
+    assert_eq!(direct.id, "survivor-id");
+
+    let redirected = store
+        .get_memory_by_id("merged-away-id")
+        .await
+        .expect("query")
+        .expect("redirect through consolidated_from should resolve");
+    assert_eq!(redirected.id, "survivor-id");
+
+    let missing = store
+        .get_memory_by_id("never-existed-id")
+        .await
+        .expect("query");
+    assert!(missing.is_none());
+}
