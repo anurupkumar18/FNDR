@@ -1,0 +1,13 @@
+{
+  "session_id": "terminal_test_loop",
+  "frames": [
+    {"frame_id":"terminal-01","story_id":"cargo-test-loop","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"$ cargo test merge_replay\nCompiling fndr capture tests\ntest merge replay baseline ... running"},
+    {"frame_id":"terminal-02","story_id":"cargo-test-loop","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"$ cargo test merge_replay\ntest merge replay baseline ... ok\n1 passed; 0 failed; 0 ignored"},
+    {"frame_id":"terminal-03","story_id":"cargo-test-loop","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"$ python3 scripts/model/test_score_merge.py\nRan 6 tests in 0.002 seconds\nOK"},
+    {"frame_id":"terminal-04","story_id":"cargo-test-loop","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"$ cargo test merge_replay\ntest merge replay baseline ... ok\n1 passed; 0 failed; 0 ignored"},
+    {"frame_id":"terminal-05","story_id":"cargo-test-loop","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"$ python3 scripts/model/score_merge.py .eval-tmp/merge-all.jsonl\nwrote docs/evidence/W03/merge-baseline.md"},
+    {"frame_id":"terminal-06","story_id":"cargo-test-loop","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"$ cargo test merge_replay\ntest merge replay baseline ... ok\n1 passed; 0 failed; 0 ignored"},
+    {"frame_id":"terminal-07","story_id":"cargo-test-loop","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"$ git status --short\nA scripts/model/score_merge.py\nA src-tauri/tests/merge_replay.rs"},
+    {"frame_id":"terminal-08","story_id":"cargo-test-loop","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"$ cargo test merge_replay\ntest merge replay baseline ... ok\n1 passed; 0 failed; 0 ignored"}
+  ]
+}

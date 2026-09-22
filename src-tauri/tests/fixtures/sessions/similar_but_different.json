@@ -1,0 +1,13 @@
+{
+  "session_id": "similar_but_different",
+  "frames": [
+    {"frame_id":"similar-01","story_id":"intern-onboarding","app":"Google Docs","window_title":"Engineering intern onboarding","url":"https://docs.example.test/people/intern-onboarding","evidence":"Team handbook: review the values, record your mentor meeting, and complete the engineering intern onboarding checklist for local development access."},
+    {"frame_id":"similar-02","story_id":"incident-response","app":"Google Docs","window_title":"Incident response runbook","url":"https://docs.example.test/operations/incident-response","evidence":"Team handbook: review the values, page the incident commander, and follow the incident response runbook for production service recovery."},
+    {"frame_id":"similar-03","story_id":"intern-onboarding","app":"Google Docs","window_title":"Engineering intern onboarding","url":"https://docs.example.test/people/intern-onboarding","evidence":"The intern onboarding guide provisions a local development account, introduces the mentor, and schedules codebase orientation sessions."},
+    {"frame_id":"similar-04","story_id":"incident-response","app":"Google Docs","window_title":"Incident response runbook","url":"https://docs.example.test/operations/incident-response","evidence":"The incident response runbook creates a status channel, captures the outage timeline, and coordinates rollback approval with operations."},
+    {"frame_id":"similar-05","story_id":"intern-onboarding","app":"Google Docs","window_title":"Engineering intern onboarding","url":"https://docs.example.test/people/intern-onboarding","evidence":"Intern onboarding ends with a development environment check, a project walkthrough, and a small supervised first contribution."},
+    {"frame_id":"similar-06","story_id":"incident-response","app":"Google Docs","window_title":"Incident response runbook","url":"https://docs.example.test/operations/incident-response","evidence":"Incident response ends with recovery verification, customer communication, and a scheduled blameless review of the service outage."},
+    {"frame_id":"similar-07","story_id":"intern-onboarding","app":"Google Docs","window_title":"Engineering intern onboarding","url":"https://docs.example.test/people/intern-onboarding","evidence":"The onboarding document keeps the shared team handbook introduction but focuses on mentoring, local tools, and learning objectives."},
+    {"frame_id":"similar-08","story_id":"incident-response","app":"Google Docs","window_title":"Incident response runbook","url":"https://docs.example.test/operations/incident-response","evidence":"The runbook keeps the shared team handbook introduction but focuses on alerts, mitigations, and production recovery decisions."}
+  ]
+}

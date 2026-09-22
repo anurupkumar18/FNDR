@@ -1,0 +1,13 @@
+{
+  "session_id": "chat_thread_growth",
+  "frames": [
+    {"frame_id":"chat-01","story_id":"merge-review-thread","app":"Slack","window_title":"#fndr-merge-review","url":"https://chat.example.test/fndr/merge-review","evidence":"Maya: I added a synthetic replay session so the capture merge threshold has a measured baseline before tuning."},
+    {"frame_id":"chat-02","story_id":"merge-review-thread","app":"Slack","window_title":"#fndr-merge-review","url":"https://chat.example.test/fndr/merge-review","evidence":"Maya: I added a synthetic replay session so the capture merge threshold has a measured baseline before tuning. Rowan: Please include false merges because unrelated stories lose context."},
+    {"frame_id":"chat-03","story_id":"merge-review-thread","app":"Slack","window_title":"#fndr-merge-review","url":"https://chat.example.test/fndr/merge-review","evidence":"Rowan: Please include false merges because unrelated stories lose context. Maya: The scorer will also report fragmentation from duplicate stored memories."},
+    {"frame_id":"chat-04","story_id":"merge-review-thread","app":"Slack","window_title":"#fndr-merge-review","url":"https://chat.example.test/fndr/merge-review","evidence":"Maya: The scorer will also report fragmentation from duplicate stored memories. Rowan: Keep the fixture content public or synthetic for privacy."},
+    {"frame_id":"chat-05","story_id":"merge-review-thread","app":"Slack","window_title":"#fndr-merge-review","url":"https://chat.example.test/fndr/merge-review","evidence":"Rowan: Keep the fixture content public or synthetic for privacy. Maya: The replay uses no screen pixels and no user database records."},
+    {"frame_id":"chat-06","story_id":"merge-review-thread","app":"Slack","window_title":"#fndr-merge-review","url":"https://chat.example.test/fndr/merge-review","evidence":"Maya: The replay uses no screen pixels and no user database records. Rowan: That keeps the baseline safe to commit and share."},
+    {"frame_id":"chat-07","story_id":"merge-review-thread","app":"Slack","window_title":"#fndr-merge-review","url":"https://chat.example.test/fndr/merge-review","evidence":"Rowan: That keeps the baseline safe to commit and share. Maya: The integration test writes one scored line for every fixture frame."},
+    {"frame_id":"chat-08","story_id":"merge-review-thread","app":"Slack","window_title":"#fndr-merge-review","url":"https://chat.example.test/fndr/merge-review","evidence":"Maya: The integration test writes one scored line for every fixture frame. Rowan: Good, then future merge decisions can compare against it."}
+  ]
+}

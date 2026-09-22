@@ -4102,6 +4102,37 @@ async fn merge_or_append_memory_record(
     Ok(incoming)
 }
 
+/// Replays a synthetic capture session through FNDR's in-flight merge path.
+///
+/// This intentionally uses the same batch and continuity state as the capture
+/// loop, while keeping the evaluation deterministic when no embedder is
+/// available. It is consumed by the synthetic MEM-04 integration test, not by
+/// an IPC command or the application runtime.
+pub async fn replay_memory_records(
+    state: &AppState,
+    records: &[MemoryRecord],
+) -> Result<Vec<MemoryRecord>, String> {
+    let mut batch = Vec::with_capacity(records.len());
+    let mut continuity_index = HashMap::new();
+    let mut outcomes = Vec::with_capacity(records.len());
+
+    for record in records {
+        outcomes.push(
+            merge_or_append_memory_record(
+                state,
+                &mut batch,
+                &mut continuity_index,
+                record.clone(),
+                None,
+                None,
+            )
+            .await?,
+        );
+    }
+
+    Ok(outcomes)
+}
+
 pub(crate) fn eligible_for_story_merge(record: &MemoryRecord) -> bool {
     record.clean_text.trim().len() >= 36 || record.snippet.trim().len() >= 18
 }

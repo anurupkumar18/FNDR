@@ -1,0 +1,13 @@
+{
+  "session_id": "two_articles_alternating",
+  "frames": [
+    {"frame_id":"articles-01","story_id":"rust-ownership","app":"Google Chrome","window_title":"Rust ownership explained","url":"https://public.example.test/rust/ownership","evidence":"Rust ownership assigns each value one owner and borrowing rules prevent mutable aliases during compiler checks."},
+    {"frame_id":"articles-02","story_id":"city-transit","app":"Google Chrome","window_title":"City transit redesign","url":"https://public.example.test/city/transit","evidence":"The city transit proposal adds a protected bus lane, changes downtown stops, and funds safer pedestrian crossings."},
+    {"frame_id":"articles-03","story_id":"rust-ownership","app":"Google Chrome","window_title":"Rust ownership explained","url":"https://public.example.test/rust/ownership","evidence":"The ownership article describes lifetimes, immutable references, and how the Rust compiler rejects dangling data."},
+    {"frame_id":"articles-04","story_id":"city-transit","app":"Google Chrome","window_title":"City transit redesign","url":"https://public.example.test/city/transit","evidence":"Transit planners estimate faster bus trips after the downtown lane redesign and the public hearing remains open."},
+    {"frame_id":"articles-05","story_id":"rust-ownership","app":"Google Chrome","window_title":"Rust ownership explained","url":"https://public.example.test/rust/ownership","evidence":"Rust moves values by default while references borrow them, which keeps memory safety checks visible in source code."},
+    {"frame_id":"articles-06","story_id":"city-transit","app":"Google Chrome","window_title":"City transit redesign","url":"https://public.example.test/city/transit","evidence":"The transit map moves two stops near the library and preserves late evening service for the medical district."},
+    {"frame_id":"articles-07","story_id":"rust-ownership","app":"Google Chrome","window_title":"Rust ownership explained","url":"https://public.example.test/rust/ownership","evidence":"The Rust guide compares shared references with exclusive mutable references and shows compiler diagnostics for violations."},
+    {"frame_id":"articles-08","story_id":"city-transit","app":"Google Chrome","window_title":"City transit redesign","url":"https://public.example.test/city/transit","evidence":"The proposed transit budget reserves funding for bus shelters, sidewalk access, and signal priority on the new route."}
+  ]
+}

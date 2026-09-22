@@ -1,0 +1,13 @@
+{
+  "session_id": "revisit_same_day",
+  "frames": [
+    {"frame_id":"revisit-01","story_id":"paper-vector-search","app":"Google Chrome","window_title":"Vector search evaluation paper","url":"https://papers.example.test/vector-eval","evidence":"The vector search paper defines recall at ten and compares lexical retrieval with dense embeddings on developer documentation."},
+    {"frame_id":"revisit-02","story_id":"paper-vector-search","app":"Google Chrome","window_title":"Vector search evaluation paper","url":"https://papers.example.test/vector-eval","evidence":"The evaluation paper explains that a held out benchmark avoids tuning retrieval thresholds directly on reported results."},
+    {"frame_id":"revisit-03","story_id":"paper-vector-search","app":"Google Chrome","window_title":"Vector search evaluation paper","url":"https://papers.example.test/vector-eval","evidence":"The paper's methods section measures ranking quality with labeled query and document pairs instead of anecdotal search examples."},
+    {"frame_id":"revisit-04","story_id":"release-checklist","app":"Notion","window_title":"Release checklist","url":"https://notes.example.test/release-checklist","evidence":"The release checklist tracks signed builds, changelog review, smoke tests, and the owner approval needed before publishing."},
+    {"frame_id":"revisit-05","story_id":"release-checklist","app":"Notion","window_title":"Release checklist","url":"https://notes.example.test/release-checklist","evidence":"The checklist records the QA pass, rollback notes, and deployment owner for the next desktop release candidate."},
+    {"frame_id":"revisit-06","story_id":"release-checklist","app":"Notion","window_title":"Release checklist","url":"https://notes.example.test/release-checklist","evidence":"The release note draft links smoke evidence and says no production rollout happens before a human visual check."},
+    {"frame_id":"revisit-07","story_id":"paper-vector-search","app":"Google Chrome","window_title":"Vector search evaluation paper","url":"https://papers.example.test/vector-eval","evidence":"Returning to the vector search paper, the conclusion recommends tracking false positives alongside recall during retrieval changes."},
+    {"frame_id":"revisit-08","story_id":"paper-vector-search","app":"Google Chrome","window_title":"Vector search evaluation paper","url":"https://papers.example.test/vector-eval","evidence":"The vector evaluation appendix documents pairwise labels and a reproducible scoring script for the benchmark corpus."}
+  ]
+}

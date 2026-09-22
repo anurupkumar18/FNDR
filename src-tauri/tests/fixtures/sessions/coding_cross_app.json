@@ -1,0 +1,13 @@
+{
+  "session_id": "coding_cross_app",
+  "frames": [
+    {"frame_id":"coding-01","story_id":"fndr-merge-fix","app":"Cursor","window_title":"capture/mod.rs - fndr","url":null,"evidence":"FNDR capture merge function chooses a continuity anchor before lexical similarity and the new regression covers a batched story."},
+    {"frame_id":"coding-02","story_id":"fndr-merge-fix","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"cargo test capture_merge_regression compiled the FNDR capture module and reported the continuity anchor test passing."},
+    {"frame_id":"coding-03","story_id":"fndr-merge-fix","app":"Cursor","window_title":"capture/mod.rs - fndr","url":null,"evidence":"The merge replay fixture needs a stable memory id for every incoming capture frame in the FNDR capture story."},
+    {"frame_id":"coding-04","story_id":"fndr-merge-fix","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"cargo test merge_replay checks the synthetic FNDR session and writes pairwise scoring input for the merge baseline."},
+    {"frame_id":"coding-05","story_id":"fndr-merge-fix","app":"Cursor","window_title":"capture/mod.rs - fndr","url":null,"evidence":"FNDR batch merge cannot identify editor and terminal views of the same repository change without an explicit shared anchor."},
+    {"frame_id":"coding-06","story_id":"fndr-merge-fix","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"cargo test reports the merge baseline replay remains deterministic without loading an embedding model."},
+    {"frame_id":"coding-07","story_id":"fndr-merge-fix","app":"Cursor","window_title":"capture/mod.rs - fndr","url":null,"evidence":"The FNDR merge helper returns the existing memory record when a later frame continues the same capture story."},
+    {"frame_id":"coding-08","story_id":"fndr-merge-fix","app":"Terminal","window_title":"fndr cargo test","url":null,"evidence":"cargo test finished the FNDR capture merge regression and the replay output is ready for scoring."}
+  ]
+}

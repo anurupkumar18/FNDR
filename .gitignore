@@ -6,6 +6,7 @@ dist/
 .venv/
 __pycache__/
 *.pyc
+.eval-tmp/
 
 # AI Models (large binaries)
 *.gguf
