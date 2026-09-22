@@ -71,6 +71,9 @@ pub use companion::*;
 mod screen_guide;
 pub use screen_guide::*;
 
+// Privacy proof IPC command
+pub use crate::privacy_proof::*;
+
 #[cfg(test)]
 mod daily_summary_tests {
     use crate::embedding::{Embedder, EmbeddingBackend};

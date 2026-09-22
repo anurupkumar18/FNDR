@@ -819,6 +819,11 @@ async fn do_download(
     }
 
     emit_download_log(app, &format!("Sending HTTP GET request to {}...", url));
+    if let Ok(parsed_url) = url.parse::<reqwest::Url>() {
+        if let Some(host) = parsed_url.host_str() {
+            crate::privacy_proof::record_egress(host);
+        }
+    }
     let response = request.send().await.map_err(|e| {
         let msg = format!("HTTP request failed or hung: {}", e);
         emit_download_log(app, &msg);

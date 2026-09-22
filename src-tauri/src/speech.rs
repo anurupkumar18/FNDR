@@ -290,6 +290,11 @@ async fn download_with_resume(
         request = request.header("Range", format!("bytes={}-", resume_from));
     }
 
+    if let Ok(parsed_url) = url.parse::<reqwest::Url>() {
+        if let Some(host) = parsed_url.host_str() {
+            crate::privacy_proof::record_egress(host);
+        }
+    }
     let response = request
         .send()
         .await

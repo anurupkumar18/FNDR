@@ -1324,6 +1324,34 @@ export async function runAgentRequest(
     return invoke<AgentRunResponse>("run_agent_request", { request });
 }
 
+export interface AgentAction {
+    id: string;
+    run_id: string;
+    title: string;
+    description: string;
+    kind: string;
+    status: "proposed" | "needs_approval" | "approved" | "running" | "succeeded" | "failed" | "blocked" | "cancelled";
+    result: { success: boolean; output: string; error: string | null; duration_ms: number } | null;
+}
+
+export async function proposeAgentAction(
+    runId: string,
+    kind: string,
+    riskLevel: AgentRiskLevel,
+    description: string,
+    input: Record<string, unknown>,
+): Promise<AgentAction> {
+    return invoke<AgentAction>("propose_agent_action", { runId, kind, riskLevel, description, input });
+}
+
+export async function approveAgentAction(actionId: string): Promise<AgentAction> {
+    return invoke<AgentAction>("approve_agent_action", { actionId });
+}
+
+export async function executeAgentAction(actionId: string): Promise<AgentAction> {
+    return invoke<AgentAction>("execute_agent_action", { actionId });
+}
+
 export async function listAgentAuditRuns(
     limit = 20,
     mode?: AgentMode | null,

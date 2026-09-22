@@ -204,3 +204,29 @@ pub fn policy_for_action(
         blocked_because: blocked,
     }
 }
+
+#[cfg(test)]
+mod approve_then_act_tests {
+    use super::*;
+
+    #[test]
+    fn a_medium_risk_readonly_command_in_act_mode_requires_approval() {
+        let decision = policy_for_action(
+            &AgentActionKind::RunReadOnlyCommand,
+            &RiskLevel::Medium,
+            &AgentMode::Act,
+        );
+        assert!(decision.allowed);
+        assert!(decision.requires_approval);
+    }
+
+    #[test]
+    fn ask_mode_blocks_every_action_kind() {
+        let decision = policy_for_action(
+            &AgentActionKind::RunReadOnlyCommand,
+            &RiskLevel::Low,
+            &AgentMode::Ask,
+        );
+        assert!(!decision.allowed);
+    }
+}
