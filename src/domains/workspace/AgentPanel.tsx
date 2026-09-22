@@ -9,6 +9,7 @@ import {
     type AgentAuditRecord,
     type AgentEvalCase,
     type AgentSkillCandidate,
+    type AgentAction,
     type RetrievalExplanation,
     type RetrievalFeedbackRating,
     type ContextPack,
@@ -22,6 +23,9 @@ import {
     getAgentAuditRun,
     listRecentContextPacks,
     listAgentAuditRuns,
+    approveAgentAction,
+    executeAgentAction,
+    proposeAgentAction,
     proposeEvalFromRun,
     proposeSkillFromRun,
     quickSetupOllama,
@@ -40,6 +44,16 @@ import {
     type ContextDelta,
 } from "@/shared/ipc/tauri";
 import "./AgentPanel.css";
+
+// Fixed, demo-safe read-only commands. Kept in lockstep with the allowlist in
+// src-tauri/src/agent/execution.rs so nothing proposed here can fail policy.
+// The command and args are always chosen from this list plus the user's own
+// typed goal text; neither is ever derived from screen or capture content.
+const READONLY_COMMAND_OPTIONS: { label: string; command: string; args: string[] }[] = [
+    { label: "git status", command: "git", args: ["status"] },
+    { label: "cargo check", command: "cargo", args: ["check"] },
+    { label: "npm run typecheck", command: "npm", args: ["run", "typecheck"] },
+];
 
 interface AgentPanelProps {
     isVisible: boolean;
@@ -61,6 +75,10 @@ const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 
 function nextConversationId(): string {
     return createClientId("fndr-hermes");
+}
+
+function nextActionRunId(): string {
+    return createClientId("fndr-action");
 }
 
 function isProviderKind(value: string | null | undefined): value is HermesProviderKind {
@@ -163,6 +181,10 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
     const [agentDraftEval, setAgentDraftEval] = useState<AgentEvalCase | null>(null);
     const [agentInspectError, setAgentInspectError] = useState<string | null>(null);
     const [draft, setDraft] = useState("");
+    const [actionGoal, setActionGoal] = useState("");
+    const [actionCommandIndex, setActionCommandIndex] = useState(0);
+    const [proposedAction, setProposedAction] = useState<AgentAction | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
     const [conversationId, setConversationId] = useState(() => nextConversationId());
     const [hasSeededForm, setHasSeededForm] = useState(false);
     const [setupExpanded, setSetupExpanded] = useState(false);
@@ -259,6 +281,10 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
             setAgentDraftSkill(null);
             setAgentDraftEval(null);
             setAgentInspectError(null);
+            setActionGoal("");
+            setActionCommandIndex(0);
+            setProposedAction(null);
+            setActionError(null);
         }
     }, [isVisible]);
 
@@ -387,6 +413,57 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
         }
     };
 
+    const handleProposeAction = async () => {
+        const goal = actionGoal.trim();
+        if (!goal || busyAction === "propose-action") return;
+
+        setBusyAction("propose-action");
+        setActionError(null);
+        try {
+            const option = READONLY_COMMAND_OPTIONS[actionCommandIndex];
+            const action = await proposeAgentAction(
+                nextActionRunId(),
+                "run_read_only_command",
+                "medium",
+                goal,
+                { command: option.command, args: option.args }
+            );
+            setProposedAction(action);
+        } catch (err) {
+            setActionError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setBusyAction(null);
+        }
+    };
+
+    const handleApproveAction = async () => {
+        if (!proposedAction || busyAction === "approve-action") return;
+
+        setBusyAction("approve-action");
+        setActionError(null);
+        try {
+            setProposedAction(await approveAgentAction(proposedAction.id));
+        } catch (err) {
+            setActionError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setBusyAction(null);
+        }
+    };
+
+    const handleExecuteAction = async () => {
+        if (!proposedAction || busyAction === "execute-action") return;
+
+        setBusyAction("execute-action");
+        setActionError(null);
+        try {
+            setProposedAction(await executeAgentAction(proposedAction.id));
+        } catch (err) {
+            setActionError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setBusyAction(null);
+        }
+    };
+
     const handleSelectAuditRun = async (runId: string) => {
         setBusyAction("audit-detail");
         setAgentInspectError(null);
@@ -510,6 +587,11 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
                         agentInspectError={agentInspectError}
                         agentBusy={busyAction === "agent-run"}
                         inspectBusy={busyAction === "audit-detail" || busyAction === "feedback"}
+                        actionGoal=""
+                        actionCommandIndex={0}
+                        proposedAction={null}
+                        actionError={null}
+                        actionBusy={false}
                         onAgentGoalChange={setAgentGoal}
                         onAgentModeChange={() => undefined}
                         onRunAgentMode={handleRunAgentMode}
@@ -517,6 +599,11 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
                         onRateResult={handleRateResult}
                         onProposeSkill={() => undefined}
                         onProposeEval={() => undefined}
+                        onActionGoalChange={() => undefined}
+                        onActionCommandIndexChange={() => undefined}
+                        onProposeAction={() => undefined}
+                        onApproveAction={() => undefined}
+                        onExecuteAction={() => undefined}
                         onStop={() => undefined}
                         onOpenHermes={() => undefined}
                     />
@@ -597,6 +684,11 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
                             agentInspectError={agentInspectError}
                             agentBusy={busyAction === "agent-run"}
                             inspectBusy={busyAction === "audit-detail" || busyAction === "feedback" || busyAction === "skill" || busyAction === "eval"}
+                            actionGoal={actionGoal}
+                            actionCommandIndex={actionCommandIndex}
+                            proposedAction={proposedAction}
+                            actionError={actionError}
+                            actionBusy={busyAction === "propose-action" || busyAction === "approve-action" || busyAction === "execute-action"}
                             onAgentGoalChange={setAgentGoal}
                             onAgentModeChange={setAgentMode}
                             onRunAgentMode={handleRunAgentMode}
@@ -604,6 +696,11 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
                             onRateResult={handleRateResult}
                             onProposeSkill={handleProposeSkill}
                             onProposeEval={handleProposeEval}
+                            onActionGoalChange={setActionGoal}
+                            onActionCommandIndexChange={setActionCommandIndex}
+                            onProposeAction={handleProposeAction}
+                            onApproveAction={handleApproveAction}
+                            onExecuteAction={handleExecuteAction}
                             onStop={() => stopAgent().then(setStatus).catch(console.error)}
                             onOpenHermes={() => setActiveView("hermes")}
                         />
@@ -677,6 +774,11 @@ interface OverviewViewProps {
     agentInspectError: string | null;
     agentBusy: boolean;
     inspectBusy: boolean;
+    actionGoal: string;
+    actionCommandIndex: number;
+    proposedAction: AgentAction | null;
+    actionError: string | null;
+    actionBusy: boolean;
     onAgentGoalChange: (value: string) => void;
     onAgentModeChange: (value: AgentMode) => void;
     onRunAgentMode: () => void;
@@ -684,6 +786,11 @@ interface OverviewViewProps {
     onRateResult: (runId: string, rating: RetrievalFeedbackRating, memoryId?: string) => void;
     onProposeSkill: (runId: string) => void;
     onProposeEval: (runId: string) => void;
+    onActionGoalChange: (value: string) => void;
+    onActionCommandIndexChange: (index: number) => void;
+    onProposeAction: () => void;
+    onApproveAction: () => void;
+    onExecuteAction: () => void;
     onStop: () => void;
     onOpenHermes: () => void;
 }
@@ -708,6 +815,11 @@ function OverviewView({
     agentInspectError,
     agentBusy,
     inspectBusy,
+    actionGoal,
+    actionCommandIndex,
+    proposedAction,
+    actionError,
+    actionBusy,
     onAgentGoalChange,
     onAgentModeChange,
     onRunAgentMode,
@@ -715,6 +827,11 @@ function OverviewView({
     onRateResult,
     onProposeSkill,
     onProposeEval,
+    onActionGoalChange,
+    onActionCommandIndexChange,
+    onProposeAction,
+    onApproveAction,
+    onExecuteAction,
     onStop,
     onOpenHermes,
 }: OverviewViewProps) {
@@ -828,6 +945,78 @@ function OverviewView({
                     </div>
                 )}
             </div>
+
+            {!contextOnly && agentMode === "act" && (
+                <div className="ap-card">
+                    <div className="ap-card-title">Propose an action</div>
+                    <div className="ap-card-subtitle">
+                        Runs one of a fixed set of pre-approved read-only commands, after you approve it.
+                    </div>
+                    <div className="ap-form-grid">
+                        <label className="ap-field ap-field-wide">
+                            <span>Goal</span>
+                            <input
+                                aria-label="Action goal"
+                                value={actionGoal}
+                                onChange={(event) => onActionGoalChange(event.target.value)}
+                                placeholder="Why do you want to run this command?"
+                                disabled={actionBusy}
+                            />
+                        </label>
+                        <label className="ap-field">
+                            <span>Command</span>
+                            <select
+                                aria-label="Read-only command"
+                                value={actionCommandIndex}
+                                onChange={(event) => onActionCommandIndexChange(Number(event.target.value))}
+                                disabled={actionBusy}
+                            >
+                                {READONLY_COMMAND_OPTIONS.map((option, index) => (
+                                    <option key={option.label} value={index}>{option.label}</option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
+                    <div className="ap-inline-actions">
+                        <button
+                            className="ap-btn ap-btn-primary"
+                            disabled={actionBusy || !actionGoal.trim()}
+                            onClick={onProposeAction}
+                        >
+                            Propose
+                        </button>
+                        {proposedAction && (
+                            <button
+                                className="ap-btn"
+                                disabled={actionBusy || proposedAction.status !== "needs_approval"}
+                                onClick={onApproveAction}
+                            >
+                                Approve
+                            </button>
+                        )}
+                        {proposedAction && (
+                            <button
+                                className="ap-btn"
+                                disabled={actionBusy || proposedAction.status !== "approved"}
+                                onClick={onExecuteAction}
+                            >
+                                Run
+                            </button>
+                        )}
+                    </div>
+                    {actionError && <div className="ap-error-box">{actionError}</div>}
+                    {proposedAction && (
+                        <div className="ap-agent-result">
+                            <div className="ap-card-subtitle">{proposedAction.title} · {proposedAction.status}</div>
+                            {proposedAction.result && (
+                                <pre className="ap-evidence-summary">
+                                    {proposedAction.result.output || proposedAction.result.error || ""}
+                                </pre>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
 
             <div className="ap-card">
                 <div className="ap-card-title">{contextOnly ? "Recent context runs" : "Recent agent runs"}</div>
