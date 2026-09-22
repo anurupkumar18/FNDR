@@ -1750,116 +1750,6 @@ fn build_grounded_memory_context(
     }
 }
 
-fn compose_primary_embedding_text(
-    extraction: Option<&StructuredMemoryExtraction>,
-    app_name: &str,
-    window_title: &str,
-    memory_context: &str,
-    display_summary: &str,
-    clean_text: &str,
-    lexical_shadow: &str,
-) -> String {
-    let mut segments = Vec::new();
-    if let Some(mem) = extraction {
-        if !mem.user_intent.trim().is_empty() {
-            segments.push(format!("intent: {}", mem.user_intent.trim()));
-        }
-        if !mem.project.trim().is_empty() {
-            segments.push(format!("project: {}", mem.project.trim()));
-        }
-        if !mem.topic.trim().is_empty() {
-            segments.push(format!("topic: {}", mem.topic.trim()));
-        }
-        if !mem.workflow.trim().is_empty() {
-            segments.push(format!("workflow: {}", mem.workflow.trim()));
-        }
-    }
-    // The durable memory_context is now the strongest single retrieval signal
-    // — promote it ahead of entities/files/results so the embedding tower
-    // anchors on synthesis rather than enumerations.
-    if !memory_context.trim().is_empty() {
-        segments.push(format!("context: {}", memory_context.trim()));
-    }
-    if let Some(mem) = extraction {
-        if !mem.entities.is_empty() {
-            segments.push(format!(
-                "entities: {}",
-                mem.entities
-                    .iter()
-                    .take(8)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        if !mem.files_touched.is_empty() {
-            segments.push(format!(
-                "files: {}",
-                mem.files_touched
-                    .iter()
-                    .take(8)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        if !mem.results.is_empty() {
-            segments.push(format!(
-                "results: {}",
-                mem.results
-                    .iter()
-                    .take(4)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ));
-        }
-        if !mem.decisions.is_empty() {
-            segments.push(format!(
-                "decisions: {}",
-                mem.decisions
-                    .iter()
-                    .take(4)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ));
-        }
-        if !mem.next_steps.is_empty() {
-            segments.push(format!(
-                "next: {}",
-                mem.next_steps
-                    .iter()
-                    .take(4)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ));
-        }
-        if !mem.search_aliases.is_empty() {
-            segments.push(format!(
-                "aliases: {}",
-                mem.search_aliases
-                    .iter()
-                    .take(8)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-    }
-    if !display_summary.trim().is_empty() {
-        segments.push(format!("summary: {}", display_summary.trim()));
-    }
-    segments.push(format!(
-        "app: {} | window: {}",
-        app_name.trim(),
-        window_title.trim()
-    ));
-    let _ = (clean_text, lexical_shadow);
-    segments.join("\n")
-}
-
 fn weighted_primary_embedding(primary: &[f32], snippet: &[f32], support: &[f32]) -> Vec<f32> {
     let dim = primary
         .len()
@@ -5841,45 +5731,6 @@ Activity patterns and insights dashboard
     }
 
     #[test]
-    fn fused_primary_embedding_text_excludes_raw_ocr_excerpt() {
-        let quality = text_cleanup::CaptureQualityStats {
-            total_lines: 8,
-            kept_lines: 8,
-            low_conf_lines: 0,
-            dropped_noise_lines: 0,
-            dropped_low_signal_lines: 0,
-            avg_line_score: 0.72,
-        };
-        let raw = "README.md DESIGN_DIRECTION.md Output Truncation: All tool outputs are truncated to prevent context overflow";
-        let fusion = build_low_ram_semantic_fusion(
-            "Codex",
-            "Push latest changes",
-            None,
-            raw,
-            None,
-            &quality,
-            "ocr",
-        )
-        .expect("fusion should build");
-        let text = compose_primary_embedding_text(
-            Some(&fusion.extraction),
-            "Codex",
-            "Push latest changes",
-            &fusion.extraction.memory_context,
-            "Reviewing README and DESIGN_DIRECTION implementation status.",
-            raw,
-            "Output Truncation noisy raw OCR",
-        );
-
-        assert!(text.contains("intent: reviewing implementation status"));
-        assert!(text.contains("files: README.md, DESIGN_DIRECTION.md"));
-        assert!(text.contains("context: "));
-        assert!(!text.contains("Output Truncation"));
-        assert!(!text.contains("evidence:"));
-        assert!(!text.contains("shadow:"));
-    }
-
-    #[test]
     fn lightweight_entities_extracts_named_tokens() {
         let entities = lightweight_entities_from_text(
             "Screenpipe integrates Obsidian, Apple Intelligence, and Toggl reports.",
@@ -6040,35 +5891,6 @@ Activity patterns and insights dashboard
         assert_eq!(extraction.files_touched.len(), 1);
         assert_eq!(extraction.entities.len(), 1);
         assert_eq!(extraction.dedup_fingerprint, "fndr:ranking:memory_cards");
-    }
-
-    #[test]
-    fn primary_embedding_text_is_structured_first_with_capped_evidence() {
-        let extraction = StructuredMemoryExtraction {
-            user_intent: "Refactor OCR scoring".to_string(),
-            project: "FNDR".to_string(),
-            topic: "capture quality".to_string(),
-            entities: vec!["Apple Vision".to_string()],
-            files_touched: vec!["src-tauri/src/capture/text_cleanup.rs".to_string()],
-            results: vec!["Reduced low-signal capture writes".to_string()],
-            ..Default::default()
-        };
-        let long_text = "evidence ".repeat(120);
-        let text = compose_primary_embedding_text(
-            Some(&extraction),
-            "Codex",
-            "capture/text_cleanup.rs",
-            "Improved OCR cleanup and grounding checks.",
-            "Implemented structured-first embedding context.",
-            &long_text,
-            "ocr cleanup grounding quality",
-        );
-
-        assert!(text.contains("intent: Refactor OCR scoring"));
-        assert!(text.contains("project: FNDR"));
-        assert!(text.contains("files: src-tauri/src/capture/text_cleanup.rs"));
-        assert!(!text.contains("evidence:"));
-        assert!(!text.contains(&"evidence ".repeat(20)));
     }
 
     #[test]

@@ -411,15 +411,14 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
         return normalized;
     }
     crate::memory_insight::derive_insight_for_record(&mut normalized);
-    let canonical_document = compose_memory_embedding_document(&normalized, None);
-    let canonical_embedding_text = strip_low_conf_markers(&canonical_document.primary_text);
+    let mut final_document = compose_memory_embedding_document(&normalized, None);
+    let canonical_embedding_text = strip_low_conf_markers(&final_document.primary_text);
     let embedding_text_mismatch = if normalized.embedding_text.trim().is_empty() {
         normalized.embedding_text = canonical_embedding_text;
         false
     } else {
         normalized.embedding_text.trim() != canonical_embedding_text.trim()
     };
-    let mut final_document = compose_memory_embedding_document(&normalized, None);
     if embedding_text_mismatch {
         // The existing vector was generated from the persisted `embedding_text`;
         // keep the manifest hash tied to that source while flagging the drift.
@@ -777,10 +776,6 @@ pub(super) fn infer_intent_analysis(record: &MemoryRecord) -> crate::storage::In
         supporting_evidence: evidence.get(top.0).cloned().unwrap_or_default(),
         competing_intents: competing,
     }
-}
-
-pub fn compose_embedding_text(record: &MemoryRecord) -> String {
-    crate::memory_insight::compose_insight_embedding_text(record)
 }
 
 /// Source noun-phrase candidates for alias generation from the strongest

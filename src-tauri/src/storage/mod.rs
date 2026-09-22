@@ -5,8 +5,8 @@ pub mod schema;
 mod state_store;
 
 pub use lance_store::{
-    compose_embedding_text, generate_search_aliases_public, normalize_record_for_index,
-    pollution_ratio_score, salience_concentration_score, topic_clarity_score, Store,
+    generate_search_aliases_public, normalize_record_for_index, pollution_ratio_score,
+    salience_concentration_score, topic_clarity_score, Store,
     ACTIVITY_EVENTS_TABLE, CONTEXT_DELTAS_TABLE, CONTEXT_PACKS_TABLE, DECISION_LEDGER_TABLE,
     EDGES_TABLE, ENTITY_ALIASES_TABLE, GRAPH_EDGES_TABLE, GRAPH_NODES_TABLE, KNOWLEDGE_PAGES_TABLE,
     MEETINGS_TABLE, MEMORIES_TABLE, MEMORIES_V5_PARENT_TABLE, MEMORY_CHUNKS_TABLE, NODES_TABLE,
