@@ -1,0 +1,302 @@
+[
+  {
+    "id": "editor-01",
+    "file": "editor-01.png",
+    "app_class": "editor",
+    "bundle_id": "com.microsoft.VSCode",
+    "window_title": "sum.js",
+    "expected_outcome": "store",
+    "expected_text": "function sumPositive(numbers) {\n  let total = 0;\n  for (const n of numbers) {\n    if (n > 0) {\n      total += n;\n    }\n  }\n  return total;\n}",
+    "cer_budget": 0.443
+  },
+  {
+    "id": "editor-02",
+    "file": "editor-02.png",
+    "app_class": "editor",
+    "bundle_id": "com.microsoft.VSCode",
+    "window_title": "greet.py",
+    "expected_outcome": "store",
+    "expected_text": "def greet(name, times=1):\n    \"\"\"Return a friendly greeting repeated `times` times.\"\"\"\n    lines = []\n    for _ in range(times):\n        lines.append(f\"Hello, {name}!\")\n    return \"\\n\".join(lines)",
+    "cer_budget": 0.382
+  },
+  {
+    "id": "editor-03",
+    "file": "editor-03.png",
+    "app_class": "editor",
+    "bundle_id": "com.microsoft.VSCode",
+    "window_title": "clamp.rs",
+    "expected_outcome": "store",
+    "expected_text": "fn clamp_to_range(value: i32, low: i32, high: i32) -> i32 {\n    if value < low {\n        low\n    } else if value > high {\n        high\n    } else {\n        value\n    }\n}",
+    "cer_budget": 0.47
+  },
+  {
+    "id": "editor-04",
+    "file": "editor-04.png",
+    "app_class": "editor",
+    "bundle_id": "com.microsoft.VSCode",
+    "window_title": "config.json",
+    "expected_outcome": "store",
+    "expected_text": "{\n  \"name\": \"fixture-app\",\n  \"version\": \"1.0.0\",\n  \"retries\": 3,\n  \"timeout_ms\": 4000,\n  \"features\": [\"search\", \"sync\"]\n}",
+    "cer_budget": 0.629
+  },
+  {
+    "id": "editor-05",
+    "file": "editor-05.png",
+    "app_class": "editor",
+    "bundle_id": "com.microsoft.VSCode",
+    "window_title": "README.md",
+    "expected_outcome": "store",
+    "expected_text": "# Fixture Project\n\nThis is a small sample project used for testing.\n\n## Usage\n\nRun `make build` then `make test` to verify everything works.",
+    "cer_budget": 0.1
+  },
+  {
+    "id": "terminal-01",
+    "file": "terminal-01.png",
+    "app_class": "terminal",
+    "bundle_id": "com.apple.Terminal",
+    "window_title": "cargo test",
+    "expected_outcome": "store",
+    "expected_text": "$ cargo test\nrunning 12 tests\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured",
+    "cer_budget": 0.129
+  },
+  {
+    "id": "terminal-02",
+    "file": "terminal-02.png",
+    "app_class": "terminal",
+    "bundle_id": "com.apple.Terminal",
+    "window_title": "npm test",
+    "expected_outcome": "store",
+    "expected_text": "$ npm test\nTest Files  8 passed (8)\n     Tests  41 passed (41)\n  Duration  2.14s",
+    "cer_budget": 0.238
+  },
+  {
+    "id": "terminal-03",
+    "file": "terminal-03.png",
+    "app_class": "terminal",
+    "bundle_id": "com.apple.Terminal",
+    "window_title": "pytest",
+    "expected_outcome": "store",
+    "expected_text": "$ pytest\n===== test session starts =====\ncollected 20 items\n20 passed in 1.02s",
+    "cer_budget": 0.217
+  },
+  {
+    "id": "terminal-04",
+    "file": "terminal-04.png",
+    "app_class": "terminal",
+    "bundle_id": "com.apple.Terminal",
+    "window_title": "git status",
+    "expected_outcome": "store",
+    "expected_text": "$ git status\nOn branch main\nChanges not staged for commit:\n  modified:   src/lib.rs",
+    "cer_budget": 0.158
+  },
+  {
+    "id": "terminal-05",
+    "file": "terminal-05.png",
+    "app_class": "terminal",
+    "bundle_id": "com.apple.Terminal",
+    "window_title": "go test",
+    "expected_outcome": "store",
+    "expected_text": "$ go test ./...\nok      example.com/fixture/pkg   0.412s\nPASS",
+    "cer_budget": 0.591
+  },
+  {
+    "id": "browser_article-01",
+    "file": "browser_article-01.png",
+    "app_class": "browser_article",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Getting Started",
+    "expected_outcome": "store",
+    "expected_text": "Getting Started\n\nInstall the package, then run the setup command. Configuration lives in a single file at the project root.",
+    "cer_budget": 0.326
+  },
+  {
+    "id": "browser_article-02",
+    "file": "browser_article-02.png",
+    "app_class": "browser_article",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "API Reference",
+    "expected_outcome": "store",
+    "expected_text": "API Reference\n\nThe search endpoint accepts a query string and returns a ranked list of matching records with scores.",
+    "cer_budget": 0.317
+  },
+  {
+    "id": "browser_article-03",
+    "file": "browser_article-03.png",
+    "app_class": "browser_article",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Frequently Asked Questions",
+    "expected_outcome": "store",
+    "expected_text": "FAQ\n\nIf a build fails, clear the local cache and try again. Most failures come from a stale dependency lock file.",
+    "cer_budget": 0.112
+  },
+  {
+    "id": "browser_article-04",
+    "file": "browser_article-04.png",
+    "app_class": "browser_article",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Changelog",
+    "expected_outcome": "store",
+    "expected_text": "Changelog\n\nThe latest release adds faster search indexing and repairs a memory leak in the background worker.",
+    "cer_budget": 0.233
+  },
+  {
+    "id": "browser_article-05",
+    "file": "browser_article-05.png",
+    "app_class": "browser_article",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Installation Guide",
+    "expected_outcome": "store",
+    "expected_text": "Installation Guide\n\nDownload the archive, extract it, and add the binary to your shell path before running the first command.",
+    "cer_budget": 0.338
+  },
+  {
+    "id": "chat_mock-01",
+    "file": "chat_mock-01.png",
+    "app_class": "chat_mock",
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "window_title": "Team Standup",
+    "expected_outcome": "store",
+    "expected_text": "Priya: Finished the export bug fix, opening a PR now.\nSam: Nice, I will review it after lunch.",
+    "cer_budget": 0.178
+  },
+  {
+    "id": "chat_mock-02",
+    "file": "chat_mock-02.png",
+    "app_class": "chat_mock",
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "window_title": "Support",
+    "expected_outcome": "store",
+    "expected_text": "Customer: My export keeps failing on large files.\nAgent: Can you tell me the file size and format?",
+    "cer_budget": 0.223
+  },
+  {
+    "id": "chat_mock-03",
+    "file": "chat_mock-03.png",
+    "app_class": "chat_mock",
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "window_title": "Weekend Plans",
+    "expected_outcome": "store",
+    "expected_text": "Jo: Hiking Saturday morning if the weather holds.\nAli: Count me in, what time are we starting?",
+    "cer_budget": 0.156
+  },
+  {
+    "id": "chat_mock-04",
+    "file": "chat_mock-04.png",
+    "app_class": "chat_mock",
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "window_title": "Project Planning",
+    "expected_outcome": "store",
+    "expected_text": "Dana: Let us lock the scope by Friday.\nChris: Agreed, I will draft the ticket list tonight.",
+    "cer_budget": 0.193
+  },
+  {
+    "id": "chat_mock-05",
+    "file": "chat_mock-05.png",
+    "app_class": "chat_mock",
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "window_title": "Family",
+    "expected_outcome": "store",
+    "expected_text": "Mom: Dinner is at seven, don't be late.\nKai: On my way, traffic is light tonight.",
+    "cer_budget": 0.198
+  },
+  {
+    "id": "pdf_paper-01",
+    "file": "pdf_paper-01.png",
+    "app_class": "pdf_paper",
+    "bundle_id": "com.apple.Preview",
+    "window_title": "Abstract",
+    "expected_outcome": "store",
+    "expected_text": "Abstract\n\nThis paper presents a method for ranking search results using a combination of lexical and semantic signals.",
+    "cer_budget": 0.058
+  },
+  {
+    "id": "pdf_paper-02",
+    "file": "pdf_paper-02.png",
+    "app_class": "pdf_paper",
+    "bundle_id": "com.apple.Preview",
+    "window_title": "Introduction",
+    "expected_outcome": "store",
+    "expected_text": "1. Introduction\n\nPrior work has treated keyword and vector search as separate systems. We propose fusing both signals before ranking.",
+    "cer_budget": 0.073
+  },
+  {
+    "id": "pdf_paper-03",
+    "file": "pdf_paper-03.png",
+    "app_class": "pdf_paper",
+    "bundle_id": "com.apple.Preview",
+    "window_title": "Methods",
+    "expected_outcome": "store",
+    "expected_text": "2. Methods\n\nWe compute a lexical score and a semantic score for each candidate, then combine them with a weighted sum before reranking.",
+    "cer_budget": 0.065
+  },
+  {
+    "id": "pdf_paper-04",
+    "file": "pdf_paper-04.png",
+    "app_class": "pdf_paper",
+    "bundle_id": "com.apple.Preview",
+    "window_title": "Results",
+    "expected_outcome": "store",
+    "expected_text": "3. Results\n\nThe fused ranking improves top five accuracy by twelve percent over either signal used alone on our held out evaluation set.",
+    "cer_budget": 0.175
+  },
+  {
+    "id": "pdf_paper-05",
+    "file": "pdf_paper-05.png",
+    "app_class": "pdf_paper",
+    "bundle_id": "com.apple.Preview",
+    "window_title": "References",
+    "expected_outcome": "store",
+    "expected_text": "References\n\n[1] Example Author. A Study of Retrieval Methods. Journal of Fixture Research, 2024.",
+    "cer_budget": 0.06
+  },
+  {
+    "id": "privacy-bank",
+    "file": "privacy-bank.png",
+    "app_class": "privacy_negative",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Example Bank - Sign in",
+    "expected_outcome": "skip:blocklist",
+    "expected_text": "",
+    "cer_budget": 1.0
+  },
+  {
+    "id": "privacy-password-manager",
+    "file": "privacy-password-manager.png",
+    "app_class": "privacy_negative",
+    "bundle_id": "com.agilebits.onepassword7",
+    "window_title": "1Password mini",
+    "expected_outcome": "skip:blocklist",
+    "expected_text": "",
+    "cer_budget": 1.0
+  },
+  {
+    "id": "privacy-private-browsing",
+    "file": "privacy-private-browsing.png",
+    "app_class": "privacy_negative",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Incognito - New Tab",
+    "expected_outcome": "skip:blocklist",
+    "expected_text": "",
+    "cer_budget": 1.0
+  },
+  {
+    "id": "privacy-secure-input",
+    "file": "privacy-secure-input.png",
+    "app_class": "privacy_negative",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Account Login - Secure",
+    "expected_outcome": "skip:blocklist",
+    "expected_text": "",
+    "cer_budget": 1.0
+  },
+  {
+    "id": "privacy-fndr-window",
+    "file": "privacy-fndr-window.png",
+    "app_class": "privacy_negative",
+    "bundle_id": "com.fndr.app",
+    "window_title": "FNDR",
+    "expected_outcome": "skip:self_app",
+    "expected_text": "",
+    "cer_budget": 1.0
+  }
+]
