@@ -350,7 +350,7 @@ async fn download_with_resume(
 pub fn resolve_sidecar(script_name: &str) -> Option<PathBuf> {
     let packaged = std::env::current_exe().ok().and_then(|exe| {
         exe.parent()
-            .map(|dir| dir.join("../Resources/sidecar").join(script_name))
+            .map(|dir| dir.join("../Resources/sidecars").join(script_name))
     });
     if let Some(path) = packaged {
         if path.exists() {
@@ -359,7 +359,7 @@ pub fn resolve_sidecar(script_name: &str) -> Option<PathBuf> {
     }
 
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("sidecar")
+        .join("sidecars")
         .join(script_name);
     dev.exists().then_some(dev)
 }
