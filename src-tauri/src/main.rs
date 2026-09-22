@@ -648,6 +648,17 @@ fn main() {
                 );
             }
 
+            // Pre-create the notch HUD (hidden) and register its toggle.
+            ipc::commands::create_notch_hud_window(app.handle());
+            if let Err(err) = ipc::commands::register_notch_hud_shortcut(app.handle()) {
+                tracing::warn!("Notch HUD shortcut registration failed: {err}");
+            } else {
+                tracing::info!(
+                    "Notch HUD global shortcut registered: {}",
+                    ipc::commands::NOTCH_HUD_SHORTCUT
+                );
+            }
+
             if let Err(err) = ipc::commands::register_screen_guide_shortcut(
                 app.handle(),
                 &state.config.read().screen_guide.clone(),
@@ -817,6 +828,13 @@ fn main() {
             // Omnibar
             ipc::commands::dismiss_omnibar,
             ipc::commands::omnibar_open_memory,
+            // Notch HUD
+            ipc::commands::get_notch_hud_geometry,
+            ipc::commands::set_notch_hud_hit_rect,
+            ipc::commands::set_notch_hud_keyboard,
+            ipc::commands::dismiss_notch_hud,
+            ipc::commands::toggle_notch_hud,
+            ipc::commands::notch_hud_open_memory,
             // Screen Guide
             ipc::commands::get_screen_guide_settings,
             ipc::commands::set_screen_guide_settings,
