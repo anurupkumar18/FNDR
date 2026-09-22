@@ -22,7 +22,7 @@ Use this index to find the right document quickly. **Authoritative agent vocabul
 | [`decisions/`](decisions/) | Architecture decision records (ADRs), numbered filenames; ADR-015: v1 is the product, v2 is a knowledge source |
 | [`architecture/`](architecture/) | Long-form architecture + insight graph schema (`graph-schema.md`) |
 | [`setup/engineering/`](setup/engineering/) | Implementation guides (timeline rules, repo layout, refactoring notes, agent tooling) |
-| [`product/`](product/) | Product-level technical notes (e.g. intelligence engine) |
+| [`product/`](product/) | Product-level technical notes, incl. the intelligence engine (`intelligence-engine.md`) |
 | [`agents/`](agents/) | Reserved for agent/MCP-oriented runbooks (add as needed) |
 | Frontend source layout | [`../src/domains/README.md`](../src/domains/README.md) |
 
