@@ -1496,6 +1496,8 @@ export interface RuntimeAggregateSnapshot {
     max_ms: number;
     avg_ms: number;
     ewma_ms: number;
+    p50_ms: number;
+    p95_ms: number;
 }
 
 export interface RuntimeRecentSnapshot {

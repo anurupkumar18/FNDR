@@ -259,6 +259,8 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
                                     <th>Operation</th>
                                     <th>n</th>
                                     <th>ewma ms</th>
+                                    <th>p50 ms</th>
+                                    <th>p95 ms</th>
                                     <th>max ms</th>
                                     <th>avg ms</th>
                                 </tr>
@@ -275,6 +277,8 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
                                                 </td>
                                                 <td>{row.n}</td>
                                                 <td>{row.ewma_ms.toFixed(1)}</td>
+                                                <td>{row.p50_ms}</td>
+                                                <td>{row.p95_ms}</td>
                                                 <td>{row.max_ms}</td>
                                                 <td>{row.avg_ms.toFixed(1)}</td>
                                             </tr>

@@ -2110,9 +2110,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         state.capture_stats.record_evaluated();
 
         // Get active application info
+        let context_started = Instant::now();
         let app_context = macos::get_frontmost_app_info();
         let app_name = app_context.app_name.clone();
         let window_title = app_context.window_title.clone();
+        runtime_metrics::since_ms("capture.context_ms", context_started);
 
         // A missing text embedder blocks the frame instead of letting
         // zero-vector memory rows reach storage; periodic re-init lets capture
@@ -2146,7 +2148,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let force_capture =
             last_forced_capture.elapsed().as_secs() >= config.forced_capture_interval;
 
+        let url_started = Instant::now();
         let url = macos::get_browser_url(&app_name);
+        runtime_metrics::since_ms("capture.context_ms", url_started);
         if let Some(ref u) = url {
             tracing::info!("Frontmost browser URL: {}", u);
         }
@@ -2363,7 +2367,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
+        let pixels_started = Instant::now();
         let capture_result = macos::capture_screen();
+        runtime_metrics::since_ms("capture.pixels_ms", pixels_started);
         let image_data = match capture_result {
             Ok(data) => data,
             Err(e) => {
@@ -2391,7 +2397,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         }
 
         // Deduplication check
+        let dedupe_started = Instant::now();
         let is_duplicate = hasher.is_duplicate(&image_data, config.dedupe_threshold);
+        runtime_metrics::since_ms("capture.dedupe_ms", dedupe_started);
 
         if is_duplicate && !force_capture {
             state.frames_dropped.fetch_add(1, Ordering::Relaxed);
@@ -2466,6 +2474,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     high_signal.stats.kept_lines.max(1),
                 )
             } else {
+                let ocr_stage_started = Instant::now();
                 let (ocr_result, qwen_cleaned) = match ocr.recognize_with_metadata(&image_data) {
                     Ok(result) => result,
                     Err(e) => {
@@ -2477,6 +2486,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         continue;
                     }
                 };
+                runtime_metrics::since_ms("capture.ocr_ms", ocr_stage_started);
                 // DEBUG: Log OCR pipeline filtering to diagnose zero-confidence issues
                 tracing::debug!(
                     "OCR raw result [{}]: confidence={:.3}, blocks={}, text_len={}, stats={{kept_lines={}, dropped={}, low_conf={}}}",
@@ -2489,7 +2499,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     ocr_result.ocr_stats.low_conf_count
                 );
                 source_low_signal = ocr_result.is_low_signal(config.min_text_length);
+                let cleanup_started = Instant::now();
                 let high_signal = extract_ocr_text(&app_name, &ocr_result);
+                runtime_metrics::since_ms("capture.cleanup_ms", cleanup_started);
                 (
                     high_signal.text.clone(),
                     qwen_cleaned,
@@ -2529,7 +2541,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     // visual-narrative path: VLM + BGE batch + (lookups).
                     // Same invariant as the OCR pipeline above.
                     let _visual_guard = state.model_pipeline_lock.lock().await;
-                    match compose_visual_capture_record(
+                    let semantic_started = Instant::now();
+                    let visual_compose_result = compose_visual_capture_record(
                         state.as_ref(),
                         text_embedder.as_ref(),
                         &mut embedding_memo,
@@ -2545,8 +2558,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         observed_block_count,
                         novelty,
                     )
-                    .await
-                    {
+                    .await;
+                    runtime_metrics::since_ms("capture.semantic_ms", semantic_started);
+                    match visual_compose_result {
                         Ok(record) => {
                             visual_tracker.admit(
                                 image_vec,
@@ -3304,6 +3318,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &embedding_inputs,
         );
         let embed_latency = embed_start.elapsed();
+        runtime_metrics::since_ms("capture.embed_ms", embed_start);
         let primary_embedding = embedding_vectors
             .first()
             .cloned()
@@ -3760,7 +3775,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         };
         let incoming_record_id = record.id.clone();
         let batch_size_before = batch.len();
-        let merged_or_new = match merge_or_append_memory_record(
+        let merge_started = Instant::now();
+        let merge_result = merge_or_append_memory_record(
             state.as_ref(),
             &mut batch,
             &mut continuity_index,
@@ -3768,8 +3784,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             text_embedder.as_ref(),
             engine.as_ref(),
         )
-        .await
-        {
+        .await;
+        runtime_metrics::since_ms("capture.merge_ms", merge_started);
+        let merged_or_new = match merge_result {
             Ok(merged) => {
                 let batch_size_after = batch.len();
                 if batch_size_after > batch_size_before {
