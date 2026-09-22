@@ -43,6 +43,11 @@ pub async fn post_json_response(
     body: &serde_json::Value,
     bearer_token: Option<&str>,
 ) -> Result<(reqwest::StatusCode, serde_json::Value), String> {
+    if let Ok(parsed_url) = url.parse::<reqwest::Url>() {
+        if let Some(host) = parsed_url.host_str() {
+            crate::privacy_proof::record_egress(host);
+        }
+    }
     let mut req = client.post(url).json(body);
     if let Some(token) = bearer_token {
         req = req.bearer_auth(token);
