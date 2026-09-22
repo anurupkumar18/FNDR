@@ -156,6 +156,16 @@ fn propose_action_logic(
     description: &str,
     input: serde_json::Value,
 ) -> Result<AgentAction, String> {
+    // Policy inputs are otherwise entirely caller-supplied: RunReadOnlyCommand at Low risk
+    // skips approval by policy design (see policy_for_action), so any caller that sends
+    // Low here would bypass the human approval step for the one action kind we execute
+    // today. The frontend always sends Medium; enforce that server-side too so nothing
+    // else can quietly propose it at Low. A real fix derives risk server-side from
+    // (kind, input) instead of trusting the caller; that is bigger work, tracked
+    // separately, and out of scope for this narrow gap-closer.
+    if matches!(kind, AgentActionKind::RunReadOnlyCommand) && risk_level != RiskLevel::Medium {
+        return Err("RunReadOnlyCommand must be proposed at Medium risk".to_string());
+    }
     let decision = policy_for_action(&kind, &risk_level, &AgentMode::Act);
     if !decision.allowed {
         return Err(decision.blocked_because.unwrap_or(decision.reason));
@@ -303,5 +313,23 @@ mod action_lifecycle_tests {
         .unwrap();
         let result = execute_action_logic(dir.path(), &action.id).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_read_only_command_at_low_risk_is_rejected_before_policy_runs() {
+        let dir = tempdir().unwrap();
+        let result = propose_action_logic(
+            dir.path(),
+            "run-3",
+            AgentActionKind::RunReadOnlyCommand,
+            RiskLevel::Low,
+            "Check repo status",
+            serde_json::json!({"command": "git", "args": ["status"]}),
+        );
+        assert!(
+            result.is_err(),
+            "RunReadOnlyCommand at Low risk must not be proposable; it would be \
+             auto-approved with no human step"
+        );
     }
 }

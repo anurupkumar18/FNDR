@@ -58,7 +58,8 @@ export type PanelKey =
     | "timeTracking"
     | "focusMode"
     | "screenGuide"
-    | "engineMetrics";
+    | "engineMetrics"
+    | "privacyProof";
 
 // Alpha mode deliberately exposes only the evidence-bearing paths. The full
 // registry remains intact for later milestones; this list is the single source
@@ -73,6 +74,7 @@ export const DEMO_COMMAND_IDS = [
     "wrapped",
     "screen-guide",
     "engine-metrics",
+    "privacy-proof",
     "pause-capture",
     "resume-capture",
 ] as const;
@@ -188,6 +190,14 @@ const COMMANDS: Command[] = [
         category: "navigate",
         keywords: ["metrics", "performance", "latency", "p50", "p95", "pipeline"],
         run: ({ onOpenPanel }) => onOpenPanel("engineMetrics"),
+    },
+    {
+        id: "privacy-proof",
+        label: "Privacy Proof",
+        description: "Evidence that sensitive content never entered storage",
+        category: "navigate",
+        keywords: ["privacy", "proof", "egress", "skip", "blocklist"],
+        run: ({ onOpenPanel }) => onOpenPanel("privacyProof"),
     },
     {
         id: "todo",

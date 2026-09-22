@@ -62,6 +62,7 @@ const SIDEBAR_GROUPS = [
         items: [
             { key: "screenGuide", text: "Screen Guide" },
             { key: "engineMetrics", text: "Engine Metrics" },
+            { key: "privacyProof", text: "Privacy Proof" },
         ],
     },
 ] as const satisfies ReadonlyArray<{

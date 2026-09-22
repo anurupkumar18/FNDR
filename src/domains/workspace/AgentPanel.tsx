@@ -55,6 +55,32 @@ const READONLY_COMMAND_OPTIONS: { label: string; command: string; args: string[]
     { label: "npm run typecheck", command: "npm", args: ["run", "typecheck"] },
 ];
 
+// Statuses where an action is still awaiting approval or execution. While a
+// proposed action sits in one of these, the command dropdown must stay
+// disabled so the visible selection can never drift from what was actually
+// proposed and stored server-side.
+const PENDING_ACTION_STATUSES: ReadonlySet<AgentAction["status"]> = new Set([
+    "proposed",
+    "needs_approval",
+    "approved",
+    "running",
+]);
+
+function isActionPending(action: AgentAction | null): boolean {
+    return action !== null && PENDING_ACTION_STATUSES.has(action.status);
+}
+
+/** The command actually stored on the proposed action, read from its own
+ *  `input` field rather than the (possibly since-changed) dropdown state. */
+function formatProposedCommand(action: AgentAction): string {
+    const { command, args } = action.input;
+    if (typeof command !== "string") {
+        return "(unknown command)";
+    }
+    const argList = Array.isArray(args) ? args.filter((arg): arg is string => typeof arg === "string") : [];
+    return [command, ...argList].join(" ");
+}
+
 interface AgentPanelProps {
     isVisible: boolean;
     onClose: () => void;
@@ -969,7 +995,7 @@ function OverviewView({
                                 aria-label="Read-only command"
                                 value={actionCommandIndex}
                                 onChange={(event) => onActionCommandIndexChange(Number(event.target.value))}
-                                disabled={actionBusy}
+                                disabled={actionBusy || isActionPending(proposedAction)}
                             >
                                 {READONLY_COMMAND_OPTIONS.map((option, index) => (
                                     <option key={option.label} value={index}>{option.label}</option>
@@ -1008,6 +1034,9 @@ function OverviewView({
                     {proposedAction && (
                         <div className="ap-agent-result">
                             <div className="ap-card-subtitle">{proposedAction.title} · {proposedAction.status}</div>
+                            <div className="ap-card-subtitle">
+                                Proposed command: <code>{formatProposedCommand(proposedAction)}</code>
+                            </div>
                             {proposedAction.result && (
                                 <pre className="ap-evidence-summary">
                                     {proposedAction.result.output || proposedAction.result.error || ""}
