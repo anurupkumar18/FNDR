@@ -2038,9 +2038,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let force_capture =
             last_forced_capture.elapsed().as_secs() >= config.forced_capture_interval;
 
-        let url_started = Instant::now();
-        let url = macos::get_browser_url(&app_name);
-        runtime_metrics::since_ms("capture.context_ms", url_started);
+        let url = app_context.browser_url.clone();
         if let Some(ref u) = url {
             tracing::info!("Frontmost browser URL: {}", u);
         }

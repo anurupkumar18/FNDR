@@ -541,6 +541,67 @@ pub fn has_accessibility_permission() -> bool {
     unsafe { AXIsProcessTrusted() }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FocusedWindowSnapshot {
+    pub title: Option<String>,
+    pub document_url: Option<String>,
+}
+
+/// Read the active window title and document URL without launching a helper process.
+/// An expected process ID prevents a stale Accessibility focus target from being used.
+pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<FocusedWindowSnapshot> {
+    if !has_accessibility_permission() {
+        return None;
+    }
+
+    unsafe {
+        let system_el = AXUIElementCreateSystemWide();
+        if system_el.is_null() {
+            return None;
+        }
+        let focused_app = match ax_copy_attr_value(system_el, "AXFocusedApplication") {
+            Ok(focused_app) => focused_app,
+            Err(_) => {
+                CFRelease(system_el);
+                return None;
+            }
+        };
+        CFRelease(system_el);
+        if focused_app.is_null() {
+            return None;
+        }
+
+        let mut pid: PidT = 0;
+        let pid_matches = AXUIElementGetPid(focused_app, &mut pid) == K_AX_ERROR_SUCCESS
+            && pid > 0
+            && expected_pid.map_or(true, |expected| expected == pid);
+        if !pid_matches {
+            CFRelease(focused_app);
+            return None;
+        }
+
+        let (window_title, window_document_url) =
+            ax_copy_attr_value(focused_app, "AXFocusedWindow")
+                .ok()
+                .map(|window| {
+                    let title = ax_string_attr(window, "AXTitle");
+                    let document_url = ax_string_attr(window, "AXDocument");
+                    CFRelease(window);
+                    (title, document_url)
+                })
+                .unwrap_or_default();
+        let title = window_title.or_else(|| ax_string_attr(focused_app, "AXTitle"));
+        let document_url =
+            window_document_url.or_else(|| ax_string_attr(focused_app, "AXDocument"));
+        CFRelease(focused_app);
+
+        Some(FocusedWindowSnapshot {
+            title,
+            document_url,
+        })
+    }
+}
+
 /// Capture the focused input field's context from the currently frontmost application.
 /// Stores the target PID for later use by `inject_text`.
 ///

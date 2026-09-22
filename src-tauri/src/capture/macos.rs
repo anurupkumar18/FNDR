@@ -4,12 +4,8 @@
 
 use image::ImageEncoder;
 use objc2_app_kit::NSWorkspace;
-use std::io::Read;
-use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-
-const PRIVACY_LOOKUP_TIMEOUT: Duration = Duration::from_millis(900);
 
 #[derive(Debug, Clone)]
 pub struct FrontmostAppContext {
@@ -17,6 +13,7 @@ pub struct FrontmostAppContext {
     pub bundle_id: Option<String>,
     pub window_title: String,
     pub window_title_verified: bool,
+    pub browser_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -26,8 +23,6 @@ struct ScriptCacheEntry {
     cached_at: Instant,
 }
 
-static WINDOW_TITLE_CACHE: OnceLock<Mutex<Option<ScriptCacheEntry>>> = OnceLock::new();
-static URL_CACHE: OnceLock<Mutex<Option<ScriptCacheEntry>>> = OnceLock::new();
 static BROWSER_SEMANTIC_CACHE: OnceLock<Mutex<Option<ScriptCacheEntry>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Default)]
@@ -178,15 +173,15 @@ fn image_to_png(image: &core_graphics::image::CGImage) -> Result<Vec<u8>, String
 
 /// Get information about the frontmost application
 pub fn get_frontmost_app_info() -> FrontmostAppContext {
-    get_frontmost_app_info_with_cache(true)
+    read_frontmost_app_info()
 }
 
 /// Get uncached app/window context for privacy-sensitive capture decisions.
 pub fn get_frontmost_app_info_fresh() -> FrontmostAppContext {
-    get_frontmost_app_info_with_cache(false)
+    read_frontmost_app_info()
 }
 
-fn get_frontmost_app_info_with_cache(allow_cache: bool) -> FrontmostAppContext {
+fn read_frontmost_app_info() -> FrontmostAppContext {
     unsafe {
         let workspace = NSWorkspace::sharedWorkspace();
         let app = workspace.frontmostApplication();
@@ -202,139 +197,49 @@ fn get_frontmost_app_info_with_cache(allow_cache: bool) -> FrontmostAppContext {
             .and_then(|a| a.bundleIdentifier())
             .map(|s| s.to_string());
 
-        let verified_window_title = get_front_window_title(&app_name, allow_cache);
-        let window_title_verified = verified_window_title.is_some();
-        let window_title = verified_window_title
-            .or_else(|| bundle_id.clone())
-            .unwrap_or_default();
+        let app_pid = app.as_ref().map(|a| a.processIdentifier());
+        let native_window = crate::accessibility::focused_window_snapshot(app_pid);
+        let native_title = native_window
+            .as_ref()
+            .and_then(|window| window.title.as_deref());
+        let window_title_verified = native_title.is_some_and(|title| !title.trim().is_empty());
+        let window_title = resolve_window_title(native_title, bundle_id.as_deref());
+        let browser_url = is_browser_app(&app_name)
+            .then(|| {
+                normalize_browser_document_url(
+                    native_window
+                        .as_ref()
+                        .and_then(|window| window.document_url.as_deref()),
+                )
+            })
+            .flatten();
 
         FrontmostAppContext {
             app_name,
             bundle_id,
             window_title,
             window_title_verified,
+            browser_url,
         }
     }
 }
 
-/// Best-effort active window title via AppleScript (requires Accessibility permissions for generic fallback).
-fn get_front_window_title(app_name: &str, allow_cache: bool) -> Option<String> {
-    if let Some(cached) = privacy_sensitive_cache_hit(
-        allow_cache,
-        cache_get(&WINDOW_TITLE_CACHE, app_name, Duration::from_millis(900)),
-    ) {
-        return Some(cached);
-    }
-
-    let app_lower = app_name.to_lowercase();
-    let script = if app_lower.contains("safari") {
-        r#"tell application "Safari" to get name of current tab of front window"#
-    } else if app_lower.contains("chrome") {
-        r#"tell application "Google Chrome" to get title of active tab of front window"#
-    } else if app_lower.contains("arc") {
-        r#"tell application "Arc" to get title of active tab of front window"#
-    } else if app_lower.contains("brave") {
-        r#"tell application "Brave Browser" to get title of active tab of front window"#
-    } else if app_lower.contains("edge") {
-        r#"tell application "Microsoft Edge" to get title of active tab of front window"#
-    } else {
-        r#"tell application "System Events"
-                tell (first process whose frontmost is true)
-                    if (count of windows) > 0 then
-                        return name of front window
-                    end if
-                end tell
-            end tell"#
-    };
-
-    let result = run_bounded_osascript(script).filter(|title| !title.is_empty());
-
-    cache_put(&WINDOW_TITLE_CACHE, app_name, result.clone());
-    result
+fn resolve_window_title(native_title: Option<&str>, bundle_id: Option<&str>) -> String {
+    native_title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .or(bundle_id)
+        .unwrap_or_default()
+        .to_string()
 }
 
-/// Get the current URL from the frontmost browser window using AppleScript
-pub fn get_browser_url(app_name: &str) -> Option<String> {
-    get_browser_url_with_cache(app_name, true)
-}
-
-/// Get an uncached browser URL for privacy-sensitive capture decisions.
-pub fn get_browser_url_fresh(app_name: &str) -> Option<String> {
-    get_browser_url_with_cache(app_name, false)
+fn normalize_browser_document_url(document_url: Option<&str>) -> Option<String> {
+    let url = document_url?.trim();
+    (url.starts_with("http://") || url.starts_with("https://")).then(|| url.to_string())
 }
 
 pub fn is_browser_app(app_name: &str) -> bool {
     super::admission::is_browser_app(app_name)
-}
-
-fn get_browser_url_with_cache(app_name: &str, allow_cache: bool) -> Option<String> {
-    if let Some(cached) = privacy_sensitive_cache_hit(
-        allow_cache,
-        cache_get(&URL_CACHE, app_name, Duration::from_millis(1200)),
-    ) {
-        return Some(cached);
-    }
-
-    let app_lower = app_name.to_lowercase();
-
-    let script = if app_lower.contains("safari") {
-        r#"tell application "Safari" to get URL of current tab of front window"#
-    } else if app_lower.contains("chrome") {
-        r#"tell application "Google Chrome" to get URL of active tab of front window"#
-    } else if app_lower.contains("firefox") {
-        // Firefox doesn't support AppleScript well, try via UI scripting
-        return None;
-    } else if app_lower.contains("arc") {
-        r#"tell application "Arc" to get URL of active tab of front window"#
-    } else if app_lower.contains("brave") {
-        r#"tell application "Brave Browser" to get URL of active tab of front window"#
-    } else if app_lower.contains("edge") {
-        r#"tell application "Microsoft Edge" to get URL of active tab of front window"#
-    } else {
-        cache_put(&URL_CACHE, app_name, None);
-        return None;
-    };
-
-    // Run osascript to get the URL
-    let result = run_bounded_osascript(script)
-        .filter(|url| url.starts_with("http://") || url.starts_with("https://"));
-
-    cache_put(&URL_CACHE, app_name, result.clone());
-    result
-}
-
-fn privacy_sensitive_cache_hit(allow_cache: bool, cached: Option<String>) -> Option<String> {
-    allow_cache.then_some(cached).flatten()
-}
-
-fn run_bounded_osascript(script: &str) -> Option<String> {
-    let mut child = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let deadline = Instant::now() + PRIVACY_LOOKUP_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Ok(None) | Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    };
-    if !status.success() {
-        return None;
-    }
-    let mut output = String::new();
-    child.stdout.take()?.read_to_string(&mut output).ok()?;
-    Some(output.trim().to_string())
 }
 
 pub fn get_browser_semantic_content(app_name: &str) -> Option<BrowserSemanticContent> {
@@ -650,22 +555,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn privacy_sensitive_lookup_never_accepts_a_cached_value() {
-        let stale = Some("https://allowed.example".to_string());
-
-        assert_eq!(privacy_sensitive_cache_hit(false, stale.clone()), None);
-        assert_eq!(
-            privacy_sensitive_cache_hit(true, stale),
-            Some("https://allowed.example".to_string())
-        );
-    }
-
-    #[test]
     fn privacy_sensitive_browser_detection_includes_unsupported_firefox() {
         assert!(is_browser_app("Firefox"));
         assert!(is_browser_app("Opera"));
         assert!(is_browser_app("Google Chrome"));
         assert!(!is_browser_app("Finder"));
+    }
+
+    #[test]
+    fn native_window_title_prefers_accessibility_and_falls_back_to_bundle_id() {
+        assert_eq!(
+            resolve_window_title(Some("  FNDR architecture  "), Some("com.google.Chrome")),
+            "FNDR architecture"
+        );
+        assert_eq!(
+            resolve_window_title(Some("   "), Some("com.apple.finder")),
+            "com.apple.finder"
+        );
+    }
+
+    #[test]
+    fn native_document_url_keeps_only_http_urls() {
+        assert_eq!(
+            normalize_browser_document_url(Some(" https://docs.example.com/fndr ")),
+            Some("https://docs.example.com/fndr".to_string())
+        );
+        assert_eq!(
+            normalize_browser_document_url(Some("file:///private/tmp")),
+            None
+        );
+        assert_eq!(normalize_browser_document_url(None), None);
     }
 
     #[test]

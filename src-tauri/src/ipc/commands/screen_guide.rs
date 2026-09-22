@@ -1411,7 +1411,7 @@ pub async fn ask_screen_guide(
     }
 
     let blocklist = state.inner().config.read().blocklist.clone();
-    let url = crate::capture::macos::get_browser_url_fresh(&context.app_name);
+    let url = context.browser_url.clone();
     if let Some(err) = screen_guide_context_verification_error(&context, url.as_deref()) {
         restore_screen_guide_capture_if_owned(
             &app,
@@ -1473,8 +1473,7 @@ pub async fn ask_screen_guide(
         return Err(err);
     }
     let post_capture_context = crate::capture::macos::get_frontmost_app_info_fresh();
-    let post_capture_url =
-        crate::capture::macos::get_browser_url_fresh(&post_capture_context.app_name);
+    let post_capture_url = post_capture_context.browser_url.clone();
     let post_capture_display = screen_guide_main_display_signature(&app).ok();
     let post_capture_blocklist = state.inner().config.read().blocklist.clone();
     if !screen_guide_context_can_be_captured(
@@ -1835,7 +1834,7 @@ async fn screen_guide_cue_is_fresh<R: tauri::Runtime>(
     cue: &ScreenGuidePointCue,
 ) -> bool {
     let current_context = crate::capture::macos::get_frontmost_app_info_fresh();
-    let current_url = crate::capture::macos::get_browser_url_fresh(&current_context.app_name);
+    let current_url = current_context.browser_url.clone();
     let blocklist = state.config.read().blocklist.clone();
     if !screen_guide_context_can_be_captured(&current_context, current_url.as_deref(), &blocklist) {
         return false;
@@ -1870,7 +1869,7 @@ async fn screen_guide_cue_is_fresh<R: tauri::Runtime>(
 
     let cue_capture = {
         let capture_context = crate::capture::macos::get_frontmost_app_info_fresh();
-        let capture_url = crate::capture::macos::get_browser_url_fresh(&capture_context.app_name);
+        let capture_url = capture_context.browser_url.clone();
         let capture_blocklist = state.config.read().blocklist.clone();
         let capture_display = screen_guide_main_display_signature(app).ok();
         let target_is_safe = capture_display
@@ -1934,7 +1933,7 @@ async fn screen_guide_cue_is_fresh<R: tauri::Runtime>(
     // Apply the same fresh privacy/context checks immediately after capture.
     // The bytes stay in memory and are discarded if anything changed.
     let post_context = crate::capture::macos::get_frontmost_app_info_fresh();
-    let post_url = crate::capture::macos::get_browser_url_fresh(&post_context.app_name);
+    let post_url = post_context.browser_url.clone();
     let post_blocklist = state.config.read().blocklist.clone();
     let Ok(post_display) = screen_guide_main_display_signature(app) else {
         return false;
@@ -3266,6 +3265,7 @@ mod tests {
             bundle_id: Some("com.apple.Safari".to_string()),
             window_title: "Account settings".to_string(),
             window_title_verified: true,
+            browser_url: None,
         };
         let display = ScreenGuideDisplaySignature {
             x: 0,
@@ -3390,6 +3390,7 @@ mod tests {
             bundle_id: Some("com.apple.Terminal".to_string()),
             window_title: "shell".to_string(),
             window_title_verified: true,
+            browser_url: None,
         };
 
         assert!(screen_guide_ocr_is_allowed(
@@ -3413,6 +3414,7 @@ mod tests {
             bundle_id: Some("com.apple.Notes".to_string()),
             window_title: "com.apple.Notes".to_string(),
             window_title_verified: false,
+            browser_url: None,
         };
 
         let error = screen_guide_context_verification_error(&context, None)
@@ -3429,6 +3431,7 @@ mod tests {
             bundle_id: Some("org.mozilla.firefox".to_string()),
             window_title: "Example".to_string(),
             window_title_verified: true,
+            browser_url: None,
         };
 
         let error = screen_guide_context_verification_error(&context, None)
