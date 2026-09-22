@@ -25,7 +25,7 @@ use crate::search::HybridSearcher;
 use crate::AppState;
 use axum::{
     extract::{ConnectInfo, OriginalUri, State},
-    http::{header, HeaderMap, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -46,7 +46,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 // ---------------------------------------------------------------------------
 // Public status type (returned to Tauri frontend)
@@ -147,7 +147,7 @@ impl McpDeploymentMode {
     }
 
     fn default_require_auth(self) -> bool {
-        !matches!(self, McpDeploymentMode::Local)
+        true
     }
 
     fn default_loopback_auth_bypass(self) -> bool {
@@ -660,6 +660,14 @@ pub async fn start(
         public_sse_endpoint.as_deref(),
     );
 
+    // Only origins the owner explicitly allowed get CORS headers; a request with no
+    // Origin header (curl, Claude Code, any non-browser client) is never subject to
+    // CORS at all, so this only affects whether a web page's JS can read the response.
+    let cors_allowed_origins: Vec<HeaderValue> = allowed_origins
+        .iter()
+        .filter_map(|origin| HeaderValue::from_str(origin).ok())
+        .collect();
+
     let server_state = Arc::new(HttpState {
         app_state,
         token: tok.clone(),
@@ -672,7 +680,7 @@ pub async fn start(
     });
 
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(AllowOrigin::list(cors_allowed_origins))
         .allow_methods(Any)
         .allow_headers(Any);
 
@@ -904,13 +912,10 @@ fn with_path(base: &str, path: &str) -> String {
 }
 
 fn is_origin_allowed(
-    mode: McpDeploymentMode,
+    _mode: McpDeploymentMode,
     headers: &HeaderMap,
     allowed_origins: &[String],
 ) -> bool {
-    if matches!(mode, McpDeploymentMode::Local) {
-        return true;
-    }
     let origin = headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok());
@@ -5104,7 +5109,66 @@ mod tests {
     }
 
     #[test]
-    fn localhost_initialize_tools_list_and_call_work_without_auth() {
+    fn mcp_rejects_unauthenticated_tool_call_in_default_local_mode() {
+        let mode = McpDeploymentMode::Local;
+        let peer: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+        let require = mode.default_require_auth();
+        let bypass = mode.default_loopback_auth_bypass();
+        assert!(require, "Local mode must require auth by default");
+        assert!(!should_bypass_http_auth(
+            peer,
+            bypass,
+            require,
+            Some("tools/call")
+        ));
+        // The handshake stays open so clients can discover the server.
+        assert!(should_bypass_http_auth(
+            peer,
+            bypass,
+            require,
+            Some("initialize")
+        ));
+        assert!(should_bypass_http_auth(
+            peer,
+            bypass,
+            require,
+            Some("tools/list")
+        ));
+        // A non-loopback peer never bypasses.
+        let remote: SocketAddr = "192.168.1.20:50000".parse().unwrap();
+        assert!(!should_bypass_http_auth(
+            remote,
+            bypass,
+            require,
+            Some("initialize")
+        ));
+    }
+
+    #[test]
+    fn mcp_rejects_web_origin_in_local_mode() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://evil.example"),
+        );
+        assert!(!is_origin_allowed(McpDeploymentMode::Local, &headers, &[]));
+        // CLI clients such as Claude Code send no Origin header and stay allowed.
+        assert!(is_origin_allowed(
+            McpDeploymentMode::Local,
+            &HeaderMap::new(),
+            &[]
+        ));
+        // An origin the owner explicitly allowed passes.
+        let allowed = vec!["https://evil.example".to_string()];
+        assert!(is_origin_allowed(
+            McpDeploymentMode::Local,
+            &headers,
+            &allowed
+        ));
+    }
+
+    #[test]
+    fn localhost_handshake_bypasses_auth_but_tools_call_requires_token() {
         std::env::remove_var("FNDR_MCP_REQUIRE_AUTH");
         let app_state = build_test_app_state();
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -5153,7 +5217,9 @@ mod tests {
             assert_eq!(tools_list_body["jsonrpc"], "2.0");
             assert!(tools_list_body["result"]["tools"].is_array());
 
-            let tool_call = client
+            // SEC-01: tools/call is not a handshake method, so it must require a token
+            // by default now, even from localhost.
+            let unauthenticated_call = client
                 .post(&status.endpoint)
                 .header("Content-Type", "application/json")
                 .json(&json!({
@@ -5167,9 +5233,30 @@ mod tests {
                 }))
                 .send()
                 .await
-                .expect("tools/call request");
-            assert_eq!(tool_call.status(), reqwest::StatusCode::OK);
-            let tool_call_body: Value = tool_call.json().await.expect("tools/call json");
+                .expect("unauthenticated tools/call request");
+            assert_eq!(
+                unauthenticated_call.status(),
+                reqwest::StatusCode::UNAUTHORIZED
+            );
+
+            let authenticated_call = client
+                .post(&status.endpoint)
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {}", status.token))
+                .json(&json!({
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "fndr_health_check",
+                        "arguments": {}
+                    }
+                }))
+                .send()
+                .await
+                .expect("authenticated tools/call request");
+            assert_eq!(authenticated_call.status(), reqwest::StatusCode::OK);
+            let tool_call_body: Value = authenticated_call.json().await.expect("tools/call json");
             assert_eq!(tool_call_body["jsonrpc"], "2.0");
             assert!(tool_call_body["result"]["structuredContent"]["health"].is_object());
 
