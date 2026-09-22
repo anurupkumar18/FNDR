@@ -1,4 +1,4 @@
-.PHONY: demo install dev test rust-test diagnostic reset-lancedb clean-dev-cache clean-all-generated clean-dev-cache-dry-run capture-baseline
+.PHONY: demo install dev test rust-test diagnostic reset-lancedb clean-dev-cache clean-all-generated clean-dev-cache-dry-run capture-baseline phase-progress
 
 install:
 	npm install
@@ -33,3 +33,6 @@ clean-dev-cache-dry-run:
 capture-baseline:
 	@test -n "$(METRICS)" || (echo "usage: make capture-baseline METRICS=/path/m.ndjson OUT=docs/evidence/W01/capture-baseline.md" && exit 1)
 	python3 scripts/bench/summarize_metrics.py "$(METRICS)" --out "$(OUT)" --machine "$$(sysctl -n machdep.cpu.brand_string), $$(( $$(sysctl -n hw.memsize) / 1073741824 )) GB" --build release
+
+phase-progress:
+	python3 scripts/team/phase_progress.py --manifest docs/superpowers/plans/2026-09-21-beta-final-master-plan.md --api

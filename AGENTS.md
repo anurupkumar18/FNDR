@@ -8,13 +8,7 @@ FNDR is a macOS desktop app: local screen-context memory, search, meetings, task
 
 ## Repo map for agents
 
-- Shared vocabulary and pointers: `docs/CONTEXT.md` (stub at repo root: `CONTEXT.md`)
-- Documentation index: `docs/README.md`
-- Architecture decisions: `docs/decisions/`
-- Design direction: `docs/product/DESIGN_DIRECTION.md`
-- UI domains: `src/domains/` (see `src/domains/README.md`)
-- Insight graph schema (Lance): `docs/architecture/graph-schema.md`
-- Product technical notes: `docs/product/`
+Full documentation index: `docs/README.md`. Domain vocabulary: `docs/CONTEXT.md`.
 
 ## Verification (after meaningful edits)
 
@@ -29,14 +23,7 @@ Run the **cheapest relevant** checks and say what you ran. Default full sweep fr
 - Add or extend tests at stable boundaries where behavior is observable.
 - Debug with evidence (repro, narrowing, hypotheses), not guesses.
 - If something is unclear after inspection, ask targeted questions instead of assuming.
-
-## Anti-bloat gate (before adding code)
-
-Answer honestly:
-
-> Can this be solved by deleting code, reusing an existing module, tightening an interface, adding a test, or improving a name instead of adding a new layer?
-
-If yes, do that first.
+- Anti-bloat gate before adding code: can this be solved by deleting code, reusing an existing module, tightening an interface, adding a test, or improving a name instead of adding a new layer? If yes, do that first.
 
 ## Portable skills (always on)
 
@@ -60,11 +47,7 @@ All workflows live under **`.agent-skills/portable-engineering/`** (plain Markdo
 | Challenge your own plan | `.agent-skills/portable-engineering/productivity/grill-me/SKILL.md` |
 | Write a new portable skill | `.agent-skills/portable-engineering/productivity/write-a-skill/SKILL.md` |
 
-When multiple rows apply, order matters: **zoom-out → grill-with-docs → to-prd / to-issues → tdd** for new work; **diagnose** supersedes generic implementation patterns for defects; **handoff** when stopping mid-flight.
-
-### Offline / single-file reference
-
-If the environment cannot open the tree, use `.agent-skills/portable-engineering/ALL_SKILLS_COMBINED.md` (same content as the individual `SKILL.md` files).
+When multiple rows apply, order matters: **zoom-out → grill-with-docs → to-prd / to-issues → tdd** for new work; **diagnose** supersedes generic implementation patterns for defects; **handoff** when stopping mid-flight. If the environment cannot open the tree, use `ALL_SKILLS_COMBINED.md` in the same folder as a single-file fallback.
 
 ## Privacy and data safety
 

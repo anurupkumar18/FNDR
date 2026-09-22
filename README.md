@@ -169,7 +169,7 @@ FNDR includes an MCP server with:
 
 - Transport endpoints for streamable HTTP and legacy SSE compatibility
 - Deployment modes: `local`, `tunnel`, `public`
-- Optional TLS + bearer auth + allowed-origin controls
+- Optional TLS, plus bearer auth (required by default in every mode, including `local`, per ADR-017) and allowed-origin controls
 - Memory + agent tool surfaces (`memory.*`, `fndr.*`, `agent.*`)
 
 Key environment variables:

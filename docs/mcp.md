@@ -57,13 +57,15 @@ Each prompt tells the external agent to call FNDR tools first, cite evidence, re
 Defaults:
 
 - local-first
+- **auth required by default in every mode, including `local`** (ADR-017): every `tools/call` needs `Authorization: Bearer <token>`, where `<token>` is read from `~/.fndr/mcp_token`. Only the `initialize` and `tools/list` handshake from a loopback peer is exempt, so a client can discover the server before authenticating.
+- a request carrying an `Origin` header is refused unless that origin is explicitly listed in `FNDR_MCP_ALLOWED_ORIGINS`; requests with no `Origin` header (CLI clients such as Claude Code) are unaffected
 - read-only Agent mode
 - raw evidence excluded
 - sensitive contexts redacted or excluded
 - blocklist enforced before agent context exposure
 - dangerous actions approval-gated or blocked
 
-Remote/tunnel mode must use bearer auth and strict origin rules. Do not expose MCP publicly without auth.
+Set `FNDR_MCP_REQUIRE_AUTH=0` to opt back into the old no-auth-on-localhost behavior for local development; this is not recommended since any local process or web page that finds the port would regain full access. Remote/tunnel/public modes must use bearer auth and strict origin rules regardless. Do not expose MCP publicly without auth.
 
 ## Example Tool Calls
 
