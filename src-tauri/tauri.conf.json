@@ -47,7 +47,8 @@
             "target/hermes-agent-bundle/": "hermes-agent/",
             "sidecars/parakeet_runner.py": "sidecars/parakeet_runner.py",
             "sidecars/whisper_gguf_runner.py": "sidecars/whisper_gguf_runner.py",
-            "sidecars/orpheus_tts_runner.py": "sidecars/orpheus_tts_runner.py"
+            "sidecars/orpheus_tts_runner.py": "sidecars/orpheus_tts_runner.py",
+            "sidecars/laya_decide_runner.py": "sidecars/laya_decide_runner.py"
         },
         "icon": [
             "icons/icon.png",
