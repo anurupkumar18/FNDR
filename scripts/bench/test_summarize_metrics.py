@@ -15,6 +15,7 @@ def row(ts_ms, cpu, rss_mb, evaluated, stored, skipped, skips):
             "aggregates": {
                 "capture.ocr_ms": {"n": 10, "avg_ms": 41.5, "p50_ms": 40, "p95_ms": 88, "max_ms": 120},
                 "capture.flush_ms": {"n": 3, "avg_ms": 5.0, "p50_ms": 5, "p95_ms": 6, "max_ms": 6},
+                "capture.context_ms": {"n": 10, "avg_ms": 45.0, "p50_ms": 42, "p95_ms": 80, "max_ms": 95},
                 "mem.embed_ms": {"n": 4, "avg_ms": 90.0, "p50_ms": 88, "p95_ms": 140, "max_ms": 150},
                 "embedding.other_ms": {"n": 1, "avg_ms": 1.0, "p50_ms": 1, "p95_ms": 1, "max_ms": 1},
             },
@@ -53,6 +54,14 @@ class SummarizeTests(unittest.TestCase):
         self.assertIn("Unexplained drops: 0", text)
         self.assertIn("| perceptual_dup | 10 | 50.0 percent |", text)
         self.assertNotIn("| blocklist | 0 |", text)
+
+    def test_report_includes_cap_05_before_after_when_requested(self):
+        rows = [row(0, 1.0, 400, 1, 1, 0, {}), row(60000, 1.0, 410, 2, 2, 0, {})]
+        text = sm.summarize(rows, "Apple M1, 8 GB", "debug", before_context_p95=915)
+        self.assertIn("## CAP-05 context lookup comparison", text)
+        self.assertIn("| AppleScript baseline | 915 |", text)
+        self.assertIn("| Accessibility result | 80 |", text)
+        self.assertIn("| Change | -835 |", text)
 
     def test_unexplained_drops_are_surfaced(self):
         rows = [row(0, 1.0, 400, 10, 2, 3, {}), row(60000, 1.0, 400, 10, 2, 3, {})]

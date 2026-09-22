@@ -31,7 +31,7 @@ def load(path):
     return rows
 
 
-def summarize(rows, machine, build):
+def summarize(rows, machine, build, before_context_p95=None):
     if not rows:
         raise ValueError("no samples in input")
     first = rows[0]["snapshot"]
@@ -73,6 +73,18 @@ def summarize(rows, machine, build):
         lines.append(
             f"| {op} | {a['n']} | {a['avg_ms']:.1f} | {a['p50_ms']} | {a['p95_ms']} | {a['max_ms']} |"
         )
+    if before_context_p95 is not None and (after := stages.get("capture.context_ms")):
+        after_p95 = after["p95_ms"]
+        lines += [
+            "",
+            "## CAP-05 context lookup comparison",
+            "",
+            "| Measurement | capture.context_ms p95 (ms) |",
+            "|---|---:|",
+            f"| AppleScript baseline | {before_context_p95} |",
+            f"| Accessibility result | {after_p95} |",
+            f"| Change | {after_p95 - before_context_p95:+} |",
+        ]
     lines += ["", "## Skip reasons", "", "| Reason | Count | Share of evaluated |", "|---|---|---|"]
     evaluated = max(totals["evaluated"], 1)
     for reason, count in sorted(skips.items(), key=lambda kv: -kv[1]):
@@ -92,8 +104,9 @@ def main(argv):
     parser.add_argument("--out", required=True)
     parser.add_argument("--machine", default="unknown")
     parser.add_argument("--build", default="release")
+    parser.add_argument("--before-context-p95", type=int)
     args = parser.parse_args(argv)
-    report = summarize(load(args.input), args.machine, args.build)
+    report = summarize(load(args.input), args.machine, args.build, args.before_context_p95)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(report)
     print(f"wrote {args.out}")
