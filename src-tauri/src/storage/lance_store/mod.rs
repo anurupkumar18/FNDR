@@ -166,8 +166,8 @@ use schemas::*;
 use text_kw::*;
 
 pub use normalize_embed_migrate::{
-    compose_embedding_text, generate_search_aliases_public, normalize_record_for_index,
-    pollution_ratio_score, salience_concentration_score, topic_clarity_score,
+    generate_search_aliases_public, normalize_record_for_index, pollution_ratio_score,
+    salience_concentration_score, topic_clarity_score,
 };
 
 impl Store {

@@ -15,14 +15,15 @@
 //!    scrubbing fails we fall back to a deterministic non-narrated summary.
 //! 3. **Insight** — `derive_insight_for_record` is re-run on the merged
 //!    record so insight columns track the upgraded structured fields.
-//! 4. **Embeddings** — `compose_embedding_text` regenerates the canonical
+//! 4. **Embeddings** — the canonical embedding document regenerates the
 //!    embedding text and the v4 MiniLM 384 vectors are recomputed from it.
 //!    V5 BGE 1024 chunks are not touched here; that surface is owned by the
 //!    explicit `reindex_memories_v5` path.
 
 use crate::embedding::Embedder;
+use crate::memory_embedding_document::compose_memory_embedding_document;
 use crate::memory_insight::derive_insight_for_record;
-use crate::storage::{compose_embedding_text, MemoryRecord, Store};
+use crate::storage::{MemoryRecord, Store};
 use crate::summariser::narration_filter::clean_or_fallback_display_summary;
 use futures::future::BoxFuture;
 
@@ -302,7 +303,7 @@ pub async fn review_one_memory_with_mode(
 
     derive_insight_for_record(&mut record);
 
-    record.embedding_text = compose_embedding_text(&record);
+    record.embedding_text = compose_memory_embedding_document(&record, None).primary_text;
     if let Some(embedder) = embedder {
         match embedder.embed_batch(&[record.embedding_text.clone()]) {
             Ok(vectors) => {
@@ -818,7 +819,11 @@ mod tests {
         assert_eq!(written.reviewer_generation, 1);
         assert_eq!(written.synthesis_branch, SYNTHESIS_BRANCH_REVIEWED_LOCAL);
         assert!(written.memory_context.contains("chunk-first"));
-        assert!(!written.embedding_text.is_empty());
+        assert_eq!(
+            written.embedding_text,
+            crate::memory_embedding_document::compose_memory_embedding_document(&written, None)
+                .primary_text
+        );
     }
 
     #[tokio::test]

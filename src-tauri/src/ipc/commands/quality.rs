@@ -2,6 +2,7 @@
 
 use super::common::truncate_chars;
 use crate::context_runtime;
+use crate::memory_embedding_document::compose_memory_embedding_document;
 use crate::memory_quality::{
     classify_storage_outcome, is_low_evidence_visual_fallback_record,
     quality_gate_reason as shared_quality_gate_reason,
@@ -324,10 +325,6 @@ fn is_vague_memory_context(value: &str) -> bool {
     vague_markers
         .iter()
         .any(|marker| normalized.contains(marker))
-}
-
-fn compose_rebuild_embedding_text(record: &MemoryRecord) -> String {
-    crate::memory_insight::compose_insight_embedding_text(record)
 }
 
 fn regenerate_search_aliases_basic(record: &MemoryRecord) -> Vec<String> {
@@ -843,7 +840,7 @@ pub async fn rebuild_memory_context_for_range(
         rebuilt.insight_spans_json.clear();
         rebuilt.insight_card_confidence = 0.0;
         crate::memory_insight::derive_insight_for_record(&mut rebuilt);
-        rebuilt.embedding_text = compose_rebuild_embedding_text(&rebuilt);
+        rebuilt.embedding_text = compose_memory_embedding_document(&rebuilt, None).primary_text;
         rebuilt.search_aliases = regenerate_search_aliases_basic(&rebuilt);
         if rebuilt.raw_evidence.trim().is_empty() {
             rebuilt.raw_evidence = serde_json::json!({
@@ -1069,7 +1066,7 @@ pub async fn backfill_insight_layers_for_range(
         rebuilt.insight_spans_json.clear();
         rebuilt.insight_card_confidence = 0.0;
         crate::memory_insight::derive_insight_for_record(&mut rebuilt);
-        rebuilt.embedding_text = compose_rebuild_embedding_text(&rebuilt);
+        rebuilt.embedding_text = compose_memory_embedding_document(&rebuilt, None).primary_text;
         rebuilt.search_aliases = regenerate_search_aliases_basic(&rebuilt);
         if rebuilt.insight_what_happened != before.insight_what_happened
             || rebuilt.embedding_text != before.embedding_text
