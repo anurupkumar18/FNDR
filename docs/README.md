@@ -6,6 +6,7 @@ Use this index to find the right document quickly. **Authoritative agent vocabul
 
 | Document | Purpose |
 | --- | --- |
+| [`team/TEAM.md`](team/TEAM.md) | Team guide: what we build, what to do now, definition of done |
 | [`CONTEXT.md`](../CONTEXT.md) | Product terms, where truth lives, default quality bar |
 | [`architecture/ARCHITECTURE.md`](architecture/ARCHITECTURE.md) | Capture → search → UI pipeline and core Rust modules |
 | [`product/DESIGN_DIRECTION.md`](product/DESIGN_DIRECTION.md) | UX and visual direction |
