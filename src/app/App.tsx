@@ -59,7 +59,10 @@ const SIDEBAR_GROUPS = [
     },
     {
         label: "Assist",
-        items: [{ key: "screenGuide", text: "Screen Guide" }],
+        items: [
+            { key: "screenGuide", text: "Screen Guide" },
+            { key: "engineMetrics", text: "Engine Metrics" },
+        ],
     },
 ] as const satisfies ReadonlyArray<{
     label: string;

@@ -7,6 +7,7 @@ import { DailySummaryPanel } from "@/domains/workspace/DailySummaryPanel";
 import { FndrWrappedPanel } from "@/domains/workspace/FndrWrappedPanel";
 import { StatsPanel } from "@/domains/workspace/StatsPanel";
 import { TodoPanel } from "@/domains/workspace/TodoPanel";
+import { EngineMetricsPanel } from "@/domains/workspace/EngineMetricsPanel";
 import { AppToasts } from "./AppToasts";
 import { PanelErrorBoundary } from "./PanelErrorBoundary";
 import type { AppToast } from "./types";
@@ -35,7 +36,7 @@ interface AppPanelsProps {
 }
 
 /** Alpha demo surface: Vault, Search & Ask, daily reflection, Stats, To-dos,
- *  Wrapped, and Screen Guide.
+ *  Wrapped, Screen Guide, and Engine Metrics.
  *  Hidden rank-2 panels stay compiled under src/domains but are not mounted. */
 export function AppPanels({
     activePanel,
@@ -91,6 +92,9 @@ export function AppPanels({
             </PanelErrorBoundary>
             <PanelErrorBoundary panelName="Screen Guide">
                 <ScreenGuidePanel isVisible={activePanel === "screenGuide"} onClose={onClosePanel} />
+            </PanelErrorBoundary>
+            <PanelErrorBoundary panelName="Engine Metrics">
+                <EngineMetricsPanel isVisible={activePanel === "engineMetrics"} onClose={onClosePanel} />
             </PanelErrorBoundary>
             <CommandPalette
                 isOpen={showCommandPalette}

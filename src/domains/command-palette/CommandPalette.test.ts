@@ -12,10 +12,11 @@ describe("demo command palette", () => {
             "todo",
             "wrapped",
             "screen-guide",
+            "engine-metrics",
             "pause-capture",
             "resume-capture",
         ]);
-        expect(isDemoCommand("engine-metrics")).toBe(false);
+        expect(isDemoCommand("engine-metrics")).toBe(true);
         expect(isDemoCommand("local-context")).toBe(false);
         expect(isDemoCommand("automation")).toBe(false);
     });

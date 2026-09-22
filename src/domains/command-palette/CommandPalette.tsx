@@ -57,7 +57,8 @@ export type PanelKey =
     | "ask"
     | "timeTracking"
     | "focusMode"
-    | "screenGuide";
+    | "screenGuide"
+    | "engineMetrics";
 
 // Alpha mode deliberately exposes only the evidence-bearing paths. The full
 // registry remains intact for later milestones; this list is the single source
@@ -71,6 +72,7 @@ export const DEMO_COMMAND_IDS = [
     "todo",
     "wrapped",
     "screen-guide",
+    "engine-metrics",
     "pause-capture",
     "resume-capture",
 ] as const;
@@ -178,6 +180,14 @@ const COMMANDS: Command[] = [
         category: "navigate",
         keywords: ["statistics", "data", "analytics", "usage"],
         run: ({ onOpenPanel }) => onOpenPanel("stats"),
+    },
+    {
+        id: "engine-metrics",
+        label: "Engine Metrics",
+        description: "Live performance snapshot for capture, search, and memory graph",
+        category: "navigate",
+        keywords: ["metrics", "performance", "latency", "p50", "p95", "pipeline"],
+        run: ({ onOpenPanel }) => onOpenPanel("engineMetrics"),
     },
     {
         id: "todo",
