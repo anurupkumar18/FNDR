@@ -722,7 +722,7 @@ fn extract_ocr_text(app_name: &str, ocr_result: &RecognizedText) -> text_cleanup
     text_cleanup::build_high_signal_text_for_app(app_name, &ocr_result.text)
 }
 
-fn normalize_evidence_text(value: &str) -> String {
+pub(crate) fn normalize_evidence_text(value: &str) -> String {
     value
         .to_ascii_lowercase()
         .chars()
@@ -1205,7 +1205,7 @@ fn apply_semantic_fusion(
     })
 }
 
-fn field_supported_by_evidence(field: &str, evidence_norm: &str) -> bool {
+pub(crate) fn field_supported_by_evidence(field: &str, evidence_norm: &str) -> bool {
     let normalized_field = normalize_evidence_text(field);
     let terms = normalized_field
         .split_whitespace()
@@ -2044,7 +2044,10 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let force_capture =
             last_forced_capture.elapsed().as_secs() >= config.forced_capture_interval;
 
-        let url = app_context.browser_url.clone();
+        let url = app_context
+            .browser_url
+            .as_deref()
+            .map(strip_url_credentials);
         if let Some(ref u) = url {
             tracing::info!("Frontmost browser URL: {}", u);
         }
@@ -4536,8 +4539,15 @@ pub(crate) async fn merge_memory_records_with_policy(
         .max(EMBEDDING_DIM as u32);
     let parent_id = incoming.parent_id.clone().or(existing.parent_id.clone());
     let related_ids = merge_string_lists(&existing.related_ids, &incoming.related_ids);
-    let consolidated_from =
+    // The merged record always keeps `existing.id` (see the `id:` field
+    // below), so `incoming.id` would otherwise vanish. Track it in
+    // consolidated_from so any citation already holding that id can still
+    // resolve (MEM-07 invariant 8), via the get_memory_by_id fallback.
+    let mut consolidated_from =
         merge_string_lists(&existing.consolidated_from, &incoming.consolidated_from);
+    if incoming.id != existing.id && !consolidated_from.contains(&incoming.id) {
+        consolidated_from.push(incoming.id.clone());
+    }
     let synthesis_branch = prefer_non_empty(&incoming.synthesis_branch, &existing.synthesis_branch);
     let topic_categories =
         merge_string_lists(&existing.topic_categories, &incoming.topic_categories);
@@ -5556,6 +5566,84 @@ fn extract_domain(url: &str) -> Option<String> {
     }
 }
 
+/// Query-parameter and fragment key fragments that commonly carry secrets
+/// (OAuth tokens, session ids, API keys, passwords) in a URL.
+const URL_CREDENTIAL_KEY_MARKERS: &[&str] = &[
+    "token",
+    "password",
+    "passwd",
+    "secret",
+    "api_key",
+    "apikey",
+    "auth",
+    "credential",
+    "session",
+    "jwt",
+];
+
+fn strip_url_userinfo(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let (scheme, rest) = url.split_at(scheme_end + 3);
+    let Some(at_pos) = rest.find('@') else {
+        return url.to_string();
+    };
+    let slash_pos = rest.find('/');
+    if slash_pos.is_some_and(|slash| slash < at_pos) {
+        return url.to_string();
+    }
+    format!("{scheme}{}", &rest[at_pos + 1..])
+}
+
+/// Removes any `key=value` pair whose key looks like a credential from a
+/// query string or fragment, keeping the rest in order.
+fn strip_credential_pairs(query_or_fragment: &str) -> String {
+    query_or_fragment
+        .split('&')
+        .filter(|pair| {
+            let key = pair.split('=').next().unwrap_or("").to_ascii_lowercase();
+            !URL_CREDENTIAL_KEY_MARKERS
+                .iter()
+                .any(|marker| key.contains(marker))
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// Strips userinfo (`user:pass@host`) and any query-string or fragment
+/// parameter whose key looks like a credential, so a captured URL never
+/// carries a secret into a stored `MemoryRecord` (MEM-07 invariant 7).
+pub(crate) fn strip_url_credentials(url: &str) -> String {
+    let url = strip_url_userinfo(url);
+    let (before_fragment, fragment) = match url.split_once('#') {
+        Some((head, tail)) => (head, Some(strip_credential_pairs(tail))),
+        None => (url.as_str(), None),
+    };
+    let (base, query) = match before_fragment.split_once('?') {
+        Some((base, query)) => (base, Some(strip_credential_pairs(query))),
+        None => (before_fragment, None),
+    };
+
+    let mut result = base.to_string();
+    if let Some(query) = query.filter(|q| !q.is_empty()) {
+        result.push('?');
+        result.push_str(&query);
+    }
+    if let Some(fragment) = fragment.filter(|f| !f.is_empty()) {
+        result.push('#');
+        result.push_str(&fragment);
+    }
+    result
+}
+
+/// True when `url` still contains a credential-looking userinfo section or
+/// query/fragment parameter. Used by the MEM-07 memory contract to verify
+/// `strip_url_credentials` ran before storage.
+pub(crate) fn url_has_credential_leak(url: &str) -> bool {
+    strip_url_credentials(url) != url
+}
+
 /// Returns true when the OCR volume alone justifies admitting the frame,
 /// bypassing a low extraction_grounding_confidence score.
 ///
@@ -5579,6 +5667,62 @@ fn should_text_heavy_override(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_url_credentials_removes_credential_query_params_keeps_others() {
+        assert_eq!(
+            strip_url_credentials("https://example.com/path?api_key=xyz&foo=bar"),
+            "https://example.com/path?foo=bar"
+        );
+    }
+
+    #[test]
+    fn strip_url_credentials_drops_bare_query_string_when_only_credential_params() {
+        assert_eq!(
+            strip_url_credentials("https://example.com/path?token=abc"),
+            "https://example.com/path"
+        );
+    }
+
+    #[test]
+    fn strip_url_credentials_strips_userinfo() {
+        assert_eq!(
+            strip_url_credentials("https://user:pass@example.com/path"),
+            "https://example.com/path"
+        );
+    }
+
+    #[test]
+    fn strip_url_credentials_keeps_at_sign_in_path_untouched() {
+        assert_eq!(
+            strip_url_credentials("https://example.com/a@b/path"),
+            "https://example.com/a@b/path"
+        );
+    }
+
+    #[test]
+    fn strip_url_credentials_strips_credential_fragment() {
+        assert_eq!(
+            strip_url_credentials("https://example.com/path#access_token=abc"),
+            "https://example.com/path"
+        );
+    }
+
+    #[test]
+    fn strip_url_credentials_is_a_no_op_on_a_clean_url() {
+        let clean = "https://example.com/path?foo=bar#section";
+        assert_eq!(strip_url_credentials(clean), clean);
+    }
+
+    #[test]
+    fn url_has_credential_leak_detects_unstripped_urls() {
+        assert!(url_has_credential_leak(
+            "https://example.com/path?password=secret"
+        ));
+        assert!(!url_has_credential_leak(
+            "https://example.com/path?foo=bar"
+        ));
+    }
 
     #[test]
     fn screen_guide_generation_suppresses_durable_capture() {
@@ -5919,6 +6063,49 @@ Activity patterns and insights dashboard
         assert_eq!(merged.dedup_fingerprint, "hn_research");
         assert_eq!(merged.embedding_model, "bge-large-en-v1.5");
         assert_eq!(merged.embedding_dim, EMBEDDING_DIM as u32);
+    }
+
+    #[tokio::test]
+    async fn merge_keeps_incoming_id_in_consolidated_from_for_citation_redirect() {
+        // MEM-07 invariant 8: the merged record always keeps `existing.id`
+        // and drops `incoming.id`. Anything holding an earlier citation to
+        // `incoming.id` (a search result, an agent's cited memory_id) needs
+        // a way to still resolve it, so it must survive somewhere on the
+        // merged record.
+        let existing = merge_test_record("existing-id");
+        let mut incoming = merge_test_record("incoming-id");
+        incoming.timestamp = 2;
+
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+
+        assert_eq!(merged.id, "existing-id");
+        assert!(
+            merged.consolidated_from.contains(&"incoming-id".to_string()),
+            "consolidated_from should carry the dropped id, got {:?}",
+            merged.consolidated_from
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_of_already_consolidated_records_does_not_lose_earlier_ids() {
+        let mut existing = merge_test_record("existing-id");
+        existing.consolidated_from = vec!["ancient-id".to_string()];
+        let mut incoming = merge_test_record("incoming-id");
+        incoming.timestamp = 2;
+        incoming.consolidated_from = vec!["another-old-id".to_string()];
+
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+
+        assert_eq!(merged.id, "existing-id");
+        for expected in ["ancient-id", "another-old-id", "incoming-id"] {
+            assert!(
+                merged.consolidated_from.iter().any(|id| id == expected),
+                "expected {expected} in {:?}",
+                merged.consolidated_from
+            );
+        }
     }
 
     #[tokio::test]
