@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { getPrivacyProof, type PrivacyProof as PrivacyProofData } from "@/shared/ipc/tauri";
 import { usePolling } from "@/shared/hooks/usePolling";
 import "../workspace/PipelineInspectorPanel.css";
@@ -46,23 +46,21 @@ export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps
     const [proof, setProof] = useState<PrivacyProofData | null>(null);
     const [error, setError] = useState<string | null>(null);
 
-    usePolling(
-        async (isMounted) => {
-            try {
-                const next = await getPrivacyProof();
-                if (isMounted()) {
-                    setProof(next);
-                    setError(null);
-                }
-            } catch (e) {
-                if (isMounted()) {
-                    setError(e instanceof Error ? e.message : String(e));
-                }
+    const loadPrivacyProof = useCallback(async (isMounted: () => boolean) => {
+        try {
+            const next = await getPrivacyProof();
+            if (isMounted()) {
+                setProof(next);
+                setError(null);
             }
-        },
-        5000,
-        isVisible
-    );
+        } catch (e) {
+            if (isMounted()) {
+                setError(e instanceof Error ? e.message : String(e));
+            }
+        }
+    }, []);
+
+    usePolling(loadPrivacyProof, 5000, isVisible);
 
     if (!isVisible) {
         return null;
