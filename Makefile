@@ -1,4 +1,4 @@
-.PHONY: demo install dev test rust-test diagnostic reset-lancedb clean-dev-cache clean-all-generated clean-dev-cache-dry-run
+.PHONY: demo install dev test rust-test diagnostic reset-lancedb clean-dev-cache clean-all-generated clean-dev-cache-dry-run phase-progress
 
 install:
 	npm install
@@ -29,3 +29,6 @@ clean-all-generated:
 
 clean-dev-cache-dry-run:
 	./scripts/clean-dev-build-cache.sh --dry-run
+
+phase-progress:
+	python3 scripts/team/phase_progress.py --manifest docs/superpowers/plans/2026-09-21-beta-final-master-plan.md --api
