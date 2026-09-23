@@ -1,8 +1,16 @@
 .search-panel {
   display: flex;
   flex-direction: column;
-  width: min(760px, calc(100vw - 260px));
+  width: min(760px, 100%);
+  max-width: 100%;
   gap: 10px;
+  box-sizing: border-box;
+}
+
+.search-panel *,
+.search-panel *::before,
+.search-panel *::after {
+  box-sizing: border-box;
 }
 
 .summary-bubble {
@@ -12,6 +20,7 @@
   border: 1px solid var(--border);
   color: var(--text-secondary);
   box-shadow: 0 12px 24px var(--shadow-color);
+  overflow-wrap: anywhere;
 }
 
 .summary-loading,
@@ -50,7 +59,7 @@
   width: 100%;
   min-height: 56px;
   transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
-  overflow: hidden;
+  overflow: visible;
   box-shadow: 0 18px 32px var(--shadow-color);
 }
 
@@ -90,9 +99,9 @@
   flex: 1;
   border: none;
   background: transparent;
-  font-family: var(--font-display);
-  font-style: italic;
-  font-size: 1.1rem;
+  font-family: var(--film-font-ui, var(--font-body));
+  font-style: normal;
+  font-size: 1rem;
   font-weight: 400;
   color: var(--fg);
   caret-color: var(--accent);
@@ -104,7 +113,7 @@
 
 .search-input::placeholder {
   color: var(--fg-3);
-  font-style: italic;
+  font-style: normal;
   opacity: 1;
 }
 
@@ -175,12 +184,21 @@
 .search-clear {
   background: var(--accent-light);
   border: 1px solid var(--border);
-  width: 30px;
-  height: 30px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   border-radius: 999px;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all var(--transition-fast);
+}
+
+.search-clear:focus-visible,
+.filter-select:focus-visible,
+.memory-mention-item:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .search-clear:hover:not(:disabled) {
@@ -200,6 +218,13 @@
 }
 
 /* Mic uses global .fndr-os-chrome-btn — only recording pulse here */
+[data-theme="light"] .search-bar .voice-btn,
+[data-theme="paper"] .search-bar .voice-btn {
+  /* The shared OS-chrome circle intentionally stays dark over a light
+     wallpaper. Use inverse ink here just like the fixed shell controls. */
+  color: var(--cp-text-inverse, #ffffff);
+}
+
 .voice-btn.recording {
   animation: pulseRecording 1.5s infinite;
 }
@@ -250,6 +275,8 @@
   appearance: none;
   -webkit-appearance: none;
   transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+  min-height: 44px;
+  max-width: 100%;
 }
 
 .select-arrow {
@@ -296,6 +323,8 @@
   font-size: 0.85rem;
   font-weight: 500;
   animation: slideUp 0.3s ease-out;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 @keyframes slideUp {
@@ -393,6 +422,7 @@
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: 0 12px 28px var(--shadow-color);
+  overscroll-behavior: contain;
 }
 
 .memory-mention-item {
@@ -401,7 +431,8 @@
   align-items: flex-start;
   width: 100%;
   text-align: left;
-  padding: 8px 10px;
+  padding: 10px 12px;
+  min-height: 44px;
   border: none;
   border-bottom: 1px solid var(--border);
   background: transparent;
@@ -416,11 +447,15 @@
 .memory-mention-title {
   font-size: 0.78rem;
   font-weight: 600;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .memory-mention-snippet {
   font-size: 0.72rem;
   opacity: 0.85;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .memory-mention-loading,
@@ -428,4 +463,44 @@
   padding: 10px;
   font-size: 0.78rem;
   color: var(--text-secondary);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .search-bar {
+    padding-inline: 8px;
+  }
+
+  .search-icon {
+    display: none;
+  }
+
+  .search-input-group {
+    gap: 6px;
+  }
+
+  .search-filters,
+  .select-wrapper {
+    width: 100%;
+  }
+
+  .select-wrapper {
+    flex-basis: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-bar,
+  .search-clear,
+  .filter-select,
+  .voice-status,
+  .voice-btn.recording {
+    animation: none;
+    transition: none;
+  }
+
+  .search-placeholder-overlay {
+    transition: none !important;
+  }
 }

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { fndrAnswer, type ComposedAnswer, type MemoryCard } from "@/shared/ipc/tauri";
+import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./AskPanel.css";
 
 const ANSWER_TIMEOUT_MS = 60_000;
@@ -42,11 +43,9 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
     const [draft, setDraft] = useState("");
     const [state, setState] = useState<AskState>({ kind: "idle" });
     const seq = useRef(0);
+    const dialogRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
-
-    useEffect(() => {
-        if (isVisible) window.setTimeout(() => inputRef.current?.focus(), 30);
-    }, [isVisible]);
+    useModalFocus(isVisible, dialogRef, inputRef, onClose);
 
     if (!isVisible) return null;
 
@@ -77,7 +76,13 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
     };
 
     return (
-        <div className="ask-page" role="dialog" aria-label="Search and Ask FNDR">
+        <div
+            ref={dialogRef}
+            className="ask-page"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search and Ask FNDR"
+        >
             <header className="ask-header">
                 <div className="ask-header-title">
                     <h2>Search & Ask FNDR</h2>

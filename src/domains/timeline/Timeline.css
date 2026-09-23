@@ -1,4 +1,6 @@
 .timeline-container {
+  box-sizing: border-box;
+  width: 100%;
   max-width: 800px;
   margin: 0 auto;
   padding: 40px 20px;
@@ -22,6 +24,7 @@
   position: relative;
   overflow: hidden;
   animation: cardIn 0.4s ease-out backwards;
+  overflow-wrap: anywhere;
 }
 
 @keyframes cardIn {
@@ -61,6 +64,7 @@
   align-items: center;
   gap: 12px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .result-meta-actions {
@@ -68,6 +72,8 @@
   align-items: center;
   gap: 8px;
   margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .result-app {
@@ -79,6 +85,8 @@
   background: var(--bg-3);
   padding: 2px 8px;
   border-radius: var(--film-radius-sm);
+  max-width: min(32ch, 100%);
+  overflow-wrap: anywhere;
 }
 
 .result-time {
@@ -91,17 +99,25 @@
   color: var(--text-muted);
 }
 
-.timeline-delete-btn {
-  padding: 4px 9px;
-  font-size: 0.68rem;
+.timeline-delete-btn,
+.timeline-select-btn {
+  min-height: 44px;
+  padding: 8px 12px;
+  font-size: 0.75rem;
   color: var(--text-secondary);
   border-color: var(--border);
   background: var(--bg-3);
 }
 
-.timeline-delete-btn:hover {
+.timeline-delete-btn:hover,
+.timeline-select-btn:hover {
   border-color: var(--border-strong);
   background: var(--surface-hover);
+}
+
+.timeline-select-btn {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
 }
 
 .result-title {
@@ -201,6 +217,15 @@
   margin-top: 14px;
 }
 
+.result-context-label {
+  flex-basis: 100%;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .result-chip {
   font-size: 0.74rem;
   color: var(--text-secondary);
@@ -220,6 +245,11 @@
   cursor: pointer;
   color: var(--text-muted);
   font-size: 0.78rem;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .source-details ul {
@@ -228,6 +258,7 @@
   color: var(--text-secondary);
   font-size: 0.85rem;
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 /* Timeline States (Loading, Empty) */
@@ -253,6 +284,19 @@
   margin-bottom: 12px;
 }
 
+.timeline-state p {
+  max-width: 52ch;
+  margin: 0;
+  line-height: 1.55;
+}
+
+.timeline-query-preview {
+  color: var(--text-secondary);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  margin-bottom: 8px !important;
+}
+
 .load-more-container {
   display: flex;
   justify-content: center;
@@ -268,10 +312,68 @@
   cursor: pointer;
   transition: all 0.2s;
   font-weight: 500;
+  min-height: 44px;
 }
 
 .load-more-btn:hover {
   background: var(--surface-hover);
   border-color: var(--border-strong);
   color: var(--text-primary);
+}
+
+.load-more-btn[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.load-more-btn:focus-visible,
+.timeline-select-btn:focus-visible,
+.timeline-delete-btn:focus-visible,
+.source-details summary:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .timeline-container {
+    padding: 24px 12px;
+  }
+
+  .timeline-stream {
+    gap: 14px;
+  }
+
+  .result-card {
+    padding: 16px;
+  }
+
+  .result-meta {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .result-meta-main {
+    flex: 1 1 180px;
+  }
+
+  .result-meta-actions {
+    margin-left: 0;
+  }
+
+  .timeline-state {
+    min-height: 40vh;
+    padding: 28px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .result-card,
+  .load-more-btn {
+    animation: none;
+    transition: none;
+  }
+
+  .result-card:hover {
+    transform: none;
+  }
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AskPanel } from "./AskPanel";
 import { fndrAnswer, type ComposedAnswer, type MemoryCard } from "@/shared/ipc/tauri";
 
@@ -37,6 +37,28 @@ afterEach(() => {
 });
 
 describe("AskPanel", () => {
+    it("owns modal focus, closes on Escape, and restores the invoking control", async () => {
+        const onClose = vi.fn();
+        const panel = (visible: boolean) => (
+            <>
+                <button type="button">Ask launcher</button>
+                <AskPanel isVisible={visible} onClose={onClose} onOpenMemoryById={() => {}} />
+            </>
+        );
+        const { rerender } = render(panel(false));
+        const launcher = screen.getByRole("button", { name: "Ask launcher" });
+        launcher.focus();
+
+        rerender(panel(true));
+        const input = screen.getByRole("textbox", { name: "Search or ask FNDR" });
+        await waitFor(() => expect(input).toHaveFocus());
+        fireEvent.keyDown(input, { key: "Escape" });
+        expect(onClose).toHaveBeenCalledTimes(1);
+
+        rerender(panel(false));
+        await waitFor(() => expect(launcher).toHaveFocus());
+    });
+
     it("frames searching and asking as one local-memory workflow", () => {
         render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
         expect(screen.getByRole("heading", { name: "Search & Ask FNDR" })).toBeInTheDocument();

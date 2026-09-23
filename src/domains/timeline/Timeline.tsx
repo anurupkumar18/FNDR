@@ -76,9 +76,9 @@ export function Timeline({
 
     if (isLoading) {
         return (
-            <div className="timeline-state">
+            <div className="timeline-state" role="status" aria-live="polite" aria-busy="true">
                 <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
-                <p>Searching memories...</p>
+                <p>Searching saved memories…</p>
             </div>
         );
     }
@@ -88,16 +88,17 @@ export function Timeline({
             return (
                 <div className="timeline-state timeline-welcome">
                     <div className="welcome-icon">⌘</div>
-                    <h2>Welcome to FNDR</h2>
-                    <p>Your memories are being captured. Type a query and press Enter to search.</p>
+                    <h2>Find a saved memory</h2>
+                    <p>Search by topic, app, person, or time to revisit what FNDR has saved.</p>
                 </div>
             );
         }
         return (
             <div className="timeline-state">
                 <div className="empty-icon"><Icon name="search" size={48} /></div>
-                <h3>No memories found</h3>
-                <p>Try a different search term</p>
+                <h3>No saved memories match</h3>
+                <p className="timeline-query-preview">“{formatQueryPreview(query)}”</p>
+                <p>Try fewer words, or change the time range or app filter.</p>
             </div>
         );
     }
@@ -112,6 +113,8 @@ export function Timeline({
                     const cleanSummary = stripLegacySources(result.display_summary ?? result.summary);
                     const displayTitle = preferredTitle(result);
                     const primaryText = cleanSummary || displayTitle || "Captured memory";
+                    const appLabel = result.app_name.trim() || "Unknown app";
+                    const controlLabel = formatControlLabel(displayTitle || primaryText);
                     const showPrimaryText =
                         !displayTitle ||
                         (!isLowSignalPreview(primaryText, result.app_name) &&
@@ -119,6 +122,15 @@ export function Timeline({
                     const matchReason = preferredMatchReason(result, query);
                     const domain = domainFromUrl(result.url);
                     const confidence = result.confidence ?? result.score;
+                    const detailLabels = Array.from(new Set([
+                        matchReason,
+                        qualityLabel(result, query, confidence),
+                        domain,
+                        result.timeline_action_class && result.timeline_action_class !== "other"
+                            ? result.timeline_action_class
+                            : "",
+                        result.source_count > 1 ? `${result.source_count} sources` : "",
+                    ].filter(Boolean)));
                     const evidence = (result.raw_snippets ?? [])
                         .map((snippet) => stripLegacySources(snippet).trim())
                         .filter(Boolean)
@@ -128,24 +140,13 @@ export function Timeline({
                             key={result.id}
                             className={`result-card ${selectedResultId === result.id ? "selected" : ""}`}
                             onClick={() => onSelectResult(result)}
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(event) => {
-                                if (event.key === "Enter" || event.key === " ") {
-                                    event.preventDefault();
-                                    onSelectResult(result);
-                                }
-                            }}
+                            aria-current={selectedResultId === result.id ? "true" : undefined}
                         >
                             <div className={`result-meta ${evalUi ? "result-meta-eval" : ""}`}>
                                 <div className="result-meta-main">
-                                    <span className="result-app">{result.app_name}</span>
+                                    <span className="result-app">{appLabel}</span>
                                     <span className="result-time">
-                                        {formatDay(result.timestamp)} ·{" "}
-                                        {new Date(result.timestamp).toLocaleTimeString(undefined, {
-                                            hour: "2-digit",
-                                            minute: "2-digit",
-                                        })}
+                                        {formatTimestamp(result.timestamp)}
                                     </span>
                                 </div>
                                 <div className="result-meta-actions">
@@ -154,8 +155,24 @@ export function Timeline({
                                             score {result.score.toFixed(3)}
                                         </span>
                                     )}
+                                    <button
+                                        type="button"
+                                        className="ui-action-btn timeline-select-btn"
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            onSelectResult(result);
+                                        }}
+                                        aria-label={`${selectedResultId === result.id ? "Selected" : "Select"} memory: ${controlLabel}`}
+                                        aria-pressed={selectedResultId === result.id}
+                                        title={selectedResultId === result.id
+                                            ? "Selected for memory commands"
+                                            : "Select for memory commands"}
+                                    >
+                                        {selectedResultId === result.id ? "Selected" : "Select"}
+                                    </button>
                                     {onDeleteMemory && (
                                         <button
+                                            type="button"
                                             className="ui-action-btn timeline-delete-btn"
                                             onClick={(event) => {
                                                 event.stopPropagation();
@@ -176,19 +193,14 @@ export function Timeline({
                             )}
                             {showPrimaryText && <p className="result-primary">{primaryText}</p>}
                             <InsightLayers card={result} evalUi={evalUi} />
-                            <div className="result-context-chips" aria-label="Match details">
-                                {matchReason && <span className="result-chip">{matchReason}</span>}
-                                <span className="result-chip">{qualityLabel(result, query, confidence)}</span>
-                                {domain && <span className="result-chip">{domain}</span>}
-                                {result.timeline_action_class &&
-                                    result.timeline_action_class !== "other" && (
-                                        <span className="result-chip result-chip-action">
-                                            {result.timeline_action_class}
-                                        </span>
-                                    )}
-                                {result.source_count > 1 && (
-                                    <span className="result-chip">{result.source_count} sources</span>
-                                )}
+                            <div
+                                className="result-context-chips"
+                                aria-label="Why this memory matched and where it came from"
+                            >
+                                <span className="result-context-label">Why this matched</span>
+                                {detailLabels.map((label) => (
+                                    <span className="result-chip" key={label}>{label}</span>
+                                ))}
                             </div>
                             {evidence.length > 0 && (
                                 <details
@@ -208,18 +220,47 @@ export function Timeline({
                 })}
             </div>
 
-            {hasMore && (
+            {results.length > TIMELINE_STREAM.initialVisible && (
                 <div className="load-more-container">
                     <button
-                        onClick={() => setVisibleCount((n) => n + TIMELINE_STREAM.loadMoreStep)}
+                        type="button"
+                        onClick={() => {
+                            if (hasMore) {
+                                setVisibleCount((n) => n + TIMELINE_STREAM.loadMoreStep);
+                            }
+                        }}
                         className="load-more-btn"
+                        aria-disabled={!hasMore}
                     >
-                        Load {Math.min(TIMELINE_STREAM.loadMoreStep, results.length - visibleCount)} more
+                        {hasMore
+                            ? `Load ${Math.min(TIMELINE_STREAM.loadMoreStep, results.length - visibleCount)} more`
+                            : `All ${results.length} results shown`}
                     </button>
                 </div>
             )}
         </div>
     );
+}
+
+function formatQueryPreview(query: string): string {
+    const normalized = query.replace(/\s+/g, " ").trim();
+    return normalized.length > 120 ? `${normalized.slice(0, 117)}…` : normalized;
+}
+
+function formatControlLabel(value: string): string {
+    const normalized = value.replace(/\s+/g, " ").trim();
+    return normalized.length > 96 ? `${normalized.slice(0, 93)}…` : normalized;
+}
+
+function formatTimestamp(timestamp: number): string {
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) {
+        return "Time unavailable";
+    }
+    return `${formatDay(timestamp)} · ${date.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+    })}`;
 }
 
 function preferredTitle(result: MemoryCard): string {
@@ -258,9 +299,16 @@ function domainFromUrl(url: string | undefined): string {
 }
 
 function preferredMatchReason(result: MemoryCard, query: string): string {
+    const appName = normalizePreview(result.app_name);
+    const windowTitle = normalizePreview(result.window_title);
     const explicit = (result.context ?? [])
         .map((value) => value.trim())
-        .find((value) => value.length > 0);
+        .find((value) => {
+            const normalized = normalizePreview(value);
+            return normalized.length > 0
+                && normalized !== appName
+                && normalized !== windowTitle;
+        });
     if (explicit) {
         return explicit;
     }

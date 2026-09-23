@@ -27,9 +27,7 @@ interface SearchBarProps {
     onTimeFilterChange: (filter: string | null) => void;
     appFilter: string | null;
     onAppFilterChange: (filter: string | null) => void;
-    onSetMeetingPanelOpen: (open: boolean) => void;
     onSetMemoryCardsPanelOpen: (open: boolean) => void;
-    onSetKnowledgeGraphPanelOpen: (open: boolean) => void;
     appNames: string[];
     resultCount: number;
     searchResults: MemoryCard[];
@@ -50,9 +48,7 @@ export function SearchBar({
     onTimeFilterChange,
     appFilter,
     onAppFilterChange,
-    onSetMeetingPanelOpen,
     onSetMemoryCardsPanelOpen,
-    onSetKnowledgeGraphPanelOpen,
     appNames,
     resultCount,
     searchResults,
@@ -63,6 +59,7 @@ export function SearchBar({
     const [isSummarizing, setIsSummarizing] = useState(false);
     const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
     const [isRecording, setIsRecording] = useState(false);
+    const [isPreparingVoice, setIsPreparingVoice] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [placeholderIndex, setPlaceholderIndex] = useState(0);
     const [placeholderVisible, setPlaceholderVisible] = useState(true);
@@ -74,7 +71,7 @@ export function SearchBar({
     const mimeTypeRef = useRef<string>("audio/webm");
     const recordingStartedAtRef = useRef<number>(0);
     const summaryRequestRef = useRef(0);
-    const searchResultsRef = useRef(searchResults);
+    const statusTimeoutRef = useRef<number | null>(null);
     const hasQuery = submittedValue.trim().length > 0;
     const hasPendingSubmit = value.trim() !== submittedValue.trim();
     const showMetaRow = hasQuery;
@@ -82,21 +79,28 @@ export function SearchBar({
     const activePlaceholder =
         PLACEHOLDERS[placeholderIndex % Math.max(PLACEHOLDERS.length, 1)] ?? DEFAULT_PLACEHOLDER;
     const showAnimatedPlaceholder = !hasInput;
+    const uniqueAppNames = Array.from(
+        new Set(appNames.map((name) => name.trim()).filter(Boolean))
+    );
 
     const atMemoryMatch = /@memory\s+(.+)/i.exec(value);
     const atMemoryQuery = atMemoryMatch?.[1]?.trim() ?? "";
     const [memoryMentionHits, setMemoryMentionHits] = useState<MemoryCard[]>([]);
     const [memoryMentionBusy, setMemoryMentionBusy] = useState(false);
+    const [memoryMentionError, setMemoryMentionError] = useState(false);
 
     useEffect(() => {
         if (!atMemoryQuery || atMemoryQuery.length < MEMORY_MENTIONS.minQueryLength) {
             setMemoryMentionHits([]);
+            setMemoryMentionBusy(false);
+            setMemoryMentionError(false);
             return;
         }
         let cancelled = false;
         const timer = window.setTimeout(() => {
             void (async () => {
                 setMemoryMentionBusy(true);
+                setMemoryMentionError(false);
                 try {
                     const hits = await searchMemoryCards(
                         atMemoryQuery,
@@ -110,6 +114,7 @@ export function SearchBar({
                 } catch {
                     if (!cancelled) {
                         setMemoryMentionHits([]);
+                        setMemoryMentionError(true);
                     }
                 } finally {
                     if (!cancelled) {
@@ -125,11 +130,7 @@ export function SearchBar({
     }, [atMemoryQuery, value]);
 
     useEffect(() => {
-        searchResultsRef.current = searchResults;
-    }, [searchResults]);
-
-    useEffect(() => {
-        if (PLACEHOLDERS.length <= 1) {
+        if (PLACEHOLDERS.length <= 1 || hasInput) {
             return;
         }
 
@@ -148,7 +149,7 @@ export function SearchBar({
                 window.clearTimeout(swapTimer);
             }
         };
-    }, [placeholderIndex]);
+    }, [hasInput, placeholderIndex]);
 
     useEffect(() => {
         const activeValue = submittedValue.trim();
@@ -165,7 +166,7 @@ export function SearchBar({
         setSummary(null);
 
         const timer = window.setTimeout(async () => {
-            const latestResults = searchResultsRef.current;
+            const latestResults = searchResults;
             if (cancelled || requestId !== summaryRequestRef.current) {
                 return;
             }
@@ -261,32 +262,25 @@ export function SearchBar({
             cancelled = true;
             window.clearTimeout(timer);
         };
-    }, [submittedValue, resultCount]);
+    }, [appFilter, resultCount, searchResults, submittedValue, timeFilter]);
     
-    useEffect(() => {
-        if (inputRef.current && value.length > 0) {
-            inputRef.current.scrollLeft = 0;
-        }
-    }, [value]);
-
     useEffect(() => {
         return () => {
             stopMediaStream(mediaStreamRef.current);
             mediaStreamRef.current = null;
+            if (statusTimeoutRef.current !== null) {
+                window.clearTimeout(statusTimeoutRef.current);
+            }
         };
     }, []);
 
     useEffect(() => {
         const handleKeydown = (event: KeyboardEvent) => {
-            const key = event.key.toLowerCase();
-            if ((event.metaKey || event.ctrlKey) && key === "k") {
-                event.preventDefault();
-                const input = document.getElementById("fndr-search-input") as HTMLElement | null;
-                input?.focus();
-                return;
-            }
-
-            if (key === "escape" && !disabled) {
+            if (
+                event.key === "Escape"
+                && !disabled
+                && document.activeElement === inputRef.current
+            ) {
                 onChange("");
                 onSubmit("");
             }
@@ -338,26 +332,16 @@ export function SearchBar({
         }
 
         if (normalized.includes("open meetings") || normalized.includes("open meeting recorder")) {
-            onSetMeetingPanelOpen(true);
-            setVoiceStatus("Opened Meetings.");
-            return;
-        }
-
-        if (normalized.includes("close meetings") || normalized.includes("close meeting recorder")) {
-            onSetMeetingPanelOpen(false);
-            setVoiceStatus("Closed Meetings.");
+            const nextQuery = "meeting notes and follow-ups";
+            onChange(nextQuery);
+            onSubmit(nextQuery);
+            setVoiceStatus("Searching your meeting memories.");
             return;
         }
 
         if (normalized.includes("open graph") || normalized.includes("open knowledge graph")) {
-            onSetKnowledgeGraphPanelOpen(true);
-            setVoiceStatus("Opened Graph.");
-            return;
-        }
-
-        if (normalized.includes("close graph") || normalized.includes("close knowledge graph")) {
-            onSetKnowledgeGraphPanelOpen(false);
-            setVoiceStatus("Closed Graph.");
+            onSetMemoryCardsPanelOpen(true);
+            setVoiceStatus("Opened Memory Vault. Connected context is available inside each memory.");
             return;
         }
 
@@ -374,21 +358,35 @@ export function SearchBar({
         }
 
         if (normalized.includes("pause capture") || normalized.includes("pause recording")) {
-            await pauseCapture();
-            setVoiceStatus("Capture paused.");
+            try {
+                await pauseCapture();
+                setVoiceStatus("Capture paused. It will remain paused after relaunch.");
+            } catch {
+                setVoiceStatus("Couldn't pause capture. Use Capture settings to try again.");
+            }
             return;
         }
 
         if (normalized.includes("resume capture") || normalized.includes("start capture")) {
-            await resumeCapture();
-            setVoiceStatus("Capture resumed.");
+            try {
+                await resumeCapture();
+                setVoiceStatus("Capture resumed.");
+            } catch {
+                setVoiceStatus("Couldn't resume capture. Use Capture settings to try again.");
+            }
             return;
         }
 
         onChange(cleaned);
         onSubmit(cleaned);
         setVoiceStatus(`Searching for: ${cleaned}`);
-        setTimeout(() => setVoiceStatus(null), VOICE_RECORDING.statusClearMs);
+        if (statusTimeoutRef.current !== null) {
+            window.clearTimeout(statusTimeoutRef.current);
+        }
+        statusTimeoutRef.current = window.setTimeout(() => {
+            setVoiceStatus(null);
+            statusTimeoutRef.current = null;
+        }, VOICE_RECORDING.statusClearMs);
     }
 
     async function handleVoiceToggle() {
@@ -398,10 +396,12 @@ export function SearchBar({
         }
 
         if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-            setVoiceStatus("Voice capture is not supported in this build.");
+            setVoiceStatus("Microphone isn't available here. Type your search instead.");
             return;
         }
 
+        setIsPreparingVoice(true);
+        setVoiceStatus("Waiting for microphone permission…");
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -447,11 +447,13 @@ export function SearchBar({
             setVoiceStatus("Listening... tap again to stop.");
         } catch (err) {
             console.error("Voice capture failed:", err);
-            setVoiceStatus("Microphone access failed.");
+            setVoiceStatus(microphoneFailureMessage(err));
             stopMediaStream(mediaStreamRef.current);
             mediaStreamRef.current = null;
             mediaRecorderRef.current = null;
             setIsRecording(false);
+        } finally {
+            setIsPreparingVoice(false);
         }
     }
 
@@ -471,7 +473,7 @@ export function SearchBar({
             await handleVoiceTranscript(result.text);
         } catch (err) {
             console.error("Voice transcription failed:", err);
-            setVoiceStatus(`Voice transcription failed: ${String(err)}`);
+            setVoiceStatus("Voice transcription failed. Type your search or try again.");
         } finally {
             setIsTranscribing(false);
         }
@@ -514,6 +516,8 @@ export function SearchBar({
                             disabled={disabled}
                             aria-disabled={disabled}
                             aria-label="Search memories"
+                            enterKeyHint="search"
+                            spellCheck={false}
                         />
                         <span
                             className="search-placeholder-overlay"
@@ -536,9 +540,18 @@ export function SearchBar({
                         type="button"
                         className={`fndr-os-chrome-btn voice-btn ${isRecording ? "recording" : ""}`}
                         onClick={() => void handleVoiceToggle()}
-                        aria-label={isRecording ? "Stop voice recording" : "Start voice recording"}
+                        aria-label={
+                            isRecording
+                                ? "Stop voice recording"
+                                : isPreparingVoice
+                                  ? "Waiting for microphone permission"
+                                  : isTranscribing
+                                    ? "Transcribing voice recording"
+                                    : "Start voice recording"
+                        }
                         title={isRecording ? "Stop voice recording" : "Speak"}
-                        disabled={disabled || isTranscribing}
+                        disabled={disabled || isPreparingVoice || isTranscribing}
+                        aria-busy={isPreparingVoice || isTranscribing}
                     >
                         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                             <rect x="5" y="8" width="2.5" height="10" rx="1.2" />
@@ -553,6 +566,7 @@ export function SearchBar({
                             onClick={() => {
                                 onChange("");
                                 onSubmit("");
+                                window.requestAnimationFrame(() => inputRef.current?.focus());
                             }}
                             aria-label="Clear search"
                             disabled={disabled}
@@ -561,12 +575,16 @@ export function SearchBar({
                         </button>
                     )}
                 </div>
-                {atMemoryQuery.length >= 2 && (
-                    <div className="memory-mention-popover" role="listbox" aria-label="Memory matches">
+                {atMemoryQuery.length >= MEMORY_MENTIONS.minQueryLength && (
+                    <div className="memory-mention-popover" role="region" aria-label="Memory suggestions">
                         {memoryMentionBusy ? (
-                            <div className="memory-mention-loading">Searching memories…</div>
+                            <div className="memory-mention-loading" role="status">Searching saved memories…</div>
+                        ) : memoryMentionError ? (
+                            <div className="memory-mention-empty" role="status">
+                                Memory suggestions are unavailable. Keep typing or press Enter to search.
+                            </div>
                         ) : memoryMentionHits.length === 0 ? (
-                            <div className="memory-mention-empty">No hits</div>
+                            <div className="memory-mention-empty" role="status">No matching saved memories</div>
                         ) : (
                             memoryMentionHits.map((h) => (
                                 <button
@@ -577,6 +595,7 @@ export function SearchBar({
                                         const stamp = new Date(h.timestamp).toISOString();
                                         const block = `[memory ${h.app_name} @ ${stamp}] ${h.summary.slice(0, 200)}`;
                                         onChange(value.replace(/@memory\s+.*/i, block));
+                                        window.requestAnimationFrame(() => inputRef.current?.focus());
                                     }}
                                 >
                                     <span className="memory-mention-title">{h.title}</span>
@@ -601,6 +620,7 @@ export function SearchBar({
                                 onChange={(e) => onTimeFilterChange(e.target.value || null)}
                                 className={`filter-select ${timeFilter ? "active" : ""}`}
                                 disabled={disabled}
+                                aria-label="Time range"
                             >
                                 <option value="">All time</option>
                                 <option value="1h">Last hour</option>
@@ -621,9 +641,10 @@ export function SearchBar({
                                 onChange={(e) => onAppFilterChange(e.target.value || null)}
                                 className={`filter-select ${appFilter ? "active" : ""}`}
                                 disabled={disabled}
+                                aria-label="App"
                             >
                                 <option value="">All apps</option>
-                                {appNames.map((name) => (
+                                {uniqueAppNames.map((name) => (
                                     <option key={name} value={name}>{name}</option>
                                 ))}
                             </select>
@@ -633,26 +654,35 @@ export function SearchBar({
                         </div>
                     </div>
 
-                    <div className="result-count">
-                        {hasQuery ? `${resultCount} results` : "Ready"}
+                    <div
+                        className="result-count"
+                        role="status"
+                        aria-live="polite"
+                        aria-label="Search result count"
+                    >
+                        {resultCount === 1 ? "1 result" : `${resultCount} results`}
                     </div>
                 </div>
             )}
 
             {hasPendingSubmit && (
-                <div className="voice-status">
+                <div className="voice-status" role="status">
                     Press Enter to search
                 </div>
             )}
 
             {voiceStatus && (
-                <div className={`voice-status ${isRecording ? "recording" : ""}`}>
+                <div
+                    className={`voice-status ${isRecording ? "recording" : ""}`}
+                    role="status"
+                    aria-live="polite"
+                >
                     {voiceStatus}
                 </div>
             )}
 
             {hasQuery && resultCount > 0 && (isSummarizing || Boolean(summary)) && (
-                <div className="summary-bubble">
+                <div className="summary-bubble" aria-live="polite">
                     {isSummarizing ? (
                         <div className="summary-loading">
                             <span className="thinking-loader thinking-loader-sm summary-loader" aria-hidden="true" />
@@ -668,6 +698,22 @@ export function SearchBar({
             )}
         </div>
     );
+}
+
+function microphoneFailureMessage(error: unknown): string {
+    const name = error instanceof DOMException
+        ? error.name
+        : typeof error === "object" && error && "name" in error
+          ? String(error.name)
+          : "";
+
+    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        return "Microphone permission wasn't granted. Type your search instead.";
+    }
+    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        return "No microphone was found. Type your search instead.";
+    }
+    return "Couldn't start the microphone. Type your search instead.";
 }
 
 function chooseRecorderOptions(): MediaRecorderOptions | undefined {
