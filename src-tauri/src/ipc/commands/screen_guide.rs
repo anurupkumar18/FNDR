@@ -19,7 +19,7 @@ use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -1111,6 +1111,8 @@ pub async fn transcribe_screen_guide_voice_input(
     mime_type: Option<String>,
     request_id: u64,
 ) -> Result<super::stats::VoiceTranscriptionResult, String> {
+    let transcribe_started = Instant::now();
+    tracing::info!(request_id, audio_bytes = audio_bytes.len(), "screen_guide:transcribe_started");
     if state.inner().is_incognito.load(Ordering::SeqCst) {
         return Err(private_screen_message());
     }
@@ -1124,10 +1126,30 @@ pub async fn transcribe_screen_guide_voice_input(
     tokio::pin!(cancellation);
 
     let text = tokio::select! {
-        result = &mut transcription => result?,
-        () = &mut cancellation => return Err(screen_guide_cancelled_message()),
+        result = &mut transcription => match result {
+            Ok(text) => text,
+            Err(err) => {
+                tracing::warn!(
+                    elapsed_ms = transcribe_started.elapsed().as_millis() as u64,
+                    error = %err,
+                    "screen_guide:transcribe_failed"
+                );
+                return Err(err);
+            }
+        },
+        () = &mut cancellation => {
+            tracing::info!(
+                elapsed_ms = transcribe_started.elapsed().as_millis() as u64,
+                "screen_guide:transcribe_cancelled"
+            );
+            return Err(screen_guide_cancelled_message());
+        }
     };
     ensure_screen_guide_request_current(state.inner(), request_id)?;
+    tracing::info!(
+        elapsed_ms = transcribe_started.elapsed().as_millis() as u64,
+        "screen_guide:transcribe_finished"
+    );
 
     Ok(super::stats::VoiceTranscriptionResult {
         text,
@@ -1298,6 +1320,8 @@ pub async fn ask_screen_guide(
     history: Vec<ScreenGuideHistoryEntry>,
     request_id: u64,
 ) -> Result<ScreenGuideAnswer, String> {
+    let ask_started = Instant::now();
+    tracing::info!(request_id, "screen_guide:ask_started");
     let question = truncate_chars(question.trim(), MAX_SCREEN_GUIDE_QUESTION_CHARS);
     if question.is_empty() {
         return Err("Screen Guide needs a question.".to_string());
@@ -1566,7 +1590,7 @@ pub async fn ask_screen_guide(
     }
 
     if ocr.plain_text.trim().is_empty() {
-        return finish_screen_guide_answer(
+        let result = finish_screen_guide_answer(
             state.inner(),
             &settings,
             request_generation,
@@ -1575,6 +1599,12 @@ pub async fn ask_screen_guide(
                 point_cue: None,
             },
         );
+        tracing::info!(
+            elapsed_ms = ask_started.elapsed().as_millis() as u64,
+            ok = result.is_ok(),
+            "screen_guide:ask_finished_no_readable_text"
+        );
+        return result;
     }
 
     // A secret detected only after OCR must not proceed into model inference or
@@ -1606,8 +1636,10 @@ pub async fn ask_screen_guide(
         request_generation,
         &deferred_restore,
     )?;
+    let inference_started = Instant::now();
     let raw_answer = match inference_engine {
         Ok(Some(engine)) => {
+            tracing::info!("screen_guide:inference_started");
             let _pipeline_guard = state.inner().model_pipeline_lock.lock().await;
             ensure_screen_guide_request_current_or_restore(
                 &app,
@@ -1615,7 +1647,7 @@ pub async fn ask_screen_guide(
                 request_generation,
                 &deferred_restore,
             )?;
-            engine
+            let answer = engine
                 .answer_screen_guide(
                     &question,
                     &screen_text,
@@ -1623,9 +1655,18 @@ pub async fn ask_screen_guide(
                     Arc::clone(&turn_cancel),
                     SCREEN_GUIDE_INFERENCE_TIMEOUT,
                 )
-                .await
+                .await;
+            tracing::info!(
+                elapsed_ms = inference_started.elapsed().as_millis() as u64,
+                usable = is_usable_model_answer(&answer),
+                "screen_guide:inference_finished"
+            );
+            answer
         }
-        Ok(None) | Err(_) => String::new(),
+        Ok(None) | Err(_) => {
+            tracing::warn!("screen_guide:inference_engine_unavailable");
+            String::new()
+        }
     };
 
     ensure_screen_guide_request_current_or_restore(
@@ -1659,7 +1700,13 @@ pub async fn ask_screen_guide(
     } else {
         fallback
     };
-    finish_screen_guide_answer(state.inner(), &settings, request_generation, parsed)
+    let result = finish_screen_guide_answer(state.inner(), &settings, request_generation, parsed);
+    tracing::info!(
+        elapsed_ms = ask_started.elapsed().as_millis() as u64,
+        ok = result.is_ok(),
+        "screen_guide:ask_finished"
+    );
+    result
 }
 
 fn show_screen_guide_overlay<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {

@@ -761,17 +761,42 @@ async fn transcribe_audio_file_with_hint(
     audio_path: &Path,
     hint: TranscriptionHint,
 ) -> Result<String, String> {
-    let model_path = ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperBaseEn).await?;
+    let started = Instant::now();
+    tracing::info!(hint = ?hint, "speech:transcribe_started");
+
+    let model_path = match ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperBaseEn).await {
+        Ok(path) => {
+            tracing::info!(elapsed_ms = started.elapsed().as_millis() as u64, "speech:model_ready");
+            path
+        }
+        Err(err) => {
+            tracing::warn!(elapsed_ms = started.elapsed().as_millis() as u64, error = %err, "speech:model_download_failed");
+            return Err(err);
+        }
+    };
 
     // Fast path: use the whisper-cli binary (brew install whisper-cpp) — no Python needed.
+    let cli_started = Instant::now();
     if let Some(text) = try_whisper_cli_binary(&model_path, audio_path).await {
         let cleaned = normalize_transcript_text(&text);
         if !cleaned.is_empty() {
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                backend = "whisper-cli",
+                "speech:transcribe_finished"
+            );
             return Ok(cleaned);
         }
     }
+    tracing::info!(
+        elapsed_ms = cli_started.elapsed().as_millis() as u64,
+        "speech:whisper_cli_unavailable_or_empty_falling_back_to_python"
+    );
 
-    ensure_whisper_backend().await?;
+    if let Err(err) = ensure_whisper_backend().await {
+        tracing::warn!(elapsed_ms = started.elapsed().as_millis() as u64, error = %err, "speech:python_backend_setup_failed");
+        return Err(err);
+    }
 
     if let Ok(custom_cmd) = std::env::var("FNDR_WHISPER_GGUF_COMMAND") {
         let mut command = AsyncCommand::new("sh");
@@ -791,10 +816,17 @@ async fn transcribe_audio_file_with_hint(
         if output.status.success() {
             let text = normalize_transcript_text(&String::from_utf8_lossy(&output.stdout));
             if !text.is_empty() {
+                tracing::info!(
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    backend = "custom_command",
+                    "speech:transcribe_finished"
+                );
                 return Ok(text);
             }
         }
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        tracing::warn!(elapsed_ms = started.elapsed().as_millis() as u64, error = %err, "speech:transcribe_failed");
+        return Err(err);
     }
 
     let sidecar = resolve_sidecar("whisper_gguf_runner.py")
@@ -815,13 +847,21 @@ async fn transcribe_audio_file_with_hint(
     .await?;
 
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        tracing::warn!(elapsed_ms = started.elapsed().as_millis() as u64, error = %err, "speech:transcribe_failed");
+        return Err(err);
     }
 
     let text = normalize_transcript_text(&String::from_utf8_lossy(&output.stdout));
     if text.is_empty() {
+        tracing::warn!(elapsed_ms = started.elapsed().as_millis() as u64, "speech:transcribe_empty_result");
         return Err("Whisper GGUF runner returned empty transcript".to_string());
     }
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        backend = "whisper_gguf_sidecar",
+        "speech:transcribe_finished"
+    );
     Ok(text)
 }
 
