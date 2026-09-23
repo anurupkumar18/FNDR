@@ -40,15 +40,60 @@ describe("ScreenGuidePanel", () => {
     it("renders a disabled state with explicit readiness and local privacy guidance", async () => {
         render(<ScreenGuidePanel isVisible onClose={() => {}} />);
 
+        expect(screen.getByRole("dialog", { name: "Screen Guide" })).toBeInTheDocument();
         expect(await screen.findByRole("heading", { name: "Screen Guide" })).toBeInTheDocument();
         expect(screen.getByText("Screen Guide is off")).toBeInTheDocument();
-        expect(screen.getByText(/stay on this Mac/i)).toBeInTheDocument();
-        expect(screen.getByText(/only listens while you hold/i)).toBeInTheDocument();
+        expect(screen.getByText(/processed on this Mac for this turn/i)).toBeInTheDocument();
+        expect(screen.getByText(/does not click, type, or add the turn/i)).toBeInTheDocument();
         expect(screen.getByRole("checkbox", { name: "Enable Screen Guide" })).not.toBeChecked();
         expect(screen.getByRole("textbox", { name: "Ask about your main display" })).toBeDisabled();
         expect(screen.getByRole("button", { name: "Ask Screen Guide" })).toBeDisabled();
         expect(screen.getByRole("button", { name: /hold to talk/i })).toBeDisabled();
         expect(screen.getByText(/Option\+Space/)).toBeInTheDocument();
+    });
+
+    it("moves focus into the modal and closes it with Escape", async () => {
+        const onClose = vi.fn();
+        render(<ScreenGuidePanel isVisible onClose={onClose} />);
+
+        const close = screen.getByRole("button", { name: "Close Screen Guide" });
+        await waitFor(() => expect(close).toHaveFocus());
+
+        fireEvent.keyDown(close, { key: "Escape" });
+        expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers an in-panel retry when settings fail to load", async () => {
+        mocks.getScreenGuideSettings
+            .mockRejectedValueOnce(new Error("Settings service unavailable"))
+            .mockResolvedValueOnce({
+                enabled: false,
+                shortcut: "Option+Space",
+                speak_responses: false,
+                show_cursor: true,
+            });
+        render(<ScreenGuidePanel isVisible onClose={() => {}} />);
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Settings service unavailable",
+        );
+        fireEvent.click(
+            screen.getByRole("button", { name: "Retry loading Screen Guide" }),
+        );
+
+        await waitFor(() => expect(mocks.getScreenGuideSettings).toHaveBeenCalledTimes(2));
+        expect(await screen.findByText("Screen Guide is off")).toBeInTheDocument();
+        expect(screen.queryByText("Settings service unavailable")).not.toBeInTheDocument();
+    });
+
+    it("keeps settings usable while disclosing a lost live-status connection", async () => {
+        mocks.onScreenGuideState.mockRejectedValueOnce(new Error("event bridge unavailable"));
+        render(<ScreenGuidePanel isVisible onClose={() => {}} />);
+
+        expect(
+            await screen.findByText(/live activity updates are unavailable/i),
+        ).toBeInTheDocument();
+        expect(screen.getByRole("checkbox", { name: "Enable Screen Guide" })).toBeEnabled();
     });
 
     it("persists the complete settings contract when enabled", async () => {

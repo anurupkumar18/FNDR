@@ -389,6 +389,10 @@ describe("ScreenGuideOverlay", () => {
             });
             expect(screen.getByText("Microphone recording is not available in this build."))
                 .toBeInTheDocument();
+            expect(screen.getByRole("alert")).toHaveTextContent(
+                "Microphone recording is not available in this build.",
+            );
+            expect(screen.getByText("SCREEN GUIDE")).toBeInTheDocument();
             expect(mocks.acknowledgeScreenGuideMicrophoneStopped).toHaveBeenCalledWith(41);
 
             await act(async () => {

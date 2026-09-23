@@ -567,8 +567,12 @@ export function ScreenGuideOverlay() {
         : null;
 
     return (
-        <div className={`sg-overlay sg-overlay--${state.phase}`} aria-live="polite" aria-atomic="true">
-            <div className="sg-overlay-card" role="status">
+        <div className={`sg-overlay sg-overlay--${state.phase}`} aria-atomic="true">
+            <div
+                className="sg-overlay-card"
+                role={state.phase === "error" ? "alert" : "status"}
+                aria-live={state.phase === "error" ? "assertive" : "polite"}
+            >
                 {state.phase === "listening" && (
                     <span className="sg-overlay-wave" aria-hidden="true">
                         <i /><i /><i /><i />
@@ -578,11 +582,9 @@ export function ScreenGuideOverlay() {
                     <span className="sg-overlay-spinner" aria-hidden="true" />
                 )}
                 <div className="sg-overlay-copy">
+                    <span className="sg-overlay-eyebrow">SCREEN GUIDE</span>
                     {state.phase === "answer" ? (
-                        <>
-                            <span className="sg-overlay-eyebrow">SCREEN GUIDE</span>
-                            <p>{state.answer}</p>
-                        </>
+                        <p>{state.answer}</p>
                     ) : (
                         <strong>{state.message}</strong>
                     )}
