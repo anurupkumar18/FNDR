@@ -51,6 +51,7 @@ use crate::memory_embedding_document::{
 use crate::memory_quality::{deterministic_dedup_fingerprint, is_supported_dedup_fingerprint};
 use crate::models;
 use crate::ocr::{OcrEngine, RecognizedText};
+use crate::privacy::safety_gate::{self, SafetyDecision};
 use crate::privacy::Blocklist;
 use crate::storage::{MemoryRecord, SearchResult, Task, TaskType};
 use crate::summariser::narration_filter::clean_or_fallback_display_summary;
@@ -640,6 +641,17 @@ pub(crate) fn capture_context_skip_reason(
     url: Option<&str>,
     blocklist: &[String],
 ) -> Option<crate::SkipReason> {
+    capture_admission_skip_reason(app_name, bundle_id, window_title, url, None, blocklist)
+}
+
+fn capture_admission_skip_reason(
+    app_name: &str,
+    bundle_id: Option<&str>,
+    window_title: &str,
+    url: Option<&str>,
+    ocr_text: Option<&str>,
+    blocklist: &[String],
+) -> Option<crate::SkipReason> {
     if Blocklist::is_internal_app(app_name, bundle_id) {
         return Some(crate::SkipReason::SelfApp);
     }
@@ -648,6 +660,17 @@ pub(crate) fn capture_context_skip_reason(
     }
     if Blocklist::is_context_blocked(url, Some(window_title), blocklist) {
         return Some(crate::SkipReason::Blocklist);
+    }
+    if safety_gate::evaluate(
+        Some(app_name),
+        bundle_id,
+        url,
+        Some(window_title),
+        ocr_text,
+        blocklist,
+    ) != SafetyDecision::Allow
+    {
+        return Some(crate::SkipReason::SensitiveContext);
     }
     None
 }
@@ -663,8 +686,9 @@ pub(crate) fn should_skip_capture_context(
 }
 
 /// Queue one alert for a sensitive browser context before the capture flow
-/// branches into URL-only, visual, semantic, or OCR storage paths. The alert
-/// is advisory until the user adds the site to their blocklist.
+/// branches into URL-only, visual, semantic, or OCR storage paths. Alert
+/// dismissal/snoozing controls only the prompt; the deterministic safety gate
+/// remains fail-closed independently of this queue.
 fn queue_sensitive_context_alert(
     state: &AppState,
     url: Option<&str>,
@@ -1794,6 +1818,20 @@ fn emit_capture_quality_signal(state: &AppState, payload: serde_json::Value) {
     );
 }
 
+fn emit_sensitive_context_skip(state: &AppState, inspection_stage: &'static str) {
+    emit_capture_quality_signal(
+        state,
+        json!({
+            "timestamp_ms": chrono::Utc::now().timestamp_millis(),
+            "stored_or_skipped": "skipped_sensitive_context",
+            "privacy_gate": "deterministic_safety_gate",
+            "inspection_stage": inspection_stage,
+            "pixels_persisted": false,
+            "text_persisted": false,
+        }),
+    );
+}
+
 fn emit_extraction_quality_anomaly(state: &AppState, payload: serde_json::Value) {
     let _ = append_quality_event(
         state.app_data_dir.as_path(),
@@ -2048,8 +2086,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             .browser_url
             .as_deref()
             .map(strip_url_credentials);
-        if let Some(ref u) = url {
-            tracing::info!("Frontmost browser URL: {}", u);
+        if url.is_some() {
+            tracing::debug!("Frontmost browser URL available for capture policy evaluation");
         }
 
         // Close the race where Screen Guide starts after the loop-level gate
@@ -2071,13 +2109,20 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             url.as_deref(),
             &config.blocklist,
         ) {
-            tracing::debug!(
-                "Skipping capture: reason={:?} app='{}' title='{}' url={:?}",
-                reason,
-                app_name,
-                window_title,
-                url
-            );
+            if reason == crate::SkipReason::SensitiveContext {
+                queue_sensitive_context_alert(
+                    state.as_ref(),
+                    url.as_deref(),
+                    &window_title,
+                    &config.dismissed_privacy_alerts,
+                );
+                emit_sensitive_context_skip(state.as_ref(), "metadata");
+                tracing::info!(
+                    "Skipping capture: deterministic privacy gate rejected sensitive metadata"
+                );
+            } else {
+                tracing::debug!(reason = ?reason, "Skipping capture before content processing");
+            }
             state.capture_stats.record_skip(reason, &app_name);
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2434,6 +2479,29 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             observed_confidence,
             observed_block_count
         );
+
+        // Metadata-only checks run before pixels are captured. Secret
+        // patterns can only be found after transient OCR/semantic extraction,
+        // so run the same deterministic gate again before image embeddings,
+        // model inference, vector construction, or durable storage.
+        if capture_admission_skip_reason(
+            &app_name,
+            app_context.bundle_id.as_deref(),
+            &window_title,
+            url.as_deref(),
+            Some(&qwen_cleaned_text),
+            &config.blocklist,
+        ) == Some(crate::SkipReason::SensitiveContext)
+        {
+            emit_sensitive_context_skip(state.as_ref(), "transient_text");
+            tracing::info!("Skipping capture: deterministic privacy gate rejected transient text");
+            state
+                .capture_stats
+                .record_skip(crate::SkipReason::SensitiveContext, &app_name);
+            drop(image_data);
+            tokio::time::sleep(sleep_duration).await;
+            continue;
+        }
 
         // If the text source is too weak/noisy to drive the OCR-narrative
         // pipeline, attempt the visual-narrative path. The visual-admission
@@ -5860,6 +5928,100 @@ mod tests {
             Some("https://docs.example.com/fndr"),
             &blocklist,
         ));
+    }
+
+    #[test]
+    fn known_sensitive_metadata_is_blocked_before_ocr_without_user_configuration() {
+        let blocklist: Vec<String> = Vec::new();
+        let sensitive_contexts = [
+            (
+                "banking URL",
+                "Safari",
+                Some("com.apple.Safari"),
+                "Account overview",
+                Some("https://secure.chase.com/accounts"),
+            ),
+            (
+                "banking title",
+                "Safari",
+                Some("com.apple.Safari"),
+                "Online Banking — Account overview",
+                Some("https://accounts.example.com/overview"),
+            ),
+            (
+                "medical title",
+                "Safari",
+                Some("com.apple.Safari"),
+                "MyChart — Test results",
+                Some("https://health.example.com/results"),
+            ),
+            (
+                "authentication page",
+                "Google Chrome",
+                Some("com.google.Chrome"),
+                "Sign in",
+                Some("https://app.example.com/login"),
+            ),
+            (
+                "password-manager bundle",
+                "Vault",
+                Some("com.1password.1password"),
+                "Personal vault",
+                None,
+            ),
+        ];
+
+        for (label, app_name, bundle_id, window_title, url) in sensitive_contexts {
+            assert_eq!(
+                capture_context_skip_reason(app_name, bundle_id, window_title, url, &blocklist,),
+                Some(crate::SkipReason::SensitiveContext),
+                "{label} must fail closed before OCR",
+            );
+        }
+    }
+
+    #[test]
+    fn user_blocklist_and_self_app_keep_their_distinct_skip_reasons() {
+        assert_eq!(
+            capture_context_skip_reason("FNDR", Some("com.fndr.desktop"), "Privacy", None, &[],),
+            Some(crate::SkipReason::SelfApp),
+        );
+        assert_eq!(
+            capture_context_skip_reason(
+                "1Password",
+                Some("com.1password.1password"),
+                "Vault",
+                None,
+                &["1Password".to_string()],
+            ),
+            Some(crate::SkipReason::Blocklist),
+        );
+    }
+
+    #[test]
+    fn secret_pattern_text_is_rejected_by_capture_admission() {
+        assert_eq!(
+            capture_admission_skip_reason(
+                "Terminal",
+                Some("com.apple.Terminal"),
+                "Local shell",
+                None,
+                Some("export API_KEY=do-not-store-this"),
+                &[],
+            ),
+            Some(crate::SkipReason::SensitiveContext),
+        );
+        assert_eq!(
+            capture_admission_skip_reason(
+                "Terminal",
+                Some("com.apple.Terminal"),
+                "Local shell",
+                None,
+                Some("cargo test --lib capture"),
+                &[],
+            ),
+            None,
+        );
     }
 
     #[test]

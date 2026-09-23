@@ -31,11 +31,15 @@ pub async fn control(
 
     match request.action {
         CaptureAction::Pause => {
-            app_state.pause();
+            app_state
+                .set_user_capture_paused(true)
+                .map_err(CompanionError::Internal)?;
             tracing::info!(reason, "Mobile companion paused capture");
         }
         CaptureAction::Resume => {
-            app_state.resume();
+            app_state
+                .set_user_capture_paused(false)
+                .map_err(CompanionError::Internal)?;
             app_state.is_incognito.store(false, Ordering::SeqCst);
             tracing::info!(reason, "Mobile companion resumed capture");
         }

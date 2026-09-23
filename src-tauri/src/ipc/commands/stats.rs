@@ -34,6 +34,7 @@ pub struct CapturePipelineBreakdown {
     pub stored_total: u64,
     pub skipped_blocklist: u64,
     pub skipped_self_app: u64,
+    pub skipped_sensitive_context: u64,
     pub skipped_surface_policy: u64,
     pub skipped_perceptual_dup: u64,
     pub skipped_semantic_dup: u64,
@@ -135,6 +136,7 @@ pub fn capture_pipeline_breakdown(state: &AppState) -> CapturePipelineBreakdown 
         stored_total: s.total_stored(),
         skipped_blocklist: s.skipped_blocklist.load(Ordering::Relaxed),
         skipped_self_app: s.skipped_self_app.load(Ordering::Relaxed),
+        skipped_sensitive_context: s.skipped_sensitive_context.load(Ordering::Relaxed),
         skipped_surface_policy: s.skipped_surface_policy.load(Ordering::Relaxed),
         skipped_perceptual_dup: s.skipped_perceptual_dup.load(Ordering::Relaxed),
         skipped_semantic_dup: s.skipped_semantic_dup.load(Ordering::Relaxed),
@@ -234,17 +236,142 @@ pub async fn transcribe_voice_input(
 /// Pause capture
 #[tauri::command]
 pub async fn pause_capture(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.inner().pause();
+    let result = set_capture_paused_for_user(state.inner(), true);
     emit_capture_status(state.inner());
-    Ok(())
+    result
 }
 
 /// Resume capture
 #[tauri::command]
 pub async fn resume_capture(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.inner().resume();
+    let result = set_capture_paused_for_user(state.inner(), false);
     emit_capture_status(state.inner());
-    Ok(())
+    result
+}
+
+fn set_capture_paused_for_user(state: &AppState, paused: bool) -> Result<(), String> {
+    state.set_user_capture_paused(paused)
+}
+
+#[cfg(test)]
+mod capture_pause_persistence_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::graph::GraphStore;
+    use crate::storage::{StateStore, Store};
+    use tempfile::TempDir;
+
+    struct StateFixture {
+        _temp_dir: TempDir,
+        data_dir: std::path::PathBuf,
+        store: Arc<Store>,
+        state_store: Arc<StateStore>,
+    }
+
+    impl StateFixture {
+        fn new() -> Self {
+            let temp_dir = tempfile::tempdir().expect("temporary app data directory");
+            let data_dir = temp_dir.path().to_path_buf();
+            let store = Arc::new(Store::new(&data_dir).expect("memory store"));
+            let state_store = Arc::new(StateStore::new(&data_dir).expect("state store"));
+            Self {
+                _temp_dir: temp_dir,
+                data_dir,
+                store,
+                state_store,
+            }
+        }
+
+        fn app_state(&self) -> AppState {
+            AppState::new(
+                self.data_dir.clone(),
+                Config::default(),
+                self.store.clone(),
+                self.state_store.clone(),
+                GraphStore::new(self.store.clone()),
+                None,
+                None,
+            )
+        }
+    }
+
+    #[test]
+    fn capture_pause_survives_app_state_reinitialization() {
+        let fixture = StateFixture::new();
+        let state = fixture.app_state();
+        assert!(
+            state.is_capturing(),
+            "legacy installs start capture unpaused"
+        );
+
+        set_capture_paused_for_user(&state, true).expect("persist pause preference");
+        assert_eq!(
+            fixture
+                .state_store
+                .load_json::<bool>(crate::USER_CAPTURE_PAUSED_STATE_KEY)
+                .expect("load persisted pause preference"),
+            Some(true)
+        );
+
+        let relaunched = fixture.app_state();
+        assert!(relaunched.is_paused.load(Ordering::SeqCst));
+        assert!(!relaunched.is_capturing());
+    }
+
+    #[test]
+    fn explicit_capture_resume_survives_app_state_reinitialization() {
+        let fixture = StateFixture::new();
+        let state = fixture.app_state();
+        set_capture_paused_for_user(&state, true).expect("persist pause preference");
+        set_capture_paused_for_user(&state, false).expect("persist resume preference");
+        assert_eq!(
+            fixture
+                .state_store
+                .load_json::<bool>(crate::USER_CAPTURE_PAUSED_STATE_KEY)
+                .expect("load persisted resume preference"),
+            Some(false)
+        );
+
+        let relaunched = fixture.app_state();
+        assert!(!relaunched.is_paused.load(Ordering::SeqCst));
+        assert!(relaunched.is_capturing());
+    }
+
+    #[test]
+    fn transient_internal_pause_does_not_change_relaunch_preference() {
+        let fixture = StateFixture::new();
+        let state = fixture.app_state();
+        state.pause();
+        assert!(!state.is_capturing());
+
+        let relaunched = fixture.app_state();
+        assert!(relaunched.is_capturing());
+    }
+
+    #[test]
+    fn transient_internal_resume_cannot_override_a_user_pause() {
+        let fixture = StateFixture::new();
+        let state = fixture.app_state();
+        set_capture_paused_for_user(&state, true).expect("persist pause preference");
+
+        state.resume();
+
+        assert!(state.is_paused.load(Ordering::SeqCst));
+        assert!(!state.is_capturing());
+    }
+
+    #[test]
+    fn unreadable_pause_preference_fails_closed() {
+        let fixture = StateFixture::new();
+        fixture
+            .state_store
+            .save_json(crate::USER_CAPTURE_PAUSED_STATE_KEY, &"not-a-boolean")
+            .expect("seed malformed pause preference");
+
+        let state = fixture.app_state();
+        assert!(state.is_paused.load(Ordering::SeqCst));
+        assert!(!state.is_capturing());
+    }
 }
 
 /// Get statistics

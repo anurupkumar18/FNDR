@@ -26,6 +26,7 @@ pub fn evaluate(
     user_blocklist: &[String],
 ) -> SafetyDecision {
     let app = app_name.unwrap_or("").to_ascii_lowercase();
+    let bundle = bundle_id.unwrap_or("").to_ascii_lowercase();
     let title = window_title.unwrap_or("").to_ascii_lowercase();
     let url_lower = url.unwrap_or("").to_ascii_lowercase();
     let text_lower = ocr_text.unwrap_or("").to_ascii_lowercase();
@@ -40,9 +41,10 @@ pub fn evaluate(
     if let Some(id) = bundle_id {
         let id_lower = id.to_ascii_lowercase();
         if (id_lower.starts_with("com.fndr") || id_lower.contains(".fndr."))
-            && !app.contains("fndr meeting") {
-                return SafetyDecision::SkipStorage;
-            }
+            && !app.contains("fndr meeting")
+        {
+            return SafetyDecision::SkipStorage;
+        }
     }
 
     const PASSWORD_MANAGERS: &[&str] = &[
@@ -54,7 +56,7 @@ pub fn evaluate(
         "keepass",
     ];
     for pm in PASSWORD_MANAGERS {
-        if app.contains(pm) {
+        if app.contains(pm) || bundle.contains(pm) {
             return SafetyDecision::SkipStorage;
         }
     }
@@ -87,12 +89,25 @@ pub fn evaluate(
             return SafetyDecision::SkipStorage;
         }
     }
+    const BANKING_TITLES: &[&str] = &["online banking", "mobile banking", "bank account portal"];
+    if BANKING_TITLES.iter().any(|marker| title.contains(marker)) {
+        return SafetyDecision::SkipStorage;
+    }
 
     const MEDICAL_DOMAINS: &[&str] = &["epic.com", "mychart", "healthportal", "patientportal"];
     for domain in MEDICAL_DOMAINS {
         if url_lower.contains(domain) {
             return SafetyDecision::SkipStorage;
         }
+    }
+    const MEDICAL_TITLES: &[&str] = &[
+        "mychart",
+        "patient portal",
+        "health portal",
+        "medical record",
+    ];
+    if MEDICAL_TITLES.iter().any(|marker| title.contains(marker)) {
+        return SafetyDecision::SkipStorage;
     }
 
     const AUTH_INDICATORS: &[&str] = &[
@@ -123,17 +138,42 @@ pub fn evaluate(
         "token:",
         "-----begin rsa",
         "-----begin ec",
-        "ghp_",
-        "sk-",
-        "xoxb-",
     ];
     for pattern in SECRET_PATTERNS {
         if text_lower.contains(pattern) {
             return SafetyDecision::Redact;
         }
     }
+    const SECRET_TOKEN_PREFIXES: &[&str] = &["ghp_", "sk-", "xoxb-"];
+    if SECRET_TOKEN_PREFIXES
+        .iter()
+        .any(|prefix| contains_prefixed_secret(&text_lower, prefix, 12))
+    {
+        return SafetyDecision::Redact;
+    }
 
     SafetyDecision::Allow
+}
+
+fn contains_prefixed_secret(text: &str, prefix: &str, min_suffix_len: usize) -> bool {
+    let mut search_from = 0;
+    while let Some(relative_start) = text[search_from..].find(prefix) {
+        let start = search_from + relative_start;
+        let starts_at_token_boundary = start == 0
+            || text[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_');
+        let suffix_len = text[start + prefix.len()..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+            .count();
+        if starts_at_token_boundary && suffix_len >= min_suffix_len {
+            return true;
+        }
+        search_from = start + prefix.len();
+    }
+    false
 }
 
 #[cfg(test)]
@@ -205,6 +245,32 @@ mod tests {
                 &[]
             ),
             SafetyDecision::Redact
+        );
+    }
+
+    #[test]
+    fn distinguishes_long_secret_tokens_from_ordinary_hyphenated_words() {
+        assert_eq!(
+            evaluate(
+                Some("Terminal"),
+                None,
+                None,
+                Some("bash"),
+                Some("credential sk-1234567890abcdef"),
+                &[]
+            ),
+            SafetyDecision::Redact
+        );
+        assert_eq!(
+            evaluate(
+                Some("VS Code"),
+                None,
+                None,
+                Some("README.md"),
+                Some("Run the flask-abcdefghijklmnop migration and inspect sk-short"),
+                &[]
+            ),
+            SafetyDecision::Allow
         );
     }
 

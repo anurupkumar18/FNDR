@@ -64,14 +64,17 @@ mod tests {
         let stats = CapturePipelineStats::default();
         stats.record_evaluated();
         stats.record_evaluated();
-        stats.record_skip(SkipReason::Blocklist, "Example Bank");
+        stats.record_skip(SkipReason::SensitiveContext, "Example Bank");
         stats.record_store(StoreOutcome::OcrPath);
         let proof = build_privacy_proof(&stats);
         assert_eq!(proof.evaluated, 2);
         assert_eq!(proof.stored, 1);
-        assert_eq!(proof.skipped_by_reason["blocklist"], 1);
+        assert_eq!(proof.skipped_by_reason["sensitive_context"], 1);
         let json = serde_json::to_string(&proof).unwrap();
-        assert!(!json.contains("Example Bank"), "app names must not leak into the proof");
+        assert!(
+            !json.contains("Example Bank"),
+            "app names must not leak into the proof"
+        );
     }
 
     #[test]

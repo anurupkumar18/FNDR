@@ -51,6 +51,8 @@ use std::sync::Arc;
 use storage::{StateStore, Stats, Store};
 use tokio::sync::Mutex as AsyncMutex;
 
+const USER_CAPTURE_PAUSED_STATE_KEY: &str = "capture.user_paused";
+
 /// Queued insight-graph upsert work (see `capture` flush + idle `commit_graph_updates`).
 #[derive(Debug, Clone)]
 pub struct PendingGraphUpdate {
@@ -102,6 +104,8 @@ pub struct CapturePipelineStats {
     pub skipped_blocklist: AtomicU64,
     /// FNDR is frontmost — we never capture our own UI (privacy + recursion).
     pub skipped_self_app: AtomicU64,
+    /// Deterministic privacy safety gate rejected a known-sensitive context.
+    pub skipped_sensitive_context: AtomicU64,
     /// Frames blocked by `classify_capture_surface_policy::SkipFrame`
     /// or by the browser semantic shape gate (nav-heavy, low signal).
     pub skipped_surface_policy: AtomicU64,
@@ -159,6 +163,7 @@ pub enum SkipReason {
     /// FNDR itself is the active app; capture is intentionally disabled.
     SelfApp,
     Blocklist,
+    SensitiveContext,
     SurfacePolicy,
     PerceptualDup,
     SemanticDup,
@@ -185,6 +190,7 @@ impl SkipReason {
         match self {
             SkipReason::SelfApp => "self_app",
             SkipReason::Blocklist => "blocklist",
+            SkipReason::SensitiveContext => "sensitive_context",
             SkipReason::SurfacePolicy => "surface_policy",
             SkipReason::PerceptualDup => "perceptual_dup",
             SkipReason::SemanticDup => "semantic_dup",
@@ -216,6 +222,7 @@ impl Default for CapturePipelineStats {
             evaluated: AtomicU64::new(0),
             skipped_blocklist: AtomicU64::new(0),
             skipped_self_app: AtomicU64::new(0),
+            skipped_sensitive_context: AtomicU64::new(0),
             skipped_surface_policy: AtomicU64::new(0),
             skipped_perceptual_dup: AtomicU64::new(0),
             skipped_semantic_dup: AtomicU64::new(0),
@@ -243,6 +250,7 @@ impl CapturePipelineStats {
         let counter = match reason {
             SkipReason::SelfApp => &self.skipped_self_app,
             SkipReason::Blocklist => &self.skipped_blocklist,
+            SkipReason::SensitiveContext => &self.skipped_sensitive_context,
             SkipReason::SurfacePolicy => &self.skipped_surface_policy,
             SkipReason::PerceptualDup => &self.skipped_perceptual_dup,
             SkipReason::SemanticDup => &self.skipped_semantic_dup,
@@ -285,9 +293,13 @@ impl CapturePipelineStats {
 
     /// Per-reason skip counts keyed by `SkipReason::as_str()`. Cheap (atomic reads only).
     pub fn skip_counts(&self) -> std::collections::BTreeMap<&'static str, u64> {
-        let pairs: [(SkipReason, &AtomicU64); 16] = [
+        let pairs: [(SkipReason, &AtomicU64); 17] = [
             (SkipReason::SelfApp, &self.skipped_self_app),
             (SkipReason::Blocklist, &self.skipped_blocklist),
+            (
+                SkipReason::SensitiveContext,
+                &self.skipped_sensitive_context,
+            ),
             (SkipReason::SurfacePolicy, &self.skipped_surface_policy),
             (SkipReason::PerceptualDup, &self.skipped_perceptual_dup),
             (SkipReason::SemanticDup, &self.skipped_semantic_dup),
@@ -328,6 +340,7 @@ impl CapturePipelineStats {
     pub fn total_skipped(&self) -> u64 {
         self.skipped_blocklist.load(Ordering::Relaxed)
             + self.skipped_self_app.load(Ordering::Relaxed)
+            + self.skipped_sensitive_context.load(Ordering::Relaxed)
             + self.skipped_surface_policy.load(Ordering::Relaxed)
             + self.skipped_perceptual_dup.load(Ordering::Relaxed)
             + self.skipped_semantic_dup.load(Ordering::Relaxed)
@@ -362,6 +375,7 @@ pub struct AppState {
     pub state_store: Arc<StateStore>,
     pub graph: GraphStore,
     pub is_paused: AtomicBool,
+    user_capture_paused: AtomicBool,
     pub is_incognito: AtomicBool,
     /// Non-zero while a Screen Guide generation owns an ephemeral on-screen
     /// interaction. The ordinary memory capture loop must not sample during
@@ -444,13 +458,25 @@ impl AppState {
         vlm: Option<Arc<VlmEngine>>,
     ) -> Self {
         let (proactive_tx, proactive_rx) = tokio::sync::watch::channel(None);
+        let capture_paused = match state_store.load_json::<bool>(USER_CAPTURE_PAUSED_STATE_KEY) {
+            Ok(Some(paused)) => paused,
+            Ok(None) => false,
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    "Could not restore the user capture-pause preference; starting paused"
+                );
+                true
+            }
+        };
         Self {
             app_data_dir,
             config: RwLock::new(config),
             store,
             state_store,
             graph,
-            is_paused: AtomicBool::new(false),
+            is_paused: AtomicBool::new(capture_paused),
+            user_capture_paused: AtomicBool::new(capture_paused),
             is_incognito: AtomicBool::new(false),
             screen_guide_capture_generation: AtomicU64::new(0),
             screen_guide_capture_epoch: AtomicU64::new(0),
@@ -555,14 +581,49 @@ impl AppState {
         *self.app_handle.write() = Some(handle);
     }
 
+    /// Pause capture for transient internal work without changing the user's
+    /// relaunch preference.
     pub fn pause(&self) {
         self.is_paused.store(true, Ordering::SeqCst);
         tracing::info!("Capture paused");
     }
 
+    /// Resume capture after a transient internal pause without changing the
+    /// user's relaunch preference.
     pub fn resume(&self) {
+        if self.user_capture_paused.load(Ordering::SeqCst) {
+            tracing::info!("Capture remains paused by user preference");
+            return;
+        }
         self.is_paused.store(false, Ordering::SeqCst);
         tracing::info!("Capture resumed");
+    }
+
+    /// Persist a user-requested capture pause across application relaunches.
+    ///
+    /// Internal maintenance work must continue using [`Self::pause`] and
+    /// [`Self::resume`], which intentionally change only the current process.
+    pub fn set_user_capture_paused(&self, paused: bool) -> Result<(), String> {
+        // A pause takes effect before the disk write so a persistence failure
+        // cannot allow another capture after the user asked FNDR to stop.
+        if paused {
+            self.user_capture_paused.store(true, Ordering::SeqCst);
+            self.is_paused.store(true, Ordering::SeqCst);
+        }
+
+        self.state_store
+            .save_json(USER_CAPTURE_PAUSED_STATE_KEY, &paused)
+            .map_err(|err| format!("Failed to persist capture pause preference: {err}"))?;
+
+        // Resume only after the durable preference has been cleared. If the
+        // write fails, capture remains paused and the caller receives an error.
+        if !paused {
+            self.user_capture_paused.store(false, Ordering::SeqCst);
+            self.is_paused.store(false, Ordering::SeqCst);
+        }
+
+        tracing::info!(paused, "User capture-pause preference updated");
+        Ok(())
     }
 
     pub fn is_capturing(&self) -> bool {
@@ -740,6 +801,7 @@ mod tests {
             "screen_capture_failed"
         );
         assert_eq!(SkipReason::SelfApp.as_str(), "self_app");
+        assert_eq!(SkipReason::SensitiveContext.as_str(), "sensitive_context");
     }
 
     #[test]
@@ -754,6 +816,25 @@ mod tests {
     }
 
     #[test]
+    fn capture_stats_sensitive_context_has_a_distinct_privacy_counter() {
+        let stats = CapturePipelineStats::default();
+        stats.record_skip(SkipReason::SensitiveContext, "Safari");
+
+        assert_eq!(stats.skipped_sensitive_context.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.skipped_blocklist.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.skip_counts()["sensitive_context"], 1);
+        assert_eq!(stats.total_skipped(), 1);
+        assert_eq!(
+            stats
+                .last_skip
+                .read()
+                .as_ref()
+                .map(|entry| entry.reason.as_str()),
+            Some("sensitive_context")
+        );
+    }
+
+    #[test]
     fn skip_counts_and_totals_reflect_recorded_events() {
         let stats = CapturePipelineStats::default();
         stats.record_evaluated();
@@ -764,9 +845,10 @@ mod tests {
         stats.record_store(StoreOutcome::OcrPath);
         let counts = stats.skip_counts();
         assert_eq!(counts["blocklist"], 1);
+        assert_eq!(counts["sensitive_context"], 0);
         assert_eq!(counts["perceptual_dup"], 1);
         assert_eq!(counts["noise"], 0);
-        assert_eq!(counts.len(), 16);
+        assert_eq!(counts.len(), 17);
         assert_eq!(stats.evaluated_total(), 3);
         assert_eq!(stats.total_skipped(), 2);
         assert_eq!(stats.total_stored(), 1);
