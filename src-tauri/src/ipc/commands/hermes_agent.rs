@@ -368,9 +368,34 @@ fn detect_ollama_executable() -> Option<PathBuf> {
     existing_executable_path("ollama").or_else(|| find_existing_executable(candidates))
 }
 
+/// Codex binaries bundled inside OpenAI's desktop apps. They ship a working
+/// native build even when a global npm install has lost its platform binary.
+const BUNDLED_CODEX_CANDIDATES: &[&str] = &[
+    "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "/Applications/Codex.app/Contents/Resources/codex",
+];
+
+/// First Codex that actually runs; otherwise the first one found, so callers
+/// can report a broken install instead of a missing one.
 pub(crate) fn detect_codex_executable() -> Option<PathBuf> {
-    existing_executable_path("codex")
-        .or_else(|| find_existing_executable(common_executable_candidates("codex")))
+    let mut candidates: Vec<PathBuf> = existing_executable_path("codex").into_iter().collect();
+    candidates.extend(common_executable_candidates("codex"));
+    candidates.extend(BUNDLED_CODEX_CANDIDATES.iter().map(PathBuf::from));
+    candidates.retain(|candidate| candidate.is_file());
+    candidates.dedup();
+
+    candidates
+        .iter()
+        .find(|candidate| codex_runs(candidate))
+        .or_else(|| candidates.first())
+        .cloned()
+}
+
+fn codex_runs(executable: &Path) -> bool {
+    Command::new(executable)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 fn version_from_output(output: &std::process::Output) -> Option<String> {

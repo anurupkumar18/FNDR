@@ -44,8 +44,11 @@ pub use maintenance::*;
 mod hermes_agent;
 pub use hermes_agent::*;
 
-mod codex_account;
+pub(crate) mod codex_account;
 pub use codex_account::*;
+
+pub(crate) mod openclicky_bridge;
+pub use openclicky_bridge::*;
 
 mod agent;
 pub use agent::*;

@@ -5,7 +5,7 @@
 //! memory store, reads matched file contents, or writes an artifact to disk.
 
 use crate::capture::macos::FrontmostAppContext;
-use crate::config::{AutofillConfig, ScreenGuideConfig};
+use crate::config::{AutofillConfig, ScreenGuideConfig, ScreenGuideModel};
 use crate::ocr::{OcrEngine, ScreenGuideOcrLine};
 use crate::privacy::safety_gate::{self, SafetyDecision};
 use crate::privacy::Blocklist;
@@ -52,6 +52,10 @@ const MAX_SCREEN_GUIDE_FILE_CANDIDATES: usize = 64;
 const MAX_SCREEN_GUIDE_FILE_MATCHES: usize = 5;
 const MAX_SCREEN_GUIDE_FILE_ANSWER_MATCHES: usize = 3;
 const SCREEN_GUIDE_FILE_ROOT_COUNT: usize = 3;
+
+/// ChatGPT turns include a network round trip, so they get more headroom
+/// than the on-device model.
+const SCREEN_GUIDE_CODEX_TIMEOUT: Duration = Duration::from_secs(45);
 
 static POINT_TAG_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\[POINT:[^\]\r\n]*\]").expect("valid point tag regex"));
@@ -2398,6 +2402,11 @@ pub async fn ask_screen_guide(
         &deferred_restore,
     )?;
 
+    // Pixels leave the Mac only with both the ChatGPT model and the separate
+    // screenshot opt-in; the clone is taken before OCR consumes the capture.
+    let codex_screenshot = (settings.model == ScreenGuideModel::Codex && settings.send_screenshot_to_codex)
+        .then(|| image_data.clone());
+
     let ocr = tokio::task::spawn_blocking(move || {
         let engine =
             OcrEngine::new().map_err(|_| "Screen Guide OCR is unavailable.".to_string())?;
@@ -2464,6 +2473,36 @@ pub async fn ask_screen_guide(
     let history_text = transient_history_text(&history);
     let fallback = grounded_fallback(&ocr.plain_text);
 
+    let inference_started = Instant::now();
+    let raw_answer = if settings.model == ScreenGuideModel::Codex {
+        tracing::info!(screenshot = codex_screenshot.is_some(), "screen_guide:codex_started");
+        let answer = crate::ipc::commands::codex_account::answer_screen_guide_with_codex(
+            &question,
+            &screen_text,
+            &history_text,
+            codex_screenshot,
+            Arc::clone(&turn_cancel),
+            SCREEN_GUIDE_CODEX_TIMEOUT,
+        )
+        .await;
+        tracing::info!(
+            elapsed_ms = inference_started.elapsed().as_millis() as u64,
+            ok = answer.is_ok(),
+            "screen_guide:codex_finished"
+        );
+        match answer {
+            Ok(answer) => answer,
+            Err(err) => {
+                restore_screen_guide_capture_if_owned(
+                    &app,
+                    state.inner(),
+                    request_generation,
+                    &deferred_restore,
+                );
+                return Err(err);
+            }
+        }
+    } else {
     let inference_engine = state.inner().ensure_inference_engine().await;
     ensure_screen_guide_request_current_or_restore(
         &app,
@@ -2471,8 +2510,7 @@ pub async fn ask_screen_guide(
         request_generation,
         &deferred_restore,
     )?;
-    let inference_started = Instant::now();
-    let raw_answer = match inference_engine {
+    match inference_engine {
         Ok(Some(engine)) => {
             tracing::info!("screen_guide:inference_started");
             let _pipeline_guard = state.inner().model_pipeline_lock.lock().await;
@@ -2502,6 +2540,7 @@ pub async fn ask_screen_guide(
             tracing::warn!("screen_guide:inference_engine_unavailable");
             String::new()
         }
+    }
     };
 
     ensure_screen_guide_request_current_or_restore(
@@ -2535,6 +2574,28 @@ pub async fn ask_screen_guide(
     } else {
         fallback
     };
+    let mut parsed = parsed;
+    if settings.openclicky_bridge {
+        if let Some(cue) = parsed.point_cue.as_ref() {
+            let scale = f64::from_bits(captured_display.scale_factor_bits).max(1.0);
+            let display_points = (
+                f64::from(captured_display.width) / scale,
+                f64::from(captured_display.height) / scale,
+            );
+            match crate::ipc::commands::openclicky_bridge::point_at(
+                cue.x,
+                cue.y,
+                cue.label.as_deref(),
+                display_points,
+            )
+            .await
+            {
+                // OpenClicky owns the pointing; FNDR must not animate a second cursor.
+                Ok(()) => parsed.point_cue = None,
+                Err(err) => tracing::warn!(%err, "screen_guide:openclicky_point_failed"),
+            }
+        }
+    }
     let result = finish_screen_guide_answer(state.inner(), &settings, request_generation, parsed);
     tracing::info!(
         elapsed_ms = ask_started.elapsed().as_millis() as u64,

@@ -408,3 +408,12 @@
         flex-direction: column;
     }
 }
+
+.sg-model-row {
+    align-items: center;
+}
+
+.sg-model-toggle {
+    width: 200px;
+    flex-shrink: 0;
+}
