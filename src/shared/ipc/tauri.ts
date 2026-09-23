@@ -2117,11 +2117,31 @@ export async function getFocusStatus(): Promise<FocusStatus> {
 }
 
 // Screen Guide
+export type ScreenGuideModel = "local" | "codex";
+
+export interface OpenClickyBridgeStatus {
+    /** OpenClicky is running and answered its local /health. */
+    reachable: boolean;
+    /** FNDR found OPENCLICKY_BRIDGE_TOKEN to authenticate with. */
+    tokenFound: boolean;
+    bridgeTokenConfigured: boolean;
+}
+
+export async function openClickyBridgeStatus(): Promise<OpenClickyBridgeStatus> {
+    return invoke<OpenClickyBridgeStatus>("openclicky_bridge_status");
+}
+
 export interface ScreenGuideSettings {
     enabled: boolean;
     shortcut: string;
     speak_responses: boolean;
     show_cursor: boolean;
+    /** `codex` answers with the user's ChatGPT plan; never the default. */
+    model?: ScreenGuideModel;
+    /** With `codex`, also send a downscaled screenshot. */
+    send_screenshot_to_codex?: boolean;
+    /** Point with OpenClicky's cursor via its local bridge. */
+    openclicky_bridge?: boolean;
 }
 
 export interface ScreenGuideHistoryEntry {

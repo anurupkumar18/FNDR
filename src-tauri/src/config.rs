@@ -609,6 +609,28 @@ pub struct ScreenGuideConfig {
     /// Animate the pointer from its current location to a grounded screen cue.
     #[serde(default = "default_true")]
     pub show_cursor: bool,
+    /// Which model answers. `Codex` sends the question and on-screen text to
+    /// OpenAI under the user's ChatGPT plan, so it is never the default.
+    #[serde(default)]
+    pub model: ScreenGuideModel,
+    /// With `Codex`, also attach a downscaled screenshot. Separate opt-in:
+    /// it sends pixels, not just recognized text, off the Mac.
+    #[serde(default)]
+    pub send_screenshot_to_codex: bool,
+    /// Point with OpenClicky's cursor through its local control bridge
+    /// (127.0.0.1:32123) instead of FNDR's own overlay cursor.
+    #[serde(default)]
+    pub openclicky_bridge: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ScreenGuideModel {
+    /// On-device model; nothing leaves the Mac.
+    #[default]
+    Local,
+    /// ChatGPT through the Codex app-server.
+    Codex,
 }
 
 impl Default for ScreenGuideConfig {
@@ -618,6 +640,9 @@ impl Default for ScreenGuideConfig {
             shortcut: default_screen_guide_shortcut(),
             speak_responses: true,
             show_cursor: true,
+            model: ScreenGuideModel::Local,
+            send_screenshot_to_codex: false,
+            openclicky_bridge: false,
         }
     }
 }
@@ -627,6 +652,10 @@ impl ScreenGuideConfig {
         self.shortcut = self.shortcut.trim().to_string();
         if self.shortcut.is_empty() {
             self.shortcut = default_screen_guide_shortcut();
+        }
+        // A screenshot opt-in means nothing without the Codex model.
+        if self.model != ScreenGuideModel::Codex {
+            self.send_screenshot_to_codex = false;
         }
         self
     }
@@ -1244,6 +1273,25 @@ mod tests {
             .normalized()
             .validate()
             .expect("default config should stay internally consistent");
+    }
+
+    #[test]
+    fn screen_guide_never_sends_anything_off_device_by_default() {
+        let config = Config::default().normalized();
+        assert_eq!(config.screen_guide.model, ScreenGuideModel::Local);
+        assert!(!config.screen_guide.send_screenshot_to_codex);
+        assert!(!config.screen_guide.openclicky_bridge);
+
+        let stale = ScreenGuideConfig {
+            send_screenshot_to_codex: true,
+            ..ScreenGuideConfig::default()
+        }
+        .normalized();
+        assert!(!stale.send_screenshot_to_codex, "screenshot opt-in needs the ChatGPT model");
+
+        let legacy: ScreenGuideConfig =
+            serde_json::from_str(r#"{"enabled":true,"shortcut":"Control+Alt+Space"}"#).unwrap();
+        assert_eq!(legacy.model, ScreenGuideModel::Local);
     }
 
     #[test]

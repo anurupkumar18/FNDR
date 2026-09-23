@@ -12,6 +12,8 @@ import {
 import { screenGuideErrorMessage } from "./screenGuideState";
 import "./ScreenGuidePanel.css";
 import { PanelHeader } from "@/shared/components/PanelHeader";
+import { SegmentedControl } from "@/shared/components/SegmentedControl";
+import { openClickyBridgeStatus, type OpenClickyBridgeStatus } from "@/shared/ipc/tauri";
 
 interface ScreenGuidePanelProps {
     isVisible: boolean;
@@ -144,6 +146,19 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
     useEffect(() => {
         setShortcutDraft(settings?.shortcut ?? "");
     }, [settings?.shortcut]);
+
+    const usesChatGpt = settings?.model === "codex";
+    const [openClicky, setOpenClicky] = useState<OpenClickyBridgeStatus | null>(null);
+    useEffect(() => {
+        if (!isVisible || !settings?.openclicky_bridge) return;
+        let active = true;
+        openClickyBridgeStatus()
+            .then((status) => active && setOpenClicky(status))
+            .catch(() => active && setOpenClicky(null));
+        return () => {
+            active = false;
+        };
+    }, [isVisible, settings?.openclicky_bridge]);
 
     if (!isVisible) return null;
 
@@ -392,6 +407,77 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                             disabled={controlsDisabled}
                             onChange={(event) =>
                                 void updateSettings({ show_cursor: event.target.checked })
+                            }
+                        />
+                    </label>
+                </section>
+
+                <section className="sg-settings-card" aria-labelledby="sg-model-title">
+                    <div className="sg-setting-row sg-model-row">
+                        <span>
+                            <strong id="sg-model-title">Answer with</strong>
+                            <small>
+                                {usesChatGpt
+                                    ? "Your question and the text on screen go to OpenAI under your ChatGPT plan."
+                                    : "The on-device model. Nothing leaves this Mac."}
+                            </small>
+                        </span>
+                        <SegmentedControl
+                            className="sg-model-toggle"
+                            ariaLabel="Screen Guide model"
+                            value={settings?.model ?? "local"}
+                            onChange={(model) => void updateSettings({
+                                model,
+                                send_screenshot_to_codex: model === "codex" ? settings?.send_screenshot_to_codex : false,
+                            })}
+                            options={[
+                                { value: "local", label: "On-device" },
+                                { value: "codex", label: "ChatGPT" },
+                            ]}
+                        />
+                    </div>
+                    {usesChatGpt && (
+                        <label className="sg-setting-row">
+                            <span>
+                                <strong>Include a screenshot</strong>
+                                <small>
+                                    Also sends a downscaled image of your main display. Better guidance, but
+                                    everything visible leaves the Mac for that question.
+                                </small>
+                            </span>
+                            <input
+                                type="checkbox"
+                                role="switch"
+                                className="fndr-switch"
+                                aria-label="Include a screenshot"
+                                checked={settings?.send_screenshot_to_codex ?? false}
+                                disabled={controlsDisabled}
+                                onChange={(event) =>
+                                    void updateSettings({ send_screenshot_to_codex: event.target.checked })
+                                }
+                            />
+                        </label>
+                    )}
+                    <label className="sg-setting-row">
+                        <span>
+                            <strong>Point with OpenClicky</strong>
+                            <small>
+                                {openClicky?.reachable
+                                    ? openClicky.tokenFound
+                                        ? "OpenClicky's cursor shows the way instead of FNDR's."
+                                        : "Add OPENCLICKY_BRIDGE_TOKEN to ~/.config/openclicky/secrets.env."
+                                    : "Open OpenClicky to use its cursor. FNDR's cursor is used until then."}
+                            </small>
+                        </span>
+                        <input
+                            type="checkbox"
+                            role="switch"
+                            className="fndr-switch"
+                            aria-label="Point with OpenClicky"
+                            checked={settings?.openclicky_bridge ?? false}
+                            disabled={controlsDisabled}
+                            onChange={(event) =>
+                                void updateSettings({ openclicky_bridge: event.target.checked })
                             }
                         />
                     </label>

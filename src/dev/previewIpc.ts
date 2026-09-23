@@ -1178,6 +1178,8 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             case "save_hermes_setup":
                 hermesConfigured = true;
                 return previewHermesStatus(codexSignedIn, hermesConfigured);
+            case "openclicky_bridge_status":
+                return { reachable: false, tokenFound: false, bridgeTokenConfigured: false };
             case "codex_account_status":
                 return clonePreview(codexSignedIn ? previewCodexSignedIn : previewCodexSignedOut);
             case "codex_login_start": {

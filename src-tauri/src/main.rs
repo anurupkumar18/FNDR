@@ -805,6 +805,7 @@ fn main() {
             ipc::commands::codex_login_start,
             ipc::commands::codex_login_cancel,
             ipc::commands::codex_logout,
+            ipc::commands::openclicky_bridge_status,
             ipc::commands::send_direct_chat,
             ipc::commands::quick_setup_ollama,
             ipc::commands::generate_daily_briefing,
