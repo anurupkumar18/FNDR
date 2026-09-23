@@ -126,11 +126,16 @@ pub fn policy_for_action(
 
     // Act/Learn mode: check kind and risk
     let (allowed, requires_approval, reason, blocked) = match kind {
-        AgentActionKind::OpenUrl => (true, false, "Safe to open URLs".to_string(), None),
+        AgentActionKind::OpenUrl => (
+            true,
+            true,
+            "Opening a URL requires approval".to_string(),
+            None,
+        ),
         AgentActionKind::OpenFile => (
             true,
-            false,
-            "Safe to open known project files".to_string(),
+            true,
+            "Opening a file requires approval".to_string(),
             None,
         ),
         AgentActionKind::RevealInFinder => (true, false, "Safe reveal on macOS".to_string(), None),
@@ -218,6 +223,17 @@ mod approve_then_act_tests {
         );
         assert!(decision.allowed);
         assert!(decision.requires_approval);
+    }
+
+    #[test]
+    fn open_url_and_open_file_require_approval_in_act_mode() {
+        // WS5's design consequence: every external action gets its own
+        // approval, no exceptions for actions that look safe.
+        for kind in [AgentActionKind::OpenUrl, AgentActionKind::OpenFile] {
+            let decision = policy_for_action(&kind, &RiskLevel::Low, &AgentMode::Act);
+            assert!(decision.allowed, "{kind:?} should still be allowed");
+            assert!(decision.requires_approval, "{kind:?} must require approval");
+        }
     }
 
     #[test]
