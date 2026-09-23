@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { fndrBuildContextPack } from "../../shared/ipc/tauri";
+import { Button } from "@/shared/components/atoms";
+import { fndrBuildContextPack, type MemoryCard } from "../../shared/ipc/tauri";
 
 interface Props {
-    query: string;
-    project?: string;
+    card: MemoryCard;
 }
 
 /**
@@ -11,14 +11,17 @@ interface Props {
  * a markdown-rendered ContextPack to the clipboard. Shows a transient
  * "Copied" toast so the user knows the action succeeded.
  */
-export function CopyForAgentButton({ query, project }: Props) {
+export function CopyForAgentButton({ card }: Props) {
     const [status, setStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
 
     async function handleClick() {
         setStatus("copying");
         try {
-            const pack = await fndrBuildContextPack({ query, project });
-            const md = renderContextPackMarkdown(pack);
+            const pack = await fndrBuildContextPack({
+                query: card.title,
+                project: card.project,
+            });
+            const md = renderMemoryContextMarkdown(card, pack);
             await navigator.clipboard.writeText(md);
             setStatus("copied");
             setTimeout(() => setStatus("idle"), 1800);
@@ -30,20 +33,13 @@ export function CopyForAgentButton({ query, project }: Props) {
     }
 
     return (
-        <button
-            type="button"
+        <Button
+            variant="secondary"
             onClick={handleClick}
             disabled={status === "copying"}
             data-testid="fndr-copy-for-agent"
-            style={{
-                padding: "8px 14px",
-                background: status === "copied" ? "#388E3C" : "#3E2723",
-                color: "#FAF9F6",
-                borderRadius: 8,
-                border: "none",
-                fontSize: 13,
-                cursor: status === "copying" ? "wait" : "pointer",
-            }}
+            aria-live="polite"
+            aria-label="Copy this memory and related context"
         >
             {status === "copying"
                 ? "Copying…"
@@ -51,18 +47,36 @@ export function CopyForAgentButton({ query, project }: Props) {
                   ? "Copied!"
                   : status === "error"
                     ? "Copy failed"
-                    : "Copy for Agent"}
-        </button>
+                    : "Copy memory context"}
+        </Button>
     );
 }
 
-function renderContextPackMarkdown(pack: unknown): string {
+function renderMemoryContextMarkdown(card: MemoryCard, pack: unknown): string {
+    const summary =
+        card.insight_what_happened?.trim()
+        || card.display_summary?.trim()
+        || card.summary.trim();
+    const lines = [
+        `# FNDR memory: ${card.title}`,
+        "",
+        `- Memory ID: ${card.id}`,
+        `- Captured: ${new Date(card.timestamp).toISOString()}`,
+        `- Source: ${card.app_name}${card.window_title ? ` — ${card.window_title}` : ""}`,
+    ];
+    if (card.project?.trim()) lines.push(`- Project: ${card.project.trim()}`);
+    if (summary) lines.push("", "## What happened", summary);
+    if (card.insight_why_mattered?.trim()) {
+        lines.push("", "## Why it mattered", card.insight_why_mattered.trim());
+    }
+    if (card.insight_what_changed?.trim()) {
+        lines.push("", "## What changed", card.insight_what_changed.trim());
+    }
+
     if (typeof pack !== "object" || pack === null) return String(pack);
     const p = pack as Record<string, unknown>;
-    const lines: string[] = [];
-    if (typeof p.query === "string") lines.push(`# FNDR context: ${p.query}`);
     if (typeof p.summary === "string" && p.summary.trim().length > 0) {
-        lines.push("", p.summary);
+        lines.push("", "## Related FNDR context", p.summary);
     }
     if (Array.isArray(p.relevant_files) && p.relevant_files.length > 0) {
         lines.push("", "## Relevant files");

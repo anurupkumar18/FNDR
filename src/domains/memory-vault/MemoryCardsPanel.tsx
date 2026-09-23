@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     backfillGraphFromExistingMemories,
     MemoryCard,
@@ -20,6 +20,7 @@ import { GRAPH_SIM_MAX_TICKS, useGraph } from "./useGraph";
 import { MemoryCard as MemoryCardComponent } from "./MemoryCard";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
 import { KnowledgeGraph3D, GraphErrorBoundary } from "@/features/graph/components";
+import { useModalFocus } from "@/shared/hooks/useModalFocus";
 
 const VAULT_BROWSE_STORAGE_KEY = "fndr.memoryVault.browseMode";
 
@@ -48,7 +49,7 @@ interface MemoryCardsPanelProps {
 const APP_FILTER_ALL = "__all__";
 const TIME_FILTER_ALL = "__time_all__";
 const PERSPECTIVE_FILTER_ALL = "__perspective_all__";
-const MAX_RENDERED_CARDS = 300;
+const MEMORY_RENDER_BATCH = 300;
 
 type TimeFilter =
     | typeof TIME_FILTER_ALL
@@ -74,7 +75,7 @@ const TIME_FILTER_OPTIONS: Array<{ value: TimeFilter; label: string }> = [
 ];
 
 const PERSPECTIVE_FILTER_OPTIONS: Array<{ value: PerspectiveFilter; label: string }> = [
-    { value: PERSPECTIVE_FILTER_ALL, label: "All perspectives" },
+    { value: PERSPECTIVE_FILTER_ALL, label: "All activities" },
     { value: "web", label: "Web pages" },
     { value: "coding", label: "Coding sessions" },
     { value: "meetings", label: "Meetings" },
@@ -209,17 +210,18 @@ export function MemoryCardsPanel({
     const [appFilter, setAppFilter] = useState<string>(APP_FILTER_ALL);
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(TIME_FILTER_ALL);
     const [perspectiveFilter, setPerspectiveFilter] = useState<PerspectiveFilter>(PERSPECTIVE_FILTER_ALL);
+    const [renderedCardLimit, setRenderedCardLimit] = useState(MEMORY_RENDER_BATCH);
     const [deletingId, setDeletingId] = useState<string | null>(null);
-    const [openDebugIds, setOpenDebugIds] = useState<Set<string>>(new Set());
-    const [debugById, setDebugById] = useState<Record<string, MemoryDebugInspector | null>>({});
-    const [, setDebugLoadingId] = useState<string | null>(null);
     // Image-to-image (CLIP) similar-screens state, keyed by seed card id.
     const [openSimilarIds, setOpenSimilarIds] = useState<Set<string>>(new Set());
     const [similarById, setSimilarById] = useState<Record<string, SearchResult[]>>({});
-    const [, setSimilarLoadingId] = useState<string | null>(null);
+    const [similarLoadingId, setSimilarLoadingId] = useState<string | null>(null);
     const [similarErrorById, setSimilarErrorById] = useState<Record<string, string>>({});
     /** Currently-expanded card id (one modal at a time). */
     const [openExpandedId, setOpenExpandedId] = useState<string | null>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
+    useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
 
     const isVaultFeature = feature === "vault";
     const isGraphFeature = feature === "graph";
@@ -259,6 +261,10 @@ export function MemoryCardsPanel({
         () => cards.filter((card) => matchesFilters(card, timeFilter, perspectiveFilter)),
         [cards, timeFilter, perspectiveFilter]
     );
+
+    useEffect(() => {
+        setRenderedCardLimit(MEMORY_RENDER_BATCH);
+    }, [appFilter, timeFilter, perspectiveFilter]);
 
 
     useEffect(() => {
@@ -374,9 +380,9 @@ export function MemoryCardsPanel({
         return () => cancelAnimationFrame(frame);
     }, [isVisible, focusMemoryId, cards, showListSurface]);
 
-    const handleDeleteCard = async (memoryId: string) => {
+    const handleDeleteCard = async (memoryId: string): Promise<boolean> => {
         if (deletingId) {
-            return;
+            return false;
         }
 
         setDeletingId(memoryId);
@@ -385,48 +391,22 @@ export function MemoryCardsPanel({
             if (deleted) {
                 setCards((previous) => previous.filter((card) => card.id !== memoryId));
                 onMemoryDeleted?.(memoryId);
+                return true;
             }
+            setError("FNDR could not delete this memory. It is still in your vault.");
+            return false;
         } catch (err) {
             setError(err instanceof Error ? err.message : "Unable to delete memory.");
+            return false;
         } finally {
             setDeletingId(null);
         }
     };
 
-    const handleToggleDebug = async (memoryId: string) => {
-        const isOpen = openDebugIds.has(memoryId);
-        if (isOpen) {
-            setOpenDebugIds((previous) => {
-                const next = new Set(previous);
-                next.delete(memoryId);
-                return next;
-            });
+    const handleToggleVisuallySimilar = async (memoryId: string) => {
+        if (similarLoadingId === memoryId) {
             return;
         }
-        if (!debugById[memoryId]) {
-            setDebugLoadingId(memoryId);
-            try {
-                const debug = await getMemoryDebugInspector(memoryId);
-                setDebugById((previous) => ({
-                    ...previous,
-                    [memoryId]: debug,
-                }));
-            } catch {
-                // Debug details are optional — don't surface as a panel-level error.
-                // The expanded modal will simply show no debug section.
-                setDebugById((previous) => ({ ...previous, [memoryId]: null }));
-            } finally {
-                setDebugLoadingId(null);
-            }
-        }
-        setOpenDebugIds((previous) => {
-            const next = new Set(previous);
-            next.add(memoryId);
-            return next;
-        });
-    };
-
-    const handleToggleVisuallySimilar = async (memoryId: string) => {
         const isOpen = openSimilarIds.has(memoryId);
         if (isOpen) {
             setOpenSimilarIds((previous) => {
@@ -524,17 +504,33 @@ export function MemoryCardsPanel({
     }
 
     return (
-        <div className="memory-cards-panel">
+        <div
+            ref={dialogRef}
+            className="memory-cards-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="memory-cards-title"
+        >
             <div className="memory-cards-header">
                 <div className="memory-cards-heading">
-                    <h2>{isGraphFeature ? "Knowledge Graph" : "Memory Vault"}</h2>
+                    <h2 id="memory-cards-title">
+                        {isGraphFeature ? "Knowledge Graph" : "Memory Vault"}
+                    </h2>
                     <p>
                         {isGraphFeature
                             ? "Hierarchical memory graph with project, session, memory, and entity links."
-                            : "All captured memories in one browseable vault."}
+                            : "Browse moments FNDR saved from your activity. Filter by app, time, or activity, then open a memory for its details."}
                     </p>
                 </div>
-                <button className="ui-action-btn memory-cards-close-btn" onClick={onClose}>X</button>
+                <button
+                    ref={closeButtonRef}
+                    type="button"
+                    className="ui-action-btn memory-cards-close-btn"
+                    onClick={onClose}
+                    aria-label={`Close ${isGraphFeature ? "Knowledge Graph" : "Memory Vault"}`}
+                >
+                    <span aria-hidden="true">×</span>
+                </button>
             </div>
 
             <div className="memory-cards-toolbar">
@@ -562,7 +558,16 @@ export function MemoryCardsPanel({
                         </div>
                     )}
                     {showListSurface && (
-                        <div className="memory-cards-count">{filteredCards.length} cards</div>
+                        <div className="memory-cards-count">
+                            {showNeedsSignal
+                                ? `${needsSignalCards.length.toLocaleString()} excluded ${needsSignalCards.length === 1 ? "capture" : "captures"}`
+                                : `${filteredCards.length.toLocaleString()} ${filteredCards.length === 1 ? "memory" : "memories"}`}
+                            {!showNeedsSignal && filteredCards.length > renderedCardLimit && (
+                                <span className="memory-cards-count-detail">
+                                    Showing {renderedCardLimit.toLocaleString()} of {filteredCards.length.toLocaleString()}
+                                </span>
+                            )}
+                        </div>
                     )}
                     {isVaultFeature && needsSignalCards.length > 0 && (
                         <button
@@ -571,7 +576,7 @@ export function MemoryCardsPanel({
                             aria-pressed={showNeedsSignal}
                             onClick={() => setShowNeedsSignal((current) => !current)}
                         >
-                            Needs more signal ({needsSignalCards.length})
+                            Excluded captures ({needsSignalCards.length})
                         </button>
                     )}
                     {showGraphSurface && (
@@ -581,16 +586,16 @@ export function MemoryCardsPanel({
                     )}
                 </div>
 
-                {showListSurface && (
+                {showListSurface && !showNeedsSignal && (
                 <div className="memory-cards-filters">
                     <label className="memory-cards-filter">
-                        Universe
+                        App
                         <div className="memory-cards-filter-control">
                             <select
                                 value={appFilter}
                                 onChange={(event) => setAppFilter(event.target.value)}
                             >
-                                <option value={APP_FILTER_ALL}>All Apps</option>
+                                <option value={APP_FILTER_ALL}>All apps</option>
                                 {selectableApps.map((name) => (
                                     <option key={name} value={name}>
                                         {name}
@@ -604,7 +609,7 @@ export function MemoryCardsPanel({
                     </label>
 
                     <label className="memory-cards-filter">
-                        History
+                        When
                         <div className="memory-cards-filter-control">
                             <select
                                 value={timeFilter}
@@ -623,7 +628,7 @@ export function MemoryCardsPanel({
                     </label>
 
                     <label className="memory-cards-filter">
-                        Perspective
+                        Activity
                         <div className="memory-cards-filter-control">
                             <select
                                 value={perspectiveFilter}
@@ -657,8 +662,10 @@ export function MemoryCardsPanel({
                 {showListSurface && (
                 <>
                 {showNeedsSignal ? (
-                    <section className="memory-cards-state" aria-label="Needs more signal review queue">
-                        <p>These captures are kept for review but excluded from search and Ask FNDR.</p>
+                    <section className="memory-cards-state" aria-label="Excluded captures queue">
+                        <p>
+                            FNDR excluded these captures because they did not contain enough useful context. They do not appear in Search or Ask.
+                        </p>
                         <div className="memory-cards-stream">
                             {needsSignalCards.map(({ card, reason }) => (
                                 <article className="memory-cards-inline-error" key={card.id}>
@@ -734,14 +741,13 @@ export function MemoryCardsPanel({
 
                 {filteredCards.length > 0 && (
                     <div className="memory-cards-stream">
-                        {filteredCards.slice(0, MAX_RENDERED_CARDS).map((card) => (
+                        {filteredCards.slice(0, renderedCardLimit).map((card) => (
                             <MemoryCardComponent
                                 key={card.id}
                                 card={card}
                                 variant="compact"
                                 onOpen={(c) => {
                                     setOpenExpandedId(c.id);
-                                    void handleToggleDebug(c.id);
                                 }}
                                 threadCountHint={
                                     card.topic_categories?.length ||
@@ -751,6 +757,26 @@ export function MemoryCardsPanel({
                                 }
                             />
                         ))}
+                        {filteredCards.length > renderedCardLimit && (
+                            <button
+                                type="button"
+                                className="ui-action-btn memory-cards-load-more"
+                                onClick={() =>
+                                    setRenderedCardLimit((current) =>
+                                        Math.min(current + MEMORY_RENDER_BATCH, filteredCards.length),
+                                    )
+                                }
+                                aria-label={`Show ${Math.min(
+                                    MEMORY_RENDER_BATCH,
+                                    filteredCards.length - renderedCardLimit,
+                                )} more memories`}
+                            >
+                                Show {Math.min(
+                                    MEMORY_RENDER_BATCH,
+                                    filteredCards.length - renderedCardLimit,
+                                )} more
+                            </button>
+                        )}
                     </div>
                 )}
                 </>}
@@ -917,53 +943,68 @@ export function MemoryCardsPanel({
                 if (!openExpandedId) return null;
                 const expandedCard = cards.find((c) => c.id === openExpandedId);
                 if (!expandedCard) return null;
-                const debugOpen = openDebugIds.has(expandedCard.id);
                 const similarOpen = openSimilarIds.has(expandedCard.id);
-                const debugSlot = debugOpen ? (
-                    <div className="memory-debug-drawer">
-                        <pre>
-{JSON.stringify(
-    debugById[expandedCard.id] ?? { memory_id: expandedCard.id, status: "loading" },
-    null,
-    2,
-)}
-                        </pre>
-                    </div>
-                ) : null;
                 const similarSlot = similarOpen ? (
                     <div className="memory-similar-drawer">
                         <div className="memory-similar-heading">Visually similar screens</div>
+                        {similarLoadingId === expandedCard.id && (
+                            <p className="memory-similar-empty" role="status">
+                                Comparing local visual features…
+                            </p>
+                        )}
                         {similarErrorById[expandedCard.id] && (
                             <p className="memory-similar-empty" role="alert">
                                 {similarErrorById[expandedCard.id]}
                             </p>
                         )}
-                        {!similarErrorById[expandedCard.id]
+                        {similarLoadingId !== expandedCard.id
+                            && !similarErrorById[expandedCard.id]
                             && (similarById[expandedCard.id]?.length ?? 0) === 0 && (
                                 <p className="memory-similar-empty">
                                     No visually similar screens yet. Older captures may pre-date
                                     the CLIP image embedding wiring.
                                 </p>
                             )}
-                        {!similarErrorById[expandedCard.id]
+                        {similarLoadingId !== expandedCard.id
+                            && !similarErrorById[expandedCard.id]
                             && (similarById[expandedCard.id]?.length ?? 0) > 0 && (
                                 <ul className="memory-similar-list">
-                                    {similarById[expandedCard.id]!.map((hit) => (
-                                        <li key={hit.id} className="memory-similar-item">
-                                            <div className="memory-similar-meta">
-                                                <span className="memory-similar-app">{hit.app_name}</span>
-                                                <span className="memory-similar-time">
-                                                    {new Date(hit.timestamp).toLocaleString()}
-                                                </span>
-                                                <span className="memory-similar-score">
-                                                    {(hit.score * 100).toFixed(0)}%
-                                                </span>
-                                            </div>
-                                            <div className="memory-similar-title">
-                                                {hit.window_title || hit.snippet || hit.text.slice(0, 120)}
-                                            </div>
-                                        </li>
-                                    ))}
+                                    {similarById[expandedCard.id]!.map((hit) => {
+                                        const matchingMemory = cards.find((card) => card.id === hit.id);
+                                        const title = matchingMemory?.title
+                                            || hit.window_title
+                                            || hit.snippet
+                                            || hit.text.slice(0, 120);
+                                        return (
+                                            <li key={hit.id} className="memory-similar-item">
+                                                <button
+                                                    type="button"
+                                                    disabled={!matchingMemory}
+                                                    aria-label={
+                                                        matchingMemory
+                                                            ? `Open visually similar memory: ${title}`
+                                                            : `Visually similar capture unavailable: ${title}`
+                                                    }
+                                                    onClick={() => {
+                                                        if (matchingMemory) {
+                                                            setOpenExpandedId(matchingMemory.id);
+                                                        }
+                                                    }}
+                                                >
+                                                    <div className="memory-similar-meta">
+                                                        <span className="memory-similar-app">{hit.app_name}</span>
+                                                        <span className="memory-similar-time">
+                                                            {new Date(hit.timestamp).toLocaleString()}
+                                                        </span>
+                                                        <span className="memory-similar-score">
+                                                            {(hit.score * 100).toFixed(0)}% visual match
+                                                        </span>
+                                                    </div>
+                                                    <div className="memory-similar-title">{title}</div>
+                                                </button>
+                                            </li>
+                                        );
+                                    })}
                                 </ul>
                             )}
                     </div>
@@ -973,25 +1014,38 @@ export function MemoryCardsPanel({
                         card={expandedCard}
                         insightsSlot={
                             <>
-                                <InsightLayers card={expandedCard} evalUi={debugOpen} />
+                                <InsightLayers card={expandedCard} evalUi={false} />
                                 <div className="fndr-emc-extra-actions">
                                     <button
                                         type="button"
                                         className="ui-action-btn"
+                                        disabled={similarLoadingId === expandedCard.id}
+                                        aria-label={
+                                            similarLoadingId === expandedCard.id
+                                                ? "Finding similar screens"
+                                                : similarOpen
+                                                ? "Hide similar screens"
+                                                : "Find similar screens"
+                                        }
                                         onClick={() => void handleToggleVisuallySimilar(expandedCard.id)}
                                     >
-                                        {similarOpen ? "Hide similar" : "Find similar screens"}
+                                        {similarLoadingId === expandedCard.id
+                                            ? "Finding similar…"
+                                            : similarOpen
+                                            ? "Hide similar"
+                                            : "Find similar screens"}
                                     </button>
                                 </div>
                             </>
                         }
-                        debugSlot={debugSlot}
                         similarSlot={similarSlot}
                         onClose={() => setOpenExpandedId(null)}
-                        onDelete={(id) => {
-                            void handleDeleteCard(id);
-                            setOpenExpandedId(null);
+                        onDelete={async (id) => {
+                            const deleted = await handleDeleteCard(id);
+                            if (deleted) setOpenExpandedId(null);
+                            return deleted;
                         }}
+                        onOpenRelated={(id) => setOpenExpandedId(id)}
                         onReopen={(c) => void handleReopen(c.id)}
                     />
                 );

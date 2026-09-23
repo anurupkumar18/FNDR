@@ -52,8 +52,8 @@
     top: 14px;
     right: 16px;
     z-index: 1;
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
     border-radius: var(--radius-sm);
     border: 1px solid var(--hairline);
     background: var(--bg-3);
@@ -75,9 +75,10 @@
 }
 
 .fndr-emc-section-heading {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    letter-spacing: var(--film-track-stamp);
+    font-family: var(--film-font-ui);
+    font-size: 12px;
+    font-weight: 650;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--fg-3);
     margin: 14px 0 8px;
@@ -85,8 +86,8 @@
 
 .fndr-emc-meta {
     margin: 0;
-    font-family: var(--font-body);
-    font-size: var(--t-body-sm);
+    font-family: var(--film-font-ui);
+    font-size: 14px;
     color: var(--fg-2);
 }
 
@@ -97,20 +98,36 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    font-family: var(--font-body);
-    font-size: var(--t-body-sm);
+    font-family: var(--film-font-ui);
+    font-size: 14px;
     color: var(--fg);
 }
 
 .fndr-emc-related li {
-    padding-left: 14px;
     position: relative;
 }
-.fndr-emc-related li::before {
-    content: "·";
-    position: absolute;
-    left: 4px;
-    color: var(--accent);
+
+.fndr-emc-related button {
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    background: var(--bg-3);
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.fndr-emc-related button:hover {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-3));
+}
+
+.fndr-emc-related button:focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
 }
 
 .fndr-emc-evidence-row {

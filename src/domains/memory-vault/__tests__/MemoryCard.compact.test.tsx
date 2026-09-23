@@ -78,7 +78,7 @@ describe("MemoryCard — compact variant (narrow container)", () => {
 
     it("renders the app name cell", () => {
         renderCompact(makeCard());
-        const sourceEl = screen.getByLabelText("app and context");
+        const sourceEl = screen.getByLabelText("Source and activity");
         expect(sourceEl).toBeTruthy();
         expect(within(sourceEl).getByText("VS Code")).toBeTruthy();
     });
@@ -185,6 +185,7 @@ describe("MemoryCard — compact variant (narrow container)", () => {
         const allCards = screen.getAllByTestId("memory-card");
         const clickable = allCards[allCards.length - 1] as HTMLElement;
         expect(clickable.getAttribute("role")).toBe("button");
+        expect(clickable).toHaveAccessibleName("Open memory: Compact layout stress test");
         expect(clickable.getAttribute("tabindex")).toBe("0");
         unmount();
     });

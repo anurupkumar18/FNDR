@@ -6,8 +6,8 @@
  * preview-text priority (insight_what_happened > reviewed display_summary >
  * memory_context excerpt > safe fallback), and meta-OCR narration cleanup.
  */
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MemoryCard as MemoryCardData } from "@/shared/ipc/tauri";
 import {
     MemoryCard,
@@ -134,6 +134,34 @@ describe("MemoryCard — lifecycle chip rendering (expanded variant)", () => {
         render(<MemoryCard variant="expanded" card={makeCard()} />);
         const stamp = screen.getByLabelText("memory status: RAW");
         expect(stamp).toBeTruthy();
+    });
+
+    it("confirms permanent deletion in-product and reports a failed delete", async () => {
+        const onDelete = vi.fn().mockResolvedValue(false);
+        render(<MemoryCard variant="expanded" card={makeCard()} onDelete={onDelete} />);
+
+        fireEvent.click(screen.getByRole("button", { name: "Delete memory" }));
+
+        expect(screen.getByText(/delete “lifecycle stress test” permanently/i)).toBeTruthy();
+        expect(onDelete).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+
+        await waitFor(() => expect(onDelete).toHaveBeenCalledWith("test-card-abcd-1234"));
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "FNDR could not delete this memory. It is still in your vault.",
+        );
+    });
+
+    it("lets the user cancel permanent deletion without mutating anything", () => {
+        const onDelete = vi.fn();
+        render(<MemoryCard variant="expanded" card={makeCard()} onDelete={onDelete} />);
+
+        fireEvent.click(screen.getByRole("button", { name: "Delete memory" }));
+        fireEvent.click(screen.getByRole("button", { name: "Cancel deletion" }));
+
+        expect(screen.queryByText(/delete “lifecycle stress test” permanently/i)).toBeNull();
+        expect(onDelete).not.toHaveBeenCalled();
     });
 });
 

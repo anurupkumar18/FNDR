@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type {
     EvidencePack,
     MemoryCard as MemoryCardData,
@@ -17,7 +17,8 @@ interface Props {
     debugSlot?: ReactNode;
     similarSlot?: ReactNode;
     onClose: () => void;
-    onDelete?: (id: string) => void;
+    onDelete?: (id: string) => boolean | void | Promise<boolean | void>;
+    onOpenRelated?: (id: string) => void;
     onOpenInGraph?: (card: MemoryCardData) => void;
     onReopen?: (card: MemoryCardData) => void;
     onResearch?: (card: MemoryCardData) => void;
@@ -38,36 +39,64 @@ export function ExpandedMemoryCard({
     similarSlot,
     onClose,
     onDelete,
+    onOpenRelated,
     onOpenInGraph,
     onReopen,
     onResearch,
 }: Props) {
     const [related, setRelated] = useState<MemoryCardData[]>([]);
     const [subgraph, setSubgraph] = useState<{ node_count: number; edge_count: number } | null>(null);
+    const [relatedState, setRelatedState] = useState<"loading" | "ready" | "error">("loading");
+    const [subgraphState, setSubgraphState] = useState<"loading" | "ready" | "error">("loading");
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
 
     useEffect(() => {
         let cancelled = false;
-        void fndrGetRelatedMemories(card.id, 4).then((cards) => {
-            if (!cancelled) setRelated(cards);
-        });
-        void fndrGetMemorySubgraph([card.id], 2).then((sub) => {
-            if (!cancelled)
-                setSubgraph({ node_count: sub.node_count, edge_count: sub.edge_count });
-        });
+        setRelated([]);
+        setSubgraph(null);
+        setRelatedState("loading");
+        setSubgraphState("loading");
+        void fndrGetRelatedMemories(card.id, 4)
+            .then((cards) => {
+                if (!cancelled) {
+                    setRelated(cards);
+                    setRelatedState("ready");
+                }
+            })
+            .catch(() => {
+                if (!cancelled) setRelatedState("error");
+            });
+        void fndrGetMemorySubgraph([card.id], 2)
+            .then((sub) => {
+                if (!cancelled) {
+                    setSubgraph({ node_count: sub.node_count, edge_count: sub.edge_count });
+                    setSubgraphState("ready");
+                }
+            })
+            .catch(() => {
+                if (!cancelled) setSubgraphState("error");
+            });
         return () => {
             cancelled = true;
         };
     }, [card.id]);
 
     useEffect(() => {
+        const previouslyFocused = document.activeElement as HTMLElement | null;
+        closeButtonRef.current?.focus();
+        return () => previouslyFocused?.focus();
+    }, [card.id]);
+
+    useEffect(() => {
         const handler = (e: KeyboardEvent) => {
             if (e.key === "Escape") {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 onClose();
             }
         };
-        window.addEventListener("keydown", handler);
-        return () => window.removeEventListener("keydown", handler);
+        window.addEventListener("keydown", handler, true);
+        return () => window.removeEventListener("keydown", handler, true);
     }, [onClose]);
 
     const reasonNode = card.surfacing_reason ? (
@@ -115,26 +144,49 @@ export function ExpandedMemoryCard({
 
     const subgraphNode = (
         <section>
-            <h4 className="fndr-emc-section-heading">Subgraph</h4>
+            <h4 className="fndr-emc-section-heading">Connected context</h4>
             <p className="fndr-emc-meta" data-testid="fndr-subgraph-summary">
-                {subgraph
+                {subgraphState === "error"
+                    ? "Graph context unavailable."
+                    : subgraphState === "loading"
+                    ? "Loading connected context…"
+                    : subgraph
                     ? `${subgraph.node_count} nodes · ${subgraph.edge_count} edges`
-                    : "Loading subgraph…"}
+                    : "No connected context found."}
             </p>
         </section>
     );
 
-    const relatedNode =
-        related.length > 0 ? (
-            <section>
-                <h4 className="fndr-emc-section-heading">Related memories</h4>
+    const relatedNode = (
+        <section>
+            <h4 className="fndr-emc-section-heading">Related memories</h4>
+            {relatedState === "error" ? (
+                <p className="fndr-emc-meta">Related memories unavailable.</p>
+            ) : relatedState === "loading" ? (
+                <p className="fndr-emc-meta">Finding related memories…</p>
+            ) : related.length > 0 ? (
                 <ul className="fndr-emc-related">
                     {related.map((r) => (
-                        <li key={r.id}>{r.title}</li>
+                        <li key={r.id}>
+                            {onOpenRelated ? (
+                                <button
+                                    type="button"
+                                    onClick={() => onOpenRelated(r.id)}
+                                    aria-label={`Open related memory: ${r.title}`}
+                                >
+                                    {r.title}
+                                </button>
+                            ) : (
+                                r.title
+                            )}
+                        </li>
                     ))}
                 </ul>
-            </section>
-        ) : undefined;
+            ) : (
+                <p className="fndr-emc-meta">No related memories found.</p>
+            )}
+        </section>
+    );
 
     const combinedInsights = (
         <>
@@ -155,6 +207,7 @@ export function ExpandedMemoryCard({
     return (
         <div
             role="dialog"
+            aria-modal="true"
             aria-label={`Expanded memory: ${card.title}`}
             className="fndr-emc-overlay"
             onClick={onClose}
@@ -164,9 +217,10 @@ export function ExpandedMemoryCard({
                 onClick={(e) => e.stopPropagation()}
             >
                 <button
+                    ref={closeButtonRef}
                     type="button"
                     onClick={onClose}
-                    aria-label="Close"
+                    aria-label="Close memory details"
                     className="fndr-emc-close"
                 >
                     ×
@@ -178,7 +232,7 @@ export function ExpandedMemoryCard({
                     evidenceSlot={combinedEvidence}
                     relatedSlot={
                         <div className="fndr-emc-extra-actions">
-                            <CopyForAgentButton query={card.title} />
+                            <CopyForAgentButton card={card} />
                         </div>
                     }
                     footerSlot={

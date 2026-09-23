@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import type { MemoryCard as MemoryCardData } from "@/shared/ipc/tauri";
 import { DossierCorners, Stamp, Pill, Button } from "@/shared/components/atoms";
@@ -12,7 +12,7 @@ interface MemoryCardProps {
     variant: MemoryCardVariant;
     /** Open the expanded inspector (e.g. clicking a compact row). */
     onOpen?: (card: MemoryCardData) => void;
-    onDelete?: (id: string) => void;
+    onDelete?: (id: string) => boolean | void | Promise<boolean | void>;
     onResearch?: (card: MemoryCardData) => void;
     onOpenInGraph?: (card: MemoryCardData) => void;
     /** Reopen the captured source target (file/URL). */
@@ -74,6 +74,9 @@ export function MemoryCard({
     className,
     threadCountHint,
 }: MemoryCardProps) {
+    const [deleteState, setDeleteState] = useState<
+        "idle" | "confirming" | "deleting" | "error"
+    >("idle");
     const previewText = pickPreviewText(card);
     const threads = deriveThreads(card);
     const timeLabel = formatTime(card.timestamp);
@@ -100,6 +103,7 @@ export function MemoryCard({
                 className={cls}
                 onClick={onOpen ? () => onOpen(card) : undefined}
                 role={onOpen ? "button" : undefined}
+                aria-label={onOpen ? `Open memory: ${card.title}` : undefined}
                 tabIndex={onOpen ? 0 : undefined}
                 onKeyDown={(e) => {
                     if (!onOpen) return;
@@ -119,7 +123,7 @@ export function MemoryCard({
                     ) : null}
                 </div>
                 {/* source area: app name + activity/files chips */}
-                <div className="fndr-mc-c-source" aria-label="app and context">
+                <div className="fndr-mc-c-source" aria-label="Source and activity">
                     <em className="fndr-mc-c-source-app">{card.app_name}</em>
                     {card.activity_type && card.activity_type !== "other" && (
                         <span className="fndr-mc-c-chip fndr-mc-c-chip--activity" aria-label={`activity: ${card.activity_type}`}>
@@ -145,9 +149,9 @@ export function MemoryCard({
                 <CompactSurfacingGlyph card={card} />
                 <span className="fndr-mc-c-threads">
                     {threads.length > 0
-                        ? `${threads.length}`
+                        ? `${threads.length} ${threads.length === 1 ? "topic" : "topics"}`
                         : threadCountHint !== undefined
-                        ? `${threadCountHint}`
+                        ? `${threadCountHint} ${threadCountHint === 1 ? "topic" : "topics"}`
                         : ""}
                 </span>
             </motion.article>
@@ -271,21 +275,60 @@ export function MemoryCard({
                         )}
                         {onDelete && (
                             <div className="fndr-mc-actions-danger">
-                                <Button
-                                    mono
-                                    variant="ghost"
-                                    onClick={() => {
-                                        const ok =
-                                            typeof window === "undefined"
-                                                ? true
-                                                : window.confirm(
-                                                      `Delete this memory? It will be removed permanently.\n\n"${card.title}"`,
-                                                  );
-                                        if (ok) onDelete(card.id);
-                                    }}
-                                >
-                                    Delete
-                                </Button>
+                                {deleteState === "idle" ? (
+                                    <Button
+                                        mono
+                                        variant="ghost"
+                                        aria-label="Delete memory"
+                                        onClick={() => setDeleteState("confirming")}
+                                    >
+                                        Delete
+                                    </Button>
+                                ) : (
+                                    <div
+                                        className="fndr-mc-delete-confirmation"
+                                        role="group"
+                                        aria-label="Confirm memory deletion"
+                                    >
+                                        <p>Delete “{card.title}” permanently?</p>
+                                        <span>This removes it from your local FNDR vault.</span>
+                                        {deleteState === "error" && (
+                                            <span className="fndr-mc-delete-error" role="alert">
+                                                FNDR could not delete this memory. It is still in your vault.
+                                            </span>
+                                        )}
+                                        <div className="fndr-mc-delete-actions">
+                                            <Button
+                                                variant="ghost"
+                                                aria-label="Cancel deletion"
+                                                disabled={deleteState === "deleting"}
+                                                onClick={() => setDeleteState("idle")}
+                                            >
+                                                Cancel
+                                            </Button>
+                                            <Button
+                                                variant="alarm"
+                                                aria-label="Delete permanently"
+                                                disabled={deleteState === "deleting"}
+                                                onClick={async () => {
+                                                    setDeleteState("deleting");
+                                                    try {
+                                                        const deleted = await onDelete(card.id);
+                                                        if (deleted === false) {
+                                                            setDeleteState("error");
+                                                        }
+                                                    } catch {
+                                                        setDeleteState("error");
+                                                    }
+                                                }}
+                                            >
+                                                {deleteState === "deleting"
+                                                    ? "Deleting…"
+                                                    : "Delete permanently"}
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
