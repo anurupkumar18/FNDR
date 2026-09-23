@@ -8,6 +8,7 @@ mod admission;
 pub mod clipboard;
 mod dedupe;
 pub mod entity_extractor;
+pub mod enrich_policy;
 pub(crate) mod macos;
 pub mod permissions;
 mod sampling;
