@@ -6,7 +6,7 @@
   python3 scripts/team/gitlab_sync.py sync --apply          # create labels, milestones, issues, per-person boards
   python3 scripts/team/gitlab_sync.py sync --apply --update # also rewrite existing descriptions from the files
   python3 scripts/team/gitlab_sync.py list [--user NAME] [--status doing]
-  python3 scripts/team/gitlab_sync.py move VS-05 doing      # ready, doing, review, evidence, or closed
+  python3 scripts/team/gitlab_sync.py move VS-05 doing      # ready, doing, evidence, or closed
   python3 scripts/team/gitlab_sync.py comment VS-05 "Merged !42; qa-retrieval output attached"
 
 Token: $GITLAB_TOKEN, otherwise the macOS Keychain item "fndr-gitlab"
@@ -34,7 +34,7 @@ ROSTER = REPO / "docs" / "team" / "roster.json"
 HOST = os.environ.get("GITLAB_HOST", "https://capstone.cs.utah.edu")
 PROJECT_PATH = os.environ.get("GITLAB_PROJECT_PATH", "fndr/fndr")
 
-STATUSES = ("ready", "doing", "review", "evidence")
+STATUSES = ("ready", "doing", "evidence")
 MILESTONES = {
     "W02-Measure": ("2026-09-28", "2026-10-04"),
     "W03-Build": ("2026-10-05", "2026-10-11"),
@@ -43,7 +43,7 @@ MILESTONES = {
 }
 LABEL_COLORS = {
     "status::ready": "#5BC0DE", "status::doing": "#F0AD4E",
-    "status::review": "#A78BFA", "status::evidence": "#34D399",
+    "status::evidence": "#34D399",
     "prio::p0": "#B60205", "prio::p1": "#FBCA04", "prio::p2": "#C2E0C6",
     "type::feature": "#0E8A16", "type::bug": "#B60205", "type::chore": "#C5DEF5",
     "type::docs": "#0075CA", "type::spike": "#FBCA04", "type::qa": "#1D76DB",

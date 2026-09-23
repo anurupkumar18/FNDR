@@ -6,10 +6,10 @@ Every teammate (and every coding agent working for them) moves tickets the same 
 
 | Board | What it shows |
 |---|---|
-| [Beta sprint](https://capstone.cs.utah.edu/fndr/fndr/-/boards/571) | Everyone's tickets: Ready, Doing, Review, Evidence, Needs human, Blocked |
+| [Beta sprint](https://capstone.cs.utah.edu/fndr/fndr/-/boards/571) | Everyone's tickets: Open, Ready, Doing, Evidence, Needs human, Blocked |
 | [Anurup](https://capstone.cs.utah.edu/fndr/fndr/-/boards/748), [Kunj](https://capstone.cs.utah.edu/fndr/fndr/-/boards/749), [Minh](https://capstone.cs.utah.edu/fndr/fndr/-/boards/750), [Felipe](https://capstone.cs.utah.edu/fndr/fndr/-/boards/751) | The same columns, filtered to that person's assigned tickets |
 
-Boards show tickets by label, so a ticket moves between columns when its `status::` label changes, and it appears on a personal board because of its assignee. Switch boards from the board name menu at the top left.
+Boards show tickets by label, so a ticket moves between columns when its `status::` label changes, and it appears on a personal board because of its assignee. **Open** holds unassigned tickets nobody has started (the backlog); **Ready** holds assigned tickets not started yet. There is no Review column: a ticket in Evidence with an open merge request is waiting for review. Switch boards from the board name menu at the top left.
 
 ## One-time setup (each person, 3 minutes)
 
@@ -32,11 +32,11 @@ Never paste the token into chat, a ticket, a commit, a file, or an agent prompt.
 
 | Status | Means | Who moves it there |
 |---|---|---|
-| `ready` | Specified and unblocked; nobody has started | The sync, on creation |
+| Open (no status label) | Unassigned and not started; anyone may pick it up by assigning themselves and moving it to `ready` | Nobody; it is the backlog |
+| `ready` | Assigned and specified; not started | The sync, on creation |
 | `doing` | Someone is working on it now (at most two per person) | The assignee or their agent |
-| `review` | A merge request is open and a teammate is asked to review | The assignee or their agent |
-| `evidence` | Merged; the ticket's evidence is attached in a comment | The assignee or their agent |
-| `closed` | The reviewer checked the evidence | The reviewer |
+| `evidence` | A merge request is open for review, or merged with the ticket's evidence attached in a comment | The assignee or their agent |
+| `closed` | The reviewer checked the merge and the evidence | The reviewer |
 
 ## Commands
 
@@ -46,9 +46,8 @@ python3 scripts/team/gitlab_sync.py list --status doing       # my tickets in Do
 python3 scripts/team/gitlab_sync.py list --user minhpro001    # someone else's
 python3 scripts/team/gitlab_sync.py move VS-05 doing
 python3 scripts/team/gitlab_sync.py comment VS-05 "Started. Plan: failing test first, then remove the cutoff."
-python3 scripts/team/gitlab_sync.py move VS-05 review
-python3 scripts/team/gitlab_sync.py comment VS-05 "MR !57. make qa-retrieval-check: Search Recall@5 0.68 -> 0.77, no query lost."
 python3 scripts/team/gitlab_sync.py move VS-05 evidence
+python3 scripts/team/gitlab_sync.py comment VS-05 "MR !57 ready for review. make qa-retrieval-check: Search Recall@5 0.68 -> 0.77, no query lost."
 ```
 
 `move` and `comment` refuse to touch a ticket that is not assigned to the token's owner unless you add `--any` (only the reviewer closing a ticket should need it).
@@ -62,8 +61,8 @@ You are working on FNDR ticket <ID>. The ticket text is in docs/team/tickets/*.m
 Follow AGENTS.md. Board rules:
 - When you start: python3 scripts/team/gitlab_sync.py move <ID> doing, then comment your plan in two lines.
 - Comment progress at each commit that changes behavior: what changed, what you ran, what is next.
-- When a merge request is open: move <ID> review and comment the MR link and the verification output.
-- After merge: comment the evidence the ticket asks for, then move <ID> evidence.
+- When a merge request is open: move <ID> evidence and comment the MR link and the verification output.
+- After merge: comment the evidence the ticket asks for. A teammate reviews and closes the ticket.
 - Only act on tickets assigned to me. Never change assignees, labels other than status, milestones, or other people's tickets.
 - Never create new tickets. If you find a bug or missing work, write it in a comment on <ID> and tell me; I will decide.
 - Never put tokens, screen captures, memory text, or personal data in comments.
