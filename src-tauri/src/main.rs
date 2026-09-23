@@ -828,6 +828,7 @@ fn main() {
             ipc::commands::screen_guide_press,
             ipc::commands::screen_guide_release,
             ipc::commands::submit_screen_guide_text,
+            ipc::commands::cancel_screen_guide_turn,
             ipc::commands::transcribe_screen_guide_voice_input,
             ipc::commands::set_screen_guide_overlay_ready,
             ipc::commands::screen_guide_microphone_started,

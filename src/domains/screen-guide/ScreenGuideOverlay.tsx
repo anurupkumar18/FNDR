@@ -4,6 +4,7 @@ import {
     type ScreenGuideSettings,
     acknowledgeScreenGuideMicrophoneStopped,
     askScreenGuide,
+    cancelScreenGuideTurn,
     emitScreenGuideState,
     finishScreenGuideVisual,
     getScreenGuideCursorPosition,
@@ -31,6 +32,40 @@ const ERROR_VISIBLE_MS = 3_500;
 const MAX_RECORDING_MS = 60_000;
 const VISUAL_FINISH_ATTEMPTS = 3;
 const VISUAL_FINISH_RETRY_MS = 150;
+// Local Whisper on a short clip should finish in a few seconds; this is a
+// generous ceiling for a slow machine, not the expected case.
+const TRANSCRIPTION_TIMEOUT_MS = 20_000;
+// Covers a screenshot plus local VLM and LLM inference, which can genuinely
+// take a while on an 8 GB Mac under memory pressure.
+const ASK_TIMEOUT_MS = 45_000;
+
+/** Races `promise` against `timeoutMs`. On timeout, tells the backend to give
+ *  up on `generation` (a harmless no-op if it already finished) and rejects
+ *  with a message the existing error UI already knows how to show, instead
+ *  of leaving the caller awaiting a call that may never settle. */
+function withScreenGuideTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    generation: number,
+    timeoutMessage: string,
+): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+            void cancelScreenGuideTurn(generation).catch(() => undefined);
+            reject(new Error(timeoutMessage));
+        }, timeoutMs);
+        promise.then(
+            (value) => {
+                clearTimeout(timer);
+                resolve(value);
+            },
+            (reason: unknown) => {
+                clearTimeout(timer);
+                reject(reason);
+            },
+        );
+    });
+}
 
 function answerVisibleMs(answer: string): number {
     const wordCount = answer.trim().split(/\s+/u).filter(Boolean).length;
@@ -206,14 +241,19 @@ export function ScreenGuideOverlay() {
             : Promise.resolve(null);
 
         try {
-            const [response, origin] = await Promise.all([
-                askScreenGuide(
-                    question,
-                    requestId,
-                    toScreenGuideHistory(stateRef.current.exchanges),
-                ),
-                cursorPromise,
-            ]);
+            const [response, origin] = await withScreenGuideTimeout(
+                Promise.all([
+                    askScreenGuide(
+                        question,
+                        requestId,
+                        toScreenGuideHistory(stateRef.current.exchanges),
+                    ),
+                    cursorPromise,
+                ]),
+                ASK_TIMEOUT_MS,
+                requestId,
+                "Screen Guide took too long to answer and was cancelled. Try again.",
+            );
             if (
                 !mountedRef.current ||
                 requestId !== requestIdRef.current ||
@@ -250,7 +290,12 @@ export function ScreenGuideOverlay() {
         try {
             const blob = new Blob(chunks, { type: mimeType });
             const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
-            const result = await transcribeScreenGuideVoiceInput(bytes, mimeType, requestId);
+            const result = await withScreenGuideTimeout(
+                transcribeScreenGuideVoiceInput(bytes, mimeType, requestId),
+                TRANSCRIPTION_TIMEOUT_MS,
+                requestId,
+                "Transcription took too long and was cancelled. Try again.",
+            );
             if (
                 requestId !== requestIdRef.current ||
                 interactionEpoch !== interactionEpochRef.current

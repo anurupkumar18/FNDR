@@ -1093,6 +1093,16 @@ pub async fn submit_screen_guide_text(app: AppHandle, text: String) -> Result<()
     Ok(())
 }
 
+/// Explicit give-up hook for the frontend: called when a transcription or
+/// ask-the-screen call has run past its client-side timeout. Cancelling a
+/// generation that is no longer current is a harmless no-op, so the caller
+/// does not need to know whether the turn already finished on its own.
+#[tauri::command]
+pub async fn cancel_screen_guide_turn(app: AppHandle, generation: u64) -> Result<(), String> {
+    cancel_screen_guide_request_and_notify(&app, generation);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn transcribe_screen_guide_voice_input(
     app: AppHandle,

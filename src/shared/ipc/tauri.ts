@@ -2127,6 +2127,12 @@ export async function screenGuideRelease(generation: number): Promise<void> {
     return invoke<void>("screen_guide_release", { generation });
 }
 
+/** Gives up on a stuck transcription or ask-the-screen call past its
+ *  client-side timeout. A no-op if the generation already finished. */
+export async function cancelScreenGuideTurn(generation: number): Promise<void> {
+    return invoke<void>("cancel_screen_guide_turn", { generation });
+}
+
 export async function submitScreenGuideText(text: string): Promise<void> {
     return invoke<void>("submit_screen_guide_text", { text });
 }

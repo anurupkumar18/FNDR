@@ -4,6 +4,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 const mocks = vi.hoisted(() => ({
     acknowledgeScreenGuideMicrophoneStopped: vi.fn(),
     askScreenGuide: vi.fn(),
+    cancelScreenGuideTurn: vi.fn(),
     emitScreenGuideState: vi.fn(),
     finishScreenGuideVisual: vi.fn(),
     getScreenGuideCursorPosition: vi.fn(),
@@ -125,6 +126,7 @@ describe("ScreenGuideOverlay", () => {
         mocks.acknowledgeScreenGuideMicrophoneStopped.mockResolvedValue(true);
         mocks.setScreenGuideOverlayReady.mockResolvedValue(undefined);
         mocks.emitScreenGuideState.mockResolvedValue(undefined);
+        mocks.cancelScreenGuideTurn.mockResolvedValue(undefined);
     });
 
     afterEach(() => cleanup());
@@ -347,6 +349,41 @@ describe("ScreenGuideOverlay", () => {
         } finally {
             now.mockRestore();
             recorder.restore();
+        }
+    });
+
+    it("gives up on a stuck ask-the-screen call past its timeout and cancels it on the backend", async () => {
+        // Exercises withScreenGuideTimeout, the same helper that guards the
+        // voice-transcription call, through the typed-question path: the
+        // recording path's async getUserMedia/MediaRecorder setup does not
+        // settle cleanly under fake timers, but both call sites share one
+        // timeout implementation, so this covers the fix either way.
+        vi.useFakeTimers();
+        mocks.askScreenGuide.mockReturnValue(new Promise(() => undefined));
+
+        try {
+            render(<ScreenGuideOverlay />);
+            await act(async () => {
+                await vi.runAllTicks();
+            });
+
+            act(() => submitHandler?.({ text: "Where is Save?", generation: 7 }));
+            await act(async () => {
+                await vi.runAllTicks();
+            });
+            expect(mocks.askScreenGuide).toHaveBeenCalledTimes(1);
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(45_000);
+            });
+
+            expect(mocks.cancelScreenGuideTurn).toHaveBeenCalledWith(7);
+            expect(mocks.emitScreenGuideState).toHaveBeenCalledWith({
+                phase: "error",
+                message: "Screen Guide took too long to answer and was cancelled. Try again.",
+            });
+        } finally {
+            vi.useRealTimers();
         }
     });
 
