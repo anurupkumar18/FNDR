@@ -1,6 +1,6 @@
 /**
  * HomeHero — cinematic home screen hero with mouse parallax, hero search pill,
- * voice input, and animated scroll indicator.
+ * and voice input.
  *
  * Design spec: docs/superpowers/specs/2026-05-18-hero-parallax-design.md
  *
@@ -23,8 +23,8 @@ import "./HomeHero.css";
 
 // ─── Greeting helpers ─────────────────────────────────────────────────────────
 
-function getGreeting(name: string): { salutation: string; subtitle: string } {
-    const h = new Date().getHours();
+function getGreeting(name: string, now: Date): { salutation: string; subtitle: string } {
+    const h = now.getHours();
     const salutation =
         h < 12
             ? `Good Morning, ${name}!`
@@ -55,8 +55,8 @@ function formatHeroDate(now: Date): string {
     return `${weekday} • ${month} ${day}`;
 }
 
-function getTimePlaceholder(): string {
-    const h = new Date().getHours();
+function getTimePlaceholder(now: Date): string {
+    const h = now.getHours();
     if (h < 12) return "What did you work on this morning?";
     if (h < 17) return "What shall we uncover this afternoon?";
     if (h < 21) return "What happened today?";
@@ -84,9 +84,26 @@ function stopStream(s: MediaStream | null) {
     s?.getTracks().forEach((t) => t.stop());
 }
 
+function microphoneFailureMessage(error: unknown): string {
+    const name = error instanceof DOMException
+        ? error.name
+        : typeof error === "object" && error && "name" in error
+          ? String(error.name)
+          : "";
+
+    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        return "Microphone permission wasn't granted. Type your search instead.";
+    }
+    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        return "No microphone was found. Type your search instead.";
+    }
+    return "Couldn't start the microphone. Type your search instead.";
+}
+
 /** Extracts voice recording + Whisper transcription in a self-contained hook. */
 function useHeroVoice(onTranscript: (text: string) => void) {
     const [isRecording, setIsRecording] = useState(false);
+    const [isPreparing, setIsPreparing] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
 
@@ -118,7 +135,7 @@ function useHeroVoice(onTranscript: (text: string) => void) {
             const text = result.text.trim();
             if (text) {
                 onTranscript(text);
-                setVoiceStatus(null);
+                setVoiceStatus("Transcript ready. Review it, then press Enter to search.");
             } else {
                 setVoiceStatus("Didn't catch that. Try again.");
             }
@@ -139,10 +156,12 @@ function useHeroVoice(onTranscript: (text: string) => void) {
             !navigator.mediaDevices?.getUserMedia ||
             typeof MediaRecorder === "undefined"
         ) {
-            setVoiceStatus("Microphone not supported.");
+            setVoiceStatus("Microphone isn't available here. Type your search instead.");
             return;
         }
 
+        setIsPreparing(true);
+        setVoiceStatus("Waiting for microphone permission…");
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -185,16 +204,18 @@ function useHeroVoice(onTranscript: (text: string) => void) {
             recorder.start(VOICE_RECORDING.timesliceMs);
             setIsRecording(true);
             setVoiceStatus("Listening… tap again to stop.");
-        } catch {
-            setVoiceStatus("Microphone access failed.");
+        } catch (error) {
+            setVoiceStatus(microphoneFailureMessage(error));
             stopStream(streamRef.current);
             streamRef.current = null;
             recorderRef.current = null;
             setIsRecording(false);
+        } finally {
+            setIsPreparing(false);
         }
     }
 
-    return { isRecording, isTranscribing, voiceStatus, toggle };
+    return { isRecording, isPreparing, isTranscribing, voiceStatus, toggle };
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -220,7 +241,7 @@ export function HomeHero({
 
     // Greeting logic — prefer the IPC greeting if available.
     const name = userName?.trim() || "there";
-    const localGreeting = getGreeting(name);
+    const localGreeting = getGreeting(name, now);
     const salutation = greeting
         ? (() => {
               // Extract just the "Good *, Name!" part from the IPC greeting if present.
@@ -271,12 +292,11 @@ export function HomeHero({
     const subtitleY = useTransform(sy, [-1, 1], reduced ? [0, 0] : [-16.5, 16.5]);
     const searchX = useTransform(sx, [-1, 1], reduced ? [0, 0] : [-10.5, 10.5]);
     const searchY = useTransform(sy, [-1, 1], reduced ? [0, 0] : [-10.5, 10.5]);
-    const scrollX = useTransform(sx, [-1, 1], reduced ? [0, 0] : [-3.9, 3.9]);
-    const scrollY = useTransform(sy, [-1, 1], reduced ? [0, 0] : [-3.9, 3.9]);
 
     // Voice.
     const voice = useHeroVoice((text) => {
         setDraft(text);
+        window.requestAnimationFrame(() => inputRef.current?.focus());
     });
 
     function handleSubmit(value?: string) {
@@ -345,7 +365,7 @@ export function HomeHero({
                         ref={inputRef}
                         type="text"
                         className="home-hero__search-input"
-                        placeholder={getTimePlaceholder()}
+                        placeholder={getTimePlaceholder(now)}
                         value={draft}
                         onChange={(e) => setDraft(e.target.value)}
                         onKeyDown={(e) => {
@@ -355,6 +375,12 @@ export function HomeHero({
                             }
                         }}
                         aria-label="Search your memories"
+                        aria-describedby={voice.voiceStatus
+                            ? "home-search-help home-voice-status"
+                            : "home-search-help"}
+                        autoComplete="off"
+                        enterKeyHint="search"
+                        spellCheck={false}
                     />
 
                     {/* Voice button */}
@@ -365,10 +391,20 @@ export function HomeHero({
                         aria-label={
                             voice.isRecording
                                 ? "Stop voice recording"
+                                : voice.isPreparing
+                                  ? "Waiting for microphone permission"
+                                  : voice.isTranscribing
+                                    ? "Transcribing voice recording"
                                 : "Start voice recording"
                         }
-                        title={voice.isRecording ? "Stop" : "Speak"}
-                        disabled={voice.isTranscribing}
+                        title={voice.isRecording
+                            ? "Stop voice recording"
+                            : voice.isPreparing
+                              ? "Waiting for microphone permission"
+                              : voice.isTranscribing
+                                ? "Transcribing voice recording"
+                                : "Speak"}
+                        disabled={voice.isPreparing || voice.isTranscribing}
                     >
                         {voice.isRecording ? (
                             // Pulsing waveform when recording
@@ -389,7 +425,13 @@ export function HomeHero({
                             </svg>
                         )}
                         <span className="home-hero__voice-label">
-                            {voice.isRecording ? "Stop" : "Speak"}
+                            {voice.isRecording
+                                ? "Stop"
+                                : voice.isPreparing
+                                  ? "Waiting"
+                                  : voice.isTranscribing
+                                    ? "Working"
+                                    : "Speak"}
                         </span>
                     </button>
 
@@ -416,22 +458,20 @@ export function HomeHero({
 
                 {/* Voice status */}
                 {voice.voiceStatus && (
-                    <p className="home-hero__voice-status" role="status" aria-live="polite">
+                    <p
+                        id="home-voice-status"
+                        className="home-hero__voice-status"
+                        role="status"
+                        aria-live="polite"
+                    >
                         {voice.voiceStatus}
                     </p>
                 )}
+                <p id="home-search-help" className="home-hero__search-help">
+                    Search saved memories by topic, app, person, or time.
+                </p>
             </motion.div>
 
-            {/* Scroll indicator */}
-            <motion.div
-                className="home-hero__scroll-indicator"
-                style={{ x: scrollX, y: scrollY }}
-                aria-hidden="true"
-            >
-                <span className="home-hero__scroll-label">SCROLL TO EXPLORE</span>
-                <div className="home-hero__scroll-line" />
-                <div className="home-hero__scroll-dot" />
-            </motion.div>
         </div>
     );
 }

@@ -41,7 +41,7 @@ interface CommandContext {
     onClearSearch: () => void;
     onDeleteMemory: (id: string) => void;
     onGoHome: () => void;
-    isCapturing: boolean;
+    isCapturePaused: boolean;
 }
 
 export type PanelKey =
@@ -90,7 +90,7 @@ const COMMANDS: Command[] = [
     {
         id: "go-home",
         label: "Home",
-        description: "Back to your greeting, capture status and recent memories",
+        description: "Back to your greeting and universal memory search",
         category: "navigate",
         keywords: ["home", "start", "timeline", "recent"],
         run: ({ onGoHome }) => onGoHome(),
@@ -106,7 +106,7 @@ const COMMANDS: Command[] = [
     {
         id: "wrapped",
         label: "FNDR Wrapped",
-        description: "Your week in review",
+        description: "Review a selected week and export its recap",
         category: "navigate",
         keywords: ["week", "recap", "wrapped", "review"],
         run: ({ onOpenPanel }) => onOpenPanel("wrapped"),
@@ -130,7 +130,7 @@ const COMMANDS: Command[] = [
     {
         id: "memory-cards",
         label: "Memory Vault",
-        description: "Browse all memory cards",
+        description: "Browse and review memories captured from your activity",
         category: "navigate",
         keywords: ["browse", "all", "cards", "memories", "vault"],
         run: ({ onOpenPanel }) => onOpenPanel("memoryCards"),
@@ -146,7 +146,7 @@ const COMMANDS: Command[] = [
     {
         id: "daily-summary",
         label: "Daily Summary",
-        description: "Generate an AI summary of today's activity",
+        description: "Review a locally generated summary for a selected day",
         category: "navigate",
         keywords: ["summary", "today", "daily", "recap"],
         run: ({ onOpenPanel }) => onOpenPanel("dailySummary"),
@@ -178,30 +178,30 @@ const COMMANDS: Command[] = [
     {
         id: "stats",
         label: "Stats",
-        description: "View your capture statistics and activity rhythms",
+        description: "Review capture activity, rhythms, and signal quality",
         category: "navigate",
         keywords: ["statistics", "data", "analytics", "usage"],
         run: ({ onOpenPanel }) => onOpenPanel("stats"),
     },
     {
         id: "engine-metrics",
-        label: "Engine Metrics",
-        description: "Live performance snapshot for capture, search, and memory graph",
+        label: "Engine diagnostics",
+        description: "Developer troubleshooting for capture, search, and system performance",
         category: "navigate",
         keywords: ["metrics", "performance", "latency", "p50", "p95", "pipeline"],
         run: ({ onOpenPanel }) => onOpenPanel("engineMetrics"),
     },
     {
         id: "privacy-proof",
-        label: "Privacy Proof",
-        description: "Evidence that sensitive content never entered storage",
+        label: "Privacy Activity",
+        description: "Review this app session's capture skips and recorded network activity",
         category: "navigate",
         keywords: ["privacy", "proof", "egress", "skip", "blocklist"],
         run: ({ onOpenPanel }) => onOpenPanel("privacyProof"),
     },
     {
         id: "todo",
-        label: "To-Do List",
+        label: "To-dos",
         description: "View tasks, reminders and follow-ups",
         category: "navigate",
         keywords: ["task", "todo", "reminder", "followup"],
@@ -260,11 +260,11 @@ const COMMANDS: Command[] = [
     {
         id: "pause-capture",
         label: "Pause capture",
-        description: "Temporarily stop screen recording",
+        description: "Stop new screen capture until you explicitly resume",
         category: "capture",
         keywords: ["pause", "stop", "privacy", "incognito"],
         requiresConfirm: true,
-        confirmMessage: "Pause screen capture? FNDR will stop recording until you resume.",
+        confirmMessage: "Pause screen capture? FNDR will stay paused after relaunch until you resume.",
         run: async () => { await pauseCapture(); },
     },
     {
@@ -385,6 +385,10 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
     const [feedback, setFeedback] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
+    const modalRef = useRef<HTMLDivElement>(null);
+    const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+    const wasOpenRef = useRef(false);
+    const commandRanRef = useRef(false);
 
     const ctx: CommandContext = { ...context, selectedMemory };
 
@@ -392,9 +396,16 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
     const visible = COMMANDS.filter((cmd) => {
         if (demoOnly && !isDemoCommand(cmd.id)) return false;
         if (cmd.memoryOnly && !selectedMemory) return false;
+        if (cmd.id === "pause-capture" && ctx.isCapturePaused) return false;
+        if (cmd.id === "resume-capture" && !ctx.isCapturePaused) return false;
         const s = score(cmd, query);
         return s > 0;
-    }).sort((a, b) => score(b, query) - score(a, query));
+    }).sort((a, b) => {
+        const scoreDifference = score(b, query) - score(a, query);
+        if (scoreDifference !== 0 || !demoOnly) return scoreDifference;
+        return DEMO_COMMAND_IDS.indexOf(a.id as (typeof DEMO_COMMAND_IDS)[number])
+            - DEMO_COMMAND_IDS.indexOf(b.id as (typeof DEMO_COMMAND_IDS)[number]);
+    });
 
     // Group by category (only show categories that have results)
     const groups: { category: CommandCategory; commands: Command[] }[] = [];
@@ -408,12 +419,51 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
     // Reset state on open
     useEffect(() => {
         if (isOpen) {
+            previouslyFocusedRef.current = document.activeElement instanceof HTMLElement
+                ? document.activeElement
+                : null;
+            wasOpenRef.current = true;
+            commandRanRef.current = false;
             setQuery("");
             setActiveIdx(0);
             setPendingCommand(null);
             setFeedback(null);
-            setTimeout(() => inputRef.current?.focus(), 30);
+            const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 30);
+            return () => window.clearTimeout(focusTimer);
         }
+        if (wasOpenRef.current) {
+            if (!commandRanRef.current && previouslyFocusedRef.current?.isConnected) {
+                previouslyFocusedRef.current.focus();
+            }
+            wasOpenRef.current = false;
+        }
+    }, [isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const trapTab = (event: KeyboardEvent) => {
+            if (event.key !== "Tab") return;
+            const focusable = Array.from(
+                modalRef.current?.querySelectorAll<HTMLElement>(
+                    'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+                ) ?? [],
+            );
+            if (focusable.length === 0) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (!modalRef.current?.contains(document.activeElement)) {
+                event.preventDefault();
+                (event.shiftKey ? last : first).focus();
+            } else if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener("keydown", trapTab, true);
+        return () => document.removeEventListener("keydown", trapTab, true);
     }, [isOpen]);
 
     // Keep activeIdx in bounds
@@ -424,13 +474,16 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
     // Scroll active item into view
     useEffect(() => {
         const active = listRef.current?.querySelector(`[data-idx="${activeIdx}"]`);
-        active?.scrollIntoView({ block: "nearest" });
+        if (active instanceof HTMLElement && typeof active.scrollIntoView === "function") {
+            active.scrollIntoView({ block: "nearest" });
+        }
     }, [activeIdx]);
 
     const runCommand = useCallback(async (cmd: Command) => {
         setRunning(cmd.id);
         try {
             await cmd.run(ctx);
+            commandRanRef.current = true;
             setFeedback(`Done: ${cmd.label}`);
             setTimeout(() => {
                 setFeedback(null);
@@ -488,9 +541,13 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
     return (
         <div className="cp-overlay" onClick={onClose}>
             <div
+                ref={modalRef}
                 className="cp-modal"
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={handleKey}
+                role="dialog"
+                aria-modal="true"
+                aria-label="FNDR command palette"
             >
                 {/* Search bar */}
                 <div className="cp-search-row">
@@ -498,6 +555,7 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
                     <input
                         ref={inputRef}
                         className="cp-input"
+                        aria-label="Search FNDR commands"
                         placeholder={selectedMemory ? `Actions for "${selectedMemory.title.slice(0, 40)}…"` : "Jump to a view or command…"}
                         value={query}
                         onChange={(e) => { setQuery(e.target.value); setActiveIdx(0); }}
@@ -518,7 +576,7 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
                 {/* Permission confirmation gate (mirrors CC's BashTool confirm flow) */}
                 {pendingCommand && (
                     <div className="cp-confirm-gate">
-                        <div className="cp-confirm-icon">{pendingCommand.category}</div>
+                        <div className="cp-confirm-icon" aria-hidden="true">!</div>
                         <div className="cp-confirm-body">
                             <p className="cp-confirm-message">{pendingCommand.confirmMessage ?? `Run "${pendingCommand.label}"?`}</p>
                             <div className="cp-confirm-actions">
@@ -538,7 +596,12 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
 
                 {/* Feedback flash */}
                 {feedback && (
-                    <div className="cp-feedback">{feedback}</div>
+                    <div
+                        className="cp-feedback"
+                        role={feedback.startsWith("Failed:") ? "alert" : "status"}
+                    >
+                        {feedback}
+                    </div>
                 )}
 
                 {/* Results */}
@@ -585,7 +648,7 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
                         <span><kbd>↵</kbd> open</span>
                         <span><kbd>esc</kbd> close</span>
                     </div>
-                    <span className="cp-footer-local">Local Only</span>
+                    <span className="cp-footer-local">Runs in FNDR</span>
                 </div>
             </div>
         </div>

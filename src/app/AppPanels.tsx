@@ -12,12 +12,13 @@ import { PrivacyProofPanel } from "@/domains/privacy-proof/PrivacyProof";
 import { AppToasts } from "./AppToasts";
 import { PanelErrorBoundary } from "./PanelErrorBoundary";
 import type { AppToast } from "./types";
+import type { MountedPanelKey } from "./panels";
 
 interface AppPanelsProps {
-    activePanel: PanelKey | null;
+    activePanel: MountedPanelKey | null;
     appNames: string[];
     appToasts: AppToast[];
-    isCapturing: boolean;
+    isCapturePaused: boolean;
     query: string;
     selectedResult: MemoryCard | null;
     showCommandPalette: boolean;
@@ -37,13 +38,13 @@ interface AppPanelsProps {
 }
 
 /** Alpha demo surface: Vault, Search & Ask, daily reflection, Stats, To-dos,
- *  Wrapped, Screen Guide, and Engine Metrics.
+ *  Wrapped, Screen Guide, and Engine diagnostics.
  *  Hidden rank-2 panels stay compiled under src/domains but are not mounted. */
 export function AppPanels({
     activePanel,
     appNames,
     appToasts,
-    isCapturing,
+    isCapturePaused,
     query,
     selectedResult,
     showCommandPalette,
@@ -63,7 +64,7 @@ export function AppPanels({
 }: AppPanelsProps) {
     return (
         <>
-            <PanelErrorBoundary panelName="Ask FNDR">
+            <PanelErrorBoundary panelName="Ask FNDR" onClose={onClosePanel}>
                 <AskPanel isVisible={activePanel === "ask"} onClose={onClosePanel} onOpenMemoryById={onOpenMemoryById} />
             </PanelErrorBoundary>
             <MemoryCardsPanel
@@ -75,29 +76,29 @@ export function AppPanels({
                 focusMemoryId={memoryVaultFocusId}
                 onOpenMemoryById={onOpenMemoryById}
             />
-            <PanelErrorBoundary panelName="Daily Summary">
+            <PanelErrorBoundary panelName="Daily Summary" onClose={onClosePanel}>
                 <DailySummaryPanel
                     isVisible={activePanel === "dailySummary"}
                     onClose={onClosePanel}
                     onOpenMemoryById={onOpenMemoryById}
                 />
             </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="Stats">
+            <PanelErrorBoundary panelName="Stats" onClose={onClosePanel}>
                 <StatsPanel isVisible={activePanel === "stats"} onClose={onClosePanel} />
             </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="To-dos">
+            <PanelErrorBoundary panelName="To-dos" onClose={onClosePanel}>
                 <TodoPanel isVisible={activePanel === "todo"} onClose={onClosePanel} />
             </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="FNDR Wrapped">
+            <PanelErrorBoundary panelName="FNDR Wrapped" onClose={onClosePanel}>
                 <FndrWrappedPanel isVisible={activePanel === "wrapped"} onClose={onClosePanel} />
             </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="Screen Guide">
+            <PanelErrorBoundary panelName="Screen Guide" onClose={onClosePanel}>
                 <ScreenGuidePanel isVisible={activePanel === "screenGuide"} onClose={onClosePanel} />
             </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="Engine Metrics">
+            <PanelErrorBoundary panelName="Engine diagnostics" onClose={onClosePanel}>
                 <EngineMetricsPanel isVisible={activePanel === "engineMetrics"} onClose={onClosePanel} />
             </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="Privacy Proof">
+            <PanelErrorBoundary panelName="Privacy Activity" onClose={onClosePanel}>
                 <PrivacyProofPanel isVisible={activePanel === "privacyProof"} onClose={onClosePanel} />
             </PanelErrorBoundary>
             <CommandPalette
@@ -113,7 +114,7 @@ export function AppPanels({
                     onSearchApp,
                     onClearSearch,
                     onDeleteMemory,
-                    isCapturing,
+                    isCapturePaused,
                 }}
             />
             <AppToasts toasts={appToasts} onAction={onToastAction} onDismiss={onDismissToast} />

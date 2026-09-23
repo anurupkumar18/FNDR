@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from "react";
 import { AppPanels } from "./AppPanels";
+import { isMountedPanelKey, type MountedPanelKey } from "./panels";
 import { BiometricLockScreen } from "./BiometricLockScreen";
 import { HomeHero } from "./HomeHero";
 import type { AppToast } from "./types";
@@ -32,7 +33,7 @@ import {
     getStatus,
     getFunGreeting,
 } from "@/shared/ipc/tauri";
-import { getOnboardingState, saveOnboardingState, type OnboardingState } from "@/shared/ipc/onboarding";
+import { getOnboardingState, type OnboardingState } from "@/shared/ipc/onboarding";
 import { EVAL_UI } from "@/shared/utils/eval-ui";
 import "./styles/App.css";
 
@@ -40,7 +41,7 @@ function nextToastId(): string {
     return createClientId("fndr-toast");
 }
 
-const SIDEBAR_GROUPS = [
+export const SIDEBAR_GROUPS = [
     {
         label: "Memory",
         items: [
@@ -61,13 +62,13 @@ const SIDEBAR_GROUPS = [
         label: "Assist",
         items: [
             { key: "screenGuide", text: "Screen Guide" },
-            { key: "engineMetrics", text: "Engine Metrics" },
-            { key: "privacyProof", text: "Privacy Proof" },
+            { key: "engineMetrics", text: "Engine diagnostics" },
+            { key: "privacyProof", text: "Privacy Activity" },
         ],
     },
 ] as const satisfies ReadonlyArray<{
     label: string;
-    items: ReadonlyArray<{ key: PanelKey; text: string }>;
+    items: ReadonlyArray<{ key: MountedPanelKey; text: string }>;
 }>;
 
 function App() {
@@ -80,11 +81,13 @@ function App() {
     const [meetingStatus, setMeetingStatus] = useState<MeetingRecorderStatus | null>(null);
     // Single active-panel state — only one full-screen panel can be open at a time.
     // CommandPalette is kept separate because it layers on top of the current panel.
-    const [activePanel, setActivePanel] = useState<PanelKey | null>(null);
+    const [activePanel, setActivePanel] = useState<MountedPanelKey | null>(null);
     const [memoryVaultFocusId, setMemoryVaultFocusId] = useState<string | null>(null);
     const [showCommandPalette, setShowCommandPalette] = useState(false);
     const [appToasts, setAppToasts] = useState<AppToast[]>([]);
     const toastTimersRef = useRef<Map<string, number>>(new Map());
+    const sidebarButtonRef = useRef<HTMLButtonElement>(null);
+    const backgroundLayerRef = useRef<HTMLDivElement>(null);
 
     const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
     const [biometricRequired, setBiometricRequired] = useState<boolean | null>(null);
@@ -95,20 +98,6 @@ function App() {
     const [displayName, setDisplayName] = useState<string | null>(null);
     const [now, setNow] = useState(() => new Date());
     const handleUnlock = useCallback(() => setBiometricUnlocked(true), []);
-    const handleDisableBiometricLock = useCallback(async () => {
-        try {
-            const current = await getOnboardingState();
-            await saveOnboardingState({
-                ...current,
-                biometric_enabled: false,
-            });
-        } catch (err) {
-            console.error("Failed to disable biometric lock:", err);
-        } finally {
-            setBiometricRequired(false);
-            setBiometricUnlocked(true);
-        }
-    }, []);
 
     const searchAllowed = true;
     const { results, isLoading, error } = useSearch(
@@ -124,7 +113,7 @@ function App() {
     useEffect(() => {
         getOnboardingState()
             .then((s) => {
-                setOnboardingDone(s.step === "complete" && s.model_downloaded);
+                setOnboardingDone(s.step === "complete");
                 setDisplayName(s.display_name ?? null);
                 setBiometricRequired(s.biometric_enabled === true);
             })
@@ -255,12 +244,21 @@ function App() {
 
     // Command Palette panel dispatcher — opens any panel by key
     const handleOpenPanel = useCallback((panel: PanelKey) => {
+        if (!isMountedPanelKey(panel)) {
+            console.warn(`Ignored unmounted Alpha panel destination: ${panel}`);
+            return;
+        }
         setShowCommandPalette(false);
         setIsSidebarOpen(false);
         if (panel !== "memoryCards") {
             setMemoryVaultFocusId(null);
         }
         setActivePanel(panel);
+    }, []);
+
+    const closeActivePanel = useCallback(() => {
+        setActivePanel(null);
+        window.setTimeout(() => sidebarButtonRef.current?.focus(), 0);
     }, []);
 
     const handleOpenMemoryById = useCallback((memoryId: string) => {
@@ -280,6 +278,7 @@ function App() {
         setQueryDraft("");
         setTimeFilter(null);
         setAppFilter(null);
+        window.setTimeout(() => sidebarButtonRef.current?.focus(), 0);
     }, []);
 
     const dismissToast = useCallback((toastId: string) => {
@@ -323,13 +322,20 @@ function App() {
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+                if (
+                    onboardingDone !== true ||
+                    (biometricRequired === true && !biometricUnlocked) ||
+                    document.getElementById("fndr-settings-panel")
+                ) {
+                    return;
+                }
                 e.preventDefault();
                 setShowCommandPalette((prev) => !prev);
             }
         };
         window.addEventListener("keydown", handler);
         return () => window.removeEventListener("keydown", handler);
-    }, []);
+    }, [biometricRequired, biometricUnlocked, onboardingDone]);
 
     // Proactive suggestion listener — surfaces focus drift alerts and
     // resurfaced memories as toasts.
@@ -347,8 +353,6 @@ function App() {
                             title: "Focus Drift Detected",
                             body: suggestion.snippet,
                             kind: "focus_drift",
-                            actionLabel: "View Focus Mode",
-                            targetPanel: "focusMode",
                         });
                         return;
                     }
@@ -391,7 +395,7 @@ function App() {
                 case "stale_tasks":
                     return { actionLabel: "Review Tasks", targetPanel: "todo" };
                 case "context_switch":
-                    return { actionLabel: "Open Focus Mode", targetPanel: "focusMode" };
+                    return { actionLabel: "Review the day", targetPanel: "dailySummary" };
                 default:
                     return {};
             }
@@ -434,6 +438,34 @@ function App() {
             toastTimersRef.current.clear();
         };
     }, []);
+
+    const hasForegroundOverlay = activePanel !== null || showCommandPalette;
+    useLayoutEffect(() => {
+        const backgroundLayer = backgroundLayerRef.current;
+        if (!backgroundLayer) return;
+
+        let settingsWasOpen = false;
+        const syncBackgroundIsolation = () => {
+            const settingsOpen = document.getElementById("fndr-settings-panel") !== null;
+            if (hasForegroundOverlay || settingsOpen) {
+                backgroundLayer.setAttribute("inert", "");
+            } else {
+                backgroundLayer.removeAttribute("inert");
+            }
+
+            if (settingsWasOpen && !settingsOpen && !hasForegroundOverlay) {
+                backgroundLayer
+                    .querySelector<HTMLButtonElement>('[aria-controls="fndr-settings-panel"]')
+                    ?.focus();
+            }
+            settingsWasOpen = settingsOpen;
+        };
+
+        syncBackgroundIsolation();
+        const foregroundObserver = new MutationObserver(syncBackgroundIsolation);
+        foregroundObserver.observe(document.body, { childList: true });
+        return () => foregroundObserver.disconnect();
+    }, [biometricRequired, biometricUnlocked, hasForegroundOverlay, onboardingDone]);
 
     useEffect(() => {
         if (!visibleResults.length) {
@@ -480,55 +512,43 @@ function App() {
     }
 
     if (biometricRequired && !biometricUnlocked) {
-        return (
-            <BiometricLockScreen
-                onUnlock={handleUnlock}
-                onDisableBiometricLock={handleDisableBiometricLock}
-            />
-        );
+        return <BiometricLockScreen onUnlock={handleUnlock} />;
     }
 
     return (
         <div className="app film-grain">
-            {!EVAL_UI && (
-                <button
-                    type="button"
-                    className="fndr-os-chrome-btn sidebar-toggle"
-                    onClick={() => setIsSidebarOpen((prev) => !prev)}
-                    aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
-                >
-                    {isSidebarOpen ? (
-                        <span aria-hidden="true">×</span>
-                    ) : (
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-                            <path d="M4 7h16M4 12h16M4 17h16" strokeLinecap="round" />
-                        </svg>
-                    )}
-                </button>
-            )}
+            <div ref={backgroundLayerRef} className="app-background-layer">
+                {!EVAL_UI && (
+                    <button
+                        ref={sidebarButtonRef}
+                        type="button"
+                        className="fndr-os-chrome-btn sidebar-toggle"
+                        onClick={() => setIsSidebarOpen((prev) => !prev)}
+                        aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
+                        aria-expanded={isSidebarOpen}
+                        aria-controls="primary-navigation"
+                    >
+                        {isSidebarOpen ? (
+                            <span aria-hidden="true">×</span>
+                        ) : (
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                                <path d="M4 7h16M4 12h16M4 17h16" strokeLinecap="round" />
+                            </svg>
+                        )}
+                    </button>
+                )}
 
-            <div className="top-right-control">
-                <ControlPanel
-                    status={status}
-                    compact={true}
-                    evalUi={EVAL_UI}
-                    onOpenPanel={(panel) => {
-                        setIsSidebarOpen(false);
-                        setActivePanel(panel);
-                    }}
-                />
-            </div>
-
-            {!EVAL_UI && meetingStatus?.is_recording && (
-                <div className="recording-consent-banner pending">
-                    <strong>Recording Active</strong>
-                    <span>{meetingStatus.current_title ?? "Meeting"}</span>
+                <div className="top-right-control">
+                    <ControlPanel
+                        status={status}
+                        compact={true}
+                        evalUi={EVAL_UI}
+                    />
                 </div>
-            )}
 
-            {status && !status.ai_model_available && <ModelDownloadBanner />}
+                {status && !status.ai_model_available && <ModelDownloadBanner />}
 
-            {!EVAL_UI && isSidebarOpen && (
+                {!EVAL_UI && isSidebarOpen && (
                 <button
                     className="sidebar-scrim"
                     onClick={() => setIsSidebarOpen(false)}
@@ -536,8 +556,13 @@ function App() {
                 />
             )}
 
-            {!EVAL_UI && (
-                <aside className={`left-sidebar ${isSidebarOpen ? "open" : ""}`}>
+                {!EVAL_UI && (
+                <nav
+                    id="primary-navigation"
+                    className={`left-sidebar ${isSidebarOpen ? "open" : ""}`}
+                    aria-label="Primary navigation"
+                    aria-hidden={!isSidebarOpen}
+                >
                     <div className="sidebar-brand"></div>
 
                     <div className="sidebar-group sidebar-actions">
@@ -557,8 +582,11 @@ function App() {
                                     key={key}
                                     className={`ui-action-btn ${activePanel === key ? "active" : ""}`}
                                     onClick={() => {
-                                        setActivePanel(activePanel === key ? null : key);
-                                        setIsSidebarOpen(false);
+                                        if (activePanel === key) {
+                                            closeActivePanel();
+                                        } else {
+                                            handleOpenPanel(key);
+                                        }
                                     }}
                                 >
                                     {text}
@@ -572,6 +600,7 @@ function App() {
                         <button
                             className="ui-action-btn"
                             onClick={() => {
+                                sidebarButtonRef.current?.focus();
                                 setShowCommandPalette(true);
                                 setIsSidebarOpen(false);
                             }}
@@ -595,10 +624,10 @@ function App() {
                             <div className="sidebar-reel-inner" />
                         </div>
                     </div>
-                </aside>
+                </nav>
             )}
 
-            <main className={`app-main ${isFocusMode ? "search-centered" : ""}`}>
+                <main className={`app-main ${isFocusMode ? "search-centered" : "has-active-search"}`}>
                 {isFocusMode ? (
                     <div className="home-hero-stage">
                         <HomeHero
@@ -621,9 +650,7 @@ function App() {
                                     onTimeFilterChange={setTimeFilter}
                                     appFilter={appFilter}
                                     onAppFilterChange={setAppFilter}
-                                    onSetMeetingPanelOpen={(open) => setActivePanel(open ? "meeting" : null)}
                                     onSetMemoryCardsPanelOpen={(open) => setActivePanel(open ? "memoryCards" : null)}
-                                    onSetKnowledgeGraphPanelOpen={(open) => setActivePanel(open ? "knowledgeGraph" : null)}
                                     appNames={appNames}
                                     resultCount={visibleResults.length}
                                     searchResults={visibleResults}
@@ -643,9 +670,7 @@ function App() {
                                 onTimeFilterChange={setTimeFilter}
                                 appFilter={appFilter}
                                 onAppFilterChange={setAppFilter}
-                                onSetMeetingPanelOpen={(open) => setActivePanel(open ? "meeting" : null)}
                                 onSetMemoryCardsPanelOpen={(open) => setActivePanel(open ? "memoryCards" : null)}
-                                onSetKnowledgeGraphPanelOpen={(open) => setActivePanel(open ? "knowledgeGraph" : null)}
                             appNames={appNames}
                             resultCount={visibleResults.length}
                             searchResults={visibleResults}
@@ -670,14 +695,22 @@ function App() {
                         </section>
                     </div>
                 )}
-            </main>
+                </main>
+            </div>
+
+            {!EVAL_UI && meetingStatus?.is_recording && (
+                <div className="recording-consent-banner pending" role="status" aria-live="polite">
+                    <strong>Recording Active</strong>
+                    <span>{meetingStatus.current_title ?? "Meeting"}</span>
+                </div>
+            )}
 
             {!EVAL_UI && (
                 <AppPanels
                     activePanel={activePanel}
                     appNames={appNames}
                     appToasts={appToasts}
-                    isCapturing={status?.is_capturing ?? false}
+                    isCapturePaused={status?.is_paused ?? false}
                     query={query}
                     selectedResult={selectedResult}
                     showCommandPalette={showCommandPalette}
@@ -688,7 +721,7 @@ function App() {
                         setAppFilter(null);
                     }}
                     onCloseCommandPalette={() => setShowCommandPalette(false)}
-                    onClosePanel={() => setActivePanel(null)}
+                    onClosePanel={closeActivePanel}
                     onDeleteMemory={handleMemoryDeleted}
                     onDismissToast={dismissToast}
                     onGoHome={goHome}

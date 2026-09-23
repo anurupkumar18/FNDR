@@ -81,7 +81,8 @@ function StepWelcome({
                 FNDR remembers what you&apos;ve worked on so you don&apos;t have to.
                 Synthesize meetings and track tasks — all instantly.
                 <br /><br />
-                Everything runs on your computer. Nothing leaves it. Ever.
+                FNDR stores your captured memory on this Mac and processes it locally by default.
+                Model downloads connect to Hugging Face; optional integrations can connect to services you configure.
             </p>
             <label className="ob-name-label" htmlFor="ob-display-name">
                 What should FNDR call you?
@@ -140,8 +141,8 @@ function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s:
             <span className="ob-icon">🔐</span>
             <h1 className="ob-title">Lock FNDR with Touch ID</h1>
             <p className="ob-subtitle">
-                FNDR stores everything you see on screen.
-                Before we start, let's make sure only you can open it.
+                With Screen Recording permission, FNDR can store screen snapshots and extracted text.
+                Locking FNDR helps limit who can open that local history.
             </p>
             {error && <div className="ob-error-box">{error}</div>}
             <button id="ob-enable-touchid" className="ob-btn-primary" onClick={handleEnable} disabled={loading}>
@@ -159,7 +160,7 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
     return (
         <>
             <span className="ob-icon">🔒</span>
-            <h1 className="ob-title">What FNDR sees (and doesn't share)</h1>
+            <h1 className="ob-title">How FNDR handles your data</h1>
             <div className="ob-privacy-list">
                 {[
                     {
@@ -169,18 +170,18 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
                     },
                     {
                         icon: "🌐",
-                        title: "Nothing leaves your Mac",
-                        body: "No servers. No cloud. Local Qwen3-VL and Whisper models process everything offline.",
+                        title: "Local-first, with clear exceptions",
+                        body: "Captured memory stays on this Mac by default. Downloading models connects to Hugging Face, and optional integrations can connect to providers you configure.",
                     },
                     {
                         icon: "🎭",
-                        title: "Automatic privacy",
-                        body: "Password managers and banking apps are automatically skipped using perceptual deduplication and blocklists.",
+                        title: "Capture controls",
+                        body: "FNDR skips its own windows and anything matching your app/site blocklist. Review your blocklist and pause capture before opening sensitive material.",
                     },
                     {
                         icon: "🗑",
                         title: "You're in control",
-                        body: "Delete any memory, clear your history, or wipe the entire local database in one tap.",
+                        body: "Use FNDR's deletion controls to remove saved memories or clear local history.",
                     },
                 ].map(({ icon, title, body }) => (
                     <div className="ob-privacy-item" key={title}>
@@ -197,7 +198,7 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
                 className="ob-btn-primary"
                 onClick={() => onSave({ ...state, step: "model_download" })}
             >
-                I&apos;m in — Continue
+                Continue
             </button>
             <button
                 className="ob-btn-ghost"
@@ -241,7 +242,10 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
         <>
             <span className="ob-icon">🛡️</span>
             <h1 className="ob-title">Grant a few permissions</h1>
-            <p className="ob-subtitle">FNDR needs permission to see your screen. Everything stays local.</p>
+            <p className="ob-subtitle">
+                FNDR needs permission to see your screen. Captured memory stays on this Mac by default;
+                model downloads and optional integrations use the network.
+            </p>
 
             {[
                 {
@@ -464,7 +468,8 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                 Choose the &apos;brain&apos; for your FNDR. Qwen3-VL (4B) is recommended for best-in-class 
                 summaries, memory Q&amp;A, and screen understanding.
                 <br /><br />
-                Optional helpers for transcription and TTS are loaded only when needed.
+                Downloading connects to Hugging Face. After the model files are installed, supported analysis
+                runs on this Mac. Optional helpers for transcription and TTS are loaded only when needed.
             </p>
 
             {!isDownloading && (
@@ -503,7 +508,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                         {
                             icon: "🎙",
                             title: "Local Meeting Recording",
-                            body: "Whisper GGUF models are used for automatic meeting detection and privacy-first transcription.",
+                            body: "Downloaded Whisper GGUF models provide on-device transcription when installed.",
                         },
                         {
                             icon: "🕸",
@@ -625,6 +630,7 @@ interface OnboardingProps {
 
 export function Onboarding({ onComplete }: OnboardingProps) {
     const [state, setState] = useState<OnboardingState | null>(null);
+    const [saveError, setSaveError] = useState<string | null>(null);
 
     useEffect(() => {
         getOnboardingState()
@@ -634,8 +640,14 @@ export function Onboarding({ onComplete }: OnboardingProps) {
 
     const save = useCallback(
         async (next: OnboardingState) => {
+            setSaveError(null);
+            try {
+                await saveOnboardingState(next);
+            } catch {
+                setSaveError("FNDR couldn't save your setup. Please try again.");
+                return;
+            }
             setState(next);
-            await saveOnboardingState(next);
             if (next.step === "complete") {
                 onComplete(next);
             }
@@ -648,6 +660,11 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     return (
         <div className="onboarding-overlay">
             <div className="ob-card">
+                {saveError && (
+                    <div className="ob-error-box" role="alert">
+                        {saveError}
+                    </div>
+                )}
                 {state.step !== "welcome" && state.step !== "complete" && (
                     <StepDots current={state.step === "indexing_started" ? "permissions" : state.step} />
                 )}

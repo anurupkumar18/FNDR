@@ -1,28 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Onboarding } from "./Onboarding";
 
 const listAvailableModels = vi.fn();
 const downloadModel = vi.fn();
 const saveOnboardingState = vi.fn();
+const getOnboardingState = vi.fn();
+const checkPermissions = vi.fn();
 
 vi.mock("@/shared/ipc/onboarding", () => ({
-    getOnboardingState: vi.fn().mockResolvedValue({
-        step: "model_download",
-        biometric_enabled: false,
-        screen_permission: false,
-        accessibility_permission: false,
-        model_downloaded: false,
-        model_id: null,
-        display_name: null,
-    }),
+    getOnboardingState: (...args: unknown[]) => getOnboardingState(...args),
     saveOnboardingState: (...args: unknown[]) => saveOnboardingState(...args),
     requestBiometricAuth: vi.fn(),
-    checkPermissions: vi.fn().mockResolvedValue({
-        screen_recording: false,
-        accessibility: false,
-        microphone: false,
-    }),
+    checkPermissions: (...args: unknown[]) => checkPermissions(...args),
     openSystemSettings: vi.fn(),
     listAvailableModels: (...args: unknown[]) => listAvailableModels(...args),
     downloadModel: (...args: unknown[]) => downloadModel(...args),
@@ -52,6 +42,24 @@ vi.mock("@/shared/hooks/useModelDownloadStatus", () => ({
 vi.mock("@/shared/hooks/usePolling", () => ({
     usePolling: vi.fn(),
 }));
+
+beforeEach(() => {
+    getOnboardingState.mockResolvedValue({
+        step: "model_download",
+        biometric_enabled: false,
+        screen_permission: false,
+        accessibility_permission: false,
+        model_downloaded: false,
+        model_id: null,
+        display_name: null,
+    });
+    checkPermissions.mockResolvedValue({
+        screen_recording: false,
+        accessibility: false,
+        microphone: false,
+    });
+    saveOnboardingState.mockResolvedValue(undefined);
+});
 
 function qwenInfo(downloaded = false) {
     return {
@@ -138,5 +146,104 @@ describe("Onboarding model step", () => {
 
         expect(await screen.findByText("Qwen3-VL · 2B")).toBeInTheDocument();
         expect(downloadModel).not.toHaveBeenCalled();
+    });
+});
+
+describe("Onboarding persistence", () => {
+    it("keeps the current step visible when completing onboarding cannot be saved", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "permissions",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+        saveOnboardingState.mockRejectedValueOnce(new Error("disk full"));
+        const onComplete = vi.fn();
+
+        render(<Onboarding onComplete={onComplete} />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Skip for now" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "FNDR couldn't save your setup. Please try again.",
+        );
+        expect(screen.getByRole("heading", { name: "Grant a few permissions" })).toBeInTheDocument();
+        expect(onComplete).not.toHaveBeenCalled();
+    });
+});
+
+describe("Onboarding privacy disclosures", () => {
+    it("introduces FNDR as local-first and names its network exceptions", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "welcome",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByText(/stores your captured memory on this Mac/i)).toBeInTheDocument();
+        expect(screen.getByText(/model downloads.*optional integrations/i)).toBeInTheDocument();
+        expect(screen.queryByText(/nothing leaves it/i)).toBeNull();
+    });
+
+    it("explains capture controls without promising automatic protection", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "privacy_promise",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByRole("heading", { name: "How FNDR handles your data" })).toBeInTheDocument();
+        expect(await screen.findByText("Local-first, with clear exceptions")).toBeInTheDocument();
+        expect(screen.getByText(/downloading models connects to Hugging Face/i)).toBeInTheDocument();
+        expect(screen.getByText("Capture controls")).toBeInTheDocument();
+        expect(screen.getByText(/review your blocklist and pause capture/i)).toBeInTheDocument();
+        expect(screen.getByText(/deletion controls to remove saved memories/i)).toBeInTheDocument();
+        expect(screen.queryByText(/nothing leaves your Mac/i)).toBeNull();
+        expect(screen.queryByText(/doesn't share/i)).toBeNull();
+        expect(screen.queryByText(/automatic privacy/i)).toBeNull();
+        expect(screen.queryByText(/in one tap/i)).toBeNull();
+    });
+
+    it("describes screen capture as a capability rather than claiming every screen is stored", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "biometrics",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByText(/can store screen snapshots and extracted text/i)).toBeInTheDocument();
+        expect(screen.queryByText(/stores everything you see/i)).toBeNull();
+    });
+
+    it("discloses the model host before a model download", async () => {
+        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByText(/downloading connects to Hugging Face/i)).toBeInTheDocument();
+        expect(screen.getByText(/supported analysis runs on this Mac/i)).toBeInTheDocument();
+        expect(screen.getByText(/on-device transcription/i)).toBeInTheDocument();
+        expect(screen.queryByText(/privacy-first transcription/i)).toBeNull();
     });
 });

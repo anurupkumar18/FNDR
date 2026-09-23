@@ -1,4 +1,4 @@
-import type { PanelKey } from "@/domains/command-palette/CommandPalette";
+import type { MountedPanelKey } from "./panels";
 
 export interface AppToast {
     id: string;
@@ -6,7 +6,7 @@ export interface AppToast {
     body: string;
     kind: string;
     actionLabel?: string;
-    targetPanel?: PanelKey;
+    targetPanel?: MountedPanelKey;
     /** When set with targetPanel "memoryCards", the vault opens focused on this memory. */
     memoryId?: string;
 }

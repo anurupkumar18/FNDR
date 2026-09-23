@@ -53,6 +53,18 @@
     white-space: pre-wrap;
 }
 
+.panel-error-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.panel-error-actions .ui-action-btn {
+    min-height: 44px;
+    padding-inline: 18px;
+}
+
 /* ===== Biometric Lock Screen ===== */
 .biometric-lock-overlay {
     position: fixed;
@@ -321,6 +333,17 @@
     z-index: 1;
 }
 
+/* A full-screen panel or command palette is a real foreground layer, not just
+   paint over Home. App toggles `inert` on this wrapper so background controls
+   cannot receive pointer, keyboard, or assistive-technology focus. */
+.app-background-layer {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    width: 100%;
+}
+
 /* Aurora wallpaper sits at z-index:0, behind every interactive layer.
    The static page-bg gradient is removed — the WebGL canvas owns the
    background. A faint film-grain overlay is layered via .film-grain
@@ -359,6 +382,8 @@
     scrollbar-gutter: stable;
     z-index: 60;
     transform: translateX(-100%);
+    visibility: hidden;
+    pointer-events: none;
     transition: transform 0.42s var(--ease-spring);
     box-shadow:
         1px 0 0 var(--hairline) inset,
@@ -367,6 +392,8 @@
 
 .left-sidebar.open {
     transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
 }
 
 .sidebar-scrim {
@@ -411,7 +438,7 @@
     left: 50%;
     bottom: 16px;
     transform: translateX(-50%);
-    z-index: 95;
+    z-index: 8800;
     min-width: min(780px, calc(100vw - 24px));
     max-width: min(780px, calc(100vw - 24px));
     border: 1px solid color-mix(in srgb, var(--alarm) 38%, transparent);
@@ -638,6 +665,8 @@
 
 /* ===== Main content ===== */
 .app-main {
+    display: flex;
+    flex-direction: column;
     flex: 1;
     min-height: 0;
     padding: 28px;
@@ -671,8 +700,11 @@
 
 .search-shell {
     display: flex;
+    flex: 0 0 auto;
     justify-content: center;
     margin: 24px 0 28px;
+    position: relative;
+    z-index: 2;
     transition: margin 0.35s var(--ease-spring);
 }
 
@@ -789,7 +821,31 @@
 }
 
 .main-layout {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    position: relative;
+    scrollbar-color: var(--border-strong) transparent;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    z-index: 1;
+}
+
+.main-layout::-webkit-scrollbar {
     display: block;
+    width: 8px;
+}
+
+.main-layout::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.main-layout::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
 }
 
 .main-column {
@@ -1078,6 +1134,15 @@
         left: 12px;
         bottom: 12px;
         max-width: none;
+    }
+}
+
+@media (max-width: 480px) {
+    /* In results mode the search bar occupies the top of the workspace. Clear
+       the fixed menu and appearance/settings clusters as one full-width safe
+       row; Home remains vertically centered because it has no active class. */
+    .app-main.has-active-search {
+        padding-top: calc(20px + var(--fndr-os-glass-size, 44px) + env(safe-area-inset-top, 0px));
     }
 }
 

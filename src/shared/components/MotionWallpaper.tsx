@@ -34,6 +34,18 @@ export function MotionWallpaper({
         const canvas = canvasRef.current;
         if (!canvas) return;
 
+        const prefersReducedMotion = window.matchMedia?.(
+            "(prefers-reduced-motion: reduce)",
+        ).matches;
+        if (
+            document.documentElement.dataset.motion === "off" ||
+            prefersReducedMotion
+        ) {
+            // The layer's CSS gradient remains visible behind this transparent
+            // canvas, providing a stable wallpaper without WebGL or animation.
+            return;
+        }
+
         const gl = canvas.getContext("webgl", {
             antialias: false,
             powerPreference: "high-performance",
