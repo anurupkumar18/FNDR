@@ -28,9 +28,19 @@ use arrow_array::{
 };
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use futures::TryStreamExt;
+use lancedb::index::scalar::BTreeIndexBuilder;
+use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
-use lancedb::table::AddDataMode;
+use lancedb::table::{AddDataMode, CompactionOptions, OptimizeAction, OptimizeStats};
 use lancedb::Table;
+
+/// Dataset version count for a Lance table (MEM-08). Fragment count is not
+/// included: `count_fragments` is only exposed on lancedb's internal
+/// `NativeTable`, not the public `Table` handle this store holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoriesTableScaleStats {
+    pub versions: usize,
+}
 use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -1180,6 +1190,79 @@ impl Store {
             self.edges_table.delete(&filter).await?;
         }
         Ok(())
+    }
+
+    /// Dataset version and on-disk fragment counts for the main memories
+    /// table, for storage-scale diagnostics (MEM-08).
+    pub async fn memories_table_scale_stats(
+        &self,
+    ) -> Result<MemoriesTableScaleStats, Box<dyn std::error::Error>> {
+        Ok(MemoriesTableScaleStats {
+            versions: self.table.list_versions().await?.len(),
+        })
+    }
+
+    /// Creates the MEM-08 scalar and vector indexes on the memories table:
+    /// a BTree index each on `id` and `timestamp` (both already used
+    /// verbatim by `get_memory_by_id` and time-window filters), and an
+    /// IVF_PQ vector index on the live `embedding` column (used verbatim by
+    /// `vector_search`).
+    ///
+    /// Deliberately does not index `clean_text`/`snippet`/`text` for
+    /// keyword search: `keyword_search` matches with `LOWER(col) LIKE
+    /// '%term%'` (a leading wildcard), which no scalar or FTS index can
+    /// accelerate. Building an FTS index without also rewriting
+    /// `keyword_search` to use LanceDB's native full-text query API would
+    /// ship an index nothing ever queries through; that rewrite is
+    /// follow-up work, not this ticket's scope, since it changes live
+    /// search behavior and needs its own dedicated verification.
+    pub async fn create_memories_scale_indexes(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.table
+            .create_index(&["id"], Index::BTree(BTreeIndexBuilder::default()))
+            .execute()
+            .await?;
+        self.table
+            .create_index(&["timestamp"], Index::BTree(BTreeIndexBuilder::default()))
+            .execute()
+            .await?;
+        self.table
+            .create_index(&["embedding"], Index::IvfPq(Default::default()))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// Compacts small fragments into larger ones and prunes dataset
+    /// versions older than `older_than_days` (MEM-08). Safe to call
+    /// repeatedly; a table with nothing to compact or prune is a no-op.
+    ///
+    /// `delete_unverified: true` is only safe single-process: FNDR's own
+    /// instance lock on the data directory already guarantees that (see
+    /// `docs/architecture/ARCHITECTURE.md` section 2), matching the same
+    /// precondition the T-208 spike verified against v2's design.
+    pub async fn compact_and_prune(
+        &self,
+        older_than_days: i64,
+    ) -> Result<OptimizeStats, Box<dyn std::error::Error>> {
+        self.table
+            .optimize(OptimizeAction::Compact {
+                options: CompactionOptions::default(),
+                remap_options: None,
+            })
+            .await?;
+        let stats = self
+            .table
+            .optimize(OptimizeAction::Prune {
+                older_than: Some(
+                    chrono::Duration::try_days(older_than_days).unwrap_or_default(),
+                ),
+                delete_unverified: Some(true),
+                error_if_tagged_old_versions: Some(false),
+            })
+            .await?;
+        Ok(stats)
     }
 
     pub async fn list_chunks_for_memory(
