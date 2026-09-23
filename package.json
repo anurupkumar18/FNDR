@@ -23,13 +23,18 @@
         "@tauri-apps/plugin-process": "^2.3.1",
         "@tauri-apps/plugin-shell": "^2.3.5",
         "@tauri-apps/plugin-updater": "^2.10.1",
+        "border-beam": "^1.4.1",
+        "bot-avatars": "^0.1.1",
         "d3": "^7.9.0",
         "date-fns": "^3.6.0",
         "framer-motion": "^12.38.0",
+        "metal-fx": "^2.0.11",
         "postprocessing": "^6.35.6",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
+        "thinking-orbs": "^0.3.2",
         "three": "^0.160.0",
+        "voice-glow": "^0.2.1",
         "zustand": "^4.5.1"
     },
     "devDependencies": {

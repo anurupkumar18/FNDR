@@ -53,6 +53,11 @@ export class VoiceCapture {
         return this.recorder !== null;
     }
 
+    /** Live input, for anything that visualises the voice while it records. */
+    get mediaStream(): MediaStream | null {
+        return this.stream;
+    }
+
     async start(): Promise<void> {
         if (this.recorder) {
             return;

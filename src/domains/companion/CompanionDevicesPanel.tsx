@@ -9,6 +9,8 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { BorderBeam } from "border-beam";
+import { BotAvatar, type BotAvatarType } from "bot-avatars";
 import {
     CompanionDeviceListEntry,
     CompanionPairStartResponse,
@@ -18,6 +20,32 @@ import {
     companionRevokeDevice,
     companionStartPairing,
 } from "@/shared/ipc/tauri";
+
+const DEVICE_SHAPES: BotAvatarType[] = [
+    "clover",
+    "flower",
+    "blob",
+    "star",
+    "hexagon",
+    "pebble",
+    "cat",
+    "cloud",
+];
+
+/**
+ * A device keeps the same face across refreshes and restarts, so the roster is
+ * recognisable at a glance rather than reshuffling on every poll.
+ */
+function avatarFor(deviceId: string): { type: BotAvatarType; seed: number } {
+    let hash = 0;
+    for (let index = 0; index < deviceId.length; index += 1) {
+        hash = (hash * 31 + deviceId.charCodeAt(index)) >>> 0;
+    }
+    return {
+        type: DEVICE_SHAPES[hash % DEVICE_SHAPES.length],
+        seed: (hash % 1000) / 1000,
+    };
+}
 
 interface PendingPairing {
     pairing_code: string;
@@ -127,22 +155,24 @@ export function CompanionDevicesPanel({ pollIntervalMs = 5000 }: CompanionDevice
                     {pairingInFlight ? "Generating…" : "Pair a device"}
                 </button>
                 {pending ? (
-                    <div className="pending-pair" data-testid="pending-pair">
-                        <p>
-                            On your iPhone or Apple Watch, open FNDR and enter
-                            this code:
-                        </p>
-                        <p className="pair-code" aria-label="pairing code">
-                            {formatPairCode(pending.pairing_code)}
-                        </p>
-                        <p className="muted">
-                            Expires {formatExpires(pending.expires_at_ms)}.
-                        </p>
-                        <details>
-                            <summary>QR payload (debug)</summary>
-                            <pre>{pending.qr_payload}</pre>
-                        </details>
-                    </div>
+                    <BorderBeam size="md" colorVariant="ocean" strength={0.7}>
+                        <div className="pending-pair" data-testid="pending-pair">
+                            <p>
+                                On your iPhone or Apple Watch, open FNDR and enter
+                                this code:
+                            </p>
+                            <p className="pair-code" aria-label="pairing code">
+                                {formatPairCode(pending.pairing_code)}
+                            </p>
+                            <p className="muted">
+                                Expires {formatExpires(pending.expires_at_ms)}.
+                            </p>
+                            <details>
+                                <summary>QR payload (debug)</summary>
+                                <pre>{pending.qr_payload}</pre>
+                            </details>
+                        </div>
+                    </BorderBeam>
                 ) : null}
             </div>
 
@@ -159,6 +189,11 @@ export function CompanionDevicesPanel({ pollIntervalMs = 5000 }: CompanionDevice
                 <ul className="device-list">
                     {devices.map((d) => (
                         <li key={d.device_id} className={d.revoked_at_ms ? "revoked" : undefined}>
+                            <BotAvatar
+                                {...avatarFor(d.device_id)}
+                                size={36}
+                                state={d.revoked_at_ms ? "sleeping" : "default"}
+                            />
                             <div>
                                 <strong>{d.device_name}</strong>
                                 <span className="device-type">{d.device_type}</span>

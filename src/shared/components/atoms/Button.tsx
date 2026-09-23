@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { MetalFx } from "metal-fx";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "alarm";
 
@@ -28,12 +29,16 @@ export function Button({
         .filter(Boolean)
         .join(" ");
 
-    return (
+    const button = (
         <button type={type} className={cls} {...rest}>
             {icon}
             {children}
         </button>
     );
+
+    // Each wrapped button holds its own WebGL context, so the shader is spent on
+    // the call to action and nothing else. Without WebGL2 it renders the child.
+    return variant === "primary" ? <MetalFx preset="chromatic">{button}</MetalFx> : button;
 }
 
 export default Button;

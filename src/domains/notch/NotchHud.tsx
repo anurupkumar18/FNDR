@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { animate, motion, useMotionValue, useTransform } from "framer-motion";
+import { ThinkingOrb } from "thinking-orbs";
+import { VoiceBeam } from "voice-glow";
 
 import {
     type MemoryCard,
@@ -64,6 +66,7 @@ export function NotchHud() {
     const [searching, setSearching] = useState(false);
     const [turns, setTurns] = useState<ConversationTurn[]>([]);
     const [recording, setRecording] = useState(false);
+    const [voiceStream, setVoiceStream] = useState<MediaStream | null>(null);
     const [transcribing, setTranscribing] = useState(false);
     const [voiceError, setVoiceError] = useState<string | null>(null);
     const [contentHeight, setContentHeight] = useState<number>(notchMetrics.openHeaderHeight);
@@ -216,6 +219,7 @@ export function NotchHud() {
         setSelectedIndex(NO_SELECTION);
         setSearching(false);
         setRecording(false);
+        setVoiceStream(null);
         setTranscribing(false);
         setVoiceError(null);
         setContentHeight(notchMetrics.openHeaderHeight);
@@ -337,6 +341,7 @@ export function NotchHud() {
         const active = voiceRef.current;
         if (active?.isRecording) {
             setRecording(false);
+            setVoiceStream(null);
             setTranscribing(true);
             try {
                 const clip = await active.stop();
@@ -364,6 +369,7 @@ export function NotchHud() {
         try {
             await capture.start();
             setRecording(true);
+            setVoiceStream(capture.mediaStream);
         } catch {
             voiceRef.current = null;
             setVoiceError("Microphone access failed.");
@@ -470,42 +476,53 @@ export function NotchHud() {
                         transition={{ duration: 0.22 }}
                     >
                         <div ref={contentRef} className="notch-content">
-                            <div className="notch-input-row">
-                                <span
-                                    className={busy ? "notch-mark notch-mark-busy" : "notch-mark"}
-                                    aria-hidden="true"
-                                />
-                                <input
-                                    ref={inputRef}
-                                    className="notch-input"
-                                    value={query}
-                                    placeholder={
-                                        conversing ? "Ask a follow-up" : "Ask FNDR anything"
-                                    }
-                                    aria-label="Ask FNDR"
-                                    spellCheck={false}
-                                    onChange={(event) => setQuery(event.target.value)}
-                                />
-                                {voiceAvailable ? (
-                                    <button
-                                        type="button"
+                            <VoiceBeam
+                                stream={voiceStream ?? undefined}
+                                processing={busy}
+                                theme="dark"
+                                active={stage === "open"}
+                            >
+                                <div className="notch-input-row">
+                                    <span
                                         className={
-                                            recording
-                                                ? "notch-mic notch-mic-recording"
-                                                : "notch-mic"
+                                            busy ? "notch-mark notch-mark-busy" : "notch-mark"
                                         }
-                                        aria-label={recording ? "Stop and send" : "Speak to FNDR"}
-                                        aria-pressed={recording}
-                                        onClick={() => void toggleVoice()}
-                                    >
-                                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                                            <rect x="9" y="3" width="6" height="11" rx="3" />
-                                            <path d="M5 11a7 7 0 0 0 14 0" />
-                                            <path d="M12 18v3" />
-                                        </svg>
-                                    </button>
-                                ) : null}
-                            </div>
+                                        aria-hidden="true"
+                                    />
+                                    <input
+                                        ref={inputRef}
+                                        className="notch-input"
+                                        value={query}
+                                        placeholder={
+                                            conversing ? "Ask a follow-up" : "Ask FNDR anything"
+                                        }
+                                        aria-label="Ask FNDR"
+                                        spellCheck={false}
+                                        onChange={(event) => setQuery(event.target.value)}
+                                    />
+                                    {voiceAvailable ? (
+                                        <button
+                                            type="button"
+                                            className={
+                                                recording
+                                                    ? "notch-mic notch-mic-recording"
+                                                    : "notch-mic"
+                                            }
+                                            aria-label={
+                                                recording ? "Stop and send" : "Speak to FNDR"
+                                            }
+                                            aria-pressed={recording}
+                                            onClick={() => void toggleVoice()}
+                                        >
+                                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                                <rect x="9" y="3" width="6" height="11" rx="3" />
+                                                <path d="M5 11a7 7 0 0 0 14 0" />
+                                                <path d="M12 18v3" />
+                                            </svg>
+                                        </button>
+                                    ) : null}
+                                </div>
+                            </VoiceBeam>
 
                             {voiceError ? (
                                 <p className="notch-voice-error" role="status">
@@ -520,11 +537,11 @@ export function NotchHud() {
                                             <p className="notch-question">{turn.question}</p>
                                             {turn.status === "thinking" ? (
                                                 <p className="notch-thinking" role="status">
-                                                    <span className="notch-dots" aria-hidden="true">
-                                                        <i />
-                                                        <i />
-                                                        <i />
-                                                    </span>
+                                                    <ThinkingOrb
+                                                        state="searching"
+                                                        size={20}
+                                                        theme="dark"
+                                                    />
                                                     Reading your memory
                                                 </p>
                                             ) : null}
