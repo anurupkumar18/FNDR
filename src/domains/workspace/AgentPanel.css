@@ -8,7 +8,7 @@
     /* Panel identity accents (theme-invariant); neutrals come from tokens. */
     --ap-green: #10d98c;
     --ap-amber: #f5a623;
-    --ap-indigo: #6d6aff;
+    --ap-indigo: var(--accent);
 
     position: fixed;
     inset: 0;
@@ -56,7 +56,8 @@
     background: var(--bg-3);
     border: 1px solid var(--border);
     font-size: 0.7rem;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     color: var(--text-muted);
     letter-spacing: 0.02em;
 }
@@ -225,7 +226,8 @@
 .ap-card-subtitle {
     font-size: 0.74rem;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     margin-top: 2px;
 }
 
@@ -296,7 +298,7 @@
 .ap-metric-label {
     font-size: 0.67rem;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.05em;
     color: var(--text-muted);
     font-weight: 600;
 }
@@ -311,7 +313,8 @@
 .ap-metric-detail {
     font-size: 0.7rem;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -437,7 +440,8 @@
 .ap-ollama-banner-sub {
     font-size: 0.74rem;
     color: var(--text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     margin-top: 2px;
 }
 
@@ -580,7 +584,8 @@
 .ap-provider-tab-status {
     font-size: 0.68rem;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
 }
 
 /* Codex account card sits where the provider note would. */
@@ -730,7 +735,8 @@
 
 .ap-gateway-url {
     font-size: 0.7rem;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     color: var(--text-muted);
 }
 
@@ -831,7 +837,7 @@
 .ap-chat-role {
     font-size: 0.66rem;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.05em;
     color: var(--text-muted);
     font-weight: 600;
 }
@@ -874,6 +880,13 @@
     padding: 12px 14px;
     border-top: 1px solid var(--border);
     background: var(--surface);
+}
+
+.ap-agent-command-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 12px 16px 16px;
 }
 
 .ap-chat-textarea {
@@ -1006,7 +1019,7 @@
 .ap-overview-status-label {
     font-size: 0.68rem;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.05em;
     color: var(--text-muted);
     font-weight: 600;
     margin-bottom: 5px;
@@ -1055,7 +1068,7 @@
 .ap-memory-app {
     font-size: 0.66rem;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
     color: var(--text-muted);
     font-weight: 600;
     margin-bottom: 3px;

@@ -293,7 +293,8 @@
 
 .home-hero__voice-status {
     margin-top: var(--s-2);
-    font-family: var(--film-font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
     letter-spacing: 0.06em;
     color: var(--text-secondary);

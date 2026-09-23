@@ -11,13 +11,13 @@ describe("syncAuxiliaryAppearance", () => {
 
     it("applies the stored light palette to an auxiliary window", () => {
         localStorage.setItem("fndr-theme", "light");
-        localStorage.setItem("fndr-palette", "film");
+        localStorage.setItem("fndr-palette", "her");
 
         syncAuxiliaryAppearance();
 
         expect(document.documentElement).toHaveAttribute("data-theme", "light");
         expect(document.getElementById("cinematic-palette-vars")).toHaveTextContent(
-            '--cp-active-palette: "film"',
+            '--cp-active-palette: "her"',
         );
         expect(document.getElementById("cinematic-palette-vars")).toHaveTextContent(
             '--cp-active-mode: "light"',
@@ -32,7 +32,7 @@ describe("syncAuxiliaryAppearance", () => {
 
         expect(document.documentElement).toHaveAttribute("data-theme", "dark");
         expect(document.getElementById("cinematic-palette-vars")).toHaveTextContent(
-            '--cp-active-palette: "matrix"',
+            '--cp-active-palette: "system"',
         );
     });
 });

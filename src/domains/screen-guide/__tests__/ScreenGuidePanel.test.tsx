@@ -52,7 +52,7 @@ describe("ScreenGuidePanel", () => {
         expect(
             screen.getByText(/file names in Documents, Desktop, and Downloads/i),
         ).toBeInTheDocument();
-        expect(screen.getByRole("checkbox", { name: "Enable Screen Guide" })).not.toBeChecked();
+        expect(screen.getByRole("switch", { name: "Enable Screen Guide" })).not.toBeChecked();
         expect(
             screen.getByRole("textbox", { name: "Ask about your display or find a named file" }),
         ).toBeDisabled();
@@ -102,12 +102,12 @@ describe("ScreenGuidePanel", () => {
         expect(
             await screen.findByText(/live activity updates are unavailable/i),
         ).toBeInTheDocument();
-        expect(screen.getByRole("checkbox", { name: "Enable Screen Guide" })).toBeEnabled();
+        expect(screen.getByRole("switch", { name: "Enable Screen Guide" })).toBeEnabled();
     });
 
     it("persists the complete settings contract when enabled", async () => {
         render(<ScreenGuidePanel isVisible onClose={() => {}} />);
-        const enable = await screen.findByRole("checkbox", { name: "Enable Screen Guide" });
+        const enable = await screen.findByRole("switch", { name: "Enable Screen Guide" });
 
         fireEvent.click(enable);
 

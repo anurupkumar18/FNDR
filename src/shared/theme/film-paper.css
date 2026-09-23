@@ -1,6 +1,8 @@
 /* =============================================================
    FNDR brand-only tokens layered on top of cinematic-palettes.ts.
-   The --cp-* vars (bg, accent, fg) come from applyPalette("film").
+   The --cp-* vars (bg, accent, fg) come from applyPalette(); the raw
+   --film-* / --paper-* values below are only fallbacks before it runs
+   and carry the System palette (graphite + system blue).
    Tokens here are brand atmospherics (eases, fonts, font-family)
    and live in :root because they're palette-invariant.
 
@@ -47,9 +49,10 @@
     --film-dur-slow: 320ms;
     --film-dur-cinema: 420ms;
 
-    /* Mono/stamp letter tracking */
-    --film-track-label: 0.08em;
-    --film-track-stamp: 0.1em;
+    /* Small-caps label tracking: small uppercase text needs a little air,
+       not the wide film-stamp spacing. */
+    --film-track-label: 0.04em;
+    --film-track-stamp: 0.05em;
 
     /* Brand radii — macOS control (8-10px) / card-sheet (10-14px) scale. */
     --film-radius-xs: 4px;
@@ -60,44 +63,44 @@
     --film-radius-pill: 999px;
 
     /* Old Film palette — raw brand values (palette-invariant, safe at :root) */
-    --film-bg: #1a1410;
-    --film-bg-2: #221915;
-    --film-bg-3: #2a2018;
-    --film-bg-4: #352a20;
+    --film-bg: #1c1c1e;
+    --film-bg-2: #2c2c2e;
+    --film-bg-3: #3a3a3c;
+    --film-bg-4: #48484a;
 
-    --film-paper: #e8dfc8;
-    --film-paper-2: #c4a878;
-    --film-paper-3: #8a7758;
-    --film-paper-4: #5a4a3a;
+    --film-paper: #f5f5f7;
+    --film-paper-2: #a1a1a6;
+    --film-paper-3: #8e8e93;
+    --film-paper-4: #636366;
 
-    --film-amber: #d4a04a;
-    --film-amber-2: #e8b85a;
-    --film-amber-3: #a37a30;
+    --film-amber: #0a84ff;
+    --film-amber-2: #409cff;
+    --film-amber-3: #0060df;
     --film-red: #c4521e;
     --film-red-2: #d96838;
 
     /* Archival Paper palette — raw light brand values */
-    --paper-bg: #f4ede0;
-    --paper-bg-2: #ece2cf;
-    --paper-bg-3: #e0d3b8;
-    --paper-bg-4: #d4c4a3;
+    --paper-bg: #f5f5f7;
+    --paper-bg-2: #ffffff;
+    --paper-bg-3: #f2f2f7;
+    --paper-bg-4: #e5e5ea;
 
-    --paper-ink: #2a2520;
-    --paper-ink-2: #4a3f30;
-    --paper-ink-3: #6a5a48;
-    --paper-ink-4: #8a7860;
+    --paper-ink: #1d1d1f;
+    --paper-ink-2: #3a3a3c;
+    --paper-ink-3: #6e6e73;
+    --paper-ink-4: #8e8e93;
 
-    --paper-amber: #b8842e;
-    --paper-amber-2: #d49a3a;
-    --paper-amber-3: #8a6322;
+    --paper-amber: #007aff;
+    --paper-amber-2: #0062cc;
+    --paper-amber-3: #004f9e;
 
     /* Hairlines — additional steps; existing --hairline is set in index.css */
-    --film-hairline: rgba(232, 223, 200, 0.08);
-    --film-hairline-2: rgba(232, 223, 200, 0.14);
-    --film-hairline-strong: rgba(232, 223, 200, 0.22);
-    --paper-hairline: rgba(42, 37, 32, 0.08);
-    --paper-hairline-2: rgba(42, 37, 32, 0.14);
-    --paper-hairline-strong: rgba(42, 37, 32, 0.22);
+    --film-hairline: rgba(255, 255, 255, 0.08);
+    --film-hairline-2: rgba(255, 255, 255, 0.14);
+    --film-hairline-strong: rgba(255, 255, 255, 0.22);
+    --paper-hairline: rgba(0, 0, 0, 0.08);
+    --paper-hairline-2: rgba(0, 0, 0, 0.14);
+    --paper-hairline-strong: rgba(0, 0, 0, 0.22);
 
     /* Type scale */
     --t-display-1: 72px;
@@ -138,13 +141,10 @@
     --film-halation-strong: 0 0 0 1px color-mix(in srgb, var(--cp-accent) 32%, transparent),
         0 8px 20px -8px color-mix(in srgb, var(--cp-accent) 28%, transparent);
 
-    /* Pinned-amber variants — used by the immersive scroll mode where the
-       archival aesthetic should always be amber regardless of palette. */
-    --halation: 0 0 0 1px rgba(212, 160, 74, 0.22),
-        0 6px 16px -6px rgba(212, 160, 74, 0.20);
-    --halation-soft: 0 0 0 1px rgba(212, 160, 74, 0.14);
-    --halation-strong: 0 0 0 1px rgba(212, 160, 74, 0.32),
-        0 8px 20px -8px rgba(212, 160, 74, 0.28);
+    /* Same accent ring for the immersive surfaces; it follows the palette. */
+    --halation: var(--film-halation);
+    --halation-soft: var(--film-halation-soft);
+    --halation-strong: var(--film-halation-strong);
 }
 
 /* =============================================================

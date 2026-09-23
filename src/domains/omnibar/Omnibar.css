@@ -194,10 +194,11 @@ body,
     display: block;
     margin-bottom: 8px;
     color: var(--fg-3, #999);
-    font-family: var(--font-mono, ui-monospace, monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
     font-weight: 600;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
 }
 
@@ -241,7 +242,7 @@ body,
 }
 
 .omnibar-feedback.status {
-    border-color: color-mix(in srgb, var(--accent, #d4a04a) 40%, transparent);
+    border-color: color-mix(in srgb, var(--accent, #0a84ff) 40%, transparent);
 }
 
 .omnibar-footer {

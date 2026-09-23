@@ -40,11 +40,11 @@
     width: 8px;
 }
 .fndr-emc-shell::-webkit-scrollbar-thumb {
-    background: rgba(212, 160, 74, 0.30);
+    background: color-mix(in srgb, var(--fg) 22%, transparent);
     border-radius: 999px;
 }
 .fndr-emc-shell::-webkit-scrollbar-thumb:hover {
-    background: rgba(212, 160, 74, 0.55);
+    background: color-mix(in srgb, var(--fg) 38%, transparent);
 }
 
 .fndr-emc-close {
@@ -58,7 +58,8 @@
     border: 1px solid var(--hairline);
     background: var(--bg-3);
     color: var(--fg-2);
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 18px;
     line-height: 1;
     cursor: pointer;
@@ -78,7 +79,7 @@
     font-family: var(--film-font-ui);
     font-size: 12px;
     font-weight: 650;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--fg-3);
     margin: 14px 0 8px;
@@ -168,7 +169,8 @@
 }
 
 .fndr-emc-chunk-meta {
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 9px;
     letter-spacing: var(--film-track-label);
     text-transform: uppercase;

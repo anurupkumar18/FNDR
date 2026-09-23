@@ -3,6 +3,8 @@ import { Task, addTodo, completeTodo, generateDailyBriefing, getTodos, updateTod
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./TodoPanel.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelHeader } from "@/shared/components/PanelHeader";
+import { SegmentedControl } from "@/shared/components/SegmentedControl";
 
 interface TodoPanelProps {
     isVisible: boolean;
@@ -209,23 +211,14 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             aria-labelledby="todo-panel-title"
             tabIndex={-1}
         >
-            <header className="todo-page-header">
-                <div>
-                    <h2 id="todo-panel-title">To-dos</h2>
-                    <p>Create, classify, edit, and complete work carried forward from your day.</p>
-                </div>
-                <div className="todo-page-actions">
-                    <button
-                        ref={closeButtonRef}
-                        type="button"
-                        className="ui-action-btn todo-close-btn"
-                        onClick={onClose}
-                        aria-label="Close To-dos"
-                    >
-                        <span aria-hidden="true">×</span>
-                    </button>
-                </div>
-            </header>
+            <PanelHeader
+                title="To-dos"
+                titleId="todo-panel-title"
+                subtitle="Create, classify, edit, and complete work carried forward from your day."
+                closeLabel="Close To-dos"
+                closeRef={closeButtonRef}
+                onClose={onClose}
+            />
 
             <section className="todo-briefing-row">
                 <section className="todo-briefing-summary" aria-live="polite">
@@ -279,25 +272,25 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 </button>
             </section>
 
-            <section className="todo-stage-toggle" aria-label="Task stages">
-                {(["Todo", "Reminder", "Followup", "All"] as StageFilter[]).map((stage) => (
-                    <button
-                        key={stage}
-                        type="button"
-                        className={`ui-action-btn todo-stage-btn ${activeStage === stage ? "active" : ""}`}
-                        onClick={() => setActiveStage(stage)}
-                        aria-pressed={activeStage === stage}
-                        aria-label={`${stageLabel(stage)} tasks, ${stage === "All" ? sortedTasks.length : countsByType[stage]}`}
-                    >
-                        {stageLabel(stage)}
-                        <strong>
-                            {stage === "All"
-                                ? sortedTasks.length
-                                : countsByType[stage]}
-                        </strong>
-                    </button>
-                ))}
-            </section>
+            <SegmentedControl
+                className="todo-stage-toggle"
+                ariaLabel="Task stages"
+                value={activeStage}
+                onChange={setActiveStage}
+                options={(["Todo", "Reminder", "Followup", "All"] as StageFilter[]).map((stage) => {
+                    const count = stage === "All" ? sortedTasks.length : countsByType[stage];
+                    return {
+                        value: stage,
+                        ariaLabel: `${stageLabel(stage)} tasks, ${count}`,
+                        label: (
+                            <>
+                                {stageLabel(stage)}
+                                <span className="fndr-segment-count">{count}</span>
+                            </>
+                        ),
+                    };
+                })}
+            />
 
             {actionNotice && (
                 <div

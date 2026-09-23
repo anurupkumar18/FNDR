@@ -80,7 +80,7 @@
     font-weight: 600;
     color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
 }
 
 .memory-cards-filter-control {
@@ -163,7 +163,8 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 9px;
     letter-spacing: var(--film-track-stamp);
     text-transform: uppercase;
@@ -280,7 +281,8 @@
     position: absolute;
     top: 8px;
     left: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 9px;
     letter-spacing: var(--film-track-stamp);
     text-transform: uppercase;
@@ -297,7 +299,8 @@
     justify-content: center;
     gap: 12px;
     color: var(--fg-3);
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
 }
 

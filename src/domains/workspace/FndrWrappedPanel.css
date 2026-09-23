@@ -66,10 +66,11 @@
 .wrapped-eyebrow,
 .wrapped-card-label {
     color: var(--accent);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 0.74rem;
     font-weight: 700;
-    letter-spacing: 0.13em;
+    letter-spacing: 0.05em;
 }
 
 .wrapped-week-selector h3 {
@@ -89,35 +90,10 @@
 }
 
 .wrapped-month-tabs {
-    display: inline-flex;
-    gap: 3px;
-    margin-top: 26px;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: var(--film-radius-pill);
-    background: color-mix(in srgb, var(--bg-3) 74%, transparent);
+    width: min(280px, 100%);
+    margin: 26px auto 0;
 }
 
-.wrapped-month-tabs button {
-    min-height: 40px;
-    padding: 8px 14px;
-    border: 0;
-    border-radius: var(--film-radius-pill);
-    background: transparent;
-    color: var(--text-secondary);
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.76rem;
-    font-weight: 600;
-}
-
-.wrapped-month-tabs button.active {
-    background: var(--surface-elevated);
-    color: var(--text-primary);
-    box-shadow: 0 2px 8px color-mix(in srgb, var(--text-primary) 9%, transparent);
-}
-
-.wrapped-month-tabs button:focus-visible,
 .wrapped-week-option:focus-within,
 .wrapped-start-btn:focus-visible {
     outline: 2px solid var(--accent);
@@ -172,7 +148,8 @@
 .wrapped-week-option > span,
 .wrapped-week-option em {
     color: var(--text-secondary);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 0.72rem;
     font-style: normal;
     letter-spacing: 0.04em;
@@ -359,7 +336,8 @@
 
 .wrapped-rank-number {
     color: var(--text-secondary);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 0.68rem;
 }
 
@@ -371,7 +349,8 @@
 
 .wrapped-rank-time {
     color: var(--accent);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 0.72rem;
 }
 

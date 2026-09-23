@@ -1710,7 +1710,7 @@ function HermesView(props: HermesViewProps) {
 
                     <BorderBeam
                         size="line"
-                        colorVariant="gold"
+                        colorVariant="mono"
                         theme={paletteMode}
                         strength={0.55}
                         active={busyAction === "send" && !reducedMotion}

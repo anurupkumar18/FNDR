@@ -152,7 +152,7 @@
 .ask-outcome {
     align-self: flex-start;
     font-size: 11px;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     padding: 3px 10px;
     border-radius: var(--film-radius-pill);
@@ -183,7 +183,7 @@
 .ask-sources h3 {
     margin: 4px 0 8px;
     font-size: 12px;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--text-secondary);
 }

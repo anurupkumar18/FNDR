@@ -60,7 +60,8 @@
 }
 
 .cp-search-icon {
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 12px;
     letter-spacing: var(--film-track-stamp);
     text-transform: uppercase;
@@ -89,7 +90,8 @@
 
 .cp-esc-hint {
     flex-shrink: 0;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 9px;
     letter-spacing: var(--film-track-stamp);
     text-transform: uppercase;
@@ -235,18 +237,19 @@
 }
 
 .cp-results::-webkit-scrollbar-thumb {
-    background: rgba(212, 160, 74, 0.25);
+    background: color-mix(in srgb, var(--fg) 20%, transparent);
     border-radius: 2px;
 }
 
 .cp-results::-webkit-scrollbar-thumb:hover {
-    background: rgba(212, 160, 74, 0.45);
+    background: color-mix(in srgb, var(--fg) 34%, transparent);
 }
 
 .cp-empty {
     padding: 28px 20px;
     text-align: center;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
     letter-spacing: var(--film-track-stamp);
     text-transform: uppercase;
@@ -265,7 +268,8 @@
 
 .cp-group-label {
     padding: 4px 16px 3px;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 9px;
     font-weight: 600;
     letter-spacing: var(--film-track-stamp);
@@ -356,7 +360,8 @@
 
 .cp-item-enter {
     flex-shrink: 0;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 9px;
     letter-spacing: var(--film-track-stamp);
     text-transform: uppercase;
@@ -399,7 +404,8 @@
 }
 
 .cp-footer span {
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 9px;
     letter-spacing: var(--film-track-stamp);
     text-transform: uppercase;
@@ -410,7 +416,8 @@
 }
 
 .cp-footer-local {
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 9px;
     letter-spacing: var(--film-track-stamp);
     text-transform: uppercase;
@@ -419,7 +426,8 @@
 }
 
 .cp-footer kbd {
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 9px;
     background: var(--bg-3);
     border: 1px solid var(--hairline);

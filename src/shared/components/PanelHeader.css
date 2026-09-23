@@ -1,0 +1,94 @@
+/* Shared full-screen panel header. Translucent material so content that
+   scrolls beneath reads through; a hairline only where they meet. */
+.fndr-panel-header {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 20px 24px 16px;
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-bottom: 1px solid var(--hairline);
+}
+
+.fndr-panel-heading {
+    min-width: 0;
+}
+
+.fndr-panel-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.022em;
+    color: var(--fg);
+}
+
+.fndr-panel-subtitle {
+    margin: 4px 0 0;
+    max-width: 62ch;
+    font-size: 13px;
+    line-height: 1.45;
+    letter-spacing: -0.003em;
+    color: var(--fg-2);
+}
+
+.fndr-panel-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.fndr-panel-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--fg) 10%, transparent);
+    color: var(--fg-2);
+    cursor: pointer;
+    transition:
+        background-color var(--film-dur-hover) var(--film-ease-shutter),
+        color var(--film-dur-hover) var(--film-ease-shutter),
+        transform var(--film-dur-fast) var(--film-ease-shutter);
+}
+
+.fndr-panel-close svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+}
+
+.fndr-panel-close:hover {
+    background: color-mix(in srgb, var(--fg) 16%, transparent);
+    color: var(--fg);
+}
+
+.fndr-panel-close:active {
+    transform: scale(0.92);
+    transition-duration: 0ms;
+}
+
+.fndr-panel-close:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+    .fndr-panel-header {
+        background: var(--bg);
+    }
+}

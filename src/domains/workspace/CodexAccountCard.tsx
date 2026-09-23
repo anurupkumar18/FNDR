@@ -258,7 +258,7 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
     return (
         <BorderBeam
             size="md"
-            colorVariant="gold"
+            colorVariant="mono"
             theme={mode}
             strength={0.6}
             active={!!pending && !reducedMotion}

@@ -1,8 +1,4 @@
-import {
-    applyPalette,
-    isPaletteKey,
-    type PaletteMode,
-} from "@/shared/theme/cinematic-palettes";
+import { applyPalette, type PaletteMode, resolveStoredPalette } from "@/shared/theme/cinematic-palettes";
 import { STORAGE_KEYS } from "@/shared/utils/config";
 
 /**
@@ -15,7 +11,7 @@ export function syncAuxiliaryAppearance(): void {
     const storedPalette = localStorage.getItem(STORAGE_KEYS.palette);
 
     document.documentElement.setAttribute("data-theme", theme);
-    applyPalette(isPaletteKey(storedPalette) ? storedPalette : "matrix", theme);
+    applyPalette(resolveStoredPalette(storedPalette), theme);
 }
 
 export function installAuxiliaryAppearanceSync(): () => void {

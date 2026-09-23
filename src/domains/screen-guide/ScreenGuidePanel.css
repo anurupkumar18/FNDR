@@ -38,9 +38,10 @@
 
 .sg-panel-kicker {
     color: var(--accent);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 0.64rem;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.05em;
 }
 
 .sg-panel-close {
@@ -171,7 +172,8 @@
     color: var(--text-primary);
     background: var(--surface-elevated);
     font: inherit;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 0.72rem;
 }
 
