@@ -14,24 +14,29 @@ nothing leaves your Mac. The picture is in `docs/product/vision/` and the plan i
 
 ## Who owns what
 
-| Person | Lane |
-|---|---|
-| Anurup | Lead, model harness, integration, demo |
-| Kunj | Native macOS and capture pipeline |
-| Minh | Retrieval, evaluation, MCP security |
-| Felipe | Design, product surfaces, evidence packet, slides |
+October lanes (from 2026-09-28; tickets in `docs/team/tickets/`, plan in `docs/team/2026-10-month-plan.md`):
+
+| Person | Lane | Tickets |
+|---|---|---|
+| Anurup | Lead; Vault and search (one retrieval path, real text, keyword plus meaning, evaluation) | `anurup-vault-search.md` |
+| Kunj | Command surface (Screen Guide rebuilt), skills, local models | `kunj-command-skills-models.md` |
+| Minh | Reopen exactly; embeddings and chunks on every memory | `minh-reopen-embeddings.md` |
+| Felipe | Voice everywhere; onboarding and polish; product-oriented tests | `felipe-voice-onboarding-tests.md` |
+| Everyone | Product, research, and decisions | `product-decisions.md` |
+
+Boards, token setup, and the commands you and your agent use to move tickets: `docs/team/gitlab-agent-instructions.md`.
 
 Ask the lane owner before changing their area. Ask the lead when two lanes disagree.
 
 ## What do I do now?
 
-1. Open the board: Issues, Boards. Look at the `status::ready` column filtered to your name.
+1. Open your board (Issues, Boards, then your name in the board menu; links in `docs/team/gitlab-agent-instructions.md`) and look at the Ready column.
 2. Take the top ticket. Move it to `status::doing`. Keep at most two in Doing.
 3. Read the ticket. Everything you need is in it: why, steps, how to verify, what evidence to attach.
 4. Branch: `feat/<ticket-id>-short-name`. Never commit to `main`.
 5. Do the work test-first. Run `make test`.
-6. Open a merge request with the template. Ask one teammate to review. Move the ticket to `status::review`.
-7. After merge, attach the evidence (see below) and move the ticket to `status::evidence`. The reviewer closes it.
+6. Open a merge request with the template, ask one teammate to review, and move the ticket to `status::evidence` with the MR link and your verification output in a comment.
+7. After merge, attach the evidence the ticket asks for. The reviewer closes the ticket once the evidence checks out.
 
 If nothing is ready for you, say so in the team chat on Monday. Do not invent work.
 

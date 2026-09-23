@@ -8,7 +8,7 @@ FNDR is a macOS desktop app: local screen-context memory, search, meetings, task
 
 ## Repo map for agents
 
-Full documentation index: `docs/README.md`. Domain vocabulary: `docs/CONTEXT.md`.
+Full documentation index: `docs/README.md`. Domain vocabulary: `docs/CONTEXT.md`. Team tickets live in `docs/team/tickets/`; to move a ticket on the GitLab board or comment on it, follow `docs/team/gitlab-agent-instructions.md` (only the ticket's assignee, only status labels and comments).
 
 ## Verification (after meaningful edits)
 
