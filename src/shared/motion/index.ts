@@ -17,4 +17,6 @@ export {
     tSpringSnappy,
     tSpringGentle,
     tSpringReveal,
+    tSpringMomentum,
 } from "./transitions";
+export { project, rubberband, nearestSnapPoint } from "./gesture";

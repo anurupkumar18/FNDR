@@ -33,3 +33,6 @@ export const tSpringGentle: Transition = motion.spring.gentle;
 
 /** Soft reveal spring — for hero copy, deliberate entrances. */
 export const tSpringReveal: Transition = motion.spring.reveal;
+
+/** Momentum spring — only after a drag or flick handed off its velocity. */
+export const tSpringMomentum: Transition = motion.spring.momentum;
