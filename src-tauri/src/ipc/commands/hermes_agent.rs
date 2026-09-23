@@ -368,7 +368,7 @@ fn detect_ollama_executable() -> Option<PathBuf> {
     existing_executable_path("ollama").or_else(|| find_existing_executable(candidates))
 }
 
-fn detect_codex_executable() -> Option<PathBuf> {
+pub(crate) fn detect_codex_executable() -> Option<PathBuf> {
     existing_executable_path("codex")
         .or_else(|| find_existing_executable(common_executable_candidates("codex")))
 }
@@ -721,8 +721,10 @@ fn persist_hermes_setup_files(state: &AppState, setup: &HermesSetupPayload) -> R
                     .trim(),
             )
         }
+        // Hermes's canonical id for ChatGPT-subscription inference; it reads
+        // the tokens Codex keeps in $CODEX_HOME/auth.json (see codex_account.rs).
         "codex" => format!(
-            "model:\n  provider: codex\n  default: {}\n",
+            "model:\n  provider: openai-codex\n  default: {}\n",
             toml::to_string(&record.model_name)
                 .map_err(|e| e.to_string())?
                 .trim(),
