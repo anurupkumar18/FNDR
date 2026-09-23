@@ -13,6 +13,7 @@ describe("Alpha foreground panel registry", () => {
             "screenGuide",
             "engineMetrics",
             "privacyProof",
+            "agent",
         ]);
         expect(isMountedPanelKey("memoryCards")).toBe(true);
         expect(isMountedPanelKey("meeting")).toBe(false);

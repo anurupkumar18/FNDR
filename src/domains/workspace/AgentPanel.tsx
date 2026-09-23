@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { openExternalUrl } from "@/shared/utils/openExternalUrl";
+import { useModalFocus } from "@/shared/hooks/useModalFocus";
+import { CodexAccountCard } from "./CodexAccountCard";
+import { BorderBeam } from "border-beam";
+import { useReducedMotion } from "framer-motion";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { useActiveCinematicPalette } from "@/shared/hooks/useActiveCinematicPalette";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { createClientId } from "@/shared/utils/id";
 import {
@@ -14,6 +20,8 @@ import {
     type RetrievalFeedbackRating,
     type ContextPack,
     type ContextRuntimeStatus,
+    type CodexAccountStatus,
+    type CodexModel,
     type HermesBridgeStatus,
     getAgentStatus,
     getContextRuntimeStatus,
@@ -132,7 +140,7 @@ function defaultModelForProvider(
         return hermes?.ollama_models[0] ?? "llama3.2:latest";
     }
     if (provider === "codex") {
-        return "gpt-5.3-codex";
+        return "";
     }
     if (provider === "custom") {
         return "gpt-4.1-mini";
@@ -151,16 +159,6 @@ function defaultBaseUrlForProvider(
         return hermes?.provider_kind === "custom" ? hermes.base_url ?? "" : "";
     }
     return "";
-}
-
-async function openExternalUrl(url: string): Promise<void> {
-    try {
-        await shellOpen(url);
-        return;
-    } catch {
-        // ignore
-    }
-    window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function getReadinessStep(hermes: HermesBridgeStatus | null): number {
@@ -187,6 +185,7 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
     const [activeView, setActiveView] = useState<AgentView>("overview");
     const [status, setStatus] = useState<AgentStatus | null>(null);
     const [hermes, setHermes] = useState<HermesBridgeStatus | null>(null);
+    const [codexStatus, setCodexStatus] = useState<CodexAccountStatus | null>(null);
     const [runtimeStatus, setRuntimeStatus] = useState<ContextRuntimeStatus | null>(null);
     const [recentPacks, setRecentPacks] = useState<ContextPack[]>([]);
     const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -217,6 +216,9 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
     const [lastDelta, setLastDelta] = useState<ContextDelta | null>(null);
     const chatBottomRef = useRef<HTMLDivElement>(null);
     const chatInputRef = useRef<HTMLTextAreaElement>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
+    useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
 
     const loadAgentWorkspace = useCallback(async (isMounted: () => boolean) => {
         try {
@@ -565,8 +567,19 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
         if (providerKind === "openrouter") return apiKey.trim().length > 0;
         if (providerKind === "custom") return baseUrl.trim().length > 0;
         if (providerKind === "ollama") return !!hermes?.ollama_installed;
-        return !!hermes?.codex_logged_in;
+        return !!codexStatus?.usableForHermes;
     })();
+
+    const codexModels = codexStatus?.models ?? [];
+    const handleCodexStatusChange = (next: CodexAccountStatus) => {
+        setCodexStatus(next);
+        if (providerKind !== "codex" || next.models.length === 0) return;
+        setModelName((current) =>
+            next.models.some((model) => model.id === current)
+                ? current
+                : (next.models.find((model) => model.isDefault) ?? next.models[0]).id
+        );
+    };
 
     // Show quick-connect banner when Ollama is running with models but not yet configured
     // Works regardless of whether hermes CLI is installed
@@ -584,13 +597,13 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
 
     if (contextOnly) {
         return (
-            <div className="ap-root">
+            <div ref={dialogRef} className="ap-root" role="dialog" aria-modal="true" aria-labelledby="ap-title">
                 <header className="ap-header">
                     <div className="ap-header-left">
-                        <span className="ap-header-title">Context</span>
+                        <span id="ap-title" className="ap-header-title">Context</span>
                         <span className="ap-header-badge">Local · read-only</span>
                     </div>
-                    <button className="ap-close-btn" onClick={onClose} aria-label="Close Context">×</button>
+                    <button ref={closeButtonRef} className="ap-close-btn" onClick={onClose} aria-label="Close Context">×</button>
                 </header>
                 <main className="ap-content">
                     <OverviewView
@@ -639,19 +652,19 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
     }
 
     return (
-        <div className="ap-root">
+        <div ref={dialogRef} className="ap-root" role="dialog" aria-modal="true" aria-labelledby="ap-title">
             {/* Header */}
             <header className="ap-header">
                 <div className="ap-header-left">
                     <div className={`ap-header-dot ${gatewayStatusClass}`} />
-                    <span className="ap-header-title">FNDR Agent</span>
+                    <span id="ap-title" className="ap-header-title">FNDR Agent</span>
                     {hermes?.configured && (
                         <span className="ap-header-badge">
                             {hermes.model_name ?? currentProviderLabel}
                         </span>
                     )}
                 </div>
-                <button className="ap-close-btn" onClick={onClose} aria-label="Close">
+                <button ref={closeButtonRef} className="ap-close-btn" onClick={onClose} aria-label="Close FNDR Agent">
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                         <path d="M1 1L13 13M13 1L1 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                     </svg>
@@ -750,6 +763,8 @@ export function AgentPanel({ isVisible, onClose, mode = "full" }: AgentPanelProp
                             showBaseUrlField={showBaseUrlField}
                             showApiKeyField={showApiKeyField}
                             canSaveSetup={canSaveSetup}
+                            codexModels={codexModels}
+                            onCodexStatusChange={handleCodexStatusChange}
                             currentProviderLabel={currentProviderLabel}
                             chatBottomRef={chatBottomRef}
                             chatInputRef={chatInputRef}
@@ -1292,6 +1307,8 @@ interface HermesViewProps {
     showBaseUrlField: boolean;
     showApiKeyField: boolean;
     canSaveSetup: boolean;
+    codexModels: CodexModel[];
+    onCodexStatusChange: (status: CodexAccountStatus) => void;
     currentProviderLabel: string;
     chatBottomRef: React.RefObject<HTMLDivElement>;
     chatInputRef: React.RefObject<HTMLTextAreaElement>;
@@ -1315,13 +1332,15 @@ function HermesView(props: HermesViewProps) {
     const {
         hermes, busyAction, hermesError, providerKind, modelName, apiKey, baseUrl,
         messages, draft, setupExpanded, isHermesReady, readinessStep, showOllamaBanner,
-        showBaseUrlField, showApiKeyField, canSaveSetup,
+        showBaseUrlField, showApiKeyField, canSaveSetup, codexModels, onCodexStatusChange,
         chatBottomRef, chatInputRef,
         onChooseProvider, onModelNameChange, onApiKeyChange, onBaseUrlChange,
         onSaveSetup, onSetupExpanded, onDraftChange, onSend, onResetConversation,
         onInstall, onQuickSetupOllama, onStart, onStop, onSync,
     } = props;
 
+    const { mode: paletteMode } = useActiveCinematicPalette();
+    const reducedMotion = useReducedMotion() ?? false;
     const busy = busyAction !== null;
     const fullAgentConfigured = !!hermes?.installed && !!hermes?.configured;
     const fullAgentReady = !!hermes?.api_server_ready;
@@ -1493,7 +1512,11 @@ function HermesView(props: HermesViewProps) {
                                 ))}
                             </div>
 
-                            {/* Provider note */}
+                            {providerKind === "codex" ? (
+                                <div className="ap-codex-slot">
+                                    <CodexAccountCard onStatusChange={onCodexStatusChange} />
+                                </div>
+                            ) : (
                             <div className="ap-provider-note">
                                 {providerDetailNote(providerKind, hermes)}
                                 {providerKind === "ollama" && !hermes.ollama_installed && (
@@ -1505,12 +1528,23 @@ function HermesView(props: HermesViewProps) {
                                     </button>
                                 )}
                             </div>
+                            )}
 
                             {/* Form fields */}
                             <div className="ap-form-grid">
                                 <label className="ap-field">
                                     <span>Model</span>
-                                    {providerKind === "ollama" && (hermes.ollama_models.length ?? 0) > 0 ? (
+                                    {providerKind === "codex" && codexModels.length > 0 ? (
+                                        <select
+                                            value={modelName}
+                                            onChange={(e) => onModelNameChange(e.target.value)}
+                                            disabled={busy}
+                                        >
+                                            {codexModels.map((m) => (
+                                                <option key={m.id} value={m.id}>{m.displayName}</option>
+                                            ))}
+                                        </select>
+                                    ) : providerKind === "ollama" && (hermes.ollama_models.length ?? 0) > 0 ? (
                                         <select
                                             value={modelName}
                                             onChange={(e) => onModelNameChange(e.target.value)}
@@ -1524,7 +1558,11 @@ function HermesView(props: HermesViewProps) {
                                         <input
                                             value={modelName}
                                             onChange={(e) => onModelNameChange(e.target.value)}
-                                            placeholder={defaultModelForProvider(providerKind, hermes)}
+                                            placeholder={
+                                                providerKind === "codex"
+                                                    ? "Sign in to choose from your plan's models"
+                                                    : defaultModelForProvider(providerKind, hermes)
+                                            }
                                             disabled={busy}
                                         />
                                     )}
@@ -1661,14 +1699,22 @@ function HermesView(props: HermesViewProps) {
                         {busyAction === "send" && (
                             <div className="ap-chat-row ap-chat-assistant">
                                 <div className="ap-chat-role">{assistantLabel}</div>
-                                <div className="ap-chat-bubble ap-chat-thinking">
-                                    <span /><span /><span />
+                                <div className="ap-chat-bubble ap-chat-thinking" role="status">
+                                    <ThinkingIndicator state="composing" size="md" />
+                                    <span className="sr-only">Agent is thinking</span>
                                 </div>
                             </div>
                         )}
                         <div ref={chatBottomRef} />
                     </div>
 
+                    <BorderBeam
+                        size="line"
+                        colorVariant="mono"
+                        theme={paletteMode}
+                        strength={0.55}
+                        active={busyAction === "send" && !reducedMotion}
+                    >
                     <div className="ap-chat-input-area">
                         <textarea
                             ref={chatInputRef}
@@ -1702,6 +1748,7 @@ function HermesView(props: HermesViewProps) {
                             </svg>
                         </button>
                     </div>
+                    </BorderBeam>
                 </section>
             )}
 
@@ -1744,7 +1791,7 @@ function MetricCard({ label, value, detail, dotClass }: {
 function providerTabLabel(p: HermesProviderKind): string {
     switch (p) {
         case "ollama": return "Ollama";
-        case "codex": return "Codex";
+        case "codex": return "ChatGPT";
         case "openrouter": return "OpenRouter";
         case "custom": return "Custom";
     }
@@ -1761,7 +1808,7 @@ function providerTabStatus(p: HermesProviderKind, hermes: HermesBridgeStatus | n
                 : "No models";
         case "codex":
             if (!hermes.codex_cli_installed) return "Not found";
-            return hermes.codex_logged_in ? "Authenticated" : "Not signed in";
+            return hermes.codex_logged_in ? "Signed in" : "ChatGPT sign-in";
         case "openrouter":
             return "API key required";
         case "custom":
@@ -1777,9 +1824,8 @@ function providerDetailNote(p: HermesProviderKind, hermes: HermesBridgeStatus | 
             if (hermes.ollama_models.length === 0) return "Ollama is running but has no models. Pull one: `ollama pull llama3.2`";
             return `Running ${hermes.ollama_models.length} local model${hermes.ollama_models.length !== 1 ? "s" : ""}. FNDR can chat locally right away, and the full bundled agent runtime can layer on top of the same Ollama setup.`;
         case "codex":
-            return hermes?.codex_logged_in
-                ? "FNDR detected your local Codex auth. No extra API key is needed inside FNDR."
-                : "Sign in to Codex on this Mac first, then return here.";
+            // Rendered as CodexAccountCard instead of a note.
+            return "";
         case "openrouter":
             return "Access frontier models through OpenRouter. FNDR stores the key in its contained agent runtime.";
         case "custom":

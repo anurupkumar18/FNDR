@@ -75,8 +75,13 @@ export function useModalFocus(
         document.addEventListener("keydown", handleKeyDown, true);
         return () => {
             document.removeEventListener("keydown", handleKeyDown, true);
+            // Panels stay mounted through their exit animation, so by now the
+            // caller may already have moved focus somewhere deliberate. Only
+            // restore when focus would otherwise be stranded.
             const previouslyFocused = previouslyFocusedRef.current;
-            if (previouslyFocused?.isConnected) {
+            const active = document.activeElement;
+            const focusStranded = !active || active === document.body || dialogRef.current?.contains(active);
+            if (previouslyFocused?.isConnected && focusStranded) {
                 previouslyFocused.focus();
             }
             previouslyFocusedRef.current = null;

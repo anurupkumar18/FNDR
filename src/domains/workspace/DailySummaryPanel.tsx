@@ -11,6 +11,9 @@ import {
 } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./DailySummaryPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelHeader } from "@/shared/components/PanelHeader";
+import { Icon } from "@/shared/components/atoms/Icon";
 
 interface DailySummaryPanelProps {
     isVisible: boolean;
@@ -292,23 +295,14 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
             aria-labelledby="daily-summary-title"
             tabIndex={-1}
         >
-            <header className="daily-summary-header">
-                <div>
-                    <h2 id="daily-summary-title">Daily Summary</h2>
-                    <p>Review locally captured activity for one calendar day.</p>
-                </div>
-                <div className="daily-summary-actions">
-                    <button
-                        ref={closeButtonRef}
-                        type="button"
-                        className="ui-action-btn daily-summary-close-btn"
-                        onClick={onClose}
-                        aria-label="Close Daily Summary"
-                    >
-                        <span aria-hidden="true">×</span>
-                    </button>
-                </div>
-            </header>
+            <PanelHeader
+                title="Daily Summary"
+                titleId="daily-summary-title"
+                subtitle="Review locally captured activity for one calendar day."
+                closeLabel="Close Daily Summary"
+                closeRef={closeButtonRef}
+                onClose={onClose}
+            />
 
             <div className="daily-summary-body">
                 <div className="daily-summary-controls">
@@ -380,7 +374,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                 <div className="daily-summary-content">
                     {loading && (
                         <div className="daily-summary-state">
-                            <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                            <ThinkingIndicator state="composing" size="md" />
                             <p>Clustering the day&apos;s local memories...</p>
                         </div>
                     )}
@@ -500,7 +494,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
 
                     {!loading && !error && (!summary || summaryDateStr !== dateStr) && (
                         <div className="daily-summary-state empty-state">
-                            <span className="shining-shield" aria-hidden="true">📅</span>
+                            <span className="shining-shield" aria-hidden="true"><Icon name="calendar" size={32} /></span>
                             <p>Generate a summary for {displayDate(dateStr)} to review the memories FNDR recorded that day.</p>
                         </div>
                     )}

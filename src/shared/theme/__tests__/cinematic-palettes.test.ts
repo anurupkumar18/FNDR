@@ -5,8 +5,7 @@ import {
     getWallpaperInkColors,
     PALETTES,
     removePalette,
-    rgbToHex,
-} from "../cinematic-palettes";
+    rgbToHex, resolveStoredPalette } from "../cinematic-palettes";
 
 describe("applyPalette", () => {
     afterEach(() => {
@@ -22,7 +21,7 @@ describe("applyPalette", () => {
     });
 
     it("updates tokens when switching palettes", () => {
-        applyPalette("film", "dark");
+        applyPalette("system", "dark");
         applyPalette("matrix", "dark");
 
         const style = document.getElementById("cinematic-palette-vars");
@@ -61,7 +60,13 @@ describe("getWallpaperInkColors", () => {
     });
 
     it("uses light-mode UI ink when theme is light", () => {
-        const ink = getWallpaperInkColors("film", "light");
-        expect(ink.primary).toBe(PALETTES.film.light.textPrimary);
+        const ink = getWallpaperInkColors("system", "light");
+        expect(ink.primary).toBe(PALETTES.system.light.textPrimary);
+    });
+
+    it("defaults to System and retires the amber Old Film palette", () => {
+        expect(resolveStoredPalette(null)).toBe("system");
+        expect(resolveStoredPalette("film")).toBe("system");
+        expect(resolveStoredPalette("matrix")).toBe("matrix");
     });
 });

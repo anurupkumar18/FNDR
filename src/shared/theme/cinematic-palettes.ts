@@ -29,41 +29,41 @@ interface PaletteTokens {
 }
 
 export const PALETTES = {
-    film: {
-        name: "Old Film",
+    system: {
+        name: "System",
         year: 2026,
         director: "FNDR",
-        description: "Personal memory, processed like film. Amber halation over deep umber.",
-        shades: ["#1a1410", "#221915", "#2a2018", "#352a20", "#a37a30", "#d4a04a", "#e8b85a"],
+        description: "macOS system materials: graphite surfaces and system blue.",
+        shades: ["#1c1c1e", "#2c2c2e", "#3a3a3c", "#48484a", "#8e8e93", "#636366", "#0a84ff"],
         dark: {
-            bg: "#1a1410",
-            surface: "#221915",
-            surfaceRaised: "#2a2018",
-            border: "rgba(232, 223, 200, 0.08)",
-            borderStrong: "rgba(232, 223, 200, 0.22)",
-            textPrimary: "#e8dfc8",
-            textSecondary: "#c4a878",
-            textInverse: "#1a1410",
-            accent: "#d4a04a",
-            accentMuted: "#a37a30",
-            accentSubtle: "#2a2018",
+            bg: "#1c1c1e",
+            surface: "#2c2c2e",
+            surfaceRaised: "#3a3a3c",
+            border: "rgba(255, 255, 255, 0.10)",
+            borderStrong: "rgba(255, 255, 255, 0.18)",
+            textPrimary: "#f5f5f7",
+            textSecondary: "#a1a1a6",
+            textInverse: "#1c1c1e",
+            accent: "#0a84ff",
+            accentMuted: "#409cff",
+            accentSubtle: "rgba(10, 132, 255, 0.16)",
         },
         light: {
-            bg: "#f2ead8",
-            surface: "#e8dfc8",
-            surfaceRaised: "#ddd3bc",
-            border: "rgba(42, 31, 26, 0.10)",
-            borderStrong: "rgba(42, 31, 26, 0.30)",
-            textPrimary: "#2a1f1a",
-            textSecondary: "#5a4a3a",
-            textInverse: "#f2ead8",
-            accent: "#a35a1e",
-            accentMuted: "#c4621e",
-            accentSubtle: "#e8dfc8",
+            bg: "#f5f5f7",
+            surface: "#ffffff",
+            surfaceRaised: "#f2f2f7",
+            border: "rgba(0, 0, 0, 0.10)",
+            borderStrong: "rgba(0, 0, 0, 0.18)",
+            textPrimary: "#1d1d1f",
+            textSecondary: "#6e6e73",
+            textInverse: "#ffffff",
+            accent: "#007aff",
+            accentMuted: "#0062cc",
+            accentSubtle: "rgba(0, 122, 255, 0.12)",
         },
         aurora: {
-            dark:  { bg: [0.102, 0.078, 0.063], mid: [0.769, 0.659, 0.471], acc: [0.831, 0.627, 0.290] },
-            light: { bg: [0.949, 0.918, 0.847], mid: [0.353, 0.290, 0.227], acc: [0.639, 0.353, 0.118] },
+            dark:  { bg: [0.110, 0.110, 0.118], mid: [0.227, 0.227, 0.235], acc: [0.039, 0.518, 1.000] },
+            light: { bg: [0.961, 0.961, 0.969], mid: [0.820, 0.820, 0.839], acc: [0.000, 0.478, 1.000] },
         },
     },
     matrix: {
@@ -476,6 +476,15 @@ export const PALETTES = {
 } as const satisfies Record<string, CinematicPalette>;
 
 export type PaletteKey = keyof typeof PALETTES;
+
+/** The neutral macOS look every new install starts with. */
+export const DEFAULT_PALETTE: PaletteKey = "system";
+
+/** Maps a stored preference to a palette, falling back to System for
+ *  missing, unknown, or retired keys (the old "film" amber palette). */
+export function resolveStoredPalette(stored: string | null): PaletteKey {
+    return isPaletteKey(stored) ? stored : DEFAULT_PALETTE;
+}
 
 const STYLE_TAG_ID = "cinematic-palette-vars";
 

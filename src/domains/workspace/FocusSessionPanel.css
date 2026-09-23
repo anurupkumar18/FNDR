@@ -124,7 +124,7 @@
 .fs-section-label {
     font-size: 0.68rem;
     font-weight: 600;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--text-muted);
     padding: 0 2px;

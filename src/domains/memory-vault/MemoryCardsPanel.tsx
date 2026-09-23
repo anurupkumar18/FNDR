@@ -21,6 +21,8 @@ import { MemoryCard as MemoryCardComponent } from "./MemoryCard";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
 import { KnowledgeGraph3D, GraphErrorBoundary } from "@/features/graph/components";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelHeader } from "@/shared/components/PanelHeader";
 
 const VAULT_BROWSE_STORAGE_KEY = "fndr.memoryVault.browseMode";
 
@@ -511,27 +513,16 @@ export function MemoryCardsPanel({
             aria-modal="true"
             aria-labelledby="memory-cards-title"
         >
-            <div className="memory-cards-header">
-                <div className="memory-cards-heading">
-                    <h2 id="memory-cards-title">
-                        {isGraphFeature ? "Knowledge Graph" : "Memory Vault"}
-                    </h2>
-                    <p>
-                        {isGraphFeature
-                            ? "Hierarchical memory graph with project, session, memory, and entity links."
-                            : "Browse moments FNDR saved from your activity. Filter by app, time, or activity, then open a memory for its details."}
-                    </p>
-                </div>
-                <button
-                    ref={closeButtonRef}
-                    type="button"
-                    className="ui-action-btn memory-cards-close-btn"
-                    onClick={onClose}
-                    aria-label={`Close ${isGraphFeature ? "Knowledge Graph" : "Memory Vault"}`}
-                >
-                    <span aria-hidden="true">×</span>
-                </button>
-            </div>
+            <PanelHeader
+                title={isGraphFeature ? "Knowledge Graph" : "Memory Vault"}
+                titleId="memory-cards-title"
+                subtitle={isGraphFeature
+                    ? "Hierarchical memory graph with project, session, memory, and entity links."
+                    : "Browse moments FNDR saved from your activity. Filter by app, time, or activity, then open a memory for its details."}
+                closeLabel={`Close ${isGraphFeature ? "Knowledge Graph" : "Memory Vault"}`}
+                closeRef={closeButtonRef}
+                onClose={onClose}
+            />
 
             <div className="memory-cards-toolbar">
                 <div className="memory-cards-toolbar-top">
@@ -691,7 +682,7 @@ export function MemoryCardsPanel({
                     )}
                     {graphLoading && (subgraph?.nodes?.length ?? 0) === 0 && !graphError && (
                         <div className="memory-vault-graph-strip-loading">
-                            <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                            <ThinkingIndicator state="searching" size="md" />
                             <p>Loading global graph…</p>
                         </div>
                     )}
@@ -716,7 +707,7 @@ export function MemoryCardsPanel({
                 )}
                 {loading && cards.length === 0 && (
                     <div className="memory-cards-state">
-                        <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                        <ThinkingIndicator state="searching" size="md" />
                         <p>Loading memory cards...</p>
                     </div>
                 )}
@@ -792,7 +783,7 @@ export function MemoryCardsPanel({
                         )}
                         {graphLoading && (subgraph?.nodes?.length ?? 0) === 0 && !graphError && (
                             <div className="memory-cards-state">
-                                <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                                <ThinkingIndicator state="searching" size="md" />
                                 <p>Loading knowledge graph...</p>
                             </div>
                         )}

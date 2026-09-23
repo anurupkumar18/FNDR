@@ -11,6 +11,7 @@ import {
 } from "@/shared/ipc/tauri";
 import { screenGuideErrorMessage } from "./screenGuideState";
 import "./ScreenGuidePanel.css";
+import { PanelHeader } from "@/shared/components/PanelHeader";
 
 interface ScreenGuidePanelProps {
     isVisible: boolean;
@@ -260,25 +261,15 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
             aria-busy={loading || saving || submitting}
             onKeyDown={handlePanelKeyDown}
         >
-            <header className="sg-panel-header">
-                <div>
-                    <p className="sg-panel-kicker">ON-SCREEN ASSISTANCE</p>
-                    <h2 id="sg-panel-title">Screen Guide</h2>
-                    <p id="sg-panel-description">
-                        Ask about your current main display or explicitly find a file by name. FNDR
-                        can point you toward a next step without clicking or typing for you.
-                    </p>
-                </div>
-                <button
-                    ref={closeButtonRef}
-                    type="button"
-                    className="ui-action-btn sg-panel-close"
-                    onClick={onClose}
-                    aria-label="Close Screen Guide"
-                >
-                    ×
-                </button>
-            </header>
+            <PanelHeader
+                title="Screen Guide"
+                titleId="sg-panel-title"
+                subtitle="Ask about your current main display or explicitly find a file by name. FNDR can point you toward a next step without clicking or typing for you."
+                subtitleId="sg-panel-description"
+                closeLabel="Close Screen Guide"
+                closeRef={closeButtonRef}
+                onClose={onClose}
+            />
 
             <div className="sg-panel-body">
                 <section
@@ -326,6 +317,8 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                         </span>
                         <input
                             type="checkbox"
+                            role="switch"
+                            className="fndr-switch"
                             aria-label="Enable Screen Guide"
                             checked={enabled}
                             disabled={controlsDisabled}
@@ -375,6 +368,8 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                         </span>
                         <input
                             type="checkbox"
+                            role="switch"
+                            className="fndr-switch"
                             aria-label="Speak responses"
                             checked={settings?.speak_responses ?? false}
                             disabled={controlsDisabled}
@@ -390,6 +385,8 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                         </span>
                         <input
                             type="checkbox"
+                            role="switch"
+                            className="fndr-switch"
                             aria-label="Show guidance cursor"
                             checked={settings?.show_cursor ?? false}
                             disabled={controlsDisabled}

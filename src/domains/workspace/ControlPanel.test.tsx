@@ -135,7 +135,7 @@ describe("ControlPanel", () => {
         const settingsPanel = document.getElementById("fndr-settings-panel");
 
         expect(settingsButton).toHaveAttribute("aria-expanded", "true");
-        expect(screen.getByRole("dialog", { name: /fndr settings/i })).toBe(settingsPanel);
+        expect(screen.getByRole("dialog", { name: /^settings$/i })).toBe(settingsPanel);
         expect(screen.getByRole("heading", { name: /profile/i })).toBeInTheDocument();
     });
 
@@ -149,7 +149,7 @@ describe("ControlPanel", () => {
         expect(
             await screen.findByRole("button", { name: /open settings, 1 privacy alert/i }),
         ).toHaveAttribute("aria-expanded", "false");
-        expect(screen.queryByRole("dialog", { name: /fndr settings/i })).toBeNull();
+        expect(screen.queryByRole("dialog", { name: /^settings$/i })).toBeNull();
     });
 
     it("moves focus into the modal drawer and restores it after Escape", async () => {
@@ -190,7 +190,7 @@ describe("ControlPanel", () => {
 
     it("reapplies the active cinematic palette when switching theme", () => {
         localStorage.setItem("fndr-theme", "dark");
-        localStorage.setItem("fndr-palette", "film");
+        localStorage.setItem("fndr-palette", "system");
         render(<ControlPanel status={null} compact={true} />);
 
         fireEvent.click(screen.getByRole("button", { name: /switch to light mode/i }));

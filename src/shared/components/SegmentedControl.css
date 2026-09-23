@@ -1,0 +1,84 @@
+.fndr-segmented {
+    --seg-thumb: var(--bg-3);
+    --seg-thumb-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+    position: relative;
+    display: grid;
+    align-items: stretch;
+    padding: 3px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--fg) 8%, transparent);
+    isolation: isolate;
+}
+
+[data-theme="light"] .fndr-segmented {
+    --seg-thumb: #ffffff;
+}
+
+/* Placement lives on our own layer: the liquid group positions itself, so
+   it must not become a grid item next to the segments. */
+.fndr-segmented-layer {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 3px;
+    right: 3px;
+    z-index: 0;
+    pointer-events: none;
+}
+
+.fndr-segmented-layer > * {
+    height: 100%;
+}
+
+.fndr-segmented-thumb {
+    height: 100%;
+    border-radius: 7px;
+}
+
+.fndr-segment {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 26px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--fg-2);
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: -0.003em;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color var(--film-dur-hover) var(--film-ease-shutter);
+}
+
+.fndr-segment:hover {
+    color: var(--fg);
+}
+
+.fndr-segment.is-selected {
+    color: var(--fg);
+    font-weight: 600;
+}
+
+.fndr-segment:active {
+    opacity: 0.7;
+    transition-duration: 0ms;
+}
+
+.fndr-segment:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+}
+
+.fndr-segment-count {
+    font-size: 11px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--fg-3);
+}

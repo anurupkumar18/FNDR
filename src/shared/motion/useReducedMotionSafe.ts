@@ -5,8 +5,8 @@ import { useReducedMotion } from "framer-motion";
  * durations and transitions to zero when the user prefers reduced motion.
  *
  * Use at the top of any immersive component that drives motion in JS.
- * CSS-side reduced-motion is handled by the @media query in
- * `film-paper.css` under `.fndr-immersive-root`.
+ * CSS-side reduced-motion is handled app-wide by the @media query at the
+ * end of `film-paper.css`.
  */
 export function useReducedMotionSafe() {
     const reduced = useReducedMotion();

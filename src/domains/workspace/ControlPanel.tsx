@@ -20,7 +20,15 @@ import {
 } from "@/shared/ipc/onboarding";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 import { STORAGE_KEYS } from "@/shared/utils/config";
-import { applyPalette, isPaletteKey } from "@/shared/theme/cinematic-palettes";
+import {
+    applyPalette,
+    listPalettes,
+    PALETTES,
+    resolveStoredPalette,
+    type PaletteKey,
+} from "@/shared/theme/cinematic-palettes";
+import { PanelHeader } from "@/shared/components/PanelHeader";
+import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { PrivacyPanel } from "./PrivacyPanel";
 import "./ControlPanel.css";
 
@@ -176,18 +184,21 @@ export function ControlPanel({
         };
     }, [isOpen]);
 
+    const [palette, setPalette] = useState<PaletteKey>(() =>
+        resolveStoredPalette(localStorage.getItem(STORAGE_KEYS.palette)),
+    );
+
     useEffect(() => {
-        const storedPalette = localStorage.getItem(STORAGE_KEYS.palette);
-        const palette = isPaletteKey(storedPalette) ? storedPalette : "matrix";
         document.documentElement.setAttribute("data-theme", theme);
         localStorage.setItem(STORAGE_KEYS.theme, theme);
+        localStorage.setItem(STORAGE_KEYS.palette, palette);
         applyPalette(palette, theme);
         window.dispatchEvent(
             new CustomEvent("fndr-appearance-changed", {
                 detail: { palette, mode: theme },
             }),
         );
-    }, [theme]);
+    }, [theme, palette]);
 
     const toggleTheme = () => setTheme((current) => (current === "dark" ? "light" : "dark"));
 
@@ -324,22 +335,14 @@ export function ControlPanel({
                         aria-modal="true"
                         aria-labelledby="fndr-settings-title"
                     >
-                        <header className="panel-header">
-                            <div>
-                                <h2 id="fndr-settings-title">FNDR settings</h2>
-                                <p className="panel-subtitle">Local-first controls and current capability status.</p>
-                            </div>
-                            <button
-                                ref={closeButtonRef}
-                                autoFocus
-                                type="button"
-                                className="ui-action-btn panel-close"
-                                onClick={() => setIsOpen(false)}
-                                aria-label="Close settings"
-                            >
-                                <span aria-hidden="true">×</span>
-                            </button>
-                        </header>
+                        <PanelHeader
+                            title="Settings"
+                            titleId="fndr-settings-title"
+                            subtitle="Local-first controls and current capability status."
+                            closeLabel="Close settings"
+                            closeRef={closeButtonRef}
+                            onClose={() => setIsOpen(false)}
+                        />
 
                         <div className="panel-content">
                             {settingsError && (
@@ -392,6 +395,42 @@ export function ControlPanel({
                                 )}
                             </section>
 
+                            <section className="panel-section" aria-labelledby="settings-appearance-title">
+                                <h3 id="settings-appearance-title">Appearance</h3>
+                                <SegmentedControl
+                                    ariaLabel="Theme"
+                                    value={theme}
+                                    onChange={setTheme}
+                                    options={[
+                                        { value: "light", label: "Light" },
+                                        { value: "dark", label: "Dark" },
+                                    ]}
+                                />
+                                <div className="palette-list" role="radiogroup" aria-label="Color palette">
+                                    {listPalettes().map((key) => {
+                                        const option = PALETTES[key];
+                                        const selected = key === palette;
+                                        return (
+                                            <button
+                                                key={key}
+                                                type="button"
+                                                role="radio"
+                                                aria-checked={selected}
+                                                className={`palette-option${selected ? " is-selected" : ""}`}
+                                                onClick={() => setPalette(key)}
+                                            >
+                                                <span className="palette-swatch" aria-hidden="true">
+                                                    <span style={{ background: option[theme].bg }} />
+                                                    <span style={{ background: option[theme].surfaceRaised }} />
+                                                    <span style={{ background: option[theme].accent }} />
+                                                </span>
+                                                <span className="palette-name">{option.name}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </section>
+
                             <section className="panel-section" aria-labelledby="settings-capture-title">
                                 <h3 id="settings-capture-title">Capture</h3>
                                 <p className="section-hint">
@@ -399,7 +438,7 @@ export function ControlPanel({
                                 </p>
                                 <button
                                     type="button"
-                                    className={`ui-action-btn capture-toggle ${capturePaused ? "paused" : "active"}`}
+                                    className={`ui-action-btn capture-toggle ${capturePaused ? "is-paused" : "is-capturing"}`}
                                     onClick={() => void handleToggleCapture()}
                                     disabled={!status || captureBusy}
                                 >

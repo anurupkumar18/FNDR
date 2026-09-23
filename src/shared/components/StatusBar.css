@@ -12,9 +12,10 @@
     backdrop-filter: blur(8px) saturate(120%);
     -webkit-backdrop-filter: blur(8px) saturate(120%);
     color: var(--fg-3);
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: var(--t-micro);
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     display: flex;
     align-items: center;

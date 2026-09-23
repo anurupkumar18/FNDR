@@ -3,6 +3,7 @@ import { getPrivacyProof, type PrivacyProof as PrivacyProofData } from "@/shared
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import "../workspace/PipelineInspectorPanel.css";
+import { PanelHeader } from "@/shared/components/PanelHeader";
 
 interface Proof {
     evaluated: number;
@@ -119,23 +120,15 @@ export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps
             aria-labelledby="privacy-activity-title"
             aria-describedby="privacy-activity-description"
         >
-            <header className="pipeline-header">
-                <div>
-                    <h2 id="privacy-activity-title">Privacy activity</h2>
-                    <p id="privacy-activity-description">
-                        Capture outcomes and recorded network requests for the current app session.
-                    </p>
-                </div>
-                <button
-                    ref={closeButtonRef}
-                    type="button"
-                    className="ui-action-btn pipeline-close-btn"
-                    onClick={onClose}
-                    aria-label="Close privacy activity"
-                >
-                    Close
-                </button>
-            </header>
+            <PanelHeader
+                title="Privacy activity"
+                titleId="privacy-activity-title"
+                subtitle="Capture outcomes and recorded network requests for the current app session."
+                subtitleId="privacy-activity-description"
+                closeLabel="Close privacy activity"
+                closeRef={closeButtonRef}
+                onClose={onClose}
+            />
             <div className="pipeline-body">
                 {error && <div className="pipeline-error">{error}</div>}
                 {proof ? <PrivacyProof proof={proof} /> : !error && <p className="pipeline-muted">Loading privacy activity...</p>}

@@ -17,6 +17,7 @@ import { bubblePurityGate, extractAnchorTerms, scoreAnchorCoverage } from "@/sha
 import { PLACEHOLDERS } from "./placeholders";
 import { Icon } from "@/shared/components/atoms";
 import "./SearchBar.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 interface SearchBarProps {
     value: string;
@@ -685,7 +686,7 @@ export function SearchBar({
                 <div className="summary-bubble" aria-live="polite">
                     {isSummarizing ? (
                         <div className="summary-loading">
-                            <span className="thinking-loader thinking-loader-sm summary-loader" aria-hidden="true" />
+                            <ThinkingIndicator state="composing" size="sm" className="summary-loader" />
                             <span>Synthesizing memories...</span>
                         </div>
                     ) : (

@@ -1873,6 +1873,73 @@ export async function sendHermesMessage(
     return invoke<HermesChatReply>("send_hermes_message", { conversationId, input });
 }
 
+/** Emitted by the backend when a ChatGPT sign-in started with `codexLoginStart` finishes. */
+export const CODEX_LOGIN_COMPLETED_EVENT = "codex-login-completed";
+
+export type CodexCliState = "missing" | "broken" | "ready";
+
+export interface CodexAccount {
+    /** `chatgpt`, `apiKey`, `amazonBedrock`, … */
+    kind: string;
+    email: string | null;
+    planType: string | null;
+}
+
+export interface CodexUsageWindow {
+    usedPercent: number;
+    windowMinutes: number | null;
+    /** Unix seconds. */
+    resetsAt: number | null;
+}
+
+export interface CodexModel {
+    id: string;
+    displayName: string;
+    isDefault: boolean;
+}
+
+export interface CodexAccountStatus {
+    cliState: CodexCliState;
+    cliPath: string | null;
+    cliError: string | null;
+    account: CodexAccount | null;
+    /** Only a ChatGPT sign-in can back Hermes's `openai-codex` provider. */
+    usableForHermes: boolean;
+    primaryWindow: CodexUsageWindow | null;
+    secondaryWindow: CodexUsageWindow | null;
+    models: CodexModel[];
+}
+
+export interface CodexLoginStarted {
+    loginId: string;
+    authUrl: string;
+}
+
+export interface CodexLoginCompleted {
+    loginId: string;
+    success: boolean;
+    error: string | null;
+}
+
+/** Account, plan, usage and models from the official Codex app-server. */
+export async function codexAccountStatus(): Promise<CodexAccountStatus> {
+    return invoke<CodexAccountStatus>("codex_account_status");
+}
+
+/** Starts "Sign in with ChatGPT". Open `authUrl` in the browser; the result
+ *  arrives as `CODEX_LOGIN_COMPLETED_EVENT`. */
+export async function codexLoginStart(): Promise<CodexLoginStarted> {
+    return invoke<CodexLoginStarted>("codex_login_start");
+}
+
+export async function codexLoginCancel(loginId: string): Promise<void> {
+    return invoke<void>("codex_login_cancel", { loginId });
+}
+
+export async function codexLogout(): Promise<CodexAccountStatus> {
+    return invoke<CodexAccountStatus>("codex_logout");
+}
+
 export async function quickSetupOllama(): Promise<HermesBridgeStatus> {
     return invoke<HermesBridgeStatus>("quick_setup_ollama");
 }

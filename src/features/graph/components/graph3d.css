@@ -72,9 +72,10 @@
     border: 1px solid var(--g3d-hairline);
     background: var(--g3d-pill-bg);
     color: var(--g3d-paper-2);
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     padding: 7px 14px;
     border-radius: 999px;
@@ -185,9 +186,10 @@
 }
 
 .g3d-section-title {
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--g3d-paper-3);
     margin: 0 0 8px 0;
@@ -254,7 +256,8 @@
     gap: 8px;
     border-top: 1px solid var(--g3d-hairline);
     padding-top: 12px;
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
     color: var(--g3d-paper-3);
 }
@@ -264,9 +267,10 @@
     border: 1px solid var(--g3d-hairline);
     background: transparent;
     color: var(--g3d-paper-2);
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     padding: 8px 12px;
     border-radius: 8px;
@@ -361,9 +365,10 @@
 }
 
 .g3d-side-meta-key {
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--g3d-paper-3);
     min-width: 72px;
@@ -389,7 +394,8 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
     color: var(--g3d-paper-2);
     letter-spacing: 0.04em;
@@ -449,7 +455,8 @@
 
 .g3d-related-sub {
     margin-top: 4px;
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
     color: var(--g3d-paper-3);
     letter-spacing: 0.04em;
@@ -468,9 +475,10 @@
     background: transparent;
     border: 1px solid var(--g3d-hairline);
     color: var(--g3d-paper-2);
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     padding: 10px 12px;
     border-radius: 8px;
@@ -490,9 +498,10 @@
     border: none;
     color: var(--g3d-paper-3);
     cursor: pointer;
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     display: inline-flex;
     align-items: center;
@@ -557,9 +566,10 @@
 }
 
 .g3d-hover-meta {
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
     color: var(--g3d-paper-3);
     display: flex;
     flex-direction: column;
@@ -656,9 +666,10 @@
 }
 
 .g3d-state-text {
-    font-family: var(--film-font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--g3d-paper-3);
     margin: 0;
@@ -693,13 +704,14 @@
     right: 10px;
     z-index: 20;
     display: inline-flex;
-    background: color-mix(in srgb, var(--bg, #1a1410) 70%, transparent);
+    background: color-mix(in srgb, var(--bg, #1c1c1e) 70%, transparent);
     border: 1px solid var(--hairline, rgba(255, 255, 255, 0.12));
     border-radius: 999px;
     padding: 3px;
     backdrop-filter: blur(18px) saturate(140%);
     -webkit-backdrop-filter: blur(18px) saturate(140%);
-    font-family: var(--film-font-mono, var(--font-mono, "JetBrains Mono", monospace));
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
 }
 
 .mg-mode-segmented button {
@@ -709,7 +721,7 @@
     color: var(--fg-2, #aea7d4);
     font: inherit;
     font-size: 10px;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     padding: 6px 14px;
     border-radius: 999px;
@@ -721,15 +733,15 @@
 }
 
 .mg-mode-segmented button:hover {
-    color: var(--fg, #e8dfc8);
+    color: var(--fg, #f5f5f7);
 }
 
 .mg-mode-segmented button[aria-selected="true"] {
     background: linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent, #d4a04a) 30%, transparent) 0%,
-        color-mix(in srgb, var(--accent, #d4a04a) 14%, transparent) 100%
+        color-mix(in srgb, var(--accent, #0a84ff) 30%, transparent) 0%,
+        color-mix(in srgb, var(--accent, #0a84ff) 14%, transparent) 100%
     );
     color: var(--fg, #ffffff);
-    border-color: color-mix(in srgb, var(--accent, #d4a04a) 45%, transparent);
+    border-color: color-mix(in srgb, var(--accent, #0a84ff) 45%, transparent);
 }

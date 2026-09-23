@@ -19,7 +19,7 @@ describe("development UI preview IPC", () => {
     it("defaults visual QA to a stable Film dark scene", () => {
         expect(resolvePreviewConfig("")).toEqual({
             theme: "dark",
-            palette: "film",
+            palette: "system",
             motion: "off",
         });
         expect(resolvePreviewConfig("?theme=light&palette=matrix&motion=on")).toEqual({
