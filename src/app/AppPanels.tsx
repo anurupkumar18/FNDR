@@ -9,6 +9,7 @@ import { StatsPanel } from "@/domains/workspace/StatsPanel";
 import { TodoPanel } from "@/domains/workspace/TodoPanel";
 import { EngineMetricsPanel } from "@/domains/workspace/EngineMetricsPanel";
 import { PrivacyProofPanel } from "@/domains/privacy-proof/PrivacyProof";
+import { AgentPanel } from "@/domains/workspace/AgentPanel";
 import { AppToasts } from "./AppToasts";
 import { PanelPresence } from "./PanelPresence";
 import { PanelErrorBoundary } from "./PanelErrorBoundary";
@@ -135,6 +136,13 @@ export function AppPanels({
                 {(present) => (
                     <PanelErrorBoundary panelName="Privacy Activity" onClose={onClosePanel}>
                         <PrivacyProofPanel isVisible={present} onClose={onClosePanel} />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "agent"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="Hermes Agent" onClose={onClosePanel}>
+                        <AgentPanel isVisible={present} onClose={onClosePanel} />
                     </PanelErrorBoundary>
                 )}
             </PanelPresence>

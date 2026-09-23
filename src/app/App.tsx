@@ -62,6 +62,7 @@ export const SIDEBAR_GROUPS = [
     {
         label: "Assist",
         items: [
+            { key: "agent", text: "Hermes Agent" },
             { key: "screenGuide", text: "Screen Guide" },
             { key: "engineMetrics", text: "Engine diagnostics" },
             { key: "privacyProof", text: "Privacy Activity" },

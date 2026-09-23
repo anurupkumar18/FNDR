@@ -54,6 +54,7 @@ describe("CommandPalette interaction contract", () => {
             "Stats",
             "To-dos",
             "FNDR Wrapped",
+            "Hermes Agent",
             "Screen Guide",
             "Engine diagnostics",
             "Privacy Activity",

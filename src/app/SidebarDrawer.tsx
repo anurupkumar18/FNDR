@@ -127,7 +127,6 @@ export function SidebarDrawer({ isOpen, onClose, children }: SidebarDrawerProps)
                 id="primary-navigation"
                 className={`left-sidebar ${isOpen ? "open" : ""}`}
                 aria-label="Primary navigation"
-                aria-hidden={!isOpen}
                 {...(isOpen ? {} : { inert: "" })}
                 style={{ x, visibility: hidden ? "hidden" : "visible" }}
                 onPointerDown={handlePointerDown}
