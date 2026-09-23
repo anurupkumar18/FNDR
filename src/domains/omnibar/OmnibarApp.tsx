@@ -27,6 +27,8 @@ type Mode =
     | { kind: "asking" }
     | { kind: "answer"; answer: ComposedAnswer };
 
+type Feedback = { kind: "error" | "status"; message: string };
+
 function formatTimestamp(ms: number): string {
     const date = new Date(ms);
     const now = new Date();
@@ -43,6 +45,18 @@ function formatTimestamp(ms: number): string {
     });
 }
 
+function answerGroundingLabel(answer: ComposedAnswer): string {
+    const count = answer.cards.length;
+    const memories = `${count} local ${count === 1 ? "memory" : "memories"}`;
+    if (answer.verify_outcome.kind === "grounded") {
+        return `Grounded in ${memories}`;
+    }
+    if (answer.verify_outcome.kind === "partial_answer") {
+        return `Partial answer from ${memories}`;
+    }
+    return "Limited evidence in your local memory";
+}
+
 export function OmnibarApp() {
     const [surface, setSurface] = useState<Surface>("memory");
     const [query, setQuery] = useState("");
@@ -52,11 +66,20 @@ export function OmnibarApp() {
     const [searching, setSearching] = useState(false);
     const [mode, setMode] = useState<Mode>({ kind: "search" });
     const [copiedId, setCopiedId] = useState<string | null>(null);
+    const [feedback, setFeedback] = useState<Feedback | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
     const searchSeq = useRef(0);
+    const actionSeq = useRef(0);
+    const copiedTimer = useRef<number | null>(null);
 
     const reset = useCallback(() => {
+        searchSeq.current += 1;
+        actionSeq.current += 1;
+        if (copiedTimer.current !== null) {
+            window.clearTimeout(copiedTimer.current);
+            copiedTimer.current = null;
+        }
         setSurface("memory");
         setQuery("");
         setResults([]);
@@ -65,6 +88,7 @@ export function OmnibarApp() {
         setSearching(false);
         setMode({ kind: "search" });
         setCopiedId(null);
+        setFeedback(null);
     }, []);
 
     useTauriEvent<void>(OMNIBAR_FOCUS_EVENT, () => {
@@ -88,6 +112,7 @@ export function OmnibarApp() {
             return;
         }
         const seq = ++searchSeq.current;
+        setFeedback(null);
         setSearching(true);
         const timer = window.setTimeout(() => {
             searchMemoryCards(trimmed, undefined, undefined, RESULT_LIMIT)
@@ -105,6 +130,10 @@ export function OmnibarApp() {
                     }
                     setResults([]);
                     setSearching(false);
+                    setFeedback({
+                        kind: "error",
+                        message: "Couldn’t search your memory. Try again.",
+                    });
                 });
         }, SEARCH_DEBOUNCE_MS);
         return () => window.clearTimeout(timer);
@@ -115,6 +144,7 @@ export function OmnibarApp() {
             return;
         }
         const seq = ++searchSeq.current;
+        setFeedback(null);
         setSearching(true);
         const timer = window.setTimeout(() => {
             getClipboardHistory(query.trim() || undefined, CLIP_LIMIT)
@@ -132,6 +162,10 @@ export function OmnibarApp() {
                     }
                     setClips([]);
                     setSearching(false);
+                    setFeedback({
+                        kind: "error",
+                        message: "Couldn’t load clipboard history. Try again.",
+                    });
                 });
         }, CLIP_DEBOUNCE_MS);
         return () => window.clearTimeout(timer);
@@ -141,32 +175,81 @@ export function OmnibarApp() {
         const selected = listRef.current?.querySelector(
             '[data-selected="true"]'
         );
-        selected?.scrollIntoView({ block: "nearest" });
+        if (selected && typeof selected.scrollIntoView === "function") {
+            selected.scrollIntoView({ block: "nearest" });
+        }
     }, [selectedIndex]);
 
     const openMemory = useCallback(
         (memoryId: string) => {
-            void omnibarOpenMemory(memoryId).then(reset);
+            const seq = ++actionSeq.current;
+            setFeedback(null);
+            void omnibarOpenMemory(memoryId)
+                .then(() => {
+                    if (actionSeq.current === seq) reset();
+                })
+                .catch(() => {
+                    if (actionSeq.current === seq) {
+                        setFeedback({
+                            kind: "error",
+                            message: "Couldn’t open that memory. Try again.",
+                        });
+                    }
+                });
         },
         [reset]
     );
 
     const copyClip = useCallback(
         (clip: ClipboardEntry) => {
-            setCopiedId(clip.id);
-            void copyClipboardEntry(clip.text).then(() => {
-                window.setTimeout(() => {
-                    reset();
-                    void dismissOmnibar();
-                }, COPIED_FLASH_MS);
-            });
+            const seq = ++actionSeq.current;
+            setFeedback(null);
+            void copyClipboardEntry(clip.text)
+                .then(() => {
+                    if (actionSeq.current !== seq) return;
+                    setCopiedId(clip.id);
+                    setFeedback({ kind: "status", message: "Copied to your clipboard." });
+                    copiedTimer.current = window.setTimeout(() => {
+                        if (actionSeq.current !== seq) return;
+                        void dismissOmnibar()
+                            .then(reset)
+                            .catch(() => {
+                                setFeedback({
+                                    kind: "error",
+                                    message: "Copied, but Quick Find couldn’t close. Use Alt+Space to hide it.",
+                                });
+                            });
+                    }, COPIED_FLASH_MS);
+                })
+                .catch(() => {
+                    if (actionSeq.current === seq) {
+                        setCopiedId(null);
+                        setFeedback({
+                            kind: "error",
+                            message: "Couldn’t copy that clip. Try again.",
+                        });
+                    }
+                });
         },
         [reset]
     );
 
     const pasteClip = useCallback(
         (clip: ClipboardEntry) => {
-            void pasteClipboardEntry(clip.text).then(reset);
+            const seq = ++actionSeq.current;
+            setFeedback(null);
+            void pasteClipboardEntry(clip.text)
+                .then(() => {
+                    if (actionSeq.current === seq) reset();
+                })
+                .catch(() => {
+                    if (actionSeq.current === seq) {
+                        setFeedback({
+                            kind: "error",
+                            message: "Couldn’t paste into the previous app. Focus the field and try again.",
+                        });
+                    }
+                });
         },
         [reset]
     );
@@ -177,25 +260,48 @@ export function OmnibarApp() {
             return;
         }
         searchSeq.current += 1;
+        const seq = ++actionSeq.current;
         setSearching(false);
+        setFeedback(null);
         setMode({ kind: "asking" });
         fndrAnswer(trimmed)
-            .then((answer) => setMode({ kind: "answer", answer }))
-            .catch(() => setMode({ kind: "search" }));
+            .then((answer) => {
+                if (actionSeq.current === seq) setMode({ kind: "answer", answer });
+            })
+            .catch(() => {
+                if (actionSeq.current !== seq) return;
+                setMode({ kind: "search" });
+                setFeedback({
+                    kind: "error",
+                    message: "Couldn’t answer from your memory right now. Try again.",
+                });
+                window.requestAnimationFrame(() => inputRef.current?.focus());
+            });
     }, [query]);
 
     const dismiss = useCallback(() => {
-        reset();
-        void dismissOmnibar();
+        actionSeq.current += 1;
+        void dismissOmnibar()
+            .then(reset)
+            .catch(() => {
+                setFeedback({
+                    kind: "error",
+                    message: "Couldn’t close Quick Find. Use Alt+Space to hide it.",
+                });
+            });
     }, [reset]);
 
     const toggleSurface = useCallback(() => {
+        searchSeq.current += 1;
+        actionSeq.current += 1;
         setSurface((s) => (s === "memory" ? "clipboard" : "memory"));
         setQuery("");
         setResults([]);
         setClips([]);
         setSelectedIndex(0);
         setMode({ kind: "search" });
+        setCopiedId(null);
+        setFeedback(null);
         inputRef.current?.focus();
     }, []);
 
@@ -222,7 +328,9 @@ export function OmnibarApp() {
             surface === "memory" ? results.length : clips.length;
         if (event.key === "ArrowDown") {
             event.preventDefault();
-            setSelectedIndex((i) => Math.min(i + 1, listLength - 1));
+            if (listLength > 0) {
+                setSelectedIndex((i) => Math.min(i + 1, listLength - 1));
+            }
         } else if (event.key === "ArrowUp") {
             event.preventDefault();
             setSelectedIndex((i) => Math.max(i - 1, 0));
@@ -249,7 +357,13 @@ export function OmnibarApp() {
     };
 
     return (
-        <div className="omnibar" onKeyDown={handleKeyDown}>
+        <div
+            className="omnibar"
+            onKeyDown={handleKeyDown}
+            role="dialog"
+            aria-modal="false"
+            aria-label="FNDR Quick Find"
+        >
             <div className="omnibar-input-row">
                 <span className="omnibar-glyph" aria-hidden>
                     ⌕
@@ -257,8 +371,30 @@ export function OmnibarApp() {
                 <input
                     ref={inputRef}
                     className="omnibar-input"
+                    type="search"
+                    aria-label={
+                        surface === "memory"
+                            ? "Search your memory"
+                            : "Search clipboard history"
+                    }
+                    aria-controls={`omnibar-${surface}-results`}
+                    aria-activedescendant={
+                        mode.kind === "search" && (surface === "memory" ? results : clips).length
+                            ? `omnibar-${surface}-result-${selectedIndex}`
+                            : undefined
+                    }
+                    aria-busy={searching}
                     value={query}
-                    onChange={(e) => setQuery(e.target.value)}
+                    onChange={(e) => {
+                        if (mode.kind === "answer") {
+                            actionSeq.current += 1;
+                            setMode({ kind: "search" });
+                            setResults([]);
+                            setSelectedIndex(0);
+                        }
+                        setQuery(e.target.value);
+                        setFeedback(null);
+                    }}
                     placeholder={
                         surface === "memory"
                             ? "Search your memory…"
@@ -274,6 +410,11 @@ export function OmnibarApp() {
                     className="omnibar-surface-toggle"
                     onClick={toggleSurface}
                     tabIndex={-1}
+                    aria-label={
+                        surface === "memory"
+                            ? "Search clipboard history"
+                            : "Search your memory"
+                    }
                 >
                     <span data-active={surface === "memory"}>Memory</span>
                     <span data-active={surface === "clipboard"}>Clips</span>
@@ -281,10 +422,17 @@ export function OmnibarApp() {
             </div>
 
             {surface === "memory" && mode.kind === "search" && (
-                <div className="omnibar-results" ref={listRef} role="listbox">
+                <div
+                    id="omnibar-memory-results"
+                    className="omnibar-results"
+                    ref={listRef}
+                    role="listbox"
+                    aria-label="Memory matches"
+                >
                     {results.map((card, index) => (
                         <button
                             key={card.id}
+                            id={`omnibar-memory-result-${index}`}
                             type="button"
                             role="option"
                             aria-selected={index === selectedIndex}
@@ -305,17 +453,29 @@ export function OmnibarApp() {
                             </span>
                         </button>
                     ))}
-                    {!results.length && query.trim() && !searching && (
-                        <div className="omnibar-empty">No matches yet</div>
+                    {!results.length && query.trim() && !searching && !feedback && (
+                        <div className="omnibar-empty">No memory matches this search.</div>
+                    )}
+                    {!query.trim() && !searching && !feedback && (
+                        <div className="omnibar-empty omnibar-empty-guidance">
+                            Search the memories stored on this Mac, or press ⌘↵ to ask a question.
+                        </div>
                     )}
                 </div>
             )}
 
             {surface === "clipboard" && (
-                <div className="omnibar-results" ref={listRef} role="listbox">
+                <div
+                    id="omnibar-clipboard-results"
+                    className="omnibar-results"
+                    ref={listRef}
+                    role="listbox"
+                    aria-label="Clipboard history"
+                >
                     {clips.map((clip, index) => (
                         <button
                             key={clip.id}
+                            id={`omnibar-clipboard-result-${index}`}
                             type="button"
                             role="option"
                             aria-selected={index === selectedIndex}
@@ -332,6 +492,7 @@ export function OmnibarApp() {
                                     ? "Copied ✓"
                                     : [
                                           clip.app_name,
+                                          clip.window_title,
                                           formatTimestamp(clip.timestamp),
                                       ]
                                           .filter(Boolean)
@@ -339,7 +500,7 @@ export function OmnibarApp() {
                             </span>
                         </button>
                     ))}
-                    {!clips.length && !searching && (
+                    {!clips.length && !searching && !feedback && (
                         <div className="omnibar-empty">
                             {query.trim()
                                 ? "No matching clips"
@@ -350,16 +511,20 @@ export function OmnibarApp() {
             )}
 
             {surface === "memory" && mode.kind === "asking" && (
-                <div className="omnibar-answer omnibar-answer-loading">
+                <div className="omnibar-answer omnibar-answer-loading" role="status" aria-live="polite">
                     Thinking through your memory…
                 </div>
             )}
 
             {surface === "memory" && mode.kind === "answer" && (
-                <div className="omnibar-answer">
+                <div className="omnibar-answer" role="region" aria-label="Answer from your memory">
+                    <span className="omnibar-answer-label">Answer from your local memory</span>
+                    <span className="omnibar-answer-grounding">
+                        {answerGroundingLabel(mode.answer)}
+                    </span>
                     <p className="omnibar-answer-text">{mode.answer.answer}</p>
                     {mode.answer.cards.length > 0 && (
-                        <div className="omnibar-citations">
+                        <div className="omnibar-citations" aria-label="Supporting memories">
                             {mode.answer.cards.slice(0, 4).map((card) => (
                                 <button
                                     key={card.id}
@@ -381,6 +546,16 @@ export function OmnibarApp() {
                 </div>
             )}
 
+            {feedback && (
+                <div
+                    className={`omnibar-feedback ${feedback.kind}`}
+                    role={feedback.kind === "error" ? "alert" : "status"}
+                    aria-live={feedback.kind === "error" ? "assertive" : "polite"}
+                >
+                    {feedback.message}
+                </div>
+            )}
+
             <div className="omnibar-footer">
                 <span>↹ {surface === "memory" ? "clips" : "memory"}</span>
                 <span>↑↓ navigate</span>
@@ -395,7 +570,7 @@ export function OmnibarApp() {
                         <span>⌘↵ paste</span>
                     </>
                 )}
-                <span>esc close</span>
+                <span>esc {mode.kind === "search" ? "close" : "back"}</span>
             </div>
         </div>
     );

@@ -14,7 +14,7 @@ import {
 } from "@/shared/ipc/tauri";
 
 const SUCCESS_TOAST_MS = 900;
-const ERROR_TOAST_MS = 2200;
+const ERROR_TOAST_MS = 6000;
 
 type Phase =
     | { kind: "idle" }
@@ -32,6 +32,7 @@ type Phase =
         contextHint: string;
         message?: string;
     }
+    | { kind: "waiting" }
     | {
         kind: "preview";
         label: string;
@@ -43,7 +44,41 @@ type Phase =
     }
     | { kind: "injecting"; label: string; candidate: AutofillCandidate }
     | { kind: "done"; label: string; candidate: AutofillCandidate }
-    | { kind: "error"; message: string };
+    | { kind: "error"; title: string; message: string };
+
+interface AutofillErrorCopy {
+    title: string;
+    message: string;
+}
+
+function autofillErrorCopy(error: unknown): AutofillErrorCopy {
+    const raw = error instanceof Error ? error.message : String(error);
+    const normalized = raw.toLowerCase();
+
+    if (normalized.includes("accessibility") || normalized.includes("permission denied")) {
+        return {
+            title: "Autofill needs Accessibility permission",
+            message: "Allow FNDR in System Settings, then focus the field and try again.",
+        };
+    }
+
+    if (
+        normalized.includes("no autofill target")
+        || normalized.includes("target app")
+        || normalized.includes("activate target")
+        || normalized.includes("focused field")
+    ) {
+        return {
+            title: "The focused field changed",
+            message: "Focus the destination field and run Autofill again.",
+        };
+    }
+
+    return {
+        title: "Autofill couldn’t finish",
+        message: "Nothing was inserted. Focus the destination field and try again.",
+    };
+}
 
 function normalizePhrase(input: string): string {
     return input
@@ -179,7 +214,7 @@ export function AutofillOverlay() {
             if (activeRequestRef.current !== requestId) {
                 return;
             }
-            setPhase({ kind: "error", message: String(error) });
+            setPhase({ kind: "error", ...autofillErrorCopy(error) });
             scheduleDismiss(ERROR_TOAST_MS);
         }
     }
@@ -242,7 +277,7 @@ export function AutofillOverlay() {
             if (token !== resolveTokenRef.current) {
                 return;
             }
-            setPhase({ kind: "error", message: String(error) });
+            setPhase({ kind: "error", ...autofillErrorCopy(error) });
             scheduleDismiss(ERROR_TOAST_MS);
         }
     }
@@ -262,13 +297,7 @@ export function AutofillOverlay() {
         if (showFallback) {
             setPhase((current) =>
                 current.kind === "idle"
-                    ? {
-                        kind: "searching",
-                        label: "Preparing autofill",
-                        appName: "FNDR",
-                        windowTitle: "",
-                        contextHint: "",
-                    }
+                    ? { kind: "waiting" }
                     : current,
             );
         }
@@ -305,7 +334,7 @@ export function AutofillOverlay() {
         }
 
         if (isErrorPayload(payload)) {
-            setPhase({ kind: "error", message: payload.error });
+            setPhase({ kind: "error", ...autofillErrorCopy(payload.error) });
             scheduleDismiss(ERROR_TOAST_MS);
             return;
         }
@@ -328,16 +357,22 @@ export function AutofillOverlay() {
         let unlisten: UnlistenFn | null = null;
         let isMounted = true;
 
-        void setAutofillOverlayReady(true).then((pending) => {
-            if (isMounted && pending) {
-                void handlePayload(pending);
-            }
-        });
+        void setAutofillOverlayReady(true)
+            .then((pending) => {
+                if (isMounted && pending) {
+                    void handlePayload(pending);
+                }
+            })
+            .catch(() => {
+                // The native window may still be booting. A focus event retries the handoff.
+            });
 
         listen<AutofillOverlayEvent>("autofill-triggered", (event) => {
             void handlePayload(event.payload);
         }).then((fn) => {
             unlisten = fn;
+        }).catch(() => {
+            // Tauri event registration is retried with the next auxiliary-window load.
         });
 
         function handleWindowVisible() {
@@ -467,6 +502,7 @@ export function AutofillOverlay() {
     const showSearchSurface =
         showBootstrapSurface
         || phase.kind === "searching"
+        || phase.kind === "waiting"
         || phase.kind === "manual"
         || phase.kind === "preview";
     const searchButtonLabel =
@@ -474,6 +510,8 @@ export function AutofillOverlay() {
             ? "Insert"
             : phase.kind === "searching" || showBootstrapSurface
                 ? "Searching..."
+                : phase.kind === "waiting"
+                    ? "Waiting"
                 : "Search";
     const contextAppName =
         phase.kind === "manual" || phase.kind === "preview" || phase.kind === "searching"
@@ -505,7 +543,13 @@ export function AutofillOverlay() {
     }
 
     return (
-        <div className="af-overlay" role="dialog" aria-modal="false" aria-label="FNDR Autofill">
+        <div
+            className="af-overlay"
+            role="dialog"
+            aria-modal="false"
+            aria-label="FNDR Autofill"
+            aria-busy={phase.kind === "searching" || phase.kind === "injecting"}
+        >
             {showSearchSurface && (
                 <div className={`af-card af-main-card ${phase.kind}`}>
                     <div className="af-header">
@@ -513,16 +557,18 @@ export function AutofillOverlay() {
                             <span className="af-brand-mark">FNDR</span>
                             <span className="af-brand-state">
                                 {phase.kind === "preview"
-                                    ? "Smart Fill"
+                                    ? "Review match"
                                     : phase.kind === "manual"
                                         ? "Search Memory"
-                                        : "Searching"}
+                                        : phase.kind === "waiting"
+                                            ? "Waiting for field"
+                                            : "Searching"}
                             </span>
                         </div>
                         <button
                             className="af-close"
                             onClick={() => resetAndHide()}
-                            aria-label="Dismiss"
+                            aria-label="Dismiss Autofill"
                             type="button"
                         >
                             ×
@@ -533,6 +579,8 @@ export function AutofillOverlay() {
                         <input
                             ref={queryInputRef}
                             className="af-search-input"
+                            type="search"
+                            aria-label="Memory search for this field"
                             value={query}
                             onChange={(event) => setQuery(event.target.value)}
                             onKeyDown={(event) => {
@@ -544,30 +592,44 @@ export function AutofillOverlay() {
                             placeholder="Search for policy number, EIN, member ID..."
                             autoComplete="off"
                             spellCheck={false}
-                            disabled={showBootstrapSurface}
+                            disabled={showBootstrapSurface || phase.kind === "waiting"}
                         />
                         <button
                             className="af-search-btn"
                             type="submit"
-                            disabled={phase.kind === "searching" || showBootstrapSurface}
+                            disabled={
+                                phase.kind === "searching"
+                                || phase.kind === "waiting"
+                                || showBootstrapSurface
+                            }
                         >
                             {searchButtonLabel}
                         </button>
                     </form>
 
                     <div className="af-context-row">
-                        <span className="af-context-app">{contextAppName || "FNDR"}</span>
-                        <span className="af-context-window">{contextWindowTitle}</span>
+                        <span className="af-context-app" aria-label="Focused app">
+                            {contextAppName || "FNDR"}
+                        </span>
+                        <span className="af-context-window" aria-label="Focused window">
+                            {contextWindowTitle || "Waiting for a focused window"}
+                        </span>
                     </div>
 
-                    {(showBootstrapSurface || phase.kind === "searching") && (
+                    {(showBootstrapSurface || phase.kind === "searching" || phase.kind === "waiting") && (
                         <>
                             <div className="af-searching-panel">
-                                <span className="af-spinner" aria-hidden />
+                                {phase.kind !== "waiting" && <span className="af-spinner" aria-hidden />}
                                 <div className="af-searching-copy">
-                                    <span className="af-searching-title">Searching memories</span>
+                                    <span className="af-searching-title">
+                                        {phase.kind === "waiting"
+                                            ? "No field context available"
+                                            : "Searching memories"}
+                                    </span>
                                     <span className="af-searching-value">
-                                        {showBootstrapSurface
+                                        {phase.kind === "waiting"
+                                            ? "Focus a text field, then run Autofill again."
+                                            : showBootstrapSurface
                                             ? "Preparing the focused field context"
                                             : phase.kind === "searching"
                                                 ? phase.label
@@ -582,7 +644,9 @@ export function AutofillOverlay() {
                                 </div>
                             )}
                             <div className="af-footer-hint">
-                                FNDR is using the active field plus nearby screen context to rank matches.
+                                {phase.kind === "waiting"
+                                    ? "Nothing will be inserted until a new field request is available."
+                                    : "FNDR ranks local memories using the active field and nearby visible context."}
                             </div>
                         </>
                     )}
@@ -637,6 +701,12 @@ export function AutofillOverlay() {
                                 </div>
                             )}
 
+                            {phase.resolution.used_ocr_fallback && (
+                                <div className="af-banner af-banner-soft">
+                                    FNDR used nearby visible text because the field label was not available.
+                                </div>
+                            )}
+
                             {selectedCandidate.source_snippet && (
                                 <div className="af-context-box">
                                     <span className="af-context-label">Why this memory</span>
@@ -645,11 +715,13 @@ export function AutofillOverlay() {
                             )}
 
                             {phase.resolution.candidates.length > 1 && (
-                                <div className="af-candidate-list">
+                                <div className="af-candidate-list" role="listbox" aria-label="Autofill matches">
                                     {phase.resolution.candidates.map((candidate, index) => (
                                         <button
                                             key={`${candidate.memory_id}-${candidate.value}-${index}`}
                                             type="button"
+                                            role="option"
+                                            aria-selected={index === phase.selectedIndex}
                                             className={`af-candidate ${index === phase.selectedIndex ? "selected" : ""}`}
                                             onClick={() =>
                                                 setPhase((current) =>
@@ -694,7 +766,11 @@ export function AutofillOverlay() {
             )}
 
             {(phase.kind === "injecting" || phase.kind === "done" || phase.kind === "error") && (
-                <div className={`af-card af-inline-card ${phase.kind}`}>
+                <div
+                    className={`af-card af-inline-card ${phase.kind}`}
+                    role={phase.kind === "error" ? "alert" : "status"}
+                    aria-live={phase.kind === "error" ? "assertive" : "polite"}
+                >
                     {phase.kind === "injecting" ? (
                         <span className="af-spinner" aria-hidden />
                     ) : (
@@ -706,7 +782,7 @@ export function AutofillOverlay() {
                         <span className="af-inline-label">
                             {phase.kind === "injecting" && "Inserting into active field"}
                             {phase.kind === "done" && "Filled field"}
-                            {phase.kind === "error" && "Auto-fill hit an issue"}
+                            {phase.kind === "error" && phase.title}
                         </span>
                         <span className="af-inline-value">
                             {phase.kind === "injecting" && phase.candidate.value}
@@ -715,7 +791,7 @@ export function AutofillOverlay() {
                             {phase.kind === "error" && phase.message}
                         </span>
                     </div>
-                    <button className="af-close" onClick={() => resetAndHide()} aria-label="Dismiss" type="button">
+                    <button className="af-close" onClick={() => resetAndHide()} aria-label="Dismiss Autofill" type="button">
                         ×
                     </button>
                 </div>
@@ -723,6 +799,17 @@ export function AutofillOverlay() {
 
             <style>{`
                 .af-overlay {
+                    --af-text: var(--fg, #e8dfc8);
+                    --af-text-secondary: var(--fg-2, #c4a878);
+                    --af-text-muted: var(--fg-3, #8a7758);
+                    --af-surface: var(--bg-2, #221915);
+                    --af-raised: var(--bg-3, #2a2018);
+                    --af-border: var(--hairline-2, rgba(232, 223, 200, 0.14));
+                    --af-border-strong: var(--hairline-strong, rgba(232, 223, 200, 0.22));
+                    --af-accent: var(--accent, #d4a04a);
+                    --af-info: #78cdff;
+                    --af-success: #91efae;
+                    --af-danger: #ffb6a5;
                     position: fixed;
                     inset: 0;
                     display: flex;
@@ -731,15 +818,16 @@ export function AutofillOverlay() {
                     padding: 0;
                     pointer-events: none;
                     background:
-                        radial-gradient(circle at top right, rgba(255, 194, 110, 0.14), transparent 28%),
-                        linear-gradient(155deg, rgba(27, 21, 16, 0.985), rgba(14, 11, 9, 0.985));
-                    font-family: "SF Pro Text", "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
+                        radial-gradient(circle at top right, color-mix(in srgb, var(--af-accent) 14%, transparent), transparent 32%),
+                        linear-gradient(155deg, var(--af-surface), var(--bg, #1a1410));
+                    color: var(--af-text);
+                    font-family: var(--film-font-ui, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif);
                     -webkit-font-smoothing: antialiased;
                 }
 
                 .af-card {
                     pointer-events: all;
-                    color: rgba(250, 246, 239, 0.94);
+                    color: var(--af-text);
                     background: transparent;
                     animation: af-slide-in 0.18s cubic-bezier(0.25, 1, 0.5, 1) both;
                 }
@@ -752,10 +840,10 @@ export function AutofillOverlay() {
                     min-height: 100%;
                     padding: 18px 18px 16px;
                     overflow-y: auto;
-                    border: 1px solid rgba(255, 196, 122, 0.14);
+                    border: 1px solid var(--af-border);
                     box-shadow:
-                        inset 0 1px 0 rgba(255, 255, 255, 0.04),
-                        0 18px 44px rgba(0, 0, 0, 0.28);
+                        inset 0 1px 0 color-mix(in srgb, var(--af-text) 5%, transparent),
+                        var(--shadow-medium, 0 18px 44px rgba(0, 0, 0, 0.28));
                 }
 
                 .af-inline-card {
@@ -764,30 +852,32 @@ export function AutofillOverlay() {
                     gap: 10px;
                     width: min(448px, calc(100vw - 24px));
                     height: auto;
+                    max-height: calc(100vh - 24px);
+                    overflow-y: auto;
                     padding: 12px 14px;
                     margin: auto 12px 12px auto;
                     border-radius: 22px;
-                    border: 1px solid rgba(255, 196, 122, 0.18);
+                    border: 1px solid var(--af-border-strong);
                     background:
-                        radial-gradient(circle at top right, rgba(255, 194, 110, 0.14), transparent 30%),
-                        linear-gradient(155deg, rgba(27, 21, 16, 0.96), rgba(14, 11, 9, 0.96));
+                        radial-gradient(circle at top right, color-mix(in srgb, var(--af-accent) 14%, transparent), transparent 30%),
+                        linear-gradient(155deg, var(--af-surface), var(--bg, #1a1410));
                     box-shadow:
                         0 22px 56px rgba(0, 0, 0, 0.52),
                         inset 0 1px 0 rgba(255, 255, 255, 0.04);
                 }
 
                 .af-inline-card.done {
-                    border-color: rgba(104, 212, 140, 0.24);
+                    border-color: color-mix(in srgb, var(--af-success) 40%, transparent);
                     background:
-                        radial-gradient(circle at top right, rgba(104, 212, 140, 0.10), transparent 30%),
-                        linear-gradient(155deg, rgba(18, 28, 20, 0.96), rgba(12, 15, 12, 0.96));
+                        radial-gradient(circle at top right, color-mix(in srgb, var(--af-success) 11%, transparent), transparent 30%),
+                        var(--af-surface);
                 }
 
                 .af-inline-card.error {
-                    border-color: rgba(255, 141, 117, 0.24);
+                    border-color: color-mix(in srgb, var(--alarm, #c4521e) 42%, transparent);
                     background:
-                        radial-gradient(circle at top right, rgba(255, 141, 117, 0.10), transparent 30%),
-                        linear-gradient(155deg, rgba(35, 21, 18, 0.96), rgba(20, 11, 10, 0.96));
+                        radial-gradient(circle at top right, color-mix(in srgb, var(--alarm, #c4521e) 12%, transparent), transparent 30%),
+                        var(--af-surface);
                 }
 
                 .af-header {
@@ -808,35 +898,46 @@ export function AutofillOverlay() {
                     font-weight: 900;
                     letter-spacing: 0.12em;
                     text-transform: uppercase;
-                    color: #fff;
-                    background: linear-gradient(135deg, #ffc47a, #f97316);
+                    color: var(--bg, #1a1410);
+                    background: linear-gradient(135deg, var(--accent-2, #e8b85a), var(--af-accent));
                     padding: 3px 8px;
                     border-radius: 8px;
                     width: fit-content;
                     margin-bottom: 2px;
-                    box-shadow: 0 4px 12px rgba(249, 115, 22, 0.2);
+                    box-shadow: 0 4px 12px color-mix(in srgb, var(--af-accent) 22%, transparent);
                 }
 
                 .af-brand-state {
                     font-size: 12px;
-                    color: rgba(250, 246, 239, 0.56);
+                    color: var(--af-text-muted);
                 }
 
                 .af-close {
-                    width: 30px;
-                    height: 30px;
+                    width: 44px;
+                    height: 44px;
+                    flex: 0 0 44px;
                     border-radius: 999px;
-                    border: 1px solid rgba(255, 255, 255, 0.10);
-                    background: rgba(255, 255, 255, 0.04);
-                    color: rgba(250, 246, 239, 0.62);
+                    border: 1px solid var(--af-border);
+                    background: color-mix(in srgb, var(--af-text) 5%, transparent);
+                    color: var(--af-text-secondary);
                     font-size: 18px;
                     line-height: 1;
                     cursor: pointer;
                 }
 
                 .af-close:hover {
-                    background: rgba(255, 255, 255, 0.08);
-                    color: rgba(250, 246, 239, 0.92);
+                    background: color-mix(in srgb, var(--af-text) 9%, transparent);
+                    color: var(--af-text);
+                }
+
+                .af-close:focus-visible,
+                .af-search-input:focus-visible,
+                .af-search-btn:focus-visible,
+                .af-candidate:focus-visible,
+                .af-primary:focus-visible,
+                .af-secondary:focus-visible {
+                    outline: 2px solid var(--af-accent);
+                    outline-offset: 2px;
                 }
 
                 .af-search-row {
@@ -849,26 +950,27 @@ export function AutofillOverlay() {
                     width: 100%;
                     min-width: 0;
                     border-radius: 14px;
-                    border: 1px solid rgba(255, 255, 255, 0.10);
+                    min-height: 44px;
+                    border: 1px solid var(--af-border);
                     background:
-                        linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03));
+                        linear-gradient(180deg, color-mix(in srgb, var(--af-text) 7%, transparent), color-mix(in srgb, var(--af-text) 3%, transparent));
                     padding: 12px 14px;
-                    color: rgba(250, 246, 239, 0.96);
+                    color: var(--af-text);
                     font-size: 14px;
                     outline: none;
                     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-                    caret-color: rgba(120, 205, 255, 0.96);
+                    caret-color: var(--af-info);
                 }
 
                 .af-search-input:focus {
-                    border-color: rgba(120, 205, 255, 0.42);
+                    border-color: color-mix(in srgb, var(--af-info) 60%, transparent);
                     box-shadow:
-                        0 0 0 3px rgba(120, 205, 255, 0.12),
-                        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+                        0 0 0 3px color-mix(in srgb, var(--af-info) 14%, transparent),
+                        inset 0 1px 0 color-mix(in srgb, var(--af-text) 6%, transparent);
                 }
 
                 .af-search-input::placeholder {
-                    color: rgba(250, 246, 239, 0.30);
+                    color: var(--af-text-muted);
                 }
 
                 .af-search-input:disabled {
@@ -884,15 +986,16 @@ export function AutofillOverlay() {
                     font-family: inherit;
                     font-size: 13px;
                     font-weight: 600;
+                    min-height: 44px;
                     cursor: pointer;
                     transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease;
                 }
 
                 .af-search-btn {
                     padding: 0 14px;
-                    background: linear-gradient(180deg, rgba(255, 197, 112, 0.24), rgba(255, 161, 67, 0.14));
-                    border-color: rgba(255, 197, 112, 0.26);
-                    color: rgba(255, 220, 170, 0.98);
+                    background: color-mix(in srgb, var(--af-accent) 15%, var(--af-raised));
+                    border-color: color-mix(in srgb, var(--af-accent) 38%, transparent);
+                    color: var(--af-text);
                 }
 
                 .af-search-btn:disabled {
@@ -912,7 +1015,7 @@ export function AutofillOverlay() {
                     align-items: center;
                     gap: 8px;
                     min-width: 0;
-                    color: rgba(250, 246, 239, 0.40);
+                    color: var(--af-text-muted);
                     font-size: 11px;
                 }
 
@@ -920,8 +1023,8 @@ export function AutofillOverlay() {
                     flex-shrink: 0;
                     padding: 3px 8px;
                     border-radius: 999px;
-                    background: rgba(255, 255, 255, 0.06);
-                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    background: color-mix(in srgb, var(--af-text) 6%, transparent);
+                    border: 1px solid var(--af-border);
                 }
 
                 .af-context-window {
@@ -955,14 +1058,14 @@ export function AutofillOverlay() {
                 .af-empty-title {
                     font-size: 16px;
                     font-weight: 700;
-                    color: rgba(250, 246, 239, 0.96);
+                    color: var(--af-text);
                 }
 
                 .af-searching-value,
                 .af-empty-copy {
                     font-size: 12px;
                     line-height: 1.45;
-                    color: rgba(250, 246, 239, 0.58);
+                    color: var(--af-text-secondary);
                 }
 
                 .af-banner {
@@ -973,15 +1076,15 @@ export function AutofillOverlay() {
                 }
 
                 .af-banner-soft {
-                    border: 1px solid rgba(120, 205, 255, 0.16);
-                    background: rgba(120, 205, 255, 0.08);
-                    color: rgba(194, 234, 255, 0.92);
+                    border: 1px solid color-mix(in srgb, var(--af-info) 28%, transparent);
+                    background: color-mix(in srgb, var(--af-info) 9%, transparent);
+                    color: var(--af-text);
                 }
 
                 .af-banner-warn {
-                    border: 1px solid rgba(255, 194, 110, 0.20);
-                    background: rgba(255, 194, 110, 0.09);
-                    color: rgba(255, 221, 170, 0.94);
+                    border: 1px solid color-mix(in srgb, var(--af-accent) 34%, transparent);
+                    background: color-mix(in srgb, var(--af-accent) 10%, transparent);
+                    color: var(--af-text);
                 }
 
                 .af-context-box {
@@ -990,8 +1093,8 @@ export function AutofillOverlay() {
                     gap: 5px;
                     padding: 12px;
                     border-radius: 16px;
-                    border: 1px solid rgba(255, 255, 255, 0.08);
-                    background: rgba(255, 255, 255, 0.04);
+                    border: 1px solid var(--af-border);
+                    background: color-mix(in srgb, var(--af-text) 4%, transparent);
                 }
 
                 .af-context-label {
@@ -999,14 +1102,15 @@ export function AutofillOverlay() {
                     font-weight: 700;
                     letter-spacing: 0.10em;
                     text-transform: uppercase;
-                    color: rgba(250, 246, 239, 0.34);
+                    color: var(--af-text-muted);
                 }
 
                 .af-context-text {
                     font-size: 12px;
                     line-height: 1.5;
-                    color: rgba(250, 246, 239, 0.62);
+                    color: var(--af-text-secondary);
                     white-space: pre-line;
+                    overflow-wrap: anywhere;
                 }
 
                 .af-selection-card {
@@ -1015,10 +1119,10 @@ export function AutofillOverlay() {
                     gap: 8px;
                     padding: 14px;
                     border-radius: 18px;
-                    border: 1px solid rgba(255, 196, 122, 0.14);
+                    border: 1px solid var(--af-border);
                     background:
-                        radial-gradient(circle at top left, rgba(255, 188, 92, 0.12), transparent 35%),
-                        rgba(255, 255, 255, 0.04);
+                        radial-gradient(circle at top left, color-mix(in srgb, var(--af-accent) 12%, transparent), transparent 35%),
+                        color-mix(in srgb, var(--af-text) 4%, transparent);
                 }
 
                 .af-selection-top {
@@ -1036,10 +1140,10 @@ export function AutofillOverlay() {
                     white-space: nowrap;
                     border-radius: 999px;
                     padding: 4px 10px;
-                    background: rgba(255, 255, 255, 0.07);
-                    border: 1px solid rgba(255, 255, 255, 0.10);
+                    background: color-mix(in srgb, var(--af-text) 7%, transparent);
+                    border: 1px solid var(--af-border);
                     font-size: 11px;
-                    color: rgba(250, 246, 239, 0.66);
+                    color: var(--af-text-secondary);
                 }
 
                 .af-confidence-badge {
@@ -1051,18 +1155,18 @@ export function AutofillOverlay() {
                 }
 
                 .af-confidence-badge.high {
-                    background: rgba(104, 212, 140, 0.14);
-                    color: rgba(145, 239, 174, 0.96);
+                    background: color-mix(in srgb, var(--af-success) 14%, transparent);
+                    color: var(--af-success);
                 }
 
                 .af-confidence-badge.medium {
-                    background: rgba(255, 194, 110, 0.14);
-                    color: rgba(255, 220, 166, 0.96);
+                    background: color-mix(in srgb, var(--af-accent) 14%, transparent);
+                    color: var(--af-text);
                 }
 
                 .af-confidence-badge.low {
-                    background: rgba(255, 140, 110, 0.14);
-                    color: rgba(255, 188, 165, 0.96);
+                    background: color-mix(in srgb, var(--alarm, #c4521e) 14%, transparent);
+                    color: var(--af-danger);
                 }
 
                 .af-selection-value {
@@ -1070,14 +1174,14 @@ export function AutofillOverlay() {
                     line-height: 1.15;
                     letter-spacing: -0.02em;
                     font-weight: 800;
-                    color: rgba(255, 244, 226, 0.98);
+                    color: var(--af-text);
                     word-break: break-word;
                 }
 
                 .af-selection-reason {
                     font-size: 12px;
                     line-height: 1.45;
-                    color: rgba(250, 246, 239, 0.58);
+                    color: var(--af-text-secondary);
                 }
 
                 .af-selection-source {
@@ -1086,7 +1190,14 @@ export function AutofillOverlay() {
                     justify-content: space-between;
                     gap: 10px;
                     font-size: 11px;
-                    color: rgba(250, 246, 239, 0.38);
+                    color: var(--af-text-muted);
+                }
+
+                .af-selection-source > span:first-child {
+                    min-width: 0;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
                 }
 
                 .af-candidate-list {
@@ -1103,17 +1214,18 @@ export function AutofillOverlay() {
                     gap: 10px;
                     align-items: start;
                     width: 100%;
+                    min-height: 48px;
                     padding: 10px;
                     border-radius: 16px;
-                    border: 1px solid rgba(255, 255, 255, 0.08);
-                    background: rgba(255, 255, 255, 0.03);
+                    border: 1px solid var(--af-border);
+                    background: color-mix(in srgb, var(--af-text) 3%, transparent);
                     color: inherit;
                     text-align: left;
                 }
 
                 .af-candidate.selected {
-                    border-color: rgba(120, 205, 255, 0.28);
-                    background: rgba(120, 205, 255, 0.09);
+                    border-color: color-mix(in srgb, var(--af-info) 42%, transparent);
+                    background: color-mix(in srgb, var(--af-info) 10%, transparent);
                 }
 
                 .af-candidate-rank {
@@ -1123,15 +1235,15 @@ export function AutofillOverlay() {
                     display: inline-flex;
                     align-items: center;
                     justify-content: center;
-                    background: rgba(255, 255, 255, 0.08);
-                    color: rgba(250, 246, 239, 0.58);
+                    background: color-mix(in srgb, var(--af-text) 8%, transparent);
+                    color: var(--af-text-secondary);
                     font-size: 11px;
                     font-weight: 700;
                 }
 
                 .af-candidate.selected .af-candidate-rank {
-                    background: rgba(120, 205, 255, 0.18);
-                    color: rgba(194, 234, 255, 0.96);
+                    background: color-mix(in srgb, var(--af-info) 18%, transparent);
+                    color: var(--af-text);
                 }
 
                 .af-candidate-copy {
@@ -1144,13 +1256,13 @@ export function AutofillOverlay() {
                 .af-candidate-value {
                     font-size: 13px;
                     font-weight: 700;
-                    color: rgba(250, 246, 239, 0.92);
+                    color: var(--af-text);
                     word-break: break-word;
                 }
 
                 .af-candidate-meta {
                     font-size: 11px;
-                    color: rgba(250, 246, 239, 0.42);
+                    color: var(--af-text-muted);
                 }
 
                 .af-actions {
@@ -1169,15 +1281,15 @@ export function AutofillOverlay() {
                 }
 
                 .af-primary {
-                    background: linear-gradient(180deg, rgba(255, 194, 110, 0.24), rgba(255, 161, 67, 0.14));
-                    border-color: rgba(255, 194, 110, 0.24);
-                    color: rgba(255, 231, 196, 0.98);
+                    background: color-mix(in srgb, var(--af-accent) 16%, var(--af-raised));
+                    border-color: color-mix(in srgb, var(--af-accent) 38%, transparent);
+                    color: var(--af-text);
                 }
 
                 .af-secondary {
-                    background: rgba(255, 255, 255, 0.05);
-                    border-color: rgba(255, 255, 255, 0.10);
-                    color: rgba(250, 246, 239, 0.72);
+                    background: color-mix(in srgb, var(--af-text) 5%, transparent);
+                    border-color: var(--af-border);
+                    color: var(--af-text-secondary);
                 }
 
                 .af-primary kbd,
@@ -1188,15 +1300,16 @@ export function AutofillOverlay() {
 
                 .af-footer-hint {
                     font-size: 11px;
-                    color: rgba(250, 246, 239, 0.34);
+                    color: var(--af-text-muted);
+                    line-height: 1.4;
                 }
 
                 .af-spinner {
                     width: 18px;
                     height: 18px;
                     border-radius: 999px;
-                    border: 2px solid rgba(255, 255, 255, 0.14);
-                    border-top-color: rgba(255, 226, 183, 0.92);
+                    border: 2px solid var(--af-border);
+                    border-top-color: var(--af-accent);
                     animation: af-spin 0.7s linear infinite;
                     flex-shrink: 0;
                 }
@@ -1214,13 +1327,13 @@ export function AutofillOverlay() {
                 }
 
                 .af-inline-icon.done {
-                    background: rgba(104, 212, 140, 0.16);
-                    color: rgba(145, 239, 174, 0.96);
+                    background: color-mix(in srgb, var(--af-success) 16%, transparent);
+                    color: var(--af-success);
                 }
 
                 .af-inline-icon.error {
-                    background: rgba(255, 140, 110, 0.16);
-                    color: rgba(255, 194, 182, 0.96);
+                    background: color-mix(in srgb, var(--alarm, #c4521e) 16%, transparent);
+                    color: var(--af-danger);
                 }
 
                 .af-inline-copy {
@@ -1233,12 +1346,12 @@ export function AutofillOverlay() {
 
                 .af-inline-label {
                     font-size: 11px;
-                    color: rgba(250, 246, 239, 0.40);
+                    color: var(--af-text-muted);
                 }
 
                 .af-inline-value {
                     font-size: 13px;
-                    color: rgba(250, 246, 239, 0.88);
+                    color: var(--af-text);
                     line-height: 1.4;
                     word-break: break-word;
                 }
@@ -1257,6 +1370,59 @@ export function AutofillOverlay() {
                 @keyframes af-spin {
                     to {
                         transform: rotate(360deg);
+                    }
+                }
+
+                :root[data-theme="light"] .af-overlay {
+                    --af-info: #216589;
+                    --af-success: #21683c;
+                    --af-danger: #9b3425;
+                }
+
+                @media (max-width: 380px) {
+                    .af-main-card {
+                        padding: 14px 12px;
+                    }
+
+                    .af-search-row,
+                    .af-actions {
+                        grid-template-columns: 1fr;
+                    }
+
+                    .af-search-btn {
+                        padding-block: 10px;
+                    }
+
+                    .af-selection-top,
+                    .af-selection-source {
+                        align-items: flex-start;
+                        flex-direction: column;
+                    }
+
+                    .af-field-chip {
+                        max-width: 100%;
+                    }
+                }
+
+                @media (prefers-reduced-motion: reduce) {
+                    .af-card {
+                        animation: none;
+                    }
+
+                    .af-spinner {
+                        animation: none;
+                    }
+
+                    .af-search-btn,
+                    .af-primary,
+                    .af-secondary {
+                        transition: none;
+                    }
+
+                    .af-search-btn:hover:not(:disabled),
+                    .af-primary:hover,
+                    .af-secondary:hover {
+                        transform: none;
                     }
                 }
             `}</style>

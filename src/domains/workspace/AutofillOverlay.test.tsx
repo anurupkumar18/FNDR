@@ -121,4 +121,145 @@ describe("AutofillOverlay request ownership", () => {
         expect(screen.queryByText("Filled field")).not.toBeInTheDocument();
         expect(ipcMocks.dismissAutofill).not.toHaveBeenCalled();
     });
+
+    it("names the focused context and exposes candidate selection semantics", async () => {
+        ipcMocks.resolveAutofill.mockResolvedValue({
+            ...resolution,
+            candidates: [
+                resolution.candidates[0],
+                {
+                    ...resolution.candidates[0],
+                    value: "PN-456",
+                    confidence: 0.82,
+                    memory_id: "memory-2",
+                },
+            ],
+        });
+        await showPreview();
+
+        expect(screen.getByRole("searchbox", { name: "Memory search for this field" })).toHaveValue(
+            "Policy number",
+        );
+        expect(screen.getByLabelText("Focused app")).toHaveTextContent("Safari");
+        expect(screen.getByLabelText("Focused window")).toHaveTextContent("Application form");
+        expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
+        expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("discloses when visible text was needed to identify the field", async () => {
+        ipcMocks.resolveAutofill.mockResolvedValue({
+            ...resolution,
+            used_ocr_fallback: true,
+        });
+        await showPreview();
+
+        expect(screen.getByText(
+            "FNDR used nearby visible text because the field label was not available.",
+        )).toBeInTheDocument();
+    });
+
+    it("focuses manual search when field context is not specific enough", async () => {
+        render(<AutofillOverlay />);
+        await waitFor(() => expect(trigger).not.toBeNull());
+        await act(async () => {
+            trigger?.({
+                payload: {
+                    requestId: 4,
+                    payload: {
+                        ...fieldContext,
+                        label: "",
+                        screen_context: "",
+                    },
+                },
+            });
+        });
+
+        const search = screen.getByRole("searchbox", { name: "Memory search for this field" });
+        await waitFor(() => expect(search).toHaveFocus());
+        expect(screen.getByText("Search memory for this field")).toBeInTheDocument();
+    });
+
+    it("does not pretend to search when no focused-field request is available", async () => {
+        render(<AutofillOverlay />);
+        await waitFor(() => expect(eventMocks.listen).toHaveBeenCalled());
+
+        fireEvent.focus(window);
+
+        expect(await screen.findByText("No field context available")).toBeInTheDocument();
+        expect(screen.getByText("Focus a text field, then run Autofill again.")).toBeInTheDocument();
+        expect(screen.queryByText("Searching memories")).not.toBeInTheDocument();
+    });
+
+    it("turns an accessibility denial into an actionable permission state", async () => {
+        render(<AutofillOverlay />);
+        await waitFor(() => expect(trigger).not.toBeNull());
+        act(() => {
+            trigger?.({
+                payload: {
+                    requestId: 7,
+                    payload: { error: "Accessibility permission denied" },
+                },
+            });
+        });
+
+        expect(await screen.findByRole("alert")).toHaveTextContent("Autofill needs Accessibility permission");
+        expect(screen.getByRole("alert")).toHaveTextContent(
+            "Allow FNDR in System Settings, then focus the field and try again.",
+        );
+    });
+
+    it("explains when the target field changes before insertion", async () => {
+        ipcMocks.injectText.mockRejectedValue(new Error("No autofill target stored"));
+        await showPreview(8);
+
+        fireEvent.click(screen.getByRole("button", { name: /Insert Selected/i }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent("The focused field changed");
+        expect(screen.getByRole("alert")).toHaveTextContent(
+            "Focus the destination field and run Autofill again.",
+        );
+    });
+
+    it("re-runs an edited query and inserts the candidate the user selects", async () => {
+        const twoCandidates = {
+            ...resolution,
+            candidates: [
+                resolution.candidates[0],
+                {
+                    ...resolution.candidates[0],
+                    value: "PN-456",
+                    confidence: 0.82,
+                    memory_id: "memory-2",
+                },
+            ],
+        };
+        ipcMocks.resolveAutofill.mockResolvedValue(twoCandidates);
+        await showPreview(15);
+
+        const search = screen.getByRole("searchbox", { name: "Memory search for this field" });
+        fireEvent.change(search, { target: { value: "Member ID" } });
+        fireEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(ipcMocks.resolveAutofill).toHaveBeenLastCalledWith(
+            fieldContext,
+            "Member ID",
+        ));
+
+        const options = await screen.findAllByRole("option");
+        fireEvent.click(options[1]);
+        fireEvent.click(screen.getByRole("button", { name: /Insert Selected/i }));
+        await waitFor(() => expect(ipcMocks.injectText).toHaveBeenCalledWith("PN-456", 15));
+    });
+
+    it("dismisses the active request from both the button and Escape", async () => {
+        await showPreview(20);
+        fireEvent.click(screen.getByRole("button", { name: "Dismiss Autofill" }));
+        await waitFor(() => expect(ipcMocks.dismissAutofill).toHaveBeenCalledWith(20));
+
+        await act(async () => {
+            trigger?.({ payload: { requestId: 21, payload: fieldContext } });
+        });
+        expect(await screen.findByRole("button", { name: /Insert Selected/i })).toBeInTheDocument();
+        fireEvent.keyDown(window, { key: "Escape" });
+        await waitFor(() => expect(ipcMocks.dismissAutofill).toHaveBeenCalledWith(21));
+    });
 });
