@@ -255,6 +255,14 @@ struct GetContextPackArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct ResumeWorkArgs {
+    #[serde(default = "default_resume_hours")]
+    hours: u32,
+    #[serde(default = "default_resume_budget")]
+    budget_tokens: usize,
+}
+
+#[derive(Debug, Deserialize)]
 struct AgentBriefArgs {
     topic: String,
     #[serde(default = "default_agent_brief_budget")]
@@ -451,6 +459,14 @@ fn default_agent_brief_budget() -> u32 {
 
 fn default_context_pack_depth() -> String {
     "standard".to_string()
+}
+
+fn default_resume_hours() -> u32 {
+    24
+}
+
+fn default_resume_budget() -> usize {
+    2000
 }
 
 fn default_timeline_granularity() -> String {
@@ -1438,6 +1454,17 @@ fn tools_list_result() -> Value {
                 }
             },
             {
+                "name": "memory.resume_work",
+                "description": "Return recent work threads with cited, token-budgeted evidence for resuming a task.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "hours": { "type": "integer", "minimum": 1, "maximum": 168 },
+                        "budget_tokens": { "type": "integer", "minimum": 256, "maximum": 4000 }
+                    }
+                }
+            },
+            {
                 "name": "memory.agent_brief",
                 "description": "Return a compact LLM-ready brief with timeline, facts, decisions, errors, files, URLs, and optional raw evidence.",
                 "inputSchema": {
@@ -2072,6 +2099,14 @@ async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Va
                     message: format!("Invalid memory.get_context_pack args: {err}"),
                 })?;
             run_memory_get_context_pack(app_state, args).await
+        }
+        "memory.resume_work" => {
+            let args: ResumeWorkArgs =
+                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
+                    code: -32602,
+                    message: format!("Invalid memory.resume_work args: {err}"),
+                })?;
+            run_memory_resume_work(app_state, args).await
         }
         "memory.agent_brief" => {
             let args: AgentBriefArgs =
@@ -3089,6 +3124,23 @@ async fn run_memory_get_context_pack(
         "next_actions": next_actions,
         "summary": pack.summary,
         "context_pack_id": pack.id
+    })))
+}
+
+async fn run_memory_resume_work(
+    app_state: Arc<AppState>,
+    args: ResumeWorkArgs,
+) -> Result<Value, JsonRpcError> {
+    let hours = args.hours.clamp(1, 168);
+    let budget_tokens = args.budget_tokens.clamp(256, 4000);
+    let threads = crate::resume::build_resume_threads(&app_state.store, hours, budget_tokens)
+        .await
+        .map_err(internal_tool_error)?;
+
+    Ok(tool_success(json!({
+        "hours": hours,
+        "budget_tokens": budget_tokens,
+        "threads": threads,
     })))
 }
 
@@ -5280,5 +5332,46 @@ mod tests {
         );
         assert!(v.get("page_id").is_some());
         assert!(v.get("stability").is_some());
+    }
+
+    #[test]
+    fn tools_list_advertises_bounded_resume_work() {
+        let tools = tools_list_result();
+        let resume = tools["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .find(|tool| tool["name"] == "memory.resume_work")
+            .expect("memory.resume_work tool");
+
+        assert_eq!(resume["inputSchema"]["properties"]["hours"]["minimum"], 1);
+        assert_eq!(resume["inputSchema"]["properties"]["hours"]["maximum"], 168);
+        assert_eq!(
+            resume["inputSchema"]["properties"]["budget_tokens"]["minimum"],
+            256
+        );
+        assert_eq!(
+            resume["inputSchema"]["properties"]["budget_tokens"]["maximum"],
+            4000
+        );
+    }
+
+    #[test]
+    fn resume_work_tool_clamps_arguments_and_returns_threads() {
+        let app_state = build_test_app_state();
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let response = runtime
+            .block_on(call_tool(
+                Some(json!({
+                    "name": "memory.resume_work",
+                    "arguments": { "hours": 999, "budget_tokens": 9999 }
+                })),
+                app_state,
+            ))
+            .expect("resume work response");
+
+        assert_eq!(response["structuredContent"]["hours"], 168);
+        assert_eq!(response["structuredContent"]["budget_tokens"], 4000);
+        assert!(response["structuredContent"]["threads"].is_array());
     }
 }
