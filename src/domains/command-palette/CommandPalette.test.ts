@@ -11,6 +11,7 @@ describe("demo command palette", () => {
             "stats",
             "todo",
             "wrapped",
+            "hermes-agent",
             "screen-guide",
             "engine-metrics",
             "privacy-proof",

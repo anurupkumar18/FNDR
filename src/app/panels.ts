@@ -12,6 +12,7 @@ export const MOUNTED_PANEL_KEYS = [
     "screenGuide",
     "engineMetrics",
     "privacyProof",
+    "agent",
 ] as const satisfies readonly PanelKey[];
 
 export type MountedPanelKey = (typeof MOUNTED_PANEL_KEYS)[number];

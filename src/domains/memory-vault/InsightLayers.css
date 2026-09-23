@@ -101,7 +101,8 @@
 .insight-branch-chip {
   font-size: 9px;
   opacity: 0.45;
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
   padding: 1px 6px;
   border-radius: 4px;

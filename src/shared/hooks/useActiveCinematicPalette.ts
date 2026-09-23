@@ -1,17 +1,12 @@
 import { useEffect, useState } from "react";
-import {
-    getWallpaperAuroraColors,
-    isPaletteKey,
-    type PaletteKey,
-    type PaletteMode,
-} from "@/shared/theme/cinematic-palettes";
+import { getWallpaperAuroraColors, isPaletteKey, type PaletteKey, type PaletteMode, resolveStoredPalette } from "@/shared/theme/cinematic-palettes";
 import { STORAGE_KEYS } from "@/shared/utils/config";
 
 /** Active cinematic palette + aurora triple (bg/mid/acc) for wallpaper shaders. */
 export function useActiveCinematicPalette() {
     const [paletteKey, setPaletteKey] = useState<PaletteKey>(() => {
         const stored = localStorage.getItem(STORAGE_KEYS.palette);
-        return isPaletteKey(stored) ? stored : "matrix";
+        return resolveStoredPalette(stored);
     });
     const [mode, setMode] = useState<PaletteMode>(() =>
         localStorage.getItem(STORAGE_KEYS.theme) === "light" ? "light" : "dark"

@@ -16,6 +16,7 @@ import { useModelDownloadStatus } from "@/shared/hooks/useModelDownloadStatus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { formatBytes } from "@/shared/utils/format";
 import "./Onboarding.css";
+import { Icon, type IconName } from "@/shared/components/atoms/Icon";
 
 // ── Helper: step index for progress dots ─────────────────────────────────
 const STEPS: OnboardingStep[] = [
@@ -138,7 +139,7 @@ function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s:
 
     return (
         <>
-            <span className="ob-icon">🔐</span>
+            <span className="ob-icon"><Icon name="fingerprint" size={30} /></span>
             <h1 className="ob-title">Lock FNDR with Touch ID</h1>
             <p className="ob-subtitle">
                 With Screen Recording permission, FNDR can store screen snapshots and extracted text.
@@ -159,33 +160,33 @@ function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s:
 function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
     return (
         <>
-            <span className="ob-icon">🔒</span>
+            <span className="ob-icon"><Icon name="lock" size={30} /></span>
             <h1 className="ob-title">How FNDR handles your data</h1>
             <div className="ob-privacy-list">
                 {[
                     {
-                        icon: "✅",
+                        icon: "check-circle" as IconName,
                         title: "What FNDR stores",
                         body: "Text, window metadata, and snapshots of your screen. This is indexed into a local LanceDB store on your Mac.",
                     },
                     {
-                        icon: "🌐",
+                        icon: "globe" as IconName,
                         title: "Local-first, with clear exceptions",
                         body: "Captured memory stays on this Mac by default. Downloading models connects to Hugging Face, and optional integrations can connect to providers you configure.",
                     },
                     {
-                        icon: "🎭",
+                        icon: "eye-off" as IconName,
                         title: "Capture controls",
                         body: "FNDR skips its own windows and anything matching your app/site blocklist. Review your blocklist and pause capture before opening sensitive material.",
                     },
                     {
-                        icon: "🗑",
+                        icon: "trash" as IconName,
                         title: "You're in control",
                         body: "Use FNDR's deletion controls to remove saved memories or clear local history.",
                     },
                 ].map(({ icon, title, body }) => (
                     <div className="ob-privacy-item" key={title}>
-                        <span className="ob-privacy-icon">{icon}</span>
+                        <span className="ob-privacy-icon"><Icon name={icon} size={18} /></span>
                         <div className="ob-privacy-text">
                             <strong>{title}</strong>
                             <span>{body}</span>
@@ -240,7 +241,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
 
     return (
         <>
-            <span className="ob-icon">🛡️</span>
+            <span className="ob-icon"><Icon name="shield" size={30} /></span>
             <h1 className="ob-title">Grant a few permissions</h1>
             <p className="ob-subtitle">
                 FNDR needs permission to see your screen. Captured memory stays on this Mac by default;
@@ -250,21 +251,21 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
             {[
                 {
                     key: "screen_recording" as const,
-                    icon: "🖥",
+                    icon: "monitor" as IconName,
                     label: "Screen Recording",
                     desc: "Required — captures snapshots locally",
                     pane: "screen-recording" as const,
                 },
                 {
                     key: "accessibility" as const,
-                    icon: "🔡",
+                    icon: "type" as IconName,
                     label: "Accessibility",
                     desc: "Optional — reads window titles for better search",
                     pane: "accessibility" as const,
                 },
                 {
                     key: "microphone" as const,
-                    icon: "🎙",
+                    icon: "mic" as IconName,
                     label: "Microphone",
                     desc: "Optional — for meeting transcription, voice search, and voice control",
                     pane: "microphone" as const,
@@ -272,14 +273,14 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
             ].map(({ key, icon, label, desc, pane }) => (
                 <div className={`ob-permission-row ${perms[key] ? "granted" : ""}`} key={key}>
                     <div className="ob-permission-left">
-                        <span className="ob-permission-icon">{icon}</span>
+                        <span className="ob-permission-icon"><Icon name={icon} size={18} /></span>
                         <div>
                             <div className="ob-permission-label">{label}</div>
                             <div className="ob-permission-desc">{desc}</div>
                         </div>
                     </div>
                     {perms[key] ? (
-                        <span className="ob-permission-badge">✅</span>
+                        <span className="ob-permission-badge" aria-label="Granted"><Icon name="check-circle" size={18} /></span>
                     ) : (
                         <button
                             id={`ob-perm-${pane}`}
@@ -462,7 +463,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
 
     return (
         <>
-            <span className="ob-icon">🧠</span>
+            <span className="ob-icon"><Icon name="cpu" size={30} /></span>
             <h1 className="ob-title">Select your local AI model</h1>
             <p className="ob-subtitle">
                 Choose the &apos;brain&apos; for your FNDR. Qwen3-VL (4B) is recommended for best-in-class 
@@ -488,9 +489,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                             <div className="ob-model-name">{m.name}</div>
                             <div className="ob-model-desc">{m.description}</div>
                             <div className="ob-model-meta">
-                                <span>💾 {m.size_label}</span>
-                                <span>⚡ {m.speed_label}</span>
-                                <span>🧠 ~{m.ram_gb} GB RAM</span>
+                                <span><Icon name="hard-drive" size={13} /> {m.size_label}</span>
+                                <span><Icon name="zap" size={13} /> {m.speed_label}</span>
+                                <span><Icon name="cpu" size={13} /> ~{m.ram_gb} GB RAM</span>
                             </div>
                         </button>
                     ))}
@@ -501,23 +502,23 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                 <div className="ob-privacy-list" style={{ marginBottom: 24 }}>
                     {[
                         {
-                            icon: "✨",
+                            icon: "sparkles" as IconName,
                             title: "Multi-modal Intelligence",
                             body: "Qwen3-VL powers the core experience, enabling search by screen content and natural language synthesis.",
                         },
                         {
-                            icon: "🎙",
+                            icon: "mic" as IconName,
                             title: "Local Meeting Recording",
                             body: "Downloaded Whisper GGUF models provide on-device transcription when installed.",
                         },
                         {
-                            icon: "🕸",
+                            icon: "network" as IconName,
                             title: "Tasks",
                             body: "FNDR extracts reminders and converts them into local tasks automatically.",
                         },
                     ].map(({ icon, title, body }) => (
                         <div className="ob-privacy-item" key={title}>
-                            <span className="ob-privacy-icon">{icon}</span>
+                            <span className="ob-privacy-icon"><Icon name={icon} size={18} /></span>
                             <div className="ob-privacy-text">
                                 <strong>{title}</strong>
                                 <span>{body}</span>
@@ -547,7 +548,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
 
             {isDownloading && (!activeDownloadStatus || activeDownloadStatus.state !== "downloading") && (
                 <div style={{ marginBottom: 24, padding: "24px 0", textAlign: "center" }}>
-                    <span className="ob-icon pulse" style={{ display: "inline-block", fontSize: 24, marginBottom: 12 }}>⚙️</span>
+                    <span className="ob-icon pulse" style={{ display: "inline-block", marginBottom: 12 }}><Icon name="settings" size={24} /></span>
                     <div className="ob-download-title">
                         {isActivatingModel
                             ? "Loading model into FNDR..."

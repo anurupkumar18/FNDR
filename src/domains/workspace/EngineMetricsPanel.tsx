@@ -1,6 +1,7 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef } from "react";
 import { EngineMetricsCard } from "./EngineMetricsCard";
 import "./PipelineInspectorPanel.css";
+import { PanelHeader } from "@/shared/components/PanelHeader";
 
 interface EngineMetricsPanelProps {
     isVisible: boolean;
@@ -65,25 +66,15 @@ export function EngineMetricsPanel({ isVisible, onClose, onOpenPipelineInspector
             aria-describedby="engine-diagnostics-description"
             onKeyDown={handleKeyDown}
         >
-            <header className="pipeline-header">
-                <div>
-                    <span className="pipeline-header-kicker">DEVELOPER TOOL</span>
-                    <h2 id="engine-diagnostics-title">Engine diagnostics</h2>
-                    <p id="engine-diagnostics-description">
-                        A developer diagnostic for troubleshooting FNDR performance. It observes local
-                        runtime counters and does not change capture or model behavior.
-                    </p>
-                </div>
-                <button
-                    ref={closeButtonRef}
-                    type="button"
-                    className="ui-action-btn pipeline-close-btn"
-                    onClick={onClose}
-                    aria-label="Close engine diagnostics"
-                >
-                    Close
-                </button>
-            </header>
+            <PanelHeader
+                title="Engine diagnostics"
+                titleId="engine-diagnostics-title"
+                subtitle="A developer diagnostic for troubleshooting FNDR performance. It observes local runtime counters and does not change capture or model behavior."
+                subtitleId="engine-diagnostics-description"
+                closeLabel="Close engine diagnostics"
+                closeRef={closeButtonRef}
+                onClose={onClose}
+            />
 
             <div className="pipeline-body">
                 <EngineMetricsCard enabled={isVisible} title="Live engine snapshot" />

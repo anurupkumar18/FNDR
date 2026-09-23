@@ -5,6 +5,7 @@ import { useCallback, useState } from "react";
 import { MemoryCard, listMemoryCards } from "@/shared/ipc/tauri";
 import { usePolling } from "@/shared/hooks/usePolling";
 import "./FocusSessionPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 interface FocusSessionPanelProps {
     isVisible: boolean;
@@ -99,7 +100,7 @@ export function FocusSessionPanel({ isVisible, onClose, onSearchApp }: FocusSess
             <div className="fs-body">
                 {loading && cards.length === 0 && (
                     <div className="fs-state">
-                        <div className="thinking-loader thinking-loader-md" aria-hidden="true" />
+                        <ThinkingIndicator state="working" size="md" />
                         <p>Reading your active context…</p>
                     </div>
                 )}

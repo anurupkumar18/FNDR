@@ -1,0 +1,101 @@
+/* Codex account card — sits in the Hermes provider setup. */
+.codex-card {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface-translucent);
+}
+
+.codex-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.codex-card-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.codex-card-title {
+    font-size: 0.88rem;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    color: var(--text-primary);
+}
+
+.codex-card-body {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+
+.codex-card-muted {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.codex-card-error {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--danger);
+}
+
+.codex-card-badge {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--success-light);
+    color: var(--text-primary);
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.codex-usage-stack {
+    display: grid;
+    gap: 10px;
+}
+
+.codex-usage {
+    display: grid;
+    gap: 4px;
+}
+
+.codex-usage-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.codex-usage-value {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+}
+
+.codex-usage-track {
+    height: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--fg) 10%, transparent);
+    overflow: hidden;
+}
+
+.codex-usage-fill {
+    height: 100%;
+    background: var(--accent);
+    transform-origin: left center;
+    transition: transform var(--film-dur-slow) var(--film-ease-shutter);
+}
+
+.codex-usage-reset {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}

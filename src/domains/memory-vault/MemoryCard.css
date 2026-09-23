@@ -26,7 +26,8 @@
 }
 
 .fndr-mc-frame-no {
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: var(--t-micro);
     line-height: 1;
     letter-spacing: var(--film-track-label);
@@ -36,7 +37,8 @@
 
 .fndr-mc-ts {
     margin-left: auto;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: var(--t-micro);
     line-height: 1;
     color: var(--fg-3);
@@ -81,11 +83,12 @@
 }
 
 .fndr-mc-threads li {
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-weight: 500;
     font-size: 9px;
     line-height: 1;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--accent);
     border: 1px solid var(--accent);
@@ -198,7 +201,8 @@
    Empty span reserves the grid slot so rows align even when reason is absent. */
 .fndr-mc-c-route {
     grid-area: route;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
     font-weight: 600;
     color: var(--fg-3);
@@ -282,7 +286,8 @@
 
 .fndr-mc-c-frame {
     grid-area: frame;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: var(--t-micro);
     letter-spacing: var(--film-track-label);
     color: var(--fg-3);
@@ -380,10 +385,11 @@
 
 .fndr-mc-c-time {
     grid-area: time;
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
     color: var(--text-secondary);
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     text-align: right;
     white-space: nowrap;

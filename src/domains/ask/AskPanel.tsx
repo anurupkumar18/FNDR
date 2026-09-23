@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import { fndrAnswer, type ComposedAnswer, type MemoryCard } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./AskPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelHeader } from "@/shared/components/PanelHeader";
 
 const ANSWER_TIMEOUT_MS = 60_000;
 const TAKEAWAY =
@@ -83,15 +85,12 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
             aria-modal="true"
             aria-label="Search and Ask FNDR"
         >
-            <header className="ask-header">
-                <div className="ask-header-title">
-                    <h2>Search & Ask FNDR</h2>
-                    <span className="ask-badge">On-device · read-only</span>
-                </div>
-                <button type="button" className="ui-action-btn ask-close-btn" onClick={onClose} aria-label="Close Ask FNDR">
-                    ×
-                </button>
-            </header>
+            <PanelHeader
+                title="Search & Ask FNDR"
+                subtitle="On-device and read-only."
+                closeLabel="Close Ask FNDR"
+                onClose={onClose}
+            />
 
             <main className="ask-body">
                 <p className="ask-takeaway">{TAKEAWAY}</p>
@@ -143,7 +142,7 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
 
                 {state.kind === "asking" && (
                     <div className="ask-status" role="status">
-                        <div className="thinking-loader" aria-hidden="true" />
+                        <ThinkingIndicator state="searching" size="lg" />
                         <span>Searching and checking your memories…</span>
                     </div>
                 )}

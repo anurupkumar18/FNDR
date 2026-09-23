@@ -77,7 +77,7 @@
     font-size: 0.7rem;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.05em;
 }
 
 .todo-briefing-text {
@@ -125,36 +125,7 @@
 }
 
 .todo-stage-toggle {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
-}
-
-.todo-stage-btn {
-    min-height: 44px;
-    font-size: 12px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-}
-
-.todo-stage-btn strong {
-    font-size: 11px;
-    color: var(--text-secondary);
-}
-
-.todo-stage-btn.active {
-    border-color: var(--border-strong);
-    background: var(--surface-elevated);
-    color: var(--text-primary);
-    box-shadow: var(--shadow-soft);
-}
-
-.todo-stage-btn.active strong {
-    color: var(--text-primary);
+    margin: 10px 16px;
 }
 
 .todo-page-state {

@@ -7,6 +7,9 @@ import {
 } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./FndrWrappedPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelHeader } from "@/shared/components/PanelHeader";
+import { SegmentedControl } from "@/shared/components/SegmentedControl";
 
 interface FndrWrappedPanelProps {
     isVisible: boolean;
@@ -262,44 +265,29 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
         >
             {screen === "selection" ? (
                 <main className="wrapped-selection-page">
-                    <header className="wrapped-selection-header">
-                        <div>
-                            <h2 id="wrapped-panel-title">FNDR Wrapped</h2>
-                            <p>Choose a week to review your recorded activity.</p>
-                        </div>
-                        <button
-                            ref={closeButtonRef}
-                            type="button"
-                            className="ui-action-btn wrapped-close-btn"
-                            onClick={onClose}
-                            aria-label="Close FNDR Wrapped"
-                        >
-                            <span aria-hidden="true">×</span>
-                        </button>
-                    </header>
+                    <PanelHeader
+                        title="FNDR Wrapped"
+                        titleId="wrapped-panel-title"
+                        subtitle="Choose a week to review your recorded activity."
+                        closeLabel="Close FNDR Wrapped"
+                        closeRef={closeButtonRef}
+                        onClose={onClose}
+                    />
 
                     <section className="wrapped-week-selector" aria-labelledby="wrapped-week-title">
-                        <span className="wrapped-eyebrow">SELECT A WEEK</span>
+                        <span className="wrapped-eyebrow">Select a week</span>
                         <h3 id="wrapped-week-title">{selectedRange}</h3>
                         <p>{selectedWeek.isCurrentWeek ? "This week is still in progress. Your recap will show activity recorded so far." : "Weeks run from Monday through Sunday."}</p>
-                        <div className="wrapped-month-tabs" role="group" aria-label="Available Wrapped months">
-                            <button
-                                type="button"
-                                aria-pressed={monthScope === "current"}
-                                className={monthScope === "current" ? "active" : ""}
-                                onClick={() => handleMonthScopeChange("current")}
-                            >
-                                This month
-                            </button>
-                            <button
-                                type="button"
-                                aria-pressed={monthScope === "previous"}
-                                className={monthScope === "previous" ? "active" : ""}
-                                onClick={() => handleMonthScopeChange("previous")}
-                            >
-                                Last month
-                            </button>
-                        </div>
+                        <SegmentedControl
+                            className="wrapped-month-tabs"
+                            ariaLabel="Available Wrapped months"
+                            value={monthScope}
+                            onChange={handleMonthScopeChange}
+                            options={[
+                                { value: "current", label: "This month" },
+                                { value: "previous", label: "Last month" },
+                            ]}
+                        />
                         <fieldset className="wrapped-week-options">
                             <legend className="sr-only">Available weeks</legend>
                             {visibleWeeks.map((week, index) => {
@@ -367,7 +355,7 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                         {error && <p className="wrapped-results-error" role="alert">{error}</p>}
                         {!wrapped && loading && (
                             <div className="wrapped-state">
-                                <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                                <ThinkingIndicator state="weaving" size="md" />
                                 <p>Updating your recap…</p>
                             </div>
                         )}

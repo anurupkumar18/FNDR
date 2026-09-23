@@ -59,7 +59,8 @@ export type PanelKey =
     | "focusMode"
     | "screenGuide"
     | "engineMetrics"
-    | "privacyProof";
+    | "privacyProof"
+    | "agent";
 
 // Alpha mode deliberately exposes only the evidence-bearing paths. The full
 // registry remains intact for later milestones; this list is the single source
@@ -72,6 +73,7 @@ export const DEMO_COMMAND_IDS = [
     "stats",
     "todo",
     "wrapped",
+    "hermes-agent",
     "screen-guide",
     "engine-metrics",
     "privacy-proof",
@@ -118,6 +120,14 @@ const COMMANDS: Command[] = [
         category: "navigate",
         keywords: ["context", "current", "active", "now"],
         run: ({ onOpenPanel }) => onOpenPanel("focusSession"),
+    },
+    {
+        id: "hermes-agent",
+        label: "Hermes Agent",
+        description: "Chat with the FNDR agent on Ollama, OpenRouter, or your ChatGPT plan",
+        category: "navigate",
+        keywords: ["hermes", "agent", "chatgpt", "codex", "openai", "assistant"],
+        run: ({ onOpenPanel }) => onOpenPanel("agent"),
     },
     {
         id: "screen-guide",

@@ -799,14 +799,14 @@ export function AutofillOverlay() {
 
             <style>{`
                 .af-overlay {
-                    --af-text: var(--fg, #e8dfc8);
-                    --af-text-secondary: var(--fg-2, #c4a878);
+                    --af-text: var(--fg, #f5f5f7);
+                    --af-text-secondary: var(--fg-2, #a1a1a6);
                     --af-text-muted: var(--fg-3, #8a7758);
-                    --af-surface: var(--bg-2, #221915);
-                    --af-raised: var(--bg-3, #2a2018);
-                    --af-border: var(--hairline-2, rgba(232, 223, 200, 0.14));
-                    --af-border-strong: var(--hairline-strong, rgba(232, 223, 200, 0.22));
-                    --af-accent: var(--accent, #d4a04a);
+                    --af-surface: var(--bg-2, #2c2c2e);
+                    --af-raised: var(--bg-3, #3a3a3c);
+                    --af-border: var(--hairline-2, rgba(255, 255, 255, 0.14));
+                    --af-border-strong: var(--hairline-strong, rgba(255, 255, 255, 0.22));
+                    --af-accent: var(--accent, #0a84ff);
                     --af-info: #78cdff;
                     --af-success: #91efae;
                     --af-danger: #ffb6a5;
@@ -819,7 +819,7 @@ export function AutofillOverlay() {
                     pointer-events: none;
                     background:
                         radial-gradient(circle at top right, color-mix(in srgb, var(--af-accent) 14%, transparent), transparent 32%),
-                        linear-gradient(155deg, var(--af-surface), var(--bg, #1a1410));
+                        linear-gradient(155deg, var(--af-surface), var(--bg, #1c1c1e));
                     color: var(--af-text);
                     font-family: var(--film-font-ui, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif);
                     -webkit-font-smoothing: antialiased;
@@ -860,7 +860,7 @@ export function AutofillOverlay() {
                     border: 1px solid var(--af-border-strong);
                     background:
                         radial-gradient(circle at top right, color-mix(in srgb, var(--af-accent) 14%, transparent), transparent 30%),
-                        linear-gradient(155deg, var(--af-surface), var(--bg, #1a1410));
+                        linear-gradient(155deg, var(--af-surface), var(--bg, #1c1c1e));
                     box-shadow:
                         0 22px 56px rgba(0, 0, 0, 0.52),
                         inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -898,8 +898,8 @@ export function AutofillOverlay() {
                     font-weight: 900;
                     letter-spacing: 0.12em;
                     text-transform: uppercase;
-                    color: var(--bg, #1a1410);
-                    background: linear-gradient(135deg, var(--accent-2, #e8b85a), var(--af-accent));
+                    color: var(--bg, #1c1c1e);
+                    background: linear-gradient(135deg, var(--accent-2, #409cff), var(--af-accent));
                     padding: 3px 8px;
                     border-radius: 8px;
                     width: fit-content;

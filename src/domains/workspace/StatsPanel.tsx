@@ -3,6 +3,9 @@ import { Stats, getStats } from "@/shared/ipc/tauri";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./StatsPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelHeader } from "@/shared/components/PanelHeader";
+import { SegmentedControl } from "@/shared/components/SegmentedControl";
 
 interface StatsPanelProps {
     isVisible: boolean;
@@ -548,36 +551,31 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
             aria-labelledby="stats-panel-title"
             tabIndex={-1}
         >
-            <header className="stats-page-header">
-                <div>
-                    <h2 id="stats-panel-title">Activity Stats</h2>
-                    <p>A local view of capture volume, apps, timing, and signal quality.</p>
-                </div>
-                <div className="stats-page-actions">
-                    <button
-                        type="button"
-                        className="ui-action-btn stats-layout-btn"
-                        onClick={() => setViewMode((value) => (value === "stacked" ? "grid" : "stacked"))}
-                        aria-pressed={viewMode === "stacked"}
-                    >
-                        {viewMode === "stacked" ? "Lay Out All" : "Stack Cards"}
-                    </button>
-                    <button
-                        ref={closeButtonRef}
-                        type="button"
-                        className="ui-action-btn stats-close-btn"
-                        onClick={onClose}
-                        aria-label="Close Activity Stats"
-                    >
-                        <span aria-hidden="true">×</span>
-                    </button>
-                </div>
-            </header>
+            <PanelHeader
+                title="Activity Stats"
+                titleId="stats-panel-title"
+                subtitle="A local view of capture volume, apps, timing, and signal quality."
+                actions={
+                    <SegmentedControl
+                        className="stats-layout-toggle"
+                        ariaLabel="Card layout"
+                        value={viewMode}
+                        onChange={setViewMode}
+                        options={[
+                            { value: "grid", label: "Grid" },
+                            { value: "stacked", label: "Stack" },
+                        ]}
+                    />
+                }
+                closeLabel="Close Activity Stats"
+                closeRef={closeButtonRef}
+                onClose={onClose}
+            />
 
             <div className="stats-page-body">
                 {loading && !stats && (
                     <div className="stats-page-state" role="status">
-                        <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                        <ThinkingIndicator state="working" size="md" />
                         <p>Loading stats...</p>
                     </div>
                 )}

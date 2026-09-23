@@ -1,4 +1,4 @@
-import { isPaletteKey, type PaletteKey, type PaletteMode } from "@/shared/theme/cinematic-palettes";
+import { type PaletteKey, type PaletteMode, resolveStoredPalette } from "@/shared/theme/cinematic-palettes";
 
 export interface PreviewConfig {
     theme: PaletteMode;
@@ -14,7 +14,7 @@ export function resolvePreviewConfig(search: string): PreviewConfig {
 
     return {
         theme: requestedTheme === "light" ? "light" : "dark",
-        palette: isPaletteKey(requestedPalette) ? requestedPalette : "film",
+        palette: resolveStoredPalette(requestedPalette),
         motion: params.get("motion") === "on" ? "on" : "off",
     };
 }

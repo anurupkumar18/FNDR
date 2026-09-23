@@ -1,7 +1,9 @@
 import { emit } from "@tauri-apps/api/event";
-import { CAPTURE_STATUS_EVENT, SCREEN_GUIDE_STATE_EVENT } from "@/shared/ipc/tauri";
+import { CAPTURE_STATUS_EVENT, CODEX_LOGIN_COMPLETED_EVENT, SCREEN_GUIDE_STATE_EVENT } from "@/shared/ipc/tauri";
 import type {
     CaptureStatus,
+    CodexAccountStatus,
+    HermesBridgeStatus,
     ComposedAnswer,
     MemoryCard,
     MemoryReviewWorkerStatus,
@@ -476,6 +478,71 @@ function clonePreview<T>(value: T): T {
     return structuredClone(value);
 }
 
+/** Preview sign-in finishes on its own after this delay, as if the browser step completed. */
+const PREVIEW_CODEX_LOGIN_MS = 2500;
+
+const previewCodexSignedOut: CodexAccountStatus = {
+    cliState: "ready",
+    cliPath: "/opt/homebrew/bin/codex",
+    cliError: null,
+    account: null,
+    usableForHermes: false,
+    primaryWindow: null,
+    secondaryWindow: null,
+    models: [],
+};
+
+const previewCodexSignedIn: CodexAccountStatus = {
+    ...previewCodexSignedOut,
+    account: { kind: "chatgpt", email: "anurup@example.com", planType: "plus" },
+    usableForHermes: true,
+    primaryWindow: { usedPercent: 18, windowMinutes: 300, resetsAt: Math.floor(previewNow / 1000) + 3 * 3600 },
+    secondaryWindow: { usedPercent: 42, windowMinutes: 10080, resetsAt: Math.floor(previewNow / 1000) + 4 * 86400 },
+    models: [
+        { id: "gpt-6-sol", displayName: "GPT-6 Sol", isDefault: true },
+        { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", isDefault: false },
+    ],
+};
+
+function previewHermesStatus(codexSignedIn: boolean, configured: boolean): HermesBridgeStatus {
+    return {
+        installed: true,
+        configured,
+        setup_complete: configured,
+        gateway_running: false,
+        api_server_ready: false,
+        version: "0.18.2",
+        bundled_repo_available: false,
+        runtime_source: "system",
+        provider_kind: configured ? "codex" : null,
+        model_name: configured ? "gpt-6-sol" : null,
+        base_url: null,
+        api_url: "http://127.0.0.1:8742",
+        gateway_dir: "~/Library/Application Support/com.fndr.FNDR/hermes-gateway",
+        home_dir: "~/Library/Application Support/com.fndr.FNDR/hermes",
+        context_path: "~/Library/Application Support/com.fndr.FNDR/hermes-gateway/FNDR_CONTEXT.md",
+        context_ready: true,
+        last_synced_at: previewNow,
+        fndr_local_model_id: null,
+        ollama_installed: false,
+        ollama_reachable: false,
+        ollama_models: [],
+        ollama_base_url: "http://127.0.0.1:11434/v1",
+        codex_cli_installed: true,
+        codex_logged_in: codexSignedIn,
+        codex_auth_path: "~/.codex/auth.json",
+        profile_name: null,
+        focus_task: null,
+        recent_memory_count: 4,
+        open_task_count: 2,
+        direct_ollama_ready: false,
+        top_apps: [],
+        recent_memories: [],
+        last_error: null,
+        install_command: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+    };
+}
+
 async function emitPreviewEventIfAvailable(event: string, payload: unknown): Promise<void> {
     if (typeof window === "undefined") {
         return;
@@ -597,6 +664,10 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     };
     let previewBlocklist = ["1Password", "bank.example"];
     let previewPrivacyAlerts: PrivacyAlert[] = [];
+    let codexSignedIn = false;
+    let hermesConfigured = false;
+    let codexLoginSeq = 0;
+    let pendingCodexLogin: { loginId: string; timer: ReturnType<typeof setTimeout> } | null = null;
 
     return async (command: string, payload?: unknown) => {
         switch (command) {
@@ -1083,6 +1154,60 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     logs: [],
                     updated_at_ms: previewNow,
                 };
+            case "get_agent_status":
+                return { is_running: false, task_title: null, last_message: null, status: "idle" };
+            case "get_context_runtime_status":
+                return {
+                    status: "ready",
+                    mcp_running: false,
+                    recent_pack_count: 0,
+                    activity_event_count: 0,
+                    decision_count: 0,
+                    failed_writes: 0,
+                    latest_pack_tokens_used: 0,
+                };
+            case "list_recent_context_packs":
+            case "list_agent_audit_runs":
+                return [];
+            case "fndr_subscribe":
+            case "fndr_unsubscribe":
+                return true;
+            case "get_hermes_bridge_status":
+            case "sync_hermes_bridge_context":
+                return previewHermesStatus(codexSignedIn, hermesConfigured);
+            case "save_hermes_setup":
+                hermesConfigured = true;
+                return previewHermesStatus(codexSignedIn, hermesConfigured);
+            case "codex_account_status":
+                return clonePreview(codexSignedIn ? previewCodexSignedIn : previewCodexSignedOut);
+            case "codex_login_start": {
+                codexLoginSeq += 1;
+                const loginId = `preview-login-${codexLoginSeq}`;
+                if (pendingCodexLogin) clearTimeout(pendingCodexLogin.timer);
+                const timer = setTimeout(() => {
+                    pendingCodexLogin = null;
+                    codexSignedIn = true;
+                    void emitPreviewEventIfAvailable(CODEX_LOGIN_COMPLETED_EVENT, { loginId, success: true, error: null });
+                }, PREVIEW_CODEX_LOGIN_MS);
+                pendingCodexLogin = { loginId, timer };
+                return { loginId, authUrl: "about:blank#preview-chatgpt-sign-in" };
+            }
+            case "codex_login_cancel": {
+                const loginId = payloadRecord(payload)?.loginId;
+                if (pendingCodexLogin && pendingCodexLogin.loginId === loginId) {
+                    clearTimeout(pendingCodexLogin.timer);
+                    pendingCodexLogin = null;
+                    await emitPreviewEventIfAvailable(CODEX_LOGIN_COMPLETED_EVENT, {
+                        loginId,
+                        success: false,
+                        error: "Sign-in cancelled.",
+                    });
+                }
+                return null;
+            }
+            case "codex_logout":
+                codexSignedIn = false;
+                return clonePreview(previewCodexSignedOut);
             default:
                 throw new Error(`Unhandled UI preview command: ${command}`);
         }

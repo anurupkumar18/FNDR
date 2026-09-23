@@ -19,7 +19,11 @@ import {
 import { transcribeVoiceInput } from "@/shared/ipc/tauri";
 import { useReducedMotionSafe } from "@/shared/motion/useReducedMotionSafe";
 import { VOICE_RECORDING } from "@/shared/utils/config";
+import { Liquid } from "liquid-gooey";
 import "./HomeHero.css";
+
+/** Submit button width (44) plus its gap (14) — how far Speak moves to make room. */
+const ACTION_SLOT_PX = 58;
 
 // ─── Greeting helpers ─────────────────────────────────────────────────────────
 
@@ -254,6 +258,8 @@ export function HomeHero({
 
     // Search state (local, hands off via onHeroSearch).
     const [draft, setDraft] = useState("");
+    const hasDraft = draft.trim().length > 0;
+    const actionTransition = reduced ? { duration: 0 } : "smooth";
     const inputRef = useRef<HTMLInputElement>(null);
 
     // Hero visibility — pause parallax when offscreen.
@@ -383,7 +389,20 @@ export function HomeHero({
                         spellCheck={false}
                     />
 
-                    {/* Voice button */}
+                    {/* Speak and Submit share one liquid surface: with an empty field
+                        Speak holds the trailing slot and Submit waits inside it; typing
+                        slides Speak over and Submit swells out of it. */}
+                    <Liquid
+                        className="home-hero__actions"
+                        blur={4}
+                        fill="var(--surface)"
+                        shadow="inset 0 0 0 1px var(--border-strong)"
+                    >
+                    <Liquid.Item
+                        className="home-hero__action home-hero__action--voice"
+                        x={hasDraft ? 0 : ACTION_SLOT_PX}
+                        transition={actionTransition}
+                    >
                     <button
                         type="button"
                         className={`home-hero__voice-btn${voice.isRecording ? " is-recording" : ""}${voice.isTranscribing ? " is-transcribing" : ""}`}
@@ -434,8 +453,14 @@ export function HomeHero({
                                     : "Speak"}
                         </span>
                     </button>
+                    </Liquid.Item>
 
-                    {/* Submit arrow */}
+                    <Liquid.Item
+                        className="home-hero__action"
+                        x={hasDraft ? 0 : -ACTION_SLOT_PX / 2}
+                        scale={hasDraft ? 1 : 0.4}
+                        transition={actionTransition}
+                    >
                     <button
                         type="button"
                         className="home-hero__search-submit"
@@ -454,6 +479,8 @@ export function HomeHero({
                             <path d="M5 12h14M13 6l6 6-6 6" />
                         </svg>
                     </button>
+                    </Liquid.Item>
+                    </Liquid>
                 </div>
 
                 {/* Voice status */}

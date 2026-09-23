@@ -73,7 +73,7 @@ describe("StatsPanel", () => {
         render(<StatsPanel isVisible onClose={vi.fn()} />);
 
         await screen.findByText("Live Pulse Board");
-        fireEvent.click(screen.getByRole("button", { name: /stack cards/i }));
+        fireEvent.click(screen.getByRole("button", { name: "Stack" }));
 
         const insightsCard = screen.getByRole("button", { name: /bring intelligence brief to front/i });
         fireEvent.keyDown(insightsCard, { key: "Enter" });

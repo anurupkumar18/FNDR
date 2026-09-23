@@ -153,13 +153,13 @@ describe("App onboarding gate", () => {
 
         fireEvent.click(settingsButton);
 
-        expect(await screen.findByRole("dialog", { name: /fndr settings/i })).toBeInTheDocument();
+        expect(await screen.findByRole("dialog", { name: /^settings$/i })).toBeInTheDocument();
         await waitFor(() => expect(background).toHaveAttribute("inert"));
         await waitFor(() => expect(screen.getByRole("button", { name: /close settings/i })).toHaveFocus());
 
         fireEvent.keyDown(document, { key: "Escape" });
 
-        await waitFor(() => expect(screen.queryByRole("dialog", { name: /fndr settings/i })).toBeNull());
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: /^settings$/i })).toBeNull());
         await waitFor(() => expect(background).not.toHaveAttribute("inert"));
         await waitFor(() => expect(settingsButton).toHaveFocus());
         focusSpy.mockRestore();

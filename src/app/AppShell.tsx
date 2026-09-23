@@ -1,3 +1,4 @@
+import { MotionConfig } from "framer-motion";
 import { MotionWallpaper } from "@/shared/components/MotionWallpaper";
 import { useActiveCinematicPalette } from "@/shared/hooks/useActiveCinematicPalette";
 import { useActiveWallpaper } from "@/shared/hooks/useActiveWallpaper";
@@ -13,7 +14,7 @@ export function AppShell() {
     const wallpaperId = useActiveWallpaper();
 
     return (
-        <>
+        <MotionConfig reducedMotion="user">
             <div className="fndr-wallpaper-layer" aria-hidden>
                 <MotionWallpaper
                     wallpaperId={wallpaperId}
@@ -25,7 +26,7 @@ export function AppShell() {
             <div className="fndr-app-chrome">
                 <WorkModeShell />
             </div>
-        </>
+        </MotionConfig>
     );
 }
 

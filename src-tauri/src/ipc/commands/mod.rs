@@ -44,6 +44,9 @@ pub use maintenance::*;
 mod hermes_agent;
 pub use hermes_agent::*;
 
+mod codex_account;
+pub use codex_account::*;
+
 mod agent;
 pub use agent::*;
 

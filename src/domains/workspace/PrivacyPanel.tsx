@@ -92,7 +92,7 @@ export function PrivacyPanel({
     return (
         <aside className={`privacy-panel open ${embedded ? "embedded" : ""}`}>
             <header className="privacy-header">
-                <h2>Privacy Alerts</h2>
+                <h2>Privacy alerts</h2>
                 {!embedded && (
                     <button className="ui-action-btn close-btn" onClick={onClose}>X</button>
                 )}
