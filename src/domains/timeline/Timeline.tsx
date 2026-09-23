@@ -6,6 +6,7 @@ import { TIMELINE_DEDUPE, TIMELINE_MATCH_LABEL, TIMELINE_STREAM } from "./timeli
 import { InsightLayers } from "@/domains/memory-vault/InsightLayers";
 import { Icon } from "@/shared/components/atoms";
 import "./Timeline.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 interface TimelineProps {
     results: MemoryCard[];
@@ -77,7 +78,7 @@ export function Timeline({
     if (isLoading) {
         return (
             <div className="timeline-state" role="status" aria-live="polite" aria-busy="true">
-                <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                <ThinkingIndicator state="searching" size="md" />
                 <p>Searching saved memories…</p>
             </div>
         );

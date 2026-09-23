@@ -21,6 +21,7 @@ import { MemoryCard as MemoryCardComponent } from "./MemoryCard";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
 import { KnowledgeGraph3D, GraphErrorBoundary } from "@/features/graph/components";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 const VAULT_BROWSE_STORAGE_KEY = "fndr.memoryVault.browseMode";
 
@@ -691,7 +692,7 @@ export function MemoryCardsPanel({
                     )}
                     {graphLoading && (subgraph?.nodes?.length ?? 0) === 0 && !graphError && (
                         <div className="memory-vault-graph-strip-loading">
-                            <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                            <ThinkingIndicator state="searching" size="md" />
                             <p>Loading global graph…</p>
                         </div>
                     )}
@@ -716,7 +717,7 @@ export function MemoryCardsPanel({
                 )}
                 {loading && cards.length === 0 && (
                     <div className="memory-cards-state">
-                        <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                        <ThinkingIndicator state="searching" size="md" />
                         <p>Loading memory cards...</p>
                     </div>
                 )}
@@ -792,7 +793,7 @@ export function MemoryCardsPanel({
                         )}
                         {graphLoading && (subgraph?.nodes?.length ?? 0) === 0 && !graphError && (
                             <div className="memory-cards-state">
-                                <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                                <ThinkingIndicator state="searching" size="md" />
                                 <p>Loading knowledge graph...</p>
                             </div>
                         )}

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { fndrAnswer, type ComposedAnswer, type MemoryCard } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./AskPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 const ANSWER_TIMEOUT_MS = 60_000;
 const TAKEAWAY =
@@ -143,7 +144,7 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
 
                 {state.kind === "asking" && (
                     <div className="ask-status" role="status">
-                        <div className="thinking-loader" aria-hidden="true" />
+                        <ThinkingIndicator state="searching" size="lg" />
                         <span>Searching and checking your memories…</span>
                     </div>
                 )}

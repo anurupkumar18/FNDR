@@ -16,3 +16,36 @@ if (typeof localStorage === "undefined" || typeof localStorage.getItem !== "func
         },
     });
 }
+
+// jsdom has no canvas; canvas-drawn decoration (ThinkingOrb) renders nothing.
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+    configurable: true,
+    value: () => null,
+});
+
+// jsdom has no matchMedia; components that read media queries at render
+// (BorderBeam, reduced-motion checks) see "no match".
+if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
+    Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: (query: string) => ({
+            matches: false,
+            media: query,
+            onchange: null,
+            addListener: () => {},
+            removeListener: () => {},
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            dispatchEvent: () => false,
+        }),
+    });
+}
+
+// jsdom has no ResizeObserver; layout-tracking effects (liquid-gooey) observe nothing.
+if (typeof globalThis.ResizeObserver === "undefined") {
+    globalThis.ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+    } as unknown as typeof ResizeObserver;
+}

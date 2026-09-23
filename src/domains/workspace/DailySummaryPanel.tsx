@@ -11,6 +11,7 @@ import {
 } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./DailySummaryPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 interface DailySummaryPanelProps {
     isVisible: boolean;
@@ -380,7 +381,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                 <div className="daily-summary-content">
                     {loading && (
                         <div className="daily-summary-state">
-                            <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                            <ThinkingIndicator state="composing" size="md" />
                             <p>Clustering the day&apos;s local memories...</p>
                         </div>
                     )}

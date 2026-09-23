@@ -7,6 +7,7 @@ import {
 } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./FndrWrappedPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 interface FndrWrappedPanelProps {
     isVisible: boolean;
@@ -367,7 +368,7 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                         {error && <p className="wrapped-results-error" role="alert">{error}</p>}
                         {!wrapped && loading && (
                             <div className="wrapped-state">
-                                <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                                <ThinkingIndicator state="weaving" size="md" />
                                 <p>Updating your recap…</p>
                             </div>
                         )}

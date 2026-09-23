@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Task, addTodo, completeTodo, generateDailyBriefing, getTodos, updateTodo } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./TodoPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 interface TodoPanelProps {
     isVisible: boolean;
@@ -318,7 +319,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             <div className="todo-page-body">
                 {loading && tasks.length === 0 && (
                     <div className="todo-page-state" role="status">
-                        <div className="thinking-loader thinking-loader-md" aria-hidden="true" />
+                        <ThinkingIndicator state="working" size="md" />
                         <p>Loading tasks...</p>
                     </div>
                 )}

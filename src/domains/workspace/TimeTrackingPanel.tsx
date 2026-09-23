@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { getTimeTracking, AppTimeEntry, TimeTrackingResult } from "@/shared/ipc/tauri";
 import { usePolling } from "@/shared/hooks/usePolling";
 import "./TimeTrackingPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 interface TimeTrackingPanelProps {
     isVisible: boolean;
@@ -131,7 +132,7 @@ export function TimeTrackingPanel({ isVisible, onClose, onSearchApp }: TimeTrack
             <div className="tt-body">
                 {loading && !result && (
                     <div className="tt-state">
-                        <div className="thinking-loader thinking-loader-md" aria-hidden="true" />
+                        <ThinkingIndicator state="working" size="md" />
                         <p>Computing today's activity…</p>
                     </div>
                 )}

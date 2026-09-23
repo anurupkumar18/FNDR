@@ -3,6 +3,7 @@ import { Stats, getStats } from "@/shared/ipc/tauri";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./StatsPanel.css";
+import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 interface StatsPanelProps {
     isVisible: boolean;
@@ -577,7 +578,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
             <div className="stats-page-body">
                 {loading && !stats && (
                     <div className="stats-page-state" role="status">
-                        <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
+                        <ThinkingIndicator state="working" size="md" />
                         <p>Loading stats...</p>
                     </div>
                 )}
