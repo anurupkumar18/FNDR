@@ -14,6 +14,12 @@ src-tauri/models/*.gguf
 
 # User Data & Storage (CRITICAL: MUST NOT BE COMMITTED)
 *.json
+# Project config must stay visible to tools that honor .gitignore
+# (tauri-action searches for tauri.conf.json this way and failed without it).
+!package.json
+!package-lock.json
+!tsconfig*.json
+!src-tauri/tauri.conf.json
 *.json.migrated
 !src-tauri/capabilities/
 !src-tauri/capabilities/*.json

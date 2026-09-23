@@ -8,10 +8,30 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    name: Typecheck and test
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
   build-release:
     name: Build and publish macOS release
+    needs: verify
     runs-on: macos-14
     timeout-minutes: 90
+    env:
+      # Developer ID signing + notarization turn on when these secrets exist.
+      # Without them the build is ad-hoc signed, which macOS Gatekeeper blocks
+      # until the user approves it in System Settings -> Privacy & Security.
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID != '' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -37,10 +57,38 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Ad-hoc signed build (no Apple Developer account): first launch
-      # requires right-click -> Open. Updater artifacts are minisign-signed
-      # with TAURI_SIGNING_PRIVATE_KEY, independent of Apple signing.
-      - name: Build and publish release
+      - name: Build, sign, notarize and publish (Developer ID)
+        if: env.HAS_APPLE_SIGNING == 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "FNDR ${{ github.ref_name }}"
+          releaseBody: |
+            FNDR for macOS 13+ on Apple Silicon.
+
+            1. Download the `.dmg` below and drag FNDR to Applications.
+            2. Open FNDR and follow onboarding: it asks for Screen Recording
+               and downloads its on-device search model (~90 MB).
+
+            Signed with Developer ID and notarized by Apple. Later versions
+            install from inside the app.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+
+      - name: Build and publish (ad-hoc signed)
+        if: env.HAS_APPLE_SIGNING != 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,11 +98,25 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "FNDR ${{ github.ref_name }}"
           releaseBody: |
-            macOS (Apple Silicon) build.
+            FNDR for macOS 13+ on Apple Silicon.
 
-            This build is ad-hoc signed: on first launch, right-click the app
-            and choose "Open" to pass Gatekeeper. Subsequent releases install
-            automatically through the in-app updater (Settings -> Updates).
+            1. Download the `.dmg` below and drag FNDR to Applications.
+            2. Open FNDR. macOS will say it can't verify the developer, because
+               this build isn't notarized yet. Open System Settings -> Privacy &
+               Security, scroll down, and click "Open Anyway" next to FNDR.
+            3. Follow onboarding: it asks for Screen Recording and downloads
+               its on-device search model (~90 MB).
           releaseDraft: false
+          # Stays a full release: the updater reads releases/latest, which
+          # GitHub never points at a pre-release.
           prerelease: false
           includeUpdaterJson: true
+
+      - name: Verify the signature
+        run: |
+          app=$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          if [ "$HAS_APPLE_SIGNING" = "true" ]; then
+            spctl --assess --type execute --verbose=4 "$app"
+            xcrun stapler validate "$app"
+          fi
