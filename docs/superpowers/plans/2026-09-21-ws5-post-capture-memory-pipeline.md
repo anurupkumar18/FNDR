@@ -10,6 +10,10 @@
 
 **Spec:** `2026-09-21-beta-final-master-plan.md` sections 2, 7. Tickets: MEM-01 to MEM-09, RET-01, RET-02, plus Final epics in section 8. Owner and accountable DRI for every ticket: Anurup. Executors are named per ticket in the manifest.
 
+**Follow-on execution detail:** P12 review scoring is decomposed in
+`2026-09-23-s0-p12-execution.md`. It scores only human-reviewed labels and
+reports draft fixtures as structural checks, not quality evidence.
+
 ## Global Constraints
 
 - Strictly local models. No cloud LLM at runtime.

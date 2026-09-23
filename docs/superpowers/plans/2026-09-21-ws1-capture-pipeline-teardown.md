@@ -10,6 +10,10 @@
 
 **Spec:** `2026-09-21-beta-final-master-plan.md` sections 2, 4, 6, 7. Tickets: CAP-01, CAP-02, CAP-03, CAP-05, CAP-06, CAP-07, CAP-08 plus Final epic E-F1.
 
+**Follow-on execution detail:** S0 event-assisted sampling is decomposed in
+`2026-09-23-s0-p12-execution.md`. Its first slice preserves the existing
+timer fallback and explicitly excludes global input monitoring.
+
 ## Global Constraints
 
 - Reference machine is Apple M1, 8 GB RAM. All budgets are for it.
