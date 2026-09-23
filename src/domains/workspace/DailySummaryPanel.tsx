@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
     addTodo,
     generateDailySummaryForDate,
@@ -9,6 +9,7 @@ import {
     setTodoCompleted,
     type Task,
 } from "@/shared/ipc/tauri";
+import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./DailySummaryPanel.css";
 
 interface DailySummaryPanelProps {
@@ -75,6 +76,7 @@ function followupContext(followup: Task) {
 export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: DailySummaryPanelProps) {
     const [dateStr, setDateStr] = useState<string>("");
     const [summary, setSummary] = useState<string | null>(null);
+    const [summaryDateStr, setSummaryDateStr] = useState<string | null>(null);
     const [overview, setOverview] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -83,11 +85,15 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
     const [exportedPdfPath, setExportedPdfPath] = useState<string | null>(null);
     const [cache, setCache] = useState<Map<string, string>>(new Map());
     const [followups, setFollowups] = useState<Task[]>([]);
+    const [followupsLoading, setFollowupsLoading] = useState(false);
     const [followupError, setFollowupError] = useState<string | null>(null);
     const [addingTaskId, setAddingTaskId] = useState<string | null>(null);
     const [addedTaskIds, setAddedTaskIds] = useState<Set<string>>(new Set());
     const [expandedFollowupIds, setExpandedFollowupIds] = useState<Set<string>>(new Set());
     const [updatingFollowupId, setUpdatingFollowupId] = useState<string | null>(null);
+    const generationRequestRef = useRef(0);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
     const todayDateStr = localDateString();
     const isViewingToday = dateStr === todayDateStr;
 
@@ -96,20 +102,65 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
         setDateStr(localDateString());
     }, []);
 
+    useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
+
+    const selectDate = (nextDate: string) => {
+        generationRequestRef.current += 1;
+        setDateStr(nextDate);
+        setError(null);
+        setOverview(null);
+        setFollowups([]);
+        setFollowupError(null);
+        setFollowupsLoading(false);
+        setLoading(false);
+        setExportedPdfPath(null);
+        setShowToast(false);
+        setSummary(null);
+        setSummaryDateStr(null);
+    };
+
     const handleGenerate = async (targetDate = dateStr) => {
         if (!targetDate) return;
 
+        const requestId = generationRequestRef.current + 1;
+        generationRequestRef.current = requestId;
+
         setOverview(null);
         setFollowupError(null);
+        setFollowupsLoading(true);
         void getDailySummaryFollowups()
-            .then((tasks) => setFollowups(tasks))
-            .catch(() => setFollowupError("Follow-ups could not be loaded."));
+            .then((tasks) => {
+                if (generationRequestRef.current === requestId) {
+                    setFollowups(tasks);
+                }
+            })
+            .catch(() => {
+                if (generationRequestRef.current === requestId) {
+                    setFollowupError("Current follow-ups could not be loaded.");
+                }
+            })
+            .finally(() => {
+                if (generationRequestRef.current === requestId) {
+                    setFollowupsLoading(false);
+                }
+            });
         void getDailySummaryOverview(targetDate)
-            .then((rawOverview) => setOverview(rawOverview.trim() || null))
-            .catch(() => setOverview(null));
+            .then((rawOverview) => {
+                if (generationRequestRef.current === requestId) {
+                    setOverview(rawOverview.trim() || null);
+                }
+            })
+            .catch(() => {
+                if (generationRequestRef.current === requestId) {
+                    setOverview(null);
+                }
+            });
 
         if (cache.has(targetDate)) {
             setSummary(cache.get(targetDate) ?? null);
+            setSummaryDateStr(targetDate);
+            setError(null);
+            setLoading(false);
             return;
         }
 
@@ -119,12 +170,19 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
 
         try {
             const rawSummary = await generateDailySummaryForDate(targetDate);
-            setSummary(rawSummary);
-            setCache((prevConfig) => new Map(prevConfig).set(targetDate, rawSummary));
+            if (generationRequestRef.current !== requestId) return;
+            const nextSummary = rawSummary.trim() || "No memories were recorded for this date.";
+            setSummary(nextSummary);
+            setSummaryDateStr(targetDate);
+            setCache((previous) => new Map(previous).set(targetDate, nextSummary));
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to generate summary.");
+            if (generationRequestRef.current === requestId) {
+                setError(err instanceof Error ? err.message : "Failed to generate summary.");
+            }
         } finally {
-            setLoading(false);
+            if (generationRequestRef.current === requestId) {
+                setLoading(false);
+            }
         }
     };
 
@@ -132,25 +190,28 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
         if (!dateStr) return;
         const nextDate = shiftLocalDate(dateStr, days);
         if (nextDate > todayDateStr) return;
-        setDateStr(nextDate);
+        selectDate(nextDate);
         void handleGenerate(nextDate);
     };
 
     const handleToday = () => {
         if (isViewingToday) return;
-        setDateStr(todayDateStr);
+        selectDate(todayDateStr);
         void handleGenerate(todayDateStr);
     };
 
     const handleToggleFollowup = async (followup: Task) => {
         const isCompleted = !followup.is_completed;
         setUpdatingFollowupId(followup.id);
+        setFollowupError(null);
         try {
             const updated = await setTodoCompleted(followup.id, isCompleted);
             if (updated) {
                 setFollowups((previous) => previous.map((task) => (
                     task.id === followup.id ? { ...task, is_completed: isCompleted } : task
                 )));
+            } else {
+                setFollowupError("That follow-up no longer exists. Refresh the summary and try again.");
             }
         } catch (err) {
             setFollowupError(err instanceof Error ? err.message : "Unable to update follow-up.");
@@ -186,11 +247,11 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
     };
 
     const handleDownloadPdf = async () => {
-        if (!dateStr || !summary) return;
+        if (!summaryDateStr || !summary) return;
         setExporting(true);
         setError(null);
         try {
-            const path = await exportDailySummaryPdf(dateStr, summary);
+            const path = await exportDailySummaryPdf(summaryDateStr, summary);
             setExportedPdfPath(path);
             setShowToast(true);
             setTimeout(() => {
@@ -223,14 +284,29 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
     const openFollowupCount = followups.filter((followup) => !followup.is_completed).length;
 
     return (
-        <div className="daily-summary-page">
+        <div
+            ref={dialogRef}
+            className="daily-summary-page"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="daily-summary-title"
+            tabIndex={-1}
+        >
             <header className="daily-summary-header">
                 <div>
-                    <h2>Daily Summary</h2>
-                    <p>On-demand activity clustering and intelligence</p>
+                    <h2 id="daily-summary-title">Daily Summary</h2>
+                    <p>Review locally captured activity for one calendar day.</p>
                 </div>
                 <div className="daily-summary-actions">
-                    <button className="ui-action-btn daily-summary-close-btn" onClick={onClose}>X</button>
+                    <button
+                        ref={closeButtonRef}
+                        type="button"
+                        className="ui-action-btn daily-summary-close-btn"
+                        onClick={onClose}
+                        aria-label="Close Daily Summary"
+                    >
+                        <span aria-hidden="true">×</span>
+                    </button>
                 </div>
             </header>
 
@@ -259,7 +335,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                                     id="daily-summary-date"
                                     type="date"
                                     value={dateStr}
-                                    onChange={(e) => setDateStr(e.target.value)}
+                                    onChange={(event) => selectDate(event.target.value)}
                                     max={todayDateStr}
                                     aria-label="Select summary date"
                                 />
@@ -283,14 +359,14 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                             Today
                         </button>
                     </div>
-                    <button 
-                        className="ui-action-btn generate-btn" 
+                    <button
+                        className="ui-action-btn generate-btn"
                         onClick={() => void handleGenerate()}
                         disabled={loading || !dateStr}
                     >
                         {loading ? "Generating..." : "Generate Summary"}
                     </button>
-                    {summary && (
+                    {summary && summaryDateStr === dateStr && (
                         <button
                             className={`ui-action-btn generate-btn download-pdf-btn ${exporting ? "loading" : ""}`}
                             onClick={() => void handleDownloadPdf()}
@@ -310,25 +386,30 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                     )}
 
                     {!loading && error && (
-                        <div className="daily-summary-state error-state">
+                        <div className="daily-summary-state error-state" role="alert">
                             <p>{error}</p>
+                            <button type="button" className="ui-action-btn" onClick={() => void handleGenerate()}>
+                                Try again
+                            </button>
                         </div>
                     )}
 
-                    {!loading && !error && summary && (
+                    {!loading && !error && summary && summaryDateStr === dateStr && (
                         <>
                             {overview && <p className="daily-summary-overview">{overview}</p>}
                             <section className="daily-followups-card" aria-labelledby="daily-followups-heading">
                                 <div className="daily-followups-header">
                                     <div>
-                                        <p className="daily-followups-eyebrow">Next actions</p>
-                                        <h3 id="daily-followups-heading">Open follow-ups</h3>
+                                        <p className="daily-followups-eyebrow">Across your task list</p>
+                                        <h3 id="daily-followups-heading">Current open follow-ups</h3>
                                     </div>
                                     <span className="daily-followups-count">{openFollowupCount}</span>
                                 </div>
-                                {followupError && <p className="daily-followups-error">{followupError}</p>}
-                                {followups.length === 0 ? (
-                                    <p className="daily-followups-empty">No open follow-ups for this day.</p>
+                                {followupError && <p className="daily-followups-error" role="alert">{followupError}</p>}
+                                {followupsLoading ? (
+                                    <p className="daily-followups-empty" role="status">Loading current follow-ups…</p>
+                                ) : followups.length === 0 ? (
+                                    <p className="daily-followups-empty">No open follow-ups right now.</p>
                                 ) : (
                                     <div className="daily-followups-list">
                                         {followups.map((followup) => {
@@ -399,26 +480,28 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                                     </div>
                                 )}
                             </section>
-                            <div className="summary-bullets">
+                            <section className="daily-summary-result" aria-labelledby="daily-summary-result-title">
+                                <h3 id="daily-summary-result-title">Summary for {displayDate(summaryDateStr)}</h3>
+                                <ul className="summary-bullets">
                                 {summary.split("\n").map((line, idx) => {
                                     const trim = line.trim();
                                     if (!trim) return null;
+                                    const lineWithoutMarker = trim.replace(/^[-•*]\s*/, "");
                                     return (
-                                        <p key={idx} className="summary-bullet">
-                                            {trim.startsWith("-") || trim.startsWith("•") || trim.startsWith("*")
-                                                ? trim
-                                                : `• ${trim}`}
-                                        </p>
+                                        <li key={`${idx}-${lineWithoutMarker}`} className="summary-bullet">
+                                            {lineWithoutMarker}
+                                        </li>
                                     );
                                 })}
-                            </div>
+                                </ul>
+                            </section>
                         </>
                     )}
 
-                    {!loading && !error && !summary && cache.size === 0 && (
+                    {!loading && !error && (!summary || summaryDateStr !== dateStr) && (
                         <div className="daily-summary-state empty-state">
-                            <span className="shining-shield">📅</span>
-                            <p>Select a date and click Generate Summary to see your daily briefing.</p>
+                            <span className="shining-shield" aria-hidden="true">📅</span>
+                            <p>Generate a summary for {displayDate(dateStr)} to review the memories FNDR recorded that day.</p>
                         </div>
                     )}
                 </div>
@@ -427,7 +510,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
             {showToast && (
                 <div className="daily-toast" role="status" aria-live="polite">
                     <div className="daily-toast-copy">
-                        <strong>PDF downloaded</strong>
+                        <strong>Summary PDF is ready</strong>
                         <span>Open the exported daily summary from FNDR.</span>
                     </div>
                     <div className="daily-toast-actions">

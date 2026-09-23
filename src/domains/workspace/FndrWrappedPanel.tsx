@@ -1,10 +1,11 @@
-import { useCallback, useLayoutEffect, useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
     exportWeeklyWrappedPdf,
     getWeeklyWrapped,
     openExportedPdf,
     type WeeklyWrapped,
 } from "@/shared/ipc/tauri";
+import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./FndrWrappedPanel.css";
 
 interface FndrWrappedPanelProps {
@@ -123,6 +124,22 @@ function RankedList({ items, emptyLabel }: { items: WeeklyWrapped["apps"]; empty
     );
 }
 
+function CountedList({ items, emptyLabel }: { items: WeeklyWrapped["projects_and_topics"]; emptyLabel: string }) {
+    if (items.length === 0) return <p className="wrapped-empty-list">{emptyLabel}</p>;
+
+    return (
+        <ol className="wrapped-ranked-list">
+            {items.map((item, index) => (
+                <li className={index === 0 ? "top-rank" : ""} key={item.name}>
+                    <span className="wrapped-rank-number">{index + 1}</span>
+                    <span className="wrapped-rank-name">{item.name}</span>
+                    <span className="wrapped-rank-time">{item.count.toLocaleString()}</span>
+                </li>
+            ))}
+        </ol>
+    );
+}
+
 export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) {
     const today = localDateString();
     const initialWeek = currentWeek(today);
@@ -134,6 +151,10 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
     const [error, setError] = useState<string | null>(null);
     const [exporting, setExporting] = useState(false);
     const [exportedPdfPath, setExportedPdfPath] = useState<string | null>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+    useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
 
     const currentMonthWeeks = useMemo(() => {
         const now = parseLocalDate(today);
@@ -210,6 +231,17 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
         setExportedPdfPath(null);
     };
 
+    const handleOpenExport = async () => {
+        if (!exportedPdfPath) return;
+        setError(null);
+        try {
+            await openExportedPdf(exportedPdfPath);
+            setExportedPdfPath(null);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Unable to open the exported recap.");
+        }
+    };
+
     if (!isVisible) return null;
 
     const topApp = wrapped?.apps[0];
@@ -220,26 +252,40 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
         : "";
 
     return (
-        <div className="wrapped-page">
+        <div
+            ref={dialogRef}
+            className="wrapped-page"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wrapped-panel-title"
+            tabIndex={-1}
+        >
             {screen === "selection" ? (
                 <main className="wrapped-selection-page">
                     <header className="wrapped-selection-header">
                         <div>
-                            <h2>FNDR Wrapped</h2>
+                            <h2 id="wrapped-panel-title">FNDR Wrapped</h2>
                             <p>Choose a week to review your recorded activity.</p>
                         </div>
-                        <button className="ui-action-btn wrapped-close-btn" onClick={onClose}>X</button>
+                        <button
+                            ref={closeButtonRef}
+                            type="button"
+                            className="ui-action-btn wrapped-close-btn"
+                            onClick={onClose}
+                            aria-label="Close FNDR Wrapped"
+                        >
+                            <span aria-hidden="true">×</span>
+                        </button>
                     </header>
 
                     <section className="wrapped-week-selector" aria-labelledby="wrapped-week-title">
                         <span className="wrapped-eyebrow">SELECT A WEEK</span>
                         <h3 id="wrapped-week-title">{selectedRange}</h3>
                         <p>{selectedWeek.isCurrentWeek ? "This week is still in progress. Your recap will show activity recorded so far." : "Weeks run from Monday through Sunday."}</p>
-                        <div className="wrapped-month-tabs" role="tablist" aria-label="Available Wrapped months">
+                        <div className="wrapped-month-tabs" role="group" aria-label="Available Wrapped months">
                             <button
                                 type="button"
-                                role="tab"
-                                aria-selected={monthScope === "current"}
+                                aria-pressed={monthScope === "current"}
                                 className={monthScope === "current" ? "active" : ""}
                                 onClick={() => handleMonthScopeChange("current")}
                             >
@@ -247,33 +293,38 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                             </button>
                             <button
                                 type="button"
-                                role="tab"
-                                aria-selected={monthScope === "previous"}
+                                aria-pressed={monthScope === "previous"}
                                 className={monthScope === "previous" ? "active" : ""}
                                 onClick={() => handleMonthScopeChange("previous")}
                             >
                                 Last month
                             </button>
                         </div>
-                        <div className="wrapped-week-options" role="list" aria-label="Available weeks">
+                        <fieldset className="wrapped-week-options">
+                            <legend className="sr-only">Available weeks</legend>
                             {visibleWeeks.map((week, index) => {
                                 const isSelected = week.startDate === selectedWeek.startDate;
                                 return (
-                                    <button
-                                        type="button"
-                                        role="listitem"
+                                    <label
                                         className={`wrapped-week-option ${isSelected ? "selected" : ""}`}
-                                        onClick={() => setSelectedWeek(week)}
                                         key={week.startDate}
                                     >
+                                        <input
+                                            type="radio"
+                                            name="wrapped-week"
+                                            checked={isSelected}
+                                            onChange={() => setSelectedWeek(week)}
+                                            aria-label={`Week ${index + 1}: ${formatFullDateRange(week.startDate, week.endDate)}`}
+                                        />
                                         <span>Week {index + 1}</span>
                                         <strong>{formatFullDateRange(week.startDate, week.endDate)}</strong>
                                         {week.isCurrentWeek && <em>Week so far</em>}
-                                    </button>
+                                    </label>
                                 );
                             })}
-                        </div>
-                        {error && <p className="wrapped-selection-error">{error}</p>}
+                        </fieldset>
+                        {error && <p className="wrapped-selection-error" role="alert">{error}</p>}
+                        {loading && <span className="sr-only" role="status">Building the selected weekly recap.</span>}
                         <button type="button" className="wrapped-start-btn" onClick={() => void loadWrapped()} disabled={loading}>
                             {loading ? "Building recap…" : "Start Wrapped"}
                         </button>
@@ -283,7 +334,7 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                 <>
                     <header className="wrapped-results-header">
                         <div className="wrapped-results-title">
-                            <h2>FNDR Wrapped</h2>
+                            <h2 id="wrapped-panel-title">FNDR Wrapped</h2>
                             <strong>{wrapped ? formatFullDateRange(wrapped.start_date, wrapped.end_date) : selectedRange}</strong>
                             {wrapped && (
                                 <div>
@@ -293,19 +344,27 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                             )}
                         </div>
                         <div className="wrapped-results-actions">
-                            <button className="ui-action-btn wrapped-change-week-btn" onClick={handleChangeWeek}>Change week</button>
-                            <button className="ui-action-btn wrapped-refresh-btn" onClick={() => void loadWrapped()} disabled={loading}>
+                            <button type="button" className="ui-action-btn wrapped-change-week-btn" onClick={handleChangeWeek}>Change week</button>
+                            <button type="button" className="ui-action-btn wrapped-refresh-btn" onClick={() => void loadWrapped()} disabled={loading}>
                                 {loading ? "Updating…" : "Update recap"}
                             </button>
-                            <button className="ui-action-btn wrapped-export-btn" onClick={() => void handleExport()} disabled={!wrapped || exporting}>
+                            <button type="button" className="ui-action-btn wrapped-export-btn" onClick={() => void handleExport()} disabled={!wrapped || exporting}>
                                 {exporting ? "Exporting…" : "Export"}
                             </button>
-                            <button className="ui-action-btn wrapped-close-btn" onClick={onClose}>X</button>
+                            <button
+                                ref={closeButtonRef}
+                                type="button"
+                                className="ui-action-btn wrapped-close-btn"
+                                onClick={onClose}
+                                aria-label="Close FNDR Wrapped"
+                            >
+                                <span aria-hidden="true">×</span>
+                            </button>
                         </div>
                     </header>
 
                     <main className="wrapped-results-body">
-                        {error && <p className="wrapped-results-error">{error}</p>}
+                        {error && <p className="wrapped-results-error" role="alert">{error}</p>}
                         {!wrapped && loading && (
                             <div className="wrapped-state">
                                 <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
@@ -342,6 +401,11 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                                         </section>
 
                                         <section className="wrapped-card wrapped-rank-card">
+                                            <span className="wrapped-card-label">PROJECTS &amp; TOPICS</span>
+                                            <CountedList items={wrapped.projects_and_topics} emptyLabel="No project or topic labels recorded yet." />
+                                        </section>
+
+                                        <section className="wrapped-card wrapped-rank-card">
                                             <span className="wrapped-card-label">MOST-VISITED WEBSITES</span>
                                             <RankedList items={wrapped.websites} emptyLabel="No website activity recorded yet." />
                                         </section>
@@ -351,6 +415,18 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                                             <div className="wrapped-static-detail">
                                                 <span>{wrapped.busiest_day?.day ?? "No activity recorded"}</span>
                                                 <small>Most active hour: {formatHour(wrapped.busiest_hour)}</small>
+                                            </div>
+                                        </section>
+
+                                        <section className="wrapped-card">
+                                            <span className="wrapped-card-label">DOCUMENTS &amp; FILES</span>
+                                            <div className="wrapped-static-detail">
+                                                <strong>{wrapped.document_count.toLocaleString()}</strong>
+                                                <small>
+                                                    {wrapped.most_revisited_file
+                                                        ? `Most revisited: ${wrapped.most_revisited_file}`
+                                                        : "No revisited file was identified."}
+                                                </small>
                                             </div>
                                         </section>
 
@@ -371,8 +447,8 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
 
             {exportedPdfPath && (
                 <div className="wrapped-export-toast" role="status">
-                    <span>Recap exported to Downloads.</span>
-                    <button type="button" onClick={() => void openExportedPdf(exportedPdfPath)}>Open PDF</button>
+                    <span>Recap PDF is ready.</span>
+                    <button type="button" onClick={() => void handleOpenExport()}>Open PDF</button>
                     <button type="button" onClick={() => setExportedPdfPath(null)}>Dismiss</button>
                 </div>
             )}

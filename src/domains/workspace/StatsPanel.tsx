@@ -1,6 +1,7 @@
-import { CSSProperties, useCallback, useMemo, useRef, useState } from "react";
+import { CSSProperties, KeyboardEvent, useCallback, useMemo, useRef, useState } from "react";
 import { Stats, getStats } from "@/shared/ipc/tauri";
 import { usePolling } from "@/shared/hooks/usePolling";
+import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./StatsPanel.css";
 
 interface StatsPanelProps {
@@ -10,6 +11,13 @@ interface StatsPanelProps {
 
 type CardId = "metrics" | "insights" | "ranks" | "composition" | "rhythms";
 const ALL_CARDS: CardId[] = ["metrics", "insights", "ranks", "composition", "rhythms"];
+const CARD_LABELS: Record<CardId, string> = {
+    metrics: "Live Pulse Board",
+    insights: "Intelligence Brief",
+    ranks: "Activity Rankings",
+    composition: "Daypart Distribution",
+    rhythms: "Capture Timeline",
+};
 
 interface HourEntry {
     hour: number;
@@ -164,9 +172,13 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const hasLoadedStatsRef = useRef(false);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
 
     const [viewMode, setViewMode] = useState<"stacked" | "grid">("grid");
     const [deckOrder, setDeckOrder] = useState<CardId[]>(ALL_CARDS);
+
+    useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
 
     const loadStats = useCallback(async (isMounted: () => boolean) => {
         const showLoading = !hasLoadedStatsRef.current;
@@ -254,6 +266,12 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
             }
             return [id, ...prev.filter((card) => card !== id)];
         });
+    };
+
+    const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>, id: CardId) => {
+        if (viewMode !== "stacked" || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        handleCardClick(id);
     };
 
     const renderDonut = (
@@ -522,49 +540,88 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
     }
 
     return (
-        <div className="stats-page">
+        <div
+            ref={dialogRef}
+            className="stats-page"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="stats-panel-title"
+            tabIndex={-1}
+        >
             <header className="stats-page-header">
                 <div>
-                    <h2>FNDR Stats Intelligence</h2>
-                    <p>Behavioral telemetry with context, cadence, and signal quality in one view.</p>
+                    <h2 id="stats-panel-title">Activity Stats</h2>
+                    <p>A local view of capture volume, apps, timing, and signal quality.</p>
                 </div>
                 <div className="stats-page-actions">
                     <button
+                        type="button"
                         className="ui-action-btn stats-layout-btn"
                         onClick={() => setViewMode((value) => (value === "stacked" ? "grid" : "stacked"))}
+                        aria-pressed={viewMode === "stacked"}
                     >
                         {viewMode === "stacked" ? "Lay Out All" : "Stack Cards"}
                     </button>
-                    <button className="ui-action-btn stats-close-btn" onClick={onClose}>X</button>
+                    <button
+                        ref={closeButtonRef}
+                        type="button"
+                        className="ui-action-btn stats-close-btn"
+                        onClick={onClose}
+                        aria-label="Close Activity Stats"
+                    >
+                        <span aria-hidden="true">×</span>
+                    </button>
                 </div>
             </header>
 
             <div className="stats-page-body">
-                {loading && (
-                    <div className="stats-page-state">
+                {loading && !stats && (
+                    <div className="stats-page-state" role="status">
                         <div className="thinking-loader thinking-loader-lg" aria-hidden="true" />
                         <p>Loading stats...</p>
                     </div>
                 )}
 
-                {!loading && error && (
-                    <div className="stats-page-state">
+                {!loading && error && !stats && (
+                    <div className="stats-page-state" role="alert">
                         <p>{error}</p>
+                        <button type="button" className="ui-action-btn" onClick={() => void loadStats(() => true)}>
+                            Try again
+                        </button>
                     </div>
                 )}
 
-                {!loading && !error && stats && (
+                {error && stats && (
+                    <div className="stats-refresh-error" role="alert">
+                        <span>Stats could not be refreshed. Showing the last loaded snapshot. {error}</span>
+                        <button type="button" onClick={() => void loadStats(() => true)}>Try again</button>
+                    </div>
+                )}
+
+                {!loading && stats && stats.total_records === 0 && (
+                    <div className="stats-page-state stats-empty-state">
+                        <h3>No captured activity yet</h3>
+                        <p>Stats will appear after FNDR stores local memories from your work.</p>
+                    </div>
+                )}
+
+                {stats && stats.total_records > 0 && (
                     <div className={`stats-deck-container is-${viewMode}`}>
                         {ALL_CARDS.map((id) => {
                             const stackIndex = deckOrder.indexOf(id);
+                            const isInteractive = viewMode === "stacked";
+                            const isTop = stackIndex === 0;
                             return (
                                 <div
                                     key={id}
-                                    className={`stats-playing-card ${stackIndex === 0 ? "is-top" : ""} card-${id}`}
+                                    className={`stats-playing-card ${isTop ? "is-top" : ""} card-${id}`}
                                     style={{ "--stack-index": stackIndex } as CSSProperties}
-                                    onClick={() => handleCardClick(id)}
-                                    role="button"
-                                    tabIndex={0}
+                                    onClick={isInteractive ? () => handleCardClick(id) : undefined}
+                                    onKeyDown={isInteractive ? (event) => handleCardKeyDown(event, id) : undefined}
+                                    role={isInteractive ? "button" : undefined}
+                                    tabIndex={isInteractive ? 0 : undefined}
+                                    aria-label={isInteractive ? `Bring ${CARD_LABELS[id]} to front` : undefined}
+                                    aria-pressed={isInteractive ? isTop : undefined}
                                 >
                                     <div className={`stats-card-bg bg-${id}`} />
                                     <div className="stats-card-content">{renderCardContent(id)}</div>

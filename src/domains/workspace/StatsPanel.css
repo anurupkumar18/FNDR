@@ -45,6 +45,13 @@
 .stats-close-btn,
 .stats-layout-btn {
     font-size: 12px;
+    min-height: 44px;
+}
+
+.stats-close-btn {
+    width: 44px;
+    padding: 0;
+    font-size: 1.35rem;
 }
 
 .stats-page-body {
@@ -63,6 +70,54 @@
     flex-direction: column;
     gap: 10px;
     color: var(--text-secondary);
+    padding: 24px;
+    text-align: center;
+}
+
+.stats-page-state h3,
+.stats-page-state p {
+    margin: 0;
+}
+
+.stats-page-state p {
+    max-width: 480px;
+    line-height: 1.5;
+}
+
+.stats-empty-state h3 {
+    color: var(--text-primary);
+    font-size: 1.1rem;
+}
+
+.stats-refresh-error {
+    position: absolute;
+    z-index: 20;
+    top: 12px;
+    right: 24px;
+    left: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+    border-radius: var(--film-radius-md);
+    background: var(--surface-elevated);
+    color: var(--danger);
+    box-shadow: var(--shadow-medium);
+    font-size: 0.78rem;
+}
+
+.stats-refresh-error button {
+    min-height: 36px;
+    padding: 6px 10px;
+    flex-shrink: 0;
+    border: 1px solid currentColor;
+    border-radius: var(--film-radius-md);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
 }
 
 .stats-deck-container {
@@ -134,6 +189,11 @@
     border-color: var(--border-strong);
 }
 
+.stats-deck-container.is-stacked .stats-playing-card:focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: 4px;
+}
+
 .stats-deck-container.is-grid .stats-playing-card {
     position: relative;
     width: 100%;
@@ -143,12 +203,6 @@
     z-index: 1;
     cursor: default;
     box-shadow: var(--shadow-medium);
-}
-
-.stats-deck-container.is-grid .stats-playing-card:hover {
-    border-color: var(--border-strong);
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-strong);
 }
 
 .stats-deck-container.is-grid .stats-playing-card.card-metrics {
@@ -242,12 +296,6 @@
     padding: 12px;
     min-height: 76px;
     transition: transform var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
-}
-
-.stats-page-card:hover {
-    transform: translateY(-1px);
-    border-color: var(--border-strong);
-    background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 
 .stats-page-value {
@@ -379,10 +427,6 @@
     padding: 6px 8px;
     border-radius: var(--film-radius-md);
     transition: background var(--transition-fast);
-}
-
-.stats-page-rank-row:hover {
-    background: color-mix(in srgb, var(--fg) 4%, transparent);
 }
 
 .stats-page-rank-meta {
@@ -687,5 +731,10 @@
     .stats-donut-shell {
         grid-template-columns: 1fr;
         gap: 10px;
+    }
+
+    .stats-refresh-error {
+        align-items: flex-start;
+        flex-direction: column;
     }
 }

@@ -39,9 +39,15 @@
 .wrapped-change-week-btn,
 .wrapped-refresh-btn,
 .wrapped-export-btn {
-    min-height: 32px;
+    min-height: 44px;
     border-radius: var(--film-radius-md);
     font-size: 0.76rem;
+}
+
+.wrapped-close-btn {
+    width: 44px;
+    padding: 0;
+    font-size: 1.35rem;
 }
 
 .wrapped-week-selector {
@@ -61,7 +67,7 @@
 .wrapped-card-label {
     color: var(--accent);
     font-family: var(--font-mono, monospace);
-    font-size: 0.68rem;
+    font-size: 0.74rem;
     font-weight: 700;
     letter-spacing: 0.13em;
 }
@@ -93,7 +99,8 @@
 }
 
 .wrapped-month-tabs button {
-    padding: 7px 12px;
+    min-height: 40px;
+    padding: 8px 14px;
     border: 0;
     border-radius: var(--film-radius-pill);
     background: transparent;
@@ -111,7 +118,7 @@
 }
 
 .wrapped-month-tabs button:focus-visible,
-.wrapped-week-option:focus-visible,
+.wrapped-week-option:focus-within,
 .wrapped-start-btn:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 3px;
@@ -122,10 +129,13 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 9px;
     margin-top: 16px;
+    padding: 0;
+    border: 0;
     text-align: left;
 }
 
 .wrapped-week-option {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -139,6 +149,14 @@
     font: inherit;
     text-align: left;
     transition: border-color 160ms ease, background 160ms ease;
+}
+
+.wrapped-week-option input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    opacity: 0;
 }
 
 .wrapped-week-option:hover {
@@ -155,13 +173,13 @@
 .wrapped-week-option em {
     color: var(--text-secondary);
     font-family: var(--font-mono, monospace);
-    font-size: 0.66rem;
+    font-size: 0.72rem;
     font-style: normal;
     letter-spacing: 0.04em;
 }
 
 .wrapped-week-option strong {
-    font-size: 0.82rem;
+    font-size: 0.86rem;
     font-weight: 600;
     line-height: 1.35;
 }
@@ -172,6 +190,7 @@
 
 .wrapped-start-btn {
     margin-top: 22px;
+    min-height: 44px;
     padding: 10px 18px;
     border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
     border-radius: var(--film-radius-pill);
@@ -192,7 +211,8 @@
 .wrapped-results-error {
     margin: 18px 0 0;
     color: var(--danger);
-    font-size: 0.8rem;
+    font-size: 0.84rem;
+    line-height: 1.45;
 }
 
 .wrapped-results-title {

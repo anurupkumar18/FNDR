@@ -41,12 +41,14 @@
 }
 
 .daily-summary-close-btn {
-    padding: 6px 12px;
+    width: 44px;
+    height: 44px;
+    padding: 0;
     color: var(--text-secondary);
     background: transparent;
     border-radius: var(--film-radius-md);
     border: none;
-    font-size: 13px;
+    font-size: 24px;
     cursor: pointer;
     font-weight: 500;
     transition: background 0.2s, color 0.2s;
@@ -111,6 +113,7 @@
 
 .date-picker-wrapper input[type="date"] {
     width: 100%;
+    min-height: 44px;
     background: var(--bg-3);
     border: 1px solid var(--border);
     color: var(--text-primary);
@@ -146,7 +149,7 @@
 
 .daily-date-nav-btn,
 .daily-today-btn {
-    height: 35px;
+    min-height: 44px;
     border: 1px solid var(--border);
     border-radius: var(--film-radius-md);
     background: var(--bg-3);
@@ -157,7 +160,7 @@
 
 .daily-date-nav-btn {
     display: grid;
-    width: 35px;
+    width: 44px;
     padding: 0;
     place-items: center;
     font-size: 26px;
@@ -229,6 +232,18 @@
     border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
+.daily-summary-result {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.daily-summary-result h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+
 .summary-bullets {
     display: flex;
     flex-direction: column;
@@ -237,6 +252,8 @@
     border: 1px solid var(--border);
     padding: 24px;
     border-radius: var(--film-radius-lg);
+    margin: 0;
+    list-style-position: outside;
 }
 
 .daily-summary-overview {
@@ -255,7 +272,8 @@
     line-height: 1.6;
     font-size: 14px;
     color: var(--text-primary);
-    padding-left: 20px;
+    margin-left: 20px;
+    padding-left: 4px;
 }
 
 .daily-followups-card {
@@ -425,7 +443,8 @@
 .daily-followup-link {
     border: 1px solid var(--border);
     border-radius: var(--film-radius-pill);
-    padding: 7px 10px;
+    min-height: 44px;
+    padding: 8px 12px;
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
@@ -548,6 +567,10 @@
 }
 
 @media (max-width: 640px) {
+    .daily-summary-body {
+        padding: 20px 16px;
+    }
+
     .daily-summary-controls {
         align-items: stretch;
         flex-direction: column;
