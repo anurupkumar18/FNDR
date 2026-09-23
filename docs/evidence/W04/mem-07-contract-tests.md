@@ -70,9 +70,11 @@ test reprocessing_the_same_frame_twice_does_not_create_a_second_memory ... ok
 
 ## Invariant 10: deletion removes chunks, vectors, and graph nodes
 
-Real bug found and fixed. `legacy::GraphStore` (the graph store actually wired
-into `AppState`, distinct from the unused `graph::graph_store::GraphStore`)
-had no way to delete a single node: `delete_memory` removed the row and its
+Real bug found and fixed. `legacy::GraphStore` (the graph store wired into
+`AppState`; not to be confused with the separate, also-live
+`graph::graph_store::GraphStore`, which is out of scope for this deletion
+path, see `docs/architecture/graph-schema.md`) had no way to delete a
+single node: `delete_memory` removed the row and its
 chunks but left the memory's own graph node (`memory:<id>`) and its edges
 behind. Added `Store::delete_graph_nodes` and
 `GraphStore::delete_memory_node`, which delete only the memory's own node
