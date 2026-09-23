@@ -5,6 +5,50 @@ use std::collections::VecDeque;
 
 const HASH_HISTORY: usize = 3;
 
+// Ported from FNDR v2 crates/fndr-capture/src/dedup.rs (T-303).
+
+/// Sample a 9x8 luma grid from RGBA pixels (nearest neighbour, no full-resolution decode).
+pub fn luma_9x8_from_rgba(rgba: &[u8], width: usize, height: usize) -> [u8; 72] {
+    let mut out = [0u8; 72];
+    for row in 0..8 {
+        for col in 0..9 {
+            let x = (col * (width - 1)) / 8;
+            let y = (row * (height - 1)) / 7;
+            let i = (y * width + x) * 4;
+            let (r, g, b) = (rgba[i] as f32, rgba[i + 1] as f32, rgba[i + 2] as f32);
+            out[row * 9 + col] = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
+        }
+    }
+    out
+}
+
+/// Difference hash: one bit per horizontally adjacent pair of the 9x8 grid.
+pub fn dhash_9x8(luma: &[u8; 72]) -> u64 {
+    let mut hash = 0u64;
+    for row in 0..8 {
+        for col in 0..8 {
+            if luma[row * 9 + col] > luma[row * 9 + col + 1] {
+                hash |= 1u64 << (row * 8 + col);
+            }
+        }
+    }
+    hash
+}
+
+pub fn hamming(a: u64, b: u64) -> u32 {
+    (a ^ b).count_ones()
+}
+
+/// True when `hash` matches the frame two steps back but not the previous frame (A-B-A flicker).
+pub fn is_aba(recent: &VecDeque<u64>, hash: u64, threshold: u32) -> bool {
+    if recent.len() < 2 {
+        return false;
+    }
+    let previous = recent[recent.len() - 1];
+    let two_back = recent[recent.len() - 2];
+    hamming(hash, two_back) <= threshold && hamming(hash, previous) > threshold
+}
+
 /// Perceptual hasher for deduplication
 pub struct PerceptualHasher {
     hasher: img_hash::Hasher,
@@ -172,5 +216,43 @@ mod tests {
         assert!(!hasher.is_duplicate(&buf1, 5));
         // Hamming distance can be small between flat fields; only distance 0 counts as dup at threshold 1.
         assert!(!hasher.is_duplicate(&buf2, 1));
+    }
+}
+
+#[cfg(test)]
+mod dhash_tests {
+    use super::*;
+
+    #[test]
+    fn dhash_identical_zero_and_reversed_gradient_is_max_distance() {
+        let mut inc = [0u8; 72];
+        let mut dec = [0u8; 72];
+        for row in 0..8 {
+            for col in 0..9 {
+                inc[row * 9 + col] = (col * 10) as u8;
+                dec[row * 9 + col] = (250 - col * 10) as u8;
+            }
+        }
+        assert_eq!(hamming(dhash_9x8(&inc), dhash_9x8(&inc)), 0);
+        assert_eq!(hamming(dhash_9x8(&inc), dhash_9x8(&dec)), 64);
+    }
+
+    #[test]
+    fn solid_color_frames_hash_identically() {
+        let rgba = vec![200u8; 64 * 48 * 4];
+        assert_eq!(dhash_9x8(&luma_9x8_from_rgba(&rgba, 64, 48)), 0);
+    }
+
+    #[test]
+    fn aba_detects_flicker_but_not_progress() {
+        let (a, b) = (0u64, u64::MAX);
+        let mut recent = VecDeque::new();
+        recent.push_back(a);
+        recent.push_back(b);
+        assert!(is_aba(&recent, a, 4));
+        assert!(!is_aba(&recent, b, 4));
+        let mut single = VecDeque::new();
+        single.push_back(a);
+        assert!(!is_aba(&single, a, 4));
     }
 }

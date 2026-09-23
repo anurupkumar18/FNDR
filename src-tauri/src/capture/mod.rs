@@ -15,7 +15,7 @@ mod sampling;
 pub mod text_cleanup;
 
 use admission::{classify_capture_surface_policy, CaptureSurfacePolicy};
-pub use dedupe::PerceptualHasher;
+pub use dedupe::{dhash_9x8, hamming, is_aba, luma_9x8_from_rgba, PerceptualHasher};
 pub use sampling::AdaptiveSampler;
 
 /// Convenience wrapper: return just the frontmost app name on macOS.
