@@ -213,20 +213,20 @@
     font-family: var(--font-body);
 }
 
-/* Reduced-motion default for the immersive scope. The motion hook
-   does the JS-side disabling; this ensures CSS-only animations also
-   respect the user's preference. */
+/* Reduced motion, app-wide. Slides, springs and loops collapse to near-
+   instant changes; JS springs cross-fade instead (see PanelPresence,
+   SidebarDrawer). Opacity and color still change, so state stays legible. */
 @media (prefers-reduced-motion: reduce) {
-    .fndr-immersive-root {
+    :root {
         --film-dur-fast: 0ms;
         --film-dur-base: 0ms;
         --film-dur-hover: 0ms;
         --film-dur-slow: 0ms;
         --film-dur-cinema: 0ms;
     }
-    .fndr-immersive-root *,
-    .fndr-immersive-root *::before,
-    .fndr-immersive-root *::after {
+    *,
+    *::before,
+    *::after {
         animation-duration: 0.001ms !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.001ms !important;

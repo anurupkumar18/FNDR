@@ -41,14 +41,14 @@
 /* ─── Date chip ───────────────────────────────────────────────────────────── */
 
 .home-hero__date {
-    font-family: var(--film-font-mono);
+    font-family: var(--film-font-ui);
     font-size: 12px;
     font-weight: 600;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-secondary);
     margin: 0 0 var(--s-3);
-    animation: heroIn 0.55s var(--film-ease-iris) 0.05s both;
+    animation: heroIn 0.55s var(--film-ease-shutter) 0.05s both;
 }
 
 /* ─── Greeting title ──────────────────────────────────────────────────────── */
@@ -57,13 +57,13 @@
     font-family: var(--film-font-display);
     font-size: clamp(42px, 6vw, 64px);
     font-weight: 600;
-    line-height: 1;
-    letter-spacing: -0.02em;
+    line-height: 1.04;
+    letter-spacing: -0.025em;
     color: var(--text-primary);
     margin: 0 0 var(--s-3);
     max-width: 18ch;
     overflow-wrap: anywhere;
-    animation: heroIn 0.55s var(--film-ease-iris) 0.1s both;
+    animation: heroIn 0.55s var(--film-ease-shutter) 0.1s both;
 }
 
 /* ─── Subtitle ────────────────────────────────────────────────────────────── */
@@ -76,7 +76,7 @@
     color: var(--text-secondary);
     margin: 0 0 var(--s-6);
     max-width: 28ch;
-    animation: heroIn 0.55s var(--film-ease-iris) 0.15s both;
+    animation: heroIn 0.55s var(--film-ease-shutter) 0.15s both;
 }
 
 /* ─── Search pill wrapper ─────────────────────────────────────────────────── */
@@ -85,7 +85,7 @@
     width: 100%;
     max-width: 620px;
     margin-bottom: 0;
-    animation: heroIn 0.55s var(--film-ease-iris) 0.2s both;
+    animation: heroIn 0.55s var(--film-ease-shutter) 0.2s both;
 }
 
 /* ─── Search pill ─────────────────────────────────────────────────────────── */
@@ -170,7 +170,8 @@
     transition:
         background 0.18s ease,
         border-color 0.18s ease,
-        color 0.18s ease;
+        color 0.18s ease,
+        transform 0.12s var(--film-ease-shutter);
 }
 
 .home-hero__voice-btn svg {
@@ -188,6 +189,12 @@
     background: color-mix(in srgb, var(--cp-accent) 22%, transparent);
     border-color: color-mix(in srgb, var(--cp-accent) 65%, transparent);
     color: var(--cp-accent, var(--accent));
+}
+
+.home-hero__voice-btn:active:not(:disabled),
+.home-hero__search-submit:active:not(:disabled) {
+    transform: scale(0.95);
+    transition-duration: 0ms;
 }
 
 .home-hero__voice-btn:disabled {
@@ -245,7 +252,7 @@
     transition:
         background 0.15s ease,
         border-color 0.15s ease,
-        transform 0.12s var(--film-ease-iris);
+        transform 0.12s var(--film-ease-shutter);
 }
 
 .home-hero__search-submit svg {
