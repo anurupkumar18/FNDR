@@ -3,7 +3,7 @@
 
   python3 scripts/team/gitlab_sync.py plan                  # parse and validate; no token, no network
   python3 scripts/team/gitlab_sync.py sync                  # read GitLab and print what would change
-  python3 scripts/team/gitlab_sync.py sync --apply          # create labels, milestones, issues, lane hubs, boards
+  python3 scripts/team/gitlab_sync.py sync --apply          # create labels, milestones, issues, per-person boards
   python3 scripts/team/gitlab_sync.py sync --apply --update # also rewrite existing descriptions from the files
   python3 scripts/team/gitlab_sync.py list [--user NAME] [--status doing]
   python3 scripts/team/gitlab_sync.py move VS-05 doing      # ready, doing, review, evidence, or closed
@@ -52,12 +52,11 @@ LABEL_COLORS = {
     "area::command": "#D62728", "area::skills": "#E377C2", "area::local-models": "#7F7F7F",
     "area::voice": "#FF7F0E", "area::onboarding": "#2CA02C", "area::ui-polish": "#BCBD22",
     "area::tests": "#1F77B4", "area::product": "#000000",
-    "lane-hub": "#333333",
 }
 HEADER_RE = re.compile(r"^## ([A-Z]{2,3}-\d{2,3}) (.+?)\s*$")
 META_RE = re.compile(r"^- (assignee|labels|milestone|estimate|depends): (.*)$")
 TITLE_ID_RE = re.compile(r"^\[([A-Z]{2,3}-\d{2,3})\] ")
-HUB_TITLE = "[LANE] {name}: October lane"
+TEAM_BOARD = os.environ.get("GITLAB_TEAM_BOARD", "Beta sprint")
 
 
 @dataclass
@@ -177,7 +176,13 @@ def issue_title(t: Ticket) -> str:
 
 
 def create_labels(t: Ticket, roster: dict[str, str]) -> list[str]:
-    return [*t.labels, owner_label(t.assignee, roster), "status::ready"]
+    return [*t.labels, owner_label(t.assignee, roster), "status::ready", "phase::beta", "evidence::needed"]
+
+
+def gitlab_duration(hours: float) -> str:
+    """4.5 -> '4h30m' for GitLab's time estimate."""
+    whole, minutes = int(hours), round((hours - int(hours)) * 60)
+    return f"{whole}h{minutes}m" if minutes else f"{whole}h"
 
 
 def render_description(t: Ticket, iids: dict[str, int]) -> str:
@@ -188,29 +193,6 @@ def render_description(t: Ticket, iids: dict[str, int]) -> str:
         f"Source: `{t.source}`. Edit the ticket there and run `make gitlab-sync`; "
         f"status, comments, and merge request links live here."
     )
-
-
-def render_hub(name: str, tickets: list[Ticket], iids: dict[str, int]) -> str:
-    total = sum(t.hours for t in tickets)
-    lines = [
-        f"All of {name}'s October tickets, grouped by week. Checkboxes follow the issues.",
-        f"Total estimate: {total:g} hours "
-        f"(p0 {sum(t.hours for t in tickets if t.prio == 'prio::p0'):g}, "
-        f"p1 {sum(t.hours for t in tickets if t.prio == 'prio::p1'):g}, "
-        f"p2 {sum(t.hours for t in tickets if t.prio == 'prio::p2'):g}).",
-        "",
-    ]
-    for milestone in MILESTONES:
-        week = [t for t in tickets if t.milestone == milestone]
-        if not week:
-            continue
-        lines += [f"### {milestone}", ""]
-        for t in week:
-            ref = f"#{iids[t.id]}" if t.id in iids else f"[{t.id}]"
-            lines.append(f"- [ ] {ref} {t.title} ({t.estimate}, {t.prio.split('::')[1]})")
-        lines.append("")
-    lines.append("Plan: `docs/team/2026-10-month-plan.md`. Tickets: `docs/team/tickets/`.")
-    return "\n".join(lines)
 
 
 def status_change(current: list[str], new_status: str) -> tuple[list[str], list[str]]:
@@ -315,30 +297,31 @@ def user_ids(gl: GitLab, usernames) -> dict[str, int]:
 
 
 def ensure_boards(gl: GitLab, roster: dict[str, str], uid: dict[str, int], apply: bool) -> list[str]:
-    """Team board, one board per person, and a board with one list per person. Returns board links."""
-    labels = {l["name"]: l["id"] for l in gl.get_all("labels")}
+    """The team board holds everyone's tickets; each person gets a board with the same columns, filtered
+    to their tickets. Returns board links."""
     boards = {b["name"]: b for b in gl.get_all("boards")}
-    wanted = [("FNDR team", None)] + [(name, username) for username, name in roster.items()] + [("People", None)]
-    links = []
-    for name, username in wanted:
+    team = boards.get(TEAM_BOARD)
+    if team is None:
+        raise SystemExit(f"Board {TEAM_BOARD!r} not found; create it in GitLab or set GITLAB_TEAM_BOARD")
+    columns = [lst["label"]["id"] for lst in sorted(team.get("lists", []), key=lambda l: l.get("position", 0))
+               if lst.get("label")]
+    links = [f"{TEAM_BOARD}: {board_url(team['id'], False, None)}"]
+    for username, name in roster.items():
         board = boards.get(name)
         if board is None:
             if not apply:
-                links.append(f"would create board {name!r}")
+                links.append(f"would create board {name!r} with the {TEAM_BOARD} columns, filtered to {username}")
                 continue
             status, board, _ = gl.post("boards", {"name": name})
             if status not in (200, 201):
                 print(f"FAIL create board {name}: {status} {board}", file=sys.stderr)
                 continue
-        list_labels = (
-            [f"owner::{n.lower()}" for n in roster.values()] if name == "People" else [f"status::{s}" for s in STATUSES]
-        )
-        existing = {lst.get("label", {}).get("name") for lst in board.get("lists", []) if lst.get("label")}
-        for label in list_labels:
-            if label not in existing and apply and label in labels:
-                gl.post(f"boards/{board['id']}/lists", {"label_id": labels[label]})
-        scoped = False
-        if username and username in uid and apply:
+        existing = {lst["label"]["id"] for lst in board.get("lists", []) if lst.get("label")}
+        for label_id in columns:
+            if label_id not in existing and apply:
+                gl.post(f"boards/{board['id']}/lists", {"label_id": label_id})
+        scoped = bool(board.get("assignee"))
+        if not scoped and username in uid and apply:
             status, updated, _ = gl.put(f"boards/{board['id']}", {"assignee_id": uid[username]})
             scoped = status == 200 and bool((updated or {}).get("assignee"))
         links.append(f"{name}: {board_url(board['id'], scoped, username)}")
@@ -379,6 +362,7 @@ def sync(apply: bool, update: bool) -> int:
     existing = issues_by_ticket_id(gl)
     iids = {tid: issue["iid"] for tid, issue in existing.items()}
     created = updated = 0
+    created_ids: set[str] = set()
     for t in tickets:
         if t.id in existing:
             if update:
@@ -400,32 +384,17 @@ def sync(apply: bool, update: bool) -> int:
             status, issue, _ = gl.post("issues", payload)
             if status in (200, 201):
                 iids[t.id] = issue["iid"]
+                created_ids.add(t.id)
+                gl.post(f"issues/{issue['iid']}/time_estimate", {"duration": gitlab_duration(t.hours)})
             else:
                 print(f"FAIL {t.id}: {status} {issue}", file=sys.stderr)
             time.sleep(0.1)
 
-    if apply and created:
-        # Second pass so dependency references point at real issue numbers.
+    if apply and created_ids:
+        # Second pass so new tickets' dependency references point at real issue numbers.
         for t in tickets:
-            if t.id in iids and t.depends:
+            if t.id in created_ids and t.depends:
                 gl.put(f"issues/{iids[t.id]}", {"description": render_description(t, iids)})
-
-    hubs = {i["title"]: i for i in gl.get_all("issues", {"labels": "lane-hub", "state": "all"})}
-    for username, name in roster.items():
-        mine = [t for t in tickets if t.assignee == username]
-        title = HUB_TITLE.format(name=name)
-        description = render_hub(name, mine, iids)
-        print(f"hub     {'~' if title in hubs else '+'} {title} ({len(mine)} tickets)")
-        if not apply:
-            continue
-        if title in hubs:
-            gl.put(f"issues/{hubs[title]['iid']}", {"description": description})
-        else:
-            gl.post("issues", {
-                "title": title, "description": description,
-                "labels": f"lane-hub,{owner_label(username, roster)}",
-                "assignee_ids": [uid[username]] if username in uid else [],
-            })
 
     for link in ensure_boards(gl, roster, uid, apply):
         print(f"board   {link}")

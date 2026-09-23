@@ -69,7 +69,7 @@ Further flags nobody asked about:
 | 1.9 GB of model files on an 8 GB machine (Qwen3-VL-2B, whisper-small, BGE-large, MiniLM, CLIP); BGE is downloaded and unused. | Onboarding weight and memory pressure with no retrieval benefit. |
 | The local model runs rarely and slowly: 79 traced calls in total; extraction p50 8 s, review p50 22 s, daily briefing p50 17 s; 0% of real memories have a project or next steps. | Resume, To-dos, Seen-before, and agent packs all read fields that are empty. |
 | Privacy Activity counters reset on quit. | Trust cannot be shown over a day or a week. |
-| Planning outweighs product: 20 plan documents under `docs/superpowers/plans` and 47 manifest tickets, while each teammate has about 7 commits since June. | This month plan has to replace the pile, not add to it. |
+| Planning outweighs product: 20 plan documents under `docs/superpowers/plans` and 47 manifest tickets, far more than the user-facing change shipped since June. | This month plan has to replace the pile, not add to it. |
 | 798 Rust tests and 55 frontend test files pass while the real vault holds 29 thin memories. | Green CI proves fixtures, not usefulness. Each lane needs an end-to-end number. |
 
 ## Part 2: How useful the hands-on pass is, and what has to be true first

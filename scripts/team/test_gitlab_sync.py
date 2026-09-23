@@ -53,7 +53,7 @@ class ParseTest(unittest.TestCase):
         bad = SAMPLE.replace("assignee: anurupkumar\n- labels: area::vault-search, type::qa, prio::p1",
                              "assignee: someone\n- labels: area::nope, type::qa")
         bad = bad.replace("W03-Build", "W99-Nope").replace("depends: VS-01", "depends: XX-99")
-        bad += "\n## VS-01 Duplicate\n- assignee: anurupkumar\n- labels: prio::p0\n- milestone: W02-Measure\n- estimate: 1h\n- depends: none\n\nBody — dash.\n"
+        bad += "\n## VS-01 Duplicate\n- assignee: anurupkumar\n- labels: prio::p0\n- milestone: W02-Measure\n- estimate: 1h\n- depends: none\n\nBody \u2014 dash.\n"
         errors = "\n".join(gs.validate(gs.parse_tickets(bad, "x.md"), ROSTER))
         for expected in ("duplicate id", "someone", "W99-Nope", "needs a prio", "area::nope", "XX-99", "em or en dash"):
             self.assertIn(expected, errors)
@@ -68,7 +68,8 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(gs.issue_title(t), "[VS-01] Record the baseline")
         self.assertEqual(
             gs.create_labels(t, ROSTER),
-            ["area::vault-search", "type::qa", "prio::p0", "owner::anurup", "status::ready"],
+            ["area::vault-search", "type::qa", "prio::p0", "owner::anurup", "status::ready", "phase::beta",
+             "evidence::needed"],
         )
 
     def test_description_links_dependencies_once_issues_exist(self):
@@ -77,12 +78,9 @@ class RenderTest(unittest.TestCase):
         self.assertIn("Depends on: #12 (VS-01).", gs.render_description(t, {"VS-01": 12}))
         self.assertIn("Source: `docs/team/tickets/sample.md`", gs.render_description(t, {}))
 
-    def test_hub_groups_by_week_and_totals_hours(self):
-        hub = gs.render_hub("Anurup", self.tickets, {"VS-01": 12})
-        self.assertIn("Total estimate: 7.5 hours (p0 3, p1 4.5, p2 0)", hub)
-        self.assertIn("### W02-Measure", hub)
-        self.assertIn("- [ ] #12 Record the baseline (3h, p0)", hub)
-        self.assertIn("- [ ] [VS-02] Add a persona (4.5h, p1)", hub)
+    def test_duration_uses_gitlab_time_format(self):
+        self.assertEqual(gs.gitlab_duration(3), "3h")
+        self.assertEqual(gs.gitlab_duration(4.5), "4h30m")
 
     def test_status_change_swaps_only_status_labels(self):
         add, remove = gs.status_change(["prio::p0", "status::ready", "owner::anurup"], "doing")

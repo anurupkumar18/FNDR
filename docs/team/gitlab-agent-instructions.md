@@ -6,18 +6,15 @@ Every teammate (and every coding agent working for them) moves tickets the same 
 
 | Board | What it shows |
 |---|---|
-| FNDR team | Every open ticket in four columns: Ready, Doing, Review, Evidence |
-| Anurup, Kunj, Minh, Felipe | The same four columns for one person's tickets |
-| People | One column per person, for a quick "who is doing what" |
+| [Beta sprint](https://capstone.cs.utah.edu/fndr/fndr/-/boards/571) | Everyone's tickets: Ready, Doing, Review, Evidence, Needs human, Blocked |
+| [Anurup](https://capstone.cs.utah.edu/fndr/fndr/-/boards/748), [Kunj](https://capstone.cs.utah.edu/fndr/fndr/-/boards/749), [Minh](https://capstone.cs.utah.edu/fndr/fndr/-/boards/750), [Felipe](https://capstone.cs.utah.edu/fndr/fndr/-/boards/751) | The same columns, filtered to that person's assigned tickets |
 
-Each person also has a lane hub issue, `[LANE] <Name>: October lane`, which lists every ticket of theirs by week with checkboxes that follow the issues. Links to all boards are printed at the end of `make gitlab-sync` and pinned in the team chat.
-
-If our GitLab plan cannot save a per-person filter on a board, the per-person board links include `?assignee_username=<you>`; bookmark your link.
+Boards show tickets by label, so a ticket moves between columns when its `status::` label changes, and it appears on a personal board because of its assignee. Switch boards from the board name menu at the top left.
 
 ## One-time setup (each person, 3 minutes)
 
 1. On `capstone.cs.utah.edu`, open your avatar, then Edit profile, then Access tokens. Create a personal access token named `fndr-agent` with the `api` scope and an expiry of 2026-12-20.
-2. Store it in your macOS Keychain (you will be asked to type it; it is never shown or saved in a file):
+2. Store it in your macOS Keychain (you will be asked to type it; it is never shown or saved in a file). If you already export `GITLAB_TOKEN` in your shell profile, the script uses that instead and you can skip this step:
 
 ```bash
 security add-generic-password -s fndr-gitlab -a "$USER" -w
