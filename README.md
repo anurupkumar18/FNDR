@@ -8,6 +8,16 @@ The core runtime is a React + TypeScript UI (`src/`) on top of a Tauri 2 + Rust 
 
 ---
 
+## Who This Is For
+
+- **People who lose track of what they were doing.** You close a tab, forget a URL, or can't recall which doc had that one number — FNDR lets you search or ask for it instead of reconstructing it from memory.
+- **Developers and agent builders** who want a local, inspectable memory layer to plug into their own tools over MCP, without shipping raw personal activity to a cloud service to get it.
+- **Privacy-conscious users** who want the benefit of an "AI that remembers your screen" without a third party holding that data — everything here runs and stays on-device by default.
+
+It is not a screen-recording surveillance tool, a cloud memory service, or a general-purpose screenshot archive.
+
+---
+
 ## 1. Project Overview
 
 FNDR captures desktop activity and converts it into structured memory records. A memory record includes cleaned text, app/window/url metadata, retrieval fields, embeddings, and insight fields used to improve recall quality.
@@ -257,3 +267,7 @@ fndr/
 FNDR follows an open-core model. The code in this repository is licensed under the [Apache License 2.0](LICENSE).
 
 Copyright 2026 Anurup Kumar.
+
+---
+
+See [CHANGELOG.md](CHANGELOG.md) for recent development notes and items pending an approval decision.
