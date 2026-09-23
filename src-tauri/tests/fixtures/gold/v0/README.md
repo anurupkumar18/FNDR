@@ -22,6 +22,9 @@ finished, agreement-verified gold set. Review before trusting any number
 - `guard.jsonl` (20 lines): same shape as `extraction.jsonl`, distinct
   content, held out from any tuning. Its only job is catching a regression;
   never look at it while iterating on a prompt or schema.
+- `review-draft.jsonl` (1 line): a synthetic contract fixture for the P12
+  review scorer. Its label is intentionally draft, so a scorer run must
+  withhold all quality claims while still reporting structural counts.
 - Splits inside `extraction.jsonl`: `dev` (use freely while iterating) and
   `test` (only look at when reporting a final number).
 
@@ -72,3 +75,17 @@ for f in counts:
 print("ok")
 PY
 ```
+
+## Score post-capture review output
+
+The scorer only consumes saved synthetic/public JSONL. It never calls a model,
+opens LanceDB, or reads real captures.
+
+```bash
+python3 scripts/model/score_memory_review.py \
+  src-tauri/tests/fixtures/gold/v0/review-draft.jsonl \
+  --out /tmp/fndr-review-draft.md
+```
+
+The report must say that quality is unavailable because this fixture is still
+draft. Guard cases require `--report-guard` and are report-only.
