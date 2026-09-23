@@ -157,7 +157,7 @@ Four lanes, one per person. The tickets are the source of truth (`docs/team/tick
 |---|---|---|---|---|
 | Vault and search | Anurup | Find anything by meaning or exact words, same answer everywhere | Baseline and merge gate; cutoff removed; BM25 plus rank fusion; one `retrieve` for every surface; Accessibility text in capture; chunk retrieval; embedding choice | `anurup-vault-search.md` (VS-01 to VS-26) |
 | Reopen and embeddings | Minh | Every memory opens exactly where it came from; every memory has vectors and chunks automatically | Reopen QA matrix (41 cases); file paths and PDF pages; downloads openable and never executed; chunk at capture; automatic backfill; no zero vectors; embedding QA matrix | `minh-reopen-embeddings.md` (RE-01 to RE-14, EM-01 to EM-12) |
-| Command surface, skills, local models | Kunj | FNDR does useful things by text or voice, learns skills from what worked, and gets real use out of local models | Command contract; notch branch resolved; tool registry and executors; grammar router; Quick Find as command bar; risk policy; journal and skills; model usage measured; enrichment policy wired; interactive before background | `kunj-command-skills-models.md` (GS-01 to GS-14, SK-01 to SK-07, LM-01 to LM-10) |
+| Command surface, skills, local models | Kunj | FNDR does useful things by text or voice, learns skills from what worked, and gets real use out of local models | Command contract; notch HUD (merged Sep 23) reconciled with the command surface; tool registry and executors; grammar router; Quick Find as command bar; risk policy; journal and skills; model usage measured; enrichment policy wired; interactive before background | `kunj-command-skills-models.md` (GS-01 to GS-14, SK-01 to SK-07, LM-01 to LM-10) |
 | Voice, onboarding, tests | Felipe | One fast, visible voice pipeline everywhere; onboarding that gets a new user to a first useful moment; tests that protect what users do | Voice baseline and contract; native speech helper; shared voice control on Home, Search, command bar; Touch ID fix; onboarding copy and permissions; five destinations; test audit and journey tests | `felipe-voice-onboarding-tests.md` (VO-01 to VO-13, OB-01 to OB-07, PX-01 to PX-06, QT-01 to QT-07) |
 
 Load (nominal hours without an agent, from `make gitlab-plan` on 2026-09-23): p0 is 66 to 75 hours per person against about 60 hours of month capacity, so p0 already assumes agent help; p1 and p2 are the backlog, pulled only when a person's p0 for the week is done or blocked. The Friday retro cuts p1 first.
@@ -168,7 +168,7 @@ Cross-lane contracts: `retrieve` (Anurup) is used by Kunj's `search` tool and Mi
 
 | Week | Dates | Theme | Friday demo must show |
 |---|---|---|---|
-| W1 | Sep 28 to Oct 4 | Right answers, right place | One retrieval path with BM25; first `make qa-retrieval` improvement; reopen v1 on a live day; labels done; ADR-018 decided; notch branch resolved; five-destination sidebar |
+| W1 | Sep 28 to Oct 4 | Right answers, right place | One retrieval path with BM25; first `make qa-retrieval` improvement; reopen v1 on a live day; labels done; ADR-018 decided; notch HUD (merged Sep 23) reconciled with the command surface; five-destination sidebar |
 | W2 | Oct 5 to 11 | Real RAG, real voice | Chunk index live with the chosen embedder; Recall@5 on both personas; streaming voice with partial text; first tools running from Quick Find; two user sessions |
 | W3 | Oct 12 to 18 | Act and prove it | Voice commands doing real work; skills first slice; agent notes; downloads found by content; five user sessions; freeze Fri Oct 16 |
 | W4 | Oct 19 to 25 | Beta | Beta Wed Oct 21; retro Fri Oct 23; November plan from what we learned |
@@ -222,7 +222,7 @@ Cross-lane contracts: `retrieve` (Anurup) is used by Kunj's `search` tool and Mi
 |---|---|---|---|
 | 1 | Opt-in cloud reasoning with the person's own key | Yes, for structuring, the intent router, Ask, and "about this screen" | Local only |
 | 2 | Retrieval ownership | Decided 2026-09-23: Anurup owns retrieval and its evaluation; Minh owns embedding coverage and reopen | Done |
-| 3 | Notch HUD branch | Merge the useful parts in W1, then close it | Close it after W1 |
+| 3 | Notch HUD branch | Merged into main on 2026-09-23 (350105c); GS-02 reconciles it with the command surface | Done |
 | 4 | Tools that change things | Paste, reminders, and Shortcuts with one-tap confirm; nothing that sends or deletes this month | As written |
 | 5 | Agent write-back scope | Notes only this month; suggested edits after Beta | Notes only |
 | 6 | Pull from external tools (Drive, Notion, Calendar) through MCP clients | Not this month | Not this month |

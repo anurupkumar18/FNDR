@@ -24,23 +24,23 @@ Usefulness is part of done: every tool and skill ticket ends with a real-task ch
 
 **Evidence.** The merged doc.
 
-## GS-02 Merge the useful parts of the notch HUD branch or close it
+## GS-02 Reconcile the merged notch HUD with the command surface
 - assignee: rathodkunj
 - labels: area::command, type::chore, prio::p0
 - milestone: W02-Measure
-- estimate: 4h
+- estimate: 3h
 - depends: none
 
-**Today.** `github/kunj-notch-hud` diverges from `main` since Sep 9: 61 files, about 10,500 lines added and 5,800 removed, on the GitHub mirror only.
+**Today.** The notch HUD work (ask FNDR from the camera housing, motion, typography, theme tokens) was merged into `main` on 2026-09-23 in `350105c`, alongside `main`'s UI-UX program fixes to the same shell and token files.
 
 **Do.**
-1. List what the branch adds (notch HUD, typography, motion, tokens) and what `main` changed in the same files since.
-2. Decide with the owner which parts serve the command surface (the notch as the command and voice entry point is a strong candidate) and which are style changes superseded by `main`.
-3. Port the chosen parts onto a fresh branch from `main` in small MRs; close the old branch.
+1. Native smoke on `main`: the notch HUD opens, takes a question, answers, and closes without stealing focus; record what works and what does not.
+2. Check for doubled styling from the two efforts landing close together (two token sets, conflicting typography or palette defaults) and remove the duplicates; coordinate with Felipe's PX-02 so tokens change once.
+3. Decide with the owner whether the notch becomes the voice and command entry point for GS-08 and GS-13; note the decision in the MR.
 
-**Done when.** No FNDR work lives only on the old branch.
+**Done when.** A recording of the notch HUD on `main`, no duplicate token definitions, and the entry-point decision written down.
 
-**Evidence.** The MR links and the closed branch.
+**Evidence.** The recording and the MR.
 
 ## GS-03 Build the typed tool registry
 - assignee: rathodkunj

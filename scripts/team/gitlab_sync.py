@@ -365,10 +365,13 @@ def sync(apply: bool, update: bool) -> int:
     created_ids: set[str] = set()
     for t in tickets:
         if t.id in existing:
-            if update:
-                print(f"issue   ~ {issue_title(t)}")
+            current = existing[t.id]
+            wanted = {"title": issue_title(t), "description": render_description(t, iids)}
+            changed = {k: val for k, val in wanted.items() if (current.get(k) or "") != val}
+            if update and changed:
+                print(f"issue   ~ {issue_title(t)} ({', '.join(changed)})")
                 if apply:
-                    gl.put(f"issues/{existing[t.id]['iid']}", {"description": render_description(t, iids)})
+                    gl.put(f"issues/{current['iid']}", changed)
                 updated += 1
             continue
         print(f"issue   + {issue_title(t)}  -> {t.assignee}, {t.milestone}")
