@@ -2254,6 +2254,24 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
+        // The frontmost app can change in the gap between reading window
+        // context above and capturing pixels here (surface-policy checks,
+        // dedup hashing, and privacy-alert queuing all run in between). A
+        // cheap identity re-check (no Accessibility tree walk) catches a
+        // fast app-switch so pixels never get stored under a stale app
+        // name and window title.
+        if macos::frontmost_bundle_id() != app_context.bundle_id {
+            tracing::debug!(
+                "Frontmost app changed since context read (was {:?}); discarding frame",
+                app_context.bundle_id
+            );
+            state
+                .capture_stats
+                .record_skip(crate::SkipReason::AppSwitchedDuringCapture, &app_name);
+            tokio::time::sleep(sleep_duration).await;
+            continue;
+        }
+
         // Capture screen. Check on both sides of the synchronous OS call: if
         // Screen Guide appeared while the call was in flight, discard these
         // bytes before hashing, OCR, inference, or storage can observe them.

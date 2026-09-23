@@ -128,6 +128,9 @@ pub struct CapturePipelineStats {
     /// Screen-capture syscall itself failed.
     pub skipped_screen_capture_failed: AtomicU64,
     pub skipped_embedder_unavailable: AtomicU64,
+    /// Frontmost app changed between reading window context and capturing
+    /// pixels; the frame was discarded to avoid a stale app-name label.
+    pub skipped_app_switched_during_capture: AtomicU64,
     /// Memory stored via the OCR-narrative path.
     pub stored_ocr_path: AtomicU64,
     /// Memory stored via the visual-narrative path.
@@ -171,6 +174,10 @@ pub enum SkipReason {
     /// Text embedder unavailable; the frame is blocked so zero-vector memory
     /// rows never reach storage.
     EmbedderUnavailable,
+    /// The frontmost app changed between reading window context and
+    /// capturing pixels; the frame is discarded rather than labeled under
+    /// the app that was frontmost a moment ago.
+    AppSwitchedDuringCapture,
 }
 
 impl SkipReason {
@@ -191,6 +198,7 @@ impl SkipReason {
             SkipReason::VisualComposeFailed => "visual_compose_failed",
             SkipReason::ScreenCaptureFailed => "screen_capture_failed",
             SkipReason::EmbedderUnavailable => "embedder_unavailable",
+            SkipReason::AppSwitchedDuringCapture => "app_switched_during_capture",
         }
     }
 }
@@ -221,6 +229,7 @@ impl Default for CapturePipelineStats {
             skipped_visual_compose_failed: AtomicU64::new(0),
             skipped_screen_capture_failed: AtomicU64::new(0),
             skipped_embedder_unavailable: AtomicU64::new(0),
+            skipped_app_switched_during_capture: AtomicU64::new(0),
             stored_ocr_path: AtomicU64::new(0),
             stored_visual_path: AtomicU64::new(0),
             stored_url_only: AtomicU64::new(0),
@@ -247,6 +256,7 @@ impl CapturePipelineStats {
             SkipReason::VisualComposeFailed => &self.skipped_visual_compose_failed,
             SkipReason::ScreenCaptureFailed => &self.skipped_screen_capture_failed,
             SkipReason::EmbedderUnavailable => &self.skipped_embedder_unavailable,
+            SkipReason::AppSwitchedDuringCapture => &self.skipped_app_switched_during_capture,
         };
         counter.fetch_add(1, Ordering::Relaxed);
         *self.last_skip.write() = Some(LastSkipEntry {
@@ -275,7 +285,7 @@ impl CapturePipelineStats {
 
     /// Per-reason skip counts keyed by `SkipReason::as_str()`. Cheap (atomic reads only).
     pub fn skip_counts(&self) -> std::collections::BTreeMap<&'static str, u64> {
-        let pairs: [(SkipReason, &AtomicU64); 15] = [
+        let pairs: [(SkipReason, &AtomicU64); 16] = [
             (SkipReason::SelfApp, &self.skipped_self_app),
             (SkipReason::Blocklist, &self.skipped_blocklist),
             (SkipReason::SurfacePolicy, &self.skipped_surface_policy),
@@ -303,6 +313,10 @@ impl CapturePipelineStats {
                 SkipReason::EmbedderUnavailable,
                 &self.skipped_embedder_unavailable,
             ),
+            (
+                SkipReason::AppSwitchedDuringCapture,
+                &self.skipped_app_switched_during_capture,
+            ),
         ];
         pairs
             .iter()
@@ -327,6 +341,9 @@ impl CapturePipelineStats {
             + self.skipped_visual_compose_failed.load(Ordering::Relaxed)
             + self.skipped_screen_capture_failed.load(Ordering::Relaxed)
             + self.skipped_embedder_unavailable.load(Ordering::Relaxed)
+            + self
+                .skipped_app_switched_during_capture
+                .load(Ordering::Relaxed)
     }
 
     /// Sum of every `stored_*` counter.
@@ -749,7 +766,7 @@ mod tests {
         assert_eq!(counts["blocklist"], 1);
         assert_eq!(counts["perceptual_dup"], 1);
         assert_eq!(counts["noise"], 0);
-        assert_eq!(counts.len(), 15);
+        assert_eq!(counts.len(), 16);
         assert_eq!(stats.evaluated_total(), 3);
         assert_eq!(stats.total_skipped(), 2);
         assert_eq!(stats.total_stored(), 1);

@@ -224,6 +224,19 @@ fn read_frontmost_app_info() -> FrontmostAppContext {
     }
 }
 
+/// Cheap frontmost-app identity check: one Cocoa call, no Accessibility
+/// tree walk. Used to detect a fast app-switch between reading window
+/// context (`get_frontmost_app_info`) and capturing pixels, which would
+/// otherwise label another app's screen content under a stale app name.
+pub fn frontmost_bundle_id() -> Option<String> {
+    unsafe {
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .and_then(|app| app.bundleIdentifier())
+            .map(|s| s.to_string())
+    }
+}
+
 fn resolve_window_title(native_title: Option<&str>, bundle_id: Option<&str>) -> String {
     native_title
         .map(str::trim)
@@ -553,6 +566,18 @@ mod core_graphics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frontmost_bundle_id_matches_get_frontmost_app_info() {
+        // Both read the same NSWorkspace state; calling them back to back
+        // in a test process (no app switch in between) must agree, the
+        // same invariant the capture loop's race check relies on.
+        assert_eq!(
+            frontmost_bundle_id(),
+            get_frontmost_app_info().bundle_id,
+            "frontmost_bundle_id must agree with get_frontmost_app_info absent a real app switch"
+        );
+    }
 
     #[test]
     fn privacy_sensitive_browser_detection_includes_unsupported_firefox() {
