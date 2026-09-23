@@ -737,6 +737,7 @@ fn main() {
             ipc::commands::get_stats,
             ipc::commands::get_runtime_metrics,
             ipc::commands::get_privacy_proof,
+            ipc::commands::resume_work,
             ipc::commands::get_retention_days,
             ipc::commands::set_retention_days,
             ipc::commands::delete_older_than,

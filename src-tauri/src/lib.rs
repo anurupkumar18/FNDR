@@ -30,6 +30,7 @@ pub mod models;
 pub mod ocr;
 pub mod privacy;
 pub mod privacy_proof;
+pub mod resume;
 pub mod search;
 pub mod speech;
 pub mod storage;

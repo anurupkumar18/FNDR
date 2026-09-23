@@ -74,6 +74,9 @@ pub use screen_guide::*;
 // Privacy proof IPC command
 pub use crate::privacy_proof::*;
 
+// Resume Work IPC command
+pub use crate::resume::*;
+
 #[cfg(test)]
 mod daily_summary_tests {
     use crate::embedding::{Embedder, EmbeddingBackend};

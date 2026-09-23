@@ -5556,7 +5556,7 @@ fn build_session_id(
     )
 }
 
-fn extract_domain(url: &str) -> Option<String> {
+pub(crate) fn extract_domain(url: &str) -> Option<String> {
     let without_scheme = url.split("://").nth(1).unwrap_or(url);
     let host = without_scheme.split('/').next()?.trim();
     if host.is_empty() {
