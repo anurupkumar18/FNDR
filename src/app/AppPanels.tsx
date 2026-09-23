@@ -10,6 +10,7 @@ import { TodoPanel } from "@/domains/workspace/TodoPanel";
 import { EngineMetricsPanel } from "@/domains/workspace/EngineMetricsPanel";
 import { PrivacyProofPanel } from "@/domains/privacy-proof/PrivacyProof";
 import { AppToasts } from "./AppToasts";
+import { PanelPresence } from "./PanelPresence";
 import { PanelErrorBoundary } from "./PanelErrorBoundary";
 import type { AppToast } from "./types";
 import type { MountedPanelKey } from "./panels";
@@ -64,43 +65,79 @@ export function AppPanels({
 }: AppPanelsProps) {
     return (
         <>
-            <PanelErrorBoundary panelName="Ask FNDR" onClose={onClosePanel}>
-                <AskPanel isVisible={activePanel === "ask"} onClose={onClosePanel} onOpenMemoryById={onOpenMemoryById} />
-            </PanelErrorBoundary>
-            <MemoryCardsPanel
-                isVisible={activePanel === "memoryCards"}
-                onClose={onClosePanel}
-                appNames={appNames}
-                onMemoryDeleted={onMemoryDeleted}
-                feature="vault"
-                focusMemoryId={memoryVaultFocusId}
-                onOpenMemoryById={onOpenMemoryById}
-            />
-            <PanelErrorBoundary panelName="Daily Summary" onClose={onClosePanel}>
-                <DailySummaryPanel
-                    isVisible={activePanel === "dailySummary"}
-                    onClose={onClosePanel}
-                    onOpenMemoryById={onOpenMemoryById}
-                />
-            </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="Stats" onClose={onClosePanel}>
-                <StatsPanel isVisible={activePanel === "stats"} onClose={onClosePanel} />
-            </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="To-dos" onClose={onClosePanel}>
-                <TodoPanel isVisible={activePanel === "todo"} onClose={onClosePanel} />
-            </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="FNDR Wrapped" onClose={onClosePanel}>
-                <FndrWrappedPanel isVisible={activePanel === "wrapped"} onClose={onClosePanel} />
-            </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="Screen Guide" onClose={onClosePanel}>
-                <ScreenGuidePanel isVisible={activePanel === "screenGuide"} onClose={onClosePanel} />
-            </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="Engine diagnostics" onClose={onClosePanel}>
-                <EngineMetricsPanel isVisible={activePanel === "engineMetrics"} onClose={onClosePanel} />
-            </PanelErrorBoundary>
-            <PanelErrorBoundary panelName="Privacy Activity" onClose={onClosePanel}>
-                <PrivacyProofPanel isVisible={activePanel === "privacyProof"} onClose={onClosePanel} />
-            </PanelErrorBoundary>
+            <PanelPresence open={activePanel === "ask"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="Ask FNDR" onClose={onClosePanel}>
+                        <AskPanel isVisible={present} onClose={onClosePanel} onOpenMemoryById={onOpenMemoryById} />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "memoryCards"}>
+                {(present) => (
+                    <MemoryCardsPanel
+                        isVisible={present}
+                        onClose={onClosePanel}
+                        appNames={appNames}
+                        onMemoryDeleted={onMemoryDeleted}
+                        feature="vault"
+                        focusMemoryId={memoryVaultFocusId}
+                        onOpenMemoryById={onOpenMemoryById}
+                    />
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "dailySummary"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="Daily Summary" onClose={onClosePanel}>
+                        <DailySummaryPanel
+                            isVisible={present}
+                            onClose={onClosePanel}
+                            onOpenMemoryById={onOpenMemoryById}
+                        />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "stats"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="Stats" onClose={onClosePanel}>
+                        <StatsPanel isVisible={present} onClose={onClosePanel} />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "todo"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="To-dos" onClose={onClosePanel}>
+                        <TodoPanel isVisible={present} onClose={onClosePanel} />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "wrapped"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="FNDR Wrapped" onClose={onClosePanel}>
+                        <FndrWrappedPanel isVisible={present} onClose={onClosePanel} />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "screenGuide"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="Screen Guide" onClose={onClosePanel}>
+                        <ScreenGuidePanel isVisible={present} onClose={onClosePanel} />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "engineMetrics"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="Engine diagnostics" onClose={onClosePanel}>
+                        <EngineMetricsPanel isVisible={present} onClose={onClosePanel} />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "privacyProof"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="Privacy Activity" onClose={onClosePanel}>
+                        <PrivacyProofPanel isVisible={present} onClose={onClosePanel} />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
             <CommandPalette
                 isOpen={showCommandPalette}
                 onClose={onCloseCommandPalette}
