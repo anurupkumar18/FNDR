@@ -337,7 +337,11 @@
     pointer-events: none;
 }
 
-/* ===== Left sidebar — genuine glass material ===== */
+/* ===== Left sidebar — heavy material, macOS source list =====
+   Position is owned by SidebarDrawer's motion value (drag, flick, and
+   toggle all interrupt each other), so there is no CSS transform
+   transition here. The sidebar is a structural region, so it gets the
+   heavier, darker material; the scrim's opacity tracks the drawer. */
 .left-sidebar {
     position: fixed;
     top: 0;
@@ -345,30 +349,23 @@
     bottom: 0;
     width: 244px;
     border-right: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-    background: color-mix(in srgb, var(--surface) 72%, transparent);
-    backdrop-filter: blur(32px) saturate(180%);
-    -webkit-backdrop-filter: blur(32px) saturate(180%);
-    padding: 54px 10px 6px;
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    padding: 54px 10px 12px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 2px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-gutter: stable;
+    touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
     z-index: 60;
-    transform: translateX(-100%);
-    visibility: hidden;
-    pointer-events: none;
-    transition: transform 0.42s var(--ease-spring);
+    will-change: transform;
     box-shadow:
         1px 0 0 var(--hairline) inset,
-        8px 0 32px var(--shadow-color);
-}
-
-.left-sidebar.open {
-    transform: translateX(0);
-    visibility: visible;
-    pointer-events: auto;
+        12px 0 40px var(--shadow-color);
 }
 
 .sidebar-scrim {
@@ -376,20 +373,18 @@
     inset: 0;
     border: 0;
     background: color-mix(in srgb, var(--bg-primary) 62%, transparent);
-    backdrop-filter: blur(2px);
-    -webkit-backdrop-filter: blur(2px);
     z-index: 50;
-    animation: scrimFade 0.3s var(--ease-smooth);
+    cursor: default;
 }
 
-@keyframes scrimFade {
-    from {
-        opacity: 0;
-    }
-
-    to {
-        opacity: 1;
-    }
+/* Shared layer every full-screen panel mounts in (PanelPresence). The
+   panels are themselves fixed/inset:0, so this layer only adds the
+   materialize transform and one z-tier above the shell chrome. */
+.panel-presence {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    transform-origin: 50% 40%;
 }
 
 /* ===== Chrome buttons (sidebar toggle, top-right controls) ===== */
@@ -482,154 +477,80 @@
     background: rgba(60, 12, 12, 0.78);
 }
 
-/* ===== Sidebar groups ===== */
+/* ===== Sidebar groups — source-list rows =====
+   Rows are borderless; only the selected row gets a filled rounded rect,
+   the way Finder and System Settings mark selection. Hover is a quiet
+   tint, press is instant, and nothing lifts or glows. */
 .sidebar-group {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
-    gap: 3px;
-    width: 100%;
-    padding: 0;
-}
-
-.sidebar-group+.sidebar-group {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-[data-theme="light"] .sidebar-group+.sidebar-group {
-    border-top-color: rgba(0, 0, 0, 0.08);
-}
-
-.sidebar-label {
-    font-size: 0.6rem;
-    font-weight: 600;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    opacity: 0.5;
-    padding: 0 6px;
-    margin-bottom: 3px;
-}
-
-.sidebar-actions {
-    gap: 5px;
-    margin-top: 0;
+    gap: 1px;
     width: 100%;
 }
 
-.sidebar-actions .ui-action-btn {
+.sidebar-group + .sidebar-group {
+    margin-top: 14px;
+}
+
+.sidebar-item {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: space-between;
+    gap: 8px;
     width: 100%;
-    min-height: 38px;
-    padding: 0 14px;
+    min-height: 30px;
+    padding: 0 10px;
+    border: 0;
     border-radius: var(--radius-md);
-    font-size: 0.78rem;
-    font-weight: 500;
-    letter-spacing: 0.005em;
-    border: 1px solid var(--border);
-    background: var(--surface-translucent);
-    box-shadow: 0 7px 14px var(--shadow-color);
+    background: transparent;
     color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: -0.003em;
+    text-align: left;
+    cursor: pointer;
     transition:
-        border-color 0.16s var(--ease-smooth),
-        background 0.15s var(--ease-smooth),
-        box-shadow 0.18s var(--ease-smooth),
-        color 0.15s var(--ease-smooth),
-        transform 0.12s var(--ease-spring);
+        background-color var(--film-dur-hover) var(--ease-smooth),
+        color var(--film-dur-hover) var(--ease-smooth);
 }
 
-.sidebar-actions .ui-action-btn:hover:not(:disabled) {
-    background: var(--surface-hover);
-    border-color: var(--border-strong);
+.sidebar-item:hover {
+    background: color-mix(in srgb, var(--fg) 6%, transparent);
     color: var(--text-primary);
-    transform: translateY(-1px);
-    box-shadow: 0 8px 16px var(--shadow-color);
 }
 
-.sidebar-actions .ui-action-btn:focus-visible {
+.sidebar-item:active {
+    background: color-mix(in srgb, var(--fg) 10%, transparent);
+    transition-duration: 0ms;
+}
+
+.sidebar-item:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: -2px;
 }
 
-.sidebar-actions .ui-action-btn.active {
+.sidebar-item.active {
     background: var(--accent-light);
-    border-color: transparent;
     color: var(--text-primary);
-    box-shadow: none;
+    font-weight: 600;
 }
 
-[data-theme="light"] .sidebar-actions .ui-action-btn {
-    border-color: var(--border);
-    background: var(--surface-translucent);
-    box-shadow: 0 7px 14px var(--shadow-color);
-    color: var(--text-secondary);
+.sidebar-item-shortcut {
+    font-family: var(--font-body);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
 }
 
-[data-theme="light"] .sidebar-actions .ui-action-btn:hover:not(:disabled) {
-    background: var(--surface-hover);
-    border-color: var(--border-strong);
-    box-shadow: 0 8px 16px var(--shadow-color);
-}
-
-[data-theme="light"] .sidebar-actions .ui-action-btn.active {
-    background: var(--accent-light);
-    border-color: transparent;
-    box-shadow: none;
-}
-
-/* ── Sidebar reel footer ─────────────────────────────────────────────────── */
-.sidebar-reel-footer {
+.sidebar-footer {
     margin-top: auto;
-    padding-top: 8px;
-}
-
-.sidebar-reel-meta {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 8px 6px;
-}
-
-.sidebar-reel-date,
-.sidebar-reel-frames {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    letter-spacing: var(--film-track-stamp);
-    text-transform: uppercase;
-    color: var(--fg-3);
-}
-
-.sidebar-reel-strip {
-    height: 22px;
-    overflow: hidden;
-    border-top: 1px solid var(--hairline);
-    position: relative;
-}
-
-.sidebar-reel-inner {
-    position: absolute;
-    top: 0;
-    left: 0;
-    height: 100%;
-    width: 100%;
-    background-image: repeating-linear-gradient(
-        90deg,
-        transparent 0px,
-        transparent 8px,
-        var(--hairline-strong) 8px,
-        var(--hairline-strong) 9px,
-        transparent 9px,
-        transparent 12px,
-        var(--accent) 12px,
-        var(--accent) 13px,
-        transparent 13px,
-        transparent 20px
-    );
-    opacity: 0.22;
+    padding: 12px 10px 0;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
+    color: var(--text-muted);
 }
 
 /* ===== Main content ===== */
@@ -835,21 +756,19 @@
     box-shadow: 0 4px 12px var(--shadow-color);
 }
 
-/* ===== Sidebar brand — FNDR mark =====
-   Amber dot + Cormorant wordmark per the handoff spec.
-   Replaces the empty .sidebar-brand placeholder div. */
+/* ===== Sidebar brand — FNDR mark ===== */
 .sidebar-brand {
     display: flex;
     align-items: center;
-    gap: 10px;
-    height: 40px;
-    margin: 0 0 18px 6px;
+    gap: 8px;
+    height: 28px;
+    margin: 0 0 12px 10px;
 }
 
 .sidebar-brand::before {
     content: "";
-    width: 6px;
-    height: 6px;
+    width: 7px;
+    height: 7px;
     border-radius: 999px;
     background: var(--accent);
     flex-shrink: 0;
@@ -858,30 +777,22 @@
 .sidebar-brand::after {
     content: "FNDR";
     font-family: var(--font-display);
-    font-weight: 600;
+    font-weight: 700;
     font-size: 15px;
-    letter-spacing: 0.22em;
+    letter-spacing: 0.04em;
     color: var(--fg);
-    text-transform: uppercase;
 }
 
-/* Sidebar section labels — mono caps per spec. */
+/* Section headers — small, semibold, sentence case (Finder "Favorites"),
+   with the slight positive tracking small text needs. */
 .sidebar-label {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    font-weight: 400;
-    letter-spacing: 0.24em;
-    text-transform: uppercase;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
     color: var(--fg-3);
-    opacity: 0.85;
-    padding: 0 6px;
-    margin-bottom: 6px;
+    padding: 0 10px;
+    margin-bottom: 4px;
 }
-
-/* Active nav item — a rounded-rect, accent-tinted fill (see the
-   .sidebar-actions .ui-action-btn.active rule above), the same way
-   macOS sidebars (Finder, System Settings) highlight the selected row
-   instead of a glowing accent bar. */
 
 /* ===== App toast stack ===== */
 .app-toast-stack {
@@ -1021,13 +932,7 @@
 
     .left-sidebar {
         width: 224px;
-        border-right: 1px solid rgba(255, 255, 255, 0.07);
-        border-bottom: 0;
-        padding: 48px 8px 6px;
-    }
-
-    .sidebar-group {
-        padding: 2px 0;
+        padding: 48px 8px 10px;
     }
 
     .app-main {
@@ -1106,7 +1011,7 @@
 }
 
 [data-theme="light"] .left-sidebar {
-    background: color-mix(in srgb, var(--surface) 72%, transparent);
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
     border-right-color: var(--hairline);
     box-shadow:
         1px 0 0 var(--hairline) inset,

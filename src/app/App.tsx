@@ -35,6 +35,7 @@ import {
 } from "@/shared/ipc/tauri";
 import { getOnboardingState, type OnboardingState } from "@/shared/ipc/onboarding";
 import { EVAL_UI } from "@/shared/utils/eval-ui";
+import { SidebarDrawer } from "./SidebarDrawer";
 import "./styles/App.css";
 
 function nextToastId(): string {
@@ -125,6 +126,7 @@ function App() {
     }, []);
 
     const isFocusMode = !query.trim();
+    const isHomeActive = activePanel === null && isFocusMode;
 
     const [homeGreeting, setHomeGreeting] = useState("");
 
@@ -516,7 +518,7 @@ function App() {
     }
 
     return (
-        <div className="app film-grain">
+        <div className="app">
             <div ref={backgroundLayerRef} className="app-background-layer">
                 {!EVAL_UI && (
                     <button
@@ -548,26 +550,21 @@ function App() {
 
                 {status && !status.ai_model_available && <ModelDownloadBanner />}
 
-                {!EVAL_UI && isSidebarOpen && (
-                <button
-                    className="sidebar-scrim"
-                    onClick={() => setIsSidebarOpen(false)}
-                    aria-label="Close sidebar overlay"
-                />
-            )}
-
                 {!EVAL_UI && (
-                <nav
-                    id="primary-navigation"
-                    className={`left-sidebar ${isSidebarOpen ? "open" : ""}`}
-                    aria-label="Primary navigation"
-                    aria-hidden={!isSidebarOpen}
+                <SidebarDrawer
+                    isOpen={isSidebarOpen}
+                    onClose={() => {
+                        setIsSidebarOpen(false);
+                        sidebarButtonRef.current?.focus();
+                    }}
                 >
                     <div className="sidebar-brand"></div>
 
-                    <div className="sidebar-group sidebar-actions">
+                    <div className="sidebar-group">
                         <button
-                            className={`ui-action-btn ${activePanel === null && !query.trim() ? "active" : ""}`}
+                            type="button"
+                            className={`sidebar-item ${isHomeActive ? "active" : ""}`}
+                            aria-current={isHomeActive ? "page" : undefined}
                             onClick={goHome}
                         >
                             Home
@@ -575,12 +572,14 @@ function App() {
                     </div>
 
                     {SIDEBAR_GROUPS.map((group) => (
-                        <div key={group.label} className="sidebar-group sidebar-actions">
+                        <div key={group.label} className="sidebar-group">
                             <div className="sidebar-label">{group.label}</div>
                             {group.items.map(({ key, text }) => (
                                 <button
                                     key={key}
-                                    className={`ui-action-btn ${activePanel === key ? "active" : ""}`}
+                                    type="button"
+                                    className={`sidebar-item ${activePanel === key ? "active" : ""}`}
+                                    aria-current={activePanel === key ? "page" : undefined}
                                     onClick={() => {
                                         if (activePanel === key) {
                                             closeActivePanel();
@@ -595,36 +594,28 @@ function App() {
                         </div>
                     ))}
 
-                    <div className="sidebar-group sidebar-actions">
+                    <div className="sidebar-group">
                         <div className="sidebar-label">Commands</div>
                         <button
-                            className="ui-action-btn"
+                            type="button"
+                            className="sidebar-item"
                             onClick={() => {
                                 sidebarButtonRef.current?.focus();
                                 setShowCommandPalette(true);
                                 setIsSidebarOpen(false);
                             }}
                         >
-                            Cmd+K Palette
+                            Command Palette
+                            <kbd className="sidebar-item-shortcut">⌘K</kbd>
                         </button>
                     </div>
 
-                    <div className="sidebar-reel-footer">
-                        <div className="sidebar-reel-meta">
-                            <span className="sidebar-reel-date">
-                                {new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase()}
-                            </span>
-                            {status?.frames_captured != null && (
-                                <span className="sidebar-reel-frames">
-                                    {String(status.frames_captured).padStart(4, "0")} FR
-                                </span>
-                            )}
+                    {status?.frames_captured != null && (
+                        <div className="sidebar-footer">
+                            {status.frames_captured.toLocaleString("en-US")} frames captured
                         </div>
-                        <div className="sidebar-reel-strip" aria-hidden="true">
-                            <div className="sidebar-reel-inner" />
-                        </div>
-                    </div>
-                </nav>
+                    )}
+                </SidebarDrawer>
             )}
 
                 <main className={`app-main ${isFocusMode ? "search-centered" : "has-active-search"}`}>
