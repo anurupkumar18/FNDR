@@ -1,0 +1,30 @@
+{"id": "q-001", "question": "when did the tests last pass in the repo", "relevant": ["g-006", "g-007", "g-008", "g-010"]}
+{"id": "q-002", "question": "what was that Rust clamp function I wrote", "relevant": ["g-003"]}
+{"id": "q-003", "question": "what does the fixture-app config timeout look like", "relevant": ["g-004"]}
+{"id": "q-004", "question": "what did the README say to run to build the project", "relevant": ["g-005"]}
+{"id": "q-005", "question": "what file did git say was modified", "relevant": ["g-009"]}
+{"id": "q-006", "question": "what does the API reference say the search endpoint returns", "relevant": ["g-012"]}
+{"id": "q-007", "question": "what did the FAQ say to do when a build fails", "relevant": ["g-013"]}
+{"id": "q-008", "question": "what changed in the latest release changelog", "relevant": ["g-014"]}
+{"id": "q-009", "question": "who is fixing the export bug", "relevant": ["g-016"]}
+{"id": "q-010", "question": "what did the customer say was failing on large files", "relevant": ["g-017"]}
+{"id": "q-011", "question": "what time is the hiking trip on Saturday", "relevant": ["g-018"]}
+{"id": "q-012", "question": "when does the project scope need to be locked", "relevant": ["g-019"]}
+{"id": "q-013", "question": "what time is dinner tonight", "relevant": ["g-020"]}
+{"id": "q-014", "question": "what method did the paper use to rank search results", "relevant": ["g-021", "g-023"]}
+{"id": "q-015", "question": "how much did the fused ranking improve accuracy by", "relevant": ["g-024"]}
+{"id": "q-016", "question": "who wrote the paper I was reading about retrieval methods", "relevant": ["g-025"]}
+{"id": "q-017", "question": "what package did I just install with pip", "relevant": ["g-026"]}
+{"id": "q-018", "question": "what error was I debugging in app.py", "relevant": ["g-027"]}
+{"id": "q-019", "question": "what docker image did I build", "relevant": ["g-028"]}
+{"id": "q-020", "question": "what did the reviewer suggest on my pull request", "relevant": ["g-029"]}
+{"id": "q-021", "question": "why did CI fail on pull request 501", "relevant": ["g-030"]}
+{"id": "q-022", "question": "what playlist was I listening to while working", "relevant": ["g-031"]}
+{"id": "q-023", "question": "what was that Rust ownership video covering", "relevant": ["g-032"]}
+{"id": "q-024", "question": "what job posting was I looking at", "relevant": ["g-033"]}
+{"id": "q-025", "question": "what flight am I taking to JFK", "relevant": ["g-036"]}
+{"id": "q-026", "question": "what was discussed in the design review meeting", "relevant": ["g-039"]}
+{"id": "q-027", "question": "what feedback did Sam give on the onboarding flow", "relevant": ["g-040"]}
+{"id": "q-028", "question": "what is on my grocery list", "relevant": ["g-043"]}
+{"id": "q-029", "question": "when is the contract renewal call", "relevant": ["g-044", "g-045"]}
+{"id": "q-030", "question": "what was I studying in the linear algebra course", "relevant": ["g-050"]}
