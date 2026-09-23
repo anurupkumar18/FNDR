@@ -580,9 +580,317 @@ fn extraction_grounding_confidence(record: &MemoryRecord) -> Option<f32> {
         .map(|value| value as f32)
 }
 
+/// Lifecycle values `MemoryRecord.enrichment_status` may hold (MEM-07
+/// invariant 3).
+const VALID_ENRICHMENT_STATUSES: &[&str] =
+    &["", "pending", "reviewed_local", "reviewed_daily", "review_failed"];
+
+/// The finalized-memory contract (MEM-07): every invariant a stored
+/// `MemoryRecord` must satisfy, checkable from the record alone. Invariants
+/// 8, 9, and 10 are process invariants (merge, reprocessing, deletion) and
+/// are covered by their own tests instead, since they can't be observed on
+/// a single record snapshot.
+pub fn assert_memory_contract(record: &MemoryRecord) -> Result<(), String> {
+    // Invariant 1: provenance, no raw screenshot bytes.
+    if record.app_name.trim().is_empty() {
+        return Err("invariant 1 (provenance): app_name is empty".to_string());
+    }
+    if record.timestamp <= 0 {
+        return Err("invariant 1 (provenance): timestamp is not set".to_string());
+    }
+    if record.session_key.trim().is_empty() {
+        return Err("invariant 1 (provenance): session_key is empty".to_string());
+    }
+    if record.content_hash.trim().is_empty() {
+        return Err("invariant 1 (provenance): content_hash (evidence hash) is empty".to_string());
+    }
+    if record.screenshot_path.is_some() {
+        return Err("invariant 1 (provenance): screenshot_path must be None (ADR-004)".to_string());
+    }
+
+    // Invariant 2: a non-zero primary vector of the live contract dimension,
+    // plus an embedding_manifest recording its provenance.
+    if record.embedding.len() != crate::embedding::EMBEDDING_DIM {
+        return Err(format!(
+            "invariant 2 (embedding): embedding has {} dims, expected {}",
+            record.embedding.len(),
+            crate::embedding::EMBEDDING_DIM
+        ));
+    }
+    if record.embedding.iter().all(|v| *v == 0.0) {
+        return Err("invariant 2 (embedding): embedding is all-zero".to_string());
+    }
+    if crate::memory_embedding_document::read_embedding_manifest(&record.raw_evidence).is_none() {
+        return Err("invariant 2 (embedding): raw_evidence has no embedding_manifest".to_string());
+    }
+
+    // Invariant 3: a valid lifecycle state; a visual_semantics_failed record
+    // never carries enriched (uncapped) confidence/quality scores.
+    if !VALID_ENRICHMENT_STATUSES.contains(&record.enrichment_status.as_str()) {
+        return Err(format!(
+            "invariant 3 (lifecycle): enrichment_status {:?} is not one of {:?}",
+            record.enrichment_status, VALID_ENRICHMENT_STATUSES
+        ));
+    }
+    if is_visual_semantics_failed_record(record) {
+        let capped = [
+            ("evidence_confidence", record.evidence_confidence, 0.30),
+            ("agent_usefulness_score", record.agent_usefulness_score, 0.25),
+            ("retrieval_value_score", record.retrieval_value_score, 0.25),
+            ("graph_readiness_score", record.graph_readiness_score, 0.15),
+            ("specificity_score", record.specificity_score, 0.15),
+            ("intent_score", record.intent_score, 0.10),
+            ("confidence_score", record.confidence_score, 0.20),
+            ("importance_score", record.importance_score, 0.20),
+            ("extraction_confidence", record.extraction_confidence, 0.15),
+            ("insight_card_confidence", record.insight_card_confidence, 0.15),
+        ];
+        for (label, value, ceiling) in capped {
+            if value > ceiling {
+                return Err(format!(
+                    "invariant 3 (lifecycle): visual_semantics_failed record has {label}={value} above its {ceiling} cap"
+                ));
+            }
+        }
+        if record.entity_score != 0.0 {
+            return Err(
+                "invariant 3 (lifecycle): visual_semantics_failed record has non-zero entity_score"
+                    .to_string(),
+            );
+        }
+    }
+
+    // Invariant 4: every non-empty structured field is supported by the
+    // evidence or cleared. High-confidence extractions are allowed to keep
+    // an unsupported value (mirrors the live scrub gate in capture::mod).
+    if record.extraction_confidence < 0.8 {
+        let evidence_norm = crate::capture::normalize_evidence_text(&format!(
+            "{} {} {}",
+            record.app_name, record.window_title, record.clean_text
+        ));
+        let scalar_fields: [(&str, &str); 6] = [
+            ("project", &record.project),
+            ("topic", &record.topic),
+            ("workflow", &record.workflow),
+            ("user_intent", &record.user_intent),
+            ("memory_context", &record.memory_context),
+            ("outcome", &record.outcome),
+        ];
+        for (label, value) in scalar_fields {
+            if !value.trim().is_empty()
+                && !crate::capture::field_supported_by_evidence(value, &evidence_norm)
+            {
+                return Err(format!(
+                    "invariant 4 (grounding): {label} {value:?} is not supported by evidence and was not cleared"
+                ));
+            }
+        }
+        let list_fields: [(&str, &[String]); 3] = [
+            ("entities", &record.entities),
+            ("files_touched", &record.files_touched),
+            ("search_aliases", &record.search_aliases),
+        ];
+        for (label, values) in list_fields {
+            for value in values {
+                if !crate::capture::field_supported_by_evidence(value, &evidence_norm) {
+                    return Err(format!(
+                        "invariant 4 (grounding): {label} entry {value:?} is not supported by evidence and was not cleared"
+                    ));
+                }
+            }
+        }
+    }
+
+    // Invariant 5: no meta narration in summary or display fields.
+    let narration_fields: [(&str, &str); 4] = [
+        ("memory_context", &record.memory_context),
+        ("display_summary", &record.display_summary),
+        ("insight_what_happened", &record.insight_what_happened),
+        ("insight_why_mattered", &record.insight_why_mattered),
+    ];
+    for (label, value) in narration_fields {
+        if !value.trim().is_empty() && crate::summariser::narration_filter::narration_filter_hits(value) {
+            return Err(format!(
+                "invariant 5 (no meta narration): {label} reads like narration about the capture itself"
+            ));
+        }
+    }
+
+    // Invariant 6: activity_type is one of CANONICAL_ACTIVITY_TYPES.
+    if !record.activity_type.is_empty()
+        && !crate::inference::CANONICAL_ACTIVITY_TYPES.contains(&record.activity_type.as_str())
+    {
+        return Err(format!(
+            "invariant 6 (activity_type): {:?} is not a canonical activity type",
+            record.activity_type
+        ));
+    }
+
+    // Invariant 7: URL fields carry no credentials in the query string.
+    for (label, url) in [("url", &record.url), ("reopen_url", &record.reopen_url)] {
+        if let Some(url) = url {
+            if crate::capture::url_has_credential_leak(url) {
+                return Err(format!(
+                    "invariant 7 (url credentials): {label} still carries a credential-looking userinfo or query/fragment parameter"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory_embedding_document::{
+        build_embedding_manifest, compose_memory_embedding_document, upsert_embedding_manifest,
+        EmbeddingStatus, VisualSemanticSource,
+    };
+
+    fn valid_memory_record() -> MemoryRecord {
+        let mut record = MemoryRecord {
+            app_name: "Chrome".to_string(),
+            window_title: "Quarterly roadmap review".to_string(),
+            timestamp: 1_700_000_000_000,
+            session_key: "session-key-1".to_string(),
+            content_hash: "hash-abc123".to_string(),
+            clean_text: "Reviewed the quarterly roadmap document with the team".to_string(),
+            embedding: vec![0.01; crate::embedding::EMBEDDING_DIM],
+            activity_type: "reviewing_agent_output".to_string(),
+            extraction_confidence: 0.9,
+            url: Some("https://example.com/roadmap?doc=42".to_string()),
+            ..Default::default()
+        };
+        let doc = compose_memory_embedding_document(&record, None);
+        let manifest = build_embedding_manifest(
+            &doc,
+            EmbeddingStatus::Ready,
+            EmbeddingStatus::Ready,
+            VisualSemanticSource::TextCapture,
+        );
+        record.raw_evidence = upsert_embedding_manifest("{}", &manifest);
+        record
+    }
+
+    #[test]
+    fn contract_accepts_a_fully_valid_record() {
+        assert_eq!(assert_memory_contract(&valid_memory_record()), Ok(()));
+    }
+
+    #[test]
+    fn contract_rejects_empty_app_name() {
+        let mut record = valid_memory_record();
+        record.app_name = String::new();
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 1"), "{err}");
+    }
+
+    #[test]
+    fn contract_rejects_raw_screenshot_path() {
+        let mut record = valid_memory_record();
+        record.screenshot_path = Some("/tmp/frame.png".to_string());
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 1"), "{err}");
+    }
+
+    #[test]
+    fn contract_rejects_wrong_dimension_embedding() {
+        let mut record = valid_memory_record();
+        record.embedding = vec![0.01; 3];
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 2"), "{err}");
+    }
+
+    #[test]
+    fn contract_rejects_all_zero_embedding() {
+        let mut record = valid_memory_record();
+        record.embedding = vec![0.0; crate::embedding::EMBEDDING_DIM];
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 2"), "{err}");
+    }
+
+    #[test]
+    fn contract_rejects_missing_embedding_manifest() {
+        let mut record = valid_memory_record();
+        record.raw_evidence = "{}".to_string();
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 2"), "{err}");
+    }
+
+    #[test]
+    fn contract_rejects_invalid_lifecycle_state() {
+        let mut record = valid_memory_record();
+        record.enrichment_status = "done".to_string();
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 3"), "{err}");
+    }
+
+    #[test]
+    fn contract_accepts_capped_visual_semantics_failed_scores() {
+        let mut record = valid_memory_record();
+        record.storage_outcome = VISUAL_SEMANTICS_FAILED_OUTCOME.to_string();
+        cap_visual_semantics_failed_scores(&mut record);
+        assert_eq!(assert_memory_contract(&record), Ok(()));
+    }
+
+    #[test]
+    fn contract_rejects_uncapped_visual_semantics_failed_scores() {
+        let mut record = valid_memory_record();
+        record.storage_outcome = VISUAL_SEMANTICS_FAILED_OUTCOME.to_string();
+        record.confidence_score = 0.9;
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 3"), "{err}");
+    }
+
+    #[test]
+    fn contract_rejects_unsupported_low_confidence_field() {
+        let mut record = valid_memory_record();
+        record.extraction_confidence = 0.2;
+        record.topic = "completely unrelated fabricated topic".to_string();
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 4"), "{err}");
+    }
+
+    #[test]
+    fn contract_allows_unsupported_field_at_high_confidence() {
+        let mut record = valid_memory_record();
+        record.extraction_confidence = 0.95;
+        record.topic = "completely unrelated fabricated topic".to_string();
+        assert_eq!(assert_memory_contract(&record), Ok(()));
+    }
+
+    #[test]
+    fn contract_rejects_meta_narration_in_memory_context() {
+        let mut record = valid_memory_record();
+        record.memory_context = "The user is viewing a spreadsheet of quarterly numbers.".to_string();
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 5"), "{err}");
+    }
+
+    #[test]
+    fn contract_rejects_non_canonical_activity_type() {
+        let mut record = valid_memory_record();
+        record.activity_type = "photo_capture".to_string();
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 6"), "{err}");
+    }
+
+    #[test]
+    fn contract_rejects_url_with_credentials() {
+        let mut record = valid_memory_record();
+        record.url = Some("https://example.com/path?api_key=secret".to_string());
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 7"), "{err}");
+    }
+
+    #[test]
+    fn contract_rejects_reopen_url_with_credentials() {
+        let mut record = valid_memory_record();
+        record.reopen_url = Some("https://example.com/path?token=secret".to_string());
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(err.contains("invariant 7"), "{err}");
+    }
 
     #[test]
     fn dedup_fingerprint_fallback_is_stable_and_supported() {

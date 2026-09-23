@@ -158,3 +158,34 @@ fn replays_synthetic_sessions_and_emits_gold_scoring_input() {
         .expect("write replay output");
     }
 }
+
+#[test]
+fn reprocessing_the_same_frame_twice_does_not_create_a_second_memory() {
+    // MEM-07 invariant 9: replaying the exact same frame content twice in a
+    // row (same app, url, window title, and evidence) must land in one
+    // memory, not two, whether or not the caller happens to reuse the id.
+    let fixture_paths = fixture_paths();
+    let fixture = load_session(&fixture_paths[0]);
+    let frame = &fixture.frames[0];
+
+    let temp_dir = tempfile::tempdir().expect("temporary replay store");
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+    let first = record(frame, &fixture.session_id, 0);
+    let mut second = record(frame, &fixture.session_id, 1);
+    second.id = uuid::Uuid::new_v4().to_string();
+
+    let outcomes = runtime
+        .block_on(replay_memory_records(
+            &state(temp_dir.path()),
+            &[first, second],
+        ))
+        .expect("replay duplicate frame");
+
+    assert_eq!(outcomes.len(), 2);
+    assert_eq!(
+        outcomes[0].id, outcomes[1].id,
+        "reprocessing identical frame content should merge into one memory, got {:?}",
+        outcomes.iter().map(|o| &o.id).collect::<Vec<_>>()
+    );
+}
