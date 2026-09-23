@@ -102,8 +102,11 @@ export function PrivacyPanel({
                 {alerts.length === 0 ? (
                     <div className="empty-alerts">
                         <span className="empty-icon"><Icon name="shield" size={32} /></span>
-                        <p>No active privacy alerts.</p>
-                        <small>Your data is secure.</small>
+                        <p>No recent apps or sites need your review.</p>
+                        <small>
+                            Detection can miss sensitive content. Use blocklists or pause capture before
+                            opening private material.
+                        </small>
                     </div>
                 ) : (
                     <div className="alerts-list">

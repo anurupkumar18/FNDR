@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+    getPrivacyAlerts,
+    pauseCapture,
+    setBlocklist,
+} from "@/shared/ipc/tauri";
 import { ControlPanel } from "./ControlPanel";
 
 const checkUpdateMock = vi.fn();
@@ -110,9 +115,92 @@ vi.mock("@/shared/ipc/onboarding", () => ({
 afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.mocked(getPrivacyAlerts).mockResolvedValue([]);
+    localStorage.clear();
+    document.getElementById("cinematic-palette-vars")?.remove();
 });
 
 describe("ControlPanel", () => {
+    it("keeps the closed settings sheet out of the accessibility tree", () => {
+        render(<ControlPanel status={null} compact={true} />);
+
+        const settingsButton = screen.getByRole("button", { name: /open settings/i });
+
+        expect(settingsButton).toHaveAttribute("aria-expanded", "false");
+        expect(document.getElementById("fndr-settings-panel")).toBeNull();
+        expect(screen.queryByRole("heading", { name: /profile/i })).not.toBeInTheDocument();
+
+        fireEvent.click(settingsButton);
+
+        const settingsPanel = document.getElementById("fndr-settings-panel");
+
+        expect(settingsButton).toHaveAttribute("aria-expanded", "true");
+        expect(screen.getByRole("dialog", { name: /fndr settings/i })).toBe(settingsPanel);
+        expect(screen.getByRole("heading", { name: /profile/i })).toBeInTheDocument();
+    });
+
+    it("uses the alert badge without forcing settings open over the current task", async () => {
+        vi.mocked(getPrivacyAlerts).mockResolvedValue([
+            { id: "privacy-alert-1", domain_or_title: "bank.example", detected_at: 1 },
+        ]);
+
+        render(<ControlPanel status={statusWithEmbedder("real", false)} compact={true} />);
+
+        expect(
+            await screen.findByRole("button", { name: /open settings, 1 privacy alert/i }),
+        ).toHaveAttribute("aria-expanded", "false");
+        expect(screen.queryByRole("dialog", { name: /fndr settings/i })).toBeNull();
+    });
+
+    it("moves focus into the modal drawer and restores it after Escape", async () => {
+        render(<ControlPanel status={statusWithEmbedder("real", false)} compact={true} />);
+
+        const settingsButton = screen.getByRole("button", { name: /open settings/i });
+        fireEvent.click(settingsButton);
+
+        const closeButton = await screen.findByRole("button", { name: /close settings/i });
+        await waitFor(() => expect(closeButton).toHaveFocus());
+
+        fireEvent.keyDown(document, { key: "Escape" });
+
+        await waitFor(() => expect(settingsButton).toHaveFocus());
+        expect(settingsButton).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("reports capture and blocklist action failures in the drawer", async () => {
+        vi.mocked(pauseCapture).mockRejectedValueOnce(new Error("capture unavailable"));
+        vi.mocked(setBlocklist).mockRejectedValueOnce(new Error("settings unavailable"));
+
+        render(<ControlPanel status={statusWithEmbedder("real", false)} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        fireEvent.click(await screen.findByRole("button", { name: /pause capture/i }));
+        expect(await screen.findByRole("alert", { name: /capture action failed/i })).toHaveTextContent(
+            /capture unavailable/i,
+        );
+
+        fireEvent.change(screen.getByRole("textbox", { name: /app or website/i }), {
+            target: { value: "Private Browser" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+        expect(await screen.findByRole("alert", { name: /blocklist update failed/i })).toHaveTextContent(
+            /settings unavailable/i,
+        );
+    });
+
+    it("reapplies the active cinematic palette when switching theme", () => {
+        localStorage.setItem("fndr-theme", "dark");
+        localStorage.setItem("fndr-palette", "film");
+        render(<ControlPanel status={null} compact={true} />);
+
+        fireEvent.click(screen.getByRole("button", { name: /switch to light mode/i }));
+
+        expect(document.documentElement).toHaveAttribute("data-theme", "light");
+        expect(document.getElementById("cinematic-palette-vars")?.textContent).toContain(
+            '--cp-active-mode: "light"',
+        );
+    });
+
     it("shows one demo-safe settings sheet without destructive or model-management controls", async () => {
         render(<ControlPanel status={null} compact={true} />);
 
@@ -120,11 +208,11 @@ describe("ControlPanel", () => {
         fireEvent.click(settingsButton);
 
         expect(await screen.findByRole("heading", { name: /profile/i })).toBeInTheDocument();
-        expect(screen.getByRole("heading", { name: /capture status/i })).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: /^capture$/i })).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: /privacy alerts/i })).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: /blocked apps & sites/i })).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: /local models/i })).toBeInTheDocument();
-        expect(await screen.findByText(/no active privacy alerts/i)).toBeInTheDocument();
+        expect(await screen.findByText(/no recent apps or sites need your review/i)).toBeInTheDocument();
         expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
         expect(screen.queryByText(/danger zone/i)).toBeNull();
         expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();

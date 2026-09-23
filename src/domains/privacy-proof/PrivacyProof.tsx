@@ -1,5 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { getPrivacyProof, type PrivacyProof as PrivacyProofData } from "@/shared/ipc/tauri";
+import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import "../workspace/PipelineInspectorPanel.css";
 
@@ -11,25 +12,46 @@ interface Proof {
     egress_hosts: string[];
 }
 
-const label = (reason: string) => reason.replace(/_/g, " ");
+const REASON_LABELS: Record<string, string> = {
+    self_app: "FNDR was open",
+    blocklist: "Blocked app or site",
+    sensitive_context: "Sensitive context",
+    surface_policy: "Excluded screen type",
+    perceptual_dup: "Repeated image",
+    semantic_dup: "Repeated content",
+    ocr_failed: "Text extraction failed",
+    low_signal_text: "Too little usable text",
+    noise: "Low-quality text",
+    grounding: "Low-confidence analysis",
+    stacked_extraction: "Analysis quality checks",
+    visual_small: "Image too small",
+    visual_novelty: "Repeated visual",
+    visual_compose_failed: "Visual analysis failed",
+    screen_capture_failed: "Screen capture failed",
+    embedder_unavailable: "Search model unavailable",
+    app_switched_during_capture: "App changed during capture",
+};
+
+const label = (reason: string) => REASON_LABELS[reason] ?? reason.replace(/_/g, " ");
 
 export function PrivacyProof({ proof }: { proof: Proof }) {
     const reasons = Object.entries(proof.skipped_by_reason).filter(([, count]) => count > 0);
     return (
-        <section aria-label="Privacy proof" className="pipeline-panel-card">
+        <section aria-label="Privacy activity for this app session" className="pipeline-panel-card">
             <div className="pipeline-engine-kv">
-                <span>Frames evaluated</span>
+                <span>Frames evaluated this app session</span>
                 <strong>{proof.evaluated}</strong>
-                <span>Frames stored</span>
+                <span>Frames stored this app session</span>
                 <strong>{proof.stored}</strong>
             </div>
             <p className="pipeline-egress-summary">
-                {proof.egress_requests} direct network requests from FNDR
+                {`${proof.egress_requests} FNDR network ${proof.egress_requests === 1 ? "request" : "requests"} recorded this app session`}
             </p>
+            <p className="pipeline-muted">These counts reset when FNDR closes.</p>
 
             {reasons.length > 0 && (
                 <>
-                    <h4>Skipped before storage</h4>
+                    <h4>Not stored this app session</h4>
                     <ul className="pipeline-skip-reasons">
                         {reasons.map(([reason, count]) => (
                             <li key={reason}>
@@ -42,13 +64,13 @@ export function PrivacyProof({ proof }: { proof: Proof }) {
             )}
 
             {proof.egress_hosts.length > 0 && (
-                <p className="pipeline-egress-hosts">Hosts: {proof.egress_hosts.join(", ")}</p>
+                <p className="pipeline-egress-hosts">Recorded hosts: {proof.egress_hosts.join(", ")}</p>
             )}
 
             <p className="pipeline-muted pipeline-privacy-note">
-                Counts only FNDR's own outbound calls. It does not include model downloads, the Hermes
-                subprocess talking to a configured cloud provider, or network use by allowlisted commands
-                like cargo check or npm run typecheck.
+                Recorded FNDR requests can include model downloads and enabled integrations. Child processes,
+                provider tools, and commands may make requests this counter does not see, so this is activity
+                history—not a complete network audit.
             </p>
         </section>
     );
@@ -64,6 +86,8 @@ interface PrivacyProofPanelProps {
 export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps) {
     const [proof, setProof] = useState<PrivacyProofData | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
 
     const loadPrivacyProof = useCallback(async (isMounted: () => boolean) => {
         try {
@@ -80,25 +104,41 @@ export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps
     }, []);
 
     usePolling(loadPrivacyProof, 5000, isVisible);
+    useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
 
     if (!isVisible) {
         return null;
     }
 
     return (
-        <div className="pipeline-panel">
+        <div
+            ref={dialogRef}
+            className="pipeline-panel pipeline-panel--privacy"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="privacy-activity-title"
+            aria-describedby="privacy-activity-description"
+        >
             <header className="pipeline-header">
                 <div>
-                    <h2>Privacy proof</h2>
-                    <p>Evidence that sensitive content never entered storage.</p>
+                    <h2 id="privacy-activity-title">Privacy activity</h2>
+                    <p id="privacy-activity-description">
+                        Capture outcomes and recorded network requests for the current app session.
+                    </p>
                 </div>
-                <button type="button" className="ui-action-btn pipeline-close-btn" onClick={onClose}>
+                <button
+                    ref={closeButtonRef}
+                    type="button"
+                    className="ui-action-btn pipeline-close-btn"
+                    onClick={onClose}
+                    aria-label="Close privacy activity"
+                >
                     Close
                 </button>
             </header>
             <div className="pipeline-body">
                 {error && <div className="pipeline-error">{error}</div>}
-                {proof ? <PrivacyProof proof={proof} /> : !error && <p className="pipeline-muted">Loading privacy proof...</p>}
+                {proof ? <PrivacyProof proof={proof} /> : !error && <p className="pipeline-muted">Loading privacy activity...</p>}
             </div>
         </div>
     );
