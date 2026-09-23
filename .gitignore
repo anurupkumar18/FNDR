@@ -74,3 +74,6 @@ fastlane/test_output/
 
 # Claude Code worktrees (never commit)
 .claude/worktrees/
+
+# Local browser-audit artifacts
+.playwright-cli/
