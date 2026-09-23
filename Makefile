@@ -1,4 +1,4 @@
-.PHONY: demo install dev test rust-test diagnostic reset-lancedb clean-dev-cache clean-all-generated clean-dev-cache-dry-run capture-baseline capture-baseline-verify phase-progress
+.PHONY: demo install dev test rust-test diagnostic reset-lancedb clean-dev-cache clean-all-generated clean-dev-cache-dry-run capture-baseline capture-baseline-verify phase-progress gitlab-plan gitlab-sync
 
 install:
 	npm install
@@ -41,3 +41,9 @@ capture-baseline-verify:
 
 phase-progress:
 	python3 scripts/team/phase_progress.py --manifest docs/superpowers/plans/2026-09-21-beta-final-master-plan.md --api
+
+gitlab-plan:
+	python3 scripts/team/gitlab_sync.py plan
+
+gitlab-sync:
+	python3 scripts/team/gitlab_sync.py sync $(if $(APPLY),--apply) $(if $(UPDATE),--update)

@@ -1,6 +1,6 @@
 # FNDR October plan: from demo to daily tool
 
-**Status:** Draft v0.2, 2026-09-23. Becomes v1 after the owner's hands-on QA pass (Sep 24 to 27) and the Monday Sep 28 meeting. Covers Mon Sep 28 to Sun Oct 25; Beta is Wed Oct 21.
+**Status:** Draft v0.3, 2026-09-23 (lanes reassigned by the owner; tickets written). Becomes v1 after the owner's hands-on QA pass (Sep 24 to 27) and the Monday Sep 28 meeting. Covers Mon Sep 28 to Sun Oct 25; Beta is Wed Oct 21.
 
 **Read with:** `docs/product/qa-walkthrough.md` (how each feature works today and how we score it), `docs/superpowers/plans/2026-09-23-user-first-qa-reset.md` (what the sweep found, Parts 1 and 1b), `docs/team/TEAM.md` (workflow, definition of done).
 
@@ -68,7 +68,7 @@ To be filled from the scorecard and Pass D numbers on Sep 27.
 3. **Voice that is fast and visible.** Streaming on-device transcription with partial text and clear stages.
 4. **Quick actions by command or voice.** Open apps, documents, and memories; paste; run your Shortcuts; make a reminder. Approval where it matters, everything journaled.
 5. **Resume Work** on top of the above (it is only as good as retrieval and stored fields).
-6. **Assistants write back** (agent notes with provenance).
+6. **Assistants write back** (agent notes with provenance). Not ticketed this round; picked up after Beta or by whichever lane finishes its p0 early.
 7. **Skills from what worked** (a first slice: save a successful command sequence as a skill, run it by name, share it with Claude Code).
 8. Stretch: **Seen before** (a cited nudge when an error or document comes back).
 
@@ -151,66 +151,18 @@ Capture, OCR, storage, and embeddings stay on the Mac, always. Reasoning (struct
 
 ## 7. Lanes
 
-Four lanes, one per person, each owning user-facing outcomes. Pairs are listed where deliverables cross lanes.
+Four lanes, one per person. The tickets are the source of truth (`docs/team/tickets/`, synced to the GitLab boards by `make gitlab-sync`); this section is the summary. Each lane also owns product and decision tickets in `product-decisions.md`.
 
-### Lane 1: Retrieval and memory engine (Anurup)
+| Lane | Owner | Mission | Week 1 to 3 highlights | Tickets |
+|---|---|---|---|---|
+| Vault and search | Anurup | Find anything by meaning or exact words, same answer everywhere | Baseline and merge gate; cutoff removed; BM25 plus rank fusion; one `retrieve` for every surface; Accessibility text in capture; chunk retrieval; embedding choice | `anurup-vault-search.md` (VS-01 to VS-26) |
+| Reopen and embeddings | Minh | Every memory opens exactly where it came from; every memory has vectors and chunks automatically | Reopen QA matrix (41 cases); file paths and PDF pages; downloads openable and never executed; chunk at capture; automatic backfill; no zero vectors; embedding QA matrix | `minh-reopen-embeddings.md` (RE-01 to RE-14, EM-01 to EM-12) |
+| Command surface, skills, local models | Kunj | FNDR does useful things by text or voice, learns skills from what worked, and gets real use out of local models | Command contract; notch branch resolved; tool registry and executors; grammar router; Quick Find as command bar; risk policy; journal and skills; model usage measured; enrichment policy wired; interactive before background | `kunj-command-skills-models.md` (GS-01 to GS-14, SK-01 to SK-07, LM-01 to LM-10) |
+| Voice, onboarding, tests | Felipe | One fast, visible voice pipeline everywhere; onboarding that gets a new user to a first useful moment; tests that protect what users do | Voice baseline and contract; native speech helper; shared voice control on Home, Search, command bar; Touch ID fix; onboarding copy and permissions; five destinations; test audit and journey tests | `felipe-voice-onboarding-tests.md` (VO-01 to VO-13, OB-01 to OB-07, PX-01 to PX-06, QT-01 to QT-07) |
 
-Mission: make search and Ask right every time, and make the engine behind commands and skills sound.
+Load (nominal hours without an agent, from `make gitlab-plan` on 2026-09-23): p0 is 66 to 75 hours per person against about 60 hours of month capacity, so p0 already assumes agent help; p1 and p2 are the backlog, pulled only when a person's p0 for the week is done or blocked. The Friday retro cuts p1 first.
 
-| Week | Deliverable | Done when |
-|---|---|---|
-| W1 | One retrieval path in `context_runtime` for Search, Ask, Resume, and MCP; word-overlap cutoff removed; LanceDB BM25 index plus reciprocal rank fusion | `make qa-retrieval`: the two paths agree on every query; paraphrase Recall@5 up; no keyword row gets worse |
-| W1 to W2 | Chunk-level index built at capture time from the full cleaned text; embedding model chosen by the Lane 3 bake-off; one migration | Chunk rows for every new memory in `make vault-health`; ADR recording the choice with the numbers |
-| W2 | ADR-018 and the reasoning tier for memory structuring and Ask | Project and next-step fill on a live day, before and after, from `make vault-health`; zero cloud requests when off |
-| W2 to W3 | Intent router (grammar first, then function calling constrained to the tool schemas) and the action journal | 50-utterance command script: 45 correct; injected screen text never produces a tool call |
-| W3 | Skills first slice: save as skill, approve, run by name, optional export for Claude Code | A recorded run of "save that as my Monday setup," then running it by name |
-
-Pairs with: Lane 2 on tools and capture text, Lane 3 on evals, Lane 4 on command and skill UX.
-
-### Lane 2: Mac native layer: capture text, reopen, voice, and actions (Kunj)
-
-Mission: make FNDR see the right text, open the right thing, hear you quickly, and do things on the Mac safely.
-
-| Week | Deliverable | Done when |
-|---|---|---|
-| W1 | Decide with the owner: merge the useful parts of the notch HUD branch or retire it, so no work lives outside `main` | Branch merged or closed; decision noted in the merge request |
-| W1 | Reopen v1: page URLs from the Accessibility tree, `AXDocument` file paths, Preview page numbers, downloads with source URL and a link to the page memory | `make vault-health` on a live day: 90% of memories reopen to a page or file; a downloaded PDF opens from the Vault |
-| W1 to W2 | Accessibility text first for knowledge-worker apps (Google Docs and Sheets in Chrome, Word, Pages, Keynote, PowerPoint, Preview, Slack, Notion), OCR as fallback | Median stored text 800 characters or more on a live day; before and after `make qa-retrieval` on a live-captured query set |
-| W2 | Native streaming voice (SpeechAnalyzer on macOS 26, older on-device recognizer as fallback), stage events to the UI | Voice log: first partial text within 0.5 s, final within 1 s of release, 50 utterances |
-| W2 to W3 | Tool executors (`open_app`, `open_url`, `open_memory_source`, `reveal_file`, `paste_text`, `run_shortcut`, `create_reminder`, `start_timer`) with the risk policy, and Quick Find back on as the command bar | Each tool has a test; a native recording of voice and typed commands doing real work |
-| W3 | Download content indexing (PDF and document text chunked and embedded) | Find a downloaded PDF by a phrase that is only inside it |
-
-Stretch: Seen before. Pairs with: Lane 1 on the router and chunking, Lane 4 on voice and command UX.
-
-### Lane 3: Search quality, evaluation, and the agent contract (Minh)
-
-Mission: be the team's source of truth on whether search is right, and make FNDR a memory any assistant can connect to in minutes and rely on.
-
-| Week | Deliverable | Done when |
-|---|---|---|
-| W1 | Human labels: review the draft extraction and retrieval cases; grow the retrieval query set to 60 queries across two seeded personas (add an office-PM week) including time and app filters; Felipe re-labels 10 blind | Every case marked human-reviewed or rejected; agreement recorded; `make qa-retrieval` runs both personas |
-| W1 | Agent access that survives relaunch: a persisted setting that starts the server on launch, and a Stop control | A Claude Code connection keeps working after relaunch with no clicks |
-| W1 to W2 | MCP canonical surface from `docs/product/mcp-tool-audit.md`, with a contract test per canonical tool | Contract suite passes; `docs/mcp.md` lists only canonical tools |
-| W2 | Embedding and reranker bake-off runner for Lane 1: Recall@5, MRR@10, ms per chunk, and memory for each candidate; search latency at 10,000 memories | One table in `docs/evidence/` anyone can regenerate with one command |
-| W2 to W3 | `fndr.remember` (agent notes with provenance) with the injected-note tests, and a local log of agent reads | Notes found by Search and Resume; injected notes change nothing else; today's agent reads countable over IPC |
-| W3 | Friday retrieval scoreboard, setup guides for Claude Code, Claude Desktop, and Cursor, and a README feature table that matches the code | Scoreboard posted every Friday; a teammate follows each guide cold in under 5 minutes |
-
-Pairs with: Lane 1 on retrieval changes and write-back, Lane 4 on how numbers and agent activity read.
-
-### Lane 4: Product experience and user research (Felipe)
-
-Mission: make FNDR obvious to a first-time user, and bring back evidence from real people about whether it helps.
-
-| Week | Deliverable | Done when |
-|---|---|---|
-| W1 | Home is Resume plus search; five destinations with Labs | Browser preview and native screenshots in light and dark |
-| W1 to W2 | Search and Vault UX: why a result matched (words or meaning), source icons (page, document, download), "Open where I left off" as the main action, app and time filter chips | Component tests; five people find a known item without help in the research sessions |
-| W2 | Voice and command UX: listening, partial text, understood intent, action preview, approval, undo; one design for Home, Quick Find, and voice | A recording of each state from Lane 2's events |
-| W2 | Daily Brief merge; remove panels the verdicts cut | No dead navigation; tests updated |
-| W1 to W3 | User research: five knowledge workers (two students, two office, one project lead); tasks: find a known item, reopen it, resume a thread, run one voice command | Times, correctness, and quotes in `docs/research/`; no participant screen data stored |
-| W3 to W4 | Agent-note badge, Privacy Activity v2 (agent reads, cloud requests), Beta storyboard, slides, backup video, evidence packet | Two timed rehearsals; the video plays offline |
-
-Pairs with: Lane 1 on skills UX, Lane 2 on Quick Find and voice, Lane 3 on research numbers.
+Cross-lane contracts: `retrieve` (Anurup) is used by Kunj's `search` tool and Minh's reopen checks; `reopen_memory` (Minh) is used by Kunj's `open_memory_source`; `voice://state` (Felipe) feeds Kunj's router; the risk policy (Kunj) gates MCP reopen (Minh). Each contract is written down in the first ticket that defines it.
 
 ## 8. Weekly gates
 
@@ -269,7 +221,7 @@ Pairs with: Lane 1 on skills UX, Lane 2 on Quick Find and voice, Lane 3 on resea
 | # | Decision | Recommendation | Default if not decided by Sep 28 |
 |---|---|---|---|
 | 1 | Opt-in cloud reasoning with the person's own key | Yes, for structuring, the intent router, Ask, and "about this screen" | Local only |
-| 2 | Retrieval ownership | Lane 1 owns the one retrieval path; Lane 3 owns the numbers that judge it | As written |
+| 2 | Retrieval ownership | Decided 2026-09-23: Anurup owns retrieval and its evaluation; Minh owns embedding coverage and reopen | Done |
 | 3 | Notch HUD branch | Merge the useful parts in W1, then close it | Close it after W1 |
 | 4 | Tools that change things | Paste, reminders, and Shortcuts with one-tap confirm; nothing that sends or deletes this month | As written |
 | 5 | Agent write-back scope | Notes only this month; suggested edits after Beta | Notes only |
