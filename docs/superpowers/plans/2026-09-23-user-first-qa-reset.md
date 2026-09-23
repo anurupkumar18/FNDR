@@ -1,10 +1,10 @@
 # User-first QA reset (Phase 0) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Parts 1 to 3 are decision material for the owner. Tasks 1 to 5 are for implementers. Tasks 6 and 7 need the owner.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Parts 1 to 3 are decision material for the owner. Tasks 1 to 7 are for implementers. Tasks 8 and 9 need the owner.
 
-**Goal:** Make FNDR testable the way a knowledge worker would actually use it, so the owner can score every feature hands-on before the October month plan (`docs/team/2026-10-month-plan.md`) is finalized and handed to the team.
+**Goal:** Make FNDR testable the way a knowledge worker would actually use it, and put hard numbers on the Vault and search before anyone changes them, so the owner can score every feature hands-on before the October month plan (`docs/team/2026-10-month-plan.md`) is finalized and handed to the team.
 
-**Architecture:** No new subsystems. Four small slices on top of what exists: a written walkthrough with honest "how it works" notes, a seeded QA profile whose memories carry the structured fields Resume Work needs, a Resume Work list on Home that calls the existing `resume_work` command, and a Settings card that turns on the existing MCP server on a stable port and gives copy-paste setup for Claude Code.
+**Architecture:** No new subsystems. Six small slices on top of what exists: a written walkthrough with honest "how it works" notes, a seeded QA profile whose memories carry the structured fields Resume Work needs, a Resume Work list on Home that calls the existing `resume_work` command, a Settings card that turns on the existing MCP server on a stable port, an aggregate-only vault health report, and a retrieval baseline that runs the same query set through both of FNDR's retrieval paths (the Search screen and Ask/agents).
 
 **Tech Stack:** Tauri 2 + Rust (`src-tauri/`), React + TypeScript (`src/`), Vitest + Testing Library, LanceDB, the existing seeder example `src-tauri/examples/seed_demo.rs`.
 
@@ -43,6 +43,35 @@ The strategy docs say "Resume Work is the product, Deja vu is the delight, Priva
 
 The one-line reading: the spine (capture, OCR, storage, hybrid search, cited answers) is real; the three things we lead with are either invisible (Resume), unreachable (agent access), or not built (Deja vu). A hands-on QA pass today would mostly exercise the Reflect panels, which are not the product.
 
+## Part 1b: Second sweep, the owner's seven points (verified 2026-09-23)
+
+Measured on the owner's real profile with the vault health script from Task 5 (aggregate counts only, no memory text) and read from code. The owner's priority order after this sweep: **Vault and search quality first**, then reopen, voice, and quick actions.
+
+| # | Owner's concern | What is actually true | Evidence |
+|---|---|---|---|
+| 1 | Reopen where you left off | 26 of 29 real memories reopen only the app, not the page or file (10% specific); a URL is stored on 10%. Native document apps expose the open file through the Accessibility attribute `AXDocument`; FNDR reads it for Autofill but never during capture. A file path is stored only when the local model lists one in `files_touched` (0 of 29). Downloads are detected (`downloads.rs` watches ~/Downloads) and stored as memories, but with no reopen target, no source URL, no link to the page that started them, and no file content indexed. | vault health; `memory/reopen.rs:83`; `accessibility/mod.rs:588`; `downloads.rs:212-238` |
+| 2 | Vault and search are not good enough | The owner's vault has 29 memories over 5 active days in the last week (about 6 per active day) with a median of 129 characters of stored text. Either FNDR barely ran or it dropped nearly everything; we cannot tell which, because skip counts reset on quit and no capture baseline was ever recorded. No retrieval quality number exists anywhere: the gold labels are drafts and no eval run has been recorded. | vault health; `docs/evidence/` has no retrieval or capture baseline |
+| 2 | Consistent no matter what or when | Two retrieval stacks. The Search screen uses `search/` (`HybridSearcher` plus a word-overlap reranker); Ask and every MCP tool use `context_runtime/` (planner routes plus fusion). The same question can rank different memories in each. | `ipc/commands/search.rs:530`; `context_runtime/mod.rs:3059`; `mcp/mod.rs:2413` |
+| 2 | Semantic | The Search reranker drops any result whose word overlap with the query is under 15%, whatever its vector similarity. That removes exactly the paraphrase matches semantic search is for. | `search/reranker.rs:9-30` |
+| 2 | Keyword side | Keyword search is `LOWER(column) LIKE '%term%'` over seven columns with the row limit applied before scoring, so it returns the first matches found on disk, not the best ones. There is no full-text (BM25) index, although the LanceDB 0.27 crate in use ships one. | `storage/lance_store/mod.rs:1693-1750` |
+| 6 | Is anything embedded; is there RAG? | Yes, embedded: every memory has three non-zero 384-dimension MiniLM vectors (0% zero vectors). No, not the RAG we describe: the parent-plus-chunk design in ADR-008 uses BGE 1024-dimension chunk tables that have **0 rows** on the owner's profile, because chunk indexing only runs from a manual reindex. So retrieval matches one short composed summary per memory, not the text you actually saw. MiniLM-L6 (2019) is also the weakest embedder still in common use. | vault health; ADR-008, ADR-010 |
+| 6 | What LanceDB does | LanceDB is an embedded, file-based database (no server process) that stores rows with vector columns and answers nearest-neighbor queries combined with SQL-style filters. FNDR keeps each memory as one 113-column row in `memories_v4_minilm_384` and has 17 other tables (graph, tasks, meetings, context packs, chunks); 9 of the 18 are empty on the owner's profile. | `~/Library/Application Support/com.fndr.app/lancedb`, vault health |
+| 3 | Screen Guide and computer use | Screen Guide is a local re-implementation of Clicky (ADR-014) that replaced Clicky's cloud models with the local 2B vision model and was defined read-only: it can point, never click, type, or open. On 8 GB that model is slow (local extraction p50 8 s, max 36 s from the owner's trace log) and shares one inference lock with capture enrichment. Voice commands in Search are hard-coded `includes("pause capture")` string checks. The in-app agent (`agent/`) has twelve developer-oriented action kinds (read-only shell commands, delegate to Claude Code) and its panel is not mounted. There is no typed action layer for "open this app, open that doc, make a reminder." Kunj's notch HUD work sits on an unmerged branch on the GitHub mirror: 61 files, about 10,500 lines added and 5,800 removed, diverging from `main` since Sep 9. | ADR-014; `llm_traces.jsonl` aggregates; `agent/actions.rs:7`; `SearchBar.tsx:334-375`; `git diff --stat main...github/kunj-notch-hud` |
+| 4 | Skills from actions | Scaffolding exists: `agent/skills.rs` turns an agent audit record into a skill draft appended to a JSONL file, and the MCP prompt `turn_workflow_into_skill` exists. Nothing in the shipped app creates audit records, so no skill has ever been drafted. | `agent/skills.rs:43,113` |
+| 5 | Voice | Browser `MediaRecorder` audio is written to a file, then transcribed by a whisper.cpp CLI if one is installed, otherwise by a Python sidecar (`whisper_cpp_python`, unmaintained, needs Homebrew Python 3.10 to 3.13) that loads the 466 MB `ggml-small` model from disk on every request. No streaming, no partial text, no progress beyond a status string. macOS 26 includes an on-device streaming recognizer (SpeechAnalyzer) with partial results; FNDR does not use it. | `speech.rs:350-460,712`; `sidecars/whisper_gguf_runner.py` |
+
+Further flags nobody asked about:
+
+| Flag | Why it matters |
+|---|---|
+| Nobody is dogfooding: the diary is empty, the owner's vault holds 29 memories, and no capture baseline exists. | We are designing for usage we have never observed. |
+| The always-on cost is unmeasured (the CAP-02 real run was never recorded). | "Is it worth running all day?" has no number behind it. |
+| 1.9 GB of model files on an 8 GB machine (Qwen3-VL-2B, whisper-small, BGE-large, MiniLM, CLIP); BGE is downloaded and unused. | Onboarding weight and memory pressure with no retrieval benefit. |
+| The local model runs rarely and slowly: 79 traced calls in total; extraction p50 8 s, review p50 22 s, daily briefing p50 17 s; 0% of real memories have a project or next steps. | Resume, To-dos, Seen-before, and agent packs all read fields that are empty. |
+| Privacy Activity counters reset on quit. | Trust cannot be shown over a day or a week. |
+| Planning outweighs product: 20 plan documents under `docs/superpowers/plans` and 47 manifest tickets, while each teammate has about 7 commits since June. | This month plan has to replace the pile, not add to it. |
+| 798 Rust tests and 55 frontend test files pass while the real vault holds 29 thin memories. | Green CI proves fixtures, not usefulness. Each lane needs an end-to-end number. |
+
 ## Part 2: How useful the hands-on pass is, and what has to be true first
 
 The owner asked to use FNDR for real and score each feature. That is the highest-value activity available this week, on one condition: it must separate two questions that are currently tangled.
@@ -57,9 +86,10 @@ If these are not separated, every weak screen gets blamed on the model and every
 | A. Seeded | Useful given good inputs? | A QA profile whose memories carry project, topic, outcome, next steps, decisions, errors, for knowledge-worker threads | Task 2 |
 | B. Live | Does the engine produce them? | The real app on the real profile, and a Resume screen to look at | Task 3 |
 | C. Agent | Can my assistant use my memory? | A way to turn on MCP on a stable port and connect Claude Code without reading source | Task 4 |
+| D. Numbers | How good are the Vault and search, before we change them? | A vault health report for any profile, and one query set run through both retrieval paths with Recall@5, MRR@10, latency, and agreement | Tasks 5 and 6 |
 | All | Consistent scoring | A walkthrough with promise, how it works, known gaps, steps, and a score row per feature | Task 1 |
 
-Estimated effort: Tasks 1 to 5 are about one working day with an agent. Pass A is 90 minutes, Pass B is two normal working days plus 45 minutes of review, Pass C is 30 minutes.
+Estimated effort: Tasks 1 to 7 are one to two working days with an agent. Pass A is 90 minutes, Pass B is two normal working days plus 45 minutes of review, Pass C is 30 minutes, Pass D is 10 minutes of commands.
 
 ## Part 3: Where the SWOT is right, and where this plan pushes back
 
@@ -82,7 +112,7 @@ What to contemplate before adding external or cloud resources: add one only if i
 | `src-tauri/examples/seed_demo.rs` | Modify | Accept structured fields and `minutes_ago` in seed entries; unit tests |
 | `scripts/demo/knowledge-worker-week.json` | Create | Synthetic week for a student, intern, and capstone lead |
 | `scripts/demo/seed-demo-profile.sh` | Modify | Corpus path from `FNDR_DEMO_CORPUS` |
-| `Makefile` | Modify | `qa-seed`, `qa-app`, `qa-preview` targets |
+| `Makefile` | Modify | `qa-seed`, `qa-app`, `qa-preview`, `vault-health`, `qa-retrieval` targets |
 | `src/shared/ipc/tauri.ts` | Modify | `ResumeThread` types and `resumeWork()` wrapper |
 | `src/domains/resume/resumeFormat.ts` | Create | Pure helpers: age label, pack text for an AI assistant |
 | `src/domains/resume/resumeFormat.test.ts` | Create | Helper tests |
@@ -100,6 +130,10 @@ What to contemplate before adding external or cloud resources: add one only if i
 | `src/domains/workspace/ControlPanel.css` | Modify | One layout rule for the copy buttons |
 | `src/dev/previewIpc.ts`, `src/dev/previewIpc.test.ts` | Modify | Model `resume_work`, `get_mcp_server_status`, `start_mcp_server` for the browser preview |
 | `docs/mcp.md` | Modify | Document the stable port and the Settings card |
+| `scripts/audit/vault_health.py`, `scripts/audit/test_vault_health.py` | Create | Aggregate-only store report: memories per day, vector health, text length, structured-field fill, reopen specificity, chunk rows |
+| `src-tauri/src/ipc/commands/search.rs` | Modify | Extract `search_ranked_results`, the exact ranked list the Search screen uses, so the eval can call it |
+| `src-tauri/examples/retrieval_qa.rs` | Create | Runs a query set through Search and Ask paths on a seeded profile; Recall@5, MRR@10, latency, agreement |
+| `scripts/demo/knowledge-worker-queries.json` | Create | 22 queries with expected memory ids for the knowledge-worker corpus, tagged keyword or paraphrase |
 
 ---
 
@@ -109,7 +143,7 @@ What to contemplate before adding external or cloud resources: add one only if i
 - Create: `docs/product/qa-walkthrough.md`
 
 **Interfaces:**
-- Consumes: `make qa-seed` and `make qa-app` (Task 2), the Resume section (Task 3), the Agent access card (Task 4). Write the doc first; it names these commands.
+- Consumes: `make qa-seed` and `make qa-app` (Task 2), the Resume section (Task 3), the Agent access card (Task 4), `make vault-health` (Task 5), `make qa-retrieval` (Task 6). Write the doc first; it names these commands.
 - Produces: the filled scorecard that Task 7 turns into the month plan's "What we heard" table.
 
 - [ ] **Step 1: Create the walkthrough with this exact content**
@@ -126,6 +160,7 @@ Use FNDR the way a knowledge worker would, then decide feature by feature whethe
 | A. Seeded | If the engine gave this screen perfect inputs, is the screen useful? | `make qa-seed`, then `make qa-app` (separate profile, your real data is untouched) | 90 minutes |
 | B. Live | Does the engine produce those inputs from my real work? | `npm run tauri dev` on your normal profile; work normally | 2 working days, then 45 minutes of review |
 | C. Agent | Can my AI assistant use my FNDR memory? | Settings, Agent access, connect Claude Code | 30 minutes |
+| D. Numbers | How healthy is my vault, and how good is search today? | `make vault-health` on your real profile; `make qa-retrieval` after `make qa-seed` | 10 minutes |
 
 Pass A persona: Sam, a senior who is writing a history essay (HIST 2100), finishing a data assignment (CS 3500), interning as an analyst (Q4 onboarding survey readout), and leading a capstone team (pantry app demo). All data is synthetic.
 
@@ -142,6 +177,7 @@ Pass A persona: Sam, a senior who is writing a history essay (HIST 2100), finish
 2. Quit heavy apps. On 8 GB, a browser with many tabs plus FNDR plus the local model is enough to trigger memory pressure, which changes what FNDR does.
 3. Have a stopwatch for the Resume task at the end.
 4. Optional: screen-record each pass. Keep recordings outside the repo.
+5. Run Pass D first and keep both outputs next to you: `make vault-health` (your real profile; counts only, no memory text) and `make qa-retrieval` (the seeded profile). They tell you what the engine has to work with before you judge any screen.
 
 ## Feature cards
 
@@ -199,8 +235,9 @@ Pass A persona: Sam, a senior who is writing a history essay (HIST 2100), finish
 
 - **Promise:** browse and check what FNDR remembered, and remove what you do not want.
 - **How it works today:** list with app, time, and source filters; an expanded view with provenance, Open source, Find similar, Copy for Agent (builds a context pack as Markdown), and Delete. A separate tab lists excluded low-signal captures.
-- **Steps:** open five memories. Is the summary right? Delete one and confirm it is gone from Search.
-- **Good looks like:** summaries read like something a person wrote; delete is obvious and final.
+- **Known gaps:** most memories reopen only the app, not the page or file (10% specific on the owner's profile). Downloads are stored as memories but cannot be opened from the Vault.
+- **Steps:** open five memories. Is the summary right? Click "Open source" on each: did it land on the exact page or document, only the app, or nothing? Pass B: download a PDF in your browser, then find it in the Vault and Search and try to open it. Delete one memory and confirm it is gone from Search.
+- **Good looks like:** summaries read like something a person wrote; "Open source" lands on the exact page or file; the download is findable by its name and by what it is about; delete is obvious and final.
 
 ### 8. Agent access (Claude Code over MCP)
 
@@ -255,6 +292,13 @@ Pass A persona: Sam, a senior who is writing a history essay (HIST 2100), finish
 - **Promise:** developers can see stage timings and counters.
 - **Steps:** open once. Audience is developers; score whether it belongs in the main sidebar.
 
+### 16. Voice input
+
+- **Promise:** say what you want instead of typing it.
+- **How it works today:** the window records audio in the browser engine, writes it to a temporary file, then transcribes it with a whisper.cpp command-line tool if one is installed, otherwise with a Python helper that loads the 466 MB Whisper small model from disk for every request. The text comes back all at once; there is no partial text while you speak. In Search, a few hard-coded phrases ("pause capture," "open memory vault") act as commands; anything else becomes a search.
+- **Steps:** ten short utterances each on Home, in Search, and in Screen Guide: five searches ("the pandas fix from last week"), three commands ("pause capture"), two you wish worked ("open the essay draft," "remind me to email Dana at 4"). Time from releasing the button to text appearing. Count failures and wrong words.
+- **Good looks like:** text appears in under a second, nine of ten are right, and you can see what stage it is in while you wait.
+
 ## Not testable in this build
 
 Deja vu (error to prior fix), agent write-back into the Vault, cloud reasoning, Meetings screen, full knowledge graph, Quick Find (Alt+Space) and Autofill (switched off for the Alpha), approve-then-act agent, phone companion. List any of these you missed during Pass B.
@@ -291,6 +335,11 @@ Deja vu (error to prior fix), agent write-back into the Vault, cloud reasoning, 
 | 13 | Screen Guide | B | | | | |
 | 14 | Seen-before toasts | B | | | | |
 | 15 | Engine diagnostics | A | | | | |
+| 16 | Voice input | B | | | | |
+
+## Pass D numbers
+
+Paste the summary lines from `make vault-health` and the first table from `make qa-retrieval` here (counts and scores only).
 
 ## Open notes
 
@@ -300,7 +349,7 @@ Anything that surprised you, anything you wanted and could not do, and the one f
 - [ ] **Step 2: Verify the doc has every card and no dashes that break the house style**
 
 Run: `grep -c '^### ' docs/product/qa-walkthrough.md && grep -nP '[\x{2013}\x{2014}]' docs/product/qa-walkthrough.md; echo "exit $?"`
-Expected: `15` cards, then no dash matches and `exit 1` from the second grep.
+Expected: `16` cards, then no dash matches and `exit 1` from the second grep.
 
 - [ ] **Step 3: Commit**
 
@@ -1782,13 +1831,625 @@ git add src-tauri/src/mcp/mod.rs src/domains/workspace docs/mcp.md src/dev/previ
 git commit -m "feat(mcp): stable local port and an Agent access card with Claude Code setup"
 ```
 
-### Task 5: Integration check and hand the QA build to the owner
+### Task 5: Vault health report
+
+**Files:**
+- Create: `scripts/audit/vault_health.py`, `scripts/audit/test_vault_health.py`
+- Modify: `Makefile`
+- Create: `docs/evidence/W01/vault-health-owner.md` (aggregate output only)
+
+**Interfaces:**
+- Consumes: any FNDR LanceDB directory; the `memories_v4_minilm_384` columns `embedding`, `timestamp`, `clean_text`, `project`, `topic`, `outcome`, `next_steps`, `decisions`, `errors`, `summary_source`, `reopen_kind`; table names ending in `.lance`.
+- Produces: `summarize(db_path: str) -> dict` with keys `tables`, `memories`, `first_day`, `last_day`, `active_days`, `memories_per_active_day`, `zero_or_missing_vectors_pct`, `clean_text_chars_p50`, `structured_pct`, `summary_source`, `reopen_specific_pct`, `chunk_rows`; `render(report: dict) -> str` (Markdown, never memory text); `make vault-health [DB=<dir>]`. Lane 3 reruns this every Friday.
+
+Requires `python3 -m pip install lancedb numpy` (lancedb 0.29 reads the tables the Rust crate writes; checked against the owner's profile on 2026-09-23).
+
+- [ ] **Step 1: Write the failing test `scripts/audit/test_vault_health.py`**
+
+```python
+import os
+import sys
+import tempfile
+import unittest
+
+import lancedb
+import pyarrow as pa
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from vault_health import MEMORY_TABLE, render, summarize  # noqa: E402
+
+
+class VaultHealthTest(unittest.TestCase):
+    def test_counts_structure_reopen_and_empty_chunk_tables(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = lancedb.connect(d)
+            day_ms = 86_400_000
+            start = 1_758_600_000_000
+            db.create_table(
+                MEMORY_TABLE,
+                pa.table(
+                    {
+                        "id": ["a", "b"],
+                        "timestamp": [start, start + day_ms],
+                        "embedding": pa.array([[0.1, 0.2], [0.0, 0.0]], type=pa.list_(pa.float32(), 2)),
+                        "clean_text": ["secret-text-" * 10, "y" * 300],
+                        "project": ["Essay", ""],
+                        "topic": ["unknown", "Drafting"],
+                        "outcome": ["", ""],
+                        "next_steps": [["Finish"], []],
+                        "decisions": pa.array([[], []], type=pa.list_(pa.string())),
+                        "errors": pa.array([[], []], type=pa.list_(pa.string())),
+                        "summary_source": ["llm", "fallback"],
+                        "reopen_kind": ["browser_url", "app_bundle"],
+                    }
+                ),
+            )
+            db.create_table("memory_chunks_v1_bge_1024", pa.table({"id": pa.array([], type=pa.string())}))
+            report = summarize(d)
+
+        self.assertEqual(report["memories"], 2)
+        self.assertEqual(report["active_days"], 2)
+        self.assertEqual(report["zero_or_missing_vectors_pct"], 50.0)
+        self.assertEqual(report["structured_pct"]["project"], 50.0)
+        self.assertEqual(report["structured_pct"]["topic"], 50.0)
+        self.assertEqual(report["structured_pct"]["next_steps"], 50.0)
+        self.assertEqual(report["structured_pct"]["decisions"], 0.0)
+        self.assertEqual(report["reopen_specific_pct"], 50.0)
+        self.assertEqual(report["chunk_rows"]["memory_chunks_v1_bge_1024"], 0)
+        text = render(report)
+        self.assertIn("| project | 50.0% |", text)
+        self.assertNotIn("secret-text", text)
+
+    def test_missing_memory_table_is_reported_not_raised(self):
+        with tempfile.TemporaryDirectory() as d:
+            lancedb.connect(d).create_table("tasks", pa.table({"id": ["t"]}))
+            report = summarize(d)
+        self.assertNotIn("memories", report)
+        self.assertIn("No `memories_v4_minilm_384` table found.", render(report))
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `python3 scripts/audit/test_vault_health.py`
+Expected: FAIL with `ModuleNotFoundError: No module named 'vault_health'`.
+
+- [ ] **Step 3: Implement `scripts/audit/vault_health.py`**
+
+```python
+#!/usr/bin/env python3
+"""Aggregate-only health report for an FNDR LanceDB store.
+
+Prints counts and percentages, never memory text, so the output is safe to
+paste into an evidence file. Requires: pip install lancedb numpy
+
+Usage: python3 scripts/audit/vault_health.py [--db <lancedb dir>] [--out <md>]
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import datetime
+import os
+
+import numpy as np
+
+DEFAULT_DB = os.path.expanduser("~/Library/Application Support/com.fndr.app/lancedb")
+MEMORY_TABLE = "memories_v4_minilm_384"
+CHUNK_TABLES = ("memories_v5_bge_1024", "memory_chunks_v1_bge_1024")
+STRUCTURED = ("project", "topic", "outcome", "next_steps", "decisions", "errors")
+SPECIFIC_REOPEN = ("browser_url", "file_path", "app_deep_link")
+
+
+def _filled(values) -> int:
+    return sum(1 for v in values if v not in (None, "", "unknown") and v != [])
+
+
+def _pct(part: int, whole: int) -> float:
+    return round(100.0 * part / whole, 1) if whole else 0.0
+
+
+def summarize(db_path: str) -> dict:
+    import lancedb
+
+    db = lancedb.connect(db_path)
+    names = sorted(d[: -len(".lance")] for d in os.listdir(db_path) if d.endswith(".lance"))
+    tables = {name: db.open_table(name).count_rows() for name in names}
+    report: dict = {"tables": tables}
+    if MEMORY_TABLE not in tables:
+        return report
+
+    t = db.open_table(MEMORY_TABLE).to_arrow()
+    n = t.num_rows
+    cols = set(t.column_names)
+
+    def col(name: str) -> list:
+        return t.column(name).to_pylist() if name in cols else [None] * n
+
+    zero = sum(1 for v in col("embedding") if v is None or not np.any(np.asarray(v, dtype=np.float32)))
+    days = collections.Counter(
+        datetime.datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d") for ms in col("timestamp") if ms
+    )
+    text_lens = sorted(len(v or "") for v in col("clean_text"))
+    reopen = collections.Counter(str(v) for v in col("reopen_kind"))
+    specific = sum(reopen.get(kind, 0) for kind in SPECIFIC_REOPEN)
+    report.update(
+        {
+            "memories": n,
+            "first_day": min(days) if days else None,
+            "last_day": max(days) if days else None,
+            "active_days": len(days),
+            "memories_per_active_day": round(n / len(days), 1) if days else 0.0,
+            "zero_or_missing_vectors_pct": _pct(zero, n),
+            "clean_text_chars_p50": int(np.percentile(text_lens, 50)) if text_lens else 0,
+            "structured_pct": {field: _pct(_filled(col(field)), n) for field in STRUCTURED},
+            "summary_source": dict(collections.Counter(str(v) for v in col("summary_source"))),
+            "reopen_specific_pct": _pct(specific, n),
+            "chunk_rows": {name: tables.get(name, 0) for name in CHUNK_TABLES},
+        }
+    )
+    return report
+
+
+def render(report: dict) -> str:
+    lines = ["# FNDR vault health", "", "Aggregate counts only; no memory text.", ""]
+    lines += ["## Tables", "", "| table | rows |", "|---|---|"]
+    lines += [f"| {name} | {rows} |" for name, rows in sorted(report["tables"].items())]
+    if "memories" not in report:
+        lines += ["", f"No `{MEMORY_TABLE}` table found."]
+        return "\n".join(lines) + "\n"
+    chunks = ", ".join(f"{name} = {rows}" for name, rows in report["chunk_rows"].items())
+    lines += [
+        "",
+        "## Memories",
+        "",
+        f"- Memories: {report['memories']} over {report['active_days']} active days "
+        f"({report['first_day']} to {report['last_day']}), {report['memories_per_active_day']} per active day",
+        f"- Zero or missing primary vectors: {report['zero_or_missing_vectors_pct']}%",
+        f"- Stored clean text, median characters: {report['clean_text_chars_p50']}",
+        f"- Reopens to a specific page or file, not just the app: {report['reopen_specific_pct']}%",
+        f"- Chunk-level rows: {chunks}",
+        "",
+        "## Structured fields filled",
+        "",
+        "| field | filled |",
+        "|---|---|",
+    ]
+    lines += [f"| {field} | {pct}% |" for field, pct in report["structured_pct"].items()]
+    lines += ["", "## Summary source", "", "| source | memories |", "|---|---|"]
+    lines += [f"| {src} | {count} |" for src, count in sorted(report["summary_source"].items(), key=lambda kv: -kv[1])]
+    return "\n".join(lines) + "\n"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Aggregate-only FNDR vault health report")
+    parser.add_argument("--db", default=DEFAULT_DB)
+    parser.add_argument("--out")
+    args = parser.parse_args()
+    text = render(summarize(os.path.expanduser(args.db)))
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    print(text)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `python3 scripts/audit/test_vault_health.py`
+Expected: `Ran 2 tests` and `OK`. (This exact script and test passed in a scratch copy on 2026-09-23.)
+
+- [ ] **Step 5: Add the Make target and record the owner baseline**
+
+Add `vault-health` to `.PHONY` and append to `Makefile`:
+
+```make
+vault-health:
+	python3 scripts/audit/vault_health.py $(if $(DB),--db "$(DB)") $(if $(OUT),--out "$(OUT)")
+```
+
+Run: `make vault-health OUT=docs/evidence/W01/vault-health-owner.md`
+Expected on the owner's profile as of 2026-09-23: `Memories: 29 over 5 active days`, `Zero or missing primary vectors: 0.0%`, `Stored clean text, median characters: 129`, `Reopens to a specific page or file, not just the app: 10.3%`, both chunk tables `= 0`, `project | 0.0%`, `next_steps | 0.0%`. Newer numbers are fine; the point is a dated baseline. Open the file and confirm it contains no memory text before committing.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add scripts/audit/vault_health.py scripts/audit/test_vault_health.py Makefile docs/evidence/W01/vault-health-owner.md
+git commit -m "feat(audit): aggregate-only vault health report and owner baseline"
+```
+
+### Task 6: Retrieval baseline through both search paths
+
+**Files:**
+- Modify: `src-tauri/src/ipc/commands/search.rs` (extract a public helper from `search_memory_cards`, lines 511 to 541)
+- Create: `src-tauri/examples/retrieval_qa.rs`
+- Create: `scripts/demo/knowledge-worker-queries.json`
+- Modify: `Makefile`
+- Create: `docs/evidence/W01/retrieval-baseline-seeded.md` (generated)
+
+**Interfaces:**
+- Consumes: `run_search_query(state: &AppState, query: &str, time_filter: Option<&str>, app_filter: Option<&str>, limit: usize) -> Result<Vec<SearchResult>, String>` (`search.rs:21`), `partition_surfaceable`, `QueryContext::from_query`, `rerank_results`; `fndr_lib::context_runtime::{run_query, ComposeMode}` returning `ComposedAnswer { cards: Vec<MemoryCard>, .. }` where `MemoryCard { id, evidence_ids, .. }`; `AppState::new(app_data_dir, Config, Arc<Store>, Arc<StateStore>, GraphStore, None, None)`; the seeded QA profile from Task 2.
+- Produces: `pub async fn search_ranked_results(state: &AppState, query: &str, time_filter: Option<&str>, app_filter: Option<&str>, raw_limit: usize) -> Result<Vec<SearchResult>, String>` (used by the Search screen and the eval); `cargo run --example retrieval_qa -- --data-dir <profile> --cases <json> [--out <md>]`; `make qa-retrieval`. The month plan's retrieval work is judged by this report.
+
+- [ ] **Step 1: Write the failing tests at the bottom of a new `src-tauri/examples/retrieval_qa.rs`**
+
+Create the file with only the header, imports, and this test module for now:
+
+```rust
+//! Retrieval baseline on a seeded profile, through the two paths the app uses:
+//! the Search screen (`search_ranked_results`) and Ask plus every MCP tool
+//! (`context_runtime::run_query`). Read-only; refuses the real profile.
+//! Usage: cargo run --example retrieval_qa -- --data-dir <profile> --cases <json> [--out <md>]
+
+use fndr_lib::config::Config;
+use fndr_lib::context_runtime::{run_query, ComposeMode};
+use fndr_lib::graph::GraphStore;
+use fndr_lib::ipc::commands::search::search_ranked_results;
+use fndr_lib::storage::{StateStore, Store};
+use fndr_lib::AppState;
+use serde::Deserialize;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ids(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| v.to_string()).collect()
+    }
+
+    #[test]
+    fn rank_counts_a_card_as_relevant_when_any_cited_id_is_relevant() {
+        let relevant: HashSet<String> = ["b".to_string()].into();
+        let ranked = vec![ids(&["x"]), ids(&["y", "b"]), ids(&["b"])];
+        assert_eq!(first_relevant_rank(&ranked, &relevant, 10), Some(2));
+        assert_eq!(first_relevant_rank(&ranked, &relevant, 1), None);
+    }
+
+    #[test]
+    fn score_reports_recall_at_5_and_mrr() {
+        let mut score = Score::default();
+        score.add(Some(1));
+        score.add(Some(4));
+        score.add(Some(7));
+        score.add(None);
+        assert!((score.recall_at_5() - 0.5).abs() < 1e-6);
+        assert!((score.mrr_at_10() - (1.0 + 0.25 + 1.0 / 7.0) / 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn percentile_uses_nearest_rank_and_handles_empty() {
+        assert_eq!(percentile(&[], 95.0), 0);
+        assert_eq!(percentile(&[10, 20, 30, 40, 50], 50.0), 30);
+        assert_eq!(percentile(&[10, 20, 30, 40, 50], 95.0), 50);
+    }
+
+    #[test]
+    fn every_expected_id_exists_in_the_knowledge_worker_corpus() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/demo/");
+        let cases = load_cases(format!("{root}knowledge-worker-queries.json")).expect("cases");
+        let corpus: Vec<serde_json::Value> = serde_json::from_slice(
+            &std::fs::read(format!("{root}knowledge-worker-week.json")).expect("corpus"),
+        )
+        .expect("json");
+        let known: HashSet<&str> = corpus.iter().filter_map(|e| e["id"].as_str()).collect();
+        for case in &cases {
+            assert!(!case.relevant_ids.is_empty(), "{} has no expected ids", case.query);
+            for id in &case.relevant_ids {
+                assert!(known.contains(id.as_str()), "{} expects unknown id {id}", case.query);
+            }
+        }
+        assert!(cases.iter().filter(|c| c.kind == "paraphrase").count() >= 8);
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cd src-tauri && cargo test --example retrieval_qa`
+Expected: compile FAIL: unresolved import `search_ranked_results`, cannot find `first_relevant_rank`, `Score`, `percentile`, `load_cases`.
+
+- [ ] **Step 3: Extract `search_ranked_results` in `src-tauri/src/ipc/commands/search.rs`**
+
+Add this function directly below `run_search_query`:
+
+```rust
+/// The ranked list the Search screen shows before card synthesis: hybrid
+/// retrieval, low-signal removal, then the anchor-coverage rerank. Public so
+/// `examples/retrieval_qa.rs` measures exactly what users see.
+pub async fn search_ranked_results(
+    state: &AppState,
+    query: &str,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+    raw_limit: usize,
+) -> Result<Vec<SearchResult>, String> {
+    let mut raw_results = run_search_query(state, query, time_filter, app_filter, raw_limit).await?;
+    raw_results.truncate(raw_limit);
+    let (raw_results, low_signal) = partition_surfaceable(raw_results);
+    if !low_signal.is_empty() {
+        tracing::info!(hidden = low_signal.len(), "search_memory_cards:low_signal_hidden");
+    }
+    let query_context = QueryContext::from_query(query);
+    let (mut reranked, rerank_stats) = rerank_results(&query_context, raw_results);
+    if rerank_stats.excluded_for_coverage > 0 {
+        tracing::info!(
+            excluded_for_coverage = rerank_stats.excluded_for_coverage,
+            query = %query_context.raw_query,
+            "search_memory_cards:coverage_gate"
+        );
+    }
+    reranked.truncate(raw_limit);
+    Ok(reranked)
+}
+```
+
+In `search_memory_cards`, replace everything from `let mut raw_results = run_search_query(` through the line `tracing::info!(count = raw_results.len(), "search_memory_cards:rerank:done");` with:
+
+```rust
+    let raw_results = search_ranked_results(
+        state.inner(),
+        &query,
+        time_filter.as_deref(),
+        app_filter.as_deref(),
+        raw_limit,
+    )
+    .await?;
+    tracing::info!(count = raw_results.len(), "search_memory_cards:rerank:done");
+```
+
+Keep the `let raw_limit = limit.max(18).min(50);` line above it. If the compiler reports that `raw_results` must be mutable further down, declare it `let mut raw_results`. This is a behavior-preserving extraction; the existing search tests are its regression check.
+
+- [ ] **Step 4: Create `scripts/demo/knowledge-worker-queries.json`**
+
+```json
+[
+  { "query": "pandas import error fix", "kind": "keyword", "relevant_ids": ["kw-cs-a4-fix-old"] },
+  { "query": "how did I get python to find the data library last time", "kind": "paraphrase", "relevant_ids": ["kw-cs-a4-fix-old"] },
+  { "query": "what does Dana want for the survey readout", "kind": "keyword", "relevant_ids": ["kw-intern-brief", "kw-intern-email"] },
+  { "query": "churn drivers due Thursday", "kind": "keyword", "relevant_ids": ["kw-intern-brief"] },
+  { "query": "what customers complained about during onboarding", "kind": "paraphrase", "relevant_ids": ["kw-intern-themes"] },
+  { "query": "single sign-on", "kind": "keyword", "relevant_ids": ["kw-intern-themes"] },
+  { "query": "essay rubric weights", "kind": "keyword", "relevant_ids": ["kw-hist-rubric"] },
+  { "query": "how much of my history grade depends on sources", "kind": "paraphrase", "relevant_ids": ["kw-hist-rubric"] },
+  { "query": "Field Order 15", "kind": "keyword", "relevant_ids": ["kw-hist-outline"] },
+  { "query": "labor contracts passage page 112", "kind": "keyword", "relevant_ids": ["kw-hist-reader", "kw-hist-draft"] },
+  { "query": "counterargument paragraph", "kind": "keyword", "relevant_ids": ["kw-hist-draft"] },
+  { "query": "weekday vs weekend ridership chart", "kind": "keyword", "relevant_ids": ["kw-cs-a4-vscode-new", "kw-cs-a4-charts"] },
+  { "query": "which plotting library am I allowed to use", "kind": "paraphrase", "relevant_ids": ["kw-cs-a4-charts", "kw-cs-a4-spec"] },
+  { "query": "who is recording the backup video", "kind": "keyword", "relevant_ids": ["kw-cap-standup", "kw-cap-slack"] },
+  { "query": "architecture slide", "kind": "keyword", "relevant_ids": ["kw-cap-slides"] },
+  { "query": "how long is the capstone demo script", "kind": "paraphrase", "relevant_ids": ["kw-cap-script"] },
+  { "query": "spring enrollment", "kind": "keyword", "relevant_ids": ["kw-inbox-triage"] },
+  { "query": "duplicate survey responses removed", "kind": "keyword", "relevant_ids": ["kw-intern-clean"] },
+  { "query": "food bank inventory app presentation", "kind": "paraphrase", "relevant_ids": ["kw-cap-slides", "kw-cap-script", "kw-cap-standup"] },
+  { "query": "transit dataset assignment requirements", "kind": "keyword", "relevant_ids": ["kw-cs-a4-spec"] },
+  { "query": "my thesis about why Reconstruction failed", "kind": "paraphrase", "relevant_ids": ["kw-hist-outline", "kw-hist-draft"] },
+  { "query": "the problem our capstone app solves", "kind": "paraphrase", "relevant_ids": ["kw-cap-script"] }
+]
+```
+
+- [ ] **Step 5: Implement the example above the test module**
+
+Insert between the imports and `#[cfg(test)]`:
+
+```rust
+/// Same default the Search screen uses for its raw result list.
+const SEARCH_LIMIT: usize = 20;
+const ASK_LIMIT: usize = 10;
+
+#[derive(Deserialize)]
+struct Case {
+    query: String,
+    relevant_ids: Vec<String>,
+    #[serde(default)]
+    kind: String,
+}
+
+#[derive(Default)]
+struct Score {
+    n: usize,
+    hits_at_5: usize,
+    reciprocal_rank_sum: f32,
+}
+
+impl Score {
+    fn add(&mut self, rank: Option<usize>) {
+        self.n += 1;
+        if let Some(rank) = rank {
+            if rank <= 5 {
+                self.hits_at_5 += 1;
+            }
+            self.reciprocal_rank_sum += 1.0 / rank as f32;
+        }
+    }
+
+    fn recall_at_5(&self) -> f32 {
+        self.hits_at_5 as f32 / self.n.max(1) as f32
+    }
+
+    fn mrr_at_10(&self) -> f32 {
+        self.reciprocal_rank_sum / self.n.max(1) as f32
+    }
+}
+
+/// 1-based rank of the first result, within `k`, that cites a relevant memory id.
+fn first_relevant_rank(ranked: &[Vec<String>], relevant: &HashSet<String>, k: usize) -> Option<usize> {
+    ranked
+        .iter()
+        .take(k)
+        .position(|ids| ids.iter().any(|id| relevant.contains(id)))
+        .map(|index| index + 1)
+}
+
+fn percentile(values: &[u128], p: f64) -> u128 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let index = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
+    sorted[index]
+}
+
+fn rank_label(rank: Option<usize>) -> String {
+    rank.map_or_else(|| "miss".to_string(), |r| r.to_string())
+}
+
+fn arg(name: &str) -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1).cloned())
+}
+
+fn load_cases(path: impl AsRef<Path>) -> Result<Vec<Case>, Box<dyn std::error::Error>> {
+    Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let data_dir = PathBuf::from(arg("--data-dir").ok_or("--data-dir required")?);
+    let cases_path = PathBuf::from(arg("--cases").ok_or("--cases required")?);
+    if let Some(real) = dirs::data_dir().map(|d| d.join("com.fndr.app")) {
+        let real = real.canonicalize().unwrap_or(real);
+        if data_dir.canonicalize()? == real {
+            return Err("refusing to evaluate against the real FNDR profile".into());
+        }
+    }
+    let cases = load_cases(&cases_path)?;
+
+    let store = Arc::new(Store::new(&data_dir)?);
+    let state_store = Arc::new(StateStore::new(&data_dir)?);
+    let graph = GraphStore::new(store.clone());
+    let state = AppState::new(data_dir.clone(), Config::default(), store, state_store, graph, None, None);
+    let rt = tokio::runtime::Runtime::new()?;
+
+    let (mut search_score, mut ask_score) = (Score::default(), Score::default());
+    let (mut search_ms, mut ask_ms) = (Vec::new(), Vec::new());
+    let mut agree_top1 = 0usize;
+    let mut rows = Vec::new();
+    for case in &cases {
+        let relevant: HashSet<String> = case.relevant_ids.iter().cloned().collect();
+
+        let started = Instant::now();
+        let search_ranked: Vec<Vec<String>> = rt
+            .block_on(search_ranked_results(&state, &case.query, None, None, SEARCH_LIMIT))?
+            .into_iter()
+            .map(|result| vec![result.id])
+            .collect();
+        search_ms.push(started.elapsed().as_millis());
+
+        let started = Instant::now();
+        let answer = rt.block_on(run_query(&state, &case.query, ASK_LIMIT, ComposeMode::Cards))?;
+        ask_ms.push(started.elapsed().as_millis());
+        let ask_ranked: Vec<Vec<String>> = answer
+            .cards
+            .into_iter()
+            .map(|card| std::iter::once(card.id).chain(card.evidence_ids).collect())
+            .collect();
+
+        let search_rank = first_relevant_rank(&search_ranked, &relevant, 10);
+        let ask_rank = first_relevant_rank(&ask_ranked, &relevant, 10);
+        search_score.add(search_rank);
+        ask_score.add(ask_rank);
+        if let (Some(s), Some(a)) = (search_ranked.first(), ask_ranked.first()) {
+            if s.iter().any(|id| a.contains(id)) {
+                agree_top1 += 1;
+            }
+        }
+        let kind = if case.kind.is_empty() { "unlabeled" } else { case.kind.as_str() };
+        rows.push(format!(
+            "| {} | {} | {} | {} |",
+            case.query,
+            kind,
+            rank_label(search_rank),
+            rank_label(ask_rank)
+        ));
+    }
+
+    let mut report = vec![
+        format!("# Retrieval baseline: {} queries from `{}`", cases.len(), cases_path.display()),
+        String::new(),
+        "Search is the Search screen's ranked list; Ask is the path Ask FNDR and every MCP tool use.".to_string(),
+        "No local model is loaded, so query expansion is off; this measures retrieval, not answers.".to_string(),
+        String::new(),
+        "| Path | Recall@5 | MRR@10 | p50 ms | p95 ms |".to_string(),
+        "|---|---|---|---|---|".to_string(),
+        format!(
+            "| Search | {:.2} | {:.2} | {} | {} |",
+            search_score.recall_at_5(),
+            search_score.mrr_at_10(),
+            percentile(&search_ms, 50.0),
+            percentile(&search_ms, 95.0)
+        ),
+        format!(
+            "| Ask | {:.2} | {:.2} | {} | {} |",
+            ask_score.recall_at_5(),
+            ask_score.mrr_at_10(),
+            percentile(&ask_ms, 50.0),
+            percentile(&ask_ms, 95.0)
+        ),
+        String::new(),
+        format!("Both paths put the same memory first on {agree_top1} of {} queries.", cases.len()),
+        String::new(),
+        "| Query | Kind | Search rank | Ask rank |".to_string(),
+        "|---|---|---|---|".to_string(),
+    ];
+    report.extend(rows);
+    let text = report.join("\n") + "\n";
+    if let Some(out) = arg("--out") {
+        if let Some(parent) = Path::new(&out).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&out, &text)?;
+    }
+    print!("{text}");
+    Ok(())
+}
+```
+
+- [ ] **Step 6: Run the tests, then the existing search tests**
+
+Run: `cd src-tauri && cargo test --example retrieval_qa && cargo test --test search_flow && cargo test --lib search`
+Expected: 4 example tests PASS; `search_flow` and the `search` unit tests pass unchanged.
+
+- [ ] **Step 7: Add the Make target and record the seeded baseline**
+
+Add `qa-retrieval` to `.PHONY` and append to `Makefile`:
+
+```make
+QA_QUERIES := $(CURDIR)/scripts/demo/knowledge-worker-queries.json
+
+qa-retrieval:
+	cd src-tauri && CARGO_BUILD_JOBS=2 cargo run --example retrieval_qa -- --data-dir "$(QA_PROFILE)" --cases "$(QA_QUERIES)" --out "$(CURDIR)/docs/evidence/W01/retrieval-baseline-seeded.md"
+```
+
+Run: `make qa-seed && make qa-retrieval`
+Expected: a table with Recall@5 and MRR@10 for Search and Ask, latency, the agreement line, and one row per query. Do not tune anything in this task; whatever the numbers are, they are the baseline. Read the paraphrase rows closely: a Search miss where Ask hits points at the word-overlap cutoff in `search/reranker.rs`.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src-tauri/src/ipc/commands/search.rs src-tauri/examples/retrieval_qa.rs scripts/demo/knowledge-worker-queries.json Makefile docs/evidence/W01/retrieval-baseline-seeded.md
+git commit -m "feat(eval): retrieval baseline through the Search and Ask paths on the seeded profile"
+```
+
+### Task 7: Integration check and hand the QA build to the owner
 
 **Files:**
 - No source changes expected. Evidence notes go in the MR description, not in git.
 
 **Interfaces:**
-- Consumes: Tasks 1 to 4.
+- Consumes: Tasks 1 to 6.
 - Produces: a green branch, a browser screenshot of Home and Settings, and a seeded QA profile ready for Pass A.
 
 - [ ] **Step 1: Full sweep**
@@ -1822,22 +2483,23 @@ The month plan names each teammate's lane. Do not push `qa/user-first-reset` to 
 git push -u origin qa/user-first-reset
 ```
 
-### Task 6: Owner QA session (needs the owner)
+### Task 8: Owner QA session (needs the owner)
 
 **Files:**
 - Modify: `docs/product/qa-walkthrough.md` (fill the tables; keep personal or sensitive details out of it)
 
-- [ ] **Step 1: Pass A (90 minutes).** `make qa-seed && make qa-app`. Work through cards 4 to 12 and 15 as Sam.
-- [ ] **Step 2: Pass C (30 minutes).** Card 8 on the QA profile.
-- [ ] **Step 3: Pass B (two working days).** Run the real app on your real profile; do cards 1 to 6, 13, 14 and the Resume task.
-- [ ] **Step 4: Fill the scorecard and open notes, then commit on the branch.**
+- [ ] **Step 1: Pass D (10 minutes).** `make vault-health` and `make qa-retrieval`; paste the summary lines into the walkthrough.
+- [ ] **Step 2: Pass A (90 minutes).** `make qa-seed && make qa-app`. Work through cards 4 to 12 and 15 as Sam.
+- [ ] **Step 3: Pass C (30 minutes).** Card 8 on the QA profile.
+- [ ] **Step 4: Pass B (two working days).** Run the real app on your real profile all day, every day; do cards 1 to 7, 13, 14, 16 and the Resume task. At the end, run `make vault-health` again and compare memories per active day with the Pass D baseline.
+- [ ] **Step 5: Fill the scorecard and open notes, then commit on the branch.**
 
 ```bash
 git add docs/product/qa-walkthrough.md
 git commit -m "docs(qa): owner scores from seeded, live, and agent passes"
 ```
 
-### Task 7: Turn the scores into the month plan and hand it to the team
+### Task 9: Turn the scores into the month plan and hand it to the team
 
 **Files:**
 - Modify: `docs/team/2026-10-month-plan.md` (section "What the hands-on pass found" and any lane item a verdict changes)
@@ -1858,8 +2520,8 @@ git push
 
 ## Self-review
 
-**Spec coverage.** Own sweep from user and company roles: Part 1 (evidence), Part 3 (SWOT pushback), and the month plan's role lens. How useful the QA pass is and what has to be true first: Part 2. Short-term QA enablers first: Tasks 1 to 5. Month-long hand-off split into four lanes: `docs/team/2026-10-month-plan.md`, finalized by Task 7. Knowledge-worker niche: the seeded persona (Task 2) and the month plan audience. Two-way MCP and loosened local rules: Part 3 and the month plan's decisions and lanes. "How it actually works" for each feature: Task 1 cards.
+**Spec coverage.** Own sweep from user and company roles: Part 1 (evidence), Part 3 (SWOT pushback), and the month plan's role lens. The owner's second list (reopen, Vault and RAG quality, computer use, skills from actions, voice, LanceDB, other flags): Part 1b, with measurement in Tasks 5 and 6, walkthrough cards 7 and 16, and month-plan lanes. How useful the QA pass is and what has to be true first: Part 2. Short-term QA enablers first: Tasks 1 to 7. Month-long hand-off split into four lanes: `docs/team/2026-10-month-plan.md`, finalized by Task 9. Knowledge-worker niche: the seeded persona (Task 2) and the month plan audience. Two-way MCP and loosened local rules: Part 3 and the month plan's decisions and lanes. "How it actually works" for each feature: Task 1 cards.
 
 **Placeholder scan.** Every code step has code; the walkthrough is complete; Task 6 is intentionally human work with no code. No "TBD."
 
-**Type consistency.** `ResumeThread` fields match `resume/mod.rs` and `pack.rs` serialization (`title`, `last_state`, `age_minutes`, `next_steps`, `evidence`, `pack.items[].memory_id`, `pack.dropped_for_budget`). `resumeWork(hours, budgetTokens)` maps to Rust `hours`, `budget_tokens` through Tauri's camelCase argument convention used elsewhere (`dateStr` for `date_str`). `McpServerStatus` fields match `mcp/mod.rs:56-69`. `record_at` and `timestamp_ms(entry, now)` are used consistently in `main` and the tests.
+**Type consistency.** `search_ranked_results(&AppState, &str, Option<&str>, Option<&str>, usize)` is defined in Task 6 Step 3 and called with those types in the Task 6 example. `summarize` and `render` keys match between the Task 5 script and its test. `ResumeThread` fields match `resume/mod.rs` and `pack.rs` serialization (`title`, `last_state`, `age_minutes`, `next_steps`, `evidence`, `pack.items[].memory_id`, `pack.dropped_for_budget`). `resumeWork(hours, budgetTokens)` maps to Rust `hours`, `budget_tokens` through Tauri's camelCase argument convention used elsewhere (`dateStr` for `date_str`). `McpServerStatus` fields match `mcp/mod.rs:56-69`. `record_at` and `timestamp_ms(entry, now)` are used consistently in `main` and the tests.
