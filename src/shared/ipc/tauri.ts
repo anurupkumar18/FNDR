@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 
 export interface SearchResult {
     id: string;
@@ -2093,6 +2093,7 @@ export type ScreenGuidePhase =
 export interface ScreenGuideStateEvent {
     phase: ScreenGuidePhase;
     message?: string | null;
+    generation: number;
 }
 
 export interface ScreenGuideShortcutEvent {
@@ -2203,8 +2204,8 @@ export function onScreenGuideState(
     });
 }
 
-export async function emitScreenGuideState(state: ScreenGuideStateEvent): Promise<void> {
-    return emit(SCREEN_GUIDE_STATE_EVENT, state);
+export async function reportScreenGuideState(state: ScreenGuideStateEvent): Promise<void> {
+    return invoke("report_screen_guide_state", { state });
 }
 
 // Auto-fill

@@ -62,7 +62,21 @@ FNDR is a **local-first, privacy-focused memory assistant** for macOS. It contin
 
 ### Screen Guide overlay
 
-Screen Guide should feel like a small native FNDR affordance, not a second app. Its panel uses the existing warm surfaces and typography; its transient point cue uses a restrained blue marker so it remains distinct from orange primary actions. The answer is always available as text, speech is optional, the overlay never intercepts clicks, and Reduce Motion replaces travel animation with a simple appearance at the target.
+Screen Guide should feel like a small native FNDR affordance, not a second app.
+An OS-managed status item keeps FNDR quietly present beside the notch/menu bar
+and uses only a bounded set of micro-states: ready, listening, on-device
+processing, finding, found, or attention needed. It must never display a user's
+question, screen text, filename, path, answer, or detailed error, and it must
+not draw over the physical notch or depend on private placement APIs.
+Transient listening and answer feedback appears just below the menu bar so it
+remains visible on both notched and non-notched displays.
+
+The panel uses the existing warm surfaces and typography; its transient point
+cue uses a restrained blue marker so it remains distinct from orange primary
+actions. Holding the shortcut should make listening feedback immediate, and the
+answer is always available as text even when optional local speech is muted or
+interrupted. The overlay never intercepts clicks, and Reduce Motion replaces
+travel animation with a simple appearance at the target.
 
 ### Color System
 

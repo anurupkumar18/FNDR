@@ -199,7 +199,6 @@
     font-size: 0.76rem;
     color: var(--text-muted);
     margin: 0;
-    font-style: italic;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

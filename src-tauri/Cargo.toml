@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Tauri
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-shell = "2"
 
 # Async runtime
@@ -108,7 +108,7 @@ objc2-screen-capture-kit = { version = "0.3.2", features = ["SCScreenshotManager
 libc = "0.2"
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSString", "NSData", "NSDictionary", "NSArray", "NSThread"] }
-objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSWorkspace", "NSRunningApplication", "NSImage", "NSPasteboard", "libc"] }
+objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSWorkspace", "NSRunningApplication", "NSImage", "NSPasteboard", "NSScreen", "libc"] }
 block2 = "0.5"
 
 [dev-dependencies]
@@ -129,10 +129,22 @@ codegen-units = 16
 panic = "abort"
 strip = true
 
+# macOS 27 rejects stripped proc-macro dylibs whose LINKEDIT string table is
+# emitted with four-byte alignment. Build dependencies never ship in the app,
+# so keep them unstripped while retaining stripping for the release binary.
+[profile.release.build-override]
+strip = false
+
 [profile.dev]
 debug = 0
 split-debuginfo = "off"
 
+[profile.dev.build-override]
+strip = false
+
 [profile.test]
 debug = 0
 split-debuginfo = "off"
+
+[profile.test.build-override]
+strip = false

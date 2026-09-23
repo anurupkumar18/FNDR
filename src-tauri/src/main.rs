@@ -648,6 +648,7 @@ fn main() {
 
             // Pre-create the full-screen, click-through Screen Guide overlay
             // before shortcuts can make it visible.
+            ipc::commands::create_screen_guide_notch_companion(app.handle());
             ipc::commands::create_screen_guide_overlay_window(app.handle());
 
             // Alpha demo: Auto-Fill and the Alt+Space Omnibar are not part of
@@ -830,6 +831,7 @@ fn main() {
             ipc::commands::submit_screen_guide_text,
             ipc::commands::cancel_screen_guide_turn,
             ipc::commands::transcribe_screen_guide_voice_input,
+            ipc::commands::report_screen_guide_state,
             ipc::commands::set_screen_guide_overlay_ready,
             ipc::commands::screen_guide_microphone_started,
             ipc::commands::acknowledge_screen_guide_microphone_stopped,

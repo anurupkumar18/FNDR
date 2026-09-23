@@ -17,7 +17,7 @@ interface ScreenGuidePanelProps {
     onClose: () => void;
 }
 
-const IDLE_STATUS: ScreenGuideStateEvent = { phase: "idle", message: null };
+const IDLE_STATUS: ScreenGuideStateEvent = { phase: "idle", message: null, generation: 0 };
 
 function statusCopy(
     settings: ScreenGuideSettings | null,
@@ -33,7 +33,7 @@ function statusCopy(
         case "transcribing":
             return "Transcribing on this Mac…";
         case "thinking":
-            return "Looking at this screen…";
+            return "Finding the answer on this Mac…";
         case "answer":
             return "Answer ready";
         case "error":
@@ -265,8 +265,8 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                     <p className="sg-panel-kicker">ON-SCREEN ASSISTANCE</p>
                     <h2 id="sg-panel-title">Screen Guide</h2>
                     <p id="sg-panel-description">
-                        Read the current main display after you explicitly ask, then point you toward
-                        a next step without clicking or typing for you.
+                        Ask about your current main display or explicitly find a file by name. FNDR
+                        can point you toward a next step without clicking or typing for you.
                     </p>
                 </div>
                 <button
@@ -322,7 +322,7 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                     <label className="sg-setting-row">
                         <span>
                             <strong>Enable Screen Guide</strong>
-                            <small>Make the hold-to-ask shortcut available</small>
+                            <small>Keep FNDR ready beside the notch for hold-to-talk</small>
                         </span>
                         <input
                             type="checkbox"
@@ -401,10 +401,11 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                 </section>
 
                 <section className="sg-ask-card">
-                    <label htmlFor="sg-question">Ask about your main display</label>
+                    <label htmlFor="sg-question">Ask about your display or find a named file</label>
                     <p className="sg-ask-hint" id="sg-question-hint">
                         Type a question now, or hold to talk. Screen Guide reads the display only for
-                        this question.
+                        this question; explicit file lookups check names only in Documents, Desktop,
+                        and Downloads.
                     </p>
                     <div className="sg-question-row">
                         <input
@@ -413,7 +414,7 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                             value={question}
                             disabled={questionDisabled}
                             aria-describedby="sg-question-hint"
-                            placeholder="Where is the setting I need?"
+                            placeholder="Where is the setting I need? or Find my I-20 document"
                             onChange={(event) => setQuestion(event.target.value)}
                             onKeyDown={(event) => {
                                 if (event.key === "Enter") {
@@ -466,9 +467,10 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                 <aside className="sg-privacy-note">
                     <strong>Local and read-only</strong>
                     <p>
-                        The question, temporary display image, transcription, and answer are processed
-                        on this Mac for this turn. Screen Guide does not click, type, or add the turn
-                        to Memory Vault.
+                        The question, temporary display image, transcription, answer, and file-match
+                        names are processed on this Mac for this turn. Screen Guide does not click,
+                        type, or add the turn to Memory Vault. File search checks only file names in
+                        Documents, Desktop, and Downloads; it never reads or opens files.
                     </p>
                 </aside>
 

@@ -66,6 +66,7 @@ static SPEECH_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 static ACTIVE_TRANSCRIPTION_COMMANDS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_VOICE_INPUTS: OnceLock<StdMutex<HashSet<PathBuf>>> = OnceLock::new();
 const TRANSCRIPTION_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const AUDIO_CONVERSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn active_voice_inputs() -> &'static StdMutex<HashSet<PathBuf>> {
     ACTIVE_VOICE_INPUTS.get_or_init(|| StdMutex::new(HashSet::new()))
@@ -364,32 +365,108 @@ pub fn resolve_sidecar(script_name: &str) -> Option<PathBuf> {
     dev.exists().then_some(dev)
 }
 
-pub fn python_for_sidecar() -> Option<PathBuf> {
-    let venv_dir = speech_venv_dir()?;
+fn venv_python_path(venv_dir: &Path) -> PathBuf {
     if cfg!(target_os = "windows") {
-        let candidate = venv_dir.join("Scripts").join("python");
-        if candidate.exists() {
-            return Some(candidate);
-        }
+        venv_dir.join("Scripts").join("python.exe")
     } else {
-        let candidate = venv_dir.join("bin").join("python3");
-        if candidate.exists() {
-            return Some(candidate);
-        }
+        venv_dir.join("bin").join("python3")
+    }
+}
+
+fn parse_python_version(raw: &str) -> Option<(u32, u32)> {
+    let version = raw
+        .split_whitespace()
+        .find(|part| part.chars().next().is_some_and(|ch| ch.is_ascii_digit()))?;
+    let mut components = version.split('.');
+    let major = components.next()?.parse().ok()?;
+    let minor = components.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
+fn supported_python_version((major, minor): (u32, u32)) -> bool {
+    major == 3 && minor <= 13
+}
+
+fn python_version(python: &Path) -> Option<(u32, u32)> {
+    let output = Command::new(python).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    parse_python_version(&stdout).or_else(|| parse_python_version(&stderr))
+}
+
+fn python_is_supported(python: &Path) -> bool {
+    python_version(python)
+        .map(supported_python_version)
+        .unwrap_or(false)
+}
+
+fn speech_venv_is_usable(venv_dir: &Path) -> bool {
+    python_is_supported(&venv_python_path(venv_dir))
+}
+
+fn speech_venv_has_pip(venv_dir: &Path) -> bool {
+    Command::new(venv_python_path(venv_dir))
+        .args(["-m", "pip", "--version"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+pub fn python_for_sidecar(app_data_dir: &Path) -> Option<PathBuf> {
+    let venv_dir = prepare_speech_venv_dir(app_data_dir);
+    if speech_venv_is_usable(&venv_dir) {
+        return Some(venv_python_path(&venv_dir));
     }
     None
 }
 
-fn pip_for_venv(venv_dir: &Path) -> PathBuf {
-    if cfg!(target_os = "windows") {
-        venv_dir.join("Scripts").join("pip")
-    } else {
-        venv_dir.join("bin").join("pip")
-    }
+fn speech_venv_dir(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("speech").join("venv")
 }
 
-fn speech_venv_dir() -> Option<PathBuf> {
+fn legacy_speech_venv_dir() -> Option<PathBuf> {
     dirs::document_dir().map(|root| root.join("FNDR Speech").join("venv"))
+}
+
+fn migrate_owned_speech_venv(legacy: &Path, target: &Path) -> Result<bool, String> {
+    if target.exists() || !legacy.is_dir() {
+        return Ok(false);
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| "FNDR speech environment has no parent directory.".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Failed preparing private speech storage: {}", error))?;
+    std::fs::rename(legacy, target).map_err(|error| {
+        format!(
+            "Failed moving the legacy FNDR speech environment: {}",
+            error
+        )
+    })?;
+    Ok(true)
+}
+
+fn prepare_speech_venv_dir(app_data_dir: &Path) -> PathBuf {
+    let target = speech_venv_dir(app_data_dir);
+    if target.exists() {
+        return target;
+    }
+    if let Some(legacy) = legacy_speech_venv_dir() {
+        match migrate_owned_speech_venv(&legacy, &target) {
+            Ok(true) => {
+                tracing::info!("Moved the legacy FNDR speech environment into private app storage")
+            }
+            Ok(false) => {}
+            Err(error) => tracing::warn!("{}", error),
+        }
+    }
+    target
 }
 
 /// Probe for a usable Python 3 interpreter, preferring versions ≤ 3.13
@@ -413,18 +490,68 @@ fn find_python3() -> Option<PathBuf> {
     ];
     for &path in candidates {
         let candidate = PathBuf::from(path);
-        if Command::new(&candidate)
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
+        if python_is_supported(&candidate) {
             return Some(candidate);
         }
     }
     None
+}
+
+fn resolve_binary_from_candidates(
+    explicit: Option<PathBuf>,
+    path_dirs: &[PathBuf],
+    fixed_candidates: &[PathBuf],
+    binary_name: &str,
+) -> Option<PathBuf> {
+    explicit
+        .into_iter()
+        .chain(path_dirs.iter().map(|dir| dir.join(binary_name)))
+        .chain(fixed_candidates.iter().cloned())
+        .find(|candidate| binary_is_executable(candidate))
+        .map(|candidate| {
+            if candidate.is_absolute() {
+                candidate
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(&candidate))
+                    .unwrap_or(candidate)
+            }
+        })
+}
+
+fn binary_is_executable(candidate: &Path) -> bool {
+    let Ok(metadata) = candidate.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn resolve_ffmpeg_binary() -> Option<PathBuf> {
+    let explicit = std::env::var_os("FNDR_FFMPEG_PATH").map(PathBuf::from);
+    let path_dirs = std::env::var_os("PATH")
+        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let fixed_candidates = [
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/opt/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+    ]
+    .map(PathBuf::from);
+
+    resolve_binary_from_candidates(explicit, &path_dirs, &fixed_candidates, "ffmpeg")
 }
 
 async fn run_transcription_command(
@@ -456,35 +583,162 @@ async fn run_transcription_command(
     }
 }
 
+fn audio_is_pcm_wav_candidate(audio_path: &Path) -> bool {
+    audio_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+}
+
+async fn convert_audio_to_pcm_wav(
+    app_data_dir: &Path,
+    audio_path: &Path,
+    ffmpeg_path: &Path,
+) -> Result<TemporaryVoiceInput, String> {
+    let output_path = make_voice_input_path(app_data_dir, "wav");
+    if let Some(parent) = output_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| format!("Failed to create voice input cache directory: {}", error))?;
+    }
+    let output = TemporaryVoiceInput::new(output_path);
+
+    let mut command = AsyncCommand::new(ffmpeg_path);
+    command
+        .args(["-nostdin", "-y", "-i"])
+        .arg(audio_path)
+        .args(["-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le"])
+        .arg(output.path());
+    let result =
+        run_transcription_command(command, AUDIO_CONVERSION_TIMEOUT, "ffmpeg voice conversion")
+            .await?;
+    if !result.status.success() {
+        let detail = String::from_utf8_lossy(&result.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("ffmpeg voice conversion exited with {}", result.status)
+        } else {
+            format!("ffmpeg voice conversion failed: {}", detail)
+        });
+    }
+
+    let output_is_nonempty = std::fs::metadata(output.path())
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false);
+    if !output_is_nonempty {
+        return Err("ffmpeg voice conversion did not produce a PCM WAV".to_string());
+    }
+
+    Ok(output)
+}
+
+fn whisper_cli_command(
+    cli_path: &Path,
+    model_path: &Path,
+    audio_path: &Path,
+    cpu_only: bool,
+) -> AsyncCommand {
+    let mut command = AsyncCommand::new(cli_path);
+    command
+        .arg("-m")
+        .arg(model_path)
+        .arg("-f")
+        .arg(audio_path)
+        .args(["-l", "en", "--no-timestamps", "-nt"]);
+    if cpu_only {
+        command.arg("-ng");
+    }
+    command
+}
+
+fn transcript_from_successful_output(output: &Output) -> Option<String> {
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+async fn try_whisper_cli_binary_with_candidates(
+    model_path: &Path,
+    audio_path: &Path,
+    cli_paths: &[PathBuf],
+) -> Option<String> {
+    try_whisper_cli_binary_with_candidates_within(
+        model_path,
+        audio_path,
+        cli_paths,
+        TRANSCRIPTION_COMMAND_TIMEOUT,
+    )
+    .await
+}
+
+async fn try_whisper_cli_binary_with_candidates_within(
+    model_path: &Path,
+    audio_path: &Path,
+    cli_paths: &[PathBuf],
+    overall_timeout: Duration,
+) -> Option<String> {
+    let mut seen = HashSet::new();
+    let unique_cli_paths = cli_paths
+        .iter()
+        .filter(|candidate| binary_is_executable(candidate))
+        .filter_map(|candidate| candidate.canonicalize().ok())
+        .filter(|candidate| seen.insert(candidate.clone()))
+        .collect::<Vec<_>>();
+
+    tokio::time::timeout(overall_timeout, async {
+        for cli_path in unique_cli_paths {
+            let gpu_result = run_transcription_command(
+                whisper_cli_command(&cli_path, model_path, audio_path, false),
+                TRANSCRIPTION_COMMAND_TIMEOUT,
+                "whisper-cli",
+            )
+            .await;
+
+            match gpu_result {
+                Ok(output) if output.status.success() => {
+                    if let Some(text) = transcript_from_successful_output(&output) {
+                        return Some(text);
+                    }
+                }
+                Ok(_) => {
+                    let cpu_result = run_transcription_command(
+                        whisper_cli_command(&cli_path, model_path, audio_path, true),
+                        TRANSCRIPTION_COMMAND_TIMEOUT,
+                        "whisper-cli CPU fallback",
+                    )
+                    .await;
+                    if let Ok(output) = cpu_result {
+                        if let Some(text) = transcript_from_successful_output(&output) {
+                            return Some(text);
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// Try to run whisper via the `whisper-cli` binary (from `brew install whisper-cpp`).
 /// Returns the transcript on success, or None if the binary is unavailable / fails.
 async fn try_whisper_cli_binary(model_path: &Path, audio_path: &Path) -> Option<String> {
-    // whisper-cpp installs as `whisper-cli` on Homebrew
-    let cli_paths: &[&str] = &[
-        "/opt/homebrew/bin/whisper-cli",
-        "/usr/local/bin/whisper-cli",
-        "whisper-cli",
-    ];
-    for &cli in cli_paths {
-        let mut command = AsyncCommand::new(cli);
-        command
-            .arg("-m")
-            .arg(model_path)
-            .arg("-f")
-            .arg(audio_path)
-            .args(["-l", "en", "--no-timestamps", "-nt"]);
-        if let Ok(out) =
-            run_transcription_command(command, TRANSCRIPTION_COMMAND_TIMEOUT, "whisper-cli").await
-        {
-            if out.status.success() {
-                let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !text.is_empty() {
-                    return Some(text);
-                }
-            }
-        }
-    }
-    None
+    let path_dirs = std::env::var_os("PATH")
+        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut cli_paths = path_dirs
+        .iter()
+        .map(|directory| directory.join("whisper-cli"))
+        .collect::<Vec<_>>();
+    cli_paths.extend([
+        PathBuf::from("/opt/homebrew/bin/whisper-cli"),
+        PathBuf::from("/usr/local/bin/whisper-cli"),
+    ]);
+    try_whisper_cli_binary_with_candidates(model_path, audio_path, &cli_paths).await
 }
 
 fn python_imports_ok(python: &Path, imports: &str) -> bool {
@@ -514,16 +768,22 @@ fn llama_cpp_extra_index() -> &'static str {
     }
 }
 
-fn ensure_venv_ready() -> Result<PathBuf, String> {
-    let Some(venv_dir) = speech_venv_dir() else {
-        return Err("Could not determine Documents directory for FNDR Speech".to_string());
-    };
+fn ensure_venv_ready(app_data_dir: &Path) -> Result<PathBuf, String> {
+    let venv_dir = prepare_speech_venv_dir(app_data_dir);
 
-    let python3 = find_python3().ok_or_else(|| {
-        "python3 (≤3.13) is required for speech features. Install it with: brew install python@3.13".to_string()
-    })?;
+    if venv_dir.exists() && !speech_venv_is_usable(&venv_dir) {
+        tracing::warn!(
+            "Recreating unusable FNDR-owned speech environment at {:?}",
+            venv_dir
+        );
+        std::fs::remove_dir_all(&venv_dir)
+            .map_err(|error| format!("Failed removing unusable FNDR Speech venv: {}", error))?;
+    }
 
     if !venv_dir.exists() {
+        let python3 = find_python3().ok_or_else(|| {
+            "python3 (≤3.13) is required for speech features. Install it with: brew install python@3.13".to_string()
+        })?;
         if let Some(parent) = venv_dir.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -536,13 +796,33 @@ fn ensure_venv_ready() -> Result<PathBuf, String> {
         }
     }
 
-    let pip = pip_for_venv(&venv_dir);
-    if !pip.exists() {
-        return Err(format!("Pip binary missing at {:?}", pip));
+    let python = venv_python_path(&venv_dir);
+    if !speech_venv_is_usable(&venv_dir) {
+        return Err(format!(
+            "FNDR Speech venv is missing a usable Python ≤3.13 at {:?}",
+            python
+        ));
+    }
+    if !speech_venv_has_pip(&venv_dir) {
+        let ensure_pip = Command::new(&python)
+            .args(["-m", "ensurepip", "--upgrade"])
+            .status()
+            .map_err(|e| format!("Failed restoring speech pip: {}", e))?;
+        if !ensure_pip.success() || !speech_venv_has_pip(&venv_dir) {
+            return Err("FNDR Speech needs pip to install its local backend.".to_string());
+        }
     }
 
-    let upgrade = Command::new(&pip)
-        .args(["install", "--upgrade", "pip", "setuptools", "wheel"])
+    let upgrade = Command::new(&python)
+        .args([
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "pip",
+            "setuptools",
+            "wheel",
+        ])
         .status()
         .map_err(|e| format!("Failed upgrading speech pip: {}", e))?;
     if !upgrade.success() {
@@ -552,22 +832,22 @@ fn ensure_venv_ready() -> Result<PathBuf, String> {
     Ok(venv_dir)
 }
 
-fn ensure_whisper_backend_blocking() -> Result<(), String> {
-    if let Some(python) = python_for_sidecar() {
+fn ensure_whisper_backend_blocking(app_data_dir: &Path) -> Result<(), String> {
+    if let Some(python) = python_for_sidecar(app_data_dir) {
         if whisper_imports_ok(&python) {
             return Ok(());
         }
     }
 
-    let venv_dir = ensure_venv_ready()?;
-    let pip = pip_for_venv(&venv_dir);
+    let venv_dir = ensure_venv_ready(app_data_dir)?;
+    let python = venv_python_path(&venv_dir);
 
-    let whisper = Command::new(&pip)
+    let whisper = Command::new(&python)
         .env(
             "CMAKE_ARGS",
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWHISPER_METAL=1",
         )
-        .args(["install", "whisper-cpp-python"])
+        .args(["-m", "pip", "install", "whisper-cpp-python"])
         .status()
         .map_err(|e| format!("Failed installing whisper-cpp-python: {}", e))?;
     if !whisper.success() {
@@ -575,10 +855,6 @@ fn ensure_whisper_backend_blocking() -> Result<(), String> {
     }
 
     // Workaround: whisper-cpp-python on MacOS expects .so but often builds .dylib
-    let Some(python) = python_for_sidecar() else {
-        return Err("Speech venv was created, but python was not found".to_string());
-    };
-
     let patch_script = "
 import sys, os
 site_packages = [p for p in sys.path if 'site-packages' in p]
@@ -598,18 +874,20 @@ if site_packages:
     Ok(())
 }
 
-fn ensure_orpheus_backend_blocking() -> Result<(), String> {
-    if let Some(python) = python_for_sidecar() {
+fn ensure_orpheus_backend_blocking(app_data_dir: &Path) -> Result<(), String> {
+    if let Some(python) = python_for_sidecar(app_data_dir) {
         if orpheus_imports_ok(&python) {
             return Ok(());
         }
     }
 
-    let venv_dir = ensure_venv_ready()?;
-    let pip = pip_for_venv(&venv_dir);
+    let venv_dir = ensure_venv_ready(app_data_dir)?;
+    let python = venv_python_path(&venv_dir);
 
-    let llama = Command::new(&pip)
+    let llama = Command::new(&python)
         .args([
+            "-m",
+            "pip",
             "install",
             "llama-cpp-python",
             "--extra-index-url",
@@ -621,17 +899,21 @@ fn ensure_orpheus_backend_blocking() -> Result<(), String> {
         return Err("Failed installing llama-cpp-python".to_string());
     }
 
-    let deps = Command::new(&pip)
-        .args(["install", "huggingface_hub", "numpy", "onnxruntime"])
+    let deps = Command::new(&python)
+        .args([
+            "-m",
+            "pip",
+            "install",
+            "huggingface_hub",
+            "numpy",
+            "onnxruntime",
+        ])
         .status()
         .map_err(|e| format!("Failed installing Orpheus dependencies: {}", e))?;
     if !deps.success() {
         return Err("Failed installing Orpheus dependencies".to_string());
     }
 
-    let Some(python) = python_for_sidecar() else {
-        return Err("Speech venv was created, but python was not found".to_string());
-    };
     if !orpheus_imports_ok(&python) {
         return Err("Orpheus backend dependencies are still unavailable after install".to_string());
     }
@@ -639,16 +921,18 @@ fn ensure_orpheus_backend_blocking() -> Result<(), String> {
     Ok(())
 }
 
-pub async fn ensure_whisper_backend() -> Result<(), String> {
+pub async fn ensure_whisper_backend(app_data_dir: &Path) -> Result<(), String> {
     let _guard = bootstrap_lock().lock().await;
-    tokio::task::spawn_blocking(ensure_whisper_backend_blocking)
+    let app_data_dir = app_data_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || ensure_whisper_backend_blocking(&app_data_dir))
         .await
         .map_err(|e| e.to_string())?
 }
 
-pub async fn ensure_orpheus_backend() -> Result<(), String> {
+pub async fn ensure_orpheus_backend(app_data_dir: &Path) -> Result<(), String> {
     let _guard = bootstrap_lock().lock().await;
-    tokio::task::spawn_blocking(ensure_orpheus_backend_blocking)
+    let app_data_dir = app_data_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || ensure_orpheus_backend_blocking(&app_data_dir))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -774,10 +1058,33 @@ async fn transcribe_audio_file_with_hint(
             return Err(err);
         }
     };
+    let cli_started = Instant::now();
+    let ffmpeg_path = resolve_ffmpeg_binary();
 
     // Fast path: use the whisper-cli binary (brew install whisper-cpp) — no Python needed.
-    let cli_started = Instant::now();
-    if let Some(text) = try_whisper_cli_binary(&model_path, audio_path).await {
+    let cli_transcript = if audio_is_pcm_wav_candidate(audio_path) {
+        try_whisper_cli_binary(&model_path, audio_path).await
+    } else if let Some(ffmpeg_path) = ffmpeg_path.as_deref() {
+        match convert_audio_to_pcm_wav(app_data_dir, audio_path, ffmpeg_path).await {
+            Ok(normalized_audio) => {
+                try_whisper_cli_binary(&model_path, normalized_audio.path()).await
+            }
+            Err(error) => {
+                if SPEECH_SHUTTING_DOWN.load(Ordering::SeqCst) {
+                    return Err(error);
+                }
+                tracing::warn!("Could not normalize voice input for whisper-cli: {}", error);
+                None
+            }
+        }
+    } else {
+        tracing::warn!("Could not find ffmpeg to normalize voice input for whisper-cli");
+        None
+    };
+    if SPEECH_SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("Voice transcription is shutting down.".to_string());
+    }
+    if let Some(text) = cli_transcript {
         let cleaned = normalize_transcript_text(&text);
         if !cleaned.is_empty() {
             tracing::info!(
@@ -793,7 +1100,7 @@ async fn transcribe_audio_file_with_hint(
         "speech:whisper_cli_unavailable_or_empty_falling_back_to_python"
     );
 
-    if let Err(err) = ensure_whisper_backend().await {
+    if let Err(err) = ensure_whisper_backend(app_data_dir).await {
         tracing::warn!(elapsed_ms = started.elapsed().as_millis() as u64, error = %err, "speech:python_backend_setup_failed");
         return Err(err);
     }
@@ -806,6 +1113,9 @@ async fn transcribe_audio_file_with_hint(
             .env("FNDR_AUDIO_PATH", audio_path)
             .env("FNDR_WHISPER_MODEL_PATH", &model_path)
             .env("FNDR_TRANSCRIBE_HINT", hint.env_value());
+        if let Some(ffmpeg_path) = ffmpeg_path.as_deref() {
+            command.env("FNDR_FFMPEG_PATH", ffmpeg_path);
+        }
         let output = run_transcription_command(
             command,
             TRANSCRIPTION_COMMAND_TIMEOUT,
@@ -831,11 +1141,14 @@ async fn transcribe_audio_file_with_hint(
 
     let sidecar = resolve_sidecar("whisper_gguf_runner.py")
         .ok_or_else(|| "Could not locate whisper_gguf_runner.py".to_string())?;
-    let python = python_for_sidecar()
+    let python = python_for_sidecar(app_data_dir)
         .or_else(find_python3)
         .ok_or_else(|| "No usable python3 found for Whisper transcription. Install with: brew install python@3.13".to_string())?;
     let mut command = AsyncCommand::new(python);
     command.arg(sidecar).arg(&model_path).arg(audio_path);
+    if let Some(ffmpeg_path) = ffmpeg_path.as_deref() {
+        command.env("FNDR_FFMPEG_PATH", ffmpeg_path);
+    }
     if let Some(flag) = hint.sidecar_flag() {
         command.arg(flag);
     }
@@ -875,7 +1188,7 @@ pub async fn synthesize_speech(
     }
 
     let model_path = ensure_model_downloaded(app_data_dir, SpeechModelKind::Orpheus3B).await?;
-    ensure_orpheus_backend().await?;
+    ensure_orpheus_backend(app_data_dir).await?;
 
     let output_path = make_tts_output_path(app_data_dir);
     if let Some(parent) = output_path.parent() {
@@ -912,10 +1225,12 @@ pub async fn synthesize_speech(
 
     let sidecar = resolve_sidecar("orpheus_tts_runner.py")
         .ok_or_else(|| "Could not locate orpheus_tts_runner.py".to_string())?;
-    let python = python_for_sidecar().or_else(find_python3).ok_or_else(|| {
-        "No usable python3 found for Orpheus TTS. Install with: brew install python@3.13"
-            .to_string()
-    })?;
+    let python = python_for_sidecar(app_data_dir)
+        .or_else(find_python3)
+        .ok_or_else(|| {
+            "No usable python3 found for Orpheus TTS. Install with: brew install python@3.13"
+                .to_string()
+        })?;
     let model = model_path.clone();
     let output = output_path.clone();
     let text = text.to_string();
@@ -948,6 +1263,234 @@ pub async fn synthesize_speech(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn development_build_resolves_bundled_whisper_sidecar() {
+        let sidecar = resolve_sidecar("whisper_gguf_runner.py")
+            .expect("the checked-in Whisper sidecar should be resolvable in development");
+
+        assert!(sidecar.is_file());
+        assert!(sidecar.ends_with("sidecars/whisper_gguf_runner.py"));
+    }
+
+    #[test]
+    fn python_version_filter_rejects_python_3_14() {
+        assert_eq!(parse_python_version("Python 3.13.7\n"), Some((3, 13)));
+        assert!(supported_python_version((3, 13)));
+        assert!(!supported_python_version((3, 14)));
+        assert!(!supported_python_version((2, 7)));
+    }
+
+    #[test]
+    fn compressed_browser_audio_requires_pcm_normalization() {
+        assert!(audio_is_pcm_wav_candidate(Path::new("voice.WAV")));
+        assert!(!audio_is_pcm_wav_candidate(Path::new("voice.webm")));
+        assert!(!audio_is_pcm_wav_candidate(Path::new("voice.m4a")));
+        assert!(!audio_is_pcm_wav_candidate(Path::new("voice.ogg")));
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(path)
+            .expect("executable metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("mark test command executable");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn binary_resolver_finds_fixed_candidate_without_a_shell_path() {
+        let temp = tempfile::tempdir().expect("temporary binary directory");
+        let ffmpeg = temp.path().join("ffmpeg");
+        std::fs::write(&ffmpeg, b"#!/bin/sh\nexit 0\n").expect("write fake ffmpeg");
+        make_executable(&ffmpeg);
+
+        let resolved =
+            resolve_binary_from_candidates(None, &[], std::slice::from_ref(&ffmpeg), "ffmpeg");
+
+        assert_eq!(resolved.as_deref(), Some(ffmpeg.as_path()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn compressed_audio_is_normalized_to_owned_pcm_wav() {
+        let app_data = tempfile::tempdir().expect("temporary app data directory");
+        let ffmpeg = app_data.path().join("fake-ffmpeg");
+        std::fs::write(&ffmpeg, b"#!/bin/sh\ncp \"$4\" \"${11}\"\n").expect("write fake ffmpeg");
+        make_executable(&ffmpeg);
+        let compressed = app_data.path().join("recording.webm");
+        std::fs::write(&compressed, b"compressed microphone input")
+            .expect("write compressed input");
+
+        let normalized = convert_audio_to_pcm_wav(app_data.path(), &compressed, &ffmpeg)
+            .await
+            .expect("normalize input");
+        let normalized_path = normalized.path().to_path_buf();
+
+        assert_eq!(
+            normalized_path.extension().and_then(|value| value.to_str()),
+            Some("wav")
+        );
+        assert_eq!(
+            std::fs::read(&normalized_path).expect("read normalized input"),
+            b"compressed microphone input"
+        );
+        drop(normalized);
+        assert!(
+            !normalized_path.exists(),
+            "normalized microphone input should be transient"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn whisper_cli_retries_on_cpu_after_gpu_failure() {
+        let temp = tempfile::tempdir().expect("temporary whisper-cli directory");
+        let cli = temp.path().join("whisper-cli");
+        std::fs::write(
+            &cli,
+            b"#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"-ng\" ]; then\n    printf 'cpu transcript\\n'\n    exit 0\n  fi\ndone\nexit 23\n",
+        )
+        .expect("write fake whisper-cli");
+        make_executable(&cli);
+
+        let transcript = try_whisper_cli_binary_with_candidates(
+            Path::new("model.bin"),
+            Path::new("voice.wav"),
+            &[cli],
+        )
+        .await;
+
+        assert_eq!(transcript.as_deref(), Some("cpu transcript"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn whisper_cli_deduplicates_aliases_to_the_same_executable() {
+        let temp = tempfile::tempdir().expect("temporary whisper-cli directory");
+        let cli = temp.path().join("whisper-cli");
+        let alias = temp.path().join("whisper-cli-alias");
+        let attempts = temp.path().join("attempts");
+        std::fs::write(
+            &cli,
+            format!("#!/bin/sh\nprintf x >> '{}'\nexit 23\n", attempts.display()),
+        )
+        .expect("write fake whisper-cli");
+        make_executable(&cli);
+        std::os::unix::fs::symlink(&cli, &alias).expect("create whisper-cli alias");
+
+        let transcript = try_whisper_cli_binary_with_candidates(
+            Path::new("model.bin"),
+            Path::new("voice.wav"),
+            &[cli, alias],
+        )
+        .await;
+
+        assert_eq!(transcript, None);
+        assert_eq!(
+            std::fs::read(&attempts).expect("read attempt count"),
+            b"xx",
+            "one executable should receive one GPU attempt and one CPU fallback"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn whisper_cli_candidates_share_one_overall_timeout() {
+        let temp = tempfile::tempdir().expect("temporary whisper-cli directory");
+        let cli = temp.path().join("whisper-cli");
+        let finished = temp.path().join("finished");
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\nsleep 1\nprintf done > '{}'\n",
+                finished.display()
+            ),
+        )
+        .expect("write slow whisper-cli");
+        make_executable(&cli);
+
+        let transcript = try_whisper_cli_binary_with_candidates_within(
+            Path::new("model.bin"),
+            Path::new("voice.wav"),
+            &[cli],
+            Duration::from_millis(25),
+        )
+        .await;
+
+        assert_eq!(transcript, None);
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert!(!finished.exists(), "timed-out whisper-cli kept running");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_venv_with_broken_python_is_not_usable() {
+        let temp = tempfile::tempdir().expect("temporary venv directory");
+        let bin = temp.path().join("bin");
+        std::fs::create_dir_all(&bin).expect("create venv bin directory");
+        std::os::unix::fs::symlink(temp.path().join("removed-python"), bin.join("python3"))
+            .expect("create broken venv python link");
+
+        assert!(!speech_venv_is_usable(temp.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_pip_does_not_make_a_working_runtime_disposable() {
+        let temp = tempfile::tempdir().expect("temporary venv directory");
+        let bin = temp.path().join("bin");
+        std::fs::create_dir_all(&bin).expect("create venv bin directory");
+        let python = bin.join("python3");
+        std::fs::write(
+            &python,
+            b"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'Python 3.13.7\\n'; exit 0; fi\nexit 1\n",
+        )
+        .expect("write fake Python runtime");
+        make_executable(&python);
+
+        assert!(speech_venv_is_usable(temp.path()));
+        assert!(!speech_venv_has_pip(temp.path()));
+    }
+
+    #[test]
+    fn speech_environment_stays_inside_private_app_data() {
+        let app_data = tempfile::tempdir().expect("temporary app data directory");
+        let venv = speech_venv_dir(app_data.path());
+
+        assert_eq!(venv, app_data.path().join("speech").join("venv"));
+        assert!(venv.starts_with(app_data.path()));
+    }
+
+    #[test]
+    fn legacy_speech_environment_moves_without_overwriting_private_storage() {
+        let temp = tempfile::tempdir().expect("temporary speech storage");
+        let legacy = temp.path().join("Documents/FNDR Speech/venv");
+        let target = temp
+            .path()
+            .join("Library/Application Support/FNDR/speech/venv");
+        std::fs::create_dir_all(&legacy).expect("create legacy speech environment");
+        std::fs::write(legacy.join("marker"), b"owned runtime").expect("write legacy marker");
+
+        assert!(migrate_owned_speech_venv(&legacy, &target).expect("migrate legacy runtime"));
+        assert!(!legacy.exists());
+        assert_eq!(
+            std::fs::read(target.join("marker")).expect("read migrated marker"),
+            b"owned runtime"
+        );
+
+        std::fs::create_dir_all(&legacy).expect("recreate legacy directory");
+        assert!(
+            !migrate_owned_speech_venv(&legacy, &target).expect("existing private runtime wins")
+        );
+        assert!(
+            legacy.exists(),
+            "legacy data must not be overwritten or deleted"
+        );
+    }
 
     #[tokio::test]
     async fn cancelling_an_async_task_removes_its_temporary_voice_input() {

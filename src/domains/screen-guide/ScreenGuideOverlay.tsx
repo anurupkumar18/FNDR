@@ -5,12 +5,12 @@ import {
     acknowledgeScreenGuideMicrophoneStopped,
     askScreenGuide,
     cancelScreenGuideTurn,
-    emitScreenGuideState,
     finishScreenGuideVisual,
     getScreenGuideCursorPosition,
     getScreenGuideSettings,
     onScreenGuideShortcut,
     onScreenGuideSubmit,
+    reportScreenGuideState,
     screenGuideMicrophoneStarted,
     setScreenGuideOverlayReady,
     transcribeScreenGuideVoiceInput,
@@ -596,7 +596,11 @@ export function ScreenGuideOverlay() {
 
     useEffect(() => {
         const message = state.phase === "answer" ? "Answer ready" : state.message;
-        void emitScreenGuideState({ phase: state.phase, message }).catch(() => undefined);
+        void reportScreenGuideState({
+            phase: state.phase,
+            message,
+            generation: requestIdRef.current,
+        }).catch(() => undefined);
     }, [state.message, state.phase]);
 
     if (state.phase === "idle") return null;

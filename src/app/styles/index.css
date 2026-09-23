@@ -48,9 +48,10 @@
     --focus-ring: color-mix(in srgb, var(--accent) 48%, transparent);
 
     /* Radii — dropped to FNDR archival scale (was 16 / 22 / 28). */
-    --radius-sm: var(--film-radius-sm);   /* 4px */
+    --radius-sm: var(--film-radius-sm);   /* 6px */
     --radius-md: var(--film-radius-md);   /* 8px */
     --radius-lg: var(--film-radius-lg);   /* 12px */
+    --radius-xl: var(--film-radius-xl);   /* 16px — sheets/modals */
     --radius-full: var(--film-radius-pill);
 
     --shadow-soft: 0 2px 6px rgba(0, 0, 0, 0.30);
@@ -188,7 +189,7 @@ body {
     font-size: var(--t-body);
 }
 
-/* Display-font headings — Cormorant Garamond. Components that need
+/* Display-font headings — the system stack. Components that need
    the body font on a heading can opt out via `font-family: inherit`. */
 h1, h2, h3, h4 {
     font-family: var(--font-display);
@@ -215,6 +216,30 @@ kbd {
     width: 0;
     height: 0;
     display: none;
+}
+
+/* Accessibility: translucency and contrast preferences, applied globally
+   so every glass surface (sidebar, toolbars, toasts, sheets, cards) falls
+   back consistently instead of each component special-casing it. */
+@media (prefers-reduced-transparency: reduce) {
+    * {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+    :root {
+        --surface-translucent: var(--bg-2);
+    }
+}
+
+@media (prefers-contrast: more) {
+    :root {
+        --border: var(--hairline-strong);
+        --surface-translucent: var(--bg-2);
+    }
+    * {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
 }
 
 /* Utility classes */
@@ -251,7 +276,7 @@ kbd {
     cursor: pointer;
     overflow: hidden;
     transition: all var(--transition-fast);
-    box-shadow: 0 4px 12px var(--shadow-color);
+    box-shadow: 0 1px 3px var(--shadow-color);
 }
 
 .ui-action-btn::before {
@@ -266,19 +291,19 @@ kbd {
     color: var(--text-primary);
     background: var(--surface-hover);
     border-color: var(--border-strong);
-    transform: translateY(-1px);
-    box-shadow: 0 8px 16px var(--shadow-color);
+    box-shadow: 0 2px 6px var(--shadow-color);
 }
 
 .ui-action-btn:active:not(:disabled) {
-    transform: translateY(0);
+    transform: scale(0.97);
+    transition-duration: 100ms;
 }
 
 .ui-action-btn.active {
     background: var(--accent-light);
     border-color: var(--accent);
     color: var(--text-primary);
-    box-shadow: 0 4px 12px var(--shadow-color);
+    box-shadow: 0 1px 3px var(--shadow-color);
 }
 
 .ui-action-btn:disabled {

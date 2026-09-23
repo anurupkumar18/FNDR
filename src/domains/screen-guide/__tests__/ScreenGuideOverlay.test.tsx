@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
     acknowledgeScreenGuideMicrophoneStopped: vi.fn(),
     askScreenGuide: vi.fn(),
     cancelScreenGuideTurn: vi.fn(),
-    emitScreenGuideState: vi.fn(),
+    reportScreenGuideState: vi.fn(),
     finishScreenGuideVisual: vi.fn(),
     getScreenGuideCursorPosition: vi.fn(),
     getScreenGuideSettings: vi.fn(),
@@ -125,8 +125,8 @@ describe("ScreenGuideOverlay", () => {
         mocks.screenGuideMicrophoneStarted.mockResolvedValue(undefined);
         mocks.acknowledgeScreenGuideMicrophoneStopped.mockResolvedValue(true);
         mocks.setScreenGuideOverlayReady.mockResolvedValue(undefined);
-        mocks.emitScreenGuideState.mockResolvedValue(undefined);
         mocks.cancelScreenGuideTurn.mockResolvedValue(undefined);
+        mocks.reportScreenGuideState.mockResolvedValue(undefined);
     });
 
     afterEach(() => cleanup());
@@ -177,7 +177,7 @@ describe("ScreenGuideOverlay", () => {
 
             act(() => shortcutHandler?.({ action: "press", generation: 1 }));
             await waitFor(() => expect(FakeMediaRecorder.instances[0]?.state).toBe("recording"));
-            mocks.emitScreenGuideState.mockClear();
+            mocks.reportScreenGuideState.mockClear();
 
             act(() => shortcutHandler?.({ action: "cancel", generation: 1 }));
 
@@ -190,9 +190,10 @@ describe("ScreenGuideOverlay", () => {
             );
             expect(mocks.transcribeScreenGuideVoiceInput).not.toHaveBeenCalled();
             await waitFor(() =>
-                expect(mocks.emitScreenGuideState).toHaveBeenCalledWith({
+                expect(mocks.reportScreenGuideState).toHaveBeenCalledWith({
                     phase: "idle",
                     message: null,
+                    generation: 1,
                 }),
             );
         } finally {
@@ -331,7 +332,7 @@ describe("ScreenGuideOverlay", () => {
             await waitFor(() =>
                 expect(mocks.transcribeScreenGuideVoiceInput).toHaveBeenCalledTimes(1),
             );
-            mocks.emitScreenGuideState.mockClear();
+            mocks.reportScreenGuideState.mockClear();
 
             act(() => shortcutHandler?.({ action: "cancel", generation: 1 }));
             await act(async () => {
@@ -341,9 +342,10 @@ describe("ScreenGuideOverlay", () => {
 
             expect(mocks.askScreenGuide).not.toHaveBeenCalled();
             await waitFor(() =>
-                expect(mocks.emitScreenGuideState).toHaveBeenCalledWith({
+                expect(mocks.reportScreenGuideState).toHaveBeenCalledWith({
                     phase: "idle",
                     message: null,
+                    generation: 1,
                 }),
             );
         } finally {
@@ -378,9 +380,10 @@ describe("ScreenGuideOverlay", () => {
             });
 
             expect(mocks.cancelScreenGuideTurn).toHaveBeenCalledWith(7);
-            expect(mocks.emitScreenGuideState).toHaveBeenCalledWith({
+            expect(mocks.reportScreenGuideState).toHaveBeenCalledWith({
                 phase: "error",
                 message: "Screen Guide took too long to answer and was cancelled. Try again.",
+                generation: 7,
             });
         } finally {
             vi.useRealTimers();

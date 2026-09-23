@@ -397,13 +397,11 @@
 .wallpaper-choice:hover {
     border-color: var(--border-strong);
     background: var(--surface-elevated);
-    transform: translateY(-1px);
 }
 
 .wallpaper-choice.active {
     border-color: var(--accent);
     background: var(--accent-light);
-    box-shadow: 0 0 20px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .wallpaper-choice-preview {
@@ -650,7 +648,6 @@
 .blocklist-empty {
     font-size: 0.85rem;
     color: var(--text-muted);
-    font-style: italic;
 }
 
 .blocklist-item {
