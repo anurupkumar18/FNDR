@@ -47,6 +47,9 @@ pub use maintenance::*;
 mod hermes_agent;
 pub use hermes_agent::*;
 
+mod agent_chats;
+pub use agent_chats::*;
+
 pub(crate) mod codex_account;
 pub use codex_account::*;
 

@@ -1866,11 +1866,55 @@ export async function stopHermesGateway(): Promise<HermesBridgeStatus> {
     return invoke<HermesBridgeStatus>("stop_hermes_gateway");
 }
 
+/** Sends a message to Hermes. `memoryIds` attach FNDR memories as reference
+ *  context; the backend loads them itself, capped at 8 per message. */
 export async function sendHermesMessage(
     conversationId: string,
-    input: string
+    input: string,
+    memoryIds: string[] = []
 ): Promise<HermesChatReply> {
-    return invoke<HermesChatReply>("send_hermes_message", { conversationId, input });
+    return invoke<HermesChatReply>("send_hermes_message", { conversationId, input, memoryIds });
+}
+
+export interface AttachedMemory {
+    id: string;
+    title: string;
+    appName: string;
+    timestamp: number;
+}
+
+export interface AgentChatMessage {
+    role: "user" | "assistant";
+    content: string;
+    at: number;
+    memories: AttachedMemory[];
+}
+
+export interface AgentChat {
+    id: string;
+    title: string;
+    createdAt: number;
+    updatedAt: number;
+    messages: AgentChatMessage[];
+}
+
+export interface AgentChatSummary {
+    id: string;
+    title: string;
+    updatedAt: number;
+    messageCount: number;
+}
+
+export async function listAgentChats(): Promise<AgentChatSummary[]> {
+    return invoke<AgentChatSummary[]>("list_agent_chats");
+}
+
+export async function getAgentChat(id: string): Promise<AgentChat | null> {
+    return invoke<AgentChat | null>("get_agent_chat", { id });
+}
+
+export async function deleteAgentChat(id: string): Promise<void> {
+    return invoke("delete_agent_chat", { id });
 }
 
 /** Emitted by the backend when a ChatGPT sign-in started with `codexLoginStart` finishes. */

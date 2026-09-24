@@ -1463,15 +1463,20 @@ pub async fn send_hermes_message(
     state: State<'_, Arc<AppState>>,
     conversation_id: String,
     input: String,
+    memory_ids: Option<Vec<String>>,
 ) -> Result<HermesChatReply, String> {
+    let memory_ids = memory_ids.unwrap_or_default();
+    let attached = super::agent_chats::load_attached_memories(state.inner(), &memory_ids).await?;
     let status = ensure_hermes_gateway_ready(state.inner(), 12_000).await?;
 
     let api_key = read_hermes_api_key(state.inner())
         .ok_or_else(|| "FNDR could not read the Hermes API server key.".to_string())?;
-    let input = input.trim();
-    if input.is_empty() {
+    let user_text = input.trim().to_string();
+    if user_text.is_empty() {
         return Err("Message cannot be empty.".to_string());
     }
+    let sent_at = chrono::Utc::now().timestamp_millis();
+    let input = format!("{}{}", super::agent_chats::memory_context_block(&attached), user_text);
 
     let instructions = "You are the native FNDR agent experience, powered by Hermes under the hood. Use FNDR's context files and private snapshot to help with planning, recall, drafting, research, and safe computer-use support. Ask before destructive actions, external messages, purchases, or credential changes.";
     let request_body = serde_json::json!({
@@ -1536,6 +1541,28 @@ pub async fn send_hermes_message(
         .unwrap_or_else(|| {
             "Hermes completed the turn, but no assistant text was returned.".to_string()
         });
+
+    let memories = attached.iter().map(super::agent_chats::attached_memory).collect();
+    let history = super::agent_chats::record_exchange(
+        state.inner(),
+        &conversation_id,
+        super::agent_chats::AgentChatMessage {
+            role: "user".to_string(),
+            content: user_text,
+            at: sent_at,
+            memories,
+        },
+        super::agent_chats::AgentChatMessage {
+            role: "assistant".to_string(),
+            content: content.clone(),
+            at: chrono::Utc::now().timestamp_millis(),
+            memories: Vec::new(),
+        },
+    );
+    if let Err(err) = history {
+        // The reply still reaches the user; only the history entry is lost.
+        tracing::warn!(%err, "agent_chats:record_failed");
+    }
 
     Ok(HermesChatReply {
         response_id,

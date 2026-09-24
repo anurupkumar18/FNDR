@@ -162,13 +162,13 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                         ? "FNDR found Codex on this Mac but it failed to start. Reinstalling it usually fixes a missing binary."
                         : "FNDR signs you in through the official Codex app. Install it, then come back here."}
                 </p>
-                <div className="ap-terminal-line">
-                    <span className="ap-terminal-prompt">$</span>
+                <div className="codex-terminal">
+                    <span className="codex-terminal-prompt">$</span>
                     <span>{CODEX_INSTALL_COMMAND}</span>
                 </div>
                 {broken && status.cliPath && <p className="codex-card-muted">Found at {status.cliPath}</p>}
-                <div className="ap-inline-actions">
-                    <button type="button" className="ap-btn" onClick={() => void refresh()} disabled={busy}>
+                <div className="codex-actions">
+                    <button type="button" className="codex-btn" onClick={() => void refresh()} disabled={busy}>
                         Check again
                     </button>
                 </div>
@@ -197,8 +197,8 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                     Hermes runs on your subscription and counts against these limits.
                 </p>
                 {error && <p className="codex-card-error" role="alert">{error}</p>}
-                <div className="ap-inline-actions">
-                    <button type="button" className="ap-btn" onClick={() => void handleSignOut()} disabled={busy}>
+                <div className="codex-actions">
+                    <button type="button" className="codex-btn" onClick={() => void handleSignOut()} disabled={busy}>
                         Sign out
                     </button>
                 </div>
@@ -226,13 +226,13 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                 </div>
             ) : null}
             {error && <p className="codex-card-error" role="alert">{error}</p>}
-            <div className="ap-inline-actions">
+            <div className="codex-actions">
                 {pending ? (
                     <>
-                        <button type="button" className="ap-btn" onClick={() => void openExternalUrl(pending.authUrl)}>
+                        <button type="button" className="codex-btn" onClick={() => void openExternalUrl(pending.authUrl)}>
                             Open sign-in page
                         </button>
-                        <button type="button" className="ap-btn" onClick={() => void handleCancel()} disabled={busy}>
+                        <button type="button" className="codex-btn" onClick={() => void handleCancel()} disabled={busy}>
                             Cancel
                         </button>
                     </>
@@ -240,13 +240,13 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                     <>
                         <button
                             type="button"
-                            className="ap-btn ap-btn-primary"
+                            className="codex-btn codex-btn-primary"
                             onClick={() => void handleSignIn()}
                             disabled={busy}
                         >
                             Sign in with ChatGPT
                         </button>
-                        <button type="button" className="ap-link-btn" onClick={() => void openExternalUrl(CODEX_PLAN_HELP_URL)}>
+                        <button type="button" className="codex-link" onClick={() => void openExternalUrl(CODEX_PLAN_HELP_URL)}>
                             Which plans work?
                         </button>
                     </>

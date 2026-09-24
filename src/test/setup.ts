@@ -64,3 +64,8 @@ if (typeof window !== "undefined") {
             }
         });
 }
+
+// jsdom has no layout, so no scrollIntoView; scrolling is a no-op in tests.
+if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !== "function") {
+    Element.prototype.scrollIntoView = () => {};
+}
