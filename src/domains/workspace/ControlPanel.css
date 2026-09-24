@@ -1153,3 +1153,59 @@
     color: rgba(255, 255, 255, 0.9);
     font-weight: 500;
 }
+
+.appearance-sublabel {
+    margin: 16px 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.wallpaper-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 8px;
+}
+
+.wallpaper-option {
+    display: grid;
+    gap: 6px;
+    padding: 4px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    text-align: center;
+    cursor: pointer;
+}
+
+.wallpaper-preview {
+    display: block;
+    aspect-ratio: 16 / 10;
+    border-radius: 9px;
+    box-shadow: inset 0 0 0 1px var(--border);
+    transition: box-shadow var(--film-dur-hover) var(--film-ease-shutter), transform var(--film-dur-fast) var(--film-ease-shutter);
+}
+
+.wallpaper-option:hover .wallpaper-preview {
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.wallpaper-option:active .wallpaper-preview {
+    transform: scale(0.97);
+}
+
+.wallpaper-option.is-selected {
+    color: var(--text-primary);
+}
+
+.wallpaper-option.is-selected .wallpaper-preview {
+    box-shadow: 0 0 0 2px var(--accent);
+}
+
+.wallpaper-option:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}

@@ -28,6 +28,13 @@ import {
     type PaletteKey,
 } from "@/shared/theme/cinematic-palettes";
 import { PanelHeader } from "@/shared/components/PanelHeader";
+import {
+    DEFAULT_WALLPAPER,
+    WALLPAPERS,
+    isWallpaperId,
+    listWallpapers,
+    type WallpaperId,
+} from "@/shared/wallpaper/wallpaper-registry";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { PrivacyPanel } from "./PrivacyPanel";
 import "./ControlPanel.css";
@@ -188,17 +195,23 @@ export function ControlPanel({
         resolveStoredPalette(localStorage.getItem(STORAGE_KEYS.palette)),
     );
 
+    const [wallpaper, setWallpaper] = useState<WallpaperId>(() => {
+        const stored = localStorage.getItem(STORAGE_KEYS.wallpaper);
+        return isWallpaperId(stored) ? stored : DEFAULT_WALLPAPER;
+    });
+
     useEffect(() => {
         document.documentElement.setAttribute("data-theme", theme);
         localStorage.setItem(STORAGE_KEYS.theme, theme);
         localStorage.setItem(STORAGE_KEYS.palette, palette);
+        localStorage.setItem(STORAGE_KEYS.wallpaper, wallpaper);
         applyPalette(palette, theme);
         window.dispatchEvent(
             new CustomEvent("fndr-appearance-changed", {
-                detail: { palette, mode: theme },
+                detail: { palette, mode: theme, wallpaper },
             }),
         );
-    }, [theme, palette]);
+    }, [theme, palette, wallpaper]);
 
     const toggleTheme = () => setTheme((current) => (current === "dark" ? "light" : "dark"));
 
@@ -425,6 +438,31 @@ export function ControlPanel({
                                                     <span style={{ background: option[theme].accent }} />
                                                 </span>
                                                 <span className="palette-name">{option.name}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <p className="appearance-sublabel" id="settings-wallpaper-label">Background</p>
+                                <div className="wallpaper-list" role="radiogroup" aria-labelledby="settings-wallpaper-label">
+                                    {listWallpapers().map((key) => {
+                                        const option = WALLPAPERS[key];
+                                        const selected = key === wallpaper;
+                                        return (
+                                            <button
+                                                key={key}
+                                                type="button"
+                                                role="radio"
+                                                aria-checked={selected}
+                                                title={option.description}
+                                                className={`wallpaper-option${selected ? " is-selected" : ""}`}
+                                                onClick={() => setWallpaper(key)}
+                                            >
+                                                <span
+                                                    className="wallpaper-preview"
+                                                    style={{ background: option.preview }}
+                                                    aria-hidden="true"
+                                                />
+                                                <span className="wallpaper-name">{option.name}</span>
                                             </button>
                                         );
                                     })}

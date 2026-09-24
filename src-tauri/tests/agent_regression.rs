@@ -97,11 +97,12 @@ mod action_policy {
     }
 
     #[test]
-    fn low_risk_open_url_allowed_without_approval() {
+    fn open_url_is_allowed_but_needs_approval_even_when_low_risk() {
+        // Opening a URL leaves FNDR, so Act mode asks first (1b68fd5).
         let decision =
             policy_for_action(&AgentActionKind::OpenUrl, &RiskLevel::Low, &AgentMode::Act);
         assert!(decision.allowed);
-        assert!(!decision.requires_approval);
+        assert!(decision.requires_approval);
     }
 
     #[test]

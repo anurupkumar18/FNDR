@@ -12,6 +12,13 @@ use regex::Regex;
 use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
 
+// `class!` looks Vision's classes up at runtime, so the framework has to be
+// loaded by whatever binary links this crate. The app happened to pull it in
+// through other dependencies; tests and evals did not, and panicked with
+// "class VNImageRequestHandler could not be found".
+#[link(name = "Vision", kind = "framework")]
+extern "C" {}
+
 const OCR_DROP_THRESHOLD: f32 = 0.40;
 const OCR_LOW_CONF_THRESHOLD: f32 = 0.65;
 
