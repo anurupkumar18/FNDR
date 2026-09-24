@@ -5,6 +5,8 @@ use fndr_lib::storage::{MemoryRecord, Store};
 use serde::Deserialize;
 use std::collections::HashSet;
 
+mod common;
+
 #[derive(Debug, Deserialize)]
 struct EvalCase {
     query: String,
@@ -215,10 +217,11 @@ fn hybrid_search_relevance_eval_suite() {
     let mut mrr_sum = 0.0f32;
     let mut negative_failures = Vec::new();
 
+    let search_config = common::ci_safe_search_config();
     for case in &cases {
         let hits = rt
             .block_on(async {
-                HybridSearcher::search(&store, &embedder, &case.query, 6, None, None).await
+                HybridSearcher::search_with_config(&store, &embedder, &case.query, 6, None, None, &search_config).await
             })
             .expect("search query");
         let hit_ids = hits.into_iter().map(|item| item.id).collect::<Vec<_>>();
