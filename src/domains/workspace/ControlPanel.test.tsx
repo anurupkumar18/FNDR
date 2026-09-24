@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
     getPrivacyAlerts,
     pauseCapture,
@@ -199,6 +199,25 @@ describe("ControlPanel", () => {
         expect(document.getElementById("cinematic-palette-vars")?.textContent).toContain(
             '--cp-active-mode: "light"',
         );
+    });
+
+    it("lets the user change the home background and tells the wallpaper layer", () => {
+        localStorage.setItem("fndr-wallpaper", "warpGrid");
+        const changes: unknown[] = [];
+        const listener = (event: Event) => changes.push((event as CustomEvent).detail);
+        window.addEventListener("fndr-appearance-changed", listener);
+        render(<ControlPanel status={null} compact={true} />);
+
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        const backgrounds = screen.getByRole("radiogroup", { name: "Background" });
+        expect(within(backgrounds).getByRole("radio", { name: "Warp Grid" })).toHaveAttribute("aria-checked", "true");
+
+        fireEvent.click(within(backgrounds).getByRole("radio", { name: "Nebula Drift" }));
+
+        expect(within(backgrounds).getByRole("radio", { name: "Nebula Drift" })).toHaveAttribute("aria-checked", "true");
+        expect(localStorage.getItem("fndr-wallpaper")).toBe("nebula");
+        expect(changes[changes.length - 1]).toMatchObject({ wallpaper: "nebula" });
+        window.removeEventListener("fndr-appearance-changed", listener);
     });
 
     it("shows one demo-safe settings sheet without destructive or model-management controls", async () => {
