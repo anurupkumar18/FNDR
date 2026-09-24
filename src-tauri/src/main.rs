@@ -655,6 +655,17 @@ fn main() {
             // the demo surface, so their windows and global shortcuts are not
             // registered.
 
+            // Pre-create the notch HUD (hidden) and register its toggle.
+            ipc::commands::create_notch_hud_window(app.handle());
+            if let Err(err) = ipc::commands::register_notch_hud_shortcut(app.handle()) {
+                tracing::warn!("Notch HUD shortcut registration failed: {err}");
+            } else {
+                tracing::info!(
+                    "Notch HUD global shortcut registered: {}",
+                    ipc::commands::NOTCH_HUD_SHORTCUT
+                );
+            }
+
             if let Err(err) = ipc::commands::register_screen_guide_shortcut(
                 app.handle(),
                 &state.config.read().screen_guide.clone(),
@@ -801,11 +812,19 @@ fn main() {
             ipc::commands::start_hermes_gateway,
             ipc::commands::stop_hermes_gateway,
             ipc::commands::send_hermes_message,
+            ipc::commands::list_agent_chats,
+            ipc::commands::get_agent_chat,
+            ipc::commands::delete_agent_chat,
             ipc::commands::codex_account_status,
             ipc::commands::codex_login_start,
             ipc::commands::codex_login_cancel,
             ipc::commands::codex_logout,
             ipc::commands::openclicky_bridge_status,
+            ipc::commands::computer_use_status,
+            ipc::commands::computer_use_say,
+            ipc::commands::computer_use_interrupt,
+            ipc::commands::computer_use_respond,
+            ipc::commands::computer_use_stop,
             ipc::commands::send_direct_chat,
             ipc::commands::quick_setup_ollama,
             ipc::commands::generate_daily_briefing,
@@ -828,6 +847,13 @@ fn main() {
             // Omnibar
             ipc::commands::dismiss_omnibar,
             ipc::commands::omnibar_open_memory,
+            // Notch HUD
+            ipc::commands::get_notch_hud_geometry,
+            ipc::commands::set_notch_hud_hit_rect,
+            ipc::commands::set_notch_hud_keyboard,
+            ipc::commands::dismiss_notch_hud,
+            ipc::commands::toggle_notch_hud,
+            ipc::commands::notch_hud_open_memory,
             // Screen Guide
             ipc::commands::get_screen_guide_settings,
             ipc::commands::set_screen_guide_settings,

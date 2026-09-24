@@ -28,3 +28,9 @@ Negative / accepted risks:
 - Gatekeeper shows the unidentified-developer flow on first launch until notarization is added.
 - Losing the minisign private key breaks the update chain for existing installs; the key must be backed up.
 - aarch64-only until an x86_64 target is added deliberately.
+
+## Addendum (2026-09-23): signing turns on with secrets
+
+- `release.yml` now signs with Developer ID and notarizes whenever the Apple secrets listed in `docs/setup/releasing.md` exist, and falls back to ad-hoc signing when they don't. It verifies the result with `codesign` (and `spctl` + `stapler` when signed) and gates on typecheck + tests first.
+- Right-click → Open no longer bypasses Gatekeeper on current macOS; unsigned users must use System Settings → Privacy & Security → Open Anyway. Ad-hoc signatures also change every build, so macOS can ask for Screen Recording again after an update. Both go away with Developer ID signing, which is why it is now the recommended path rather than out of scope.
+- The first release run failed before building: the repo-wide `*.json` ignore hid `src-tauri/tauri.conf.json` from tauri-action's config search. `.gitignore` now un-ignores the project config files.

@@ -711,6 +711,41 @@ fn read_hermes_setup_record(state: &AppState) -> Option<HermesSetupRecord> {
     serde_json::from_str::<HermesSetupRecord>(&raw).ok()
 }
 
+/// A YAML double-quoted scalar. JSON string syntax is valid YAML, so this
+/// quotes and escapes model names and URLs safely. (This used to go through
+/// `toml::to_string`, which rejects a bare string with "unsupported rust type"
+/// and made every provider save fail.)
+fn yaml_scalar(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// Hermes's `config.yaml` model block for a saved provider choice.
+fn hermes_config_yaml(record: &HermesSetupRecord) -> Result<String, String> {
+    let model = yaml_scalar(&record.model_name);
+    let base_url = record.base_url.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    Ok(match record.provider_kind.as_str() {
+        "ollama" => format!(
+            "model:\n  provider: custom\n  default: {model}\n  base_url: {}\n  context_length: 32768\n",
+            yaml_scalar(base_url.unwrap_or(OLLAMA_BASE_URL)),
+        ),
+        // Hermes's canonical id for ChatGPT-subscription inference; it reads
+        // the tokens Codex keeps in $CODEX_HOME/auth.json (see codex_account.rs).
+        "codex" => format!("model:\n  provider: openai-codex\n  default: {model}\n"),
+        "custom" => {
+            let base_url =
+                base_url.ok_or_else(|| "A base URL is required for a custom endpoint.".to_string())?;
+            format!(
+                "model:\n  provider: custom\n  default: {model}\n  base_url: {}\n",
+                yaml_scalar(base_url),
+            )
+        }
+        provider => format!(
+            "model:\n  provider: {}\n  default: {model}\n",
+            yaml_scalar(provider),
+        ),
+    })
+}
+
 fn persist_hermes_setup_files(state: &AppState, setup: &HermesSetupPayload) -> Result<(), String> {
     let home_dir = hermes_home_dir(state);
     std::fs::create_dir_all(&home_dir).map_err(|e| e.to_string())?;
@@ -729,55 +764,7 @@ fn persist_hermes_setup_files(state: &AppState, setup: &HermesSetupPayload) -> R
             .map(|value| value.trim().to_string()),
     };
 
-    let config_yaml = match record.provider_kind.as_str() {
-        "ollama" => {
-            let base_url = record
-                .base_url
-                .clone()
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| OLLAMA_BASE_URL.to_string());
-            format!(
-                "model:\n  provider: custom\n  default: {}\n  base_url: {}\n  context_length: 32768\n",
-                toml::to_string(&record.model_name)
-                    .map_err(|e| e.to_string())?
-                    .trim(),
-                toml::to_string(&base_url)
-                    .map_err(|e| e.to_string())?
-                    .trim(),
-            )
-        }
-        // Hermes's canonical id for ChatGPT-subscription inference; it reads
-        // the tokens Codex keeps in $CODEX_HOME/auth.json (see codex_account.rs).
-        "codex" => format!(
-            "model:\n  provider: openai-codex\n  default: {}\n",
-            toml::to_string(&record.model_name)
-                .map_err(|e| e.to_string())?
-                .trim(),
-        ),
-        "custom" => {
-            let base_url = record
-                .base_url
-                .clone()
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| "A base URL is required for a custom endpoint.".to_string())?;
-            format!(
-                "model:\n  provider: custom\n  default: {}\n  base_url: {}\n",
-                toml::to_string(&record.model_name)
-                    .map_err(|e| e.to_string())?
-                    .trim(),
-                toml::to_string(&base_url)
-                    .map_err(|e| e.to_string())?
-                    .trim(),
-            )
-        }
-        _ => format!(
-            "model:\n  provider: {}\n  default: {}\n",
-            record.provider_kind,
-            toml::to_string(&record.model_name)
-                .map_err(|e| e.to_string())?
-                .trim(),
-        ),
-    };
+    let config_yaml = hermes_config_yaml(&record)?;
 
     let mut env_lines = vec![
         "API_SERVER_ENABLED=true".to_string(),
@@ -1476,15 +1463,20 @@ pub async fn send_hermes_message(
     state: State<'_, Arc<AppState>>,
     conversation_id: String,
     input: String,
+    memory_ids: Option<Vec<String>>,
 ) -> Result<HermesChatReply, String> {
+    let memory_ids = memory_ids.unwrap_or_default();
+    let attached = super::agent_chats::load_attached_memories(state.inner(), &memory_ids).await?;
     let status = ensure_hermes_gateway_ready(state.inner(), 12_000).await?;
 
     let api_key = read_hermes_api_key(state.inner())
         .ok_or_else(|| "FNDR could not read the Hermes API server key.".to_string())?;
-    let input = input.trim();
-    if input.is_empty() {
+    let user_text = input.trim().to_string();
+    if user_text.is_empty() {
         return Err("Message cannot be empty.".to_string());
     }
+    let sent_at = chrono::Utc::now().timestamp_millis();
+    let input = format!("{}{}", super::agent_chats::memory_context_block(&attached), user_text);
 
     let instructions = "You are the native FNDR agent experience, powered by Hermes under the hood. Use FNDR's context files and private snapshot to help with planning, recall, drafting, research, and safe computer-use support. Ask before destructive actions, external messages, purchases, or credential changes.";
     let request_body = serde_json::json!({
@@ -1549,6 +1541,28 @@ pub async fn send_hermes_message(
         .unwrap_or_else(|| {
             "Hermes completed the turn, but no assistant text was returned.".to_string()
         });
+
+    let memories = attached.iter().map(super::agent_chats::attached_memory).collect();
+    let history = super::agent_chats::record_exchange(
+        state.inner(),
+        &conversation_id,
+        super::agent_chats::AgentChatMessage {
+            role: "user".to_string(),
+            content: user_text,
+            at: sent_at,
+            memories,
+        },
+        super::agent_chats::AgentChatMessage {
+            role: "assistant".to_string(),
+            content: content.clone(),
+            at: chrono::Utc::now().timestamp_millis(),
+            memories: Vec::new(),
+        },
+    );
+    if let Err(err) = history {
+        // The reply still reaches the user; only the history entry is lost.
+        tracing::warn!(%err, "agent_chats:record_failed");
+    }
 
     Ok(HermesChatReply {
         response_id,
@@ -1843,4 +1857,56 @@ pub async fn quick_setup_ollama(
     }
     *get_hermes_gateway_error_store().lock() = None;
     sync_hermes_bridge_files(state.inner()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(provider: &str, model: &str, base_url: Option<&str>) -> HermesSetupRecord {
+        HermesSetupRecord {
+            provider_kind: provider.to_string(),
+            model_name: model.to_string(),
+            base_url: base_url.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn toml_cannot_quote_a_bare_string_which_is_why_saves_failed() {
+        let err = toml::to_string(&"gpt-6-sol").unwrap_err().to_string();
+        assert!(err.contains("unsupported rust type"), "{err}");
+    }
+
+    #[test]
+    fn writes_the_codex_provider_hermes_expects() {
+        assert_eq!(
+            hermes_config_yaml(&record("codex", "gpt-6-sol", None)).unwrap(),
+            "model:\n  provider: openai-codex\n  default: \"gpt-6-sol\"\n"
+        );
+    }
+
+    #[test]
+    fn quotes_values_yaml_would_otherwise_misread() {
+        let yaml = hermes_config_yaml(&record("ollama", "llama3.2:latest", None)).unwrap();
+        assert!(yaml.contains("default: \"llama3.2:latest\""));
+        assert!(yaml.contains(&format!("base_url: \"{OLLAMA_BASE_URL}\"")));
+
+        let yaml = hermes_config_yaml(&record("custom", "my \"best\" model", Some(" http://localhost:8000/v1 "))).unwrap();
+        assert!(yaml.contains(r#"default: "my \"best\" model""#));
+        assert!(yaml.contains("base_url: \"http://localhost:8000/v1\""));
+    }
+
+    #[test]
+    fn a_custom_endpoint_needs_a_base_url() {
+        assert!(hermes_config_yaml(&record("custom", "m", None)).is_err());
+        assert!(hermes_config_yaml(&record("custom", "m", Some("  "))).is_err());
+    }
+
+    #[test]
+    fn other_providers_are_written_through_as_quoted_ids() {
+        assert_eq!(
+            hermes_config_yaml(&record("openrouter", "openai/gpt-5-mini", None)).unwrap(),
+            "model:\n  provider: \"openrouter\"\n  default: \"openai/gpt-5-mini\"\n"
+        );
+    }
 }

@@ -665,6 +665,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     let previewBlocklist = ["1Password", "bank.example"];
     let previewPrivacyAlerts: PrivacyAlert[] = [];
     let codexSignedIn = false;
+    let agentChats: Array<{ id: string; title: string; createdAt: number; updatedAt: number; messages: Array<{ role: string; content: string; at: number; memories: Array<{ id: string; title: string; appName: string; timestamp: number }> }> }> = [];
     let hermesConfigured = false;
     let codexLoginSeq = 0;
     let pendingCodexLogin: { loginId: string; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -1178,8 +1179,46 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             case "save_hermes_setup":
                 hermesConfigured = true;
                 return previewHermesStatus(codexSignedIn, hermesConfigured);
+            case "computer_use_status":
+                return { enabled: false, codexReady: true, openComputerUsePath: null, active: false };
             case "openclicky_bridge_status":
                 return { reachable: false, tokenFound: false, bridgeTokenConfigured: false };
+            case "list_agent_chats":
+                return agentChats.map((chat) => ({
+                    id: chat.id,
+                    title: chat.title,
+                    updatedAt: chat.updatedAt,
+                    messageCount: chat.messages.length,
+                }));
+            case "get_agent_chat": {
+                const id = payloadRecord(payload)?.id;
+                return clonePreview(agentChats.find((chat) => chat.id === id) ?? null);
+            }
+            case "delete_agent_chat": {
+                const id = payloadRecord(payload)?.id;
+                agentChats = agentChats.filter((chat) => chat.id !== id);
+                return null;
+            }
+            case "send_hermes_message": {
+                const record = payloadRecord(payload) ?? {};
+                const conversationId = String(record.conversationId ?? "preview-chat");
+                const input = String(record.input ?? "");
+                const memoryIds = Array.isArray(record.memoryIds) ? (record.memoryIds as string[]) : [];
+                const memories = previewCards
+                    .filter((card) => memoryIds.includes(card.id))
+                    .map((card) => ({ id: card.id, title: card.title, appName: card.app_name, timestamp: card.timestamp }));
+                const content = memories.length
+                    ? `Using ${memories.length} attached memor${memories.length === 1 ? "y" : "ies"}: ${memories.map((m, i) => `[${i + 1}] ${m.title}`).join(", ")}. Here's a plan for “${input}”.`
+                    : `Here's a first pass at “${input}”.`;
+                const now = Date.now();
+                const existing = agentChats.find((chat) => chat.id === conversationId);
+                const chat = existing ?? { id: conversationId, title: input.slice(0, 60), createdAt: now, updatedAt: now, messages: [] };
+                chat.messages.push({ role: "user", content: input, at: now, memories });
+                chat.messages.push({ role: "assistant", content, at: now + 1, memories: [] });
+                chat.updatedAt = now + 1;
+                agentChats = [chat, ...agentChats.filter((c) => c.id !== conversationId)];
+                return { response_id: `resp-${now}`, conversation_id: conversationId, content };
+            }
             case "codex_account_status":
                 return clonePreview(codexSignedIn ? previewCodexSignedIn : previewCodexSignedOut);
             case "codex_login_start": {

@@ -49,3 +49,23 @@ if (typeof globalThis.ResizeObserver === "undefined") {
         disconnect() {}
     } as unknown as typeof ResizeObserver;
 }
+
+// jsdom implements no SVG filter primitives, so a per-frame write into
+// feDisplacementMap's `scale` throws inside animation loops (the notch's voice
+// beam). Nothing asserts on painted frames; unpaintable frames are dropped.
+if (typeof window !== "undefined") {
+    const scheduleFrame = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback: FrameRequestCallback): number =>
+        scheduleFrame((time) => {
+            try {
+                callback(time);
+            } catch {
+                /* unpaintable frame under jsdom */
+            }
+        });
+}
+
+// jsdom has no layout, so no scrollIntoView; scrolling is a no-op in tests.
+if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !== "function") {
+    Element.prototype.scrollIntoView = () => {};
+}

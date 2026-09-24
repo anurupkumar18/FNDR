@@ -32,6 +32,9 @@ pub use autofill::*;
 mod omnibar;
 pub use omnibar::*;
 
+mod notch;
+pub use notch::*;
+
 mod clipboard;
 pub use clipboard::*;
 
@@ -44,11 +47,17 @@ pub use maintenance::*;
 mod hermes_agent;
 pub use hermes_agent::*;
 
+mod agent_chats;
+pub use agent_chats::*;
+
 pub(crate) mod codex_account;
 pub use codex_account::*;
 
 pub(crate) mod openclicky_bridge;
 pub use openclicky_bridge::*;
+
+mod computer_use;
+pub use computer_use::*;
 
 mod agent;
 pub use agent::*;

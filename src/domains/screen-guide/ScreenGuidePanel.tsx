@@ -13,7 +13,12 @@ import { screenGuideErrorMessage } from "./screenGuideState";
 import "./ScreenGuidePanel.css";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
-import { openClickyBridgeStatus, type OpenClickyBridgeStatus } from "@/shared/ipc/tauri";
+import {
+    computerUseStatus,
+    openClickyBridgeStatus,
+    type ComputerUseStatus,
+    type OpenClickyBridgeStatus,
+} from "@/shared/ipc/tauri";
 
 interface ScreenGuidePanelProps {
     isVisible: boolean;
@@ -149,6 +154,17 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
 
     const usesChatGpt = settings?.model === "codex";
     const [openClicky, setOpenClicky] = useState<OpenClickyBridgeStatus | null>(null);
+    const [computerUse, setComputerUse] = useState<ComputerUseStatus | null>(null);
+    useEffect(() => {
+        if (!isVisible) return;
+        let active = true;
+        computerUseStatus()
+            .then((status) => active && setComputerUse(status))
+            .catch(() => active && setComputerUse(null));
+        return () => {
+            active = false;
+        };
+    }, [isVisible, settings?.operate_computer]);
     useEffect(() => {
         if (!isVisible || !settings?.openclicky_bridge) return;
         let active = true;
@@ -478,6 +494,27 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                             disabled={controlsDisabled}
                             onChange={(event) =>
                                 void updateSettings({ openclicky_bridge: event.target.checked })
+                            }
+                        />
+                    </label>
+                    <label className="sg-setting-row">
+                        <span>
+                            <strong>Operate my Mac</strong>
+                            <small>
+                                {computerUse && !computerUse.openComputerUsePath
+                                    ? "Needs open-computer-use: run npm install -g open-computer-use, then open-computer-use doctor."
+                                    : "Talk to the notch in Do mode and FNDR clicks and types for you. Every action asks first; say “stop” anytime."}
+                            </small>
+                        </span>
+                        <input
+                            type="checkbox"
+                            role="switch"
+                            className="fndr-switch"
+                            aria-label="Operate my Mac"
+                            checked={settings?.operate_computer ?? false}
+                            disabled={controlsDisabled}
+                            onChange={(event) =>
+                                void updateSettings({ operate_computer: event.target.checked })
                             }
                         />
                     </label>

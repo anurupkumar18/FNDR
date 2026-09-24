@@ -1866,11 +1866,55 @@ export async function stopHermesGateway(): Promise<HermesBridgeStatus> {
     return invoke<HermesBridgeStatus>("stop_hermes_gateway");
 }
 
+/** Sends a message to Hermes. `memoryIds` attach FNDR memories as reference
+ *  context; the backend loads them itself, capped at 8 per message. */
 export async function sendHermesMessage(
     conversationId: string,
-    input: string
+    input: string,
+    memoryIds: string[] = []
 ): Promise<HermesChatReply> {
-    return invoke<HermesChatReply>("send_hermes_message", { conversationId, input });
+    return invoke<HermesChatReply>("send_hermes_message", { conversationId, input, memoryIds });
+}
+
+export interface AttachedMemory {
+    id: string;
+    title: string;
+    appName: string;
+    timestamp: number;
+}
+
+export interface AgentChatMessage {
+    role: "user" | "assistant";
+    content: string;
+    at: number;
+    memories: AttachedMemory[];
+}
+
+export interface AgentChat {
+    id: string;
+    title: string;
+    createdAt: number;
+    updatedAt: number;
+    messages: AgentChatMessage[];
+}
+
+export interface AgentChatSummary {
+    id: string;
+    title: string;
+    updatedAt: number;
+    messageCount: number;
+}
+
+export async function listAgentChats(): Promise<AgentChatSummary[]> {
+    return invoke<AgentChatSummary[]>("list_agent_chats");
+}
+
+export async function getAgentChat(id: string): Promise<AgentChat | null> {
+    return invoke<AgentChat | null>("get_agent_chat", { id });
+}
+
+export async function deleteAgentChat(id: string): Promise<void> {
+    return invoke("delete_agent_chat", { id });
 }
 
 /** Emitted by the backend when a ChatGPT sign-in started with `codexLoginStart` finishes. */
@@ -2142,6 +2186,8 @@ export interface ScreenGuideSettings {
     send_screenshot_to_codex?: boolean;
     /** Point with OpenClicky's cursor via its local bridge. */
     openclicky_bridge?: boolean;
+    /** Let the notch operate the Mac via open-computer-use; each action is approved. */
+    operate_computer?: boolean;
 }
 
 export interface ScreenGuideHistoryEntry {
@@ -2544,4 +2590,99 @@ export async function companionListDevices(): Promise<CompanionDeviceListEntry[]
 
 export async function companionRevokeDevice(deviceId: string): Promise<boolean> {
     return invoke<boolean>("companion_revoke_device", { deviceId });
+}
+
+// Notch HUD — the panel parked on the display's camera housing.
+
+export const NOTCH_HUD_HOVER_EVENT = "notch-hud://hover";
+export const NOTCH_HUD_GEOMETRY_EVENT = "notch-hud://geometry";
+
+/** Logical points, as measured from the display the HUD is parked on. */
+export interface NotchHudGeometry {
+    closed_width: number;
+    closed_height: number;
+    is_physical_notch: boolean;
+    window_width: number;
+    window_height: number;
+    screen_width: number;
+    screen_height: number;
+}
+
+export async function getNotchHudGeometry(): Promise<NotchHudGeometry> {
+    return invoke<NotchHudGeometry>("get_notch_hud_geometry");
+}
+
+/**
+ * The drawn panel's frame in CSS pixels relative to the window's top-left. The
+ * window is fixed at its largest footprint and stays click-through outside this
+ * rectangle, so it must be re-reported whenever the silhouette resizes.
+ */
+export async function setNotchHudHitRect(rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}): Promise<void> {
+    return invoke("set_notch_hud_hit_rect", { rect });
+}
+
+/** Take or release the keyboard — the HUD is not focusable at rest. */
+export async function setNotchHudKeyboard(active: boolean): Promise<void> {
+    return invoke("set_notch_hud_keyboard", { active });
+}
+
+export async function dismissNotchHud(): Promise<void> {
+    return invoke("dismiss_notch_hud");
+}
+
+export async function toggleNotchHud(): Promise<void> {
+    return invoke("toggle_notch_hud");
+}
+
+export async function notchHudOpenMemory(memoryId: string): Promise<void> {
+    return invoke("notch_hud_open_memory", { memoryId });
+}
+
+
+// Computer use — the notch operates the Mac through open-computer-use.
+
+export const COMPUTER_USE_EVENT = "computer-use://event";
+
+export type ComputerUseEvent =
+    | { kind: "ready" }
+    | { kind: "message"; text: string; final: boolean }
+    | { kind: "action"; itemId: string; tool: string; summary: string }
+    | { kind: "actionDone"; itemId: string; tool: string; ok: boolean }
+    | { kind: "approval"; requestKey: string; tool: string; summary: string }
+    | { kind: "approvalResolved"; requestKey: string }
+    | { kind: "turnDone"; status: string; error: string | null }
+    | { kind: "ended"; error: string | null };
+
+export interface ComputerUseStatus {
+    /** Screen Guide's "Operate my Mac" setting. */
+    enabled: boolean;
+    codexReady: boolean;
+    openComputerUsePath: string | null;
+    active: boolean;
+}
+
+export async function computerUseStatus(): Promise<ComputerUseStatus> {
+    return invoke<ComputerUseStatus>("computer_use_status");
+}
+
+/** Starts a conversation if needed; mid-task words redirect the current turn. */
+export async function computerUseSay(text: string): Promise<void> {
+    return invoke("computer_use_say", { text });
+}
+
+export async function computerUseInterrupt(): Promise<void> {
+    return invoke("computer_use_interrupt");
+}
+
+export async function computerUseRespond(requestKey: string, approve: boolean): Promise<void> {
+    return invoke("computer_use_respond", { requestKey, approve });
+}
+
+export async function computerUseStop(): Promise<void> {
+    return invoke("computer_use_stop");
 }

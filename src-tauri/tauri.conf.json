@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.tauri.app/config/2",
-    "productName": "fndr",
+    "productName": "FNDR",
     "version": "0.3.0",
     "identifier": "com.fndr.app",
     "build": {
@@ -55,6 +55,7 @@
             "icons/icon.icns"
         ],
         "macOS": {
+            "signingIdentity": "-",
             "entitlements": "Entitlements.plist",
             "infoPlist": "Info.plist",
             "minimumSystemVersion": "13.0"

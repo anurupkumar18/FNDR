@@ -621,6 +621,10 @@ pub struct ScreenGuideConfig {
     /// (127.0.0.1:32123) instead of FNDR's own overlay cursor.
     #[serde(default)]
     pub openclicky_bridge: bool,
+    /// Let FNDR click, type and press keys through open-computer-use when
+    /// asked in the notch. Every action still needs an explicit approval.
+    #[serde(default)]
+    pub operate_computer: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -643,6 +647,7 @@ impl Default for ScreenGuideConfig {
             model: ScreenGuideModel::Local,
             send_screenshot_to_codex: false,
             openclicky_bridge: false,
+            operate_computer: false,
         }
     }
 }
@@ -1281,6 +1286,7 @@ mod tests {
         assert_eq!(config.screen_guide.model, ScreenGuideModel::Local);
         assert!(!config.screen_guide.send_screenshot_to_codex);
         assert!(!config.screen_guide.openclicky_bridge);
+        assert!(!config.screen_guide.operate_computer);
 
         let stale = ScreenGuideConfig {
             send_screenshot_to_codex: true,

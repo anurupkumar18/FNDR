@@ -18,6 +18,7 @@ export default defineConfig({
                 autofill: resolve(__dirname, "autofill.html"),
                 omnibar: resolve(__dirname, "omnibar.html"),
                 screenGuide: resolve(__dirname, "screen-guide.html"),
+                notch: resolve(__dirname, "notch.html"),
             },
         },
     },
