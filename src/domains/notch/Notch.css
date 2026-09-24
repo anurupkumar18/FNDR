@@ -327,3 +327,135 @@ body,
     text-transform: uppercase;
     color: rgba(255, 255, 255, 0.3);
 }
+
+/* Ask | Do */
+.notch-mode-toggle {
+    width: 132px;
+    margin: 0 auto 10px;
+    --seg-thumb: rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.notch-mode-toggle .fndr-segment {
+    min-height: 22px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.notch-mode-toggle .fndr-segment.is-selected {
+    color: #ffffff;
+}
+
+/* Do mode: spoken computer use */
+.notch-operator {
+    display: grid;
+    gap: 10px;
+    padding: 4px 2px 6px;
+    color: #f5f5f7;
+}
+
+.notch-operator-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    min-height: 22px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.72);
+}
+
+.notch-operator-log {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.notch-operator-you {
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.notch-operator-fndr {
+    color: #ffffff;
+}
+
+.notch-operator-action {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 12px;
+}
+
+.notch-operator-dot {
+    width: 7px;
+    height: 7px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.4);
+}
+
+.notch-operator-dot.is-running {
+    background: #0a84ff;
+}
+
+.notch-operator-dot.is-done {
+    background: #30d158;
+}
+
+.notch-operator-dot.is-failed {
+    background: #ff453a;
+}
+
+.notch-operator-approval {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.notch-operator-approval p {
+    margin: 0;
+    font-size: 13px;
+}
+
+.notch-operator-approval-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.notch-operator-btn {
+    min-height: 28px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.notch-operator-btn:active {
+    transform: scale(0.96);
+}
+
+.notch-operator-btn-primary {
+    background: #0a84ff;
+}
+
+.notch-operator-stop {
+    background: rgba(255, 69, 58, 0.9);
+}
+
+.notch-operator-type {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}

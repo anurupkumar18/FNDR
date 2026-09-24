@@ -39,6 +39,9 @@ import {
     resolveTurn,
 } from "./notchConversation";
 import { VoiceCapture, isVoiceCaptureAvailable } from "./notchVoice";
+import { NotchOperator } from "./NotchOperator";
+import { SegmentedControl } from "@/shared/components/SegmentedControl";
+import { computerUseStatus } from "@/shared/ipc/tauri";
 
 const SEARCH_DEBOUNCE_MS = 200;
 /** No row highlighted — Enter asks FNDR instead of opening a memory. */
@@ -70,6 +73,9 @@ export function NotchHud() {
     const [transcribing, setTranscribing] = useState(false);
     const [voiceError, setVoiceError] = useState<string | null>(null);
     const [contentHeight, setContentHeight] = useState<number>(notchMetrics.openHeaderHeight);
+    const [mode, setMode] = useState<"ask" | "do">("ask");
+    const [operateEnabled, setOperateEnabled] = useState(false);
+    const [operatorStream, setOperatorStream] = useState<MediaStream | null>(null);
 
     const inputRef = useRef<HTMLInputElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
@@ -83,6 +89,22 @@ export function NotchHud() {
     // where the render's own `turns` may already be a generation behind.
     const turnsRef = useRef<ConversationTurn[]>([]);
     turnsRef.current = turns;
+
+    // "Do" appears only once the user has turned on Operate my Mac.
+    useEffect(() => {
+        if (stage !== "open") return;
+        let live = true;
+        computerUseStatus()
+            .then((status) => {
+                if (!live) return;
+                setOperateEnabled(status.enabled);
+                if (!status.enabled) setMode("ask");
+            })
+            .catch(() => live && setOperateEnabled(false));
+        return () => {
+            live = false;
+        };
+    }, [stage]);
 
     const style = styleFor(geometry.is_physical_notch);
     const closedSize = useMemo(
@@ -476,6 +498,32 @@ export function NotchHud() {
                         transition={{ duration: 0.22 }}
                     >
                         <div ref={contentRef} className="notch-content">
+                            {operateEnabled ? (
+                                <SegmentedControl
+                                    className="notch-mode-toggle"
+                                    ariaLabel="Notch mode"
+                                    value={mode}
+                                    onChange={setMode}
+                                    options={[
+                                        { value: "ask", label: "Ask" },
+                                        { value: "do", label: "Do" },
+                                    ]}
+                                />
+                            ) : null}
+                            {mode === "do" ? (
+                                <VoiceBeam
+                                    stream={operatorStream ?? undefined}
+                                    processing={false}
+                                    theme="dark"
+                                    active={stage === "open"}
+                                >
+                                    <NotchOperator
+                                        active={stage === "open"}
+                                        onStreamChange={setOperatorStream}
+                                    />
+                                </VoiceBeam>
+                            ) : (
+                            <>
                             <VoiceBeam
                                 stream={voiceStream ?? undefined}
                                 processing={busy}
@@ -600,6 +648,8 @@ export function NotchHud() {
                                 {!conversing && results.length > 0 ? <span>↓ browse</span> : null}
                                 <span>esc {conversing ? "clear" : "close"}</span>
                             </p>
+                            </>
+                            )}
                         </div>
                     </motion.div>
                 </motion.div>

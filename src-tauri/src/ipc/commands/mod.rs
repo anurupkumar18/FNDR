@@ -53,6 +53,9 @@ pub use codex_account::*;
 pub(crate) mod openclicky_bridge;
 pub use openclicky_bridge::*;
 
+mod computer_use;
+pub use computer_use::*;
+
 mod agent;
 pub use agent::*;
 

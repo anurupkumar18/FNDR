@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
     screenGuideRelease: vi.fn(),
     setScreenGuideSettings: vi.fn(),
     submitScreenGuideText: vi.fn(),
+    computerUseStatus: vi.fn(),
+    openClickyBridgeStatus: vi.fn(),
 }));
 
 vi.mock("@/shared/ipc/tauri", () => mocks);
@@ -34,6 +36,17 @@ describe("ScreenGuidePanel", () => {
             return vi.fn();
         });
         mocks.screenGuidePress.mockReset().mockResolvedValue(1);
+        mocks.computerUseStatus.mockReset().mockResolvedValue({
+            enabled: false,
+            codexReady: true,
+            openComputerUsePath: null,
+            active: false,
+        });
+        mocks.openClickyBridgeStatus.mockReset().mockResolvedValue({
+            reachable: false,
+            tokenFound: false,
+            bridgeTokenConfigured: false,
+        });
         mocks.screenGuideRelease.mockReset().mockResolvedValue(undefined);
         mocks.setScreenGuideSettings.mockReset().mockImplementation(async (settings) => settings);
         mocks.submitScreenGuideText.mockReset().mockResolvedValue(undefined);

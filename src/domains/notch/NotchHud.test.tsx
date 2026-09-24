@@ -16,6 +16,12 @@ const ipcMocks = vi.hoisted(() => ({
     listMemoryCards: vi.fn(),
     fndrAnswer: vi.fn(),
     transcribeVoiceInput: vi.fn(),
+    COMPUTER_USE_EVENT: "computer-use://event",
+    computerUseStatus: vi.fn(),
+    computerUseSay: vi.fn(),
+    computerUseInterrupt: vi.fn(),
+    computerUseRespond: vi.fn(),
+    computerUseStop: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => eventMocks);
@@ -122,6 +128,16 @@ describe("NotchHud", () => {
             surfacing_reasons: [],
         });
         ipcMocks.transcribeVoiceInput.mockResolvedValue({ text: "what did I read about vLLM" });
+        ipcMocks.computerUseStatus.mockResolvedValue({
+            enabled: false,
+            codexReady: true,
+            openComputerUsePath: "/opt/homebrew/bin/open-computer-use",
+            active: false,
+        });
+        ipcMocks.computerUseSay.mockResolvedValue(undefined);
+        ipcMocks.computerUseInterrupt.mockResolvedValue(undefined);
+        ipcMocks.computerUseRespond.mockResolvedValue(undefined);
+        ipcMocks.computerUseStop.mockResolvedValue(undefined);
     });
 
     afterEach(() => {
@@ -266,6 +282,116 @@ describe("NotchHud", () => {
             const calls = ipcMocks.setNotchHudHitRect.mock.calls;
             // The pill is detached from the screen edge; the notch never is.
             expect(calls[calls.length - 1][0].y).toBe(6);
+        });
+    });
+
+    describe("Do mode: spoken computer use", () => {
+        let recognition: FakeRecognition | null = null;
+
+        class FakeRecognition {
+            continuous = false;
+            interimResults = false;
+            lang = "";
+            onresult: ((event: unknown) => void) | null = null;
+            onend: (() => void) | null = null;
+            onerror: ((event: unknown) => void) | null = null;
+            constructor() {
+                recognition = this;
+            }
+            start(): void {}
+            stop(): void {}
+            abort(): void {}
+            /** The system recognizer finishing a phrase. */
+            hear(transcript: string): void {
+                act(() => {
+                    this.onresult?.({ resultIndex: 0, results: [Object.assign([{ transcript }], { isFinal: true })] });
+                });
+            }
+        }
+
+        beforeEach(() => {
+            recognition = null;
+            Object.defineProperty(window, "webkitSpeechRecognition", {
+                value: FakeRecognition,
+                configurable: true,
+                writable: true,
+            });
+            ipcMocks.computerUseStatus.mockResolvedValue({
+                enabled: true,
+                codexReady: true,
+                openComputerUsePath: "/opt/homebrew/bin/open-computer-use",
+                active: false,
+            });
+        });
+
+        afterEach(() => {
+            delete (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
+        });
+
+        it("keeps Do hidden until Operate my Mac is on", async () => {
+            ipcMocks.computerUseStatus.mockResolvedValue({
+                enabled: false,
+                codexReady: true,
+                openComputerUsePath: null,
+                active: false,
+            });
+            render(<NotchHud />);
+            await openPanel();
+            await waitFor(() => expect(ipcMocks.computerUseStatus).toHaveBeenCalled());
+            expect(screen.queryByRole("button", { name: "Do" })).not.toBeInTheDocument();
+        });
+
+        it("sends spoken instructions, asks before acting, and stops on command", async () => {
+            render(<NotchHud />);
+            await openPanel();
+            fireEvent.click(await screen.findByRole("button", { name: "Do" }));
+            await waitFor(() => expect(recognition).not.toBeNull());
+
+            recognition!.hear("open Notes and start a new note");
+            await waitFor(() =>
+                expect(ipcMocks.computerUseSay).toHaveBeenCalledWith("open Notes and start a new note"),
+            );
+
+            emit("computer-use://event", { kind: "message", text: "I'll open Notes.", final: false });
+            expect(await screen.findByText("I'll open Notes.")).toBeInTheDocument();
+
+            emit("computer-use://event", {
+                kind: "approval",
+                requestKey: "req-1",
+                tool: "click",
+                summary: "click \"New Note\" in Notes",
+            });
+            expect(await screen.findByRole("alertdialog", { name: "Approve action" })).toHaveTextContent(
+                'Okay to click "New Note" in Notes?',
+            );
+
+            recognition!.hear("yes");
+            await waitFor(() => expect(ipcMocks.computerUseRespond).toHaveBeenCalledWith("req-1", true));
+            expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+            recognition!.hear("stop");
+            await waitFor(() => expect(ipcMocks.computerUseInterrupt).toHaveBeenCalled());
+            expect(ipcMocks.computerUseSay).toHaveBeenCalledTimes(1);
+        });
+
+        it("answers an approval with a tap and accepts typed instructions", async () => {
+            render(<NotchHud />);
+            await openPanel();
+            fireEvent.click(await screen.findByRole("button", { name: "Do" }));
+
+            emit("computer-use://event", {
+                kind: "approval",
+                requestKey: "req-2",
+                tool: "type_text",
+                summary: "type \"hello\" in Notes",
+            });
+            fireEvent.click(await screen.findByRole("button", { name: "Don't" }));
+            await waitFor(() => expect(ipcMocks.computerUseRespond).toHaveBeenCalledWith("req-2", false));
+
+            const typed = screen.getByLabelText("Instruction for FNDR");
+            fireEvent.change(typed, { target: { value: "close the window" } });
+            fireEvent.submit(typed.closest("form") as HTMLFormElement);
+            await waitFor(() => expect(ipcMocks.computerUseSay).toHaveBeenCalledWith("close the window"));
         });
     });
 });

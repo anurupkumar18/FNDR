@@ -92,7 +92,7 @@ pub struct CodexLoginCompleted {
 }
 
 /// One JSON-RPC connection to a `codex app-server` child over stdio (JSONL).
-struct AppServer {
+pub(crate) struct AppServer {
     child: Child,
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
@@ -104,7 +104,7 @@ impl AppServer {
         Self::spawn_with(executable, &[]).await
     }
 
-    async fn spawn_with(executable: &Path, extra_args: &[String]) -> Result<Self, String> {
+    pub(crate) async fn spawn_with(executable: &Path, extra_args: &[String]) -> Result<Self, String> {
         let mut child = Command::new(executable)
             .args(["app-server", "-c", FILE_CREDENTIAL_STORE])
             .args(extra_args)
@@ -141,7 +141,7 @@ impl AppServer {
         Ok(server)
     }
 
-    async fn write(&mut self, message: Value) -> Result<(), String> {
+    pub(crate) async fn write(&mut self, message: Value) -> Result<(), String> {
         let mut line = message.to_string();
         line.push('\n');
         self.stdin
@@ -154,7 +154,7 @@ impl AppServer {
         self.write(json!({ "method": method, "params": params })).await
     }
 
-    async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    pub(crate) async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
         self.write(json!({ "method": method, "id": id, "params": params })).await?;
@@ -186,7 +186,8 @@ impl AppServer {
         }
     }
 
-    async fn read_message(&mut self) -> Result<Value, String> {
+    /// Next JSON-RPC message of any kind, including server-initiated requests.
+    pub(crate) async fn read_raw(&mut self) -> Result<Value, String> {
         loop {
             let line = self
                 .lines
@@ -194,11 +195,18 @@ impl AppServer {
                 .await
                 .map_err(|e| format!("Reading from Codex app-server failed: {e}"))?
                 .ok_or("Codex app-server exited")?;
-            let Ok(message) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            // Server-initiated requests (approvals, elicitations, token
-            // refresh) carry both a method and an id. FNDR never grants them.
+            if let Ok(message) = serde_json::from_str::<Value>(&line) {
+                return Ok(message);
+            }
+        }
+    }
+
+    /// Next response or notification. Server-initiated requests (approvals,
+    /// elicitations, token refresh) carry both a method and an id; callers
+    /// that don't handle them explicitly never grant them.
+    async fn read_message(&mut self) -> Result<Value, String> {
+        loop {
+            let message = self.read_raw().await?;
             if let (Some(id), Some(method)) = (message.get("id").cloned(), message.get("method")) {
                 tracing::warn!(%method, "codex_app_server:declined_server_request");
                 self.write(json!({
@@ -212,14 +220,14 @@ impl AppServer {
         }
     }
 
-    async fn shutdown(mut self) {
+    pub(crate) async fn shutdown(mut self) {
         let _ = self.child.kill().await;
     }
 }
 
 /// GUI apps on macOS don't inherit the shell PATH, and the npm-installed
 /// `codex` is a Node script, so the child needs `node` findable.
-fn child_path_env(executable: &Path) -> std::ffi::OsString {
+pub(crate) fn child_path_env(executable: &Path) -> std::ffi::OsString {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Some(parent) = executable.parent() {
         dirs.push(parent.to_path_buf());
@@ -232,7 +240,7 @@ fn child_path_env(executable: &Path) -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap_or_default()
 }
 
-fn parse_account(result: &Value) -> Option<CodexAccount> {
+pub(crate) fn parse_account(result: &Value) -> Option<CodexAccount> {
     let account = result.get("account")?.as_object()?;
     Some(CodexAccount {
         kind: account.get("type")?.as_str()?.to_string(),
@@ -272,7 +280,7 @@ fn parse_models(result: &Value) -> Vec<CodexModel> {
         .collect()
 }
 
-fn ready_executable() -> Result<PathBuf, String> {
+pub(crate) fn ready_executable() -> Result<PathBuf, String> {
     detect_codex_executable().ok_or_else(|| {
         "Codex isn't installed. Install it with `brew install codex` or `npm install -g @openai/codex`, then try again."
             .to_string()
@@ -432,7 +440,7 @@ pub async fn codex_logout() -> Result<CodexAccountStatus, String> {
 
 /// Everything in a Codex session that can act rather than answer. Screen
 /// Guide turns only read the question, the OCR text and an optional image.
-const READ_ONLY_DISABLED_FEATURES: &[&str] = &[
+pub(crate) const READ_ONLY_DISABLED_FEATURES: &[&str] = &[
     "shell_tool",
     "unified_exec",
     "apps",
@@ -470,7 +478,7 @@ impl Drop for ScratchDir {
     }
 }
 
-fn is_plain_config_key(name: &str) -> bool {
+pub(crate) fn is_plain_config_key(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()
@@ -498,7 +506,7 @@ fn read_only_session_args(mcp_server_names: &[String]) -> Result<Vec<String>, St
     Ok(args)
 }
 
-async fn configured_mcp_server_names(executable: &Path) -> Result<Vec<String>, String> {
+pub(crate) async fn configured_mcp_server_names(executable: &Path) -> Result<Vec<String>, String> {
     let mut server = AppServer::spawn(executable).await?;
     let result = server.request("config/read", json!({ "includeLayers": false })).await;
     server.shutdown().await;
