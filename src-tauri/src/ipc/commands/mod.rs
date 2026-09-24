@@ -32,6 +32,9 @@ pub use autofill::*;
 mod omnibar;
 pub use omnibar::*;
 
+mod notch;
+pub use notch::*;
+
 mod clipboard;
 pub use clipboard::*;
 

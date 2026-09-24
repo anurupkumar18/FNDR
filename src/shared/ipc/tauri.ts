@@ -2545,3 +2545,55 @@ export async function companionListDevices(): Promise<CompanionDeviceListEntry[]
 export async function companionRevokeDevice(deviceId: string): Promise<boolean> {
     return invoke<boolean>("companion_revoke_device", { deviceId });
 }
+
+// Notch HUD — the panel parked on the display's camera housing.
+
+export const NOTCH_HUD_HOVER_EVENT = "notch-hud://hover";
+export const NOTCH_HUD_GEOMETRY_EVENT = "notch-hud://geometry";
+
+/** Logical points, as measured from the display the HUD is parked on. */
+export interface NotchHudGeometry {
+    closed_width: number;
+    closed_height: number;
+    is_physical_notch: boolean;
+    window_width: number;
+    window_height: number;
+    screen_width: number;
+    screen_height: number;
+}
+
+export async function getNotchHudGeometry(): Promise<NotchHudGeometry> {
+    return invoke<NotchHudGeometry>("get_notch_hud_geometry");
+}
+
+/**
+ * The drawn panel's frame in CSS pixels relative to the window's top-left. The
+ * window is fixed at its largest footprint and stays click-through outside this
+ * rectangle, so it must be re-reported whenever the silhouette resizes.
+ */
+export async function setNotchHudHitRect(rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}): Promise<void> {
+    return invoke("set_notch_hud_hit_rect", { rect });
+}
+
+/** Take or release the keyboard — the HUD is not focusable at rest. */
+export async function setNotchHudKeyboard(active: boolean): Promise<void> {
+    return invoke("set_notch_hud_keyboard", { active });
+}
+
+export async function dismissNotchHud(): Promise<void> {
+    return invoke("dismiss_notch_hud");
+}
+
+export async function toggleNotchHud(): Promise<void> {
+    return invoke("toggle_notch_hud");
+}
+
+export async function notchHudOpenMemory(memoryId: string): Promise<void> {
+    return invoke("notch_hud_open_memory", { memoryId });
+}
+
