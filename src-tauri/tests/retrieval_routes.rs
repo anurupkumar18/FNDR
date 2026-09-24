@@ -135,7 +135,17 @@ fn dispatch_runs_all_five_routes_and_graph_returns_path() {
         allowed_edges: vec![GraphEdgeType::SameTaskAs],
     };
 
-    let config = SearchConfig::default().normalized();
+    // This test checks that every route dispatches and returns hits, not
+    // latency. The production keyword budget is tuned for a warm release
+    // build; a cold debug build on a shared CI runner can miss it and make
+    // the keyword route come back empty, so give it the most headroom the
+    // config allows.
+    let config = SearchConfig {
+        keyword_timeout_ms: 10_000,
+        keyword_variant_timeout_ms: 5_000,
+        ..SearchConfig::default()
+    }
+    .normalized();
     let ctx = RouteCtx::new(&store, &config)
         .with_embedder(&embedder)
         .with_graph(&graph_index, &graph_nodes, &graph_edges)
