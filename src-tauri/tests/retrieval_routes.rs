@@ -1,4 +1,4 @@
-use fndr_lib::config::{SearchConfig, DEFAULT_IMAGE_EMBEDDING_DIM};
+use fndr_lib::config::DEFAULT_IMAGE_EMBEDDING_DIM;
 use fndr_lib::context_runtime::query_plan::{
     plan, EntityHint, EntityHintKind, GraphExpansion, PlanHints, Route, TimeWindow,
 };
@@ -8,6 +8,8 @@ use fndr_lib::graph::graph_index::GraphIndex;
 use fndr_lib::graph::schema::{GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
 use fndr_lib::storage::{MemoryRecord, Store};
 use uuid::Uuid;
+
+mod common;
 
 fn record(id: &str, text: &str, timestamp: i64, embedding: Vec<f32>) -> MemoryRecord {
     MemoryRecord {
@@ -135,17 +137,8 @@ fn dispatch_runs_all_five_routes_and_graph_returns_path() {
         allowed_edges: vec![GraphEdgeType::SameTaskAs],
     };
 
-    // This test checks that every route dispatches and returns hits, not
-    // latency. The production keyword budget is tuned for a warm release
-    // build; a cold debug build on a shared CI runner can miss it and make
-    // the keyword route come back empty, so give it the most headroom the
-    // config allows.
-    let config = SearchConfig {
-        keyword_timeout_ms: 10_000,
-        keyword_variant_timeout_ms: 5_000,
-        ..SearchConfig::default()
-    }
-    .normalized();
+    // Checks dispatch and hits, not latency; see common::ci_safe_search_config.
+    let config = common::ci_safe_search_config();
     let ctx = RouteCtx::new(&store, &config)
         .with_embedder(&embedder)
         .with_graph(&graph_index, &graph_nodes, &graph_edges)
