@@ -93,11 +93,10 @@ impl Default for OcrConfig {
             custom_noise_patterns: Vec::new(),
             remove_duplicates: true,
             preserve_formatting: false,
-            // Use 0.02 to filter tiny UI elements (< 36px on typical 1800px height).
-            // This improves reported confidence (0.40-0.65 → 0.50-0.75 typical range)
-            // by excluding text with inherently lower OCR confidence.
-            // Trade-off: loses capture of very small status indicators/labels.
-            minimum_text_height: 0.02,
+            // Any nonzero fraction scales with physical pixels: 0.02 on a
+            // 1964px Retina frame (~39px) drops all normal UI/editor text.
+            // Low-confidence and noise lines are filtered downstream instead.
+            minimum_text_height: 0.0,
         }
     }
 }
@@ -977,7 +976,7 @@ mod tests {
     #[test]
     fn test_minimum_text_height_default() {
         let config = OcrConfig::default();
-        assert_eq!(config.minimum_text_height, 0.02);
+        assert_eq!(config.minimum_text_height, 0.0);
     }
 
     #[test]
