@@ -1859,6 +1859,33 @@ fn capture_overlapped_screen_guide(
         || epoch_after != epoch_confirmed
 }
 
+/// Dedicated capture thread / runtime stack. Matches the UI Tokio workers in
+/// `main.rs`. The OS default (~2MB) overflows once Retina PNG encode, Vision
+/// OCR, and Lance insert run on the same unnamed `block_on` thread.
+pub const CAPTURE_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Start the capture loop on its own named runtime so OCR/insert cannot stall
+/// the UI, with an 8MB stack so those frames cannot overflow.
+pub fn spawn_capture_loop(state: Arc<AppState>) {
+    std::thread::Builder::new()
+        .name("fndr-capture".into())
+        .stack_size(CAPTURE_THREAD_STACK_BYTES)
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .thread_name("fndr-capture-worker")
+                .thread_stack_size(CAPTURE_THREAD_STACK_BYTES)
+                .enable_all()
+                .build()
+                .expect("Failed to build capture runtime");
+            rt.block_on(async {
+                if let Err(e) = run_capture_loop(state).await {
+                    tracing::error!("Capture loop error: {}", e);
+                }
+            });
+        })
+        .expect("failed to spawn capture thread");
+}
+
 /// Run the main capture loop
 pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Initializing capture pipeline...");
@@ -1901,6 +1928,20 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
     // Adaptive admission state for the visual-narrative path (frames with
     // thin OCR but informative pixels). Resets per session key.
     let mut visual_tracker = VisualNoveltyTracker::default();
+    let mut last_visual_failure_warn: Option<Instant> = None;
+
+    // Without Screen Recording access macOS still returns a frame, but with
+    // app windows blanked out, so OCR silently sees only wallpaper/menu bar.
+    // Under `tauri dev` the grant is checked against the host app (terminal
+    // or editor), not FNDR.
+    let (screen_capture_allowed, screen_capture_detail) =
+        permissions::preflight_screen_capture_access();
+    if !screen_capture_allowed {
+        tracing::warn!(
+            "Screen Recording permission missing; captured frames will contain no window content. {} When running `tauri dev`, grant the terminal host app instead.",
+            screen_capture_detail
+        );
+    }
 
     tracing::info!("Capture loop started");
 
@@ -2638,7 +2679,20 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         .record_skip(crate::SkipReason::VisualNovelty, &app_name);
                 }
                 VisualAdmissionOutcome::Failed(err) => {
-                    tracing::debug!("visual-admission: gate failed for {}: {}", app_name, err);
+                    if warn_interval_elapsed(
+                        last_visual_failure_warn,
+                        Instant::now(),
+                        VISUAL_FAILURE_WARN_INTERVAL,
+                    ) {
+                        last_visual_failure_warn = Some(Instant::now());
+                        tracing::warn!(
+                            "visual-admission: gate failed for {}; low-text frames are being dropped: {}",
+                            app_name,
+                            err
+                        );
+                    } else {
+                        tracing::debug!("visual-admission: gate failed for {}: {}", app_name, err);
+                    }
                     emit_capture_quality_signal(
                         state.as_ref(),
                         json!({
@@ -4915,6 +4969,14 @@ fn semantic_embeddings_enabled(text_embedder: Option<&Embedder>) -> bool {
 /// How often the capture loop retries text-embedder initialization while blocked.
 const EMBEDDER_INIT_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Minimum gap between repeated visual-admission failure warnings; the same
+/// failure (e.g. missing CLIP weights) recurs on every low-text frame.
+const VISUAL_FAILURE_WARN_INTERVAL: Duration = Duration::from_secs(300);
+
+fn warn_interval_elapsed(last_warn: Option<Instant>, now: Instant, interval: Duration) -> bool {
+    last_warn.is_none_or(|last| now.saturating_duration_since(last) >= interval)
+}
+
 /// Tick decision for the capture loop when the text embedder may be missing.
 ///
 /// A missing embedder blocks frame processing so zero-vector memory rows never
@@ -5754,6 +5816,47 @@ fn should_text_heavy_override(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dedicated_capture_thread_survives_3mb_stack_use() {
+        // Default secondary stacks are ~2MB. This frame depth is ~3MB and must
+        // not abort when the capture thread is given CAPTURE_THREAD_STACK_BYTES.
+        let name = std::thread::Builder::new()
+            .name("fndr-capture".into())
+            .stack_size(CAPTURE_THREAD_STACK_BYTES)
+            .spawn(|| {
+                occupy_stack_frames(48);
+                std::thread::current().name().map(str::to_string)
+            })
+            .expect("spawn capture-sized thread")
+            .join()
+            .expect("capture-sized thread overflowed or panicked");
+        assert_eq!(name.as_deref(), Some("fndr-capture"));
+        assert_eq!(CAPTURE_THREAD_STACK_BYTES, 8 * 1024 * 1024);
+    }
+
+    #[inline(never)]
+    fn occupy_stack_frames(frames: usize) {
+        if frames == 0 {
+            return;
+        }
+        let buf = [0u8; 64 * 1024];
+        std::hint::black_box(buf[0]);
+        occupy_stack_frames(frames - 1);
+    }
+
+    #[test]
+    fn visual_failure_warning_fires_first_time_then_waits_for_interval() {
+        let start = Instant::now();
+        let interval = Duration::from_secs(300);
+        assert!(warn_interval_elapsed(None, start, interval));
+        assert!(!warn_interval_elapsed(
+            Some(start),
+            start + Duration::from_secs(299),
+            interval
+        ));
+        assert!(warn_interval_elapsed(Some(start), start + interval, interval));
+    }
 
     #[test]
     fn strip_url_credentials_removes_credential_query_params_keeps_others() {

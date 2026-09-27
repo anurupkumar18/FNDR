@@ -208,16 +208,8 @@ fn main() {
                 });
             }
 
-            // Start capture pipeline
-            let capture_state = state.clone();
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    if let Err(e) = capture::run_capture_loop(capture_state).await {
-                        tracing::error!("Capture loop error: {}", e);
-                    }
-                });
-            });
+            // Start capture pipeline (named thread + 8MB stack; see capture::spawn_capture_loop)
+            capture::spawn_capture_loop(state.clone());
 
             // Background task: compact legacy capture payloads and purge stray artifacts.
             {
