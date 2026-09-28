@@ -90,6 +90,39 @@ pub(super) async fn run_search_query(
     Ok(strip_internal_fndr_results(results))
 }
 
+/// The ranked retrieval stage Search uses before card synthesis: hybrid
+/// retrieval, low-signal removal, then the anchor-coverage rerank. Public so
+/// `examples/retrieval_qa.rs` can baseline that boundary without duplicating it.
+pub async fn search_ranked_results(
+    state: &AppState,
+    query: &str,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+    raw_limit: usize,
+) -> Result<Vec<SearchResult>, String> {
+    let mut raw_results =
+        run_search_query(state, query, time_filter, app_filter, raw_limit).await?;
+    raw_results.truncate(raw_limit);
+    let (raw_results, low_signal) = partition_surfaceable(raw_results);
+    if !low_signal.is_empty() {
+        tracing::info!(
+            hidden = low_signal.len(),
+            "search_memory_cards:low_signal_hidden"
+        );
+    }
+    let query_context = QueryContext::from_query(query);
+    let (mut reranked, rerank_stats) = rerank_results(&query_context, raw_results);
+    if rerank_stats.excluded_for_coverage > 0 {
+        tracing::info!(
+            excluded_for_coverage = rerank_stats.excluded_for_coverage,
+            query = %query_context.raw_query,
+            "search_memory_cards:coverage_gate"
+        );
+    }
+    reranked.truncate(raw_limit);
+    Ok(reranked)
+}
+
 pub(super) fn cache_is_fresh(computed_at_ms: i64) -> bool {
     let age_ms = chrono::Utc::now().timestamp_millis() - computed_at_ms;
     (0..=MEMORY_DERIVED_CACHE_TTL_MS).contains(&age_ms)
@@ -510,7 +543,7 @@ pub async fn search_memory_cards(
     };
 
     let raw_limit = limit.max(18).min(50);
-    let mut raw_results = run_search_query(
+    let raw_results = search_ranked_results(
         state.inner(),
         &query,
         time_filter.as_deref(),
@@ -518,25 +551,6 @@ pub async fn search_memory_cards(
         raw_limit,
     )
     .await?;
-    raw_results.truncate(raw_limit);
-    let (raw_results, low_signal) = partition_surfaceable(raw_results);
-    if !low_signal.is_empty() {
-        tracing::info!(
-            hidden = low_signal.len(),
-            "search_memory_cards:low_signal_hidden"
-        );
-    }
-    let query_context = QueryContext::from_query(&query);
-    let (reranked, rerank_stats) = rerank_results(&query_context, raw_results);
-    let mut raw_results = reranked;
-    if rerank_stats.excluded_for_coverage > 0 {
-        tracing::info!(
-            excluded_for_coverage = rerank_stats.excluded_for_coverage,
-            query = %query_context.raw_query,
-            "search_memory_cards:coverage_gate"
-        );
-    }
-    raw_results.truncate(raw_limit);
     tracing::info!(count = raw_results.len(), "search_memory_cards:rerank:done");
     if raw_results.is_empty() {
         tracing::info!(

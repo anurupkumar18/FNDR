@@ -27,6 +27,9 @@ src-tauri/models/*.gguf
 !src-tauri/tests/fixtures/**/*.json
 !docs/team/
 !docs/team/*.json
+!scripts/demo/knowledge-worker-week.json
+!scripts/demo/knowledge-worker-queries.json
+!docs/evidence/W02/retrieval-baseline-seeded.json
 *.lancedb/
 *.db/
 *.lance/

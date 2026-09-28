@@ -18,7 +18,7 @@ Measurements from 2026-09-23 on the owner's profile: 29 memories in 5 active day
 **Do.**
 1. Land Phase 0 Tasks 5 and 6 if not already merged.
 2. `make qa-seed && make qa-retrieval`, then `make vault-health` on your real profile.
-3. Save both outputs under `docs/evidence/W02/` and add a JSON copy of the retrieval scores (`--json` output, see VS-04).
+3. Save both outputs under `docs/evidence/W02/` and emit the versioned JSON retrieval report with `--json`; VS-04 owns comparing later runs against it.
 
 **Done when.** Both files are committed and the Friday scoreboard quotes them.
 
@@ -73,8 +73,8 @@ Measurements from 2026-09-23 on the owner's profile: 29 memories in 5 active day
 **Why.** Search quality silently regressed before because nothing checked it.
 
 **Do.**
-1. Add `--json <path>` to `retrieval_qa` that writes per-path Recall@5, MRR@10, per-kind recall, and per-query ranks.
-2. Commit `docs/evidence/retrieval-baseline.json` as the reference.
+1. Consume the VS-01 schema-v1 JSON output and compare later runs by per-path Recall@5, MRR@10, per-kind recall, and per-query ranks.
+2. Promote the accepted VS-01 JSON evidence to the canonical retrieval reference.
 3. Add `make qa-retrieval-check` that reruns and fails when any path's Recall@5 drops more than 0.05 or any previously found query becomes a miss.
 4. Add one line to `docs/team/TEAM.md`: search, capture-text, chunking, and embedding merge requests paste this output.
 
