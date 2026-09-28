@@ -93,10 +93,11 @@ impl Default for OcrConfig {
             custom_noise_patterns: Vec::new(),
             remove_duplicates: true,
             preserve_formatting: false,
-            // Any nonzero fraction scales with physical pixels: 0.02 on a
-            // 1964px Retina frame (~39px) drops all normal UI/editor text.
-            // Low-confidence and noise lines are filtered downstream instead.
-            minimum_text_height: 0.0,
+            // Keep the fixture-proven default: removing the Vision height gate
+            // admits small noisy detections that downstream cleanup does not
+            // reliably remove. Retina small-text tuning needs a measured,
+            // resolution-aware profile rather than a global zero threshold.
+            minimum_text_height: 0.02,
         }
     }
 }
@@ -976,7 +977,7 @@ mod tests {
     #[test]
     fn test_minimum_text_height_default() {
         let config = OcrConfig::default();
-        assert_eq!(config.minimum_text_height, 0.0);
+        assert_eq!(config.minimum_text_height, 0.02);
     }
 
     #[test]
