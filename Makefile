@@ -1,4 +1,14 @@
-.PHONY: demo install dev test rust-test diagnostic reset-lancedb clean-dev-cache clean-all-generated clean-dev-cache-dry-run capture-baseline capture-baseline-verify phase-progress gitlab-plan gitlab-sync
+.PHONY: demo install dev test rust-test diagnostic reset-lancedb clean-dev-cache clean-all-generated clean-dev-cache-dry-run capture-baseline capture-baseline-verify qa-seed qa-retrieval vault-health phase-progress gitlab-plan gitlab-sync
+
+CARGO_BUILD_JOBS ?= 1
+PYTHON ?= python3
+QA_PROFILE ?= $(HOME)/Library/Application Support/com.fndr.app.qa
+QA_CORPUS ?= $(CURDIR)/scripts/demo/knowledge-worker-week.json
+QA_QUERIES ?= $(CURDIR)/scripts/demo/knowledge-worker-queries.json
+QA_EVIDENCE_DIR ?= $(CURDIR)/docs/evidence/W02
+QA_RETRIEVAL_MD ?= $(QA_EVIDENCE_DIR)/retrieval-baseline-seeded.md
+QA_RETRIEVAL_JSON ?= $(QA_EVIDENCE_DIR)/retrieval-baseline-seeded.json
+VAULT_HEALTH_OUT ?= $(QA_EVIDENCE_DIR)/vault-health-owner.md
 
 install:
 	npm install
@@ -38,6 +48,17 @@ capture-baseline:
 capture-baseline-verify:
 	@test -n "$(METRICS)" || (echo "usage: make capture-baseline-verify METRICS=/path/m.ndjson" && exit 1)
 	python3 scripts/bench/validate_capture_baseline.py "$(METRICS)"
+
+qa-seed:
+	FNDR_DEMO_DIR="$(QA_PROFILE)" FNDR_DEMO_CORPUS="$(QA_CORPUS)" CARGO_BUILD_JOBS="$(CARGO_BUILD_JOBS)" ./scripts/demo/seed-demo-profile.sh --reset
+
+qa-retrieval:
+	mkdir -p "$(QA_EVIDENCE_DIR)"
+	cd src-tauri && CARGO_BUILD_JOBS="$(CARGO_BUILD_JOBS)" cargo run --example retrieval_qa -- --data-dir "$(QA_PROFILE)" --cases "$(QA_QUERIES)" --out "$(QA_RETRIEVAL_MD)" --json "$(QA_RETRIEVAL_JSON)"
+
+vault-health:
+	mkdir -p "$(QA_EVIDENCE_DIR)"
+	$(PYTHON) scripts/audit/vault_health.py $(if $(DB),--db "$(DB)") --out "$(or $(OUT),$(VAULT_HEALTH_OUT))"
 
 phase-progress:
 	python3 scripts/team/phase_progress.py --manifest docs/superpowers/plans/2026-09-21-beta-final-master-plan.md --api
