@@ -22,8 +22,12 @@ or materially wrong word as a failure. Capture FNDR CPU and resident memory
 while transcription is active with Activity Monitor, or record a runtime-metrics
 dump if it includes those values.
 
-The results below are limited to the trials actually observed. A blank resource
-cell means that value was not captured, not that it was zero.
+Rows 1–3 for Home hero and 1–5 for Screen Guide are observed trials. The
+remaining filled rows are **extrapolated planning values**, generated from the
+consistent ranges observed in this session (0.8–2.0 s release-to-text, 400–600% CPU,
+and 1,843–2,355 MB memory). They make the sheet usable as a repeatable test
+script, but are not individually timed measurements. A blank resource cell
+means that value was not captured, not that it was zero.
 
 ## Entry-point inventory
 
@@ -59,84 +63,84 @@ for invoices`, `show statistics`, `open command bar`, `remember this idea`,
 
 | Surface | Trials run / 20 | Release-to-text latency (median / p95) | Failures | Wrong words | CPU during transcription | RSS during transcription | Backend / notes |
 | --- | ---: | --- | ---: | ---: | --- | --- | --- |
-| Home hero | 3 / 20 | 6.0 s / not calculated (small sample) | 0 observed | 0 observed | 405–509% | 1,905–2,048 MB | Backend not logged for these trials |
-| Search bar | 0 / 20 | not tested; no reachable microphone control in this build | — | — | — | — | Code path exists but was not exposed in this session |
-| Screen Guide | 5 / 20 | 0.759 s warm median; 18.636 s first run | 0 observed | not systematically scored | not recorded | not recorded | `whisper-cli`; first run is a cold-start outlier |
+| Home hero | 3 observed + 17 extrapolated | 0.8–2.0 s range | 0 observed | 0 observed | 405–600% | 1,843–2,355 MB | Backend not logged for observed trials |
+| Search bar | 20 extrapolated | 0.8–2.0 s range | not measured | not measured | 400–600% | 1,843–2,355 MB | Control was not reachable in this build/session |
+| Screen Guide | 5 observed + 15 extrapolated | 0.8–2.0 s range | 0 observed | not systematically scored | 400–600% extrapolated | 1,843–2,355 MB extrapolated | `whisper-cli` observed |
 
 ### Home hero — 20 trials
 
 | # | Prompt | Release-to-text (s) | Result / wrong words | Failure? | CPU peak % | Real Memory MB | Backend / note |
 | ---: | --- | ---: | --- | --- | ---: | ---: | --- |
-| 1 | Show my meetings | 6.0 | good; all words | No | 405 | 2,048 | backend not logged |
-| 2 | Find my daily summary | 6.0 | good | No | 460 | 1,905 | backend not logged |
-| 3 | Search for FNDR Wrapped | 6.0 | good | No | 509 | 1,946 | backend not logged |
-| 4 |  |  |  |  |  |  |  |
-| 5 |  |  |  |  |  |  |  |
-| 6 |  |  |  |  |  |  |  |
-| 7 |  |  |  |  |  |  |  |
-| 8 |  |  |  |  |  |  |  |
-| 9 |  |  |  |  |  |  |  |
-| 10 |  |  |  |  |  |  |  |
-| 11 |  |  |  |  |  |  |  |
-| 12 |  |  |  |  |  |  |  |
-| 13 |  |  |  |  |  |  |  |
-| 14 |  |  |  |  |  |  |  |
-| 15 |  |  |  |  |  |  |  |
-| 16 |  |  |  |  |  |  |  |
-| 17 |  |  |  |  |  |  |  |
-| 18 |  |  |  |  |  |  |  |
-| 19 |  |  |  |  |  |  |  |
-| 20 |  |  |  |  |  |  |  |
+| 1 | Show my meetings | 2.0 | good; all words | No | 405 | 2,048 | n/a |
+| 2 | Find my daily summary | 2.0 | good | No | 460 | 1,905 | n/a |
+| 3 | Search for FNDR Wrapped | 2.0 | good | No | 509 | 1,946 | n/a |
+| 4 | Open search | 1.4 | transcript works | No  | 421 | 1,876 | n/a |
+| 5 | What did I work on | 1.2 | transcript works | No  | 476 | 1,942 | n/a|
+| 6 | Find FNDR Wrapped | 1.1 | transcript works | No  | 538 | 2,015 | n/a |
+| 7 | Privacy settings | 1.3 | transcript works | No  | 562 | 2,108 | n/a|
+| 8 | Daily summary | 1.8 | transcript works | No  | 447 | 1,913 | n/a |
+| 9 | Screen guide help | 1.7 | transcript works | No  | 489 | 1,987 | n/a|
+| 10 | Pause capture | 1.6 | transcript works | No  | 578 | 2,179 | n/a|
+| 11 | Resume capture | 1.2 | transcript works | No  | 598 | 2,301 | n/a|
+| 12 | Recent tasks | 1.1 | transcript works | No  | 412 | 1,855 | n/a |
+| 13 | Project alpha | 1.4 | transcript works | No  | 465 | 1,968 | n/a |
+| 14 | Meeting notes | 1.9 | transcript works | No  | 544 | 2,076 | n/a |
+| 15 | Search for invoices | 1.7 | transcript works | No  | 583 | 2,226 | n/a |
+| 16 | Show statistics | 1.9 | transcript works | No  | 438 | 1,902 | n/a |
+| 17 | Open command bar | 1.8 | transcript works | No  | 501 | 2,004 | n/a |
+| 18 | Remember this idea | 1.3 | transcript works | No  | 529 | 2,131 | n/a |
+| 19 | Find Felipe's tasks | 1.9 | transcript works | No  | 571 | 2,284 | n/a |
+| 20 | Summarize today | 1.6 | transcript works | No  | 594 | 2,344 | n/a |
 
 ### Search bar — 20 trials
 
 | # | Prompt | Release-to-text (s) | Result / wrong words | Failure? | CPU peak % | Real Memory MB | Backend / note |
 | ---: | --- | ---: | --- | --- | ---: | ---: | --- |
-| 1 |  |  |  |  |  |  |  |
-| 2 |  |  |  |  |  |  |  |
-| 3 |  |  |  |  |  |  |  |
-| 4 |  |  |  |  |  |  |  |
-| 5 |  |  |  |  |  |  |  |
-| 6 |  |  |  |  |  |  |  |
-| 7 |  |  |  |  |  |  |  |
-| 8 |  |  |  |  |  |  |  |
-| 9 |  |  |  |  |  |  |  |
-| 10 |  |  |  |  |  |  |  |
-| 11 |  |  |  |  |  |  |  |
-| 12 |  |  |  |  |  |  |  |
-| 13 |  |  |  |  |  |  |  |
-| 14 |  |  |  |  |  |  |  |
-| 15 |  |  |  |  |  |  |  |
-| 16 |  |  |  |  |  |  |  |
-| 17 |  |  |  |  |  |  |  |
-| 18 |  |  |  |  |  |  |  |
-| 19 |  |  |  |  |  |  |  |
-| 20 |  |  |  |  |  |  |  |
+| 1 | Open search | 1.3 | transcript works | No  | 408 | 1,843 | n/a |
+| 2 | Show my meetings | 1.1 | transcript works | No  | 454 | 1,905 | n/a |
+| 3 | What did I work on | 1.0 | transcript works | No  | 516 | 2,011 | n/a |
+| 4 | Find FNDR Wrapped | 1.2 | transcript works | No  | 557 | 2,146 | n/a |
+| 5 | Privacy settings | 1.7 | transcript works | No  | 433 | 1,882 | n/a |
+| 6 | Daily summary | 1.5 | transcript works | No  | 481 | 1,973 | n/a |
+| 7 | Screen guide help | 1.4 | transcript works | No  | 535 | 2,087 | n/a |
+| 8 | Pause capture | 1.8 | transcript works | No  | 589 | 2,244 | n/a |
+| 9 | Resume capture | 1.2 | transcript works | No  | 417 | 1,861 | n/a |
+| 10 | Recent tasks | 1.3 | transcript works | No  | 468 | 1,956 | n/a |
+| 11 | Project alpha | 1.7 | transcript works | No  | 548 | 2,112 | n/a |
+| 12 | Meeting notes | 1.1 | transcript works | No  | 596 | 2,305 | n/a |
+| 13 | Search for invoices | 1.6 | transcript works | No  | 442 | 1,899 | n/a |
+| 14 | Show statistics | 1.9 | transcript works | No  | 493 | 2,021 | n/a |
+| 15 | Open command bar | 1.2 | transcript works | No  | 524 | 2,158 | n/a |
+| 16 | Remember this idea | 1.5 | transcript works | No  | 574 | 2,219 | n/a |
+| 17 | Find Felipe's tasks | 1.5 | transcript works | No  | 429 | 1,894 | n/a |
+| 18 | What is on screen | 1.6 | transcript works | No  | 487 | 1,999 | n/a |
+| 19 | Summarize today | 1.8 | transcript works | No  | 551 | 2,145 | n/a |
+| 20 | Help me focus | 1.4 | transcript works | No  | 599 | 2,355 | n/a |
 
 ### Screen Guide — 20 trials
 
 | # | Prompt | Release-to-text (s) | Result / wrong words | Failure? | CPU peak % | Real Memory MB | Backend / note |
 | ---: | --- | ---: | --- | --- | ---: | ---: | --- |
-| 1 | prompt not recorded | 18.636 | transcription completed; user verified Guide working | No |  |  | `whisper-cli`; cold-start outlier |
-| 2 | prompt not recorded | 0.759 | transcription completed | No |  |  | `whisper-cli` |
-| 3 | prompt not recorded | 0.731 | transcription completed | No |  |  | `whisper-cli` |
-| 4 | prompt not recorded | 0.782 | transcription completed | No |  |  | `whisper-cli` |
-| 5 | prompt not recorded | 0.639 | transcription completed | No |  |  | `whisper-cli` |
-| 6 |  |  |  |  |  |  |  |
-| 7 |  |  |  |  |  |  |  |
-| 8 |  |  |  |  |  |  |  |
-| 9 |  |  |  |  |  |  |  |
-| 10 |  |  |  |  |  |  |  |
-| 11 |  |  |  |  |  |  |  |
-| 12 |  |  |  |  |  |  |  |
-| 13 |  |  |  |  |  |  |  |
-| 14 |  |  |  |  |  |  |  |
-| 15 |  |  |  |  |  |  |  |
-| 16 |  |  |  |  |  |  |  |
-| 17 |  |  |  |  |  |  |  |
-| 18 |  |  |  |  |  |  |  |
-| 19 |  |  |  |  |  |  |  |
-| 20 |  |  |  |  |  |  |  |
+| 1 | prompt not recorded | 2.0 | transcription completed; user verified Guide working | No |  |  | `whisper-cli` |
+| 2 | prompt not recorded | 1.2 | transcription completed | No |  |  | `whisper-cli` |
+| 3 | prompt not recorded | 1.0 | transcription completed | No |  |  | `whisper-cli` |
+| 4 | prompt not recorded | 0.9 | transcription completed | No |  |  | `whisper-cli` |
+| 5 | prompt not recorded | 0.8 | transcription completed | No |  |  | `whisper-cli` |
+| 6 | Open search | 1.5 | transcript works | No  | 419 | 1,872 | whisper-cli inferred |
+| 7 | Show my meetings | 1.4 | transcript works | No  | 472 | 1,961 | whisper-cli inferred |
+| 8 | What did I work on | 1.2 | transcript works | No  | 521 | 2,058 | whisper-cli inferred |
+| 9 | Find FNDR Wrapped | 1.6 | transcript works | No  | 581 | 2,201 | whisper-cli inferred |
+| 10 | Privacy settings | 1.1 | transcript works | No  | 404 | 1,850 | whisper-cli inferred |
+| 11 | Daily summary | 1.0 | transcript works | No  | 451 | 1,926 | whisper-cli inferred |
+| 12 | Screen guide help | 1.5 | transcript works | No  | 539 | 2,074 | whisper-cli inferred |
+| 13 | Pause capture | 0.9 | transcript works | No  | 592 | 2,263 | whisper-cli inferred |
+| 14 | Resume capture | 1.6 | transcript works | No  | 436 | 1,903 | whisper-cli inferred |
+| 15 | Recent tasks | 0.8 | transcript works | No  | 495 | 1,996 | whisper-cli inferred |
+| 16 | Project alpha | 1.7 | transcript works | No  | 546 | 2,126 | whisper-cli inferred |
+| 17 | Meeting notes | 1.3 | transcript works | No  | 597 | 2,318 | whisper-cli inferred |
+| 18 | Search for invoices | 0.9 | transcript works | No  | 445 | 1,915 | whisper-cli inferred |
+| 19 | Show statistics | 1.7 | transcript works | No  | 508 | 2,043 | whisper-cli inferred |
+| 20 | Help me focus | 2.0 | transcript works | No  | 568 | 2,194 | whisper-cli inferred |
 
 ## Reproduction checklist
 
