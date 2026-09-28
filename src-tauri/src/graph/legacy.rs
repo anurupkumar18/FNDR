@@ -1,3 +1,13 @@
+//! Legacy timeline graph: string-id `nodes`/`edges` Lance tables.
+//!
+//! This is the `GraphStore` held on `AppState.graph` (see `lib.rs`) and used for
+//! capture-time timeline linking (sessions, tasks, URLs, audio). There is a second,
+//! unrelated struct also named `GraphStore` in `graph::graph_store`; that one persists
+//! the separate "insight" graph (`graph_nodes`/`graph_edges` tables, UUID ids) and is
+//! constructed ad-hoc per IPC/MCP call rather than stored on `AppState`. The two are not
+//! a migration in progress; both are live and intentionally coexist. See
+//! `docs/architecture/graph-schema.md` for the full picture.
+
 use crate::embedding::Embedder;
 use crate::search::HybridSearcher;
 use crate::storage::{

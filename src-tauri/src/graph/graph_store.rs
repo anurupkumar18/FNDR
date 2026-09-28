@@ -1,6 +1,13 @@
 //! Insight graph persistence in LanceDB (`graph_nodes`, `graph_edges`).
 //!
 //! Uses the same `Store` connection bundle as the rest of the app — no second DB handle.
+//!
+//! Shares the name `GraphStore` with the unrelated `graph::legacy::GraphStore` by
+//! coincidence, not lineage: that one is the legacy timeline graph (string ids,
+//! `nodes`/`edges` tables, held on `AppState.graph`). This struct is never stored on
+//! `AppState`; callers construct it ad-hoc per IPC/MCP request (see
+//! `ipc/commands/graph.rs`, `mcp/mod.rs`, `context_runtime/mod.rs`). Both are live; see
+//! `docs/architecture/graph-schema.md` for which does what.
 
 use std::collections::HashSet;
 use std::sync::Arc;
