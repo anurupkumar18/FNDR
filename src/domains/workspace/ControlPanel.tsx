@@ -329,7 +329,11 @@ export function ControlPanel({
         setCaptureBusy(true);
         setCaptureMessage(null);
         try {
-            if (capturePaused) {
+            if (status.is_incognito) {
+                await resumeCapture();
+                setCapturePaused(false);
+                setCaptureMessage("Private mode ended. Screen Guide and local capture are available again.");
+            } else if (capturePaused) {
                 await resumeCapture();
                 setCapturePaused(false);
                 setCaptureMessage("Capture resumed. New screen context can be processed locally.");
@@ -580,7 +584,7 @@ export function ControlPanel({
                                 </p>
                                 <button
                                     type="button"
-                                    className={`ui-action-btn capture-toggle ${capturePaused ? "is-paused" : "is-capturing"}`}
+                                    className={`ui-action-btn capture-toggle ${capturePaused || status?.is_incognito ? "is-paused" : "is-capturing"}`}
                                     onClick={() => void handleToggleCapture()}
                                     disabled={!status || captureBusy}
                                 >
@@ -588,6 +592,8 @@ export function ControlPanel({
                                         ? "Checking capture status…"
                                         : captureBusy
                                             ? "Updating…"
+                                            : status?.is_incognito
+                                                ? "Exit private mode"
                                             : capturePaused
                                                 ? "Resume capture"
                                                 : "Pause capture"}

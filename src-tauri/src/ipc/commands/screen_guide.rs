@@ -109,8 +109,24 @@ fn screen_guide_input_allowed(is_incognito: bool) -> bool {
     !is_incognito
 }
 
-fn screen_guide_press_should_begin(active_generation: Option<u64>, is_incognito: bool) -> bool {
-    active_generation.is_none() && screen_guide_input_allowed(is_incognito)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScreenGuidePressDecision {
+    Begin,
+    Busy,
+    PrivateMode,
+}
+
+fn screen_guide_press_decision(
+    active_generation: Option<u64>,
+    is_incognito: bool,
+) -> ScreenGuidePressDecision {
+    if is_incognito {
+        ScreenGuidePressDecision::PrivateMode
+    } else if active_generation.is_some() {
+        ScreenGuidePressDecision::Busy
+    } else {
+        ScreenGuidePressDecision::Begin
+    }
 }
 
 fn screen_guide_privacy_cleanup_still_owns_turn(
@@ -1579,7 +1595,10 @@ pub fn register_screen_guide_shortcut<R: tauri::Runtime>(
                 ShortcutState::Pressed => ScreenGuideShortcutTransition::Pressed,
                 ShortcutState::Released => ScreenGuideShortcutTransition::Released,
             };
-            let _ = shortcut_tx.send(transition);
+            tracing::info!(?transition, "screen_guide:shortcut_event_received");
+            if shortcut_tx.send(transition).is_err() {
+                tracing::warn!("screen_guide:shortcut_worker_unavailable");
+            }
         })
         .map_err(|err| err.to_string())?;
     *SCREEN_GUIDE_REGISTERED_SHORTCUT_ID.lock() = Some(shortcut.id());
@@ -1595,14 +1614,28 @@ fn handle_screen_guide_shortcut_transition<R: tauri::Runtime>(
 ) {
     match transition {
         ScreenGuideShortcutTransition::Pressed => {
-            if !screen_guide_press_should_begin(
+            match screen_guide_press_decision(
                 *active_generation,
                 screen_guide_input_is_private(app),
             ) {
-                return;
+                ScreenGuidePressDecision::Begin => {}
+                ScreenGuidePressDecision::Busy => {
+                    tracing::info!("screen_guide:shortcut_ignored_while_busy");
+                    return;
+                }
+                ScreenGuidePressDecision::PrivateMode => {
+                    tracing::warn!("screen_guide:shortcut_rejected_private_mode");
+                    publish_screen_guide_shortcut_rejection(app, private_mode_message());
+                    return;
+                }
             }
-            let Ok(generation) = begin_screen_guide_input() else {
-                return;
+            let generation = match begin_screen_guide_input() {
+                Ok(generation) => generation,
+                Err(err) => {
+                    tracing::warn!(error = %err, "screen_guide:shortcut_begin_failed");
+                    publish_screen_guide_shortcut_rejection(app, err);
+                    return;
+                }
             };
             *active_generation = Some(generation);
             update_screen_guide_notch(app, ScreenGuideUiPhase::Listening);
@@ -1621,7 +1654,8 @@ fn handle_screen_guide_shortcut_transition<R: tauri::Runtime>(
             }
             stop_say_process();
             adopt_deferred_restore_for_generation(generation);
-            if show_screen_guide_overlay(app).is_err() {
+            if let Err(err) = show_screen_guide_overlay(app) {
+                tracing::warn!(error = %err, "screen_guide:shortcut_overlay_failed");
                 if cancel_screen_guide_runtime_if_current(generation) {
                     let _ = finish_screen_guide_surface_cleanup(app, generation);
                 }
@@ -1636,6 +1670,7 @@ fn handle_screen_guide_shortcut_transition<R: tauri::Runtime>(
             )
             .is_err()
             {
+                tracing::warn!("screen_guide:shortcut_press_delivery_failed");
                 if cancel_screen_guide_runtime_if_current(generation) {
                     let _ = finish_screen_guide_surface_cleanup(app, generation);
                 }
@@ -1864,7 +1899,7 @@ pub async fn set_screen_guide_settings(
 #[tauri::command]
 pub async fn screen_guide_press(app: AppHandle) -> Result<u64, String> {
     if screen_guide_input_is_private(&app) {
-        return Err(private_screen_message());
+        return Err(private_mode_message());
     }
     let generation = begin_screen_guide_input()?;
     update_screen_guide_notch(&app, ScreenGuideUiPhase::Listening);
@@ -1943,7 +1978,7 @@ pub async fn submit_screen_guide_text(app: AppHandle, text: String) -> Result<()
         return Err("Screen Guide needs a question.".to_string());
     }
     if screen_guide_input_is_private(&app) {
-        return Err(private_screen_message());
+        return Err(private_mode_message());
     }
     let generation = begin_screen_guide_input()?;
     schedule_screen_guide_hidden_lease(&app, generation);
@@ -2010,7 +2045,7 @@ pub async fn transcribe_screen_guide_voice_input(
     let transcribe_started = Instant::now();
     tracing::info!(request_id, audio_bytes = audio_bytes.len(), "screen_guide:transcribe_started");
     if state.inner().is_incognito.load(Ordering::SeqCst) {
-        return Err(private_screen_message());
+        return Err(private_mode_message());
     }
     let cancel = screen_guide_turn_cancel(request_id)?;
     schedule_screen_guide_hidden_lease(&app, request_id);
@@ -2231,7 +2266,7 @@ pub async fn ask_screen_guide(
         return Err("Screen Guide is turned off.".to_string());
     }
     if state.inner().is_incognito.load(Ordering::SeqCst) {
-        return Err(private_screen_message());
+        return Err(private_mode_message());
     }
 
     let (request_generation, turn_cancel) = {
@@ -2264,7 +2299,7 @@ pub async fn ask_screen_guide(
         let matches = find_screen_guide_files(lookup.clone(), turn_cancel).await?;
         ensure_screen_guide_request_current(state.inner(), request_generation)?;
         if state.inner().is_incognito.load(Ordering::SeqCst) {
-            return Err(private_screen_message());
+            return Err(private_mode_message());
         }
         return finish_screen_guide_answer(
             &app,
@@ -2418,7 +2453,7 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
-        return Err(private_screen_message());
+        return Err(private_mode_message());
     }
 
     let blocklist = state.inner().config.read().blocklist.clone();
@@ -2439,7 +2474,7 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
-        return Err(private_screen_message());
+        return Err(protected_screen_message());
     }
 
     if let Err(err) = ensure_screen_guide_request_current_or_restore(
@@ -2580,7 +2615,7 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
-        return Err(private_screen_message());
+        return Err(private_mode_message());
     }
 
     if ocr.plain_text.trim().is_empty() {
@@ -2612,7 +2647,7 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
-        return Err(private_screen_message());
+        return Err(protected_screen_message());
     }
 
     let positioned_ocr = if ocr.lines.is_empty() {
@@ -2786,7 +2821,7 @@ pub async fn ask_screen_guide(
 
 fn show_screen_guide_overlay<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if screen_guide_input_is_private(app) {
-        return Err(private_screen_message());
+        return Err(private_mode_message());
     }
     if !screen_guide_overlay_can_activate(
         SCREEN_GUIDE_OVERLAY_SAFE.load(Ordering::SeqCst),
@@ -3980,8 +4015,37 @@ fn emit_screen_guide_event<R: tauri::Runtime>(
     }
 }
 
-fn private_screen_message() -> String {
-    "Screen Guide will not inspect this private screen.".to_string()
+fn publish_screen_guide_shortcut_rejection<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    message: String,
+) {
+    let (generation, enabled) = {
+        let runtime = SCREEN_GUIDE_RUNTIME.lock();
+        (runtime.generation, runtime.enabled)
+    };
+    update_screen_guide_notch_with_enabled(app, enabled, ScreenGuideUiPhase::Error);
+    if let Err(err) = app.emit(
+        SCREEN_GUIDE_STATE_EVENT,
+        ScreenGuideStatePayload {
+            phase: ScreenGuideUiPhase::Error,
+            message: Some(message),
+            generation,
+            activity_stage: None,
+            target_app: None,
+        },
+    ) {
+        tracing::warn!(error = %err, "screen_guide:shortcut_rejection_delivery_failed");
+    }
+}
+
+fn private_mode_message() -> String {
+    "FNDR Private Mode is on. Open Settings → Capture and choose Exit Private Mode, then try Screen Guide again."
+        .to_string()
+}
+
+fn protected_screen_message() -> String {
+    "Screen Guide did not inspect this screen because it matches FNDR's blocked or sensitive-content rules. Switch to another window or review Settings → Privacy."
+        .to_string()
 }
 
 fn screen_guide_accessibility_permission_error() -> String {
@@ -5357,9 +5421,29 @@ mod tests {
     fn incognito_rejects_input_before_microphone_or_overlay_work() {
         assert!(screen_guide_input_allowed(false));
         assert!(!screen_guide_input_allowed(true));
-        assert!(screen_guide_press_should_begin(None, false));
-        assert!(!screen_guide_press_should_begin(Some(7), false));
-        assert!(!screen_guide_press_should_begin(None, true));
+        assert_eq!(
+            screen_guide_press_decision(None, false),
+            ScreenGuidePressDecision::Begin
+        );
+        assert_eq!(
+            screen_guide_press_decision(Some(7), false),
+            ScreenGuidePressDecision::Busy
+        );
+        assert_eq!(
+            screen_guide_press_decision(None, true),
+            ScreenGuidePressDecision::PrivateMode
+        );
+    }
+
+    #[test]
+    fn private_mode_and_protected_target_have_distinct_guidance() {
+        let private_mode = private_mode_message();
+        let protected_target = protected_screen_message();
+
+        assert!(private_mode.contains("Private Mode is on"));
+        assert!(private_mode.contains("Exit Private Mode"));
+        assert!(!protected_target.contains("Exit Private Mode"));
+        assert_ne!(private_mode, protected_target);
     }
 
     #[test]

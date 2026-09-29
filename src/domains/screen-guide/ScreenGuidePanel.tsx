@@ -28,6 +28,7 @@ import {
 
 interface ScreenGuidePanelProps {
     isVisible: boolean;
+    isPrivateMode?: boolean;
     onClose: () => void;
 }
 
@@ -37,9 +38,11 @@ function statusCopy(
     settings: ScreenGuideSettings | null,
     status: ScreenGuideStateEvent,
     loading: boolean,
+    isPrivateMode: boolean,
 ): string {
     if (loading) return "Loading Screen Guide…";
     if (!settings?.enabled) return "Screen Guide is off";
+    if (isPrivateMode) return "FNDR Private Mode is on";
     if (status.message) return status.message;
     switch (status.phase) {
         case "listening":
@@ -57,7 +60,11 @@ function statusCopy(
     }
 }
 
-export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) {
+export function ScreenGuidePanel({
+    isVisible,
+    isPrivateMode = false,
+    onClose,
+}: ScreenGuidePanelProps) {
     const [settings, setSettings] = useState<ScreenGuideSettings | null>(null);
     const [shortcutDraft, setShortcutDraft] = useState("");
     const [status, setStatus] = useState<ScreenGuideStateEvent>(IDLE_STATUS);
@@ -205,7 +212,7 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
 
     const enabled = settings?.enabled ?? false;
     const controlsDisabled = loading || saving || !settings;
-    const questionDisabled = controlsDisabled || !enabled || submitting;
+    const questionDisabled = controlsDisabled || !enabled || isPrivateMode || submitting;
     const settingsLoadFailed = !loading && !settings && Boolean(error);
     const activityOwnsLiveStatus = activityTrace !== null && status.phase !== "idle";
 
@@ -330,21 +337,39 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
 
             <div className="sg-panel-body">
                 <section
-                    className={`sg-readiness ${enabled ? "is-ready" : "is-off"}`}
+                    className={`sg-readiness ${enabled && !isPrivateMode ? "is-ready" : "is-off"}`}
                     role={activityOwnsLiveStatus ? undefined : "status"}
                     aria-live={activityOwnsLiveStatus ? undefined : "polite"}
                     aria-atomic={activityOwnsLiveStatus ? undefined : "true"}
                 >
                     <span className="sg-readiness-dot" aria-hidden="true" />
                     <div>
-                        <strong>{statusCopy(settings, status, loading)}</strong>
+                        <strong>{statusCopy(settings, status, loading, isPrivateMode)}</strong>
                         <span>
-                            {enabled
+                            {isPrivateMode
+                                ? "Exit Private Mode in Settings → Capture to use Screen Guide"
+                                : enabled
                                 ? `Hold ${settings?.shortcut ?? "Control+Alt+Space"} from any app`
                                 : `${settings?.shortcut ?? "Control+Alt+Space"} is available when enabled`}
                         </span>
                     </div>
                 </section>
+
+                {error && (
+                    <div className="sg-panel-error" role="alert">
+                        <p>{error}</p>
+                        {settingsLoadFailed && (
+                            <button
+                                type="button"
+                                className="ui-action-btn"
+                                onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+                                aria-label="Retry loading Screen Guide"
+                            >
+                                Retry
+                            </button>
+                        )}
+                    </div>
+                )}
 
                 {activityTrace && status.phase !== "idle" && (
                     <ActivityTrace
@@ -627,21 +652,6 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                     </p>
                 </aside>
 
-                {error && (
-                    <div className="sg-panel-error" role="alert">
-                        <p>{error}</p>
-                        {settingsLoadFailed && (
-                            <button
-                                type="button"
-                                className="ui-action-btn"
-                                onClick={() => setLoadAttempt((attempt) => attempt + 1)}
-                                aria-label="Retry loading Screen Guide"
-                            >
-                                Retry
-                            </button>
-                        )}
-                    </div>
-                )}
             </div>
         </div>
     );

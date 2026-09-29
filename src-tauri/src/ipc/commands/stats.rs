@@ -244,13 +244,21 @@ pub async fn pause_capture(state: State<'_, Arc<AppState>>) -> Result<(), String
 /// Resume capture
 #[tauri::command]
 pub async fn resume_capture(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    let result = set_capture_paused_for_user(state.inner(), false);
+    let result = resume_capture_for_user(state.inner());
     emit_capture_status(state.inner());
     result
 }
 
 fn set_capture_paused_for_user(state: &AppState, paused: bool) -> Result<(), String> {
     state.set_user_capture_paused(paused)
+}
+
+fn resume_capture_for_user(state: &AppState) -> Result<(), String> {
+    state.set_user_capture_paused(false)?;
+    if state.is_incognito.swap(false, Ordering::SeqCst) {
+        tracing::info!("Private mode cleared by desktop resume");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -335,6 +343,18 @@ mod capture_pause_persistence_tests {
         let relaunched = fixture.app_state();
         assert!(!relaunched.is_paused.load(Ordering::SeqCst));
         assert!(relaunched.is_capturing());
+    }
+
+    #[test]
+    fn explicit_capture_resume_exits_private_mode() {
+        let fixture = StateFixture::new();
+        let state = fixture.app_state();
+        state.is_incognito.store(true, Ordering::SeqCst);
+
+        resume_capture_for_user(&state).expect("resume capture and exit private mode");
+
+        assert!(!state.is_incognito.load(Ordering::SeqCst));
+        assert!(state.is_capturing());
     }
 
     #[test]

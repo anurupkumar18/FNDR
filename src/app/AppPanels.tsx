@@ -21,6 +21,7 @@ interface AppPanelsProps {
     appNames: string[];
     appToasts: AppToast[];
     isCapturePaused: boolean;
+    isPrivateMode: boolean;
     query: string;
     selectedResult: MemoryCard | null;
     showCommandPalette: boolean;
@@ -47,6 +48,7 @@ export function AppPanels({
     appNames,
     appToasts,
     isCapturePaused,
+    isPrivateMode,
     query,
     selectedResult,
     showCommandPalette,
@@ -121,7 +123,11 @@ export function AppPanels({
             <PanelPresence open={activePanel === "screenGuide"}>
                 {(present) => (
                     <PanelErrorBoundary panelName="Screen Guide" onClose={onClosePanel}>
-                        <ScreenGuidePanel isVisible={present} onClose={onClosePanel} />
+                        <ScreenGuidePanel
+                            isVisible={present}
+                            isPrivateMode={isPrivateMode}
+                            onClose={onClosePanel}
+                        />
                     </PanelErrorBoundary>
                 )}
             </PanelPresence>

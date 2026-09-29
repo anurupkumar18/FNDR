@@ -76,6 +76,23 @@ describe("ScreenGuidePanel", () => {
         expect(screen.getByText(/Option\+Space/)).toBeInTheDocument();
     });
 
+    it("shows live private mode instead of claiming the shortcut is ready", async () => {
+        mocks.getScreenGuideSettings.mockResolvedValueOnce({
+            enabled: true,
+            shortcut: "Control+Alt+Space",
+            speak_responses: false,
+            show_cursor: true,
+        });
+
+        render(<ScreenGuidePanel isVisible isPrivateMode onClose={() => {}} />);
+
+        expect(await screen.findByText("FNDR Private Mode is on")).toBeInTheDocument();
+        expect(screen.getByText(/exit Private Mode in Settings/i)).toBeInTheDocument();
+        expect(screen.queryByText(/from any app/i)).toBeNull();
+        expect(screen.getByRole("button", { name: "Ask Screen Guide" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: /hold to talk/i })).toBeDisabled();
+    });
+
     it("moves focus into the modal and closes it with Escape", async () => {
         const onClose = vi.fn();
         render(<ScreenGuidePanel isVisible onClose={onClose} />);

@@ -708,7 +708,8 @@ function App() {
                     activePanel={activePanel}
                     appNames={appNames}
                     appToasts={appToasts}
-                    isCapturePaused={status?.is_paused ?? false}
+                    isCapturePaused={(status?.is_paused ?? false) || (status?.is_incognito ?? false)}
+                    isPrivateMode={status?.is_incognito ?? false}
                     query={query}
                     selectedResult={selectedResult}
                     showCommandPalette={showCommandPalette}

@@ -4,6 +4,7 @@ import {
     type CaptureStatus,
     getPrivacyAlerts,
     pauseCapture,
+    resumeCapture,
     setBlocklist,
 } from "@/shared/ipc/tauri";
 import { ControlPanel } from "./ControlPanel";
@@ -187,6 +188,18 @@ describe("ControlPanel", () => {
         expect(await screen.findByRole("alert", { name: /blocklist update failed/i })).toHaveTextContent(
             /settings unavailable/i,
         );
+    });
+
+    it("offers a desktop exit when private mode is active", async () => {
+        const status = statusWithEmbedder("real", false);
+        status.is_incognito = true;
+
+        render(<ControlPanel status={status} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        fireEvent.click(await screen.findByRole("button", { name: /exit private mode/i }));
+
+        await waitFor(() => expect(resumeCapture).toHaveBeenCalledTimes(1));
+        expect(screen.getByText(/private mode ended/i)).toBeInTheDocument();
     });
 
     it("reapplies the active cinematic palette when switching theme", () => {
