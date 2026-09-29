@@ -23,6 +23,12 @@ import { KnowledgeGraph3D, GraphErrorBoundary } from "@/features/graph/component
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 import { PanelHeader } from "@/shared/components/PanelHeader";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+} from "@/shared/activity/activityTrace";
 
 const VAULT_BROWSE_STORAGE_KEY = "fndr.memoryVault.browseMode";
 
@@ -209,6 +215,7 @@ export function MemoryCardsPanel({
     const [showNeedsSignal, setShowNeedsSignal] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [vaultActivity, setVaultActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [appFilter, setAppFilter] = useState<string>(APP_FILTER_ALL);
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(TIME_FILTER_ALL);
     const [perspectiveFilter, setPerspectiveFilter] = useState<PerspectiveFilter>(PERSPECTIVE_FILTER_ALL);
@@ -219,6 +226,7 @@ export function MemoryCardsPanel({
     const [similarById, setSimilarById] = useState<Record<string, SearchResult[]>>({});
     const [similarLoadingId, setSimilarLoadingId] = useState<string | null>(null);
     const [similarErrorById, setSimilarErrorById] = useState<Record<string, string>>({});
+    const [similarActivityById, setSimilarActivityById] = useState<Record<string, ActivityTraceSnapshot>>({});
     /** Currently-expanded card id (one modal at a time). */
     const [openExpandedId, setOpenExpandedId] = useState<string | null>(null);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -324,9 +332,26 @@ export function MemoryCardsPanel({
 
         let cancelled = false;
         const selectedApp = appFilter === APP_FILTER_ALL ? null : appFilter;
+        const startedAtMs = Date.now();
+        const startedTrace = recordActivityStep(
+            beginActivityTrace({
+                id: `memory-vault-${startedAtMs}`,
+                title: "Memory Vault loading activity",
+                startedAtMs,
+            }),
+            {
+                id: "memory-index",
+                label: "Loading saved-memory index",
+                actor: "Memory store",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        );
 
         setLoading(cards.length === 0);
         setError(null);
+        setVaultActivity(startedTrace);
 
         void listMemoryCards(1500, selectedApp)
             .then((items) => {
@@ -334,6 +359,17 @@ export function MemoryCardsPanel({
                     return;
                 }
                 setCards(items);
+                const finishedAtMs = Date.now();
+                setVaultActivity((current) => recordActivityStep(current ?? startedTrace, {
+                    id: "memory-index",
+                    label: "Loaded saved-memory index",
+                    actor: "Memory store",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: finishedAtMs,
+                    durationMs: finishedAtMs - startedAtMs,
+                    detail: `${items.length.toLocaleString()} ${items.length === 1 ? "memory" : "memories"} returned`,
+                }));
             })
             .catch((err) => {
                 if (cancelled) {
@@ -341,6 +377,16 @@ export function MemoryCardsPanel({
                 }
                 // Preserve existing cards if refresh fails so the panel remains usable.
                 setError(err instanceof Error ? err.message : "Unable to load memory cards.");
+                const finishedAtMs = Date.now();
+                setVaultActivity((current) => recordActivityStep(current ?? startedTrace, {
+                    id: "memory-index",
+                    label: "Saved-memory index unavailable",
+                    actor: "Memory store",
+                    status: "failed",
+                    evidence: "ipc-boundary",
+                    atMs: finishedAtMs,
+                    durationMs: finishedAtMs - startedAtMs,
+                }));
             })
             .finally(() => {
                 if (!cancelled) {
@@ -419,12 +465,47 @@ export function MemoryCardsPanel({
             return;
         }
         if (similarById[memoryId] === undefined) {
+            const startedAtMs = Date.now();
+            const startedTrace = recordActivityStep(
+                beginActivityTrace({
+                    id: `visual-similarity-${startedAtMs}`,
+                    title: "Visual similarity activity",
+                    startedAtMs,
+                }),
+                {
+                    id: "visual-index-query",
+                    label: "Comparing local visual embeddings",
+                    actor: "CLIP image index",
+                    status: "running",
+                    evidence: "ipc-boundary",
+                    atMs: startedAtMs,
+                },
+            );
+            setSimilarActivityById((previous) => ({
+                ...previous,
+                [memoryId]: startedTrace,
+            }));
             setSimilarLoadingId(memoryId);
             try {
                 const hits = await findVisuallySimilarMemories({
                     seedMemoryId: memoryId,
                     limit: 6,
                 });
+                const finishedAtMs = Date.now();
+                const completedTrace = recordActivityStep(startedTrace, {
+                    id: "visual-index-query",
+                    label: "Compared local visual embeddings",
+                    actor: "CLIP image index",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: finishedAtMs,
+                    durationMs: finishedAtMs - startedAtMs,
+                    detail: `${hits.length} ${hits.length === 1 ? "match" : "matches"} returned`,
+                });
+                setSimilarActivityById((previous) => ({
+                    ...previous,
+                    [memoryId]: completedTrace,
+                }));
                 setSimilarById((previous) => ({
                     ...previous,
                     [memoryId]: hits,
@@ -435,6 +516,19 @@ export function MemoryCardsPanel({
                     return next;
                 });
             } catch (err) {
+                const failedAtMs = Date.now();
+                setSimilarActivityById((previous) => ({
+                    ...previous,
+                    [memoryId]: recordActivityStep(startedTrace, {
+                        id: "visual-index-query",
+                        label: "Visual embedding comparison unavailable",
+                        actor: "CLIP image index",
+                        status: "failed",
+                        evidence: "ipc-boundary",
+                        atMs: failedAtMs,
+                        durationMs: failedAtMs - startedAtMs,
+                    }),
+                }));
                 setSimilarErrorById((previous) => ({
                     ...previous,
                     [memoryId]:
@@ -644,6 +738,12 @@ export function MemoryCardsPanel({
                     </div>
                 )}
             </div>
+
+            {showListSurface && vaultActivity && (
+                <div className="memory-cards-activity-trace">
+                    <ActivityTrace trace={vaultActivity} />
+                </div>
+            )}
 
             <div
                 className={`memory-cards-body${
@@ -938,6 +1038,12 @@ export function MemoryCardsPanel({
                 const similarSlot = similarOpen ? (
                     <div className="memory-similar-drawer">
                         <div className="memory-similar-heading">Visually similar screens</div>
+                        {similarActivityById[expandedCard.id] && (
+                            <ActivityTrace
+                                trace={similarActivityById[expandedCard.id]}
+                                announce={false}
+                            />
+                        )}
                         {similarLoadingId === expandedCard.id && (
                             <p className="memory-similar-empty" role="status">
                                 Comparing local visual features…

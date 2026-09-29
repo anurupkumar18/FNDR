@@ -9,10 +9,16 @@ import {
     setScreenGuideSettings,
     submitScreenGuideText,
 } from "@/shared/ipc/tauri";
-import { screenGuideErrorMessage } from "./screenGuideState";
+import {
+    finishScreenGuideActivity,
+    recordScreenGuideActivity,
+    screenGuideErrorMessage,
+} from "./screenGuideState";
 import "./ScreenGuidePanel.css";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import type { ActivityTraceSnapshot } from "@/shared/activity/activityTrace";
 import {
     computerUseStatus,
     openClickyBridgeStatus,
@@ -55,6 +61,7 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
     const [settings, setSettings] = useState<ScreenGuideSettings | null>(null);
     const [shortcutDraft, setShortcutDraft] = useState("");
     const [status, setStatus] = useState<ScreenGuideStateEvent>(IDLE_STATUS);
+    const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [question, setQuestion] = useState("");
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -112,7 +119,25 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
         setLiveStatusError(null);
 
         void onScreenGuideState((nextStatus) => {
-            if (active) setStatus(nextStatus);
+            if (!active) return;
+            setStatus(nextStatus);
+            const activityStage = nextStatus.activity_stage;
+            if (activityStage) {
+                setActivityTrace((current) => recordScreenGuideActivity(current, {
+                    stage: activityStage,
+                    targetApp: nextStatus.target_app?.trim() || null,
+                    generation: nextStatus.generation,
+                    atMs: Date.now(),
+                }));
+            } else if (nextStatus.phase === "idle") {
+                setActivityTrace(null);
+            } else if (nextStatus.phase === "error") {
+                setActivityTrace((current) =>
+                    finishScreenGuideActivity(current, "failed", Date.now()));
+            } else if (nextStatus.phase === "answer") {
+                setActivityTrace((current) =>
+                    finishScreenGuideActivity(current, "completed", Date.now()));
+            }
         })
             .then((dispose) => {
                 if (active) unlisten = dispose;
@@ -182,6 +207,7 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
     const controlsDisabled = loading || saving || !settings;
     const questionDisabled = controlsDisabled || !enabled || submitting;
     const settingsLoadFailed = !loading && !settings && Boolean(error);
+    const activityOwnsLiveStatus = activityTrace !== null && status.phase !== "idle";
 
     const handlePanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
         if (event.key === "Escape") {
@@ -305,9 +331,9 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
             <div className="sg-panel-body">
                 <section
                     className={`sg-readiness ${enabled ? "is-ready" : "is-off"}`}
-                    role="status"
-                    aria-live="polite"
-                    aria-atomic="true"
+                    role={activityOwnsLiveStatus ? undefined : "status"}
+                    aria-live={activityOwnsLiveStatus ? undefined : "polite"}
+                    aria-atomic={activityOwnsLiveStatus ? undefined : "true"}
                 >
                     <span className="sg-readiness-dot" aria-hidden="true" />
                     <div>
@@ -319,6 +345,13 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                         </span>
                     </div>
                 </section>
+
+                {activityTrace && status.phase !== "idle" && (
+                    <ActivityTrace
+                        trace={activityTrace}
+                        className="sg-activity-status"
+                    />
+                )}
 
                 {liveStatusError && (
                     <aside className="sg-status-warning" aria-label="Live status unavailable">

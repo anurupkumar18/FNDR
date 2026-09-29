@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Onboarding } from "./Onboarding";
+import type { ModelDownloadStatus } from "@/shared/ipc/onboarding";
+import type { ActivityTraceEvidence } from "@/shared/activity/activityTrace";
 
 const listAvailableModels = vi.fn();
 const downloadModel = vi.fn();
 const saveOnboardingState = vi.fn();
 const getOnboardingState = vi.fn();
 const checkPermissions = vi.fn();
+const refreshAiModels = vi.fn();
 
 vi.mock("@/shared/ipc/onboarding", () => ({
     getOnboardingState: (...args: unknown[]) => getOnboardingState(...args),
@@ -16,10 +19,12 @@ vi.mock("@/shared/ipc/onboarding", () => ({
     openSystemSettings: vi.fn(),
     listAvailableModels: (...args: unknown[]) => listAvailableModels(...args),
     downloadModel: (...args: unknown[]) => downloadModel(...args),
-    refreshAiModels: vi.fn().mockResolvedValue({ ai_model_available: true }),
+    refreshAiModels: (...args: unknown[]) => refreshAiModels(...args),
 }));
 
-const downloadStatusValue = {
+const downloadStatusValue: ModelDownloadStatus & {
+    activity_evidence: ActivityTraceEvidence;
+} = {
     state: "idle",
     model_id: null as string | null,
     filename: null,
@@ -33,6 +38,7 @@ const downloadStatusValue = {
     error: null,
     logs: [] as string[],
     updated_at_ms: 0,
+    activity_evidence: "backend-event",
 };
 
 vi.mock("@/shared/hooks/useModelDownloadStatus", () => ({
@@ -59,6 +65,7 @@ beforeEach(() => {
         microphone: false,
     });
     saveOnboardingState.mockResolvedValue(undefined);
+    refreshAiModels.mockResolvedValue({ ai_model_available: true });
 });
 
 function qwenInfo(downloaded = false) {
@@ -100,6 +107,14 @@ afterEach(() => {
     vi.clearAllMocks();
     downloadStatusValue.state = "idle";
     downloadStatusValue.model_id = null;
+    downloadStatusValue.destination_path = null;
+    downloadStatusValue.bytes_downloaded = 0;
+    downloadStatusValue.total_bytes = 0;
+    downloadStatusValue.percent = 0;
+    downloadStatusValue.done = false;
+    downloadStatusValue.error = null;
+    downloadStatusValue.logs = [];
+    downloadStatusValue.updated_at_ms = 0;
 });
 
 describe("Onboarding model step", () => {
@@ -127,10 +142,14 @@ describe("Onboarding model step", () => {
             .mockResolvedValueOnce([qwenInfo(), minilmInfo()])
             .mockResolvedValue([qwenInfo(), minilmInfo(true)]);
         downloadModel.mockResolvedValue(undefined);
+        const view = render(<Onboarding onComplete={() => {}} />);
+        await waitFor(() => expect(downloadModel).toHaveBeenCalledTimes(1));
+
         downloadStatusValue.state = "completed";
         downloadStatusValue.model_id = "minilm-l6-v2";
-
-        render(<Onboarding onComplete={() => {}} />);
+        downloadStatusValue.done = true;
+        downloadStatusValue.updated_at_ms = 1;
+        view.rerender(<Onboarding onComplete={() => {}} />);
 
         // Embedder completion refreshes the registry instead of advancing.
         await waitFor(() => {
@@ -147,9 +166,103 @@ describe("Onboarding model step", () => {
         expect(await screen.findByText("Qwen3-VL · 2B")).toBeInTheDocument();
         expect(downloadModel).not.toHaveBeenCalled();
     });
+
+    it("shows observed model activity without exposing raw logs or local paths", async () => {
+        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo()]);
+        downloadModel.mockResolvedValue(undefined);
+        downloadStatusValue.state = "downloading";
+        downloadStatusValue.model_id = "minilm-l6-v2";
+        downloadStatusValue.bytes_downloaded = 45_000_000;
+        downloadStatusValue.total_bytes = 90_000_000;
+        downloadStatusValue.percent = 50;
+        downloadStatusValue.destination_path = "/Users/private/models/all-MiniLM-L6-v2.onnx";
+        downloadStatusValue.logs = ["raw downloader output containing a private path"];
+        downloadStatusValue.updated_at_ms = 1_000;
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        const activity = await screen.findByRole("region", { name: "Model setup activity" });
+        expect(activity).toHaveTextContent("Downloading MiniLM · Search Embedder");
+        expect(activity).toHaveTextContent("Model download service");
+        expect(activity).toHaveTextContent("50%");
+        expect(activity).toHaveTextContent("Live backend event");
+        expect(activity).not.toHaveTextContent("/Users/private/models");
+        expect(activity).not.toHaveTextContent("raw downloader output");
+    });
+
+    it("shows a safe failure state instead of backend error details", async () => {
+        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo()]);
+        downloadModel.mockResolvedValue(undefined);
+        const view = render(<Onboarding onComplete={() => {}} />);
+        await waitFor(() => expect(downloadModel).toHaveBeenCalledTimes(1));
+
+        downloadStatusValue.state = "failed";
+        downloadStatusValue.model_id = "minilm-l6-v2";
+        downloadStatusValue.error = "failed writing /Users/private/models/search.onnx";
+        downloadStatusValue.updated_at_ms = 1_000;
+        view.rerender(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByRole("region", { name: "Model setup activity" })).toHaveTextContent(
+            "Model download failed",
+        );
+        expect(screen.getByRole("alert")).toHaveTextContent(
+            "The model download failed. Retry it or check your network connection.",
+        );
+        expect(screen.queryByText(/Users\/private\/models/)).toBeNull();
+    });
+
+    it("advances after a downloaded choice finishes activation", async () => {
+        let resolveRuntime!: (value: { ai_model_available: boolean }) => void;
+        refreshAiModels.mockReturnValue(new Promise((resolve) => {
+            resolveRuntime = resolve;
+        }));
+        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+        downloadModel.mockResolvedValue(undefined);
+        const view = render(<Onboarding onComplete={() => {}} />);
+
+        fireEvent.click(await screen.findByRole("button", { name: /Download Qwen3-VL · 2B/i }));
+        await waitFor(() => expect(downloadModel).toHaveBeenCalledTimes(1));
+
+        downloadStatusValue.state = "completed";
+        downloadStatusValue.model_id = "qwen3-vl-2b";
+        downloadStatusValue.done = true;
+        downloadStatusValue.updated_at_ms = 2_000;
+        view.rerender(<Onboarding onComplete={() => {}} />);
+
+        const trace = await screen.findByRole("region", { name: "Model setup activity" });
+        expect(within(trace).getByRole("status")).toHaveTextContent("Loading the model into FNDR");
+        resolveRuntime({ ai_model_available: true });
+
+        await waitFor(() => expect(saveOnboardingState).toHaveBeenCalledWith(
+            expect.objectContaining({
+                step: "permissions",
+                model_downloaded: true,
+                model_id: "qwen3-vl-2b",
+            }),
+        ));
+    });
 });
 
 describe("Onboarding persistence", () => {
+    it("shows the observed System Settings handoff without implying a grant", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "permissions",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        fireEvent.click((await screen.findAllByRole("button", { name: "Grant" }))[0]);
+        const trace = await screen.findByRole("region", { name: "Permission check activity" });
+        expect(trace).toHaveTextContent("System Settings opened");
+        expect(trace).not.toHaveTextContent("Permission granted");
+    });
+
     it("keeps the current step visible when completing onboarding cannot be saved", async () => {
         getOnboardingState.mockResolvedValue({
             step: "permissions",

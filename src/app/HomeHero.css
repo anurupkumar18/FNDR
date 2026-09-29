@@ -303,6 +303,11 @@
     overflow-wrap: anywhere;
 }
 
+.home-hero__voice-trace {
+    margin-top: var(--s-2);
+    text-align: left;
+}
+
 .home-hero__search-help {
     margin: var(--s-3) 0 0;
     color: var(--text-secondary);

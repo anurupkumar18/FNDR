@@ -5,6 +5,12 @@ import "./TodoPanel.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+} from "@/shared/activity/activityTrace";
 
 interface TodoPanelProps {
     isVisible: boolean;
@@ -34,6 +40,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
     const [dailyBriefing, setDailyBriefing] = useState<string>("");
     const [dailyBriefingLoading, setDailyBriefingLoading] = useState(false);
     const [dailyBriefingError, setDailyBriefingError] = useState(false);
+    const [briefingActivity, setBriefingActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
     const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -82,14 +89,43 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             return;
         }
         let mounted = true;
+        const startedAtMs = Date.now();
+        const startedTrace = recordActivityStep(
+            beginActivityTrace({
+                id: `daily-briefing-${startedAtMs}`,
+                title: "Daily briefing activity",
+                startedAtMs,
+            }),
+            {
+                id: "briefing-request",
+                label: "Generating daily briefing",
+                actor: "Local briefing model",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        );
         setDailyBriefingError(false);
         setDailyBriefingLoading(true);
+        setBriefingActivity(startedTrace);
         generateDailyBriefing()
             .then((text) => {
                 if (!mounted) {
                     return;
                 }
-                setDailyBriefing((text ?? "").trim());
+                const briefing = (text ?? "").trim();
+                setDailyBriefing(briefing);
+                const finishedAtMs = Date.now();
+                setBriefingActivity(recordActivityStep(startedTrace, {
+                    id: "briefing-request",
+                    label: briefing ? "Daily briefing ready" : "Daily briefing checked",
+                    actor: "Local briefing model",
+                    status: briefing ? "completed" : "degraded",
+                    evidence: "result-metadata",
+                    atMs: finishedAtMs,
+                    durationMs: finishedAtMs - startedAtMs,
+                    detail: briefing ? "Briefing response received" : "No briefing was returned",
+                }));
             })
             .catch(() => {
                 if (!mounted) {
@@ -97,6 +133,16 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 }
                 setDailyBriefing("");
                 setDailyBriefingError(true);
+                const finishedAtMs = Date.now();
+                setBriefingActivity(recordActivityStep(startedTrace, {
+                    id: "briefing-request",
+                    label: "Daily briefing unavailable",
+                    actor: "Local briefing model",
+                    status: "failed",
+                    evidence: "ipc-boundary",
+                    atMs: finishedAtMs,
+                    durationMs: finishedAtMs - startedAtMs,
+                }));
             })
             .finally(() => {
                 if (!mounted) {
@@ -221,6 +267,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             />
 
             <section className="todo-briefing-row">
+                {briefingActivity && <ActivityTrace trace={briefingActivity} />}
                 <section className="todo-briefing-summary" aria-live="polite">
                     <p className="todo-briefing-label">Today&apos;s Briefing</p>
                     <p className="todo-briefing-text">

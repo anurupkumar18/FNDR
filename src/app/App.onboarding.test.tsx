@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const getOnboardingState = vi.hoisted(() => vi.fn());
+const useSearchMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./AppPanels", () => ({
     AppPanels: ({
@@ -35,7 +36,7 @@ vi.mock("@/domains/workspace/SearchHistoryPanel", () => ({
 }));
 
 vi.mock("@/shared/hooks/useSearch", () => ({
-    useSearch: () => ({ results: [], isLoading: false, error: null }),
+    useSearch: useSearchMock,
 }));
 vi.mock("@/shared/hooks/usePolling", () => ({ usePolling: vi.fn() }));
 vi.mock("@/shared/hooks/useTauriEvent", () => ({ useTauriEvent: vi.fn() }));
@@ -80,6 +81,13 @@ import App from "./App";
 
 beforeEach(() => {
     getOnboardingState.mockReset();
+    useSearchMock.mockReset();
+    useSearchMock.mockReturnValue({
+        results: [],
+        isLoading: false,
+        error: null,
+        activityTrace: null,
+    });
 });
 
 afterEach(() => {
@@ -133,6 +141,37 @@ describe("App onboarding gate", () => {
         fireEvent.click(screen.getByRole("button", { name: "Run search" }));
 
         await waitFor(() => expect(main).toHaveClass("has-active-search"));
+    });
+
+    it("places the real search activity trace beside the active results workflow", async () => {
+        getOnboardingState.mockResolvedValue(completedOnboarding);
+        useSearchMock.mockReturnValue({
+            results: [],
+            isLoading: true,
+            error: null,
+            activityTrace: {
+                id: "search-7",
+                title: "Memory search activity",
+                status: "running",
+                startedAtMs: 1,
+                finishedAtMs: null,
+                steps: [{
+                    id: "retrieval",
+                    label: "Requesting memory search",
+                    actor: "FNDR search service",
+                    status: "running",
+                    evidence: "ipc-boundary",
+                    atMs: 1,
+                }],
+            },
+        });
+
+        render(<App />);
+        fireEvent.click(await screen.findByRole("button", { name: "Run search" }));
+
+        expect(screen.getByLabelText("Memory search activity")).toHaveTextContent(
+            "Requesting memory search",
+        );
     });
 
     it("makes the workspace inert behind Settings and restores its trigger after Escape", async () => {

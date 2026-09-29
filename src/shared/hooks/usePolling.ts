@@ -11,13 +11,19 @@ export function usePolling(
         }
 
         let mounted = true;
+        let inFlight = false;
 
         const isMounted = () => mounted;
         const run = async () => {
-            if (!mounted || document.hidden) {
+            if (!mounted || document.hidden || inFlight) {
                 return;
             }
-            await callback(isMounted);
+            inFlight = true;
+            try {
+                await callback(isMounted);
+            } finally {
+                inFlight = false;
+            }
         };
 
         void run();

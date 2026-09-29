@@ -16,8 +16,19 @@ import {
 import { bubblePurityGate, extractAnchorTerms, scoreAnchorCoverage } from "@/shared/utils/search";
 import { PLACEHOLDERS } from "./placeholders";
 import { Icon } from "@/shared/components/atoms";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+    type ActivityTraceStep,
+} from "@/shared/activity/activityTrace";
+import {
+    beginVoiceActivityTrace,
+    recordVoiceActivityStep,
+    type VoiceActivityEvent,
+} from "@/shared/activity/voiceActivityTrace";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import "./SearchBar.css";
-import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 
 interface SearchBarProps {
     value: string;
@@ -57,8 +68,9 @@ export function SearchBar({
     disabledHint,
 }: SearchBarProps) {
     const [summary, setSummary] = useState<string | null>(null);
-    const [isSummarizing, setIsSummarizing] = useState(false);
+    const [summaryActivityTrace, setSummaryActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
+    const [voiceActivityTrace, setVoiceActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [isRecording, setIsRecording] = useState(false);
     const [isPreparingVoice, setIsPreparingVoice] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
@@ -89,6 +101,12 @@ export function SearchBar({
     const [memoryMentionHits, setMemoryMentionHits] = useState<MemoryCard[]>([]);
     const [memoryMentionBusy, setMemoryMentionBusy] = useState(false);
     const [memoryMentionError, setMemoryMentionError] = useState(false);
+
+    function recordVoiceStep(event: VoiceActivityEvent, atMs = Date.now(), durationMs?: number) {
+        setVoiceActivityTrace((current) => current
+            ? recordVoiceActivityStep(current, event, atMs, durationMs)
+            : current);
+    }
 
     useEffect(() => {
         if (!atMemoryQuery || atMemoryQuery.length < MEMORY_MENTIONS.minQueryLength) {
@@ -158,13 +176,35 @@ export function SearchBar({
 
         if (!activeValue || resultCount === 0) {
             setSummary(null);
-            setIsSummarizing(false);
+            setSummaryActivityTrace(null);
             return;
         }
 
         let cancelled = false;
-        setIsSummarizing(true);
         setSummary(null);
+        const startedAt = Date.now();
+        const traceId = `search-summary-${requestId}`;
+        setSummaryActivityTrace(recordActivityStep(
+            beginActivityTrace({
+                id: traceId,
+                title: "Search summary activity",
+                startedAtMs: startedAt,
+            }),
+            {
+                id: "settle-delay",
+                label: "Waiting for search results to settle",
+                actor: "Search summary scheduler",
+                status: "waiting",
+                evidence: "frontend-event",
+                atMs: startedAt,
+            },
+        ));
+
+        const recordSummaryStep = (step: ActivityTraceStep) => {
+            setSummaryActivityTrace((current) => current?.id === traceId
+                ? recordActivityStep(current, step)
+                : current);
+        };
 
         const timer = window.setTimeout(async () => {
             const latestResults = searchResults;
@@ -172,12 +212,41 @@ export function SearchBar({
                 return;
             }
 
+            const delayCompletedAt = Date.now();
+            recordSummaryStep({
+                id: "settle-delay",
+                label: "Search-result settle delay completed",
+                actor: "Search summary scheduler",
+                status: "completed",
+                evidence: "frontend-event",
+                atMs: delayCompletedAt,
+                durationMs: delayCompletedAt - startedAt,
+            });
+
             if (latestResults.length === 0) {
-                setIsSummarizing(false);
+                recordSummaryStep({
+                    id: "result",
+                    label: "Summary skipped: no retrieved memories",
+                    actor: "Search evidence gate",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: Date.now(),
+                    detail: "0 memories available",
+                });
                 return;
             }
 
+            let requestStartedAt: number | null = null;
             try {
+                const coverageStartedAt = Date.now();
+                recordSummaryStep({
+                    id: "coverage",
+                    label: "Evaluating evidence coverage",
+                    actor: "Search evidence gate",
+                    status: "running",
+                    evidence: "frontend-event",
+                    atMs: coverageStartedAt,
+                });
                 const anchorTerms = extractAnchorTerms(activeValue);
                 const topicalCards = latestResults
                     .map((result) => {
@@ -196,8 +265,29 @@ export function SearchBar({
                     .filter((item) => item.coverage >= SEARCH_SUMMARY.coverageFloor)
                     .slice(0, SEARCH_SUMMARY.maxCards);
 
+                const coverageCompletedAt = Date.now();
+                recordSummaryStep({
+                    id: "coverage",
+                    label: "Evaluated evidence coverage",
+                    actor: "Search evidence gate",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: coverageCompletedAt,
+                    durationMs: coverageCompletedAt - coverageStartedAt,
+                    detail: `${topicalCards.length} of ${latestResults.length} memories met coverage`,
+                });
+
                 if (topicalCards.length < 2) {
                     setSummary(null);
+                    recordSummaryStep({
+                        id: "result",
+                        label: "Summary skipped: insufficient evidence",
+                        actor: "Search evidence gate",
+                        status: "completed",
+                        evidence: "result-metadata",
+                        atMs: Date.now(),
+                        detail: `${topicalCards.length} qualifying memories; 2 required`,
+                    });
                     return;
                 }
 
@@ -228,34 +318,100 @@ export function SearchBar({
 
                 if (snippets.length < 2) {
                     setSummary(null);
+                    recordSummaryStep({
+                        id: "result",
+                        label: "Summary skipped: insufficient evidence",
+                        actor: "Search evidence gate",
+                        status: "completed",
+                        evidence: "result-metadata",
+                        atMs: Date.now(),
+                        detail: `${snippets.length} evidence items; 2 required`,
+                    });
                     return;
                 }
 
+                requestStartedAt = Date.now();
+                recordSummaryStep({
+                    id: "summary-request",
+                    label: "Requesting grounded summary",
+                    actor: "Local summary service",
+                    status: "running",
+                    evidence: "ipc-boundary",
+                    atMs: requestStartedAt,
+                });
                 const aiSummary = await summarizeSearch(activeValue, snippets);
                 if (cancelled || requestId !== summaryRequestRef.current) {
                     return;
                 }
+                const requestCompletedAt = Date.now();
+                recordSummaryStep({
+                    id: "summary-request",
+                    label: "Summary request completed",
+                    actor: "Local summary service",
+                    status: "completed",
+                    evidence: "ipc-boundary",
+                    atMs: requestCompletedAt,
+                    durationMs: requestCompletedAt - requestStartedAt,
+                });
                 if (!aiSummary?.trim()) {
                     setSummary(null);
+                    recordSummaryStep({
+                        id: "result",
+                        label: "Summary withheld: no usable result",
+                        actor: "Search evidence gate",
+                        status: "degraded",
+                        evidence: "result-metadata",
+                        atMs: Date.now(),
+                    });
                     return;
                 }
 
                 const purity = bubblePurityGate(aiSummary, anchorTerms);
                 if (!purity.pass) {
                     setSummary(null);
+                    recordSummaryStep({
+                        id: "result",
+                        label: "Summary withheld by evidence check",
+                        actor: "Search evidence gate",
+                        status: "degraded",
+                        evidence: "result-metadata",
+                        atMs: Date.now(),
+                    });
                     return;
                 }
                 setSummary(aiSummary);
-            } catch (err) {
+                recordSummaryStep({
+                    id: "result",
+                    label: "Summary ready",
+                    actor: "Search evidence gate",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: Date.now(),
+                });
+            } catch {
                 if (cancelled || requestId !== summaryRequestRef.current) {
                     return;
                 }
-                console.error("Summary generation failed:", err);
+                console.error("Summary generation failed");
                 setSummary(null);
-            } finally {
-                if (!cancelled && requestId === summaryRequestRef.current) {
-                    setIsSummarizing(false);
-                }
+                const failedAt = Date.now();
+                recordSummaryStep({
+                    id: requestStartedAt === null ? "summary-preparation" : "summary-request",
+                    label: requestStartedAt === null
+                        ? "Summary preparation failed"
+                        : "Summary request failed",
+                    actor: requestStartedAt === null
+                        ? "Search evidence gate"
+                        : "Local summary service",
+                    status: "failed",
+                    evidence: requestStartedAt === null
+                        ? "frontend-event"
+                        : "ipc-boundary",
+                    atMs: failedAt,
+                    durationMs: requestStartedAt === null
+                        ? undefined
+                        : failedAt - requestStartedAt,
+                });
             }
         }, SEARCH_SUMMARY.delayMs);
 
@@ -392,15 +548,24 @@ export function SearchBar({
 
     async function handleVoiceToggle() {
         if (isRecording) {
+            recordVoiceStep("recorder-stop-requested");
             mediaRecorderRef.current?.stop();
             return;
         }
 
+        const requestedAt = Date.now();
+        const nextTrace = beginVoiceActivityTrace("search", requestedAt);
         if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
             setVoiceStatus("Microphone isn't available here. Type your search instead.");
+            setVoiceActivityTrace(recordVoiceActivityStep(
+                nextTrace,
+                "microphone-unavailable",
+                Date.now(),
+            ));
             return;
         }
 
+        setVoiceActivityTrace(nextTrace);
         setIsPreparingVoice(true);
         setVoiceStatus("Waiting for microphone permission…");
         try {
@@ -413,6 +578,7 @@ export function SearchBar({
                     sampleRate: VOICE_RECORDING.sampleRate,
                 },
             });
+            recordVoiceStep("microphone-connected");
             const options = chooseRecorderOptions();
             const recorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
 
@@ -436,19 +602,23 @@ export function SearchBar({
                 mediaStreamRef.current = null;
                 mediaRecorderRef.current = null;
                 setIsRecording(false);
+                recordVoiceStep("recording-stopped", Date.now(), durationMs);
                 if (durationMs < VOICE_RECORDING.minDurationMs) {
                     setVoiceStatus("Hold the mic a bit longer and try again.");
+                    recordVoiceStep("recording-too-short", Date.now(), durationMs);
                     return;
                 }
                 void transcribeRecordedVoice(chunks, mimeTypeRef.current);
             };
 
-            recorder.start(VOICE_RECORDING.timesliceMs);
+            recorder.start();
             setIsRecording(true);
             setVoiceStatus("Listening... tap again to stop.");
+            recordVoiceStep("recording-started", recordingStartedAtRef.current);
         } catch (err) {
             console.error("Voice capture failed:", err);
             setVoiceStatus(microphoneFailureMessage(err));
+            recordVoiceStep("microphone-failed");
             stopMediaStream(mediaStreamRef.current);
             mediaStreamRef.current = null;
             mediaRecorderRef.current = null;
@@ -461,20 +631,31 @@ export function SearchBar({
     async function transcribeRecordedVoice(chunks: Blob[], mimeType: string) {
         if (chunks.length === 0) {
             setVoiceStatus("No voice input captured.");
+            recordVoiceStep("no-audio");
             return;
         }
 
         setIsTranscribing(true);
         setVoiceStatus("Transcribing with Whisper...");
+        const transcribingAt = Date.now();
+        recordVoiceStep("transcription-requested", transcribingAt);
 
         try {
             const blob = new Blob(chunks, { type: mimeType });
             const audioBytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
             const result = await transcribeVoiceInput(audioBytes, mimeType);
             await handleVoiceTranscript(result.text);
+            const completedAt = Date.now();
+            recordVoiceStep(
+                result.text.trim() ? "transcript-ready" : "no-speech",
+                completedAt,
+                completedAt - transcribingAt,
+            );
         } catch (err) {
             console.error("Voice transcription failed:", err);
             setVoiceStatus("Voice transcription failed. Type your search or try again.");
+            const failedAt = Date.now();
+            recordVoiceStep("transcription-failed", failedAt, failedAt - transcribingAt);
         } finally {
             setIsTranscribing(false);
         }
@@ -667,7 +848,7 @@ export function SearchBar({
             )}
 
             {hasPendingSubmit && (
-                <div className="voice-status" role="status">
+                <div className="voice-status" role={voiceActivityTrace ? undefined : "status"}>
                     Press Enter to search
                 </div>
             )}
@@ -675,26 +856,31 @@ export function SearchBar({
             {voiceStatus && (
                 <div
                     className={`voice-status ${isRecording ? "recording" : ""}`}
-                    role="status"
-                    aria-live="polite"
+                    role={voiceActivityTrace ? undefined : "status"}
+                    aria-live={voiceActivityTrace ? undefined : "polite"}
                 >
                     {voiceStatus}
                 </div>
             )}
 
-            {hasQuery && resultCount > 0 && (isSummarizing || Boolean(summary)) && (
+            {voiceActivityTrace && (
+                <ActivityTrace trace={voiceActivityTrace} className="search-voice-trace" />
+            )}
+
+            {hasQuery && resultCount > 0 && summaryActivityTrace && (
+                <ActivityTrace
+                    trace={summaryActivityTrace}
+                    className="search-summary-trace"
+                    announce={!summary}
+                />
+            )}
+
+            {hasQuery && resultCount > 0 && summary && (
                 <div className="summary-bubble" aria-live="polite">
-                    {isSummarizing ? (
-                        <div className="summary-loading">
-                            <ThinkingIndicator state="composing" size="sm" className="summary-loader" />
-                            <span>Synthesizing memories...</span>
-                        </div>
-                    ) : (
-                        <p className="summary-text">
-                            <span className="summary-icon"><Icon name="lightbulb" size={15} /></span>
-                            {summary}
-                        </p>
-                    )}
+                    <p className="summary-text">
+                        <span className="summary-icon"><Icon name="lightbulb" size={15} /></span>
+                        {summary}
+                    </p>
                 </div>
             )}
         </div>

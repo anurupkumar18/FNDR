@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+} from "@/shared/activity/activityTrace";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
     getMemoryReviewStatus,
     getRuntimeMetrics,
     type MemoryReviewWorkerStatus,
@@ -56,6 +62,7 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
     const [runtimeMetrics, setRuntimeMetrics] = useState<RuntimeMetricsSnapshot | null>(null);
     const [runtimeMetricsError, setRuntimeMetricsError] = useState<string | null>(null);
     const [runtimeMetricsLoading, setRuntimeMetricsLoading] = useState(enabled);
+    const [runtimeActivity, setRuntimeActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [reviewStatus, setReviewStatus] = useState<MemoryReviewWorkerStatus | null>(null);
     const [reviewStatusError, setReviewStatusError] = useState<string | null>(null);
     const mountedRef = useRef(true);
@@ -78,16 +85,69 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
     }, [enabled, runtimeMetricsError]);
 
     const loadRuntimeMetrics = useCallback(async (isMounted: () => boolean) => {
+        const startedAtMs = Date.now();
+        const startedTrace = recordActivityStep(
+            beginActivityTrace({
+                id: "engine-diagnostics-refresh",
+                title: "Engine diagnostics activity",
+                startedAtMs,
+            }),
+            {
+                id: "request",
+                label: "Requesting engine diagnostics",
+                actor: "Engine diagnostics",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        );
+
+        if (isMounted()) setRuntimeActivity(startedTrace);
         if (isMounted() && !runtimeMetricsRef.current) setRuntimeMetricsLoading(true);
         try {
             const snap = await getRuntimeMetrics();
             if (isMounted()) {
+                const completedAtMs = Date.now();
+                const aggregateCount = Object.keys(snap.aggregates).length;
+                const recentCount = snap.recent.length;
+                const requestCompletedTrace = recordActivityStep(startedTrace, {
+                    id: "request",
+                    label: "Engine diagnostics request returned",
+                    actor: "Engine diagnostics",
+                    status: "completed",
+                    evidence: "ipc-boundary",
+                    atMs: completedAtMs,
+                    durationMs: completedAtMs - startedAtMs,
+                });
                 setRuntimeMetrics(snap);
                 setRuntimeMetricsError(null);
+                setRuntimeActivity(recordActivityStep(requestCompletedTrace, {
+                    id: "result",
+                    label: "Engine diagnostics refreshed",
+                    actor: "FNDR runtime",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: completedAtMs,
+                    durationMs: completedAtMs - startedAtMs,
+                    detail: `${aggregateCount} latency ${aggregateCount === 1 ? "group" : "groups"} · ${recentCount} recent ${recentCount === 1 ? "operation" : "operations"} · ${snap.embedding.degraded ? "degraded" : "standard"} embedding mode`,
+                }));
             }
-        } catch (e) {
+        } catch {
             if (isMounted()) {
-                setRuntimeMetricsError(e instanceof Error ? e.message : String(e));
+                const failedAtMs = Date.now();
+                setRuntimeMetricsError("Engine diagnostics could not load. Try again.");
+                setRuntimeActivity(recordActivityStep(startedTrace, {
+                    id: "request",
+                    label: "Engine diagnostics refresh failed",
+                    actor: "Engine diagnostics",
+                    status: "failed",
+                    evidence: "ipc-boundary",
+                    atMs: failedAtMs,
+                    durationMs: failedAtMs - startedAtMs,
+                    detail: runtimeMetricsRef.current
+                        ? "The last successful snapshot remains visible."
+                        : "No diagnostics snapshot is available yet.",
+                }));
             }
         } finally {
             if (isMounted()) setRuntimeMetricsLoading(false);
@@ -101,9 +161,9 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
                 setReviewStatus(status);
                 setReviewStatusError(null);
             }
-        } catch (reason) {
+        } catch {
             if (isMounted()) {
-                setReviewStatusError(reason instanceof Error ? reason.message : String(reason));
+                setReviewStatusError("Memory review status is unavailable.");
             }
         }
     }, []);
@@ -125,10 +185,12 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
                 included in this view.
             </p>
 
-            {runtimeMetricsLoading && !runtimeMetrics && !runtimeMetricsError && (
-                <div className="pipeline-diagnostic-state" role="status" aria-live="polite">
-                    Loading live engine diagnostics…
-                </div>
+            {runtimeActivity && (
+                <ActivityTrace
+                    trace={runtimeActivity}
+                    className="pipeline-system-activity"
+                    announce={false}
+                />
             )}
 
             {runtimeMetricsError && (
@@ -154,7 +216,7 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
 
             {runtimeMetrics && (
                 <>
-                    <p className="pipeline-snapshot-meta" role="status">
+                    <p className="pipeline-snapshot-meta">
                         Snapshot captured {formatSnapshotTime(runtimeMetrics.generated_at_ms)} · refreshes
                         every 3 seconds while this view is open
                     </p>

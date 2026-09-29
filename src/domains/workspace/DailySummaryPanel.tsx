@@ -14,6 +14,12 @@ import "./DailySummaryPanel.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { Icon } from "@/shared/components/atoms/Icon";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+} from "@/shared/activity/activityTrace";
 
 interface DailySummaryPanelProps {
     isVisible: boolean;
@@ -90,6 +96,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
     const [followups, setFollowups] = useState<Task[]>([]);
     const [followupsLoading, setFollowupsLoading] = useState(false);
     const [followupError, setFollowupError] = useState<string | null>(null);
+    const [summaryActivity, setSummaryActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [addingTaskId, setAddingTaskId] = useState<string | null>(null);
     const [addedTaskIds, setAddedTaskIds] = useState<Set<string>>(new Set());
     const [expandedFollowupIds, setExpandedFollowupIds] = useState<Set<string>>(new Set());
@@ -120,6 +127,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
         setShowToast(false);
         setSummary(null);
         setSummaryDateStr(null);
+        setSummaryActivity(null);
     };
 
     const handleGenerate = async (targetDate = dateStr) => {
@@ -127,6 +135,23 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
 
         const requestId = generationRequestRef.current + 1;
         generationRequestRef.current = requestId;
+        const startedAtMs = Date.now();
+        const startedTrace = recordActivityStep(
+            beginActivityTrace({
+                id: `daily-summary-${requestId}`,
+                title: "Daily summary activity",
+                startedAtMs,
+            }),
+            {
+                id: "summary-request",
+                label: "Requesting daily summary",
+                actor: "Local summary engine",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        );
+        setSummaryActivity(startedTrace);
 
         setOverview(null);
         setFollowupError(null);
@@ -164,6 +189,16 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
             setSummaryDateStr(targetDate);
             setError(null);
             setLoading(false);
+            const finishedAtMs = Date.now();
+            setSummaryActivity(recordActivityStep(startedTrace, {
+                id: "summary-request",
+                label: "Daily summary loaded from session cache",
+                actor: "Summary cache",
+                status: "completed",
+                evidence: "frontend-event",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }));
             return;
         }
 
@@ -178,9 +213,29 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
             setSummary(nextSummary);
             setSummaryDateStr(targetDate);
             setCache((previous) => new Map(previous).set(targetDate, nextSummary));
+            const finishedAtMs = Date.now();
+            setSummaryActivity((current) => recordActivityStep(current ?? startedTrace, {
+                id: "summary-request",
+                label: "Daily summary ready",
+                actor: "Local summary engine",
+                status: "completed",
+                evidence: "result-metadata",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }));
         } catch (err) {
             if (generationRequestRef.current === requestId) {
                 setError(err instanceof Error ? err.message : "Failed to generate summary.");
+                const finishedAtMs = Date.now();
+                setSummaryActivity((current) => recordActivityStep(current ?? startedTrace, {
+                    id: "summary-request",
+                    label: "Daily summary request failed",
+                    actor: "Local summary engine",
+                    status: "failed",
+                    evidence: "ipc-boundary",
+                    atMs: finishedAtMs,
+                    durationMs: finishedAtMs - startedAtMs,
+                }));
             }
         } finally {
             if (generationRequestRef.current === requestId) {
@@ -251,17 +306,53 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
 
     const handleDownloadPdf = async () => {
         if (!summaryDateStr || !summary) return;
+        const startedAtMs = Date.now();
+        setSummaryActivity((current) => recordActivityStep(
+            current ?? beginActivityTrace({
+                id: `daily-summary-export-${startedAtMs}`,
+                title: "Daily summary activity",
+                startedAtMs,
+            }),
+            {
+                id: "pdf-export",
+                label: "Exporting daily summary PDF",
+                actor: "Local PDF exporter",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        ));
         setExporting(true);
         setError(null);
         try {
             const path = await exportDailySummaryPdf(summaryDateStr, summary);
             setExportedPdfPath(path);
+            const finishedAtMs = Date.now();
+            setSummaryActivity((current) => current ? recordActivityStep(current, {
+                id: "pdf-export",
+                label: "Daily summary PDF saved locally",
+                actor: "Local PDF exporter",
+                status: "completed",
+                evidence: "result-metadata",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }) : current);
             setShowToast(true);
             setTimeout(() => {
                 setShowToast(false);
             }, 6000);
         } catch (err) {
             setError(String(err));
+            const failedAtMs = Date.now();
+            setSummaryActivity((current) => current ? recordActivityStep(current, {
+                id: "pdf-export",
+                label: "Daily summary PDF export failed",
+                actor: "Local PDF exporter",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: failedAtMs,
+                durationMs: failedAtMs - startedAtMs,
+            }) : current);
         } finally {
             setExporting(false);
         }
@@ -272,11 +363,40 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
             return;
         }
 
+        const startedAtMs = Date.now();
+        setSummaryActivity((current) => current ? recordActivityStep(current, {
+            id: "pdf-open",
+            label: "Opening exported PDF",
+            actor: "macOS workspace",
+            status: "running",
+            evidence: "ipc-boundary",
+            atMs: startedAtMs,
+        }) : current);
         try {
             await openExportedPdf(exportedPdfPath);
             setShowToast(false);
+            const finishedAtMs = Date.now();
+            setSummaryActivity((current) => current ? recordActivityStep(current, {
+                id: "pdf-open",
+                label: "Exported PDF opened",
+                actor: "macOS workspace",
+                status: "completed",
+                evidence: "result-metadata",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }) : current);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
+            const failedAtMs = Date.now();
+            setSummaryActivity((current) => current ? recordActivityStep(current, {
+                id: "pdf-open",
+                label: "Exported PDF could not be opened",
+                actor: "macOS workspace",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: failedAtMs,
+                durationMs: failedAtMs - startedAtMs,
+            }) : current);
         }
     };
 
@@ -370,6 +490,8 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                         </button>
                     )}
                 </div>
+
+                {summaryActivity && <ActivityTrace trace={summaryActivity} />}
 
                 <div className="daily-summary-content">
                     {loading && (

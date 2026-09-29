@@ -36,6 +36,7 @@ import {
 import { getOnboardingState, type OnboardingState } from "@/shared/ipc/onboarding";
 import { EVAL_UI } from "@/shared/utils/eval-ui";
 import { SidebarDrawer } from "./SidebarDrawer";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import "./styles/App.css";
 
 function nextToastId(): string {
@@ -102,7 +103,7 @@ function App() {
     const handleUnlock = useCallback(() => setBiometricUnlocked(true), []);
 
     const searchAllowed = true;
-    const { results, isLoading, error } = useSearch(
+    const { results, isLoading, error, activityTrace: searchActivityTrace } = useSearch(
         searchAllowed ? query : "",
         timeFilter,
         appFilter
@@ -674,6 +675,11 @@ function App() {
                 {!isFocusMode && (
                     <div className="main-layout">
                         <section className="main-column">
+                            {searchActivityTrace && (
+                                <div className="search-activity-trace-wrap">
+                                    <ActivityTrace trace={searchActivityTrace} />
+                                </div>
+                            )}
                             {error && <div className="error-banner">{error}</div>}
 
                             <Timeline

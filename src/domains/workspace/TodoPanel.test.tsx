@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { TodoPanel } from "./TodoPanel";
 
 const ipc = vi.hoisted(() => ({
@@ -38,6 +38,17 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("TodoPanel", () => {
+    it("traces the daily briefing model request without exposing its text", async () => {
+        ipc.generateDailyBriefing.mockResolvedValueOnce("Prioritize the release checklist.");
+        render(<TodoPanel isVisible onClose={vi.fn()} />);
+
+        const trace = await screen.findByLabelText("Daily briefing activity");
+        expect(within(trace).getByText("Daily briefing ready")).toBeInTheDocument();
+        fireEvent.click(within(trace).getByRole("button", { name: "Show Daily briefing activity details" }));
+        expect(within(trace).getByText(/verified result/i)).toBeInTheDocument();
+        expect(within(trace).queryByText("Prioritize the release checklist.")).toBeNull();
+    });
+
     it("keeps the task list usable when an edit fails", async () => {
         ipc.updateTodo.mockRejectedValueOnce(new Error("Could not save that title"));
         render(<TodoPanel isVisible onClose={vi.fn()} />);

@@ -67,13 +67,19 @@ if (typeof Blob.prototype.arrayBuffer !== "function") {
 }
 
 class FakeMediaRecorder {
+    static instances: FakeMediaRecorder[] = [];
     static isTypeSupported(): boolean {
         return true;
     }
     ondataavailable: ((event: { data: Blob }) => void) | null = null;
     onstop: (() => void) | null = null;
     mimeType = "audio/webm";
-    start(): void {
+    startArgs: unknown[] | null = null;
+    constructor() {
+        FakeMediaRecorder.instances.push(this);
+    }
+    start(...args: unknown[]): void {
+        this.startArgs = args;
         this.ondataavailable?.({ data: new Blob(["audio"], { type: this.mimeType }) });
     }
     stop(): void {
@@ -82,6 +88,16 @@ class FakeMediaRecorder {
 }
 
 const handlers = new Map<string, (event: { payload: unknown }) => void>();
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
 
 /** Fire a backend event the way the Rust side emits it. */
 function emit(event: string, payload: unknown) {
@@ -100,6 +116,7 @@ async function openPanel() {
 describe("NotchHud", () => {
     beforeEach(() => {
         handlers.clear();
+        FakeMediaRecorder.instances = [];
         Object.defineProperty(globalThis, "MediaRecorder", {
             value: FakeMediaRecorder,
             configurable: true,
@@ -228,6 +245,64 @@ describe("NotchHud", () => {
         expect(ipcMocks.fndrAnswer).not.toHaveBeenCalled();
     });
 
+    it("traces typed memory search from debounce through a verified count without exposing the query", async () => {
+        const pending = deferred<MemoryCard[]>();
+        ipcMocks.searchMemoryCards.mockReturnValueOnce(pending.promise);
+        render(<NotchHud />);
+        const input = await openPanel();
+
+        fireEvent.change(input, { target: { value: "private roadmap term" } });
+
+        expect(await screen.findByText("Waiting for typing to settle")).toBeInTheDocument();
+        await screen.findByText("Requesting local memory matches");
+        const trace = screen.getByRole("region", { name: "Notch memory search activity" });
+        expect(trace).not.toHaveTextContent("private roadmap term");
+
+        pending.resolve([card]);
+        await screen.findByText("Memory search returned 1 match");
+        fireEvent.click(screen.getByRole("button", { name: "Show Notch memory search activity details" }));
+        expect(screen.getByText("Typing settled").closest("li")).toHaveTextContent("Completed");
+        expect(screen.getByText("Memory search request completed").closest("li")).toHaveTextContent(
+            "Completed",
+        );
+        expect(trace).not.toHaveTextContent(card.title);
+    });
+
+    it("traces a typed FNDR answer without exposing the question, answer, or raw failure", async () => {
+        const pending = deferred<Awaited<ReturnType<typeof ipcMocks.fndrAnswer>>>();
+        ipcMocks.fndrAnswer.mockReturnValueOnce(pending.promise);
+        render(<NotchHud />);
+        const input = await openPanel();
+
+        fireEvent.change(input, { target: { value: "private question about payroll" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        await screen.findByText("Requesting an answer from FNDR");
+        const trace = screen.getByRole("region", { name: "Notch answer activity" });
+        expect(trace).not.toHaveTextContent("private question about payroll");
+
+        pending.resolve({
+            query: "private question about payroll",
+            answer: "private answer from a memory",
+            evidence: {},
+            cards: [card],
+            verify_outcome: {},
+            surfacing_reasons: [],
+        });
+        await screen.findByText("Answer ready with 1 memory source");
+        expect(trace).not.toHaveTextContent("private answer from a memory");
+
+        const failed = deferred<Awaited<ReturnType<typeof ipcMocks.fndrAnswer>>>();
+        ipcMocks.fndrAnswer.mockReturnValueOnce(failed.promise);
+        fireEvent.change(input, { target: { value: "another private question" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        failed.reject(new Error("/private/tmp/raw-backend-secret.log"));
+        await screen.findByText("Answer request failed");
+        expect(screen.getByRole("region", { name: "Notch answer activity" })).not.toHaveTextContent(
+            "raw-backend-secret",
+        );
+    });
+
     it("speaks to FNDR: records, transcribes, and asks what was said", async () => {
         render(<NotchHud />);
         await openPanel();
@@ -236,6 +311,9 @@ describe("NotchHud", () => {
         const clock = vi.spyOn(Date, "now").mockReturnValue(started);
         fireEvent.click(screen.getByLabelText("Speak to FNDR"));
         await screen.findByLabelText("Stop and send");
+        expect(FakeMediaRecorder.instances[0]?.startArgs).toEqual([]);
+        expect(screen.getByText("Recording voice input")).toBeInTheDocument();
+        expect(screen.getByRole("region", { name: "Voice input activity" })).toBeInTheDocument();
         // Past the minimum hold, so the clip isn't discarded as a stray tap.
         clock.mockReturnValue(started + 1500);
         fireEvent.click(screen.getByLabelText("Stop and send"));
@@ -245,6 +323,29 @@ describe("NotchHud", () => {
         await waitFor(() =>
             expect(ipcMocks.fndrAnswer).toHaveBeenCalledWith("what did I read about vLLM", 3)
         );
+        expect(screen.getByText("Transcript ready")).toBeInTheDocument();
+        expect(screen.queryByText("what did I read about vLLM", {
+            selector: ".activity-trace *",
+        })).not.toBeInTheDocument();
+    });
+
+    it("categorizes microphone failures without exposing raw errors", async () => {
+        Object.defineProperty(navigator, "mediaDevices", {
+            value: {
+                getUserMedia: vi.fn().mockRejectedValue(new Error("/private/tmp/secret.wav")),
+            },
+            configurable: true,
+        });
+        render(<NotchHud />);
+        await openPanel();
+
+        fireEvent.click(screen.getByLabelText("Speak to FNDR"));
+
+        await screen.findByText("Microphone access failed");
+        expect(screen.getByRole("region", { name: "Voice input activity" })).toHaveTextContent(
+            "Failed",
+        );
+        expect(screen.queryByText(/secret\.wav/)).not.toBeInTheDocument();
     });
 
     it("backs out one layer at a time on Escape", async () => {
@@ -392,6 +493,63 @@ describe("NotchHud", () => {
             fireEvent.change(typed, { target: { value: "close the window" } });
             fireEvent.submit(typed.closest("form") as HTMLFormElement);
             await waitFor(() => expect(ipcMocks.computerUseSay).toHaveBeenCalledWith("close the window"));
+        });
+
+        it("traces computer-use requests and backend action events without exposing instructions or summaries", async () => {
+            const pendingSay = deferred<void>();
+            ipcMocks.computerUseSay.mockReturnValueOnce(pendingSay.promise);
+            render(<NotchHud />);
+            await openPanel();
+            fireEvent.click(await screen.findByRole("button", { name: "Do" }));
+            await screen.findByText("Listening for an instruction");
+
+            const typed = screen.getByLabelText("Instruction for FNDR");
+            fireEvent.change(typed, { target: { value: "open the confidential payroll file" } });
+            fireEvent.submit(typed.closest("form") as HTMLFormElement);
+
+            await screen.findByText("Sending instruction to computer use");
+            let trace = screen.getByRole("region", { name: "Computer use activity" });
+            expect(trace).not.toHaveTextContent("confidential payroll");
+            pendingSay.resolve();
+            await screen.findByText("Instruction accepted by computer use");
+
+            emit("computer-use://event", {
+                kind: "action",
+                itemId: "private-action-id",
+                tool: "click",
+                summary: "click Payroll.xlsx in a private folder",
+            });
+            await screen.findByText("Computer action started");
+            trace = screen.getByRole("region", { name: "Computer use activity" });
+            expect(trace).not.toHaveTextContent("Payroll.xlsx");
+
+            emit("computer-use://event", {
+                kind: "actionDone",
+                itemId: "private-action-id",
+                tool: "click",
+                ok: true,
+            });
+            await screen.findByText("Computer action completed");
+            fireEvent.click(screen.getByRole("button", { name: "Show Computer use activity details" }));
+            expect(screen.getByText("Instruction accepted by computer use").closest("li")).toHaveTextContent(
+                "Completed",
+            );
+            expect(screen.getByText("Computer action completed", {
+                selector: ".activity-trace-step strong",
+            }).closest("li")).toHaveTextContent("Completed");
+
+            emit("computer-use://event", {
+                kind: "approval",
+                requestKey: "private-request-key",
+                tool: "type_text",
+                summary: "type a private password into a private window",
+            });
+            await waitFor(() => expect(
+                screen.getByRole("region", { name: "Computer use activity" }),
+            ).toHaveTextContent("Waiting for action approval"));
+            trace = screen.getByRole("region", { name: "Computer use activity" });
+            expect(trace).not.toHaveTextContent("private password");
+            expect(trace).not.toHaveTextContent("private-request-key");
         });
     });
 });

@@ -88,8 +88,6 @@ export const VOICE_RECORDING = {
     /** Audio sample rate suggested to the user agent. */
     sampleRate: 48_000,
     channelCount: 1,
-    /** MediaRecorder slice for ondataavailable. */
-    timesliceMs: 250,
     /** Reject taps shorter than this — usually accidental presses. */
     minDurationMs: 350,
     /** Bitrate for selected MediaRecorder options. */

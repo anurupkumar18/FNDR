@@ -8,6 +8,7 @@ import {
     finishScreenGuideVisual,
     getScreenGuideCursorPosition,
     getScreenGuideSettings,
+    onScreenGuideState,
     onScreenGuideShortcut,
     onScreenGuideSubmit,
     reportScreenGuideState,
@@ -16,13 +17,18 @@ import {
     transcribeScreenGuideVoiceInput,
 } from "@/shared/ipc/tauri";
 import { VOICE_RECORDING } from "@/shared/utils/config";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
+    finishScreenGuideActivity,
+    recordScreenGuideActivity,
+    recordScreenGuideFrontendActivity,
     initialScreenGuideState,
     isLongEnoughVoiceClip,
     screenGuideReducer,
     screenGuideErrorMessage,
     toScreenGuideHistory,
 } from "./screenGuideState";
+import type { ActivityTraceSnapshot } from "@/shared/activity/activityTrace";
 import "./ScreenGuideOverlay.css";
 
 const MIN_ANSWER_VISIBLE_MS = 9_000;
@@ -92,6 +98,7 @@ function recorderOptions(): MediaRecorderOptions | undefined {
 
 export function ScreenGuideOverlay() {
     const [state, dispatch] = useReducer(screenGuideReducer, initialScreenGuideState);
+    const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [cursorOrigin, setCursorOrigin] = useState<ScreenGuideCursorPosition | null>(null);
     const stateRef = useRef(state);
     const settingsRef = useRef<ScreenGuideSettings | null>(null);
@@ -300,6 +307,12 @@ export function ScreenGuideOverlay() {
                 requestId !== requestIdRef.current ||
                 interactionEpoch !== interactionEpochRef.current
             ) return;
+            setActivityTrace((current) => recordScreenGuideFrontendActivity(current, {
+                stage: "voice_transcription",
+                generation: requestId,
+                status: "completed",
+                atMs: Date.now(),
+            }));
             await askQuestion(result.text, requestId, preferredCursor, interactionEpoch);
         } catch (reason) {
             if (
@@ -363,6 +376,12 @@ export function ScreenGuideOverlay() {
             stopGeneration: null as number | null,
         };
         pendingMediaAcquisitionRef.current = acquisition;
+        setActivityTrace((current) => recordScreenGuideFrontendActivity(current, {
+            stage: "microphone_access",
+            generation: requestId,
+            status: "running",
+            atMs: Date.now(),
+        }));
         try {
             // Microphone access is deliberately requested only after the press event.
             const stream = await navigator.mediaDevices.getUserMedia({
@@ -400,6 +419,13 @@ export function ScreenGuideOverlay() {
                 return;
             }
 
+            setActivityTrace((current) => recordScreenGuideFrontendActivity(current, {
+                stage: "microphone_access",
+                generation: requestId,
+                status: "completed",
+                atMs: Date.now(),
+            }));
+
             streamRef.current = stream;
             const options = recorderOptions();
             const recorder = options
@@ -434,7 +460,19 @@ export function ScreenGuideOverlay() {
                     fail("Hold the shortcut a little longer, then try again.");
                     return;
                 }
+                setActivityTrace((current) => recordScreenGuideFrontendActivity(current, {
+                    stage: "voice_recording",
+                    generation: requestId,
+                    status: "completed",
+                    atMs: stoppedAt,
+                }));
                 dispatch({ type: "transcribing" });
+                setActivityTrace((current) => recordScreenGuideFrontendActivity(current, {
+                    stage: "voice_transcription",
+                    generation: requestId,
+                    status: "running",
+                    atMs: Date.now(),
+                }));
                 void transcribeRecording(
                     chunks,
                     mimeTypeRef.current,
@@ -444,7 +482,13 @@ export function ScreenGuideOverlay() {
                 );
             };
 
-            recorder.start(VOICE_RECORDING.timesliceMs);
+            recorder.start();
+            setActivityTrace((current) => recordScreenGuideFrontendActivity(current, {
+                stage: "voice_recording",
+                generation: requestId,
+                status: "running",
+                atMs: recordingStartedAtRef.current,
+            }));
             try {
                 await screenGuideMicrophoneStarted(requestId);
             } catch {
@@ -520,6 +564,7 @@ export function ScreenGuideOverlay() {
         }
         if (mountedRef.current) {
             dispatch({ type: "idle" });
+            setActivityTrace(null);
             setCursorOrigin(null);
         }
     }, [acknowledgeStoppedOrDefer, clearDismissTimer, stopRecordingWithoutTranscription]);
@@ -574,6 +619,32 @@ export function ScreenGuideOverlay() {
                     return;
                 }
                 disposers.push(disposeSubmit);
+
+                const disposeState = await onScreenGuideState((nextStatus) => {
+                    if (!active || nextStatus.generation !== requestIdRef.current) return;
+                    const activityStage = nextStatus.activity_stage;
+                    if (activityStage) {
+                        setActivityTrace((current) => recordScreenGuideActivity(current, {
+                            stage: activityStage,
+                            targetApp: nextStatus.target_app?.trim() || null,
+                            generation: nextStatus.generation,
+                            atMs: Date.now(),
+                        }));
+                    } else if (nextStatus.phase === "idle") {
+                        setActivityTrace(null);
+                    } else if (nextStatus.phase === "error") {
+                        setActivityTrace((current) =>
+                            finishScreenGuideActivity(current, "failed", Date.now()));
+                    } else if (nextStatus.phase === "answer") {
+                        setActivityTrace((current) =>
+                            finishScreenGuideActivity(current, "completed", Date.now()));
+                    }
+                });
+                if (!active) {
+                    disposeState();
+                    return;
+                }
+                disposers.push(disposeState);
                 readyAttempt = setScreenGuideOverlayReady(true);
                 await readyAttempt;
             } catch {
@@ -603,6 +674,16 @@ export function ScreenGuideOverlay() {
         }).catch(() => undefined);
     }, [state.message, state.phase]);
 
+    useEffect(() => {
+        if (state.phase === "error") {
+            setActivityTrace((current) =>
+                finishScreenGuideActivity(current, "failed", Date.now()));
+        } else if (state.phase === "answer") {
+            setActivityTrace((current) =>
+                finishScreenGuideActivity(current, "completed", Date.now()));
+        }
+    }, [state.phase]);
+
     if (state.phase === "idle") return null;
 
     const cue = state.pointCue;
@@ -617,11 +698,7 @@ export function ScreenGuideOverlay() {
 
     return (
         <div className={`sg-overlay sg-overlay--${state.phase}`} aria-atomic="true">
-            <div
-                className="sg-overlay-card"
-                role={state.phase === "error" ? "alert" : "status"}
-                aria-live={state.phase === "error" ? "assertive" : "polite"}
-            >
+            <div className="sg-overlay-card">
                 {state.phase === "listening" && (
                     <span className="sg-overlay-wave" aria-hidden="true">
                         <i /><i /><i /><i />
@@ -632,10 +709,27 @@ export function ScreenGuideOverlay() {
                 )}
                 <div className="sg-overlay-copy">
                     <span className="sg-overlay-eyebrow">SCREEN GUIDE</span>
+                    {activityTrace && (
+                        <ActivityTrace
+                            trace={activityTrace}
+                            className="sg-overlay-activity"
+                            announce={state.phase !== "answer" && state.phase !== "error"}
+                            showDetails={false}
+                        />
+                    )}
                     {state.phase === "answer" ? (
-                        <p>{state.answer}</p>
+                        <p role="status" aria-live="polite">{state.answer}</p>
+                    ) : activityTrace && state.phase === "thinking" ? (
+                        <small className="sg-overlay-detail">
+                            Observable system stage only; prompt and screen contents stay hidden.
+                        </small>
                     ) : (
-                        <strong>{state.message}</strong>
+                        <strong
+                            role={state.phase === "error" ? "alert" : activityTrace ? undefined : "status"}
+                            aria-live={state.phase === "error" ? "assertive" : activityTrace ? undefined : "polite"}
+                        >
+                            {state.message}
+                        </strong>
                     )}
                 </div>
             </div>

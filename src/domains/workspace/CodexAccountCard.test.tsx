@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { CodexAccountStatus, CodexLoginCompleted } from "@/shared/ipc/tauri";
 
 const eventHandlers = new Map<string, (payload: unknown) => void>();
@@ -66,7 +66,9 @@ describe("CodexAccountCard", () => {
 
         fireEvent.click(await screen.findByRole("button", { name: "Sign in with ChatGPT" }));
 
-        expect(await screen.findByRole("status")).toHaveTextContent("Finish signing in in your browser");
+        const trace = await screen.findByLabelText("ChatGPT account activity");
+        expect(within(trace).getByRole("status")).toHaveTextContent("Browser sign-in started");
+        expect(trace).not.toHaveTextContent("auth.openai.com");
         expect(openExternalUrl).toHaveBeenCalledWith("https://auth.openai.com/x");
 
         completeLogin({ loginId: "login-1", success: true, error: null });
@@ -77,7 +79,7 @@ describe("CodexAccountCard", () => {
         expect(onStatusChange).toHaveBeenLastCalledWith(signedIn);
     });
 
-    it("cancels a pending sign-in and surfaces the failure", async () => {
+    it("cancels a pending sign-in and ignores its late completion event", async () => {
         vi.mocked(codexAccountStatus).mockResolvedValue(signedOut);
         vi.mocked(codexLoginStart).mockResolvedValue({ loginId: "login-2", authUrl: "https://auth.openai.com/y" });
         render(<CodexAccountCard onStatusChange={vi.fn()} />);
@@ -87,8 +89,31 @@ describe("CodexAccountCard", () => {
 
         await waitFor(() => expect(codexLoginCancel).toHaveBeenCalledWith("login-2"));
         completeLogin({ loginId: "login-2", success: false, error: "Sign-in cancelled." });
-        expect(await screen.findByRole("alert")).toHaveTextContent("Sign-in cancelled.");
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+        expect(screen.getByLabelText("ChatGPT account activity")).toHaveTextContent(
+            "Browser sign-in cancelled",
+        );
         expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled();
+    });
+
+    it("ignores a completion event from an older browser sign-in", async () => {
+        vi.mocked(codexAccountStatus).mockResolvedValue(signedOut);
+        vi.mocked(codexLoginStart).mockResolvedValue({
+            loginId: "login-current",
+            authUrl: "https://auth.openai.com/current",
+        });
+        render(<CodexAccountCard onStatusChange={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Sign in with ChatGPT" }));
+        expect(await screen.findByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+        completeLogin({ loginId: "login-old", success: true, error: null });
+
+        expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+        expect(codexAccountStatus).toHaveBeenCalledTimes(1);
+        expect(screen.getByLabelText("ChatGPT account activity")).toHaveTextContent(
+            "Browser sign-in started",
+        );
     });
 
     it("explains a broken Codex install instead of offering sign-in", async () => {

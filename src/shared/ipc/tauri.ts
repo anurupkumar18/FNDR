@@ -2223,10 +2223,27 @@ export type ScreenGuidePhase =
     | "answer"
     | "error";
 
+export type ScreenGuideActivityStage =
+    | "preparing"
+    | "searching_file_names"
+    | "hiding_fndr"
+    | "verifying_target"
+    | "capturing"
+    | "reading_text"
+    | "checking_on_device_model"
+    | "answering_on_device"
+    | "using_grounded_fallback"
+    | "answering_chat_gpt"
+    | "speech_started";
+
 export interface ScreenGuideStateEvent {
     phase: ScreenGuidePhase;
     message?: string | null;
     generation: number;
+    /** Closed, privacy-safe progress vocabulary. Never contains captured content. */
+    activity_stage?: ScreenGuideActivityStage | null;
+    /** Process display name only; never a title, URL, path, prompt, or OCR text. */
+    target_app?: string | null;
 }
 
 export interface ScreenGuideShortcutEvent {

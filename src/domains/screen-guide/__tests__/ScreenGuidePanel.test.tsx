@@ -21,6 +21,8 @@ describe("ScreenGuidePanel", () => {
         phase: string;
         message: string | null;
         generation: number;
+        activity_stage?: "reading_text" | "answering_chat_gpt";
+        target_app?: string | null;
     }) => void) | null;
 
     beforeEach(() => {
@@ -158,6 +160,32 @@ describe("ScreenGuidePanel", () => {
         expect(await screen.findByText("Enabled")).toBeInTheDocument();
         expect(screen.queryByText("Listening…")).not.toBeInTheDocument();
         expect(mocks.onScreenGuideState).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows typed live activity without exposing captured content", async () => {
+        mocks.getScreenGuideSettings.mockResolvedValue({
+            enabled: true,
+            shortcut: "Control+Alt+Space",
+            speak_responses: true,
+            show_cursor: true,
+        });
+        render(<ScreenGuidePanel isVisible onClose={() => {}} />);
+        await waitFor(() => expect(stateHandler).not.toBeNull());
+
+        act(() => stateHandler?.({
+            phase: "thinking",
+            message: "Answering with ChatGPT…",
+            generation: 3,
+            activity_stage: "answering_chat_gpt",
+            target_app: null,
+        }));
+
+        expect(screen.getByRole("region", { name: "Screen Guide activity" }))
+            .toHaveTextContent("Answering with ChatGPT");
+        expect(screen.getAllByRole("status")).toHaveLength(1);
+        fireEvent.click(screen.getByRole("button", { name: "Show Screen Guide activity details" }));
+        expect(screen.getByText(/No prompts, captured text, or private model reasoning/i))
+            .toBeInTheDocument();
     });
 
     it("surfaces shortcut conflicts and restores the registered shortcut", async () => {

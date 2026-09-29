@@ -258,6 +258,10 @@
     color: var(--text-muted);
 }
 
+.capture-activity-trace {
+    margin-top: 12px;
+}
+
 .capture-stats--pipeline {
     flex-direction: column;
     align-items: stretch;

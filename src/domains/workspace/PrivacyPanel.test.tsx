@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PrivacyPanel } from "./PrivacyPanel";
+import { addSiteToBlocklist } from "@/shared/ipc/tauri";
 
 const getPrivacyAlerts = vi.fn().mockResolvedValue([]);
 
@@ -31,5 +32,26 @@ describe("PrivacyPanel", () => {
         ).toBeInTheDocument();
         expect(screen.queryByText(/your data is secure/i)).toBeNull();
         await waitFor(() => expect(getPrivacyAlerts).toHaveBeenCalled());
+    });
+
+    it("traces destructive blocklist cleanup without exposing the site", async () => {
+        getPrivacyAlerts
+            .mockResolvedValueOnce([{
+                id: "alert-1",
+                domain_or_title: "private.example",
+            }])
+            .mockResolvedValueOnce([]);
+        vi.mocked(addSiteToBlocklist).mockResolvedValue(undefined);
+
+        render(<PrivacyPanel isVisible onClose={() => {}} embedded />);
+        fireEvent.click(await screen.findByRole("button", { name: "Add to Blocklist" }));
+
+        const trace = await screen.findByRole("region", { name: "Privacy cleanup activity" });
+        expect(trace).toHaveTextContent("Blocklist and local cleanup completed");
+        fireEvent.click(within(trace).getByRole("button", {
+            name: "Show Privacy cleanup activity details",
+        }));
+        expect(trace).toHaveTextContent("FNDR privacy service");
+        expect(trace).not.toHaveTextContent("private.example");
     });
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const ipc = vi.hoisted(() => ({
     getHermesBridgeStatus: vi.fn(),
@@ -66,6 +66,27 @@ describe("AgentWorkspace", () => {
         expect(screen.getByRole("button", { name: /not set up/i })).toBeInTheDocument();
     });
 
+    it("traces the actual Hermes installation request without exposing backend errors", async () => {
+        let finishInstall!: () => void;
+        ipc.getHermesBridgeStatus.mockResolvedValue({
+            ...hermes(false),
+            installed: false,
+            bundled_repo_available: false,
+        });
+        ipc.installHermesBridge.mockReturnValue(new Promise<void>((resolve) => {
+            finishInstall = resolve;
+        }));
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Install Hermes" }));
+
+        const trace = await screen.findByLabelText("Agent setup activity");
+        expect(within(trace).getByRole("status")).toHaveTextContent("Requesting Hermes installation");
+        expect(within(trace).getByRole("status")).toHaveTextContent("Running");
+        expect(trace).not.toHaveTextContent("curl");
+        finishInstall();
+    });
+
     it("sends a message with the memories the user attached", async () => {
         render(<AgentWorkspace isVisible onClose={vi.fn()} />);
         const input = await screen.findByLabelText("Message Hermes");
@@ -85,6 +106,130 @@ describe("AgentWorkspace", () => {
         const sent = screen.getByText("Summarize what I read").closest(".aw-message") as HTMLElement;
         expect(within(sent).getByText("Chunking paper notes")).toBeInTheDocument();
         await waitFor(() => expect(ipc.listAgentChats).toHaveBeenCalledTimes(2));
+    });
+
+    it("shows the real agent request boundary and model without copying message content into the trace", async () => {
+        let finishRequest!: (value: { response_id: string; conversation_id: string; content: string }) => void;
+        ipc.sendHermesMessage.mockReturnValueOnce(new Promise((resolve) => {
+            finishRequest = resolve;
+        }));
+
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+        const input = await screen.findByLabelText("Message Hermes");
+        await waitFor(() => expect(input).toBeEnabled());
+
+        fireEvent.change(input, { target: { value: "Private planning prompt" } });
+        fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+        const trace = await screen.findByLabelText("Agent request activity");
+        expect(within(trace).getByRole("status")).toHaveTextContent("Waiting for ChatGPT · gpt-6-sol");
+        expect(within(trace).getByRole("status")).toHaveTextContent("Hermes bridge");
+        expect(trace).not.toHaveTextContent("Private planning prompt");
+        expect(trace.parentElement?.closest("[aria-live]")).toBeNull();
+
+        finishRequest({ response_id: "r-live", conversation_id: "c-live", content: "A verified response." });
+
+        await waitFor(() => {
+            expect(within(trace).getByRole("status")).toHaveTextContent("Response received from ChatGPT · gpt-6-sol");
+        });
+        expect(within(trace).getByRole("status")).toHaveTextContent("Completed");
+    });
+
+    it("does not append an old response or trace after starting a new chat", async () => {
+        let finishRequest!: (value: { response_id: string; conversation_id: string; content: string }) => void;
+        ipc.sendHermesMessage.mockReturnValueOnce(new Promise((resolve) => {
+            finishRequest = resolve;
+        }));
+
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+        const input = await screen.findByLabelText("Message Hermes");
+        await waitFor(() => expect(input).toBeEnabled());
+
+        fireEvent.change(input, { target: { value: "Request for the old chat" } });
+        fireEvent.click(screen.getByRole("button", { name: "Send" }));
+        expect(await screen.findByLabelText("Agent request activity")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+        expect(screen.queryByLabelText("Agent request activity")).toBeNull();
+        expect(screen.getByLabelText("Message Hermes")).toBeEnabled();
+
+        finishRequest({
+            response_id: "stale-response",
+            conversation_id: "old-chat",
+            content: "This reply belongs to the old chat.",
+        });
+
+        await waitFor(() => expect(ipc.sendHermesMessage).toHaveBeenCalledTimes(1));
+        expect(screen.queryByText("This reply belongs to the old chat.")).toBeNull();
+        expect(screen.queryByLabelText("Agent request activity")).toBeNull();
+    });
+
+    it("does not let an older chat load overwrite a newer selection", async () => {
+        const oldChat = {
+            id: "fndr-old",
+            title: "Old plan",
+            createdAt: 1,
+            updatedAt: 2,
+            messages: [{ role: "assistant", content: "Old chat response", at: 2, memories: [] }],
+        };
+        const newerChat = {
+            id: "fndr-newer",
+            title: "Newer plan",
+            createdAt: 3,
+            updatedAt: 4,
+            messages: [{ role: "assistant", content: "Newer chat response", at: 4, memories: [] }],
+        };
+        const pending = new Map<string, (chat: typeof oldChat) => void>();
+        ipc.listAgentChats.mockResolvedValue([
+            { id: oldChat.id, title: oldChat.title, updatedAt: oldChat.updatedAt, messageCount: 1 },
+            { id: newerChat.id, title: newerChat.title, updatedAt: newerChat.updatedAt, messageCount: 1 },
+        ]);
+        ipc.getAgentChat.mockImplementation((id: string) => new Promise<typeof oldChat>((resolve) => {
+            pending.set(id, resolve);
+        }));
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole("button", { name: /^Old plan/ }));
+        fireEvent.click(screen.getByRole("button", { name: /^Newer plan/ }));
+        await waitFor(() => expect(pending.size).toBe(2));
+
+        await act(async () => {
+            pending.get(newerChat.id)?.(newerChat);
+        });
+        expect(await screen.findByText("Newer chat response")).toBeInTheDocument();
+
+        await act(async () => {
+            pending.get(oldChat.id)?.(oldChat);
+        });
+        expect(screen.getByText("Newer chat response")).toBeInTheDocument();
+        expect(screen.queryByText("Old chat response")).not.toBeInTheDocument();
+    });
+
+    it("does not let a pending chat load overwrite a new chat", async () => {
+        const oldChat = {
+            id: "fndr-old",
+            title: "Old plan",
+            createdAt: 1,
+            updatedAt: 2,
+            messages: [{ role: "assistant", content: "Old chat response", at: 2, memories: [] }],
+        };
+        let finishLoad!: (chat: typeof oldChat) => void;
+        ipc.listAgentChats.mockResolvedValue([
+            { id: oldChat.id, title: oldChat.title, updatedAt: oldChat.updatedAt, messageCount: 1 },
+        ]);
+        ipc.getAgentChat.mockReturnValue(new Promise<typeof oldChat>((resolve) => {
+            finishLoad = resolve;
+        }));
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole("button", { name: /^Old plan/ }));
+        fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+        await act(async () => {
+            finishLoad(oldChat);
+        });
+
+        expect(screen.queryByText("Old chat response")).not.toBeInTheDocument();
+        expect(screen.getByText("What should we work on?")).toBeInTheDocument();
     });
 
     it("reopens a past chat and keeps its conversation id", async () => {

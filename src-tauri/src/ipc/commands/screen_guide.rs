@@ -39,6 +39,8 @@ const MAX_SCREEN_GUIDE_SPEECH_CHARS: usize = 2_000;
 const MAX_SCREEN_GUIDE_ANSWER_CHARS: usize = 360;
 const MAX_PENDING_SCREEN_GUIDE_EVENTS: usize = 16;
 const OVERLAY_CAPTURE_SETTLE: Duration = Duration::from_millis(80);
+const SCREEN_GUIDE_CONTEXT_RETRY_INTERVAL: Duration = Duration::from_millis(40);
+const SCREEN_GUIDE_CONTEXT_MAX_ATTEMPTS: usize = 16;
 const SCREEN_GUIDE_MICROPHONE_STOP_ACK_TIMEOUT: Duration = Duration::from_millis(750);
 const SCREEN_GUIDE_MICROPHONE_MAX_DURATION: Duration = Duration::from_secs(65);
 const SCREEN_GUIDE_HIDDEN_LEASE: Duration = Duration::from_secs(150);
@@ -525,11 +527,31 @@ pub enum ScreenGuideUiPhase {
     Error,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenGuideActivityStage {
+    Preparing,
+    SearchingFileNames,
+    HidingFndr,
+    VerifyingTarget,
+    Capturing,
+    ReadingText,
+    CheckingOnDeviceModel,
+    AnsweringOnDevice,
+    UsingGroundedFallback,
+    AnsweringChatGpt,
+    SpeechStarted,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScreenGuideStatePayload {
     pub phase: ScreenGuideUiPhase,
     pub message: Option<String>,
     pub generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_stage: Option<ScreenGuideActivityStage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_app: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1212,6 +1234,56 @@ fn publish_screen_guide_state<R: tauri::Runtime>(
         .map_err(|err| err.to_string())
 }
 
+fn screen_guide_activity_message(
+    stage: ScreenGuideActivityStage,
+    _target_app: Option<&str>,
+) -> String {
+    match stage {
+        ScreenGuideActivityStage::Preparing => "Preparing this turn…".to_string(),
+        ScreenGuideActivityStage::SearchingFileNames => "Searching allowed file names…".to_string(),
+        ScreenGuideActivityStage::HidingFndr => "Hiding FNDR from the capture…".to_string(),
+        ScreenGuideActivityStage::VerifyingTarget => "Verifying the target window…".to_string(),
+        ScreenGuideActivityStage::Capturing => "Capturing the main display…".to_string(),
+        ScreenGuideActivityStage::ReadingText => "Reading visible text…".to_string(),
+        ScreenGuideActivityStage::CheckingOnDeviceModel => {
+            "Checking on-device model availability…".to_string()
+        }
+        ScreenGuideActivityStage::AnsweringOnDevice => {
+            "Answering with the on-device model…".to_string()
+        }
+        ScreenGuideActivityStage::UsingGroundedFallback => {
+            "Using OCR-grounded fallback…".to_string()
+        }
+        ScreenGuideActivityStage::AnsweringChatGpt => "Answering with ChatGPT…".to_string(),
+        ScreenGuideActivityStage::SpeechStarted => "Started macOS speech.".to_string(),
+    }
+}
+
+fn publish_screen_guide_activity<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    generation: u64,
+    stage: ScreenGuideActivityStage,
+    target_app: Option<&str>,
+) {
+    let payload = screen_guide_activity_payload(generation, stage, target_app);
+    let _ = publish_screen_guide_state(app, payload);
+}
+
+fn screen_guide_activity_payload(
+    generation: u64,
+    stage: ScreenGuideActivityStage,
+    _target_app: Option<&str>,
+) -> ScreenGuideStatePayload {
+    let message = Some(screen_guide_activity_message(stage, None));
+    ScreenGuideStatePayload {
+        phase: ScreenGuideUiPhase::Thinking,
+        message,
+        generation,
+        activity_stage: Some(stage),
+        target_app: None,
+    }
+}
+
 fn reset_screen_guide_state<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _publish = SCREEN_GUIDE_STATE_PUBLISH.lock();
     let (generation, enabled) = {
@@ -1226,6 +1298,8 @@ fn reset_screen_guide_state<R: tauri::Runtime>(app: &AppHandle<R>) {
             phase: ScreenGuideUiPhase::Idle,
             message: None,
             generation,
+            activity_stage: None,
+            target_app: None,
         },
     );
 }
@@ -1288,6 +1362,10 @@ pub async fn report_screen_guide_state(
         .map(str::trim)
         .filter(|message| !message.is_empty())
         .map(|message| truncate_chars(message, MAX_SCREEN_GUIDE_STATE_MESSAGE_CHARS));
+    if let Some(stage) = state.activity_stage {
+        state.message = Some(screen_guide_activity_message(stage, None));
+    }
+    state.target_app = None;
     publish_screen_guide_state(&app, state)
 }
 
@@ -2165,18 +2243,31 @@ pub async fn ask_screen_guide(
         schedule_screen_guide_hidden_lease(&app, generation);
         (generation, cancel)
     };
+    publish_screen_guide_activity(
+        &app,
+        request_generation,
+        ScreenGuideActivityStage::Preparing,
+        None,
+    );
 
     // Explicit file-finding requests use Spotlight's filename index and never
     // need Screen Recording access. The narrow route is intentionally before
     // capture preflight; ambiguous "find" questions continue through visible
     // screen guidance instead.
     if let Some(lookup) = screen_guide_file_lookup(&question) {
+        publish_screen_guide_activity(
+            &app,
+            request_generation,
+            ScreenGuideActivityStage::SearchingFileNames,
+            None,
+        );
         let matches = find_screen_guide_files(lookup.clone(), turn_cancel).await?;
         ensure_screen_guide_request_current(state.inner(), request_generation)?;
         if state.inner().is_incognito.load(Ordering::SeqCst) {
             return Err(private_screen_message());
         }
         return finish_screen_guide_answer(
+            &app,
             state.inner(),
             &settings,
             request_generation,
@@ -2194,7 +2285,16 @@ pub async fn ask_screen_guide(
             "Screen Guide needs Screen Recording access. {permission_detail}"
         ));
     }
+    if !crate::accessibility::has_accessibility_permission() {
+        return Err(screen_guide_accessibility_permission_error());
+    }
 
+    publish_screen_guide_activity(
+        &app,
+        request_generation,
+        ScreenGuideActivityStage::HidingFndr,
+        None,
+    );
     let capture_coordinator = SCREEN_GUIDE_CAPTURE_COORDINATOR.lock().await;
     {
         let _lifecycle = SCREEN_GUIDE_LIFECYCLE.lock();
@@ -2260,9 +2360,47 @@ pub async fn ask_screen_guide(
     schedule_screen_guide_hidden_lease(&app, request_generation);
 
     // Re-evaluate after all FNDR surfaces are hidden and, when necessary,
-    // macOS has activated the app that was behind FNDR.
-    std::thread::sleep(OVERLAY_CAPTURE_SETTLE);
-    let context = crate::capture::macos::get_frontmost_app_info_fresh();
+    // macOS has activated the app that was behind FNDR. NSWorkspace can report
+    // the new frontmost PID before AXFocusedApplication and AXFocusedWindow
+    // catch up, so wait for those two views to converge instead of trusting a
+    // single sample after a blind delay.
+    publish_screen_guide_activity(
+        &app,
+        request_generation,
+        ScreenGuideActivityStage::VerifyingTarget,
+        None,
+    );
+    let context = match wait_for_screen_guide_capture_context(
+        request_generation,
+        crate::capture::macos::get_frontmost_app_info_fresh,
+        || ensure_screen_guide_request_current(state.inner(), request_generation),
+        SCREEN_GUIDE_CONTEXT_MAX_ATTEMPTS,
+        SCREEN_GUIDE_CONTEXT_RETRY_INTERVAL,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(context_err) => {
+            let err = if crate::accessibility::has_accessibility_permission() {
+                context_err
+            } else {
+                screen_guide_accessibility_permission_error()
+            };
+            restore_screen_guide_capture_if_owned(
+                &app,
+                state.inner(),
+                request_generation,
+                &deferred_restore,
+            );
+            return Err(err);
+        }
+    };
+    publish_screen_guide_activity(
+        &app,
+        request_generation,
+        ScreenGuideActivityStage::VerifyingTarget,
+        Some(&context.app_name),
+    );
 
     if let Err(err) = ensure_screen_guide_request_current_or_restore(
         &app,
@@ -2316,6 +2454,12 @@ pub async fn ask_screen_guide(
     // Omnibar/Autofill cannot reopen and a newer Screen Guide overlay cannot
     // appear inside the synchronous CG capture. All slower context probes stay
     // outside this section.
+    publish_screen_guide_activity(
+        &app,
+        request_generation,
+        ScreenGuideActivityStage::Capturing,
+        None,
+    );
     let capture_result = (|| -> Result<(ScreenGuideDisplaySignature, Vec<u8>), String> {
         let _lifecycle = SCREEN_GUIDE_LIFECYCLE.lock();
         ensure_screen_guide_request_current(state.inner(), request_generation)?;
@@ -2407,6 +2551,12 @@ pub async fn ask_screen_guide(
     let codex_screenshot = (settings.model == ScreenGuideModel::Codex && settings.send_screenshot_to_codex)
         .then(|| image_data.clone());
 
+    publish_screen_guide_activity(
+        &app,
+        request_generation,
+        ScreenGuideActivityStage::ReadingText,
+        None,
+    );
     let ocr = tokio::task::spawn_blocking(move || {
         let engine =
             OcrEngine::new().map_err(|_| "Screen Guide OCR is unavailable.".to_string())?;
@@ -2435,6 +2585,7 @@ pub async fn ask_screen_guide(
 
     if ocr.plain_text.trim().is_empty() {
         let result = finish_screen_guide_answer(
+            &app,
             state.inner(),
             &settings,
             request_generation,
@@ -2475,6 +2626,12 @@ pub async fn ask_screen_guide(
 
     let inference_started = Instant::now();
     let raw_answer = if settings.model == ScreenGuideModel::Codex {
+        publish_screen_guide_activity(
+            &app,
+            request_generation,
+            ScreenGuideActivityStage::AnsweringChatGpt,
+            None,
+        );
         tracing::info!(screenshot = codex_screenshot.is_some(), "screen_guide:codex_started");
         let answer = crate::ipc::commands::codex_account::answer_screen_guide_with_codex(
             &question,
@@ -2503,44 +2660,56 @@ pub async fn ask_screen_guide(
             }
         }
     } else {
-    let inference_engine = state.inner().ensure_inference_engine().await;
-    ensure_screen_guide_request_current_or_restore(
-        &app,
-        state.inner(),
-        request_generation,
-        &deferred_restore,
-    )?;
-    match inference_engine {
-        Ok(Some(engine)) => {
-            tracing::info!("screen_guide:inference_started");
-            let _pipeline_guard = state.inner().model_pipeline_lock.lock().await;
-            ensure_screen_guide_request_current_or_restore(
-                &app,
-                state.inner(),
-                request_generation,
-                &deferred_restore,
-            )?;
-            let answer = engine
-                .answer_screen_guide(
-                    &question,
-                    &screen_text,
-                    &history_text,
-                    Arc::clone(&turn_cancel),
-                    SCREEN_GUIDE_INFERENCE_TIMEOUT,
-                )
-                .await;
-            tracing::info!(
-                elapsed_ms = inference_started.elapsed().as_millis() as u64,
-                usable = is_usable_model_answer(&answer),
-                "screen_guide:inference_finished"
-            );
-            answer
+        publish_screen_guide_activity(
+            &app,
+            request_generation,
+            ScreenGuideActivityStage::CheckingOnDeviceModel,
+            None,
+        );
+        let inference_engine = state.inner().ensure_inference_engine().await;
+        ensure_screen_guide_request_current_or_restore(
+            &app,
+            state.inner(),
+            request_generation,
+            &deferred_restore,
+        )?;
+        match inference_engine {
+            Ok(Some(engine)) => {
+                publish_screen_guide_activity(
+                    &app,
+                    request_generation,
+                    ScreenGuideActivityStage::AnsweringOnDevice,
+                    None,
+                );
+                tracing::info!("screen_guide:inference_started");
+                let _pipeline_guard = state.inner().model_pipeline_lock.lock().await;
+                ensure_screen_guide_request_current_or_restore(
+                    &app,
+                    state.inner(),
+                    request_generation,
+                    &deferred_restore,
+                )?;
+                let answer = engine
+                    .answer_screen_guide(
+                        &question,
+                        &screen_text,
+                        &history_text,
+                        Arc::clone(&turn_cancel),
+                        SCREEN_GUIDE_INFERENCE_TIMEOUT,
+                    )
+                    .await;
+                tracing::info!(
+                    elapsed_ms = inference_started.elapsed().as_millis() as u64,
+                    usable = is_usable_model_answer(&answer),
+                    "screen_guide:inference_finished"
+                );
+                answer
+            }
+            Ok(None) | Err(_) => {
+                tracing::warn!("screen_guide:inference_engine_unavailable");
+                String::new()
+            }
         }
-        Ok(None) | Err(_) => {
-            tracing::warn!("screen_guide:inference_engine_unavailable");
-            String::new()
-        }
-    }
     };
 
     ensure_screen_guide_request_current_or_restore(
@@ -2549,7 +2718,16 @@ pub async fn ask_screen_guide(
         request_generation,
         &deferred_restore,
     )?;
-    let parsed = if is_usable_model_answer(&raw_answer) {
+    let has_usable_model_answer = is_usable_model_answer(&raw_answer);
+    if !has_usable_model_answer {
+        publish_screen_guide_activity(
+            &app,
+            request_generation,
+            ScreenGuideActivityStage::UsingGroundedFallback,
+            None,
+        );
+    }
+    let parsed = if has_usable_model_answer {
         let mut grounded = ground_screen_guide_point_cue(
             parse_screen_guide_response(&raw_answer),
             &ocr.lines,
@@ -2596,7 +2774,8 @@ pub async fn ask_screen_guide(
             }
         }
     }
-    let result = finish_screen_guide_answer(state.inner(), &settings, request_generation, parsed);
+    let result =
+        finish_screen_guide_answer(&app, state.inner(), &settings, request_generation, parsed);
     tracing::info!(
         elapsed_ms = ask_started.elapsed().as_millis() as u64,
         ok = result.is_ok(),
@@ -3303,7 +3482,8 @@ fn screen_guide_lease_matches(
     enabled && generation == current_generation && epoch == current_epoch
 }
 
-fn finish_screen_guide_answer(
+fn finish_screen_guide_answer<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     state: &AppState,
     settings: &ScreenGuideConfig,
     request_generation: u64,
@@ -3324,8 +3504,26 @@ fn finish_screen_guide_answer(
     }
     answer.answer = truncate_chars(answer.answer.trim(), MAX_SCREEN_GUIDE_ANSWER_CHARS);
     if settings.speak_responses {
+        // The runtime lock deliberately stays held through process launch so a
+        // new request cannot race speech startup. Publish only after `say`
+        // accepted the text; a launch failure must not look like active speech.
         // Speech failure should not discard an otherwise useful local answer.
-        let _ = start_say_process(&answer.answer);
+        match start_say_process(&answer.answer) {
+            Ok(true) => {
+                // Emit directly here instead of re-locking through
+                // `publish_screen_guide_state` while the runtime lock is held.
+                let _ = app.emit(
+                    SCREEN_GUIDE_STATE_EVENT,
+                    screen_guide_activity_payload(
+                        request_generation,
+                        ScreenGuideActivityStage::SpeechStarted,
+                        None,
+                    ),
+                );
+            }
+            Ok(false) => {}
+            Err(_) => tracing::warn!("screen_guide:speech_start_failed"),
+        }
     }
     Ok(answer)
 }
@@ -3786,27 +3984,136 @@ fn private_screen_message() -> String {
     "Screen Guide will not inspect this private screen.".to_string()
 }
 
+fn screen_guide_accessibility_permission_error() -> String {
+    "Screen Guide needs Accessibility access to verify the active window. Enable FNDR—or, for a development build, the app that launched FNDR—in System Settings → Privacy & Security → Accessibility, then restart that app."
+        .to_string()
+}
+
+fn screen_guide_context_probe_rank(context: &FrontmostAppContext) -> u8 {
+    if Blocklist::is_internal_app(&context.app_name, context.bundle_id.as_deref())
+        || context.app_name.trim().is_empty()
+        || context.app_name.eq_ignore_ascii_case("unknown")
+    {
+        return 0;
+    }
+    if !context.window_title_verified {
+        return 1;
+    }
+    if crate::capture::macos::is_browser_app(&context.app_name)
+        && context.browser_url.is_none()
+    {
+        return 2;
+    }
+    3
+}
+
+fn screen_guide_context_is_ready_after_hide(context: &FrontmostAppContext) -> bool {
+    screen_guide_context_probe_rank(context) == 3
+}
+
+fn screen_guide_context_matches_latched_app(
+    latched: &FrontmostAppContext,
+    current: &FrontmostAppContext,
+) -> bool {
+    match latched.bundle_id.as_deref() {
+        Some(expected_bundle_id) => current.bundle_id.as_deref() == Some(expected_bundle_id),
+        None => latched.app_name.eq_ignore_ascii_case(&current.app_name),
+    }
+}
+
+async fn wait_for_screen_guide_capture_context<P, C>(
+    request_id: u64,
+    mut probe: P,
+    mut ensure_current: C,
+    max_attempts: usize,
+    retry_interval: Duration,
+) -> Result<FrontmostAppContext, String>
+where
+    P: FnMut() -> FrontmostAppContext,
+    C: FnMut() -> Result<(), String>,
+{
+    let attempts = max_attempts.max(1);
+    let mut best_context = None;
+    let mut best_rank = 0;
+    let mut latched_external_context: Option<FrontmostAppContext> = None;
+    for attempt in 0..attempts {
+        ensure_current()?;
+        let context = probe();
+        let rank = screen_guide_context_probe_rank(&context);
+        let internal = Blocklist::is_internal_app(&context.app_name, context.bundle_id.as_deref());
+        let has_external_identity = !internal
+            && !context.app_name.trim().is_empty()
+            && !context.app_name.eq_ignore_ascii_case("unknown");
+        if latched_external_context.is_none() && has_external_identity {
+            latched_external_context = Some(context.clone());
+        }
+        let matches_latched_target = latched_external_context
+            .as_ref()
+            .is_some_and(|latched| screen_guide_context_matches_latched_app(latched, &context));
+        tracing::info!(
+            request_id,
+            attempt = attempt + 1,
+            max_attempts = attempts,
+            app_name = %context.app_name,
+            bundle_id = context.bundle_id.as_deref().unwrap_or(""),
+            internal,
+            window_title_verified = context.window_title_verified,
+            browser_url_present = context.browser_url.is_some(),
+            matches_latched_target,
+            rank,
+            "screen_guide:context_probe"
+        );
+        if matches_latched_target && screen_guide_context_is_ready_after_hide(&context) {
+            return Ok(context);
+        }
+        if (latched_external_context.is_none() || matches_latched_target)
+            && (best_context.is_none() || rank > best_rank)
+        {
+            best_rank = rank;
+            best_context = Some(context);
+        }
+        if attempt + 1 < attempts {
+            tokio::time::sleep(retry_interval).await;
+        }
+    }
+
+    let context = best_context.expect("at least one Screen Guide context probe");
+    let error = screen_guide_context_verification_error(&context, context.browser_url.as_deref())
+        .unwrap_or_else(|| {
+            "Screen Guide couldn't finish switching focus away from FNDR. Bring the window you want help with forward, then try again."
+                .to_string()
+        });
+    tracing::warn!(
+        request_id,
+        attempts,
+        best_rank,
+        error = %error,
+        "screen_guide:context_probe_exhausted"
+    );
+    Err(error)
+}
+
 fn screen_guide_context_verification_error(
     context: &FrontmostAppContext,
     browser_url: Option<&str>,
 ) -> Option<String> {
     if context.app_name.trim().is_empty() || context.app_name.eq_ignore_ascii_case("unknown") {
         return Some(
-            "Screen Guide couldn't identify the frontmost app. Bring the screen you want help with forward, then try again."
+            "Screen Guide couldn't finish switching to the window you want help with. Bring that window forward, then try again."
                 .to_string(),
         );
     }
-    if crate::capture::macos::is_browser_app(&context.app_name) && browser_url.is_none() {
+    if !context.window_title_verified {
         return Some(format!(
-            "Screen Guide couldn't verify the active page in {}. Allow FNDR to control that browser in System Settings → Privacy & Security → Automation, or use Safari, Chrome, Arc, Brave, or Edge.",
+            "Screen Guide found {} but macOS did not finish exposing its active window after FNDR hid. Bring that window forward, then try again.",
             context.app_name
         ));
     }
-    if !context.window_title_verified {
-        return Some(
-            "Screen Guide couldn't verify the active window. Bring a window forward and allow FNDR in System Settings → Privacy & Security → Accessibility, then try again."
-                .to_string(),
-        );
+    if crate::capture::macos::is_browser_app(&context.app_name) && browser_url.is_none() {
+        return Some(format!(
+            "Screen Guide verified the {} window but couldn't read its active page URL. Open a normal web page in that browser, then try again.",
+            context.app_name
+        ));
     }
     None
 }
@@ -4026,13 +4333,13 @@ fn truncate_chars(raw: &str, max_chars: usize) -> String {
     raw.chars().take(max_chars).collect()
 }
 
-fn start_say_process(raw: &str) -> Result<(), String> {
+fn start_say_process(raw: &str) -> Result<bool, String> {
     let text = truncate_chars(
         &screen_guide_spoken_text(raw),
         MAX_SCREEN_GUIDE_SPEECH_CHARS,
     );
     if text.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     stop_say_process();
     // Feed speech over stdin so private answer text is not exposed in the
@@ -4054,7 +4361,7 @@ fn start_say_process(raw: &str) -> Result<(), String> {
         return Err(format!("Screen Guide speech input failed: {err}"));
     }
     *SCREEN_GUIDE_SAY_PROCESS.lock() = Some(child);
-    Ok(())
+    Ok(true)
 }
 
 fn stop_say_process() {
@@ -4203,6 +4510,84 @@ mod tests {
             screen_guide_notch_copy(true, ScreenGuideUiPhase::Error),
             (Some("  !"), "FNDR needs attention")
         );
+    }
+
+    #[test]
+    fn activity_payload_exposes_only_a_typed_stage_and_generic_process_copy() {
+        let payload = screen_guide_activity_payload(
+            17,
+            ScreenGuideActivityStage::VerifyingTarget,
+            Some("  Google\nChrome  "),
+        );
+
+        assert_eq!(payload.phase, ScreenGuideUiPhase::Thinking);
+        assert_eq!(
+            payload.activity_stage,
+            Some(ScreenGuideActivityStage::VerifyingTarget)
+        );
+        assert_eq!(payload.target_app, None);
+        assert_eq!(
+            payload.message.as_deref(),
+            Some("Verifying the target window…")
+        );
+
+        let value = serde_json::to_value(payload).expect("activity payload should serialize");
+        let object = value
+            .as_object()
+            .expect("activity payload should be an object");
+        assert_eq!(object.len(), 4);
+        for key in ["activity_stage", "generation", "message", "phase"] {
+            assert!(object.contains_key(key), "missing {key}");
+        }
+        assert!(!object.contains_key("target_app"));
+    }
+
+    #[test]
+    fn activity_payload_drops_target_metadata_outside_verification() {
+        let payload = screen_guide_activity_payload(
+            18,
+            ScreenGuideActivityStage::ReadingText,
+            Some("https://private.example/secret"),
+        );
+
+        assert_eq!(payload.target_app, None);
+        assert_eq!(payload.message.as_deref(), Some("Reading visible text…"));
+        assert!(!serde_json::to_string(&payload)
+            .expect("activity payload should serialize")
+            .contains("private.example"));
+    }
+
+    #[test]
+    fn activity_payload_distinguishes_model_check_fallback_and_started_speech() {
+        let cases = [
+            (
+                ScreenGuideActivityStage::CheckingOnDeviceModel,
+                "Checking on-device model availability…",
+            ),
+            (
+                ScreenGuideActivityStage::UsingGroundedFallback,
+                "Using OCR-grounded fallback…",
+            ),
+            (
+                ScreenGuideActivityStage::SpeechStarted,
+                "Started macOS speech.",
+            ),
+        ];
+
+        for (stage, expected_message) in cases {
+            let payload = screen_guide_activity_payload(
+                19,
+                stage,
+                Some("private window title must not appear"),
+            );
+
+            assert_eq!(payload.activity_stage, Some(stage));
+            assert_eq!(payload.message.as_deref(), Some(expected_message));
+            assert_eq!(payload.target_app, None);
+            assert!(!serde_json::to_string(&payload)
+                .expect("activity payload should serialize")
+                .contains("private window title"));
+        }
     }
 
     #[test]
@@ -4578,7 +4963,7 @@ mod tests {
     }
 
     #[test]
-    fn unverifiable_window_metadata_has_an_actionable_permission_error() {
+    fn unverifiable_window_metadata_is_distinct_from_permission_denial() {
         let context = FrontmostAppContext {
             app_name: "Notes".to_string(),
             bundle_id: Some("com.apple.Notes".to_string()),
@@ -4589,13 +4974,23 @@ mod tests {
 
         let error = screen_guide_context_verification_error(&context, None)
             .expect("unverified window should fail closed");
-        assert!(error.contains("Accessibility"));
+        assert!(error.contains("did not finish exposing its active window"));
+        assert!(!error.contains("Accessibility"));
+        assert!(!error.contains("active page"));
         assert!(!error.contains("private screen"));
         assert!(!screen_guide_context_can_be_captured(&context, None, &[]));
     }
 
     #[test]
-    fn missing_browser_url_has_an_actionable_automation_or_support_error() {
+    fn accessibility_permission_error_is_explicit_and_separate() {
+        let error = screen_guide_accessibility_permission_error();
+        assert!(error.contains("Accessibility access"));
+        assert!(error.contains("System Settings"));
+        assert!(!error.contains("active page URL"));
+    }
+
+    #[test]
+    fn missing_browser_url_is_distinct_from_window_or_automation_errors() {
         let context = FrontmostAppContext {
             app_name: "Firefox".to_string(),
             bundle_id: Some("org.mozilla.firefox".to_string()),
@@ -4606,9 +5001,145 @@ mod tests {
 
         let error = screen_guide_context_verification_error(&context, None)
             .expect("browser without a verified URL should fail closed");
-        assert!(error.contains("Automation"));
-        assert!(error.contains("Safari, Chrome, Arc, Brave, or Edge"));
+        assert!(error.contains("active page URL"));
+        assert!(!error.contains("Accessibility"));
+        assert!(!error.contains("Automation"));
         assert!(!screen_guide_context_can_be_captured(&context, None, &[]));
+    }
+
+    #[tokio::test]
+    async fn context_retry_waits_for_focus_and_accessibility_to_converge() {
+        let mut contexts = VecDeque::from([
+            FrontmostAppContext {
+                app_name: "FNDR".to_string(),
+                bundle_id: Some("com.fndr.app".to_string()),
+                window_title: "FNDR".to_string(),
+                window_title_verified: true,
+                browser_url: None,
+            },
+            FrontmostAppContext {
+                app_name: "Google Chrome".to_string(),
+                bundle_id: Some("com.google.Chrome".to_string()),
+                window_title: "com.google.Chrome".to_string(),
+                window_title_verified: false,
+                browser_url: None,
+            },
+            FrontmostAppContext {
+                app_name: "Google Chrome".to_string(),
+                bundle_id: Some("com.google.Chrome".to_string()),
+                window_title: "Practice Affinity".to_string(),
+                window_title_verified: true,
+                browser_url: Some("https://miro.com/app/board/example".to_string()),
+            },
+        ]);
+
+        let context = wait_for_screen_guide_capture_context(
+            41,
+            || contexts.pop_front().expect("bounded probe fixture"),
+            || Ok(()),
+            3,
+            Duration::ZERO,
+        )
+        .await
+        .expect("third probe should be fully verified");
+
+        assert_eq!(context.window_title, "Practice Affinity");
+        assert!(contexts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn context_retry_does_not_switch_to_a_different_ready_app() {
+        let mut contexts = VecDeque::from([
+            FrontmostAppContext {
+                app_name: "Google Chrome".to_string(),
+                bundle_id: Some("com.google.Chrome".to_string()),
+                window_title: "com.google.Chrome".to_string(),
+                window_title_verified: false,
+                browser_url: None,
+            },
+            FrontmostAppContext {
+                app_name: "Codex".to_string(),
+                bundle_id: Some("com.openai.codex".to_string()),
+                window_title: "FNDR activity traces".to_string(),
+                window_title_verified: true,
+                browser_url: None,
+            },
+        ]);
+
+        let error = wait_for_screen_guide_capture_context(
+            44,
+            || contexts.pop_front().expect("bounded probe fixture"),
+            || Ok(()),
+            2,
+            Duration::ZERO,
+        )
+        .await
+        .expect_err("a different ready app must not replace the latched Chrome target");
+
+        assert!(error.contains("Google Chrome"));
+        assert!(error.contains("did not finish exposing its active window"));
+        assert!(contexts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn context_retry_is_bounded_and_reports_the_remaining_failure() {
+        let mut probes = 0;
+        let error = wait_for_screen_guide_capture_context(
+            42,
+            || {
+                probes += 1;
+                FrontmostAppContext {
+                    app_name: "Google Chrome".to_string(),
+                    bundle_id: Some("com.google.Chrome".to_string()),
+                    window_title: "Practice Affinity".to_string(),
+                    window_title_verified: true,
+                    browser_url: None,
+                }
+            },
+            || Ok(()),
+            3,
+            Duration::ZERO,
+        )
+        .await
+        .expect_err("missing browser URL should exhaust the bounded retry");
+
+        assert_eq!(probes, 3);
+        assert!(error.contains("active page URL"));
+        assert!(!error.contains("Automation"));
+    }
+
+    #[tokio::test]
+    async fn context_retry_keeps_the_furthest_verified_failure() {
+        let mut contexts = VecDeque::from([
+            FrontmostAppContext {
+                app_name: "Google Chrome".to_string(),
+                bundle_id: Some("com.google.Chrome".to_string()),
+                window_title: "Practice Affinity".to_string(),
+                window_title_verified: true,
+                browser_url: None,
+            },
+            FrontmostAppContext {
+                app_name: "Google Chrome".to_string(),
+                bundle_id: Some("com.google.Chrome".to_string()),
+                window_title: "com.google.Chrome".to_string(),
+                window_title_verified: false,
+                browser_url: None,
+            },
+        ]);
+
+        let error = wait_for_screen_guide_capture_context(
+            43,
+            || contexts.pop_front().expect("bounded probe fixture"),
+            || Ok(()),
+            2,
+            Duration::ZERO,
+        )
+        .await
+        .expect_err("missing browser URL should remain the most advanced failure");
+
+        assert!(error.contains("active page URL"));
+        assert!(!error.contains("active window"));
+        assert!(!error.contains("Automation"));
     }
 
     #[test]

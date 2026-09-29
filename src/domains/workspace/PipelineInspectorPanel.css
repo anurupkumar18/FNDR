@@ -502,6 +502,10 @@
     line-height: 1.45;
 }
 
+.pipeline-system-activity {
+    margin: 12px 0;
+}
+
 .pipeline-diagnostic-error {
     display: flex;
     align-items: center;
