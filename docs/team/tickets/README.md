@@ -8,6 +8,7 @@ These files are the source of truth for the October board. `scripts/team/gitlab_
 | `minh-reopen-embeddings.md` | Minh | Reopen exactly, and vectors plus chunks on every memory without a manual step |
 | `kunj-command-skills-models.md` | Kunj | Screen Guide rebuilt as a command surface, skills from what worked, more and better local model use |
 | `felipe-voice-onboarding-tests.md` | Felipe | One voice pipeline for every feature, production-ready onboarding and polish, product-oriented tests |
+| `cross-cutting-reliability.md` | Anurup, Kunj, Minh | Screen Guide reliability, private diagnostics, truthful activity traces, and embedding parity |
 | `product-decisions.md` | Everyone | Product, research, and decision tickets |
 
 ## Weeks and milestones
