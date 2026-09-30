@@ -25,6 +25,19 @@ pub(super) async fn run_search_query(
     app_filter: Option<&str>,
     limit: usize,
 ) -> Result<Vec<SearchResult>, String> {
+    run_search_query_internal(state, query, time_filter, app_filter, limit, false)
+        .await
+        .map(|(results, _)| results)
+}
+
+async fn run_search_query_internal(
+    state: &AppState,
+    query: &str,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+    limit: usize,
+    explain: bool,
+) -> Result<(Vec<SearchResult>, Option<serde_json::Value>), String> {
     let limit = limit.clamp(1, 50);
 
     if !state
@@ -33,7 +46,10 @@ pub(super) async fn run_search_query(
         .await
         .map_err(|e| e.to_string())?
     {
-        return Ok(Vec::new());
+        return Ok((
+            Vec::new(),
+            explain.then(|| serde_json::json!({ "outcome": "empty_store" })),
+        ));
     }
 
     let search_config = {
@@ -47,113 +63,78 @@ pub(super) async fn run_search_query(
     let engine_arc = state.inference_engine();
     let engine_ref = engine_arc.as_deref();
 
-    let results = match shared_embedder() {
-        Ok(embedder) => match HybridSearcher::search_with_expansion(
-            &state.store,
-            embedder,
-            engine_ref,
-            query,
-            limit,
-            time_filter,
-            app_filter,
-            &search_config,
-        )
-        .await
-        .map_err(|err| err.to_string())
-        {
-            Ok(results) => results,
-            Err(err) => {
-                tracing::warn!(
-                    "Hybrid search failed; falling back to keyword-only search: {}",
-                    err
-                );
-                state
-                    .store
-                    .keyword_search(query, limit, time_filter, app_filter)
-                    .await
-                    .map_err(|e| e.to_string())?
-            }
-        },
-        Err(err) => {
-            tracing::warn!(
-                "Semantic embedder unavailable for raw search; falling back to keyword-only: {}",
-                err
-            );
-            state
-                .store
-                .keyword_search(query, limit, time_filter, app_filter)
+    let (hybrid_result, fallback_outcome) = match shared_embedder() {
+        Ok(embedder) => {
+            #[cfg(debug_assertions)]
+            let result = if explain {
+                HybridSearcher::search_with_expansion_explained(
+                    &state.store,
+                    embedder,
+                    engine_ref,
+                    query,
+                    limit,
+                    time_filter,
+                    app_filter,
+                    &search_config,
+                )
                 .await
-                .map_err(|e| e.to_string())?
+                .map(|(results, explanation)| (results, Some(explanation)))
+            } else {
+                HybridSearcher::search_with_expansion(
+                    &state.store,
+                    embedder,
+                    engine_ref,
+                    query,
+                    limit,
+                    time_filter,
+                    app_filter,
+                    &search_config,
+                )
+                .await
+                .map(|results| (results, None))
+                .map_err(|error| error.to_string())
+            };
+            #[cfg(not(debug_assertions))]
+            let result = HybridSearcher::search_with_expansion(
+                &state.store,
+                embedder,
+                engine_ref,
+                query,
+                limit,
+                time_filter,
+                app_filter,
+                &search_config,
+            )
+            .await
+            .map(|results| (results, None))
+            .map_err(|error| error.to_string());
+            (result, "keyword_fallback")
         }
+        Err(error) => (Err(error.to_string()), "keyword_only"),
     };
 
-    Ok(strip_internal_fndr_results(results))
-}
-
-#[cfg(debug_assertions)]
-async fn run_search_query_explained(
-    state: &AppState,
-    query: &str,
-    time_filter: Option<&str>,
-    app_filter: Option<&str>,
-    limit: usize,
-) -> Result<(Vec<SearchResult>, serde_json::Value), String> {
-    let limit = limit.clamp(1, 50);
-    if !state.store.has_memories().await.map_err(|e| e.to_string())? {
-        return Ok((Vec::new(), serde_json::json!({ "outcome": "empty_store" })));
-    }
-    let search_config = state.config.read().search.clone();
-    let engine_arc = state.inference_engine();
-    let engine_ref = engine_arc.as_deref();
-
-    let (results, explanation) = match shared_embedder() {
-        Ok(embedder) => match HybridSearcher::search_with_expansion_explained(
-            &state.store,
-            embedder,
-            engine_ref,
-            query,
-            limit,
-            time_filter,
-            app_filter,
-            &search_config,
-        )
-        .await
-        {
-            Ok(explained) => explained,
-            Err(error) => {
-                let reason = error.to_string();
-                drop(error);
-                let started = Instant::now();
-                let results = state
-                    .store
-                    .keyword_search(query, limit, time_filter, app_filter)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                (
-                    results,
-                    serde_json::json!({
-                        "outcome": "keyword_fallback",
-                        "reason": reason,
-                        "latency_ms": started.elapsed().as_millis() as u64,
-                    }),
-                )
-            }
-        },
-        Err(error) => {
+    let (results, explanation) = match hybrid_result {
+        Ok(success) => success,
+        Err(reason) => {
+            tracing::warn!(
+                reason = %reason,
+                outcome = fallback_outcome,
+                "Semantic search unavailable; falling back to keyword-only search"
+            );
             let started = Instant::now();
             let results = state
                 .store
                 .keyword_search(query, limit, time_filter, app_filter)
                 .await
                 .map_err(|e| e.to_string())?;
-            (
-                results,
+            let explanation = explain.then(|| {
                 serde_json::json!({
-                    "outcome": "keyword_only",
-                    "reason": error.to_string(),
+                    "outcome": fallback_outcome,
+                    "reason": reason,
                     "latency_ms": started.elapsed().as_millis() as u64,
-                }),
-            )
+                })
+            });
+            (results, explanation)
         }
     };
 
@@ -190,22 +171,15 @@ async fn search_ranked_results_internal(
     raw_limit: usize,
     explain: bool,
 ) -> Result<(Vec<SearchResult>, Option<serde_json::Value>), String> {
-    #[cfg(debug_assertions)]
-    let (raw_results, production_retrieval) = if explain {
-        let (results, explanation) =
-            run_search_query_explained(state, query, time_filter, app_filter, raw_limit).await?;
-        (results, Some(explanation))
-    } else {
-        (
-            run_search_query(state, query, time_filter, app_filter, raw_limit).await?,
-            None,
-        )
-    };
-    #[cfg(not(debug_assertions))]
-    let (raw_results, production_retrieval) = (
-        run_search_query(state, query, time_filter, app_filter, raw_limit).await?,
-        None,
-    );
+    let (raw_results, production_retrieval) = run_search_query_internal(
+        state,
+        query,
+        time_filter,
+        app_filter,
+        raw_limit,
+        explain,
+    )
+    .await?;
 
     let (results, mut explanation) = rank_search_results(raw_results, query, raw_limit, explain);
     if let (Some(details), Some(production_retrieval)) =

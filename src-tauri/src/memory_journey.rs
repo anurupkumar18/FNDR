@@ -1081,9 +1081,22 @@ impl MemoryJourneyRecorder {
 
     pub fn delete(&self, journey_id: &str) -> Result<(), String> {
         validate_id(journey_id)?;
-        let path = self.complete_dir(journey_id);
-        if path.exists() {
-            fs::remove_dir_all(path).map_err(io_error("delete Memory Journey"))?;
+        let mut inner = self.inner.lock();
+        if inner.armed.as_ref().map(|armed| armed.id.as_str()) == Some(journey_id) {
+            inner.armed = None;
+        }
+        if inner
+            .active
+            .as_ref()
+            .map(|manifest| manifest.journey_id.as_str())
+            == Some(journey_id)
+        {
+            inner.active = None;
+        }
+        for path in [self.partial_dir(journey_id), self.complete_dir(journey_id)] {
+            if path.exists() {
+                fs::remove_dir_all(path).map_err(io_error("delete Memory Journey"))?;
+            }
         }
         Ok(())
     }
@@ -1568,7 +1581,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_all_cancels_an_active_recording_and_removes_partial_content() {
+    fn delete_selected_cancels_an_active_recording_and_removes_partial_content() {
         let dir = tempfile::tempdir().unwrap();
         let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
         let id = recorder.arm("cancel me".into()).unwrap();
@@ -1577,11 +1590,11 @@ mod tests {
             .record_artifact(&id, "frame", "capture.png", b"private pixels")
             .unwrap();
 
-        recorder.delete_all().unwrap();
+        recorder.delete(&id).unwrap();
 
         assert!(recorder.is_inactive());
         assert!(!recorder.partial_dir(&id).exists());
-        assert!(!dir.path().join("journeys").exists());
+        assert!(recorder.status().unwrap().journeys.is_empty());
     }
 
     #[test]
