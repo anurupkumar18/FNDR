@@ -1887,6 +1887,25 @@ pub fn spawn_capture_loop(state: Arc<AppState>) {
 }
 
 /// Run the main capture loop
+#[cfg(debug_assertions)]
+fn finish_memory_journey_skip(
+    state: &AppState,
+    journey_id: Option<&str>,
+    outcome: &str,
+    privacy_blocked: bool,
+) {
+    let Some(journey_id) = journey_id else {
+        return;
+    };
+    if let Err(error) = state
+        .memory_journey
+        .finish_skipped(journey_id, outcome, privacy_blocked)
+    {
+        tracing::debug!("Could not finish skipped Memory Journey: {error}");
+    }
+    state.emit_memory_journey_status();
+}
+
 pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Initializing capture pipeline...");
 
@@ -1997,6 +2016,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 batch.retain(|_| keep_iter.next().unwrap_or(false));
             }
             if batch.is_empty() {
+                #[cfg(debug_assertions)]
+                {
+                    let _ = state
+                        .memory_journey
+                        .fail_active_storage("filtered_before_flush", 0);
+                    state.emit_memory_journey_status();
+                }
                 purge_capture_artifacts(state.store.frames_dir());
                 last_flush = Instant::now();
                 continue;
@@ -2032,6 +2058,33 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     state.invalidate_memory_derived_caches();
                     let flush_ms = flush_start.elapsed().as_millis() as u64;
                     runtime_metrics::record_ms("capture.flush_ms", flush_ms);
+                    #[cfg(debug_assertions)]
+                    {
+                        if let Some(memory_id) = state.memory_journey.active_memory_id() {
+                            if let Some(record) = batch.iter().find(|record| record.id == memory_id) {
+                                let persisted = state
+                                    .store
+                                    .get_memory_by_id(&record.id)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .is_some();
+                                let chunk_count = state
+                                    .store
+                                    .list_chunks_for_memory(&record.id)
+                                    .await
+                                    .map(|chunks| chunks.len())
+                                    .unwrap_or(0);
+                                let _ = state.memory_journey.complete_storage(
+                                    record,
+                                    persisted,
+                                    chunk_count,
+                                    flush_ms,
+                                );
+                            }
+                        }
+                        state.emit_memory_journey_status();
+                    }
                     if inserted_count > 0 {
                         tracing::info!(
                             "Flushed: attempted {} records, inserted {} in {:?}",
@@ -2048,6 +2101,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 }
                 Err(e) => {
                     tracing::error!("Failed to flush batch: {}", e);
+                    #[cfg(debug_assertions)]
+                    {
+                        let _ = state.memory_journey.fail_active_storage(
+                            "storage_error",
+                            flush_start.elapsed().as_millis() as u64,
+                        );
+                        state.emit_memory_journey_status();
+                    }
                 }
             }
             batch.clear();
@@ -2091,6 +2152,31 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let app_name = app_context.app_name.clone();
         let window_title = app_context.window_title.clone();
         runtime_metrics::since_ms("capture.context_ms", context_started);
+        #[cfg(debug_assertions)]
+        let mut memory_journey_id = {
+            let target_app_class = if app_context.browser_url.is_some() {
+                "browser"
+            } else if app_context.bundle_id.as_deref() == Some("com.fndr.app") {
+                "fndr"
+            } else {
+                "desktop_app"
+            };
+            match state
+                .memory_journey
+                .begin_capture_attempt(target_app_class)
+            {
+                Ok(id) => {
+                    if id.is_some() {
+                        state.emit_memory_journey_status();
+                    }
+                    id
+                }
+                Err(error) => {
+                    tracing::warn!("Could not start armed Memory Journey: {error}");
+                    None
+                }
+            }
+        };
 
         // A missing text embedder blocks the frame instead of letting
         // zero-vector memory rows reach storage; periodic re-init lets capture
@@ -2117,6 +2203,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::EmbedderUnavailable, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "embedder_unavailable",
+                false,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2140,6 +2233,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state.screen_guide_capture_epoch.load(Ordering::SeqCst),
             state.screen_guide_capture_generation.load(Ordering::SeqCst),
         ) {
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "screen_guide_active",
+                true,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2166,6 +2266,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 tracing::debug!(reason = ?reason, "Skipping capture before content processing");
             }
             state.capture_stats.record_skip(reason, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                reason.as_str(),
+                matches!(reason, crate::SkipReason::SensitiveContext | crate::SkipReason::SelfApp),
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2195,6 +2302,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::SurfacePolicy, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "surface_policy",
+                true,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2214,6 +2328,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state
                     .capture_stats
                     .record_skip(crate::SkipReason::SemanticDup, &app_name);
+                #[cfg(debug_assertions)]
+                finish_memory_journey_skip(
+                    state.as_ref(),
+                    memory_journey_id.as_deref(),
+                    "semantic_duplicate",
+                    false,
+                );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
             }
@@ -2312,8 +2433,44 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state.screen_guide_capture_epoch.load(Ordering::SeqCst),
                 screen_guide_generation_after,
             ) {
+                #[cfg(debug_assertions)]
+                finish_memory_journey_skip(
+                    state.as_ref(),
+                    memory_journey_id.as_deref(),
+                    "screen_guide_active",
+                    true,
+                );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
+            }
+            #[cfg(debug_assertions)]
+            if let Some(journey_id) = memory_journey_id.as_deref() {
+                let _ = state.memory_journey.record_stage(
+                    journey_id,
+                    crate::memory_journey::MemoryJourneyStageRecord {
+                        name: "text_source".to_string(),
+                        status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                        observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        duration_ms: None,
+                        outcome: "url_only".to_string(),
+                        details: json!({ "source": "browser_url_metadata" }),
+                        artifact_ids: Vec::new(),
+                    },
+                );
+                let _ = state.memory_journey.record_stage(
+                    journey_id,
+                    crate::memory_journey::MemoryJourneyStageRecord {
+                        name: "extraction".to_string(),
+                        status: crate::memory_journey::MemoryJourneyStageStatus::Skipped,
+                        observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        duration_ms: None,
+                        outcome: "not_required_for_url_only".to_string(),
+                        details: json!(null),
+                        artifact_ids: Vec::new(),
+                    },
+                );
+                let _ = state.memory_journey.attach_memory_id(journey_id, &record.id);
+                state.emit_memory_journey_status();
             }
             batch.push(record);
             batch_outcomes.push(crate::StoreOutcome::UrlOnly);
@@ -2355,6 +2512,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::AppSwitchedDuringCapture, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "app_switched_during_capture",
+                true,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2366,11 +2530,19 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         if capture_is_suppressed_by_screen_guide(
             state.screen_guide_capture_generation.load(Ordering::SeqCst),
         ) {
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "screen_guide_active",
+                true,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
         let pixels_started = Instant::now();
         let capture_result = macos::capture_screen();
+        let pixels_duration_ms = pixels_started.elapsed().as_millis() as u64;
         runtime_metrics::since_ms("capture.pixels_ms", pixels_started);
         let image_data = match capture_result {
             Ok(data) => data,
@@ -2379,6 +2551,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state
                     .capture_stats
                     .record_skip(crate::SkipReason::ScreenCaptureFailed, &app_name);
+                #[cfg(debug_assertions)]
+                finish_memory_journey_skip(
+                    state.as_ref(),
+                    memory_journey_id.as_deref(),
+                    "screen_capture_failed",
+                    false,
+                );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
             }
@@ -2394,8 +2573,28 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             screen_guide_generation_after,
         ) {
             drop(image_data);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "screen_guide_overlap",
+                true,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
+        }
+
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            if let Err(error) = state
+                .memory_journey
+                .record_frame(journey_id, &image_data, pixels_duration_ms)
+            {
+                tracing::warn!("Memory Journey frame recording stopped: {error}");
+                memory_journey_id = None;
+            } else {
+                state.emit_memory_journey_status();
+            }
         }
 
         // Deduplication check
@@ -2408,8 +2607,36 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::PerceptualDup, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "perceptual_duplicate",
+                false,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
+        }
+
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "admission".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: Some(dedupe_started.elapsed().as_millis() as u64),
+                    outcome: "allowed".to_string(),
+                    details: json!({
+                        "target_app_class": if app_context.browser_url.is_some() { "browser" } else { "desktop_app" },
+                        "privacy_decision": "allowed",
+                        "surface_decision": "allowed",
+                        "dedupe_decision": if force_capture { "forced" } else { "novel" },
+                    }),
+                    artifact_ids: Vec::new(),
+                },
+            );
         }
 
         tracing::info!("Processing new frame from {}", app_name);
@@ -2443,12 +2670,21 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state
                     .capture_stats
                     .record_skip(crate::SkipReason::SurfacePolicy, &app_name);
+                #[cfg(debug_assertions)]
+                finish_memory_journey_skip(
+                    state.as_ref(),
+                    memory_journey_id.as_deref(),
+                    "browser_semantic_low_signal",
+                    false,
+                );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
             }
         }
         let mut source_kind = "ocr";
         let mut source_low_signal = false;
+        #[cfg(debug_assertions)]
+        let mut memory_journey_positioned_line_count: Option<usize> = None;
         let ocr_start = Instant::now();
         let (text, qwen_cleaned_text, capture_quality, observed_confidence, observed_block_count) =
             if let Some(semantic) = semantic_page.as_ref().filter(|page| page.has_signal()) {
@@ -2484,11 +2720,37 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         state
                             .capture_stats
                             .record_skip(crate::SkipReason::OcrFailed, &app_name);
+                        #[cfg(debug_assertions)]
+                        finish_memory_journey_skip(
+                            state.as_ref(),
+                            memory_journey_id.as_deref(),
+                            "ocr_failed",
+                            false,
+                        );
                         tokio::time::sleep(sleep_duration).await;
                         continue;
                     }
                 };
                 runtime_metrics::since_ms("capture.ocr_ms", ocr_stage_started);
+                #[cfg(debug_assertions)]
+                if let Some(journey_id) = memory_journey_id.as_deref() {
+                    memory_journey_positioned_line_count =
+                        Some(ocr_result.debug_positioned_lines.len());
+                    let lines = serde_json::to_vec_pretty(&ocr_result.debug_positioned_lines)
+                        .unwrap_or_default();
+                    let _ = state.memory_journey.record_artifact(
+                        journey_id,
+                        "ocr",
+                        "positioned-lines.json",
+                        &lines,
+                    );
+                    let _ = state.memory_journey.record_artifact(
+                        journey_id,
+                        "ocr",
+                        "vision-normalized.txt",
+                        ocr_result.text.as_bytes(),
+                    );
+                }
                 // DEBUG: Log OCR pipeline filtering to diagnose zero-confidence issues
                 tracing::debug!(
                     "OCR raw result [{}]: confidence={:.3}, blocks={}, text_len={}, stats={{kept_lines={}, dropped={}, low_conf={}}}",
@@ -2521,6 +2783,93 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             observed_confidence,
             observed_block_count
         );
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "text_source".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: Some(ocr_latency.as_millis() as u64),
+                    outcome: source_kind.to_string(),
+                    details: json!({ "source": source_kind }),
+                    artifact_ids: Vec::new(),
+                },
+            );
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "ocr".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: Some(ocr_latency.as_millis() as u64),
+                    outcome: "recognized".to_string(),
+                    details: json!({
+                        "confidence": observed_confidence,
+                        "block_count": observed_block_count,
+                        "positioned_line_count": memory_journey_positioned_line_count,
+                        "positioned_lines_available": memory_journey_positioned_line_count.is_some(),
+                    }),
+                    artifact_ids: Vec::new(),
+                },
+            );
+            let _ = state.memory_journey.record_artifact(
+                journey_id,
+                "ocr",
+                "recognized.txt",
+                qwen_cleaned_text.as_bytes(),
+            );
+            let raw_chars = qwen_cleaned_text.chars().count();
+            let clean_chars = text.chars().count();
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "cleanup".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: None,
+                    outcome: "cleaned".to_string(),
+                    details: json!({
+                        "raw_chars": raw_chars,
+                        "clean_chars": clean_chars,
+                        "preservation_ratio": if raw_chars == 0 { 0.0 } else { clean_chars as f64 / raw_chars as f64 },
+                        "total_lines": capture_quality.total_lines,
+                        "kept_lines": capture_quality.kept_lines,
+                        "low_conf_lines": capture_quality.low_conf_lines,
+                        "dropped_noise_lines": capture_quality.dropped_noise_lines,
+                        "dropped_low_signal_lines": capture_quality.dropped_low_signal_lines,
+                    }),
+                    artifact_ids: Vec::new(),
+                },
+            );
+            let _ = state.memory_journey.record_artifact(
+                journey_id,
+                "cleanup",
+                "cleaned.txt",
+                text.as_bytes(),
+            );
+            let raw_lines = qwen_cleaned_text.lines().collect::<Vec<_>>();
+            let clean_lines = text.lines().collect::<Vec<_>>();
+            let cleanup_diff = serde_json::to_vec_pretty(&json!({
+                "removed_lines": raw_lines
+                    .iter()
+                    .filter(|line| !clean_lines.contains(line))
+                    .collect::<Vec<_>>(),
+                "added_lines": clean_lines
+                    .iter()
+                    .filter(|line| !raw_lines.contains(line))
+                    .collect::<Vec<_>>(),
+            }))
+            .unwrap_or_default();
+            let _ = state.memory_journey.record_artifact(
+                journey_id,
+                "cleanup",
+                "cleanup-diff.json",
+                &cleanup_diff,
+            );
+            state.emit_memory_journey_status();
+        }
 
         // Metadata-only checks run before pixels are captured. Secret
         // patterns can only be found after transient OCR/semantic extraction,
@@ -2540,6 +2889,16 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::SensitiveContext, &app_name);
+            #[cfg(debug_assertions)]
+            if let Some(journey_id) = memory_journey_id.as_deref() {
+                if let Err(error) = state
+                    .memory_journey
+                    .redact_and_finish_privacy_skip(journey_id, "sensitive_transient_text")
+                {
+                    tracing::debug!("Could not finish privacy-blocked Memory Journey: {error}");
+                }
+                state.emit_memory_journey_status();
+            }
             drop(image_data);
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2567,7 +2926,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     // Same invariant as the OCR pipeline above.
                     let _visual_guard = state.model_pipeline_lock.lock().await;
                     let semantic_started = Instant::now();
-                    let visual_compose_result = compose_visual_capture_record(
+                    let visual_compose_future = compose_visual_capture_record(
                         state.as_ref(),
                         text_embedder.as_ref(),
                         &mut embedding_memo,
@@ -2582,11 +2941,37 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         observed_confidence,
                         observed_block_count,
                         novelty,
-                    )
-                    .await;
+                    );
+                    #[cfg(debug_assertions)]
+                    let visual_compose_result = if let Some(journey_id) = memory_journey_id.clone() {
+                        crate::telemetry::llm_trace::with_memory_journey(
+                            state.memory_journey.clone(),
+                            journey_id,
+                            visual_compose_future,
+                        )
+                        .await
+                    } else {
+                        visual_compose_future.await
+                    };
+                    #[cfg(not(debug_assertions))]
+                    let visual_compose_result = visual_compose_future.await;
                     runtime_metrics::since_ms("capture.semantic_ms", semantic_started);
                     match visual_compose_result {
                         Ok(record) => {
+                            #[cfg(debug_assertions)]
+                            if let Some(journey_id) = memory_journey_id.as_deref() {
+                                let _ = state.memory_journey.record_vector_contracts(
+                                    journey_id,
+                                    &record.embedding_model,
+                                    (&record.embedding, &record.embedding_text),
+                                    (&record.snippet_embedding, &record.snippet),
+                                    (&record.support_embedding, &record.memory_context),
+                                    (&record.image_embedding, "captured_frame"),
+                                    semantic_started.elapsed().as_millis() as u64,
+                                );
+                                let _ = state.memory_journey.attach_memory_id(journey_id, &record.id);
+                                state.emit_memory_journey_status();
+                            }
                             visual_tracker.admit(
                                 image_vec,
                                 config.capture_pipeline.visual_novelty_ring_capacity,
@@ -2641,6 +3026,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                             state
                                 .capture_stats
                                 .record_skip(crate::SkipReason::VisualComposeFailed, &app_name);
+                            #[cfg(debug_assertions)]
+                            finish_memory_journey_skip(
+                                state.as_ref(),
+                                memory_journey_id.as_deref(),
+                                "visual_compose_failed",
+                                false,
+                            );
                         }
                     }
                 }
@@ -2660,6 +3052,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     state
                         .capture_stats
                         .record_skip(crate::SkipReason::VisualSmall, &app_name);
+                    #[cfg(debug_assertions)]
+                    finish_memory_journey_skip(
+                        state.as_ref(),
+                        memory_journey_id.as_deref(),
+                        "visual_too_small",
+                        false,
+                    );
                 }
                 VisualAdmissionOutcome::SkippedNovelty { novelty, threshold } => {
                     emit_capture_quality_signal(
@@ -2677,6 +3076,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     state
                         .capture_stats
                         .record_skip(crate::SkipReason::VisualNovelty, &app_name);
+                    #[cfg(debug_assertions)]
+                    finish_memory_journey_skip(
+                        state.as_ref(),
+                        memory_journey_id.as_deref(),
+                        "visual_low_novelty",
+                        false,
+                    );
                 }
                 VisualAdmissionOutcome::Failed(err) => {
                     if warn_interval_elapsed(
@@ -2707,6 +3113,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     state
                         .capture_stats
                         .record_skip(crate::SkipReason::VisualComposeFailed, &app_name);
+                    #[cfg(debug_assertions)]
+                    finish_memory_journey_skip(
+                        state.as_ref(),
+                        memory_journey_id.as_deref(),
+                        "visual_admission_failed",
+                        false,
+                    );
                 }
             }
             tokio::time::sleep(sleep_duration).await;
@@ -2743,6 +3156,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::LowSignalText, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "low_signal_text",
+                false,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2770,6 +3190,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::Noise, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "ocr_noise",
+                false,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2797,6 +3224,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state
                     .capture_stats
                     .record_skip(crate::SkipReason::SemanticDup, &app_name);
+                #[cfg(debug_assertions)]
+                finish_memory_journey_skip(
+                    state.as_ref(),
+                    memory_journey_id.as_deref(),
+                    "semantic_duplicate",
+                    false,
+                );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
             }
@@ -2833,9 +3267,21 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         let structure_started = Instant::now();
         let mut structured_memory = if let Some(engine) = engine.as_ref() {
-            let mut s = engine
-                .extract_structured_memory(&app_name, &window_title, &qwen_cleaned_text)
-                .await;
+            let extraction_future =
+                engine.extract_structured_memory(&app_name, &window_title, &qwen_cleaned_text);
+            #[cfg(debug_assertions)]
+            let mut s = if let Some(journey_id) = memory_journey_id.clone() {
+                crate::telemetry::llm_trace::with_memory_journey(
+                    state.memory_journey.clone(),
+                    journey_id,
+                    extraction_future,
+                )
+                .await
+            } else {
+                extraction_future.await
+            };
+            #[cfg(not(debug_assertions))]
+            let mut s = extraction_future.await;
             if let Some(ref mut extraction) = s {
                 if extraction.synthesis_branch.is_empty() {
                     extraction.synthesis_branch = "llm".to_string();
@@ -2880,6 +3326,40 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 (0.0, vec!["structured_extraction_unavailable".to_string()])
             };
         runtime_metrics::since_ms("mem.validate_ms", validate_started);
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            let extraction_json = serde_json::to_vec_pretty(&json!({
+                "structured_memory": structured_memory,
+                "grounding_confidence": extraction_grounding_confidence,
+                "issues": extraction_issues,
+                "browser_seed_used": browser_structured_seed.is_some(),
+            }))
+            .unwrap_or_default();
+            let _ = state.memory_journey.record_artifact(
+                journey_id,
+                "extraction",
+                "validated-extraction.json",
+                &extraction_json,
+            );
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "extraction".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: Some(structure_started.elapsed().as_millis() as u64),
+                    outcome: if structured_memory.is_some() { "parsed" } else { "fallback" }.to_string(),
+                    details: json!({
+                        "parse_result": if structured_memory.is_some() { "parsed" } else { "unavailable" },
+                        "validator_result": if extraction_issues.is_empty() { "ok" } else { "warnings" },
+                        "unsupported_field_warnings": extraction_issues,
+                        "fallback": structured_memory.is_none(),
+                    }),
+                    artifact_ids: Vec::new(),
+                },
+            );
+            state.emit_memory_journey_status();
+        }
         let mut semantic_fusion_diagnostics = json!({
             "applied": false,
             "reason": null,
@@ -3058,6 +3538,17 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     crate::SkipReason::Grounding
                 },
                 &app_name,
+            );
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                if drop_due_to_stacked_issues {
+                    "stacked_extraction_issues"
+                } else {
+                    "grounding_gate"
+                },
+                false,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -3352,6 +3843,41 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             compose_memory_embedding_document(&embedding_seed, Some(&config.chunking));
         runtime_metrics::since_ms("mem.compose_ms", compose_started);
         let primary_embed_input = embedding_document.primary_text.clone();
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            let document_json = serde_json::to_vec_pretty(&json!({
+                "primary": embedding_document.primary_text,
+                "snippet": embedding_document.snippet_text,
+                "support": embedding_document.support_texts,
+                "chunk_source": embedding_document.chunk_source_text,
+                "visual_semantic": embedding_document.visual_semantic_text,
+            }))
+            .unwrap_or_default();
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "embedding_document".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: Some(compose_started.elapsed().as_millis() as u64),
+                    outcome: "composed".to_string(),
+                    details: json!({
+                        "primary_chars": embedding_document.primary_text.chars().count(),
+                        "snippet_chars": embedding_document.snippet_text.chars().count(),
+                        "support_count": embedding_document.support_texts.len(),
+                        "chunk_source_chars": embedding_document.chunk_source_text.chars().count(),
+                        "visual_semantic_available": embedding_document.visual_semantic_text.is_some(),
+                    }),
+                    artifact_ids: Vec::new(),
+                },
+            );
+            let _ = state.memory_journey.record_artifact(
+                journey_id,
+                "embedding_document",
+                "embedding-document.json",
+                &document_json,
+            );
+        }
 
         let embedding_inputs = embedding_document.text_embedding_inputs();
         let semantic_embeddings_available = semantic_embeddings_enabled(text_embedder.as_ref());
@@ -3440,6 +3966,19 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 }
             }
         };
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            let _ = state.memory_journey.record_vector_contracts(
+                journey_id,
+                "all-MiniLM-L6-v2",
+                (&text_embedding, &embedding_document.primary_text),
+                (&snippet_embedding, &embedding_document.snippet_text),
+                (&support_embedding, &embedding_document.support_texts.join("\n")),
+                (&image_embedding, "captured_frame"),
+                embed_latency.as_millis() as u64,
+            );
+            state.emit_memory_journey_status();
+        }
         let host_supports_qwen_vlm =
             crate::telemetry::system_metrics::host_supports_lightweight_vlm();
         let (vlm_pressure_skip, vlm_pressure_reason) =
@@ -3848,6 +4387,16 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 record
             }
         };
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            if let Err(error) = state
+                .memory_journey
+                .attach_memory_id(journey_id, &merged_or_new.id)
+            {
+                tracing::debug!("Could not attach Memory Journey storage candidate: {error}");
+            }
+            state.emit_memory_journey_status();
+        }
         if merged_or_new.id != incoming_record_id {
             emit_extraction_quality_anomaly(
                 state.as_ref(),

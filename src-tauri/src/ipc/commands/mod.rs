@@ -89,6 +89,11 @@ pub use screen_guide::*;
 mod screen_guide_diagnostics;
 pub use screen_guide_diagnostics::*;
 
+#[cfg(debug_assertions)]
+mod memory_journey;
+#[cfg(debug_assertions)]
+pub use memory_journey::*;
+
 // Privacy proof IPC command
 pub use crate::privacy_proof::*;
 
