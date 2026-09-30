@@ -419,10 +419,83 @@ impl HybridSearcher {
         search_config: &SearchConfig,
         expansion: &[String],
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+        let (results, _) = Self::search_with_config_and_expansion_internal(
+            store,
+            embedder,
+            query,
+            limit,
+            time_filter,
+            app_filter,
+            search_config,
+            expansion,
+            false,
+        )
+        .await?;
+        Ok(results)
+    }
+
+    #[cfg(debug_assertions)]
+    pub async fn search_with_expansion_explained(
+        store: &Store,
+        embedder: &Embedder,
+        engine: Option<&crate::inference::InferenceEngine>,
+        query: &str,
+        limit: usize,
+        time_filter: Option<&str>,
+        app_filter: Option<&str>,
+        search_config: &SearchConfig,
+    ) -> Result<(Vec<SearchResult>, serde_json::Value), String> {
+        let expansion = if let Some(engine) = engine {
+            let profile = QueryProfile::from_query(query);
+            if profile.is_abstract_concept_query() {
+                timeout(
+                    Duration::from_millis(600),
+                    engine.expand_search_query(query),
+                )
+                .await
+                .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        let (results, explanation) = Self::search_with_config_and_expansion_internal(
+            store,
+            embedder,
+            query,
+            limit,
+            time_filter,
+            app_filter,
+            search_config,
+            &expansion,
+            true,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        Ok((results, explanation.unwrap_or_default()))
+    }
+
+    async fn search_with_config_and_expansion_internal(
+        store: &Store,
+        embedder: &Embedder,
+        query: &str,
+        limit: usize,
+        time_filter: Option<&str>,
+        app_filter: Option<&str>,
+        search_config: &SearchConfig,
+        expansion: &[String],
+        explain: bool,
+    ) -> Result<(Vec<SearchResult>, Option<serde_json::Value>), Box<dyn std::error::Error>> {
         let started = Instant::now();
         let profile = QueryProfile::from_query(query);
         if profile.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), explain.then(|| serde_json::json!({
+                "expansions": expansion,
+                "routes": [],
+                "fusion_inputs": {},
+                "rerank_deltas": [],
+            }))));
         }
         let search_config = search_config.clone().normalized();
 
@@ -444,6 +517,23 @@ impl HybridSearcher {
             .with_embedder(embedder)
             .with_limits(limit, time_filter, app_filter, expansion);
         let route_hits = RouteRunner::dispatch(&route_plan, &route_ctx).await;
+        let route_trace = explain.then(|| {
+            route_hits
+                .iter()
+                .map(|group| serde_json::json!({
+                    "route": format!("{:?}", group.route).to_lowercase(),
+                    "latency_ms": group.elapsed_ms,
+                    "candidates": group.hits.iter().filter_map(|hit| {
+                        hit.signals.search_result.as_ref().map(|result| serde_json::json!({
+                            "memory_id": result.id,
+                            "branch": format!("{:?}", hit.signals.branch).to_lowercase(),
+                            "score": hit.score,
+                            "embedding_reasons": result.embedding_reason_labels,
+                        }))
+                    }).collect::<Vec<_>>(),
+                }))
+                .collect::<Vec<_>>()
+        });
 
         let mut chunk_results = Vec::new();
         let mut semantic_results = Vec::new();
@@ -492,6 +582,12 @@ impl HybridSearcher {
             &keyword_results,
             &search_config,
         );
+        let fused_scores = explain.then(|| {
+            fused
+                .iter()
+                .map(|result| (result.id.clone(), result.score))
+                .collect::<HashMap<_, _>>()
+        });
         let reranked = Self::rerank_with_profile(&profile, fused, limit, &search_config);
         tracing::info!(
             results = reranked.len(),
@@ -500,7 +596,35 @@ impl HybridSearcher {
         );
         runtime_metrics::record_ms("hybrid.total_ms", started.elapsed().as_millis() as u64);
 
-        Ok(reranked)
+        let explanation = explain.then(|| serde_json::json!({
+            "expansions": expansion,
+            "query_plan": route_plan,
+            "routes": route_trace.unwrap_or_default(),
+            "fusion_inputs": {
+                "chunk": branch_trace(&chunk_results),
+                "semantic": branch_trace(&semantic_results),
+                "snippet": branch_trace(&snippet_results),
+                "keyword": branch_trace(&keyword_results),
+            },
+            "rerank_deltas": reranked.iter().enumerate().map(|(index, result)| {
+                let before = fused_scores
+                    .as_ref()
+                    .and_then(|scores| scores.get(&result.id))
+                    .copied()
+                    .unwrap_or(result.score);
+                serde_json::json!({
+                    "memory_id": result.id,
+                    "rank": index + 1,
+                    "score_before_rerank": before,
+                    "score_after_rerank": result.score,
+                    "delta": result.score - before,
+                    "embedding_reasons": result.embedding_reason_labels,
+                })
+            }).collect::<Vec<_>>(),
+            "latency_ms": started.elapsed().as_millis() as u64,
+        }));
+
+        Ok((reranked, explanation))
     }
 
     /// Merge semantic + keyword candidates, then rerank with the standard policy.
@@ -1033,6 +1157,21 @@ impl HybridSearcher {
             search_config,
         )
     }
+}
+
+fn branch_trace(results: &[SearchResult]) -> Vec<serde_json::Value> {
+    results
+        .iter()
+        .map(|result| {
+            serde_json::json!({
+                "memory_id": result.id,
+                "score": result.score,
+                "matched_routes": result.matched_routes,
+                "matched_chunk_ids": result.matched_chunk_ids,
+                "embedding_reasons": result.embedding_reason_labels,
+            })
+        })
+        .collect()
 }
 
 fn apply_relevance_gate(

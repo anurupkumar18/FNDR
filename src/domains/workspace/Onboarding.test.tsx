@@ -182,7 +182,9 @@ describe("Onboarding model step", () => {
         render(<Onboarding onComplete={() => {}} />);
 
         const activity = await screen.findByRole("region", { name: "Model setup activity" });
-        expect(activity).toHaveTextContent("Downloading MiniLM · Search Embedder");
+        await waitFor(() => {
+            expect(activity).toHaveTextContent("Downloading MiniLM · Search Embedder");
+        });
         expect(activity).toHaveTextContent("Model download service");
         expect(activity).toHaveTextContent("50%");
         expect(activity).toHaveTextContent("Live backend event");

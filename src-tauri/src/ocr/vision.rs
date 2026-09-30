@@ -176,6 +176,23 @@ pub struct RecognizedText {
 
     /// Aggregate preprocessing stats (safe to store)
     pub ocr_stats: OcrAggregateStats,
+
+    /// Exact positioned Apple Vision observations are exposed only to the
+    /// explicitly armed debug Memory Journey. Stable capture never persists
+    /// them and release builds do not contain this field.
+    #[cfg(debug_assertions)]
+    pub debug_positioned_lines: Vec<DebugOcrLine>,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DebugOcrLine {
+    pub text: String,
+    pub confidence: f32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 impl RecognizedText {
@@ -310,6 +327,22 @@ impl OcrEngine {
                 .iter()
                 .map(|line| (line.text.clone(), line.confidence))
                 .collect::<Vec<_>>();
+            #[cfg(debug_assertions)]
+            let debug_positioned_lines = raw_lines
+                .iter()
+                .filter_map(|line| {
+                    let text = normalize_ocr_line(&line.text);
+                    let (x, y) = normalized_top_left_center(line.bounds)?;
+                    (!text.is_empty()).then_some(DebugOcrLine {
+                        text,
+                        confidence: line.confidence,
+                        x,
+                        y,
+                        width: line.bounds.size.width,
+                        height: line.bounds.size.height,
+                    })
+                })
+                .collect();
             let (cleaned_text, ocr_stats_from_all) = preprocess_ocr_for_qwen(&text_and_confidence);
 
             // For the text field, apply noise filter on top of the preprocessed output.
@@ -324,6 +357,8 @@ impl OcrEngine {
                     confidence: avg_confidence_all,
                     block_count,
                     ocr_stats: ocr_stats_from_all,
+                    #[cfg(debug_assertions)]
+                    debug_positioned_lines,
                 },
                 cleaned_text,
             ))
@@ -916,6 +951,8 @@ mod tests {
             confidence: 0.49,
             block_count: 20,
             ocr_stats: OcrAggregateStats::default(),
+            #[cfg(debug_assertions)]
+            debug_positioned_lines: Vec::new(),
         };
         assert!(!rt.is_low_signal(10));
     }
@@ -927,6 +964,8 @@ mod tests {
             confidence: 0.10, // catastrophically bad
             block_count: 20,
             ocr_stats: OcrAggregateStats::default(),
+            #[cfg(debug_assertions)]
+            debug_positioned_lines: Vec::new(),
         };
         assert!(rt.is_low_signal(10));
     }

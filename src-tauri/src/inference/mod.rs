@@ -1839,6 +1839,8 @@ TRANSCRIPT:\n{}",
         let prompt_owned = prompt.to_string();
         // Task labels are tokio task-locals and do not cross into `spawn_blocking`, so read them here.
         let (task, prompt_version) = crate::telemetry::llm_trace::current_task();
+        #[cfg(debug_assertions)]
+        let memory_journey = crate::telemetry::llm_trace::current_memory_journey();
         let started = Instant::now();
 
         tokio::task::spawn_blocking(move || {
@@ -1857,6 +1859,8 @@ TRANSCRIPT:\n{}",
                 usage,
                 max_tokens,
                 started,
+                #[cfg(debug_assertions)]
+                memory_journey,
             );
             output
         })
@@ -1877,10 +1881,12 @@ TRANSCRIPT:\n{}",
         usage: TokenUsage,
         max_tokens: i32,
         started: Instant,
+        #[cfg(debug_assertions)]
+        memory_journey: Option<(
+            std::sync::Arc<crate::memory_journey::MemoryJourneyRecorder>,
+            String,
+        )>,
     ) {
-        let Some(path) = self.trace_path.as_deref() else {
-            return;
-        };
         let trace = crate::telemetry::llm_trace::build_trace(
             &crate::telemetry::llm_trace::TraceInput {
                 ts_ms: chrono::Utc::now().timestamp_millis(),
@@ -1897,8 +1903,32 @@ TRANSCRIPT:\n{}",
             },
             std::env::var("FNDR_TRACE_CONTENT").as_deref() == Ok("1"),
         );
-        if let Err(err) = crate::telemetry::llm_trace::append_trace(path, &trace) {
-            tracing::debug!("llm trace write failed: {err}");
+        if let Some(path) = self.trace_path.as_deref() {
+            if let Err(err) = crate::telemetry::llm_trace::append_trace(path, &trace) {
+                tracing::debug!("llm trace write failed: {err}");
+            }
+        }
+        #[cfg(debug_assertions)]
+        if let Some((recorder, journey_id)) = memory_journey {
+            let scoped_trace = crate::telemetry::llm_trace::build_trace(
+                &crate::telemetry::llm_trace::TraceInput {
+                    ts_ms: trace.ts_ms,
+                    task: &trace.task,
+                    prompt_version: &trace.prompt_version,
+                    model_id: &trace.model_id,
+                    prompt_tokens: trace.prompt_tokens,
+                    output_tokens: trace.output_tokens,
+                    max_tokens: trace.max_tokens,
+                    latency_ms: trace.latency_ms,
+                    prompt,
+                    output,
+                    validator: &trace.validator,
+                },
+                true,
+            );
+            if let Err(error) = recorder.record_llm_trace(&journey_id, &scoped_trace) {
+                tracing::debug!("scoped Memory Journey LLM trace write failed: {error}");
+            }
         }
     }
 
