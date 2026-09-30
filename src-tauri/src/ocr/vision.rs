@@ -103,6 +103,18 @@ impl Default for OcrConfig {
 }
 
 impl OcrConfig {
+    /// Recognition profile for transient Screen Guide captures.
+    ///
+    /// Screen Guide must read ordinary browser and editor copy on Retina-sized
+    /// display captures. The durable memory pipeline keeps the stricter 0.02
+    /// default because it has separate cleanup and storage-quality constraints.
+    pub fn screen_guide() -> Self {
+        Self {
+            minimum_text_height: 0.015,
+            ..Self::default()
+        }
+    }
+
     /// Create a fast configuration for real-time processing
     pub fn fast() -> Self {
         Self {
@@ -972,6 +984,10 @@ mod tests {
         assert_eq!(hq.recognition_level, RecognitionLevel::Accurate);
         assert!(hq.language_correction);
         assert_eq!(hq.minimum_text_height, 0.01);
+
+        let screen_guide = OcrConfig::screen_guide();
+        assert_eq!(screen_guide.recognition_level, RecognitionLevel::Accurate);
+        assert_eq!(screen_guide.minimum_text_height, 0.015);
     }
 
     #[test]

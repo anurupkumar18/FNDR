@@ -126,6 +126,9 @@ fn main() {
                     error
                 ),
             }
+            fndr_lib::ipc::commands::start_screen_guide_diagnostic_maintenance(
+                data_dir.clone(),
+            );
             let store = Store::new(&data_dir)?;
             let store_arc = Arc::new(store);
             tracing::info!("Consolidated store initialized at {:?}", data_dir);
@@ -861,6 +864,10 @@ fn main() {
             ipc::commands::ask_screen_guide,
             ipc::commands::get_screen_guide_cursor_position,
             ipc::commands::finish_screen_guide_visual,
+            ipc::commands::arm_screen_guide_diagnostic,
+            ipc::commands::get_screen_guide_diagnostic_status,
+            ipc::commands::delete_screen_guide_diagnostics,
+            ipc::commands::reveal_screen_guide_diagnostics,
             // Clipboard history
             ipc::commands::get_clipboard_history,
             ipc::commands::copy_clipboard_entry,

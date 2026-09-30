@@ -1,12 +1,17 @@
 //! Native runtime for the local-only Screen Guide overlay.
 //!
-//! Screen pixels, OCR, questions, conversation history, and explicitly
-//! requested file-name matches remain transient: this module never calls the
-//! memory store, reads matched file contents, or writes an artifact to disk.
+//! Normal turns keep screen pixels, OCR, questions, conversation history, and
+//! explicitly requested file-name matches transient. A separately consented,
+//! one-shot diagnostic turn may persist its exact capture and OCR briefly via
+//! `screen_guide_diagnostics`; diagnostics never enter Memory or model context.
 
+use super::screen_guide_diagnostics::{
+    self, ScreenGuideDiagnosticContextProbe, ScreenGuideDiagnosticDisplay,
+    ScreenGuideDiagnosticOutcome, ScreenGuideDiagnosticSession,
+};
 use crate::capture::macos::FrontmostAppContext;
 use crate::config::{AutofillConfig, ScreenGuideConfig, ScreenGuideModel};
-use crate::ocr::{OcrEngine, ScreenGuideOcrLine};
+use crate::ocr::{OcrConfig, OcrEngine, ScreenGuideOcrLine};
 use crate::privacy::safety_gate::{self, SafetyDecision};
 use crate::privacy::Blocklist;
 use crate::speech;
@@ -40,7 +45,10 @@ const MAX_SCREEN_GUIDE_ANSWER_CHARS: usize = 360;
 const MAX_PENDING_SCREEN_GUIDE_EVENTS: usize = 16;
 const OVERLAY_CAPTURE_SETTLE: Duration = Duration::from_millis(80);
 const SCREEN_GUIDE_CONTEXT_RETRY_INTERVAL: Duration = Duration::from_millis(40);
-const SCREEN_GUIDE_CONTEXT_MAX_ATTEMPTS: usize = 16;
+// Native full-screen Space transitions can take longer than the ordinary
+// window handoff. Successful probes still return immediately.
+const SCREEN_GUIDE_CONTEXT_MAX_ATTEMPTS: usize = 40;
+const SCREEN_GUIDE_BLANK_CAPTURE_RETRY: Duration = Duration::from_millis(160);
 const SCREEN_GUIDE_MICROPHONE_STOP_ACK_TIMEOUT: Duration = Duration::from_millis(750);
 const SCREEN_GUIDE_MICROPHONE_MAX_DURATION: Duration = Duration::from_secs(65);
 const SCREEN_GUIDE_HIDDEN_LEASE: Duration = Duration::from_secs(150);
@@ -369,6 +377,222 @@ struct ScreenGuideDisplaySignature {
     width: u32,
     height: u32,
     scale_factor_bits: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ScreenGuideCaptureSignal {
+    width: u32,
+    height: u32,
+    sampled_pixels: usize,
+    mean_luma: f64,
+    luma_stddev: f64,
+    luma_range: u8,
+    visible_alpha_fraction: f64,
+}
+
+impl ScreenGuideCaptureSignal {
+    fn is_blank(&self) -> bool {
+        self.sampled_pixels == 0
+            || self.visible_alpha_fraction < 0.05
+            || (self.luma_range < 8 && self.luma_stddev < 2.0)
+    }
+}
+
+fn screen_guide_capture_signal(image_data: &[u8]) -> Result<ScreenGuideCaptureSignal, String> {
+    let image = image::load_from_memory(image_data)
+        .map_err(|err| format!("Screen Guide captured an invalid image: {err}"))?
+        .to_rgba8();
+    let width = image.width();
+    let height = image.height();
+    Ok(screen_guide_capture_signal_from_rgba(
+        width,
+        height,
+        image.as_raw(),
+    ))
+}
+
+fn screen_guide_capture_signal_from_rgba(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> ScreenGuideCaptureSignal {
+    let pixel_count = pixels.len() / 4;
+    let stride = (pixel_count / 200_000).max(1);
+    let mut sampled_pixels = 0usize;
+    let mut visible_pixels = 0usize;
+    let mut min_luma = u8::MAX;
+    let mut max_luma = u8::MIN;
+    let mut sum = 0.0f64;
+    let mut sum_squares = 0.0f64;
+
+    for pixel in pixels.chunks_exact(4).step_by(stride) {
+        let luma = (0.2126 * f64::from(pixel[0])
+            + 0.7152 * f64::from(pixel[1])
+            + 0.0722 * f64::from(pixel[2]))
+        .round()
+        .clamp(0.0, 255.0) as u8;
+        sampled_pixels += 1;
+        visible_pixels += usize::from(pixel[3] > 8);
+        min_luma = min_luma.min(luma);
+        max_luma = max_luma.max(luma);
+        let luma = f64::from(luma);
+        sum += luma;
+        sum_squares += luma * luma;
+    }
+
+    let count = sampled_pixels.max(1) as f64;
+    let mean_luma = sum / count;
+    let variance = (sum_squares / count - mean_luma * mean_luma).max(0.0);
+    ScreenGuideCaptureSignal {
+        width,
+        height,
+        sampled_pixels,
+        mean_luma,
+        luma_stddev: variance.sqrt(),
+        luma_range: max_luma.saturating_sub(min_luma),
+        visible_alpha_fraction: visible_pixels as f64 / count,
+    }
+}
+
+fn record_screen_guide_diagnostic_stage(
+    diagnostic: &mut Option<ScreenGuideDiagnosticSession>,
+    stage: ScreenGuideActivityStage,
+) {
+    if let Some(session) = diagnostic.as_mut() {
+        session.record_stage(stage);
+    }
+}
+
+fn finish_screen_guide_diagnostic(
+    diagnostic: &mut Option<ScreenGuideDiagnosticSession>,
+    outcome: ScreenGuideDiagnosticOutcome,
+) {
+    let Some(session) = diagnostic.take() else {
+        return;
+    };
+    match session.finish(outcome) {
+        Ok(path) => tracing::info!(
+            bundle = %path.display(),
+            ?outcome,
+            "screen_guide:diagnostic_saved"
+        ),
+        Err(error) => tracing::warn!(
+            %error,
+            "screen_guide:diagnostic_save_failed"
+        ),
+    }
+}
+
+fn ensure_screen_guide_request_current_or_discard_diagnostic<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    request_generation: u64,
+    local_restore: &DeferredFndrRestore,
+    diagnostic: &mut Option<ScreenGuideDiagnosticSession>,
+) -> Result<(), String> {
+    ensure_screen_guide_request_current_or_restore(
+        app,
+        state,
+        request_generation,
+        local_restore,
+    )
+    .map_err(|error| {
+        // A cancelled or newly-private turn must never publish a partial
+        // diagnostic bundle. Dropping the session removes its private
+        // `.partial` directory, including any raw pixels or OCR already
+        // written by an earlier async stage.
+        diagnostic.take();
+        error
+    })
+}
+
+fn screen_guide_diagnostic_display(
+    display: &ScreenGuideDisplaySignature,
+) -> ScreenGuideDiagnosticDisplay {
+    ScreenGuideDiagnosticDisplay {
+        display_id: None,
+        display_signature: None,
+        origin_x_points: Some(f64::from(display.x)),
+        origin_y_points: Some(f64::from(display.y)),
+        width_points: Some(f64::from(display.width)),
+        height_points: Some(f64::from(display.height)),
+        scale_factor: Some(f64::from_bits(display.scale_factor_bits)),
+    }
+}
+
+fn screen_guide_diagnostic_capture_metrics(
+    signal: &ScreenGuideCaptureSignal,
+) -> screen_guide_diagnostics::ScreenGuideDiagnosticCaptureMetrics {
+    screen_guide_diagnostics::ScreenGuideDiagnosticCaptureMetrics {
+        width_pixels: signal.width,
+        height_pixels: signal.height,
+        mean_luma: signal.mean_luma,
+        luma_variance: signal.luma_stddev * signal.luma_stddev,
+        luma_range: signal.luma_range,
+        transparent_pixel_ratio: (1.0 - signal.visible_alpha_fraction).clamp(0.0, 1.0),
+    }
+}
+
+struct PendingScreenGuideDiagnosticCapture {
+    bytes: Vec<u8>,
+    display: ScreenGuideDiagnosticDisplay,
+    metrics: screen_guide_diagnostics::ScreenGuideDiagnosticCaptureMetrics,
+}
+
+async fn persist_screen_guide_diagnostic_capture(
+    diagnostic: &mut Option<ScreenGuideDiagnosticSession>,
+    pending: &mut Option<PendingScreenGuideDiagnosticCapture>,
+) {
+    let Some(capture) = pending.take() else {
+        return;
+    };
+    let Some(session) = diagnostic.take() else {
+        return;
+    };
+    let write = tokio::task::spawn_blocking(move || {
+        let mut session = session;
+        let result = session.write_capture(&capture.bytes, capture.display, capture.metrics);
+        (session, result)
+    })
+    .await;
+    match write {
+        Ok((session, Ok(()))) => *diagnostic = Some(session),
+        Ok((_session, Err(error))) => {
+            screen_guide_diagnostics::report_storage_failure(&error);
+            tracing::warn!(%error, "screen_guide:diagnostic_capture_write_failed");
+        }
+        Err(error) => {
+            let storage_error = std::io::Error::other("diagnostic capture writer stopped");
+            screen_guide_diagnostics::report_storage_failure(&storage_error);
+            tracing::warn!(%error, "screen_guide:diagnostic_capture_writer_stopped");
+        }
+    }
+}
+
+fn record_screen_guide_diagnostic_capture_without_raw(
+    diagnostic: &mut Option<ScreenGuideDiagnosticSession>,
+    pending: &mut Option<PendingScreenGuideDiagnosticCapture>,
+) {
+    let Some(capture) = pending.take() else {
+        return;
+    };
+    if let Some(session) = diagnostic.as_mut() {
+        session.record_capture_without_raw(
+            capture.bytes.len(),
+            capture.display,
+            capture.metrics,
+        );
+    }
+}
+
+fn abort_screen_guide_diagnostic_after_write_error(
+    diagnostic: &mut Option<ScreenGuideDiagnosticSession>,
+    error: &std::io::Error,
+    artifact: &'static str,
+) {
+    screen_guide_diagnostics::report_storage_failure(error);
+    tracing::warn!(%error, artifact, "screen_guide:diagnostic_artifact_write_failed");
+    diagnostic.take();
 }
 
 impl DeferredFndrRestore {
@@ -2043,13 +2267,18 @@ pub async fn transcribe_screen_guide_voice_input(
     request_id: u64,
 ) -> Result<super::stats::VoiceTranscriptionResult, String> {
     let transcribe_started = Instant::now();
-    tracing::info!(request_id, audio_bytes = audio_bytes.len(), "screen_guide:transcribe_started");
+    tracing::info!(
+        request_id,
+        audio_bytes = audio_bytes.len(),
+        "screen_guide:transcribe_started"
+    );
     if state.inner().is_incognito.load(Ordering::SeqCst) {
         return Err(private_mode_message());
     }
     let cancel = screen_guide_turn_cancel(request_id)?;
     schedule_screen_guide_hidden_lease(&app, request_id);
-    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|err| err.to_string())?;
+    let app_data_dir =
+        crate::config::fndr_app_data_dir(app.path()).map_err(|err| err.to_string())?;
     let transcription =
         speech::transcribe_audio_bytes(&app_data_dir, &audio_bytes, mime_type.as_deref());
     tokio::pin!(transcription);
@@ -2266,6 +2495,10 @@ pub async fn ask_screen_guide(
         return Err("Screen Guide is turned off.".to_string());
     }
     if state.inner().is_incognito.load(Ordering::SeqCst) {
+        let _ = screen_guide_diagnostics::take_session(
+            state.inner().app_data_dir.as_path(),
+            true,
+        );
         return Err(private_mode_message());
     }
 
@@ -2313,17 +2546,46 @@ pub async fn ask_screen_guide(
         );
     }
 
+    // File-name lookup intentionally does not consume the one-shot diagnostic
+    // arm. Diagnostics begin only for a display-reading turn.
+    let mut diagnostic = match screen_guide_diagnostics::take_session(
+        state.inner().app_data_dir.as_path(),
+        false,
+    ) {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::warn!(%error, "screen_guide:diagnostic_start_failed");
+            None
+        }
+    };
+    record_screen_guide_diagnostic_stage(
+        &mut diagnostic,
+        ScreenGuideActivityStage::Preparing,
+    );
+
     let (has_capture_access, permission_detail) =
         crate::capture::permissions::preflight_screen_capture_access();
     if !has_capture_access {
+        finish_screen_guide_diagnostic(
+            &mut diagnostic,
+            ScreenGuideDiagnosticOutcome::PermissionDenied,
+        );
         return Err(format!(
             "Screen Guide needs Screen Recording access. {permission_detail}"
         ));
     }
     if !crate::accessibility::has_accessibility_permission() {
+        finish_screen_guide_diagnostic(
+            &mut diagnostic,
+            ScreenGuideDiagnosticOutcome::PermissionDenied,
+        );
         return Err(screen_guide_accessibility_permission_error());
     }
 
+    record_screen_guide_diagnostic_stage(
+        &mut diagnostic,
+        ScreenGuideActivityStage::HidingFndr,
+    );
     publish_screen_guide_activity(
         &app,
         request_generation,
@@ -2390,6 +2652,10 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
+        finish_screen_guide_diagnostic(
+            &mut diagnostic,
+            ScreenGuideDiagnosticOutcome::Failed,
+        );
         return Err(err);
     }
     schedule_screen_guide_hidden_lease(&app, request_generation);
@@ -2399,6 +2665,10 @@ pub async fn ask_screen_guide(
     // the new frontmost PID before AXFocusedApplication and AXFocusedWindow
     // catch up, so wait for those two views to converge instead of trusting a
     // single sample after a blind delay.
+    record_screen_guide_diagnostic_stage(
+        &mut diagnostic,
+        ScreenGuideActivityStage::VerifyingTarget,
+    );
     publish_screen_guide_activity(
         &app,
         request_generation,
@@ -2409,6 +2679,22 @@ pub async fn ask_screen_guide(
         request_generation,
         crate::capture::macos::get_frontmost_app_info_fresh,
         || ensure_screen_guide_request_current(state.inner(), request_generation),
+        |attempt, context, internal, matches_latched_target, rank| {
+            if let Some(session) = diagnostic.as_mut() {
+                session.record_context_probe(ScreenGuideDiagnosticContextProbe {
+                    attempt: attempt as u32,
+                    app_name: (!context.app_name.trim().is_empty())
+                        .then(|| context.app_name.clone()),
+                    bundle_id: context.bundle_id.clone(),
+                    title_present: !context.window_title.trim().is_empty(),
+                    title_verified: context.window_title_verified,
+                    browser_url_present: context.browser_url.is_some(),
+                    is_internal: internal,
+                    matched_latched_target: matches_latched_target,
+                    rank,
+                });
+            }
+        },
         SCREEN_GUIDE_CONTEXT_MAX_ATTEMPTS,
         SCREEN_GUIDE_CONTEXT_RETRY_INTERVAL,
     )
@@ -2421,11 +2707,24 @@ pub async fn ask_screen_guide(
             } else {
                 screen_guide_accessibility_permission_error()
             };
+            if let Err(cancelled) = ensure_screen_guide_request_current_or_discard_diagnostic(
+                &app,
+                state.inner(),
+                request_generation,
+                &deferred_restore,
+                &mut diagnostic,
+            ) {
+                return Err(cancelled);
+            }
             restore_screen_guide_capture_if_owned(
                 &app,
                 state.inner(),
                 request_generation,
                 &deferred_restore,
+            );
+            finish_screen_guide_diagnostic(
+                &mut diagnostic,
+                ScreenGuideDiagnosticOutcome::ContextUnavailable,
             );
             return Err(err);
         }
@@ -2453,6 +2752,9 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
+        // Private Mode supersedes earlier diagnostic consent. Dropping the
+        // unfinished session removes its private partial directory.
+        diagnostic.take();
         return Err(private_mode_message());
     }
 
@@ -2465,6 +2767,10 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
+        finish_screen_guide_diagnostic(
+            &mut diagnostic,
+            ScreenGuideDiagnosticOutcome::ContextUnavailable,
+        );
         return Err(err);
     }
     if !screen_guide_context_can_be_captured(&context, url.as_deref(), &blocklist) {
@@ -2473,6 +2779,19 @@ pub async fn ask_screen_guide(
             state.inner(),
             request_generation,
             &deferred_restore,
+        );
+        if let Some(session) = diagnostic.as_mut() {
+            if let Err(error) = session.prepare_privacy_blocked_manifest() {
+                abort_screen_guide_diagnostic_after_write_error(
+                    &mut diagnostic,
+                    &error,
+                    "privacy_manifest",
+                );
+            }
+        }
+        finish_screen_guide_diagnostic(
+            &mut diagnostic,
+            ScreenGuideDiagnosticOutcome::PrivacyBlocked,
         );
         return Err(protected_screen_message());
     }
@@ -2489,22 +2808,46 @@ pub async fn ask_screen_guide(
     // Omnibar/Autofill cannot reopen and a newer Screen Guide overlay cannot
     // appear inside the synchronous CG capture. All slower context probes stay
     // outside this section.
+    record_screen_guide_diagnostic_stage(
+        &mut diagnostic,
+        ScreenGuideActivityStage::Capturing,
+    );
     publish_screen_guide_activity(
         &app,
         request_generation,
         ScreenGuideActivityStage::Capturing,
         None,
     );
-    let capture_result = (|| -> Result<(ScreenGuideDisplaySignature, Vec<u8>), String> {
+    let capture_once = || -> Result<
+        (
+            ScreenGuideDisplaySignature,
+            Vec<u8>,
+            ScreenGuideCaptureSignal,
+        ),
+        String,
+    > {
         let _lifecycle = SCREEN_GUIDE_LIFECYCLE.lock();
         ensure_screen_guide_request_current(state.inner(), request_generation)?;
         ensure_no_visible_fndr_windows(&app)?;
         let display = screen_guide_main_display_signature(&app)?;
         let image = crate::capture::macos::capture_screen()
             .map_err(|_| "Screen Guide could not capture the main display.".to_string())?;
-        Ok((display, image))
-    })();
-    let (captured_display, image_data) = match capture_result {
+        let signal = screen_guide_capture_signal(&image)?;
+        Ok((display, image, signal))
+    };
+    let mut capture_result = capture_once();
+    if capture_result
+        .as_ref()
+        .is_ok_and(|(_, _, signal)| signal.is_blank())
+    {
+        tracing::warn!(
+            request_id = request_generation,
+            "screen_guide:blank_capture_retry"
+        );
+        tokio::time::sleep(SCREEN_GUIDE_BLANK_CAPTURE_RETRY).await;
+        capture_result = capture_once();
+    }
+    let (captured_display, image_data, capture_signal) = match capture_result {
         Ok(capture) => capture,
         Err(err) => {
             restore_screen_guide_capture_if_owned(
@@ -2513,9 +2856,48 @@ pub async fn ask_screen_guide(
                 request_generation,
                 &deferred_restore,
             );
+            finish_screen_guide_diagnostic(
+                &mut diagnostic,
+                ScreenGuideDiagnosticOutcome::CaptureFailed,
+            );
             return Err(err);
         }
     };
+    tracing::info!(
+        request_id = request_generation,
+        width = capture_signal.width,
+        height = capture_signal.height,
+        bytes = image_data.len(),
+        mean_luma = capture_signal.mean_luma,
+        luma_stddev = capture_signal.luma_stddev,
+        luma_range = capture_signal.luma_range,
+        visible_alpha_fraction = capture_signal.visible_alpha_fraction,
+        blank = capture_signal.is_blank(),
+        "screen_guide:capture_inspected"
+    );
+    if capture_signal.is_blank() {
+        if let Some(session) = diagnostic.as_mut() {
+            session.record_capture_without_raw(
+                image_data.len(),
+                screen_guide_diagnostic_display(&captured_display),
+                screen_guide_diagnostic_capture_metrics(&capture_signal),
+            );
+        }
+        restore_screen_guide_capture_if_owned(
+            &app,
+            state.inner(),
+            request_generation,
+            &deferred_restore,
+        );
+        finish_screen_guide_diagnostic(
+            &mut diagnostic,
+            ScreenGuideDiagnosticOutcome::CaptureFailed,
+        );
+        return Err(
+            "Screen Guide captured an empty main display after macOS switched Spaces. Bring the target window to the main display, wait a moment, then try again."
+                .to_string(),
+        );
+    }
     if let Err(err) = ensure_screen_guide_request_current_or_restore(
         &app,
         state.inner(),
@@ -2552,6 +2934,10 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
+        finish_screen_guide_diagnostic(
+            &mut diagnostic,
+            ScreenGuideDiagnosticOutcome::TargetChanged,
+        );
         return Err(
             "Screen Guide paused because the visible screen changed during capture.".to_string(),
         );
@@ -2569,6 +2955,10 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
+        finish_screen_guide_diagnostic(
+            &mut diagnostic,
+            ScreenGuideDiagnosticOutcome::Failed,
+        );
         return Err(err);
     }
     schedule_screen_guide_hidden_lease(&app, request_generation);
@@ -2583,24 +2973,76 @@ pub async fn ask_screen_guide(
 
     // Pixels leave the Mac only with both the ChatGPT model and the separate
     // screenshot opt-in; the clone is taken before OCR consumes the capture.
-    let codex_screenshot = (settings.model == ScreenGuideModel::Codex && settings.send_screenshot_to_codex)
+    let codex_screenshot = (settings.model == ScreenGuideModel::Codex
+        && settings.send_screenshot_to_codex)
         .then(|| image_data.clone());
+    // Explicit diagnostic consent keeps one in-memory copy until OCR and its
+    // privacy decision finish. No raw diagnostic file exists before that gate.
+    let mut pending_diagnostic_capture = diagnostic.as_ref().map(|_| {
+        PendingScreenGuideDiagnosticCapture {
+            bytes: image_data.clone(),
+            display: screen_guide_diagnostic_display(&captured_display),
+            metrics: screen_guide_diagnostic_capture_metrics(&capture_signal),
+        }
+    });
 
+    record_screen_guide_diagnostic_stage(
+        &mut diagnostic,
+        ScreenGuideActivityStage::ReadingText,
+    );
     publish_screen_guide_activity(
         &app,
         request_generation,
         ScreenGuideActivityStage::ReadingText,
         None,
     );
-    let ocr = tokio::task::spawn_blocking(move || {
-        let engine =
-            OcrEngine::new().map_err(|_| "Screen Guide OCR is unavailable.".to_string())?;
+    let ocr_result = tokio::task::spawn_blocking(move || {
+        let engine = OcrEngine::with_config(OcrConfig::screen_guide())
+            .map_err(|_| "Screen Guide OCR is unavailable.".to_string())?;
         engine
             .recognize_screen_guide(&image_data)
             .map_err(|_| "Screen Guide could not read this screen.".to_string())
     })
-    .await
-    .map_err(|_| "Screen Guide OCR stopped unexpectedly.".to_string())??;
+    .await;
+    let ocr = match ocr_result {
+        Ok(Ok(ocr)) => ocr,
+        Ok(Err(error)) => {
+            ensure_screen_guide_request_current_or_discard_diagnostic(
+                &app,
+                state.inner(),
+                request_generation,
+                &deferred_restore,
+                &mut diagnostic,
+            )?;
+            record_screen_guide_diagnostic_capture_without_raw(
+                &mut diagnostic,
+                &mut pending_diagnostic_capture,
+            );
+            finish_screen_guide_diagnostic(
+                &mut diagnostic,
+                ScreenGuideDiagnosticOutcome::OcrFailed,
+            );
+            return Err(error);
+        }
+        Err(_) => {
+            ensure_screen_guide_request_current_or_discard_diagnostic(
+                &app,
+                state.inner(),
+                request_generation,
+                &deferred_restore,
+                &mut diagnostic,
+            )?;
+            record_screen_guide_diagnostic_capture_without_raw(
+                &mut diagnostic,
+                &mut pending_diagnostic_capture,
+            );
+            finish_screen_guide_diagnostic(
+                &mut diagnostic,
+                ScreenGuideDiagnosticOutcome::OcrFailed,
+            );
+            return Err("Screen Guide OCR stopped unexpectedly.".to_string());
+        }
+    };
 
     ensure_screen_guide_request_current_or_restore(
         &app,
@@ -2615,10 +3057,59 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
+        diagnostic.take();
         return Err(private_mode_message());
     }
 
+    // Raw diagnostic pixels remain memory-only until OCR has completed and the
+    // post-OCR safety gate has explicitly allowed the resulting context.
+    let latest_blocklist = state.inner().config.read().blocklist.clone();
+    if !screen_guide_ocr_is_allowed(&context, url.as_deref(), &ocr.plain_text, &latest_blocklist) {
+        restore_screen_guide_capture_if_owned(
+            &app,
+            state.inner(),
+            request_generation,
+            &deferred_restore,
+        );
+        if let Some(session) = diagnostic.as_mut() {
+            if let Err(error) = session.prepare_privacy_blocked_manifest() {
+                tracing::warn!(%error, "screen_guide:diagnostic_redaction_failed");
+                diagnostic.take();
+            }
+        }
+        finish_screen_guide_diagnostic(
+            &mut diagnostic,
+            ScreenGuideDiagnosticOutcome::PrivacyBlocked,
+        );
+        return Err(protected_screen_message());
+    }
+
     if ocr.plain_text.trim().is_empty() {
+        persist_screen_guide_diagnostic_capture(
+            &mut diagnostic,
+            &mut pending_diagnostic_capture,
+        )
+        .await;
+        if let Some(session) = diagnostic.as_mut() {
+            if let Err(error) = session.write_ocr(
+                &ocr.plain_text,
+                &ocr.lines,
+                OcrConfig::screen_guide().minimum_text_height,
+            ) {
+                abort_screen_guide_diagnostic_after_write_error(
+                    &mut diagnostic,
+                    &error,
+                    "ocr",
+                );
+            }
+        }
+        ensure_screen_guide_request_current_or_discard_diagnostic(
+            &app,
+            state.inner(),
+            request_generation,
+            &deferred_restore,
+            &mut diagnostic,
+        )?;
         let result = finish_screen_guide_answer(
             &app,
             state.inner(),
@@ -2634,21 +3125,42 @@ pub async fn ask_screen_guide(
             ok = result.is_ok(),
             "screen_guide:ask_finished_no_readable_text"
         );
+        if result.is_ok() {
+            finish_screen_guide_diagnostic(
+                &mut diagnostic,
+                ScreenGuideDiagnosticOutcome::NoReadableText,
+            );
+        } else {
+            diagnostic.take();
+        }
         return result;
     }
 
-    // A secret detected only after OCR must not proceed into model inference or
-    // speech, even though nothing in this path is persisted.
-    let latest_blocklist = state.inner().config.read().blocklist.clone();
-    if !screen_guide_ocr_is_allowed(&context, url.as_deref(), &ocr.plain_text, &latest_blocklist) {
-        restore_screen_guide_capture_if_owned(
-            &app,
-            state.inner(),
-            request_generation,
-            &deferred_restore,
-        );
-        return Err(protected_screen_message());
+    persist_screen_guide_diagnostic_capture(
+        &mut diagnostic,
+        &mut pending_diagnostic_capture,
+    )
+    .await;
+    if let Some(session) = diagnostic.as_mut() {
+        if let Err(error) = session.write_ocr(
+            &ocr.plain_text,
+            &ocr.lines,
+            OcrConfig::screen_guide().minimum_text_height,
+        ) {
+            abort_screen_guide_diagnostic_after_write_error(
+                &mut diagnostic,
+                &error,
+                "ocr",
+            );
+        }
     }
+    ensure_screen_guide_request_current_or_discard_diagnostic(
+        &app,
+        state.inner(),
+        request_generation,
+        &deferred_restore,
+        &mut diagnostic,
+    )?;
 
     let positioned_ocr = if ocr.lines.is_empty() {
         ocr.plain_text.clone()
@@ -2661,13 +3173,20 @@ pub async fn ask_screen_guide(
 
     let inference_started = Instant::now();
     let raw_answer = if settings.model == ScreenGuideModel::Codex {
+        record_screen_guide_diagnostic_stage(
+            &mut diagnostic,
+            ScreenGuideActivityStage::AnsweringChatGpt,
+        );
         publish_screen_guide_activity(
             &app,
             request_generation,
             ScreenGuideActivityStage::AnsweringChatGpt,
             None,
         );
-        tracing::info!(screenshot = codex_screenshot.is_some(), "screen_guide:codex_started");
+        tracing::info!(
+            screenshot = codex_screenshot.is_some(),
+            "screen_guide:codex_started"
+        );
         let answer = crate::ipc::commands::codex_account::answer_screen_guide_with_codex(
             &question,
             &screen_text,
@@ -2685,16 +3204,35 @@ pub async fn ask_screen_guide(
         match answer {
             Ok(answer) => answer,
             Err(err) => {
+                if let Err(cancelled) =
+                    ensure_screen_guide_request_current_or_discard_diagnostic(
+                        &app,
+                        state.inner(),
+                        request_generation,
+                        &deferred_restore,
+                        &mut diagnostic,
+                    )
+                {
+                    return Err(cancelled);
+                }
                 restore_screen_guide_capture_if_owned(
                     &app,
                     state.inner(),
                     request_generation,
                     &deferred_restore,
                 );
+                finish_screen_guide_diagnostic(
+                    &mut diagnostic,
+                    ScreenGuideDiagnosticOutcome::ModelUnavailable,
+                );
                 return Err(err);
             }
         }
     } else {
+        record_screen_guide_diagnostic_stage(
+            &mut diagnostic,
+            ScreenGuideActivityStage::CheckingOnDeviceModel,
+        );
         publish_screen_guide_activity(
             &app,
             request_generation,
@@ -2710,6 +3248,10 @@ pub async fn ask_screen_guide(
         )?;
         match inference_engine {
             Ok(Some(engine)) => {
+                record_screen_guide_diagnostic_stage(
+                    &mut diagnostic,
+                    ScreenGuideActivityStage::AnsweringOnDevice,
+                );
                 publish_screen_guide_activity(
                     &app,
                     request_generation,
@@ -2755,6 +3297,10 @@ pub async fn ask_screen_guide(
     )?;
     let has_usable_model_answer = is_usable_model_answer(&raw_answer);
     if !has_usable_model_answer {
+        record_screen_guide_diagnostic_stage(
+            &mut diagnostic,
+            ScreenGuideActivityStage::UsingGroundedFallback,
+        );
         publish_screen_guide_activity(
             &app,
             request_generation,
@@ -2816,6 +3362,14 @@ pub async fn ask_screen_guide(
         ok = result.is_ok(),
         "screen_guide:ask_finished"
     );
+    if result.is_ok() {
+        finish_screen_guide_diagnostic(
+            &mut diagnostic,
+            ScreenGuideDiagnosticOutcome::Completed,
+        );
+    } else {
+        diagnostic.take();
+    }
     result
 }
 
@@ -2852,6 +3406,16 @@ fn show_screen_guide_overlay<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<()
 }
 
 #[cfg(target_os = "macos")]
+fn screen_guide_overlay_collection_behavior() -> objc2_app_kit::NSWindowCollectionBehavior {
+    use objc2_app_kit::NSWindowCollectionBehavior;
+
+    NSWindowCollectionBehavior::CanJoinAllSpaces
+        | NSWindowCollectionBehavior::Stationary
+        | NSWindowCollectionBehavior::FullScreenAuxiliary
+        | NSWindowCollectionBehavior::IgnoresCycle
+}
+
+#[cfg(target_os = "macos")]
 fn configure_screen_guide_overlay_native_window<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> Result<(), String> {
@@ -2861,8 +3425,12 @@ fn configure_screen_guide_overlay_native_window<R: tauri::Runtime>(
     let pointer = window.ns_window().map_err(|err| err.to_string())?;
     let native_window = unsafe { &*(pointer as *const objc2_app_kit::NSWindow) };
     // The overlay must remain independently showable when the user has hidden
-    // FNDR with Cmd-H. Other FNDR windows retain their normal AppKit behavior.
-    unsafe { native_window.setCanHide(false) };
+    // FNDR with Cmd-H, and it must be allowed into another app's native
+    // full-screen Space. Other FNDR windows retain normal AppKit behavior.
+    unsafe {
+        native_window.setCollectionBehavior(screen_guide_overlay_collection_behavior());
+        native_window.setCanHide(false);
+    }
     Ok(())
 }
 
@@ -4015,10 +4583,7 @@ fn emit_screen_guide_event<R: tauri::Runtime>(
     }
 }
 
-fn publish_screen_guide_shortcut_rejection<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    message: String,
-) {
+fn publish_screen_guide_shortcut_rejection<R: tauri::Runtime>(app: &AppHandle<R>, message: String) {
     let (generation, enabled) = {
         let runtime = SCREEN_GUIDE_RUNTIME.lock();
         (runtime.generation, runtime.enabled)
@@ -4063,9 +4628,7 @@ fn screen_guide_context_probe_rank(context: &FrontmostAppContext) -> u8 {
     if !context.window_title_verified {
         return 1;
     }
-    if crate::capture::macos::is_browser_app(&context.app_name)
-        && context.browser_url.is_none()
-    {
+    if crate::capture::macos::is_browser_app(&context.app_name) && context.browser_url.is_none() {
         return 2;
     }
     3
@@ -4085,16 +4648,18 @@ fn screen_guide_context_matches_latched_app(
     }
 }
 
-async fn wait_for_screen_guide_capture_context<P, C>(
+async fn wait_for_screen_guide_capture_context<P, C, O>(
     request_id: u64,
     mut probe: P,
     mut ensure_current: C,
+    mut observe: O,
     max_attempts: usize,
     retry_interval: Duration,
 ) -> Result<FrontmostAppContext, String>
 where
     P: FnMut() -> FrontmostAppContext,
     C: FnMut() -> Result<(), String>,
+    O: FnMut(usize, &FrontmostAppContext, bool, bool, u8),
 {
     let attempts = max_attempts.max(1);
     let mut best_context = None;
@@ -4114,6 +4679,13 @@ where
         let matches_latched_target = latched_external_context
             .as_ref()
             .is_some_and(|latched| screen_guide_context_matches_latched_app(latched, &context));
+        observe(
+            attempt + 1,
+            &context,
+            internal,
+            matches_latched_target,
+            rank,
+        );
         tracing::info!(
             request_id,
             attempt = attempt + 1,
@@ -4449,7 +5021,25 @@ pub fn shutdown_screen_guide<R: tauri::Runtime>(app: &AppHandle<R>) {
 /// Hard privacy transition used by capture controls. Cancellation is visible
 /// to the renderer immediately so an active microphone stops; native window
 /// cleanup then runs behind the lifecycle gate without blocking the caller.
-pub fn cancel_screen_guide_for_privacy<R: tauri::Runtime>(app: &AppHandle<R>) {
+pub fn cancel_screen_guide_for_private_mode<R: tauri::Runtime>(app: &AppHandle<R>) {
+    cancel_screen_guide_for_privacy_reason(
+        app,
+        screen_guide_diagnostics::ScreenGuideDiagnosticDisarmReason::PrivateMode,
+    );
+}
+
+pub fn cancel_screen_guide_for_privacy_settings<R: tauri::Runtime>(app: &AppHandle<R>) {
+    cancel_screen_guide_for_privacy_reason(
+        app,
+        screen_guide_diagnostics::ScreenGuideDiagnosticDisarmReason::PrivacySettings,
+    );
+}
+
+fn cancel_screen_guide_for_privacy_reason<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    reason: screen_guide_diagnostics::ScreenGuideDiagnosticDisarmReason,
+) {
+    screen_guide_diagnostics::disarm_for_privacy(reason);
     let enabled = SCREEN_GUIDE_RUNTIME.lock().enabled;
     let immediate_generation = cancel_screen_guide_runtime(enabled);
     stop_say_process();
@@ -4498,6 +5088,42 @@ pub fn cancel_screen_guide_for_privacy<R: tauri::Runtime>(app: &AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn overlay_is_allowed_in_native_full_screen_spaces() {
+        use objc2_app_kit::NSWindowCollectionBehavior;
+
+        let behavior = screen_guide_overlay_collection_behavior();
+        assert!(behavior.contains(NSWindowCollectionBehavior::CanJoinAllSpaces));
+        assert!(behavior.contains(NSWindowCollectionBehavior::FullScreenAuxiliary));
+        assert!(behavior.contains(NSWindowCollectionBehavior::Stationary));
+        assert!(behavior.contains(NSWindowCollectionBehavior::IgnoresCycle));
+    }
+
+    #[test]
+    fn capture_signal_distinguishes_blank_frames_from_visible_content() {
+        let blank = vec![0u8; 64 * 64 * 4];
+        let blank_signal = screen_guide_capture_signal_from_rgba(64, 64, &blank);
+        assert!(blank_signal.is_blank());
+
+        let mut visible = vec![0u8; 64 * 64 * 4];
+        for pixel in visible.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+        for y in 20..44 {
+            for x in 12..52 {
+                let offset = (y * 64 + x) * 4;
+                visible[offset] = 240;
+                visible[offset + 1] = 240;
+                visible[offset + 2] = 240;
+            }
+        }
+        let visible_signal = screen_guide_capture_signal_from_rgba(64, 64, &visible);
+        assert!(!visible_signal.is_blank());
+        assert!(visible_signal.luma_stddev > 2.0);
+        assert_eq!(visible_signal.visible_alpha_fraction, 1.0);
+    }
 
     #[test]
     fn parses_trailing_normalized_point_cue_and_strips_it_from_answer() {
@@ -5101,6 +5727,7 @@ mod tests {
             41,
             || contexts.pop_front().expect("bounded probe fixture"),
             || Ok(()),
+            |_, _, _, _, _| {},
             3,
             Duration::ZERO,
         )
@@ -5134,6 +5761,7 @@ mod tests {
             44,
             || contexts.pop_front().expect("bounded probe fixture"),
             || Ok(()),
+            |_, _, _, _, _| {},
             2,
             Duration::ZERO,
         )
@@ -5161,6 +5789,7 @@ mod tests {
                 }
             },
             || Ok(()),
+            |_, _, _, _, _| {},
             3,
             Duration::ZERO,
         )
@@ -5195,6 +5824,7 @@ mod tests {
             43,
             || contexts.pop_front().expect("bounded probe fixture"),
             || Ok(()),
+            |_, _, _, _, _| {},
             2,
             Duration::ZERO,
         )

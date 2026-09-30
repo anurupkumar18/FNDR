@@ -11,6 +11,7 @@ import type {
     PrivacyAlert,
     PrivacyProof,
     RuntimeMetricsSnapshot,
+    ScreenGuideDiagnosticStatus,
     ScreenGuideSettings,
     Stats,
     Task,
@@ -652,6 +653,32 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         show_cursor: true,
     };
     let screenGuideGeneration = 0;
+    let screenGuideDiagnosticArmExpiresAt: number | null = null;
+    let screenGuideDiagnosticStatus: Omit<
+        ScreenGuideDiagnosticStatus,
+        "armed" | "expiresInMs"
+    > = {
+        bundleCount: 0,
+        partialCount: 0,
+        totalBytes: 0,
+        lastResult: null,
+    };
+    const currentScreenGuideDiagnosticStatus = (): ScreenGuideDiagnosticStatus => {
+        const expiresInMs = screenGuideDiagnosticArmExpiresAt === null
+            ? null
+            : Math.max(0, screenGuideDiagnosticArmExpiresAt - Date.now());
+        if (expiresInMs === 0) screenGuideDiagnosticArmExpiresAt = null;
+        return {
+            ...screenGuideDiagnosticStatus,
+            armed: expiresInMs !== null && expiresInMs > 0,
+            expiresInMs: expiresInMs !== null && expiresInMs > 0 ? expiresInMs : null,
+        };
+    };
+    const consumeScreenGuideDiagnosticArm = () => {
+        if (currentScreenGuideDiagnosticStatus().armed) {
+            screenGuideDiagnosticArmExpiresAt = null;
+        }
+    };
     const releasedScreenGuideGenerations = new Set<number>();
     let previewOnboardingState: OnboardingState = {
         step: "complete",
@@ -1074,6 +1101,42 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "get_screen_guide_settings":
                 return { ...screenGuideSettings };
+            case "get_screen_guide_diagnostic_status":
+                return currentScreenGuideDiagnosticStatus();
+            case "arm_screen_guide_diagnostic":
+                screenGuideDiagnosticArmExpiresAt = Date.now() + 5 * 60 * 1_000;
+                screenGuideDiagnosticStatus = {
+                    ...screenGuideDiagnosticStatus,
+                    lastResult: null,
+                };
+                return currentScreenGuideDiagnosticStatus();
+            case "delete_screen_guide_diagnostics":
+                screenGuideDiagnosticArmExpiresAt = null;
+                screenGuideDiagnosticStatus = {
+                    bundleCount: 0,
+                    partialCount: 0,
+                    totalBytes: 0,
+                    lastResult: {
+                        kind: "deleted",
+                        code: "diagnostics_deleted",
+                        message: "Preview cleared its synthetic diagnostic state; no files were written.",
+                        screenshotSaved: false,
+                        ocrSaved: false,
+                    },
+                };
+                return currentScreenGuideDiagnosticStatus();
+            case "reveal_screen_guide_diagnostics":
+                if (payload !== undefined) {
+                    throw new Error("Preview reveal_screen_guide_diagnostics accepts no path.");
+                }
+                if (
+                    screenGuideDiagnosticStatus.bundleCount === 0
+                    && screenGuideDiagnosticStatus.partialCount === 0
+                ) {
+                    throw new Error("There are no Screen Guide diagnostics to reveal.");
+                }
+                // Deliberate no-op: the browser preview never opens an OS-owned directory.
+                return currentScreenGuideDiagnosticStatus();
             case "set_screen_guide_settings": {
                 const settings = payloadRecord(payload)?.settings;
                 if (
@@ -1107,6 +1170,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     throw new Error("Preview screen_guide_release requires an active generation.");
                 }
                 releasedScreenGuideGenerations.add(generation);
+                consumeScreenGuideDiagnosticArm();
                 await emitPreviewEventIfAvailable(SCREEN_GUIDE_STATE_EVENT, {
                     phase: "answer",
                     message: "Preview-only response ready; no screen was captured.",
@@ -1115,6 +1179,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "submit_screen_guide_text":
                 requiredString(payload, "text", command);
+                consumeScreenGuideDiagnosticArm();
                 await emitPreviewEventIfAvailable(SCREEN_GUIDE_STATE_EVENT, {
                     phase: "answer",
                     message: "Preview-only response ready; no screen was captured.",

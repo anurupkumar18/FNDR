@@ -108,6 +108,7 @@
 
 .sg-settings-card,
 .sg-ask-card,
+.sg-diagnostics-card,
 .sg-privacy-note,
 .sg-status-warning {
     border: 1px solid var(--border);
@@ -259,6 +260,49 @@
     min-width: 78px;
 }
 
+.sg-diagnostics-card {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 14px 16px;
+}
+
+.sg-diagnostics-card strong {
+    font-size: 0.8rem;
+}
+
+.sg-diagnostics-card p {
+    max-width: 480px;
+    margin: 5px 0 0;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    line-height: 1.48;
+}
+
+.sg-diagnostics-card .sg-diagnostics-warning {
+    color: #e8bf75;
+}
+
+.sg-diagnostics-card .sg-diagnostics-state {
+    color: #8fc7ff;
+}
+
+.sg-diagnostics-card .sg-diagnostics-error {
+    color: var(--danger, #ff8f8f);
+}
+
+.sg-diagnostics-actions {
+    display: flex;
+    min-width: 156px;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sg-diagnostics-actions .ui-action-btn {
+    min-height: 44px;
+}
+
 .sg-hold-button {
     min-height: 48px;
     border: 1px solid rgba(72, 143, 224, 0.35);
@@ -299,6 +343,14 @@
     .sg-shortcut-row input {
         flex: 1;
         width: auto;
+    }
+
+    .sg-diagnostics-card {
+        flex-direction: column;
+    }
+
+    .sg-diagnostics-actions {
+        width: 100%;
     }
 }
 

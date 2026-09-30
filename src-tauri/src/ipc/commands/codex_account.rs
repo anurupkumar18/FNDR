@@ -528,6 +528,18 @@ fn downscaled_jpeg(png: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+fn ensure_screen_guide_not_cancelled(
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+
+    if cancel.load(Ordering::SeqCst) {
+        Err("Screen Guide was cancelled.".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// Answers a Screen Guide question with the user's ChatGPT plan. Uses the
 /// same prompt and [POINT] contract as the on-device model, so FNDR's
 /// grounding and freshness checks apply unchanged to the result.
@@ -541,12 +553,24 @@ pub(crate) async fn answer_screen_guide_with_codex(
 ) -> Result<String, String> {
     use std::sync::atomic::Ordering;
 
+    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
     let executable = ready_executable()?;
     let mcp_names = configured_mcp_server_names(&executable).await?;
+    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
     let args = read_only_session_args(&mcp_names)?;
+    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
     let mut server = AppServer::spawn_with(&executable, &args).await?;
 
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        server.shutdown().await;
+        return Err(error);
+    }
+
     let account = server.request("account/read", json!({ "refreshToken": false })).await?;
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        server.shutdown().await;
+        return Err(error);
+    }
     if parse_account(&account).map(|a| a.kind) != Some("chatgpt".to_string()) {
         server.shutdown().await;
         return Err("Sign in with ChatGPT in Hermes Agent settings to use ChatGPT for Screen Guide.".to_string());
@@ -567,13 +591,25 @@ pub(crate) async fn answer_screen_guide_with_codex(
         let jpeg = tokio::task::spawn_blocking(move || downscaled_jpeg(&png))
             .await
             .map_err(|_| "Screenshot preparation stopped unexpectedly.".to_string())??;
+        if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+            server.shutdown().await;
+            return Err(error);
+        }
         let path = scratch.0.join("screen.jpg");
         std::fs::write(&path, jpeg).map_err(|e| format!("Could not stage the screenshot: {e}"))?;
+        if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+            server.shutdown().await;
+            return Err(error);
+        }
         input.push(json!({ "type": "localImage", "path": path }));
         instructions.push(' ');
         instructions.push_str(SCREEN_GUIDE_SCREENSHOT_NOTE);
     }
 
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        server.shutdown().await;
+        return Err(error);
+    }
     let thread = server
         .request(
             "thread/start",
@@ -592,6 +628,10 @@ pub(crate) async fn answer_screen_guide_with_codex(
         .and_then(Value::as_str)
         .ok_or("Codex did not start a thread.")?
         .to_string();
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        server.shutdown().await;
+        return Err(error);
+    }
     let turn = server
         .request("turn/start", json!({ "threadId": thread_id, "input": input, "effort": "low" }))
         .await?;
@@ -706,6 +746,15 @@ mod tests {
     fn refuses_mcp_server_names_it_cannot_address() {
         assert!(read_only_session_args(&["weird name".into()]).is_err());
         assert!(read_only_session_args(&["a.b".into()]).is_err());
+    }
+
+    #[test]
+    fn screen_guide_cancellation_is_checked_before_remote_setup() {
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(
+            ensure_screen_guide_not_cancelled(&cancel),
+            Err("Screen Guide was cancelled.".to_string())
+        );
     }
 
     #[test]

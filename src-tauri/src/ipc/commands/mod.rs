@@ -86,6 +86,9 @@ pub use companion::*;
 mod screen_guide;
 pub use screen_guide::*;
 
+mod screen_guide_diagnostics;
+pub use screen_guide_diagnostics::*;
+
 // Privacy proof IPC command
 pub use crate::privacy_proof::*;
 
