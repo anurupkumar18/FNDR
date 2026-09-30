@@ -148,6 +148,36 @@ Implement the experience as an FNDR-owned **Screen Guide** domain.
 - Normal guide turns remain ephemeral. Any persistence beyond the explicit
   one-turn diagnostic bundle requires a separate product/privacy decision.
 
+## Amendment 2026-09-30: Screen Guide becomes a command-surface tool
+
+Screen Guide's question answering is now one tool, `about_this_screen`, in the
+command surface defined by `docs/product/command-surface.md`. The separate
+read-only product ends: there is no second entry point, router, or approval
+path for Screen Guide questions.
+
+What stays in force from this ADR, unchanged, for that tool:
+
+- Privacy policy runs before pixels are obtained, and incognito, internal FNDR,
+  and blocklisted contexts are refused.
+- Display pixels, OCR, questions, answers, and the conversation ring are not
+  persisted. The explicit one-turn diagnostic exception is unchanged.
+- Local inference is the default, with no silent cloud fallback.
+- The response boundary is typed, and a point cue cannot click or act.
+- Filename lookup keeps its fixed roots and metadata-only bounds. Its result
+  may feed `reveal_file`; it does not itself open, read, or reveal anything.
+
+What changes:
+
+- The statement that the feature is "read-only" now describes one tool, not a
+  product. Other tools in the registry act under the actions policy
+  (ADR 022).
+- `about_this_screen` is risk level Runs and has no side effects, so it needs
+  no approval card.
+- Text read from the screen is data for the answer only. It cannot add a
+  tool or an argument to any command (command-surface invariant 1).
+- Voice input follows ADR 020 and the shared voice stream, not the
+  Screen Guide-specific recorder, once VO-03 and VO-04 land.
+
 ## Source and attribution
 
 The behavior and selected motion/pointing ideas were informed by Clicky commit
