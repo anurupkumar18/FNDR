@@ -2542,6 +2542,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         }
         let pixels_started = Instant::now();
         let capture_result = macos::capture_screen();
+        #[cfg(debug_assertions)]
         let pixels_duration_ms = pixels_started.elapsed().as_millis() as u64;
         runtime_metrics::since_ms("capture.pixels_ms", pixels_started);
         let image_data = match capture_result {
