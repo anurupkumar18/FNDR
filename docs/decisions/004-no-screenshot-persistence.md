@@ -20,6 +20,28 @@ Diagnostic bundles stay inside private FNDR app data. Their files are never inde
 
 Private Mode refuses diagnostic arming and revokes a pending arm or active turn. If a safety rule rejects the turn, FNDR writes no raw capture or OCR artifacts; any privacy-blocked manifest removes app and bundle identity and keeps only aggregate stage/context evidence. If the exact artifacts would exceed the storage budget or a write fails, no incomplete bundle is published and the UI receives a typed receipt stating that the screenshot and OCR were not saved. This exception is for explicit local debugging, not memory history, and does not broaden the stable capture pipeline's no-screenshot-persistence contract.
 
+## Update 2026-09-30: debug-build Memory Journey exception
+
+Memory Journey adds a second, separately bounded developer exception. In a
+debug build, **Record next capture** may explicitly arm one capture attempt so
+the exact frame supplied to the production capture pipeline can be correlated
+with its observed OCR, cleanup, extraction, embedding-contract, storage,
+retrieval, and presentation evidence. The arm is consumed by the next attempt,
+including a privacy or admission skip. A pre-capture privacy rejection stores
+no pixels, OCR, prompt, or content artifacts.
+
+Memory Journey data stays in a private backend-owned app-data directory. It is
+never assigned to `screenshot_path`, indexed, embedded, added to Memory or
+LanceDB, used as model context, analyzed, or uploaded. Writes use partial data
+and atomic publication with owner-only permissions. Retention is limited to 24
+hours, six completed bundles, one active recording, and 128 MiB total. Export,
+reveal, and deletion require explicit developer actions. Production builds
+contain neither its raw-artifact commands nor its UI.
+
+This exception exists to establish a six-case current-state quality baseline.
+It does not authorize screenshot persistence in the stable capture pipeline or
+generalize the narrower Screen Guide diagnostic contract.
+
 ## Update 2026-05-13: CLIP image vectors on screen captures
 
 Screen captures now compute and store a 512-d CLIP image embedding alongside the existing text embeddings. The vector is derived from the same pixel buffer that already passes through Apple Vision OCR; **no raw pixels are persisted** (`screenshot_path` remains `None`). The vector is a compact, L2-normalized float32 representation — not a screenshot.

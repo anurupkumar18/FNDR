@@ -85,6 +85,23 @@ not as access to a model's thoughts or private reasoning.
   necessary to prove that a real subsystem emitted the event and performed the
   work.
 
+### Debug-build Memory Journey exception
+
+The Memory Journey inspector is deliberately outside the normal activity-trace
+privacy contract. After an explicit one-shot developer arm, a debug build may
+persist raw content artifacts and scoped model prompt/output data for one
+capture attempt so observed pipeline boundaries can be correlated. Its UI must
+label the surface as private developer evidence, not model "thinking" or a
+normal user activity history.
+
+The exception is limited by the versioned contract in
+`docs/product/memory-journey.md`: owner-only local storage, one active journey,
+six bundles, 24 hours, 128 MiB, explicit export/delete, no automatic upload,
+and no ingestion into Memory, embeddings, model context, analytics, or normal
+activity traces. A release build contains no raw Memory Journey commands or UI.
+This exception does not permit captured content in the always-available
+privacy-safe activity trace.
+
 ## Rejected alternatives
 
 - **Show model chain-of-thought:** misleading as an execution trace and
