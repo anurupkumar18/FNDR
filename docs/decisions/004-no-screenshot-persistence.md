@@ -10,7 +10,15 @@ The LanceDB schema still contains screenshot/image-related fields for compatibil
 
 ## Update 2026-09-08: explicit Screen Guide captures
 
-Screen Guide may capture the current display only after an explicit user request. The privacy policy is evaluated before pixels are obtained, Screen Guide's own panel and overlay are hidden before capture, and the resulting image exists only in process memory long enough for OCR and local inference. It must not be assigned a `screenshot_path`, written to a file, or converted into a `MemoryRecord`.
+Screen Guide may capture the current display only after an explicit user request. The privacy policy is evaluated before pixels are obtained, Screen Guide's own panel and overlay are hidden before capture, and a normal turn keeps the resulting image only in process memory long enough for OCR and answer generation. A normal turn must not assign a `screenshot_path`, write pixels to a file, or create a `MemoryRecord`.
+
+## Update 2026-09-28: explicit one-turn Screen Guide diagnostics
+
+Screen Guide has one narrow troubleshooting exception to the normal ephemeral rule. Selecting **Save next turn** explicitly arms diagnostics for five minutes. The arm is consumed by the next display-reading turn; filename-only lookup does not consume it. Raw pixels remain in memory until OCR completes and the post-OCR safety gate allows the turn. Only then may FNDR save the exact encoded screenshot supplied to OCR, exact OCR text and positioned lines, and a bounded manifest of stage timing, display geometry, aggregate image statistics, and privacy-reduced context probes. An OCR failure retains aggregate evidence only.
+
+Diagnostic bundles stay inside private FNDR app data. Their files are never indexed, embedded, added to Memory or LanceDB, supplied as model context, uploaded, or exported automatically. The diagnostics directory uses mode `0700` and its files use mode `0600`. Startup, periodic five-minute, and lazy command/session cleanup remove abandoned partials and completed bundles older than 24 hours. At most two completed bundles are kept, and active partials plus completed bundles share a 64 MiB cap. The panel reports completed bundles, active partials, bytes, and a typed save/error receipt; it can delete all diagnostic files and cancel an unused arm. An explicit backend-owned reveal action opens only FNDR's fixed local diagnostics directory.
+
+Private Mode refuses diagnostic arming and revokes a pending arm or active turn. If a safety rule rejects the turn, FNDR writes no raw capture or OCR artifacts; any privacy-blocked manifest removes app and bundle identity and keeps only aggregate stage/context evidence. If the exact artifacts would exceed the storage budget or a write fails, no incomplete bundle is published and the UI receives a typed receipt stating that the screenshot and OCR were not saved. This exception is for explicit local debugging, not memory history, and does not broaden the stable capture pipeline's no-screenshot-persistence contract.
 
 ## Update 2026-05-13: CLIP image vectors on screen captures
 

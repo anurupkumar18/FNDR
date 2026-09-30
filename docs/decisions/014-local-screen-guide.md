@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted
+Accepted; amended 2026-09-28 for bounded diagnostics and native capture
+stabilization.
 
 ## Context
 
@@ -46,11 +47,15 @@ Implement the experience as an FNDR-owned **Screen Guide** domain.
   Incognito prevents the metadata process from starting.
 - Privacy policy runs before screen pixels are obtained. The guide refuses
   incognito, internal FNDR, and blocklisted contexts.
-- Display pixels, OCR, questions, answers, and the in-memory conversation ring
-  are not persisted by Screen Guide. The existing local Whisper boundary may
-  create a bounded temporary audio file and removes it after transcription.
-- Screen pixels are passed only to existing local inference. There is no silent
-  cloud fallback and no imported Clicky Worker.
+- Normal Screen Guide turns do not persist display pixels, OCR, questions,
+  answers, or the in-memory conversation ring. The existing local Whisper
+  boundary may create a bounded temporary audio file and removes it after
+  transcription. The explicit one-turn diagnostic exception is defined below.
+- Local inference remains the default. The existing optional ChatGPT answer
+  path runs only when the person selects it, and pixels are included only with
+  the separate screenshot consent. There is no silent cloud fallback and no
+  imported Clicky Worker. Arming diagnostics never enables or changes egress,
+  and files from a diagnostic bundle are never uploaded.
 - Heavy inference is serialized through `model_pipeline_lock`.
 - The response boundary is typed. Apple Vision text-line centers are supplied
   as normalized location evidence. Model `[POINT:...]` text is accepted only
@@ -61,7 +66,22 @@ Implement the experience as an FNDR-owned **Screen Guide** domain.
   becomes a durable memory source. Other visible FNDR windows stay excluded
   until the visual turn ends, so they cannot cover the app being described;
   previously visible FNDR surfaces are then restored without taking focus from
-  the target application.
+  the target application. Its native collection behavior includes
+  `FullScreenAuxiliary`, so it can accompany another app in a native
+  full-screen Space without becoming the active application.
+- After FNDR hides, bounded context probes wait for AppKit and Accessibility to
+  agree on the exposed target instead of trusting one fixed delay. A captured
+  frame is checked for dimensions, alpha, and luminance variation; an apparently
+  blank frame is retried once after a short compositor settle, then rejected
+  with an actionable error rather than sent to OCR or inference.
+- Screen Guide uses a dedicated Apple Vision OCR profile with
+  `minimum_text_height = 0.015` so ordinary Retina browser and editor text is
+  eligible. The durable memory-capture default remains `0.02`; Screen Guide
+  stabilization does not silently change stored-memory OCR behavior.
+- Display capture still targets the primary display. Full-screen Space support
+  does not imply multi-display support: a target on another display must be
+  moved to the primary display until the monitor-aware ScreenCaptureKit
+  follow-up is implemented and native-tested.
 - Native microphone watchdogs begin before the renderer requests audio, require
   a stop acknowledgement after every returned MediaStream is closed, and
   destroy/recreate the WebView after a missed acknowledgement or hard privacy
@@ -79,12 +99,39 @@ Implement the experience as an FNDR-owned **Screen Guide** domain.
   or use a private placement API.
 - “Companion” remains reserved for FNDR's iPhone/Watch Companion API.
 
+### Explicit one-turn diagnostics
+
+- **Save next turn** arms one display-reading turn for five minutes and is
+  consumed when that turn starts. Filename-only lookup does not consume it.
+- Raw pixels remain in memory until OCR completes and the post-OCR safety gate
+  allows the turn. Only then may the bundle contain the exact screenshot
+  supplied to OCR, exact OCR text and positioned lines, plus a bounded manifest
+  of stage timings, display geometry, aggregate image statistics, outcome, and
+  privacy-reduced context probes. OCR failures retain aggregate evidence only.
+- Bundles live only under private FNDR app data, with `0700` directories and
+  `0600` files. Startup, periodic five-minute, and lazy cleanup remove abandoned
+  partials and completed bundles older than 24 hours. At most two completed
+  bundles are retained; active partials and completed bundles share a 64 MiB
+  cap. The panel reports both kinds, their total bytes, and the typed result of
+  the last save, and can delete them while also cancelling an unused arm.
+- Diagnostic files never enter Memory, LanceDB, retrieval, embeddings, model
+  context, telemetry, cloud requests, or automatic export. The existing answer
+  provider path remains separate and is not changed by diagnostic consent.
+- Private Mode refuses arming and revokes a pending arm or active diagnostic.
+  A privacy-blocked manifest contains no raw screenshot, OCR, app name, or
+  bundle identifier; only aggregate stage/context evidence may remain.
+- An over-budget or failed write publishes no incomplete bundle and returns a
+  typed receipt saying whether the screenshot and OCR were saved. An explicit
+  backend-owned reveal action opens only the fixed local diagnostics directory;
+  the renderer cannot supply an arbitrary path.
+
 ## Consequences
 
 - Users get the useful Clicky interaction within FNDR's bundle and privacy
   model, without three required cloud accounts or a second app.
-- The initial implementation can reuse existing services and add no storage
-  schema or production dependency.
+- The initial implementation reuses existing services and adds no storage
+  schema. Explicit diagnostics add only bounded local app-data files under the
+  retention policy above.
 - Explicit file questions can be answered without capturing the screen or
   granting Full Disk Access, but match completeness depends on the macOS
   metadata index and the user's Files and Folders permissions.
@@ -98,8 +145,8 @@ Implement the experience as an FNDR-owned **Screen Guide** domain.
 - Exact public-Clicky parity for modifier-only shortcuts and multi-monitor
   pointing requires platform-specific hardening beyond the primary-display
   vertical slice.
-- Persisting a guide turn or enabling any cloud provider requires a separate
-  product/privacy decision.
+- Normal guide turns remain ephemeral. Any persistence beyond the explicit
+  one-turn diagnostic bundle requires a separate product/privacy decision.
 
 ## Source and attribution
 
