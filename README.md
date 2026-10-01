@@ -180,8 +180,11 @@ Implemented controls include:
 
 FNDR is local-first by default. Optional environment variables can enable external integrations; review `.env.example` before enabling them.
 
-Screen Guide does not persist its audio, transcript, screen turn, filename
-query, or file matches. Its explicit file route uses macOS metadata only inside
+Normal Screen Guide use does not persist its audio, transcript, screen turn,
+filename query, or file matches. An explicit **Save next turn** troubleshooting
+control can retain one safety-approved display turn briefly in private app data;
+that diagnostic is bounded, deletable, never indexed or uploaded, and is not
+Memory history. The explicit file route uses macOS metadata only inside
 Documents, Desktop, and Downloads; it does not read file contents, scan the full
 home directory, or require Full Disk Access.
 

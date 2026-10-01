@@ -26,6 +26,8 @@ pub mod memory_embedding_document;
 pub mod memory_insight;
 pub mod memory_quality;
 pub mod memory_review;
+#[cfg(debug_assertions)]
+pub mod memory_journey;
 pub mod models;
 pub mod ocr;
 pub mod privacy;
@@ -370,6 +372,10 @@ impl CapturePipelineStats {
 /// Application state shared across threads
 pub struct AppState {
     pub app_data_dir: PathBuf,
+    /// Explicit, debug-build-only one-shot pipeline evidence recorder. Release
+    /// builds do not contain this field, its commands, or its raw-artifact UI.
+    #[cfg(debug_assertions)]
+    pub memory_journey: Arc<memory_journey::MemoryJourneyRecorder>,
     pub config: RwLock<Config>,
     pub store: Arc<Store>,
     pub state_store: Arc<StateStore>,
@@ -458,6 +464,10 @@ impl AppState {
         vlm: Option<Arc<VlmEngine>>,
     ) -> Self {
         let (proactive_tx, proactive_rx) = tokio::sync::watch::channel(None);
+        #[cfg(debug_assertions)]
+        let memory_journey = Arc::new(memory_journey::MemoryJourneyRecorder::new(
+            app_data_dir.join("developer-memory-journeys"),
+        ));
         let capture_paused = match state_store.load_json::<bool>(USER_CAPTURE_PAUSED_STATE_KEY) {
             Ok(Some(paused)) => paused,
             Ok(None) => false,
@@ -471,6 +481,8 @@ impl AppState {
         };
         Self {
             app_data_dir,
+            #[cfg(debug_assertions)]
+            memory_journey,
             config: RwLock::new(config),
             store,
             state_store,
@@ -579,6 +591,17 @@ impl AppState {
 
     pub fn set_app_handle(&self, handle: tauri::AppHandle) {
         *self.app_handle.write() = Some(handle);
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn emit_memory_journey_status(&self) {
+        use tauri::Emitter;
+        let Ok(status) = self.memory_journey.status() else {
+            return;
+        };
+        if let Some(handle) = self.app_handle.read().as_ref() {
+            let _ = handle.emit("memory-journey://status", status);
+        }
     }
 
     /// Pause capture for transient internal work without changing the user's

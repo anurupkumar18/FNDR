@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { RuntimeMetricsSnapshot } from "@/shared/ipc/tauri";
 
 const mocks = vi.hoisted(() => ({
@@ -103,14 +103,62 @@ describe("EngineMetricsCard", () => {
 
     afterEach(() => cleanup());
 
-    it("announces the initial load instead of rendering a blank diagnostics card", () => {
+    it("shows the observed diagnostics request while the first refresh is pending", async () => {
         mocks.getRuntimeMetrics.mockReturnValue(new Promise(() => {}));
 
         render(<EngineMetricsCard enabled />);
 
-        expect(screen.getByRole("status")).toHaveTextContent(
-            "Loading live engine diagnostics",
+        const trace = await screen.findByRole("region", {
+            name: "Engine diagnostics activity",
+        });
+        expect(within(trace).getByText("Requesting engine diagnostics")).toBeInTheDocument();
+        expect(within(trace).getByText("Running")).toBeInTheDocument();
+    });
+
+    it("shows only safe aggregate metadata from a completed diagnostics refresh", async () => {
+        const snapshot = runtimeSnapshot();
+        snapshot.aggregates = {
+            retrieval: {
+                n: 2,
+                sum_ms: 12,
+                ewma_ms: 5,
+                p50_ms: 4,
+                p95_ms: 8,
+                max_ms: 8,
+                avg_ms: 6,
+            },
+        };
+        snapshot.recent = [
+            { op: "retrieval", ms: 5, ts_ms: 1_790_115_600_000, meta: null },
+        ];
+        mocks.getRuntimeMetrics.mockResolvedValue(snapshot);
+
+        render(<EngineMetricsCard enabled />);
+
+        const trace = await screen.findByRole("region", {
+            name: "Engine diagnostics activity",
+        });
+        expect(await within(trace).findByText("Engine diagnostics refreshed")).toBeInTheDocument();
+        fireEvent.click(within(trace).getByRole("button", { name: "Show Engine diagnostics activity details" }));
+        expect(within(trace).getByText(/1 latency group · 1 recent operation/i)).toBeInTheDocument();
+        expect(trace).toHaveTextContent("Verified result");
+        expect(within(trace).queryByText("Running")).not.toBeInTheDocument();
+        expect(within(trace).queryByText(/retrieval/i)).not.toBeInTheDocument();
+    });
+
+    it("does not leak native errors through the diagnostics trace or fallback", async () => {
+        mocks.getRuntimeMetrics.mockRejectedValue(
+            new Error("failed at /Users/person/vault.db via private.example"),
         );
+
+        render(<EngineMetricsCard enabled />);
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Engine diagnostics could not load");
+        expect(alert).not.toHaveTextContent(/vault\.db|private\.example/);
+        const trace = screen.getByRole("region", { name: "Engine diagnostics activity" });
+        expect(within(trace).getByText("Engine diagnostics refresh failed")).toBeInTheDocument();
+        expect(within(trace).getByText("Failed")).toBeInTheDocument();
     });
 
     it("explains empty successful snapshots and preserves real zero values", async () => {
@@ -134,14 +182,15 @@ describe("EngineMetricsCard", () => {
 
         render(<EngineMetricsCard enabled />);
 
-        expect(await screen.findByRole("alert")).toHaveTextContent(
-            "metrics bridge unavailable",
-        );
+        expect(await screen.findByRole("alert")).toHaveTextContent("Engine diagnostics could not load");
+        expect(screen.getByRole("alert")).not.toHaveTextContent("metrics bridge unavailable");
         fireEvent.click(screen.getByRole("button", { name: "Retry engine diagnostics" }));
 
         await waitFor(() => expect(mocks.getRuntimeMetrics).toHaveBeenCalledTimes(2));
         expect(await screen.findByText("No latency samples yet.")).toBeInTheDocument();
         expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+        const trace = screen.getByRole("region", { name: "Engine diagnostics activity" });
+        expect(within(trace).getByText("Engine diagnostics refreshed")).toBeInTheDocument();
     });
 
     it("does not silently omit memory-review status when its request fails", async () => {
@@ -151,7 +200,8 @@ describe("EngineMetricsCard", () => {
         render(<EngineMetricsCard enabled />);
 
         expect(await screen.findByText("unavailable")).toHaveAccessibleDescription(
-            "worker status unavailable",
+            "Memory review status is unavailable.",
         );
+        expect(screen.queryByText("worker status unavailable")).not.toBeInTheDocument();
     });
 });

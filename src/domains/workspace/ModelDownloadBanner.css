@@ -33,6 +33,10 @@
     font-size: 13px;
 }
 
+.model-download-trace {
+    margin-top: 14px;
+}
+
 .banner-action-area {
     margin-top: 16px;
     display: flex;

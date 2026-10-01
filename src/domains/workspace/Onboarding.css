@@ -480,6 +480,12 @@
     text-align: center;
 }
 
+.ob-activity-trace {
+    width: 100%;
+    margin: 0 0 24px;
+    text-align: left;
+}
+
 .ob-error-box {
     background: var(--ob-danger-light);
     border: 1.5px solid var(--ob-danger);

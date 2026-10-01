@@ -194,6 +194,11 @@
     animation: errorShake 0.35s var(--ease-spring);
 }
 
+.biometric-lock-activity {
+    margin-bottom: 18px;
+    text-align: left;
+}
+
 @keyframes errorShake {
 
     0%,
@@ -739,6 +744,14 @@
 
 .main-column {
     min-width: 0;
+}
+
+.search-activity-trace-wrap {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 0 20px;
+    box-sizing: border-box;
 }
 
 /* ===== Error banner ===== */

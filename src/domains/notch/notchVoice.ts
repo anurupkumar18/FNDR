@@ -87,7 +87,7 @@ export class VoiceCapture {
         recorder.onstop = () => {
             void this.finish(recorder.mimeType || options?.mimeType || "audio/webm");
         };
-        recorder.start(VOICE_RECORDING.timesliceMs);
+        recorder.start();
     }
 
     /** Resolves once the recorder has flushed its last chunk. */

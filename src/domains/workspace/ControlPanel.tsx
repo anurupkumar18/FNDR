@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
     type CaptureStatus,
@@ -36,6 +36,13 @@ import {
     type WallpaperId,
 } from "@/shared/wallpaper/wallpaper-registry";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+    type ActivityTraceStatus,
+} from "@/shared/activity/activityTrace";
 import { PrivacyPanel } from "./PrivacyPanel";
 import "./ControlPanel.css";
 
@@ -50,6 +57,99 @@ type QualityStatus = {
     dropped_count: number;
     flagged_count: number;
 };
+
+function captureActivityTrace(
+    status: CaptureStatus,
+    observedAtMs: number,
+): ActivityTraceSnapshot {
+    const safeIdentifier = (value: string | null | undefined, fallback: string) => {
+        const candidate = value?.trim() ?? "";
+        return /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(candidate)
+            ? candidate
+            : fallback;
+    };
+    const embeddingModel = safeIdentifier(
+        status.embedding_model_name,
+        "Embedding model not reported",
+    );
+    const embeddingBackend = safeIdentifier(
+        status.embedding_backend,
+        "backend not reported",
+    );
+    let trace = beginActivityTrace({
+        id: "capture-pipeline",
+        title: "Capture pipeline activity",
+        startedAtMs: observedAtMs,
+    });
+
+    const embeddingStatus: ActivityTraceStatus = status.embedding_backend === "unavailable"
+        ? "failed"
+        : status.embedding_degraded
+            ? "degraded"
+            : "completed";
+    trace = recordActivityStep(trace, {
+        id: "embedding-runtime",
+        label: status.embedding_backend === "unavailable"
+            ? "Text embeddings unavailable"
+            : status.embedding_degraded
+                ? "Text embeddings running in degraded mode"
+                : "Text embeddings ready",
+        actor: "Embedding runtime",
+        status: embeddingStatus,
+        evidence: "backend-snapshot",
+        atMs: observedAtMs,
+        detail: `${embeddingModel} · ${embeddingBackend}`,
+    });
+
+    trace = recordActivityStep(trace, {
+        id: "local-model",
+        label: status.ai_model_loaded
+            ? "Local reasoning model loaded"
+            : status.ai_model_available
+                ? "Local reasoning model available but idle"
+                : "Local reasoning model unavailable",
+        actor: "Local model runtime",
+        status: status.ai_model_loaded
+            ? "completed"
+            : status.ai_model_available
+                ? "waiting"
+                : "degraded",
+        evidence: "backend-snapshot",
+        atMs: observedAtMs,
+        detail: status.ai_model_loaded
+            ? safeIdentifier(status.loaded_model_id, "Model identifier not reported")
+            : "No model loaded",
+    });
+
+    let captureStatus: ActivityTraceStatus = "waiting";
+    let captureLabel = "Capture pipeline idle";
+    if (status.embedding_backend === "unavailable") {
+        captureStatus = "failed";
+        captureLabel = "Capture blocked by embedding runtime";
+    } else if (status.is_incognito) {
+        captureLabel = "Private mode is suppressing capture";
+    } else if (status.is_paused) {
+        captureLabel = "Capture paused";
+    } else if (status.is_capturing) {
+        if (status.embedding_degraded) {
+            captureStatus = "degraded";
+            captureLabel = "Capture enabled with degraded embeddings";
+        } else {
+            captureStatus = "waiting";
+            captureLabel = "Capture enabled for the next sample";
+        }
+    }
+
+    return recordActivityStep(trace, {
+        id: "capture-state",
+        label: captureLabel,
+        actor: "Capture policy",
+        status: captureStatus,
+        evidence: "backend-snapshot",
+        atMs: observedAtMs,
+        detail: `${status.pipeline.stored_total.toLocaleString()} stored · ${status.pipeline.skipped_total.toLocaleString()} skipped`,
+    });
+}
 
 export function ControlPanel({
     status,
@@ -229,7 +329,11 @@ export function ControlPanel({
         setCaptureBusy(true);
         setCaptureMessage(null);
         try {
-            if (capturePaused) {
+            if (status.is_incognito) {
+                await resumeCapture();
+                setCapturePaused(false);
+                setCaptureMessage("Private mode ended. Screen Guide and local capture are available again.");
+            } else if (capturePaused) {
                 await resumeCapture();
                 setCapturePaused(false);
                 setCaptureMessage("Capture resumed. New screen context can be processed locally.");
@@ -306,6 +410,10 @@ export function ControlPanel({
     const stored = status?.pipeline.stored_total ?? qualityStatus?.stored_count ?? 0;
     const skipped = status?.pipeline.skipped_total ?? qualityStatus?.dropped_count ?? 0;
     const readyModels = models.filter((model) => model.download_url === "already_downloaded");
+    const captureTrace = useMemo(
+        () => status ? captureActivityTrace(status, Date.now()) : null,
+        [status],
+    );
 
     return (
         <div className="control-panel-container">
@@ -476,7 +584,7 @@ export function ControlPanel({
                                 </p>
                                 <button
                                     type="button"
-                                    className={`ui-action-btn capture-toggle ${capturePaused ? "is-paused" : "is-capturing"}`}
+                                    className={`ui-action-btn capture-toggle ${capturePaused || status?.is_incognito ? "is-paused" : "is-capturing"}`}
                                     onClick={() => void handleToggleCapture()}
                                     disabled={!status || captureBusy}
                                 >
@@ -484,6 +592,8 @@ export function ControlPanel({
                                         ? "Checking capture status…"
                                         : captureBusy
                                             ? "Updating…"
+                                            : status?.is_incognito
+                                                ? "Exit private mode"
                                             : capturePaused
                                                 ? "Resume capture"
                                                 : "Pause capture"}
@@ -501,6 +611,12 @@ export function ControlPanel({
                                     <span>Stored this session: {stored.toLocaleString()}</span>
                                     <span>Skipped this session: {skipped.toLocaleString()}</span>
                                 </div>
+                                {captureTrace && (
+                                    <ActivityTrace
+                                        trace={captureTrace}
+                                        className="capture-activity-trace"
+                                    />
+                                )}
                             </section>
 
                             <section className="panel-section">

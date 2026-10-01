@@ -13,6 +13,13 @@ import {
     searchMemoryCards,
 } from "@/shared/ipc/tauri";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+    type ActivityTraceStatus,
+} from "@/shared/activity/activityTrace";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
 
 const SEARCH_DEBOUNCE_MS = 250;
 const CLIP_DEBOUNCE_MS = 150;
@@ -57,6 +64,24 @@ function answerGroundingLabel(answer: ComposedAnswer): string {
     return "Limited evidence in your local memory";
 }
 
+function matchCountLabel(count: number): string {
+    return `${count} ${count === 1 ? "match" : "matches"}`;
+}
+
+function answerActivityResult(answer: ComposedAnswer): {
+    label: string;
+    status: ActivityTraceStatus;
+} {
+    const memories = `${answer.cards.length} local ${answer.cards.length === 1 ? "memory" : "memories"}`;
+    if (answer.verify_outcome.kind === "grounded") {
+        return { label: `Answer grounded in ${memories}`, status: "completed" };
+    }
+    if (answer.verify_outcome.kind === "partial_answer") {
+        return { label: `Partial answer composed from ${memories}`, status: "degraded" };
+    }
+    return { label: "Answer returned with limited evidence", status: "degraded" };
+}
+
 export function OmnibarApp() {
     const [surface, setSurface] = useState<Surface>("memory");
     const [query, setQuery] = useState("");
@@ -67,6 +92,7 @@ export function OmnibarApp() {
     const [mode, setMode] = useState<Mode>({ kind: "search" });
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
+    const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
     const searchSeq = useRef(0);
@@ -89,6 +115,7 @@ export function OmnibarApp() {
         setMode({ kind: "search" });
         setCopiedId(null);
         setFeedback(null);
+        setActivityTrace(null);
     }, []);
 
     useTauriEvent<void>(OMNIBAR_FOCUS_EVENT, () => {
@@ -109,12 +136,47 @@ export function OmnibarApp() {
             setResults([]);
             setSelectedIndex(0);
             setSearching(false);
+            setActivityTrace(null);
             return;
         }
         const seq = ++searchSeq.current;
+        const traceId = `omnibar-memory-search-${seq}`;
+        const startedAt = Date.now();
         setFeedback(null);
         setSearching(true);
+        setActivityTrace(recordActivityStep(
+            beginActivityTrace({ id: traceId, title: "Quick Find activity", startedAtMs: startedAt }),
+            {
+                id: "debounce",
+                label: "Waiting for typing to settle",
+                actor: "Quick Find",
+                status: "waiting",
+                evidence: "frontend-event",
+                atMs: startedAt,
+            },
+        ));
         const timer = window.setTimeout(() => {
+            const requestedAt = Date.now();
+            setActivityTrace((current) => {
+                if (current?.id !== traceId) return current;
+                const withSettledInput = recordActivityStep(current, {
+                    id: "debounce",
+                    label: "Typing settled",
+                    actor: "Quick Find",
+                    status: "completed",
+                    evidence: "frontend-event",
+                    atMs: requestedAt,
+                    durationMs: requestedAt - startedAt,
+                });
+                return recordActivityStep(withSettledInput, {
+                    id: "request",
+                    label: "Requesting local memory matches",
+                    actor: "Memory search",
+                    status: "running",
+                    evidence: "ipc-boundary",
+                    atMs: requestedAt,
+                });
+            });
             searchMemoryCards(trimmed, undefined, undefined, RESULT_LIMIT)
                 .then((cards) => {
                     if (searchSeq.current !== seq) {
@@ -123,6 +185,27 @@ export function OmnibarApp() {
                     setResults(cards);
                     setSelectedIndex(0);
                     setSearching(false);
+                    const finishedAt = Date.now();
+                    setActivityTrace((current) => {
+                        if (current?.id !== traceId) return current;
+                        const withCompletedRequest = recordActivityStep(current, {
+                            id: "request",
+                            label: "Local memory search completed",
+                            actor: "Memory search",
+                            status: "completed",
+                            evidence: "ipc-boundary",
+                            atMs: finishedAt,
+                            durationMs: finishedAt - requestedAt,
+                        });
+                        return recordActivityStep(withCompletedRequest, {
+                            id: "result",
+                            label: `Memory search returned ${matchCountLabel(cards.length)}`,
+                            actor: "Memory search",
+                            status: "completed",
+                            evidence: "result-metadata",
+                            atMs: finishedAt,
+                        });
+                    });
                 })
                 .catch(() => {
                     if (searchSeq.current !== seq) {
@@ -134,6 +217,18 @@ export function OmnibarApp() {
                         kind: "error",
                         message: "Couldn’t search your memory. Try again.",
                     });
+                    const failedAt = Date.now();
+                    setActivityTrace((current) => current?.id === traceId
+                        ? recordActivityStep(current, {
+                            id: "request",
+                            label: "Memory search failed",
+                            actor: "Memory search",
+                            status: "failed",
+                            evidence: "ipc-boundary",
+                            atMs: failedAt,
+                            durationMs: failedAt - requestedAt,
+                        })
+                        : current);
                 });
         }, SEARCH_DEBOUNCE_MS);
         return () => window.clearTimeout(timer);
@@ -144,9 +239,43 @@ export function OmnibarApp() {
             return;
         }
         const seq = ++searchSeq.current;
+        const traceId = `omnibar-clipboard-search-${seq}`;
+        const startedAt = Date.now();
         setFeedback(null);
         setSearching(true);
+        setActivityTrace(recordActivityStep(
+            beginActivityTrace({ id: traceId, title: "Quick Find activity", startedAtMs: startedAt }),
+            {
+                id: "debounce",
+                label: "Waiting to read clipboard history",
+                actor: "Quick Find",
+                status: "waiting",
+                evidence: "frontend-event",
+                atMs: startedAt,
+            },
+        ));
         const timer = window.setTimeout(() => {
+            const requestedAt = Date.now();
+            setActivityTrace((current) => {
+                if (current?.id !== traceId) return current;
+                const withSettledInput = recordActivityStep(current, {
+                    id: "debounce",
+                    label: "Clipboard request ready",
+                    actor: "Quick Find",
+                    status: "completed",
+                    evidence: "frontend-event",
+                    atMs: requestedAt,
+                    durationMs: requestedAt - startedAt,
+                });
+                return recordActivityStep(withSettledInput, {
+                    id: "request",
+                    label: "Requesting clipboard history",
+                    actor: "Clipboard history",
+                    status: "running",
+                    evidence: "ipc-boundary",
+                    atMs: requestedAt,
+                });
+            });
             getClipboardHistory(query.trim() || undefined, CLIP_LIMIT)
                 .then((entries) => {
                     if (searchSeq.current !== seq) {
@@ -155,6 +284,27 @@ export function OmnibarApp() {
                     setClips(entries);
                     setSelectedIndex(0);
                     setSearching(false);
+                    const finishedAt = Date.now();
+                    setActivityTrace((current) => {
+                        if (current?.id !== traceId) return current;
+                        const withCompletedRequest = recordActivityStep(current, {
+                            id: "request",
+                            label: "Clipboard history request completed",
+                            actor: "Clipboard history",
+                            status: "completed",
+                            evidence: "ipc-boundary",
+                            atMs: finishedAt,
+                            durationMs: finishedAt - requestedAt,
+                        });
+                        return recordActivityStep(withCompletedRequest, {
+                            id: "result",
+                            label: `Clipboard search returned ${matchCountLabel(entries.length)}`,
+                            actor: "Clipboard history",
+                            status: "completed",
+                            evidence: "result-metadata",
+                            atMs: finishedAt,
+                        });
+                    });
                 })
                 .catch(() => {
                     if (searchSeq.current !== seq) {
@@ -166,6 +316,18 @@ export function OmnibarApp() {
                         kind: "error",
                         message: "Couldn’t load clipboard history. Try again.",
                     });
+                    const failedAt = Date.now();
+                    setActivityTrace((current) => current?.id === traceId
+                        ? recordActivityStep(current, {
+                            id: "request",
+                            label: "Clipboard history request failed",
+                            actor: "Clipboard history",
+                            status: "failed",
+                            evidence: "ipc-boundary",
+                            atMs: failedAt,
+                            durationMs: failedAt - requestedAt,
+                        })
+                        : current);
                 });
         }, CLIP_DEBOUNCE_MS);
         return () => window.clearTimeout(timer);
@@ -261,12 +423,48 @@ export function OmnibarApp() {
         }
         searchSeq.current += 1;
         const seq = ++actionSeq.current;
+        const traceId = `omnibar-answer-${seq}`;
+        const requestedAt = Date.now();
         setSearching(false);
         setFeedback(null);
         setMode({ kind: "asking" });
+        setActivityTrace(recordActivityStep(
+            beginActivityTrace({ id: traceId, title: "Quick Find activity", startedAtMs: requestedAt }),
+            {
+                id: "request",
+                label: "Requesting an answer from local memory",
+                actor: "FNDR answer service",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: requestedAt,
+            },
+        ));
         fndrAnswer(trimmed)
             .then((answer) => {
-                if (actionSeq.current === seq) setMode({ kind: "answer", answer });
+                if (actionSeq.current !== seq) return;
+                setMode({ kind: "answer", answer });
+                const finishedAt = Date.now();
+                const result = answerActivityResult(answer);
+                setActivityTrace((current) => {
+                    if (current?.id !== traceId) return current;
+                    const withCompletedRequest = recordActivityStep(current, {
+                        id: "request",
+                        label: "Local-memory answer request completed",
+                        actor: "FNDR answer service",
+                        status: "completed",
+                        evidence: "ipc-boundary",
+                        atMs: finishedAt,
+                        durationMs: finishedAt - requestedAt,
+                    });
+                    return recordActivityStep(withCompletedRequest, {
+                        id: "result",
+                        label: result.label,
+                        actor: "FNDR answer service",
+                        status: result.status,
+                        evidence: "result-metadata",
+                        atMs: finishedAt,
+                    });
+                });
             })
             .catch(() => {
                 if (actionSeq.current !== seq) return;
@@ -275,6 +473,18 @@ export function OmnibarApp() {
                     kind: "error",
                     message: "Couldn’t answer from your memory right now. Try again.",
                 });
+                const failedAt = Date.now();
+                setActivityTrace((current) => current?.id === traceId
+                    ? recordActivityStep(current, {
+                        id: "request",
+                        label: "Answer request failed",
+                        actor: "FNDR answer service",
+                        status: "failed",
+                        evidence: "ipc-boundary",
+                        atMs: failedAt,
+                        durationMs: failedAt - requestedAt,
+                    })
+                    : current);
                 window.requestAnimationFrame(() => inputRef.current?.focus());
             });
     }, [query]);
@@ -302,6 +512,7 @@ export function OmnibarApp() {
         setMode({ kind: "search" });
         setCopiedId(null);
         setFeedback(null);
+        setActivityTrace(null);
         inputRef.current?.focus();
     }, []);
 
@@ -421,6 +632,14 @@ export function OmnibarApp() {
                 </button>
             </div>
 
+            {activityTrace && (
+                <ActivityTrace
+                    trace={activityTrace}
+                    className="omnibar-activity"
+                    showDetails={false}
+                />
+            )}
+
             {surface === "memory" && mode.kind === "search" && (
                 <div
                     id="omnibar-memory-results"
@@ -511,9 +730,7 @@ export function OmnibarApp() {
             )}
 
             {surface === "memory" && mode.kind === "asking" && (
-                <div className="omnibar-answer omnibar-answer-loading" role="status" aria-live="polite">
-                    Thinking through your memory…
-                </div>
+                <div className="omnibar-answer omnibar-answer-loading" aria-hidden="true" />
             )}
 
             {surface === "memory" && mode.kind === "answer" && (

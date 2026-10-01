@@ -19,6 +19,12 @@ import {
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+} from "@/shared/activity/activityTrace";
+import type { ActivityTraceSnapshot } from "@/shared/activity/activityTrace";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { CodexAccountCard } from "./CodexAccountCard";
 import "./AgentWorkspace.css";
@@ -42,6 +48,17 @@ function newConversationId(): string {
 
 function isProvider(value: string | null | undefined): value is Provider {
     return value === "codex" || value === "ollama" || value === "openrouter" || value === "custom";
+}
+
+function activityModelLabel(hermes: HermesBridgeStatus | null): string {
+    if (!hermes || !isProvider(hermes.provider_kind)) return "Configured model";
+    const provider = PROVIDER_LABEL[hermes.provider_kind];
+    const model = hermes.model_name?.trim();
+    // A custom model field can contain arbitrary user input. Only surface a
+    // bounded identifier here; paths, URLs, and prose stay out of the trace.
+    return model && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(model)
+        ? `${provider} · ${model}`
+        : provider;
 }
 
 function relativeTime(ms: number): string {
@@ -76,12 +93,15 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
     const [attached, setAttached] = useState<AttachedMemory[]>([]);
     const [sending, setSending] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [setupOpen, setSetupOpen] = useState(false);
     const [pickerOpen, setPickerOpen] = useState(false);
 
     const dialogRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
     const threadEndRef = useRef<HTMLDivElement>(null);
+    const requestGenerationRef = useRef(0);
+    const activeRequestRef = useRef<{ generation: number; conversationId: string } | null>(null);
     useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
 
     const refreshHermes = useCallback(async () => {
@@ -117,23 +137,34 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
         : "Not set up";
 
     const startNewChat = () => {
+        activeRequestRef.current = null;
+        requestGenerationRef.current += 1;
+        setSending(false);
         setConversationId(newConversationId());
         setMessages([]);
         setAttached([]);
         setError(null);
+        setActivityTrace(null);
         setSetupOpen(false);
     };
 
     const openChat = async (id: string) => {
+        activeRequestRef.current = null;
+        const loadGeneration = ++requestGenerationRef.current;
+        setSending(false);
+        setActivityTrace(null);
         setError(null);
         setSetupOpen(false);
         try {
             const chat = await getAgentChat(id);
+            if (requestGenerationRef.current !== loadGeneration) return;
             if (!chat) return;
             setConversationId(chat.id);
             setMessages(chat.messages);
             setAttached([]);
+            setActivityTrace(null);
         } catch (reason) {
+            if (requestGenerationRef.current !== loadGeneration) return;
             setError(reason instanceof Error ? reason.message : String(reason));
         }
     };
@@ -148,23 +179,84 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
         const text = draft.trim();
         if (!text || sending || !configured) return;
         const memories = attached;
+        const requestConversationId = conversationId;
+        const requestGeneration = ++requestGenerationRef.current;
+        activeRequestRef.current = {
+            generation: requestGeneration,
+            conversationId: requestConversationId,
+        };
+        const isCurrentRequest = () => {
+            const active = activeRequestRef.current;
+            return active?.generation === requestGeneration
+                && active.conversationId === requestConversationId;
+        };
         setMessages((current) => [...current, { role: "user", content: text, at: Date.now(), memories }]);
         setDraft("");
         setAttached([]);
         setPickerOpen(false);
         setSending(true);
         setError(null);
+        const requestStartedAt = Date.now();
+        const model = activityModelLabel(hermes);
+        setActivityTrace(recordActivityStep(
+            beginActivityTrace({
+                id: `agent-request-${requestStartedAt}`,
+                title: "Agent request activity",
+                startedAtMs: requestStartedAt,
+            }),
+            {
+                id: "request",
+                label: `Waiting for ${model}`,
+                actor: "Hermes bridge",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: requestStartedAt,
+                detail: `${memories.length} ${memories.length === 1 ? "memory" : "memories"} attached`,
+            },
+        ));
         try {
-            const reply = await sendHermesMessage(conversationId, text, memories.map((m) => m.id));
+            const reply = await sendHermesMessage(requestConversationId, text, memories.map((m) => m.id));
+            if (!isCurrentRequest()) return;
+            const finishedAt = Date.now();
             setMessages((current) => [
                 ...current,
                 { role: "assistant", content: reply.content, at: Date.now(), memories: [] },
             ]);
+            setActivityTrace((current) => {
+                if (!current || current.id !== `agent-request-${requestStartedAt}`) return current;
+                return recordActivityStep(current, {
+                    id: "request",
+                    label: `Response received from ${model}`,
+                    actor: "Hermes bridge",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: finishedAt,
+                    durationMs: finishedAt - requestStartedAt,
+                    detail: `${memories.length} ${memories.length === 1 ? "memory" : "memories"} attached`,
+                });
+            });
             void refreshChats();
         } catch (reason) {
+            if (!isCurrentRequest()) return;
             setError(reason instanceof Error ? reason.message : String(reason));
+            const failedAt = Date.now();
+            setActivityTrace((current) => {
+                if (!current || current.id !== `agent-request-${requestStartedAt}`) return current;
+                return recordActivityStep(current, {
+                    id: "request",
+                    label: `Request to ${model} failed`,
+                    actor: "Hermes bridge",
+                    status: "failed",
+                    evidence: "ipc-boundary",
+                    atMs: failedAt,
+                    durationMs: failedAt - requestStartedAt,
+                });
+            });
         } finally {
-            setSending(false);
+            if (isCurrentRequest()) {
+                activeRequestRef.current = null;
+                setSending(false);
+            }
         }
     };
 
@@ -234,7 +326,7 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                         onInstalled={refreshHermes}
                     />
                 ) : (
-                    <div className="aw-thread" aria-live="polite">
+                    <div className="aw-thread">
                         {messages.length === 0 && !sending ? (
                             <div className="aw-empty">
                                 <h3>What should we work on?</h3>
@@ -258,13 +350,8 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                                 <p className="aw-bubble">{message.content}</p>
                             </div>
                         ))}
-                        {sending ? (
-                            <div className="aw-message aw-assistant" role="status">
-                                <p className="aw-bubble aw-thinking">
-                                    <ThinkingIndicator state="composing" size="sm" />
-                                    {hermes?.api_server_ready ? "Thinking…" : "Starting Hermes…"}
-                                </p>
-                            </div>
+                        {activityTrace ? (
+                            <ActivityTrace trace={activityTrace} className="aw-activity-trace" />
                         ) : null}
                         <div ref={threadEndRef} />
                     </div>
@@ -457,6 +544,7 @@ function AgentSetup({ hermes, onSaved, onInstalled }: AgentSetupProps) {
     const [codex, setCodex] = useState<CodexAccountStatus | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [setupActivity, setSetupActivity] = useState<ActivityTraceSnapshot | null>(null);
 
     const chooseProvider = (next: Provider) => {
         setProvider(next);
@@ -474,13 +562,53 @@ function AgentSetup({ hermes, onSaved, onInstalled }: AgentSetupProps) {
         );
     }, []);
 
-    const run = async (action: () => Promise<unknown>) => {
+    const run = async (
+        labels: { start: string; success: string; failure: string },
+        action: () => Promise<unknown>,
+    ) => {
+        const startedAtMs = Date.now();
+        const startedTrace = recordActivityStep(
+            beginActivityTrace({
+                id: `agent-setup-${startedAtMs}`,
+                title: "Agent setup activity",
+                startedAtMs,
+            }),
+            {
+                id: "setup-request",
+                label: labels.start,
+                actor: "Hermes bridge",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        );
+        setSetupActivity(startedTrace);
         setBusy(true);
         setError(null);
         try {
             await action();
+            const finishedAtMs = Date.now();
+            setSetupActivity(recordActivityStep(startedTrace, {
+                id: "setup-request",
+                label: labels.success,
+                actor: "Hermes bridge",
+                status: "completed",
+                evidence: "result-metadata",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }));
         } catch (reason) {
             setError(reason instanceof Error ? reason.message : String(reason));
+            const finishedAtMs = Date.now();
+            setSetupActivity(recordActivityStep(startedTrace, {
+                id: "setup-request",
+                label: labels.failure,
+                actor: "Hermes bridge",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }));
         } finally {
             setBusy(false);
         }
@@ -492,12 +620,20 @@ function AgentSetup({ hermes, onSaved, onInstalled }: AgentSetupProps) {
                 <h3>Install Hermes</h3>
                 <p>FNDR's agent runs on Hermes, an open-source agent runtime. Install it once, then pick a model.</p>
                 <code className="aw-code">{hermes.install_command}</code>
+                {setupActivity ? <ActivityTrace trace={setupActivity} /> : null}
                 {error ? <p className="aw-error" role="alert">{error}</p> : null}
                 <div className="aw-setup-actions">
-                    <button type="button" className="aw-primary" disabled={busy} onClick={() => void run(async () => {
-                        await installHermesBridge();
-                        await onInstalled();
-                    })}>
+                    <button type="button" className="aw-primary" disabled={busy} onClick={() => void run(
+                        {
+                            start: "Requesting Hermes installation",
+                            success: "Hermes installation refreshed",
+                            failure: "Hermes installation failed",
+                        },
+                        async () => {
+                            await installHermesBridge();
+                            await onInstalled();
+                        },
+                    )}>
                         {busy ? "Installing…" : "Install Hermes"}
                     </button>
                 </div>
@@ -574,22 +710,30 @@ function AgentSetup({ hermes, onSaved, onInstalled }: AgentSetupProps) {
             ) : null}
 
             {error ? <p className="aw-error" role="alert">{error}</p> : null}
+            {setupActivity ? <ActivityTrace trace={setupActivity} /> : null}
             <div className="aw-setup-actions">
                 <button
                     type="button"
                     className="aw-primary"
                     disabled={!canSave}
                     onClick={() =>
-                        void run(async () => {
-                            await saveHermesSetup({
-                                provider_kind: provider,
-                                model_name: model.trim(),
-                                api_key: provider === "openrouter" || provider === "custom" ? apiKey : null,
-                                base_url: provider === "custom" || provider === "ollama" ? baseUrl.trim() : null,
-                            });
-                            setApiKey("");
-                            await onSaved();
-                        })
+                        void run(
+                            {
+                                start: "Saving agent model configuration",
+                                success: "Agent model configuration saved",
+                                failure: "Agent model configuration failed",
+                            },
+                            async () => {
+                                await saveHermesSetup({
+                                    provider_kind: provider,
+                                    model_name: model.trim(),
+                                    api_key: provider === "openrouter" || provider === "custom" ? apiKey : null,
+                                    base_url: provider === "custom" || provider === "ollama" ? baseUrl.trim() : null,
+                                });
+                                setApiKey("");
+                                await onSaved();
+                            },
+                        )
                     }
                 >
                     {busy ? "Saving…" : "Save"}

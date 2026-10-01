@@ -30,12 +30,17 @@ get an optional visual point cue or learn where a matching local file lives.
 
 - Screen Guide can already answer a typed or recorded question about an
   ephemeral main-display capture.
+- Its click-through overlay uses native full-screen auxiliary collection
+  behavior, and capture now verifies the exposed target, retries one apparently
+  blank frame, and uses a dedicated Retina-readable OCR profile.
 - Voice capture originates in a WebView, while transcription runs through
   FNDR's local speech boundary; packaged audio handling has not been reliable
   enough for shortcut-first use.
 - FNDR's memory retrieval does not locate a current file by name on demand.
-- Screen Guide has a transient overlay but no bounded, OS-managed presence in
+- Screen Guide has a transient overlay and a bounded fixed-state status item in
   the menu-bar/notch region while the app is running.
+- Normal turns remain ephemeral. A person can explicitly arm one display turn
+  to save a short-lived local diagnostic bundle for troubleshooting.
 
 ## Proposed behavior
 
@@ -55,13 +60,23 @@ get an optional visual point cue or learn where a matching local file lives.
    directory.
 5. Other questions follow the existing Screen Guide path: FNDR hides its
    overlay, applies the normal privacy policy, obtains a fresh in-memory screen
-   capture, and uses local OCR and inference. A validated normalized point cue
-   may identify a visible text label; icon-only targets are answered without a
-   cue.
+   capture, rejects or retries an apparently blank frame, and reads it with the
+   Screen Guide-specific Apple Vision profile (`minimum_text_height = 0.015`).
+   A validated normalized point cue may identify a visible text label;
+   icon-only targets are answered without a cue. Answer generation uses the
+   configured provider; local remains the default, while optional ChatGPT image
+   egress still requires its separate screenshot consent.
 6. The overlay shows the answer and, when speech output is enabled, speaks it
    with a local macOS voice before dismissing. FNDR windows excluded for a
    screen turn remain hidden until that visual answer ends, keeping the guided
    app visible and focused. A new interaction supersedes the previous one.
+7. **Save next turn** explicitly arms one display-reading turn for five minutes.
+   After OCR and its safety gate allow the turn, FNDR saves the exact OCR input
+   image, OCR output, and a privacy-reduced timing/context manifest only in
+   private FNDR app data. The arm is consumed once, expires if unused, and is
+   revoked by Private Mode. The panel shows a typed save/error receipt, storage
+   counts, delete, and a backend-owned reveal action. If OCR fails or privacy
+   blocks the turn, raw artifacts are not written.
 
 ## Non-goals
 
@@ -72,8 +87,12 @@ get an optional visual point cue or learn where a matching local file lives.
 - General full-Mac, full-home, file-content, Library, or arbitrary-volume
   search.
 - Reading, previewing, opening, revealing, moving, or modifying a located file.
-- Retaining raw pixels, temporary audio, transcripts, answers, or conversation turns.
+- Retaining raw pixels, temporary audio, transcripts, answers, or conversation
+  turns from normal use. The explicit, bounded one-turn diagnostic bundle is
+  not memory history.
 - Retaining filename queries or file-match lists as Screen Guide history.
+- Automatically exporting, uploading, indexing, embedding, or adding a Screen
+  Guide diagnostic to model context.
 - Replacing or drawing over the physical notch with a private macOS API, or
   showing questions, filenames, or answers in the status item.
 - Importing Clicky branding, analytics, onboarding media, or design system.
@@ -85,10 +104,12 @@ get an optional visual point cue or learn where a matching local file lives.
 - FR3: Settings persist through FNDR's existing configuration file.
 - FR4: The shortcut coexists with Autofill and Omnibar shortcuts.
 - FR5: The overlay is transparent, non-focusable, click-through, and visible
-  across macOS workspaces without becoming durable captured context.
+  across macOS workspaces, including another app's native full-screen Space via
+  `FullScreenAuxiliary`, without becoming durable captured context.
 - FR6: Incognito, FNDR's own windows, and blocklisted contexts are rejected
   before a guide capture.
-- FR7: Screen pixels remain in memory and are dropped after the turn.
+- FR7: During a normal turn, screen pixels remain in memory and are dropped
+  after the turn. Only FR19's explicitly armed diagnostic may write them.
 - FR8: Voice transcription reuses FNDR's local speech path.
 - FR9: Answers use local inference when available and degrade to a bounded,
   grounded screen summary when it is not.
@@ -111,6 +132,34 @@ get an optional visual point cue or learn where a matching local file lives.
 - FR18: While FNDR is running, an OS-managed status item beside the notch/menu
   bar displays only bounded fixed states; it never displays user input, file
   metadata, screen text, or answer text.
+- FR19: **Save next turn** arms for five minutes and is consumed by the next
+  display-reading turn, not by filename lookup. Private Mode refuses arming and
+  revokes a pending arm or active diagnostic.
+- FR20: Diagnostics remain in FNDR app data only, with `0700` directories and
+  `0600` files. Startup, periodic five-minute, and lazy cleanup remove abandoned
+  partials and completed bundles older than 24 hours. Cleanup keeps at most two
+  completed bundles, while active partials and completed bundles share a 64 MiB
+  cap. A panel control deletes both and cancels an arm.
+- FR21: Raw diagnostic pixels remain in memory until OCR completes and the
+  post-OCR safety gate allows the turn. Only then may FNDR write the exact
+  screenshot, OCR text and positioned lines. OCR failure retains aggregate
+  evidence only. A privacy-blocked manifest has no raw artifacts, app name, or
+  bundle identifier.
+- FR22: An apparently blank captured frame is retried once after a short
+  compositor settle and then fails with an actionable error rather than
+  continuing to OCR or inference.
+- FR23: Screen Guide uses `minimum_text_height = 0.015`; the durable memory
+  pipeline keeps its separate `0.02` OCR default.
+- FR24: The current capture backend reads the primary display only. UI and
+  errors must not imply that a window on another display was captured.
+- FR25: Diagnostic files never enter Memory, LanceDB, retrieval, embeddings,
+  model context, telemetry, cloud requests, or automatic export. Diagnostic
+  consent does not alter the separately configured answer-provider egress path.
+- FR26: The panel reports completed and active-partial counts, total bytes, and
+  a typed last-result receipt including whether screenshot and OCR were saved.
+  Over-budget or failed writes publish no incomplete bundle.
+- FR27: Reveal is an explicit backend-owned action for FNDR's fixed diagnostics
+  directory; the renderer supplies no path.
 
 ## Non-functional requirements
 
@@ -126,7 +175,8 @@ get an optional visual point cue or learn where a matching local file lives.
   telemetry. Local Whisper may use its existing bounded temporary audio file,
   which is removed after transcription. Filename lookup is restricted to the
   three disclosed folders and never returns an absolute home path to the UI or
-  speech layer.
+  speech layer. Diagnostic persistence requires the separate explicit arm,
+  follows FR20 and FR21, and never changes provider or egress settings.
 - Accessibility: every spoken response is also text; the overlay uses a live
   region, the status item has a meaningful tooltip, and motion honors Reduce
   Motion.
@@ -140,6 +190,7 @@ get an optional visual point cue or learn where a matching local file lives.
 | Screen Guide | FNDR's live, local, read-only screen assistance feature | New domain |
 | Guide interaction | One explicit voice or text question and its transient answer | New domain |
 | Ephemeral display capture | Pixels held only long enough to answer a guide interaction | ADR 004 |
+| One-turn diagnostic bundle | Explicitly armed, short-lived local screenshot, OCR, and timing evidence for one display-reading turn | ADR 004 / ADR 014 |
 | Point cue | Validated visual-only target using normalized display coordinates | New domain |
 | Scoped file lookup | An explicit filename-only macOS metadata query limited to Documents, Desktop, and Downloads | ADR 014 |
 | Notch status item | The OS-managed, fixed-state FNDR status item placed by macOS in the menu-bar/notch region | ADR 014 |
@@ -155,6 +206,7 @@ get an optional visual point cue or learn where a matching local file lives.
 | `speech` | Normalize recorded audio for bundled local transcription and speak local answers | Existing local boundary | Format, cleanup, and fallback cases |
 | Screen Guide command coordinator | Route explicit file requests to bounded macOS metadata lookup | Internal, additive branch | Classification, validation, privacy, formatting |
 | `ipc/commands` | Thin settings, lifecycle, answer, speech commands | Additive Tauri API | Serialization contracts |
+| Screen Guide diagnostics | Arm, consume, securely store, retain, and delete one-turn evidence | Additive local app-data exception; no schema | Consent, permissions, redaction, retention, deletion |
 | `src/domains/screen-guide` | Panel and overlay | Additive panel key/window | UI states and settings |
 | shortcut/window/status setup | Register guide, overlay, and status item | Preserve existing shortcuts; fixed phase event | Conflict, stale-state, and privacy tests |
 
@@ -165,9 +217,16 @@ explicit press -> local microphone -> on-device transcription -> classify reques
   explicit filename request -> incognito gate -> bounded macOS metadata query
                             -> filename + relative folder
   visible-screen question  -> pre-capture privacy gate -> ephemeral screen pixels
-                            -> OCR/local inference -> typed text + optional point cue
+                            -> blank check/retry -> Screen Guide OCR
+                            -> configured answer inference -> typed text + optional point cue
 both routes -> click-through text overlay + optional local speech
             -> discard pixels/audio/transcript/answer/lookup state
+
+explicit diagnostic arm -> next display-reading turn only -> OCR + safety gate
+                        -> allowed + within budget: private raw/manifest bundle
+                        -> blocked/failure: aggregate-only or typed error receipt
+                        -> startup/periodic/lazy expiry or explicit delete
+                        -> never Memory/index/model context/cloud/automatic export
 
 phase changes -> fixed-state OS status item (never user content)
 ```
@@ -180,8 +239,27 @@ phase changes -> fixed-state OS status item (never user content)
 - [ ] Holding the shortcut records only while held; release transcribes and can
       return a local spoken answer without opening the main FNDR window.
 - [ ] The target application keeps focus and the overlay never intercepts clicks.
+- [ ] The overlay can appear in another app's native full-screen Space without
+      activating FNDR or entering the captured frame.
 - [ ] A denied private context performs no OCR or inference.
-- [ ] No guide screenshot path or guide record appears in persistent storage.
+- [ ] Normal turns create no guide screenshot path or guide record. An
+      explicitly armed diagnostic creates only the bounded app-data bundle.
+- [ ] Diagnostic arming expires after five minutes, is consumed once, refuses
+      Private Mode, is revoked by a later Private Mode transition, and can be
+      deleted from the Screen Guide panel.
+- [ ] Diagnostic directories/files use `0700`/`0600`; startup, periodic, and
+      lazy cleanup enforce two completed bundles, 24-hour expiry, and a shared
+      64 MiB cap across completed and active-partial data.
+- [ ] A post-OCR privacy rejection leaves no diagnostic screenshot, OCR, app
+      name, or bundle identifier, and an OCR failure retains no raw capture.
+- [ ] The panel truthfully reports partials, bytes, and screenshot/OCR save
+      status; an over-budget write leaves no published bundle.
+- [ ] Diagnostic files have no Memory, LanceDB, retrieval, embedding, model
+      context, telemetry, cloud, or automatic-export path. Reveal opens only the
+      backend-owned fixed directory after an explicit user action.
+- [ ] A blank capture is retried once and then reports an actionable error.
+- [ ] Retina browser/editor fixtures demonstrate the dedicated `0.015` OCR
+      profile without changing the durable capture pipeline's `0.02` default.
 - [ ] Malformed or out-of-range point output cannot escape as a UI action.
 - [ ] Muting or interrupting speech leaves the text response intact.
 - [ ] Missing permissions/models produce an actionable local error or fallback.
@@ -199,12 +277,16 @@ phase changes -> fixed-state OS status item (never user content)
 ## Rollout / migration plan
 
 The configuration field is additive and defaults to disabled; no user content
-is migrated. Existing installs move the FNDR-owned speech runtime from its
-legacy Documents location into private app data on first fallback use. The
-first implementation targets the primary display; multi-display
-capture/overlay parity is a follow-up hardening slice because it requires a
-tested physical/logical coordinate map for mixed-scale and negative-origin
-layouts.
+is migrated. Diagnostics also default to off and are one-shot rather than a
+saved preference. Startup cleanup removes abandoned partials; periodic
+five-minute and lazy cleanup enforce the completed-bundle age/count/byte policy.
+Existing installs move the FNDR-owned speech runtime from its legacy Documents
+location into private app data on first fallback use. The first implementation
+still captures the primary display only; `FullScreenAuxiliary` fixes overlay
+participation in native full-screen Spaces but does not select a secondary monitor.
+Multi-display capture/overlay parity remains a follow-up hardening slice because
+it requires a tested physical/logical coordinate map for mixed-scale and
+negative-origin layouts and a monitor-aware ScreenCaptureKit backend.
 
 ## Risks
 
@@ -214,8 +296,14 @@ layouts.
   legitimately produce no matches.
 - Screen content can contain prompt injection; the guide must remain read-only.
 - A full-screen overlay can contaminate capture unless hidden or excluded first.
+- AppKit and Accessibility can expose a new full-screen target at different
+  times; bounded convergence and blank-frame retry reduce, but cannot eliminate,
+  compositor/Space transition failures.
 - OCR bounds locate text lines rather than precise accessibility hitboxes, and
   semantic target selection still varies with the local model.
+- An explicitly saved diagnostic can contain everything visible on the screen;
+  the consent warning, private permissions, strict retention, safety redaction,
+  truthful receipts, and delete control are mandatory parts of the feature.
 - macOS controls exact status-item placement; FNDR can live beside the notch but
   must not assume a particular notch geometry or use private placement APIs.
 
@@ -224,6 +312,7 @@ layouts.
 1. Repair packaged local microphone/transcription normalization and cleanup.
 2. Add explicit, privacy-bounded filename routing and macOS metadata lookup.
 3. Add the fixed-state OS status item and stale-state lifecycle protection.
-4. Verify shortcut voice, local speech, file lookup, and permission behavior in
-   a packaged macOS build.
-5. Harden multi-display capture/coordinate behavior in a later slice.
+4. Verify shortcut voice, local speech, file lookup, full-screen handoff,
+   one-turn diagnostics, and permission behavior in a packaged macOS build.
+5. Replace primary-display capture with a monitor-aware ScreenCaptureKit path
+   and harden mixed-scale/negative-origin coordinates in a later slice.

@@ -64,6 +64,13 @@
     flex-wrap: wrap;
 }
 
+.memory-cards-activity-trace {
+    flex: 0 0 auto;
+    padding: 10px 28px;
+    border-bottom: var(--header-border);
+    background: color-mix(in srgb, var(--surface) 54%, transparent);
+}
+
 .memory-cards-filters {
     display: flex;
     flex-wrap: wrap;

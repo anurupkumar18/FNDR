@@ -80,6 +80,39 @@ describe("AskPanel", () => {
         expect(onOpen).toHaveBeenCalledWith("demo-wed-chunking-paper");
     });
 
+    it("shows an evidence-backed activity trace while answering and after completion", async () => {
+        let resolveAnswer!: (value: ComposedAnswer) => void;
+        vi.mocked(fndrAnswer).mockImplementation(
+            () => new Promise<ComposedAnswer>((resolve) => {
+                resolveAnswer = resolve;
+            }),
+        );
+        render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
+
+        fireEvent.change(screen.getByLabelText("Search or ask FNDR"), {
+            target: { value: "What did I decide?" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Search & Ask" }));
+
+        expect(screen.getByLabelText("Ask FNDR activity")).toHaveTextContent(
+            "Requesting an answer from local memory",
+        );
+        expect(screen.getByLabelText("Ask FNDR activity")).toHaveTextContent(
+            "FNDR answer service",
+        );
+        expect(screen.getAllByRole("status")).toHaveLength(1);
+
+        resolveAnswer(answer({
+            cards: [{ ...source, matched_routes: ["Vector", "Keyword"] }],
+        }));
+
+        expect(await screen.findByText("Grounded answer returned")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Show Ask FNDR activity details" }));
+        expect(screen.getByText(/1 memory · Vector \+ Keyword/)).toBeInTheDocument();
+        expect(screen.getAllByText(/Request boundary/).length).toBeGreaterThan(0);
+        expect(screen.getAllByText(/Verified result/).length).toBeGreaterThan(0);
+    });
+
     it("shows an honest refusal when evidence is missing", async () => {
         vi.mocked(fndrAnswer).mockResolvedValue(
             answer({

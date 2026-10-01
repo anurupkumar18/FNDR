@@ -2190,6 +2190,30 @@ export interface ScreenGuideSettings {
     operate_computer?: boolean;
 }
 
+export interface ScreenGuideDiagnosticStatus {
+    armed: boolean;
+    expiresInMs: number | null;
+    bundleCount: number;
+    partialCount: number;
+    totalBytes: number;
+    lastResult: ScreenGuideDiagnosticResult | null;
+}
+
+export interface ScreenGuideDiagnosticResult {
+    kind: "saved" | "error" | "deleted" | "cancelled";
+    code:
+        | "bundle_saved"
+        | "storage_unavailable"
+        | "bundle_too_large"
+        | "diagnostics_deleted"
+        | "private_mode_disarmed"
+        | "privacy_settings_disarmed";
+    /** Bounded backend-owned copy; never a path, prompt, OCR text, or raw error. */
+    message: string;
+    screenshotSaved: boolean;
+    ocrSaved: boolean;
+}
+
 export interface ScreenGuideHistoryEntry {
     role: "user" | "assistant";
     content: string;
@@ -2223,10 +2247,27 @@ export type ScreenGuidePhase =
     | "answer"
     | "error";
 
+export type ScreenGuideActivityStage =
+    | "preparing"
+    | "searching_file_names"
+    | "hiding_fndr"
+    | "verifying_target"
+    | "capturing"
+    | "reading_text"
+    | "checking_on_device_model"
+    | "answering_on_device"
+    | "using_grounded_fallback"
+    | "answering_chat_gpt"
+    | "speech_started";
+
 export interface ScreenGuideStateEvent {
     phase: ScreenGuidePhase;
     message?: string | null;
     generation: number;
+    /** Closed, privacy-safe progress vocabulary. Never contains captured content. */
+    activity_stage?: ScreenGuideActivityStage | null;
+    /** Process display name only; never a title, URL, path, prompt, or OCR text. */
+    target_app?: string | null;
 }
 
 export interface ScreenGuideShortcutEvent {
@@ -2251,6 +2292,23 @@ export async function setScreenGuideSettings(
     settings: ScreenGuideSettings,
 ): Promise<ScreenGuideSettings> {
     return invoke<ScreenGuideSettings>("set_screen_guide_settings", { settings });
+}
+
+export async function getScreenGuideDiagnosticStatus(): Promise<ScreenGuideDiagnosticStatus> {
+    return invoke<ScreenGuideDiagnosticStatus>("get_screen_guide_diagnostic_status");
+}
+
+export async function armScreenGuideDiagnostic(): Promise<ScreenGuideDiagnosticStatus> {
+    return invoke<ScreenGuideDiagnosticStatus>("arm_screen_guide_diagnostic");
+}
+
+export async function deleteScreenGuideDiagnostics(): Promise<ScreenGuideDiagnosticStatus> {
+    return invoke<ScreenGuideDiagnosticStatus>("delete_screen_guide_diagnostics");
+}
+
+/** Reveal the backend-owned diagnostics directory without accepting a renderer path. */
+export async function revealScreenGuideDiagnostics(): Promise<ScreenGuideDiagnosticStatus> {
+    return invoke<ScreenGuideDiagnosticStatus>("reveal_screen_guide_diagnostics");
 }
 
 export async function screenGuidePress(): Promise<number> {

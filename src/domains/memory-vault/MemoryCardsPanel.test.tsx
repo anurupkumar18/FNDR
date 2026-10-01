@@ -71,6 +71,25 @@ afterEach(() => {
 });
 
 describe("MemoryCardsPanel", () => {
+    it("shows an evidence-backed trace when the vault index finishes loading", async () => {
+        vi.mocked(listMemoryCards).mockResolvedValue([card(1), card(2)]);
+
+        render(
+            <MemoryCardsPanel
+                isVisible
+                onClose={vi.fn()}
+                appNames={["VS Code"]}
+                feature="vault"
+            />,
+        );
+
+        const trace = await screen.findByLabelText("Memory Vault loading activity");
+        expect(within(trace).getByText("Loaded saved-memory index")).toBeInTheDocument();
+        fireEvent.click(within(trace).getByRole("button", { name: "Show Memory Vault loading activity details" }));
+        expect(within(trace).getByText("2 memories returned")).toBeInTheDocument();
+        expect(within(trace).getByText(/verified result/i)).toBeInTheDocument();
+    });
+
     it("owns modal focus, closes on Escape, and restores the invoking control", async () => {
         vi.mocked(listMemoryCards).mockResolvedValue([]);
         const onClose = vi.fn();
@@ -220,6 +239,13 @@ describe("MemoryCardsPanel", () => {
         const result = await screen.findByRole("button", {
             name: "Open visually similar memory: Memory 2",
         });
+        const trace = screen.getByRole("region", { name: "Visual similarity activity" });
+        expect(trace).toHaveTextContent("Compared local visual embeddings");
+        fireEvent.click(within(trace).getByRole("button", {
+            name: "Show Visual similarity activity details",
+        }));
+        expect(trace).toHaveTextContent("CLIP image index");
+        expect(trace).toHaveTextContent("1 match returned");
         fireEvent.click(result);
         expect(
             await screen.findByRole("dialog", { name: "Expanded memory: Memory 2" }),

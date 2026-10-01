@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { FndrWrappedPanel } from "./FndrWrappedPanel";
 
 const ipc = vi.hoisted(() => ({
@@ -39,6 +39,18 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("FndrWrappedPanel", () => {
+    it("traces recap generation using only aggregate result metadata", async () => {
+        render(<FndrWrappedPanel isVisible onClose={vi.fn()} />);
+
+        fireEvent.click(screen.getByRole("button", { name: /start wrapped/i }));
+
+        expect(await screen.findByText("Weekly recap ready")).toBeInTheDocument();
+        const trace = screen.getByLabelText("FNDR Wrapped activity");
+        fireEvent.click(within(trace).getByRole("button", { name: "Show FNDR Wrapped activity details" }));
+        expect(within(trace).getByText("8 captures across 2 active days")).toBeInTheDocument();
+        expect(within(trace).getByText(/verified result/i)).toBeInTheDocument();
+    });
+
     it("exposes week choices as a named single-selection control", () => {
         render(<FndrWrappedPanel isVisible onClose={vi.fn()} />);
 
@@ -68,6 +80,29 @@ describe("FndrWrappedPanel", () => {
 
         expect(await screen.findByRole("alert")).toHaveTextContent("Recap engine unavailable");
         expect(screen.getByRole("button", { name: /start wrapped/i })).toBeInTheDocument();
+    });
+
+    it("does not let a recap from before close overwrite the reopened selection", async () => {
+        let finishLoad!: (value: typeof recap) => void;
+        ipc.getWeeklyWrapped.mockReturnValueOnce(new Promise<typeof recap>((resolve) => {
+            finishLoad = resolve;
+        }));
+        const { rerender } = render(<FndrWrappedPanel isVisible onClose={vi.fn()} />);
+
+        fireEvent.click(screen.getByRole("button", { name: /start wrapped/i }));
+        await waitFor(() => expect(ipc.getWeeklyWrapped).toHaveBeenCalledOnce());
+
+        rerender(<FndrWrappedPanel isVisible={false} onClose={vi.fn()} />);
+        rerender(<FndrWrappedPanel isVisible onClose={vi.fn()} />);
+        expect(screen.getByRole("button", { name: /start wrapped/i })).toBeEnabled();
+
+        await act(async () => {
+            finishLoad(recap);
+        });
+
+        expect(screen.queryByText(/fndr recorded about/i)).not.toBeInTheDocument();
+        expect(screen.queryByText("Weekly recap ready")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /start wrapped/i })).toBeEnabled();
     });
 
     it("traps focus, closes on Escape, and restores the invoking control", async () => {

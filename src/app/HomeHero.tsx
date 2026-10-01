@@ -17,6 +17,13 @@ import {
     useTransform,
 } from "framer-motion";
 import { transcribeVoiceInput } from "@/shared/ipc/tauri";
+import type { ActivityTraceSnapshot } from "@/shared/activity/activityTrace";
+import {
+    beginVoiceActivityTrace,
+    recordVoiceActivityStep,
+    type VoiceActivityEvent,
+} from "@/shared/activity/voiceActivityTrace";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import { useReducedMotionSafe } from "@/shared/motion/useReducedMotionSafe";
 import { VOICE_RECORDING } from "@/shared/utils/config";
 import { Liquid } from "liquid-gooey";
@@ -110,12 +117,19 @@ function useHeroVoice(onTranscript: (text: string) => void) {
     const [isPreparing, setIsPreparing] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
+    const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
 
     const recorderRef = useRef<MediaRecorder | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const chunksRef = useRef<Blob[]>([]);
     const mimeTypeRef = useRef("audio/webm");
     const startedAtRef = useRef(0);
+
+    function recordVoiceStep(event: VoiceActivityEvent, atMs = Date.now(), durationMs?: number) {
+        setActivityTrace((current) => current
+            ? recordVoiceActivityStep(current, event, atMs, durationMs)
+            : current);
+    }
 
     useEffect(
         () => () => {
@@ -128,10 +142,13 @@ function useHeroVoice(onTranscript: (text: string) => void) {
     async function transcribeChunks(chunks: Blob[], mimeType: string) {
         if (chunks.length === 0) {
             setVoiceStatus("No input captured.");
+            recordVoiceStep("no-audio");
             return;
         }
         setIsTranscribing(true);
         setVoiceStatus("Transcribing…");
+        const transcribingAt = Date.now();
+        recordVoiceStep("transcription-requested", transcribingAt);
         try {
             const blob = new Blob(chunks, { type: mimeType });
             const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
@@ -140,11 +157,17 @@ function useHeroVoice(onTranscript: (text: string) => void) {
             if (text) {
                 onTranscript(text);
                 setVoiceStatus("Transcript ready. Review it, then press Enter to search.");
+                const completedAt = Date.now();
+                recordVoiceStep("transcript-ready", completedAt, completedAt - transcribingAt);
             } else {
                 setVoiceStatus("Didn't catch that. Try again.");
+                const completedAt = Date.now();
+                recordVoiceStep("no-speech", completedAt, completedAt - transcribingAt);
             }
         } catch {
             setVoiceStatus("Transcription failed.");
+            const failedAt = Date.now();
+            recordVoiceStep("transcription-failed", failedAt, failedAt - transcribingAt);
         } finally {
             setIsTranscribing(false);
         }
@@ -152,18 +175,27 @@ function useHeroVoice(onTranscript: (text: string) => void) {
 
     async function toggle() {
         if (isRecording) {
+            recordVoiceStep("recorder-stop-requested");
             recorderRef.current?.stop();
             return;
         }
 
+        const requestedAt = Date.now();
+        const nextTrace = beginVoiceActivityTrace("home", requestedAt);
         if (
             !navigator.mediaDevices?.getUserMedia ||
             typeof MediaRecorder === "undefined"
         ) {
             setVoiceStatus("Microphone isn't available here. Type your search instead.");
+            setActivityTrace(recordVoiceActivityStep(
+                nextTrace,
+                "microphone-unavailable",
+                Date.now(),
+            ));
             return;
         }
 
+        setActivityTrace(nextTrace);
         setIsPreparing(true);
         setVoiceStatus("Waiting for microphone permission…");
         try {
@@ -176,6 +208,7 @@ function useHeroVoice(onTranscript: (text: string) => void) {
                     sampleRate: VOICE_RECORDING.sampleRate,
                 },
             });
+            recordVoiceStep("microphone-connected");
             const options = chooseRecorderOptions();
             const recorder = options
                 ? new MediaRecorder(stream, options)
@@ -198,18 +231,22 @@ function useHeroVoice(onTranscript: (text: string) => void) {
                 streamRef.current = null;
                 recorderRef.current = null;
                 setIsRecording(false);
+                recordVoiceStep("recording-stopped", Date.now(), dur);
                 if (dur < VOICE_RECORDING.minDurationMs) {
                     setVoiceStatus("Hold the mic a bit longer.");
+                    recordVoiceStep("recording-too-short", Date.now(), dur);
                     return;
                 }
                 void transcribeChunks(chunks, mimeTypeRef.current);
             };
 
-            recorder.start(VOICE_RECORDING.timesliceMs);
+            recorder.start();
             setIsRecording(true);
             setVoiceStatus("Listening… tap again to stop.");
+            recordVoiceStep("recording-started", startedAtRef.current);
         } catch (error) {
             setVoiceStatus(microphoneFailureMessage(error));
+            recordVoiceStep("microphone-failed");
             stopStream(streamRef.current);
             streamRef.current = null;
             recorderRef.current = null;
@@ -219,7 +256,7 @@ function useHeroVoice(onTranscript: (text: string) => void) {
         }
     }
 
-    return { isRecording, isPreparing, isTranscribing, voiceStatus, toggle };
+    return { activityTrace, isRecording, isPreparing, isTranscribing, voiceStatus, toggle };
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -488,11 +525,17 @@ export function HomeHero({
                     <p
                         id="home-voice-status"
                         className="home-hero__voice-status"
-                        role="status"
-                        aria-live="polite"
+                        role={voice.activityTrace ? undefined : "status"}
+                        aria-live={voice.activityTrace ? undefined : "polite"}
                     >
                         {voice.voiceStatus}
                     </p>
+                )}
+                {voice.activityTrace && (
+                    <ActivityTrace
+                        trace={voice.activityTrace}
+                        className="home-hero__voice-trace"
+                    />
                 )}
                 <p id="home-search-help" className="home-hero__search-help">
                     Search saved memories by topic, app, person, or time.

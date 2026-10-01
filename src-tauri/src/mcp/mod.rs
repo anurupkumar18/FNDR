@@ -2083,6 +2083,26 @@ async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Va
             message: format!("Invalid tools/call params: {err}"),
         })?;
 
+    if let Some(risk) = crate::agent::risk_policy::mcp_tool_risk(params.name.as_str()) {
+        let kill_switch = app_state.config.read().actions_kill_switch;
+        match crate::agent::risk_policy::decide(
+            risk,
+            crate::agent::risk_policy::Caller::Mcp,
+            kill_switch,
+        ) {
+            crate::agent::risk_policy::Decision::Run => {}
+            crate::agent::risk_policy::Decision::Confirm => {
+                return Ok(tool_error(format!(
+                    "{} needs the person's approval on the Mac. The approval card is not available yet, so the request was not run.",
+                    params.name
+                )));
+            }
+            crate::agent::risk_policy::Decision::Refuse(reason) => {
+                return Ok(tool_error(reason.message().to_string()));
+            }
+        }
+    }
+
     match params.name.as_str() {
         "memory.search_full_context" => {
             let args: SearchFullContextArgs =

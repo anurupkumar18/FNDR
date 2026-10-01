@@ -1,5 +1,10 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import {
+    armScreenGuideDiagnostic,
+    deleteScreenGuideDiagnostics,
+    getScreenGuideDiagnosticStatus,
+    revealScreenGuideDiagnostics,
+    type ScreenGuideDiagnosticStatus,
     type ScreenGuideSettings,
     type ScreenGuideStateEvent,
     getScreenGuideSettings,
@@ -9,10 +14,17 @@ import {
     setScreenGuideSettings,
     submitScreenGuideText,
 } from "@/shared/ipc/tauri";
-import { screenGuideErrorMessage } from "./screenGuideState";
+import {
+    finishScreenGuideActivity,
+    recordScreenGuideActivity,
+    screenGuideErrorMessage,
+} from "./screenGuideState";
 import "./ScreenGuidePanel.css";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import type { ActivityTraceSnapshot } from "@/shared/activity/activityTrace";
+import { formatBytes } from "@/shared/utils/format";
 import {
     computerUseStatus,
     openClickyBridgeStatus,
@@ -22,6 +34,7 @@ import {
 
 interface ScreenGuidePanelProps {
     isVisible: boolean;
+    isPrivateMode?: boolean;
     onClose: () => void;
 }
 
@@ -31,9 +44,11 @@ function statusCopy(
     settings: ScreenGuideSettings | null,
     status: ScreenGuideStateEvent,
     loading: boolean,
+    isPrivateMode: boolean,
 ): string {
     if (loading) return "Loading Screen Guide…";
     if (!settings?.enabled) return "Screen Guide is off";
+    if (isPrivateMode) return "FNDR Private Mode is on";
     if (status.message) return status.message;
     switch (status.phase) {
         case "listening":
@@ -51,10 +66,15 @@ function statusCopy(
     }
 }
 
-export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) {
+export function ScreenGuidePanel({
+    isVisible,
+    isPrivateMode = false,
+    onClose,
+}: ScreenGuidePanelProps) {
     const [settings, setSettings] = useState<ScreenGuideSettings | null>(null);
     const [shortcutDraft, setShortcutDraft] = useState("");
     const [status, setStatus] = useState<ScreenGuideStateEvent>(IDLE_STATUS);
+    const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [question, setQuestion] = useState("");
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -64,6 +84,9 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
     const [loadAttempt, setLoadAttempt] = useState(0);
     const [listenerAttempt, setListenerAttempt] = useState(0);
     const [liveStatusError, setLiveStatusError] = useState<string | null>(null);
+    const [diagnosticStatus, setDiagnosticStatus] = useState<ScreenGuideDiagnosticStatus | null>(null);
+    const [diagnosticBusy, setDiagnosticBusy] = useState(false);
+    const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
     const holdingRef = useRef(false);
     const pressPromiseRef = useRef<Promise<number> | null>(null);
     const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -107,12 +130,83 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
     }, [isVisible, loadAttempt]);
 
     useEffect(() => {
+        if (!isVisible) return;
+        let active = true;
+        setDiagnosticError(null);
+        void getScreenGuideDiagnosticStatus()
+            .then((nextStatus) => {
+                if (active) setDiagnosticStatus(nextStatus);
+            })
+            .catch((reason: unknown) => {
+                if (active) {
+                    setDiagnosticError(
+                        screenGuideErrorMessage(reason, "Diagnostic storage is unavailable."),
+                    );
+                }
+            });
+        return () => {
+            active = false;
+        };
+    }, [isVisible, isPrivateMode, status.phase]);
+
+    useEffect(() => {
+        if (
+            !isVisible
+            || !diagnosticStatus?.armed
+            || diagnosticStatus.expiresInMs === null
+        ) {
+            return;
+        }
+
+        let active = true;
+        const refreshAtExpiry = window.setTimeout(() => {
+            void getScreenGuideDiagnosticStatus()
+                .then((nextStatus) => {
+                    if (active) setDiagnosticStatus(nextStatus);
+                })
+                .catch((reason: unknown) => {
+                    if (active) {
+                        setDiagnosticError(
+                            screenGuideErrorMessage(
+                                reason,
+                                "Could not refresh diagnostic status.",
+                            ),
+                        );
+                    }
+                });
+        }, Math.max(1, diagnosticStatus.expiresInMs));
+
+        return () => {
+            active = false;
+            window.clearTimeout(refreshAtExpiry);
+        };
+    }, [diagnosticStatus?.armed, diagnosticStatus?.expiresInMs, isVisible]);
+
+    useEffect(() => {
         let active = true;
         let unlisten: (() => void) | null = null;
         setLiveStatusError(null);
 
         void onScreenGuideState((nextStatus) => {
-            if (active) setStatus(nextStatus);
+            if (!active) return;
+            setStatus(nextStatus);
+            const activityStage = nextStatus.activity_stage;
+            if (activityStage) {
+                setActivityTrace((current) => recordScreenGuideActivity(current, {
+                    stage: activityStage,
+                    targetApp: nextStatus.target_app?.trim() || null,
+                    generation: nextStatus.generation,
+                    atMs: Date.now(),
+                }));
+            } else if (nextStatus.phase === "idle") {
+                setActivityTrace(null);
+            } else if (nextStatus.phase === "error") {
+                setActivityTrace((current) =>
+                    finishScreenGuideActivity(current, "failed", Date.now()));
+            } else if (nextStatus.phase === "answer") {
+                setActivityTrace((current) =>
+                    finishScreenGuideActivity(current, "completed", Date.now()));
+            }
         })
             .then((dispose) => {
                 if (active) unlisten = dispose;
@@ -180,8 +274,24 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
 
     const enabled = settings?.enabled ?? false;
     const controlsDisabled = loading || saving || !settings;
-    const questionDisabled = controlsDisabled || !enabled || submitting;
+    const questionDisabled = controlsDisabled || !enabled || isPrivateMode || submitting;
     const settingsLoadFailed = !loading && !settings && Boolean(error);
+    const activityOwnsLiveStatus = activityTrace !== null && status.phase !== "idle";
+    const hasDiagnosticFiles = (diagnosticStatus?.bundleCount ?? 0) > 0
+        || (diagnosticStatus?.partialCount ?? 0) > 0;
+    const sendsScreenshotToChatGpt = usesChatGpt && Boolean(settings?.send_screenshot_to_codex);
+    const canOperateComputer = Boolean(settings?.operate_computer);
+    const privacyHeading = !settings
+        ? "Checking privacy and agency settings"
+        : canOperateComputer
+          ? usesChatGpt
+              ? "Cloud answers with approval-gated control"
+              : "Local answers with approval-gated control"
+          : usesChatGpt
+            ? sendsScreenshotToChatGpt
+                ? "Cloud answer with screenshot"
+                : "Cloud answer without screenshot"
+            : "Local and read-only";
 
     const handlePanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
         if (event.key === "Escape") {
@@ -282,6 +392,51 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
             });
     };
 
+    const armDiagnostic = async () => {
+        if (diagnosticBusy || isPrivateMode) return;
+        setDiagnosticBusy(true);
+        setDiagnosticError(null);
+        try {
+            setDiagnosticStatus(await armScreenGuideDiagnostic());
+        } catch (reason) {
+            setDiagnosticError(
+                screenGuideErrorMessage(reason, "Could not arm the next diagnostic turn."),
+            );
+        } finally {
+            setDiagnosticBusy(false);
+        }
+    };
+
+    const deleteDiagnostics = async () => {
+        if (diagnosticBusy) return;
+        setDiagnosticBusy(true);
+        setDiagnosticError(null);
+        try {
+            setDiagnosticStatus(await deleteScreenGuideDiagnostics());
+        } catch (reason) {
+            setDiagnosticError(
+                screenGuideErrorMessage(reason, "Could not delete Screen Guide diagnostics."),
+            );
+        } finally {
+            setDiagnosticBusy(false);
+        }
+    };
+
+    const revealDiagnostics = async () => {
+        if (diagnosticBusy || !hasDiagnosticFiles) return;
+        setDiagnosticBusy(true);
+        setDiagnosticError(null);
+        try {
+            setDiagnosticStatus(await revealScreenGuideDiagnostics());
+        } catch (reason) {
+            setDiagnosticError(
+                screenGuideErrorMessage(reason, "Could not reveal Screen Guide diagnostics."),
+            );
+        } finally {
+            setDiagnosticBusy(false);
+        }
+    };
+
     return (
         <div
             className="sg-panel-page"
@@ -304,21 +459,46 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
 
             <div className="sg-panel-body">
                 <section
-                    className={`sg-readiness ${enabled ? "is-ready" : "is-off"}`}
-                    role="status"
-                    aria-live="polite"
-                    aria-atomic="true"
+                    className={`sg-readiness ${enabled && !isPrivateMode ? "is-ready" : "is-off"}`}
+                    role={activityOwnsLiveStatus ? undefined : "status"}
+                    aria-live={activityOwnsLiveStatus ? undefined : "polite"}
+                    aria-atomic={activityOwnsLiveStatus ? undefined : "true"}
                 >
                     <span className="sg-readiness-dot" aria-hidden="true" />
                     <div>
-                        <strong>{statusCopy(settings, status, loading)}</strong>
+                        <strong>{statusCopy(settings, status, loading, isPrivateMode)}</strong>
                         <span>
-                            {enabled
+                            {isPrivateMode
+                                ? "Exit Private Mode in Settings → Capture to use Screen Guide"
+                                : enabled
                                 ? `Hold ${settings?.shortcut ?? "Control+Alt+Space"} from any app`
                                 : `${settings?.shortcut ?? "Control+Alt+Space"} is available when enabled`}
                         </span>
                     </div>
                 </section>
+
+                {error && (
+                    <div className="sg-panel-error" role="alert">
+                        <p>{error}</p>
+                        {settingsLoadFailed && (
+                            <button
+                                type="button"
+                                className="ui-action-btn"
+                                onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+                                aria-label="Retry loading Screen Guide"
+                            >
+                                Retry
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                {activityTrace && status.phase !== "idle" && (
+                    <ActivityTrace
+                        trace={activityTrace}
+                        className="sg-activity-status"
+                    />
+                )}
 
                 {liveStatusError && (
                     <aside className="sg-status-warning" aria-label="Live status unavailable">
@@ -584,31 +764,123 @@ export function ScreenGuidePanel({ isVisible, onClose }: ScreenGuidePanelProps) 
                     </button>
                 </section>
 
-                <aside className="sg-privacy-note">
-                    <strong>Local and read-only</strong>
-                    <p>
-                        The question, temporary display image, transcription, answer, and file-match
-                        names are processed on this Mac for this turn. Screen Guide does not click,
-                        type, or add the turn to Memory Vault. File search checks only file names in
-                        Documents, Desktop, and Downloads; it never reads or opens files.
-                    </p>
-                </aside>
-
-                {error && (
-                    <div className="sg-panel-error" role="alert">
-                        <p>{error}</p>
-                        {settingsLoadFailed && (
+                <section className="sg-diagnostics-card" aria-labelledby="sg-diagnostics-title">
+                    <div>
+                        <strong id="sg-diagnostics-title">Troubleshoot the next turn</strong>
+                        <p>
+                            With your explicit consent, save the exact screenshot, OCR output, and
+                            privacy-safe stage timings from one Screen Guide turn. The bundle stays
+                            in FNDR app data, is never indexed or uploaded, and expires within 24 hours.
+                        </p>
+                        <p className="sg-diagnostics-warning">
+                            The screenshot and OCR can contain anything visible on your display.
+                        </p>
+                        {diagnosticStatus?.armed && (
+                            <p className="sg-diagnostics-state" role="status">
+                                Next turn is armed. It expires in about {Math.max(
+                                    1,
+                                    Math.ceil((diagnosticStatus.expiresInMs ?? 0) / 60_000),
+                                )} minute(s) if unused.
+                            </p>
+                        )}
+                        {!diagnosticStatus?.armed && (diagnosticStatus?.bundleCount ?? 0) > 0 && (
+                            <p className="sg-diagnostics-state" role="status">
+                                {diagnosticStatus?.bundleCount} local diagnostic {diagnosticStatus?.bundleCount === 1
+                                    ? "bundle"
+                                    : "bundles"} saved
+                                {diagnosticStatus && diagnosticStatus.totalBytes > 0
+                                    ? ` (${formatBytes(diagnosticStatus.totalBytes)})`
+                                    : ""}
+                                .
+                            </p>
+                        )}
+                        {(diagnosticStatus?.partialCount ?? 0) > 0 && (
+                            <p className="sg-diagnostics-state" role="status">
+                                {diagnosticStatus?.partialCount} diagnostic bundle
+                                {diagnosticStatus?.partialCount === 1 ? " write is" : " writes are"}
+                                {" "}still incomplete.
+                            </p>
+                        )}
+                        {diagnosticStatus?.lastResult && (
+                            <p
+                                className={
+                                    diagnosticStatus.lastResult.kind === "error"
+                                        ? "sg-diagnostics-error"
+                                        : "sg-diagnostics-state"
+                                }
+                                role={diagnosticStatus.lastResult.kind === "error" ? "alert" : "status"}
+                            >
+                                {diagnosticStatus.lastResult.message}
+                                {diagnosticStatus.lastResult.kind === "saved"
+                                    ? ` Receipt: screenshot ${
+                                        diagnosticStatus.lastResult.screenshotSaved ? "saved" : "not saved"
+                                    }; OCR ${
+                                        diagnosticStatus.lastResult.ocrSaved ? "saved" : "not saved"
+                                    }.`
+                                    : diagnosticStatus.lastResult.kind === "error"
+                                      ? ` (${diagnosticStatus.lastResult.code})`
+                                      : ""}
+                            </p>
+                        )}
+                        {isPrivateMode && (
+                            <p className="sg-diagnostics-state">
+                                Exit Private Mode before arming a diagnostic turn.
+                            </p>
+                        )}
+                        {diagnosticError && <p className="sg-diagnostics-error" role="alert">{diagnosticError}</p>}
+                    </div>
+                    <div className="sg-diagnostics-actions">
+                        <button
+                            type="button"
+                            className="ui-action-btn"
+                            disabled={diagnosticBusy || isPrivateMode || diagnosticStatus?.armed}
+                            onClick={() => void armDiagnostic()}
+                        >
+                            {diagnosticStatus?.armed ? "Next turn armed" : "Save next turn"}
+                        </button>
+                        {hasDiagnosticFiles && (
                             <button
                                 type="button"
                                 className="ui-action-btn"
-                                onClick={() => setLoadAttempt((attempt) => attempt + 1)}
-                                aria-label="Retry loading Screen Guide"
+                                disabled={diagnosticBusy}
+                                onClick={() => void revealDiagnostics()}
                             >
-                                Retry
+                                Reveal diagnostics in Finder
+                            </button>
+                        )}
+                        {(diagnosticStatus?.armed || hasDiagnosticFiles) && (
+                            <button
+                                type="button"
+                                className="ui-action-btn"
+                                disabled={diagnosticBusy}
+                                onClick={() => void deleteDiagnostics()}
+                            >
+                                Delete diagnostics
                             </button>
                         )}
                     </div>
-                )}
+                </section>
+
+                <aside className="sg-privacy-note">
+                    <strong>{privacyHeading}</strong>
+                    <p>
+                        {!settings
+                            ? "FNDR is loading the current model, egress, and action settings."
+                            : usesChatGpt
+                            ? sendsScreenshotToChatGpt
+                                ? "Your question, visible text, and a downscaled screenshot are sent to OpenAI for this turn."
+                                : "Your question and visible text are sent to OpenAI for this turn; screen pixels stay on this Mac."
+                            : "The question, temporary display image, transcription, and answer stay on this Mac for this turn."}{" "}
+                        {canOperateComputer
+                            ? "Operate mode can click and type only after showing an approval for each action; say Stop at any time."
+                            : "Screen Guide does not click or type."}{" "}
+                        The turn is not added to Memory Vault. File search checks only file names in
+                        Documents, Desktop, and Downloads; it never reads or opens files. Normal turns
+                        are not saved; only an explicitly armed diagnostic turn creates a temporary,
+                        deletable local bundle.
+                    </p>
+                </aside>
+
             </div>
         </div>
     );

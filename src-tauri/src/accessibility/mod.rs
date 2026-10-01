@@ -5,6 +5,7 @@
 //! 2. Inject text directly into that field without requiring keyboard focus
 
 use crate::ocr::{OcrConfig, OcrEngine};
+use objc2_app_kit::NSWorkspace;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -547,6 +548,47 @@ pub(crate) struct FocusedWindowSnapshot {
     pub document_url: Option<String>,
 }
 
+fn workspace_frontmost_pid() -> Option<PidT> {
+    unsafe {
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|app| app.processIdentifier())
+            .filter(|pid| *pid > 0)
+    }
+}
+
+fn expected_pid_remained_frontmost(
+    expected_pid: PidT,
+    before_snapshot: Option<PidT>,
+    after_snapshot: Option<PidT>,
+) -> bool {
+    expected_pid > 0
+        && before_snapshot == Some(expected_pid)
+        && after_snapshot == Some(expected_pid)
+}
+
+unsafe fn window_snapshot_for_application(
+    application: AXUIElementRef,
+) -> FocusedWindowSnapshot {
+    let (window_title, window_document_url) = ax_copy_attr_value(application, "AXFocusedWindow")
+        .ok()
+        .map(|window| {
+            let title = ax_string_attr(window, "AXTitle");
+            let document_url = ax_string_attr(window, "AXDocument");
+            CFRelease(window);
+            (title, document_url)
+        })
+        .unwrap_or_default();
+    let title = window_title.or_else(|| ax_string_attr(application, "AXTitle"));
+    let document_url =
+        window_document_url.or_else(|| ax_string_attr(application, "AXDocument"));
+
+    FocusedWindowSnapshot {
+        title,
+        document_url,
+    }
+}
+
 /// Read the active window title and document URL without launching a helper process.
 /// An expected process ID prevents a stale Accessibility focus target from being used.
 pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<FocusedWindowSnapshot> {
@@ -555,6 +597,31 @@ pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<Focu
     }
 
     unsafe {
+        if let Some(expected_pid) = expected_pid {
+            let before_snapshot = workspace_frontmost_pid();
+            if before_snapshot != Some(expected_pid) || expected_pid <= 0 {
+                return None;
+            }
+
+            // Query the known application directly. In some host environments the
+            // system-wide AXFocusedApplication lookup returns kAXErrorCannotComplete
+            // even though the frontmost application's own AX tree is available.
+            let application = AXUIElementCreateApplication(expected_pid);
+            if application.is_null() {
+                return None;
+            }
+            let snapshot = window_snapshot_for_application(application);
+            CFRelease(application);
+
+            let after_snapshot = workspace_frontmost_pid();
+            return expected_pid_remained_frontmost(
+                expected_pid,
+                before_snapshot,
+                after_snapshot,
+            )
+            .then_some(snapshot);
+        }
+
         let system_el = AXUIElementCreateSystemWide();
         if system_el.is_null() {
             return None;
@@ -573,32 +640,16 @@ pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<Focu
 
         let mut pid: PidT = 0;
         let pid_matches = AXUIElementGetPid(focused_app, &mut pid) == K_AX_ERROR_SUCCESS
-            && pid > 0
-            && expected_pid.map_or(true, |expected| expected == pid);
+            && pid > 0;
         if !pid_matches {
             CFRelease(focused_app);
             return None;
         }
 
-        let (window_title, window_document_url) =
-            ax_copy_attr_value(focused_app, "AXFocusedWindow")
-                .ok()
-                .map(|window| {
-                    let title = ax_string_attr(window, "AXTitle");
-                    let document_url = ax_string_attr(window, "AXDocument");
-                    CFRelease(window);
-                    (title, document_url)
-                })
-                .unwrap_or_default();
-        let title = window_title.or_else(|| ax_string_attr(focused_app, "AXTitle"));
-        let document_url =
-            window_document_url.or_else(|| ax_string_attr(focused_app, "AXDocument"));
+        let snapshot = window_snapshot_for_application(focused_app);
         CFRelease(focused_app);
 
-        Some(FocusedWindowSnapshot {
-            title,
-            document_url,
-        })
+        Some(snapshot)
     }
 }
 
@@ -863,5 +914,29 @@ fn inject_text_into_target(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expected_pid_remained_frontmost;
+
+    #[test]
+    fn direct_pid_snapshot_requires_same_frontmost_process_before_and_after() {
+        assert!(expected_pid_remained_frontmost(42, Some(42), Some(42)));
+    }
+
+    #[test]
+    fn direct_pid_snapshot_rejects_stale_or_changed_frontmost_process() {
+        assert!(!expected_pid_remained_frontmost(42, Some(7), Some(42)));
+        assert!(!expected_pid_remained_frontmost(42, Some(42), Some(7)));
+        assert!(!expected_pid_remained_frontmost(42, None, Some(42)));
+        assert!(!expected_pid_remained_frontmost(42, Some(42), None));
+    }
+
+    #[test]
+    fn direct_pid_snapshot_rejects_invalid_expected_pid() {
+        assert!(!expected_pid_remained_frontmost(0, Some(0), Some(0)));
+        assert!(!expected_pid_remained_frontmost(-1, Some(-1), Some(-1)));
     }
 }

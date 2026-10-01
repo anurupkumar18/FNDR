@@ -192,7 +192,7 @@ pub async fn add_to_blocklist(site: String, state: State<'_, Arc<AppState>>) -> 
 
 fn cancel_screen_guide_after_blocklist_change(state: &AppState) {
     if let Some(app_handle) = state.app_handle.read().clone() {
-        super::screen_guide::cancel_screen_guide_for_privacy(&app_handle);
+        super::screen_guide::cancel_screen_guide_for_privacy_settings(&app_handle);
     }
 }
 

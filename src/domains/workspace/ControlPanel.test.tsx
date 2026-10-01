@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
+    type CaptureStatus,
     getPrivacyAlerts,
     pauseCapture,
+    resumeCapture,
     setBlocklist,
 } from "@/shared/ipc/tauri";
 import { ControlPanel } from "./ControlPanel";
@@ -188,6 +190,18 @@ describe("ControlPanel", () => {
         );
     });
 
+    it("offers a desktop exit when private mode is active", async () => {
+        const status = statusWithEmbedder("real", false);
+        status.is_incognito = true;
+
+        render(<ControlPanel status={status} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        fireEvent.click(await screen.findByRole("button", { name: /exit private mode/i }));
+
+        await waitFor(() => expect(resumeCapture).toHaveBeenCalledTimes(1));
+        expect(screen.getByText(/private mode ended/i)).toBeInTheDocument();
+    });
+
     it("reapplies the active cinematic palette when switching theme", () => {
         localStorage.setItem("fndr-theme", "dark");
         localStorage.setItem("fndr-palette", "system");
@@ -250,6 +264,40 @@ describe("ControlPanel", () => {
         ).toBeInTheDocument();
     });
 
+    it("shows the capture pipeline and model state from the live backend status", async () => {
+        const status = statusWithEmbedder("real", false);
+        status.is_capturing = true;
+        status.frames_captured = 4;
+        status.ai_model_loaded = true;
+        status.loaded_model_id = "qwen3-vl-2b";
+        status.pipeline.stored_total = 3;
+        status.pipeline.skipped_total = 1;
+        render(<ControlPanel status={status} compact={true} />);
+
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const trace = await screen.findByLabelText("Capture pipeline activity");
+        expect(trace).toHaveTextContent("Capture enabled for the next sample");
+        expect(trace).toHaveTextContent("Capture policy");
+        fireEvent.click(within(trace).getByRole("button", { name: "Show Capture pipeline activity details" }));
+        expect(trace).toHaveTextContent("3 stored · 1 skipped");
+        expect(trace).toHaveTextContent("all-MiniLM-L6-v2");
+        expect(trace).toHaveTextContent("qwen3-vl-2b");
+        expect(trace).toHaveTextContent("Backend status");
+    });
+
+    it("surfaces degraded embeddings instead of presenting capture as healthy", async () => {
+        const status = statusWithEmbedder("hash_fallback", true);
+        status.is_capturing = true;
+        render(<ControlPanel status={status} compact={true} />);
+
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const trace = await screen.findByLabelText("Capture pipeline activity");
+        expect(trace).toHaveTextContent("Capture enabled with degraded embeddings");
+        expect(trace).toHaveAttribute("data-status", "degraded");
+    });
+
     it("does not show the capture-paused warning when the embedder is healthy", async () => {
         render(<ControlPanel status={statusWithEmbedder("real", false)} compact={true} />);
 
@@ -260,7 +308,7 @@ describe("ControlPanel", () => {
     });
 });
 
-function statusWithEmbedder(backend: string, degraded: boolean) {
+function statusWithEmbedder(backend: string, degraded: boolean): CaptureStatus {
     return {
         is_capturing: false,
         is_paused: false,

@@ -12,6 +12,7 @@ Use this index to find the right document quickly. **Authoritative agent vocabul
 | [`product/DESIGN_DIRECTION.md`](product/DESIGN_DIRECTION.md) | UX and visual direction |
 | [`product/UI-UX-OVERHAUL-PROGRAM.md`](product/UI-UX-OVERHAUL-PROGRAM.md) | Evidence-backed UI/UX program, complete surface ledger, accessibility matrix, and ordered delivery slices |
 | [`product/screen-guide.md`](product/screen-guide.md) | Local, ephemeral Screen Guide product contract |
+| [`product/memory-journey.md`](product/memory-journey.md) | Debug-only capture-to-answer evidence and quality-baseline contract |
 | [`mcp.md`](mcp.md) | MCP tools, modes, privacy model, and agent-facing additions |
 | [`agent.md`](agent.md) | FNDR Agent architecture, modes, provider strategy, and safety |
 | [`agent-context-pack.md`](agent-context-pack.md) | Typed context pack schema, ranking, redaction, and provenance |

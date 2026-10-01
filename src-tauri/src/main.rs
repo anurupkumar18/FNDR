@@ -126,6 +126,9 @@ fn main() {
                     error
                 ),
             }
+            fndr_lib::ipc::commands::start_screen_guide_diagnostic_maintenance(
+                data_dir.clone(),
+            );
             let store = Store::new(&data_dir)?;
             let store_arc = Arc::new(store);
             tracing::info!("Consolidated store initialized at {:?}", data_dir);
@@ -861,6 +864,26 @@ fn main() {
             ipc::commands::ask_screen_guide,
             ipc::commands::get_screen_guide_cursor_position,
             ipc::commands::finish_screen_guide_visual,
+            ipc::commands::arm_screen_guide_diagnostic,
+            ipc::commands::get_screen_guide_diagnostic_status,
+            ipc::commands::delete_screen_guide_diagnostics,
+            ipc::commands::reveal_screen_guide_diagnostics,
+            // Debug-only Memory Journey evidence. These command symbols are
+            // compiled out of release builds together with their recorder.
+            #[cfg(debug_assertions)]
+            ipc::commands::arm_memory_journey,
+            #[cfg(debug_assertions)]
+            ipc::commands::get_memory_journey_status,
+            #[cfg(debug_assertions)]
+            ipc::commands::create_reconstructed_memory_journey,
+            #[cfg(debug_assertions)]
+            ipc::commands::run_memory_journey_query,
+            #[cfg(debug_assertions)]
+            ipc::commands::export_memory_journey,
+            #[cfg(debug_assertions)]
+            ipc::commands::delete_memory_journey,
+            #[cfg(debug_assertions)]
+            ipc::commands::delete_all_memory_journeys,
             // Clipboard history
             ipc::commands::get_clipboard_history,
             ipc::commands::copy_clipboard_entry,

@@ -225,6 +225,41 @@ body,
     color: rgba(255, 255, 255, 0.55);
 }
 
+.notch-voice-trace,
+.notch-activity-trace {
+    margin: 0 0 8px;
+    border-color: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    --fg: #f5f5f7;
+    --fg-2: rgba(255, 255, 255, 0.64);
+    --fg-3: rgba(255, 255, 255, 0.46);
+    --accent-2: #30d158;
+    --alarm: #ff453a;
+}
+
+.notch-voice-trace .activity-trace-summary,
+.notch-activity-trace .activity-trace-summary {
+    min-height: 36px;
+    padding: 5px 8px;
+}
+
+.notch-voice-trace .activity-trace-current,
+.notch-activity-trace .activity-trace-current {
+    font-size: 11px;
+}
+
+.notch-voice-trace .activity-trace-owner,
+.notch-voice-trace .activity-trace-state,
+.notch-activity-trace .activity-trace-owner,
+.notch-activity-trace .activity-trace-state {
+    font-size: 9px;
+}
+
+.notch-activity-trace .activity-trace-details {
+    max-height: 156px;
+    overflow-y: auto;
+}
+
 .notch-thread {
     display: flex;
     flex-direction: column;

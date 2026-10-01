@@ -954,6 +954,22 @@ fn extension_from_mime(mime_type: Option<&str>) -> &'static str {
     }
 }
 
+fn validate_voice_input_container(
+    audio_bytes: &[u8],
+    mime_type: Option<&str>,
+) -> Result<(), String> {
+    let declared_webm = mime_type
+        .is_some_and(|value| value.to_ascii_lowercase().contains("webm"));
+    let has_ebml_header = audio_bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]);
+    if declared_webm && !has_ebml_header {
+        return Err(
+            "The microphone recorder produced an incomplete WebM clip before transcription. Try recording again. If it keeps happening, restart FNDR or type your request."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn normalize_transcript_text(raw: &str) -> String {
     let mut cleaned_tokens = Vec::new();
 
@@ -1000,6 +1016,15 @@ pub async fn transcribe_audio_bytes(
 ) -> Result<String, String> {
     if audio_bytes.is_empty() {
         return Err("Cannot transcribe empty audio input".to_string());
+    }
+    if let Err(error) = validate_voice_input_container(audio_bytes, mime_type) {
+        tracing::warn!(
+            audio_bytes = audio_bytes.len(),
+            mime_type = mime_type.unwrap_or(""),
+            error = %error,
+            "speech:voice_input_container_invalid"
+        );
+        return Err(error);
     }
     if SPEECH_SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("Voice transcription is shutting down.".to_string());
@@ -1287,6 +1312,30 @@ mod tests {
         assert!(!audio_is_pcm_wav_candidate(Path::new("voice.webm")));
         assert!(!audio_is_pcm_wav_candidate(Path::new("voice.m4a")));
         assert!(!audio_is_pcm_wav_candidate(Path::new("voice.ogg")));
+    }
+
+    #[tokio::test]
+    async fn incomplete_webm_voice_input_is_rejected_before_transcription() {
+        let app_data = tempfile::tempdir().expect("temporary app data directory");
+        let error = transcribe_audio_bytes(
+            app_data.path(),
+            b"not an ebml container",
+            Some("audio/webm;codecs=opus"),
+        )
+        .await
+        .expect_err("a declared WebM clip must be rejected before transcription");
+
+        assert!(error.contains("incomplete WebM clip"));
+        assert!(error.contains("Try recording again"));
+        assert!(!app_data.path().join("voice").exists());
+    }
+
+    #[test]
+    fn complete_webm_header_passes_voice_input_preflight() {
+        let webm = [0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81];
+
+        assert!(validate_voice_input_container(&webm, Some("audio/webm")).is_ok());
+        assert!(validate_voice_input_container(b"opaque audio", Some("audio/mp4")).is_ok());
     }
 
     #[cfg(unix)]
