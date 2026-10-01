@@ -18,6 +18,7 @@ pub const MEMORY_JOURNEY_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_MAX_BUNDLES: usize = 6;
 pub const DEFAULT_MAX_AGE_MS: i64 = 24 * 60 * 60 * 1000;
 pub const DEFAULT_MAX_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
+pub const MEMORY_JOURNEY_HANDOFF_GRACE_MS: i64 = 8_000;
 const MANIFEST_FILE: &str = "manifest.json";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -183,6 +184,8 @@ pub struct MemoryJourneySummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MemoryJourneyStatus {
     pub armed: bool,
+    pub arm_ready_at_ms: Option<i64>,
+    pub handoff_grace_ms: i64,
     pub active_journey_id: Option<String>,
     pub active_state: Option<MemoryJourneyState>,
     pub journeys: Vec<MemoryJourneySummary>,
@@ -207,6 +210,7 @@ struct ArmedJourney {
     id: String,
     label: String,
     created_at_ms: i64,
+    ready_at_ms: i64,
 }
 
 #[derive(Debug, Default)]
@@ -270,10 +274,12 @@ impl MemoryJourneyRecorder {
             return Err("A Memory Journey is already armed or recording".to_string());
         }
         let id = uuid::Uuid::new_v4().to_string();
+        let created_at_ms = now_ms();
         inner.armed = Some(ArmedJourney {
             id: id.clone(),
             label: label.trim().chars().take(80).collect(),
-            created_at_ms: now_ms(),
+            created_at_ms,
+            ready_at_ms: created_at_ms + MEMORY_JOURNEY_HANDOFF_GRACE_MS,
         });
         Ok(id)
     }
@@ -281,11 +287,24 @@ impl MemoryJourneyRecorder {
     /// Consume the one-shot arm. Call only after the capture loop has decided
     /// to evaluate an attempt, but before any privacy gate can return.
     pub fn begin_capture_attempt(&self, target_app_class: &str) -> Result<Option<String>, String> {
+        self.begin_capture_attempt_at(target_app_class, now_ms())
+    }
+
+    fn begin_capture_attempt_at(
+        &self,
+        target_app_class: &str,
+        now: i64,
+    ) -> Result<Option<String>, String> {
         let mut inner = self.inner.lock();
+        let Some(armed) = inner.armed.as_ref() else {
+            return Ok(None);
+        };
+        if now < armed.ready_at_ms {
+            return Ok(None);
+        }
         let Some(armed) = inner.armed.take() else {
             return Ok(None);
         };
-        let now = now_ms();
         let manifest = MemoryJourneyManifestV1 {
             schema_version: MEMORY_JOURNEY_SCHEMA_VERSION,
             journey_id: armed.id.clone(),
@@ -1004,6 +1023,7 @@ impl MemoryJourneyRecorder {
         self.cleanup()?;
         let inner = self.inner.lock();
         let armed = inner.armed.is_some();
+        let arm_ready_at_ms = inner.armed.as_ref().map(|item| item.ready_at_ms);
         let active_journey_id = inner
             .active
             .as_ref()
@@ -1027,6 +1047,8 @@ impl MemoryJourneyRecorder {
         }
         Ok(MemoryJourneyStatus {
             armed,
+            arm_ready_at_ms,
+            handoff_grace_ms: MEMORY_JOURNEY_HANDOFF_GRACE_MS,
             active_journey_id,
             active_state,
             journeys,
@@ -1407,6 +1429,12 @@ fn io_error(action: &'static str) -> impl Fn(std::io::Error) -> String {
 mod tests {
     use super::*;
 
+    fn start_armed(recorder: &MemoryJourneyRecorder, target_app_class: &str) -> Option<String> {
+        recorder
+            .begin_capture_attempt_at(target_app_class, i64::MAX)
+            .unwrap()
+    }
+
     fn stage(name: &str) -> MemoryJourneyStageRecord {
         MemoryJourneyStageRecord {
             name: name.to_string(),
@@ -1432,10 +1460,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
         let armed = recorder.arm("case 1".into()).unwrap();
-        assert_eq!(
-            recorder.begin_capture_attempt("browser").unwrap(),
-            Some(armed.clone())
-        );
+        assert_eq!(start_armed(&recorder, "browser"), Some(armed.clone()));
         assert_eq!(recorder.begin_capture_attempt("editor").unwrap(), None);
         recorder.record_stage(&armed, stage("frame")).unwrap();
         recorder
@@ -1445,11 +1470,35 @@ mod tests {
     }
 
     #[test]
+    fn armed_journey_waits_for_the_target_handoff_before_consuming_the_attempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
+        let id = recorder.arm("handoff".into()).unwrap();
+        let status = recorder.status().unwrap();
+        let ready_at_ms = status.arm_ready_at_ms.expect("armed ready timestamp");
+
+        assert_eq!(
+            recorder
+                .begin_capture_attempt_at("fndr", ready_at_ms - 1)
+                .unwrap(),
+            None
+        );
+        assert!(recorder.status().unwrap().armed);
+        assert_eq!(
+            recorder
+                .begin_capture_attempt_at("browser", ready_at_ms)
+                .unwrap(),
+            Some(id)
+        );
+        assert!(!recorder.status().unwrap().armed);
+    }
+
+    #[test]
     fn status_events_include_the_active_observed_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
         let id = recorder.arm("live evidence".into()).unwrap();
-        recorder.begin_capture_attempt("browser").unwrap();
+        start_armed(&recorder, "browser");
         recorder.record_stage(&id, stage("ocr")).unwrap();
 
         let status = recorder.status().unwrap();
@@ -1467,7 +1516,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
         let id = recorder.arm("provenance".into()).unwrap();
-        recorder.begin_capture_attempt("browser").unwrap();
+        start_armed(&recorder, "browser");
         let mut model_stage = stage("extraction");
         model_stage.details = json!({ "model": "local-model", "prompt_tokens": 12 });
         recorder.record_stage(&id, model_stage).unwrap();
@@ -1492,7 +1541,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
         let id = recorder.arm("protected".into()).unwrap();
-        recorder.begin_capture_attempt("protected").unwrap();
+        start_armed(&recorder, "protected");
         let manifest = recorder
             .finish_skipped(&id, "sensitive_context", true)
             .unwrap();
@@ -1505,7 +1554,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
         let id = recorder.arm("protected".into()).unwrap();
-        recorder.begin_capture_attempt("browser").unwrap();
+        start_armed(&recorder, "browser");
         recorder.record_stage(&id, stage("ocr")).unwrap();
         recorder
             .record_artifact(&id, "ocr", "recognized.txt", b"secret")
@@ -1525,7 +1574,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
         let id = recorder.arm("artifact".into()).unwrap();
-        recorder.begin_capture_attempt("browser").unwrap();
+        start_armed(&recorder, "browser");
         recorder.record_stage(&id, stage("ocr")).unwrap();
         let artifact = recorder
             .record_artifact(&id, "ocr", "raw.txt", b"private text")
@@ -1555,7 +1604,7 @@ mod tests {
             1_200,
         );
         let id = recorder.arm("too large".into()).unwrap();
-        recorder.begin_capture_attempt("browser").unwrap();
+        start_armed(&recorder, "browser");
         let err = recorder
             .record_artifact(&id, "frame", "frame.png", &vec![7; 2_000])
             .unwrap_err();
@@ -1570,7 +1619,7 @@ mod tests {
         let id = {
             let recorder = MemoryJourneyRecorder::new(root.clone());
             let id = recorder.arm("interrupted".into()).unwrap();
-            recorder.begin_capture_attempt("browser").unwrap();
+            start_armed(&recorder, "browser");
             assert!(recorder.partial_dir(&id).exists());
             id
         };
@@ -1585,7 +1634,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
         let id = recorder.arm("cancel me".into()).unwrap();
-        recorder.begin_capture_attempt("browser").unwrap();
+        start_armed(&recorder, "browser");
         recorder
             .record_artifact(&id, "frame", "capture.png", b"private pixels")
             .unwrap();
@@ -1608,7 +1657,7 @@ mod tests {
         );
         for label in ["one", "two", "three"] {
             let id = recorder.arm(label.into()).unwrap();
-            recorder.begin_capture_attempt("browser").unwrap();
+            start_armed(&recorder, "browser");
             recorder
                 .finish_active(&id, MemoryJourneyState::Complete)
                 .unwrap();
@@ -1632,7 +1681,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
         let id = recorder.arm("export".into()).unwrap();
-        recorder.begin_capture_attempt("browser").unwrap();
+        start_armed(&recorder, "browser");
         recorder.record_stage(&id, stage("ocr")).unwrap();
         recorder
             .record_artifact(&id, "ocr", "raw.txt", b"text")
@@ -1660,7 +1709,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
         let id = recorder.arm("scorecard".into()).unwrap();
-        recorder.begin_capture_attempt("browser").unwrap();
+        start_armed(&recorder, "browser");
         recorder.attach_memory_id(&id, "memory-1").unwrap();
         recorder
             .finish_active(&id, MemoryJourneyState::Complete)

@@ -67,6 +67,8 @@ interface JourneySummary {
 
 interface JourneyStatus {
     armed: boolean;
+    arm_ready_at_ms: number | null;
+    handoff_grace_ms: number;
     active_journey_id: string | null;
     active_state: JourneyState | null;
     journeys: JourneySummary[];
@@ -208,6 +210,9 @@ export default function MemoryJourneyInspector() {
                     <p className="pipeline-muted">
                         Follow one real capture through observed pipeline boundaries. This records prompts and content, not model chain-of-thought.
                     </p>
+                    <p className="pipeline-muted">
+                        Live case: open the target first, return here to arm, then switch straight back during the handoff.
+                    </p>
                 </div>
                 <span className={`memory-journey__state memory-journey__state--${status?.active_state ?? "idle"}`} role="status" aria-live="polite">
                     {status?.active_state?.split("_").join(" ") ?? "idle"}
@@ -232,6 +237,12 @@ export default function MemoryJourneyInspector() {
                     {busy === "reconstruct" ? "Reconstructing…" : "Inspect existing memory"}
                 </button>
             </div>
+
+            {status?.armed && (
+                <p className="pipeline-muted" aria-live="polite">
+                    Armed with a {Math.round(status.handoff_grace_ms / 1000)}-second handoff. Switch now to the already-open target; FNDR will ignore capture attempts until the handoff ends.
+                </p>
+            )}
 
             <div className="memory-journey__retention" aria-label="Memory Journey retention">
                 <span>{status?.journeys.length ?? 0}/{status?.max_bundles ?? 6} bundles</span>

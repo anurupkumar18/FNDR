@@ -62,6 +62,8 @@ const manifest = {
 
 const status = {
     armed: false,
+    arm_ready_at_ms: null,
+    handoff_grace_ms: 8_000,
     active_journey_id: null,
     active_state: null,
     journeys: [
@@ -105,7 +107,15 @@ describe("MemoryJourneyInspector", () => {
     });
 
     it("arms through IPC and advances only when an event-backed status arrives", async () => {
-        const armedStatus = { ...status, active_journey_id: "armed-1", active_state: "armed", armed: true, journeys: [], manifests: [] };
+        const armedStatus = {
+            ...status,
+            active_journey_id: "armed-1",
+            active_state: "armed",
+            arm_ready_at_ms: 9_000,
+            armed: true,
+            journeys: [],
+            manifests: [],
+        };
         mocks.invoke.mockImplementation((command: string) => {
             if (command === "arm_memory_journey") return Promise.resolve(armedStatus);
             return Promise.resolve({ ...status, journeys: [], manifests: [] });
@@ -115,9 +125,11 @@ describe("MemoryJourneyInspector", () => {
         fireEvent.click(await screen.findByRole("button", { name: "Record next capture" }));
         await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("arm_memory_journey", { label: "" }));
         expect(screen.getByRole("status")).toHaveTextContent("armed");
+        expect(screen.getByText(/8-second handoff/i)).toBeInTheDocument();
 
         mocks.eventHandler?.({ ...status, active_journey_id: "armed-1", active_state: "capturing", armed: false });
         await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("capturing"));
+        expect(screen.queryByText(/8-second handoff/i)).not.toBeInTheDocument();
     });
 
     it("runs Search with the selected journey rather than a parallel mock path", async () => {
