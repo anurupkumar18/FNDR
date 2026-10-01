@@ -615,6 +615,7 @@ fn main() {
             }
 
             app.manage(state.clone());
+            app.manage(fndr_lib::voice::VoiceManager::for_app(app.handle().clone()));
 
             // Start the Companion API (iPhone/Watch local-network surface) as a
             // background task so app startup is not blocked on TLS init. The
@@ -732,6 +733,9 @@ fn main() {
             ipc::commands::open_exported_pdf,
             // Voice / Speech
             ipc::commands::transcribe_voice_input,
+            fndr_lib::voice::voice_start,
+            fndr_lib::voice::voice_stop,
+            fndr_lib::voice::voice_cancel,
             // Capture control
             ipc::commands::pause_capture,
             ipc::commands::resume_capture,
@@ -918,6 +922,7 @@ fn main() {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
             ipc::commands::shutdown_screen_guide(app_handle);
+            fndr_lib::voice::shutdown(app_handle);
             fndr_lib::speech::shutdown_speech();
         }
     });

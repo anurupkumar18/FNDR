@@ -41,6 +41,7 @@ pub mod system_resources;
 pub mod tasks;
 pub mod telemetry;
 pub mod timeline;
+pub mod voice;
 pub mod wiki;
 
 use config::Config;
