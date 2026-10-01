@@ -731,6 +731,9 @@ pub struct Config {
     /// Click-through, local-only Screen Guide configuration.
     #[serde(default)]
     pub screen_guide: ScreenGuideConfig,
+    /// Kill switch: every command-surface action is refused while true.
+    #[serde(default)]
+    pub actions_kill_switch: bool,
     /// Authoritative local embedding model contract.
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -1111,6 +1114,7 @@ impl Default for Config {
             decay_half_life_days: 21,
             autofill: AutofillConfig::default(),
             screen_guide: ScreenGuideConfig::default(),
+            actions_kill_switch: false,
             embedding: EmbeddingConfig::default(),
             chunking: ChunkingConfig::default(),
             search: SearchConfig::default(),
