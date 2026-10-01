@@ -60,6 +60,7 @@ apps/ios/FNDRKit/.build/
 
 # Build output
 build/
+src-tauri/binaries/fndr-speech-*
 
 # iOS / Xcode
 apps/ios/Local.xcconfig
