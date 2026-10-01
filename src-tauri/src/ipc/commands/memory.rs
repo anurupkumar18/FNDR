@@ -94,7 +94,7 @@ pub async fn reopen_memory(
     Ok(true)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum ResolvedReopenTarget {
     BrowserUrl(String),
     FilePath(PathBuf),
@@ -411,5 +411,332 @@ mod tests {
             }
             other => panic!("unexpected target: {other:?}"),
         }
+    }
+
+    use ResolvedReopenTarget as R;
+    type Rec = crate::storage::MemoryRecord;
+
+    fn s(value: &str) -> Option<String> {
+        Some(value.to_string())
+    }
+
+    fn assert_reopen_cases(cases: Vec<(&str, Rec, Option<ResolvedReopenTarget>)>) {
+        for (label, record, expected) in cases {
+            assert_eq!(resolve_reopen_target(&record), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn resolve_reopen_target_uses_each_typed_kind() {
+        assert_reopen_cases(vec![
+            (
+                "browser url",
+                Rec {
+                    reopen_kind: ReopenKind::BrowserUrl,
+                    reopen_url: s(" https://example.com/a "),
+                    ..Default::default()
+                },
+                Some(R::BrowserUrl("https://example.com/a".into())),
+            ),
+            (
+                "file path",
+                Rec {
+                    reopen_kind: ReopenKind::FilePath,
+                    reopen_file_path: s("/Users/qa/doc.pdf"),
+                    ..Default::default()
+                },
+                Some(R::FilePath(PathBuf::from("/Users/qa/doc.pdf"))),
+            ),
+            (
+                "app bundle",
+                Rec {
+                    reopen_kind: ReopenKind::AppBundle,
+                    reopen_app_bundle_id: s("com.apple.Preview"),
+                    ..Default::default()
+                },
+                Some(R::AppBundle("com.apple.Preview".into())),
+            ),
+            (
+                "deep link",
+                Rec {
+                    reopen_kind: ReopenKind::AppDeepLink,
+                    reopen_app_deep_link: s("notion://www.notion.so/page-123"),
+                    ..Default::default()
+                },
+                Some(R::AppDeepLink("notion://www.notion.so/page-123".into())),
+            ),
+        ]);
+    }
+
+    #[test]
+    fn resolve_reopen_target_without_any_target_is_none() {
+        assert_reopen_cases(vec![
+            ("default record", Rec::default(), None),
+            (
+                "unknown kind with typed fields only",
+                Rec {
+                    reopen_kind: ReopenKind::Unknown,
+                    reopen_url: s("https://ignored.example"),
+                    reopen_app_bundle_id: s("com.ignored"),
+                    ..Default::default()
+                },
+                None,
+            ),
+            (
+                "blank fallbacks",
+                Rec {
+                    url: s("  "),
+                    bundle_id: s(""),
+                    files_touched: vec!["  ".into()],
+                    memory_context: "Reopen:   ".into(),
+                    ..Default::default()
+                },
+                None,
+            ),
+        ]);
+    }
+
+    #[test]
+    fn resolve_reopen_target_typed_kind_missing_field_falls_back() {
+        assert_reopen_cases(vec![
+            (
+                "browser url without reopen_url uses record url",
+                Rec {
+                    reopen_kind: ReopenKind::BrowserUrl,
+                    url: s("https://fallback.example"),
+                    ..Default::default()
+                },
+                Some(R::BrowserUrl("https://fallback.example".into())),
+            ),
+            (
+                "blank file path uses bundle id",
+                Rec {
+                    reopen_kind: ReopenKind::FilePath,
+                    reopen_file_path: s("   "),
+                    bundle_id: s("com.apple.Preview"),
+                    ..Default::default()
+                },
+                Some(R::AppBundle("com.apple.Preview".into())),
+            ),
+            (
+                "app bundle without id uses files touched",
+                Rec {
+                    reopen_kind: ReopenKind::AppBundle,
+                    files_touched: vec!["/Users/qa/doc.pdf".into()],
+                    ..Default::default()
+                },
+                Some(R::FilePath(PathBuf::from("/Users/qa/doc.pdf"))),
+            ),
+            (
+                "deep link without link and no fallbacks",
+                Rec {
+                    reopen_kind: ReopenKind::AppDeepLink,
+                    ..Default::default()
+                },
+                None,
+            ),
+        ]);
+    }
+
+    #[test]
+    fn resolve_reopen_target_rejects_invalid_typed_values() {
+        assert_reopen_cases(vec![
+            (
+                "javascript browser url",
+                Rec {
+                    reopen_kind: ReopenKind::BrowserUrl,
+                    reopen_url: s("javascript:alert(1)"),
+                    ..Default::default()
+                },
+                None,
+            ),
+            (
+                "data browser url falls back to bundle",
+                Rec {
+                    reopen_kind: ReopenKind::BrowserUrl,
+                    reopen_url: s("data:text/html,hi"),
+                    bundle_id: s("com.google.Chrome"),
+                    ..Default::default()
+                },
+                Some(R::AppBundle("com.google.Chrome".into())),
+            ),
+            (
+                "https is not a deep link",
+                Rec {
+                    reopen_kind: ReopenKind::AppDeepLink,
+                    reopen_app_deep_link: s("https://example.com"),
+                    ..Default::default()
+                },
+                None,
+            ),
+            (
+                "deep link without scheme separator",
+                Rec {
+                    reopen_kind: ReopenKind::AppDeepLink,
+                    reopen_app_deep_link: s("mailto:qa@example.com"),
+                    ..Default::default()
+                },
+                None,
+            ),
+        ]);
+    }
+
+    #[test]
+    fn resolve_reopen_target_fallback_order() {
+        let full = Rec {
+            memory_context: "Summary\nReopen: https://legacy.example\n".into(),
+            url: s("https://url.example"),
+            files_touched: vec!["".into(), "/Users/qa/doc.pdf".into()],
+            bundle_id: s("com.apple.Preview"),
+            ..Default::default()
+        };
+        let no_marker = Rec {
+            memory_context: String::new(),
+            ..full.clone()
+        };
+        let no_url = Rec {
+            url: None,
+            ..no_marker.clone()
+        };
+        let no_files = Rec {
+            files_touched: Vec::new(),
+            ..no_url.clone()
+        };
+        let non_http_url = Rec {
+            url: s("chrome://settings"),
+            ..no_url.clone()
+        };
+        assert_reopen_cases(vec![
+            (
+                "legacy marker first",
+                full,
+                Some(R::BrowserUrl("https://legacy.example".into())),
+            ),
+            (
+                "then record url",
+                no_marker,
+                Some(R::BrowserUrl("https://url.example".into())),
+            ),
+            (
+                "then first non-empty file touched",
+                no_url,
+                Some(R::FilePath(PathBuf::from("/Users/qa/doc.pdf"))),
+            ),
+            (
+                "non-http record url is skipped",
+                non_http_url,
+                Some(R::FilePath(PathBuf::from("/Users/qa/doc.pdf"))),
+            ),
+            (
+                "then bundle id",
+                no_files,
+                Some(R::AppBundle("com.apple.Preview".into())),
+            ),
+        ]);
+    }
+
+    #[test]
+    fn resolve_reopen_target_legacy_marker_variants() {
+        let marker = |context: &str| Rec {
+            memory_context: context.into(),
+            ..Default::default()
+        };
+        assert_reopen_cases(vec![
+            (
+                "file url",
+                marker("Reopen: file:///Users/qa/doc.pdf"),
+                Some(R::FilePath(PathBuf::from("/Users/qa/doc.pdf"))),
+            ),
+            (
+                "deep link",
+                marker("Reopen: notion://www.notion.so/page-123"),
+                Some(R::AppDeepLink("notion://www.notion.so/page-123".into())),
+            ),
+            ("empty marker", marker("Reopen: "), None),
+            ("javascript marker", marker("Reopen: javascript:alert(1)"), None),
+            (
+                "indented marker after other lines",
+                marker("App: Chrome\n   Reopen: https://legacy.example  "),
+                Some(R::BrowserUrl("https://legacy.example".into())),
+            ),
+        ]);
+    }
+
+    // `chrome:` pages must never be a reopen target or be opened.
+    #[test]
+    fn resolve_reopen_target_accepts_chrome_scheme_as_deep_link_flips_r14() {
+        assert_reopen_cases(vec![
+            (
+                "typed deep link",
+                Rec {
+                    reopen_kind: ReopenKind::AppDeepLink,
+                    reopen_app_deep_link: s("chrome://settings"),
+                    ..Default::default()
+                },
+                Some(R::AppDeepLink("chrome://settings".into())),
+            ),
+            (
+                "legacy marker",
+                Rec {
+                    memory_context: "Reopen: chrome://settings".into(),
+                    ..Default::default()
+                },
+                Some(R::AppDeepLink("chrome://settings".into())),
+            ),
+        ]);
+    }
+
+    // A merged memory should reopen its most specific target (the file), not the app.
+    #[test]
+    fn resolve_reopen_target_follows_kind_over_disagreeing_file_flips_r36() {
+        let record = Rec {
+            reopen_kind: ReopenKind::AppBundle,
+            reopen_app_bundle_id: s("com.google.Chrome"),
+            reopen_file_path: s("/Users/qa/doc.pdf"),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_reopen_target(&record),
+            Some(R::AppBundle("com.google.Chrome".into()))
+        );
+    }
+
+    // A `file://` marker should be percent-decoded to the path on disk.
+    #[test]
+    fn resolve_reopen_target_keeps_percent_encoding_in_file_url_flips_r25() {
+        let record = Rec {
+            memory_context: "Reopen: file:///Users/qa/My%20Doc%20caf%C3%A9.pdf".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_reopen_target(&record),
+            Some(R::FilePath(PathBuf::from("/Users/qa/My%20Doc%20caf%C3%A9.pdf")))
+        );
+    }
+
+    // A relative path is not a file target; this should be app only (R18) or the folder (R20).
+    #[test]
+    fn resolve_reopen_target_accepts_relative_file_path_flips_r18() {
+        assert_reopen_cases(vec![
+            (
+                "typed relative path",
+                Rec {
+                    reopen_kind: ReopenKind::FilePath,
+                    reopen_file_path: s("plan.md"),
+                    bundle_id: s("com.apple.TextEdit"),
+                    ..Default::default()
+                },
+                Some(R::FilePath(PathBuf::from("plan.md"))),
+            ),
+            (
+                "relative files touched over bundle",
+                Rec {
+                    files_touched: vec!["plan.md".into()],
+                    bundle_id: s("com.apple.finder"),
+                    ..Default::default()
+                },
+                Some(R::FilePath(PathBuf::from("plan.md"))),
+            ),
+        ]);
     }
 }
