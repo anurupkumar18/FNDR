@@ -39,6 +39,9 @@ fn build_speech_helper() -> io::Result<()> {
     let output = binaries.join(format!("fndr-speech-{target}"));
 
     println!("cargo:rerun-if-changed={}", source.display());
+    if output_is_fresh(&source, &output)? {
+        return Ok(());
+    }
     fs::create_dir_all(&binaries)?;
 
     let status = Command::new("xcrun")
@@ -62,6 +65,16 @@ fn build_speech_helper() -> io::Result<()> {
             "xcrun swiftc exited with {status}"
         )))
     }
+}
+
+fn output_is_fresh(source: &Path, output: &Path) -> io::Result<bool> {
+    let source_modified = fs::metadata(source)?.modified()?;
+    let output_modified = match fs::metadata(output) {
+        Ok(metadata) => metadata.modified()?,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    };
+    Ok(output_modified >= source_modified)
 }
 
 fn stage_vendored_hermes_bundle() -> io::Result<()> {
