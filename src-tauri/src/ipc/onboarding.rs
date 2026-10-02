@@ -61,7 +61,6 @@ pub enum OnboardingStep {
     Complete,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OnboardingState {
     pub step: OnboardingStep,
@@ -335,19 +334,7 @@ fn check_microphone_permission() -> bool {
 
 #[tauri::command]
 pub async fn open_system_settings(pane: String) -> Result<(), String> {
-    // pane: "screen-recording" | "accessibility" | "microphone"
-    let url = match pane.as_str() {
-        "screen-recording" => {
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-        }
-        "accessibility" => {
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-        }
-        "microphone" => {
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-        }
-        _ => return Err(format!("Unknown settings pane: {}", pane)),
-    };
+    let url = system_settings_url(&pane)?;
 
     tokio::process::Command::new("open")
         .arg(url)
@@ -355,6 +342,24 @@ pub async fn open_system_settings(pane: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+fn system_settings_url(pane: &str) -> Result<&'static str, String> {
+    match pane {
+        "screen-recording" => {
+            Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        }
+        "accessibility" => {
+            Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        }
+        "microphone" => {
+            Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+        }
+        "speech-recognition" => {
+            Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")
+        }
+        _ => Err(format!("Unknown settings pane: {pane}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -379,8 +384,8 @@ pub struct ModelInfo {
 
 #[tauri::command]
 pub async fn list_available_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
-    let app_data_dir = crate::config::fndr_app_data_dir(app.path())
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let app_data_dir =
+        crate::config::fndr_app_data_dir(app.path()).unwrap_or_else(|_| PathBuf::from("."));
 
     Ok(models::catalog()
         .iter()
@@ -640,7 +645,8 @@ async fn download_model_files(
     filename: &str,
 ) -> Result<(), String> {
     if let Some(definition) = models::model_by_id(model_id) {
-        let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
+        let app_data_dir =
+            crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
         let models_dir = models::models_dir(app_data_dir.as_path());
         for extra in definition.extra_files {
             let dest = models_dir.join(extra.filename);
@@ -997,4 +1003,22 @@ pub async fn delete_ai_model(
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::system_settings_url;
+
+    #[test]
+    fn resolves_voice_permission_settings_panes() {
+        assert_eq!(
+            system_settings_url("microphone").unwrap(),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        );
+        assert_eq!(
+            system_settings_url("speech-recognition").unwrap(),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
+        );
+        assert!(system_settings_url("unknown").is_err());
+    }
 }

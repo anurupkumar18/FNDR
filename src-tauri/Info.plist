@@ -27,7 +27,7 @@
     <key>NSMicrophoneUsageDescription</key>
     <string>FNDR needs microphone access for voice search, Screen Guide, and meeting transcription.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>FNDR uses speech recognition to hear what you ask the notch, including when you tell it to stop.</string>
+    <string>FNDR uses on-device speech recognition for voice search and Screen Guide questions.</string>
 
     <!-- Files and Folders Permissions -->
     <key>NSDocumentsFolderUsageDescription</key>

@@ -48,7 +48,9 @@ export async function checkPermissions(): Promise<PermissionsStatus> {
     return invoke<PermissionsStatus>("check_permissions");
 }
 
-export async function openSystemSettings(pane: "screen-recording" | "accessibility" | "microphone"): Promise<void> {
+export async function openSystemSettings(
+    pane: "screen-recording" | "accessibility" | "microphone" | "speech-recognition",
+): Promise<void> {
     return invoke("open_system_settings", { pane });
 }
 

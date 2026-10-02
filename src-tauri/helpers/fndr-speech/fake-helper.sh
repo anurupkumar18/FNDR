@@ -19,6 +19,13 @@ while IFS= read -r command; do
         error)
           printf '%s\n' '{"type":"error","code":"recognition_failed","message":"Recognition failed"}'
           ;;
+        permission_denied)
+          printf '%s\n' '{"type":"requesting_permission","permission":"speech_recognition"}'
+          printf '%s\n' '{"type":"unavailable","reason":"permission_denied","permission":"speech_recognition","settingsPane":"speech-recognition","message":"Allow speech recognition in System Settings."}'
+          ;;
+        permission_restricted)
+          printf '%s\n' '{"type":"unavailable","reason":"permission_restricted","permission":"microphone","settingsPane":"microphone","message":"Microphone access is restricted on this Mac."}'
+          ;;
         crash)
           exit 17
           ;;
