@@ -5511,6 +5511,7 @@ mod tests {
             window_title: "Account settings".to_string(),
             window_title_verified: true,
             browser_url: None,
+            document_path: None,
         };
         let display = ScreenGuideDisplaySignature {
             x: 0,
@@ -5636,6 +5637,7 @@ mod tests {
             window_title: "shell".to_string(),
             window_title_verified: true,
             browser_url: None,
+            document_path: None,
         };
 
         assert!(screen_guide_ocr_is_allowed(
@@ -5660,6 +5662,7 @@ mod tests {
             window_title: "com.apple.Notes".to_string(),
             window_title_verified: false,
             browser_url: None,
+            document_path: None,
         };
 
         let error = screen_guide_context_verification_error(&context, None)
@@ -5687,6 +5690,7 @@ mod tests {
             window_title: "Example".to_string(),
             window_title_verified: true,
             browser_url: None,
+            document_path: None,
         };
 
         let error = screen_guide_context_verification_error(&context, None)

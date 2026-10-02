@@ -2358,7 +2358,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             let memory_context = format!("URL-only surface capture for {} at {}", domain, snippet);
             let reopen_target = build_reopen_target(
                 url.as_deref(),
-                None,
+                macos::preferred_reopen_file_path(app_context.document_path.as_deref(), &[]),
                 app_context.bundle_id.as_deref(),
                 &app_name,
                 now.timestamp_millis(),
@@ -3671,9 +3671,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         );
         let reopen_target = build_reopen_target(
             url.as_deref(),
-            structured_memory
-                .as_ref()
-                .and_then(|memory| memory.files_touched.first().map(String::as_str)),
+            macos::preferred_reopen_file_path(
+                app_context.document_path.as_deref(),
+                structured_memory
+                    .as_ref()
+                    .map(|memory| memory.files_touched.as_slice())
+                    .unwrap_or(&[]),
+            ),
             app_context.bundle_id.as_deref(),
             &app_name,
             now.timestamp_millis(),

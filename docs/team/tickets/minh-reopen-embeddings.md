@@ -102,7 +102,7 @@ How to work this lane: test first, then fix, then rerun the matrix. The two matr
 2. Pass it as `first_file_path` to `build_reopen_target` at every capture call site (search `build_reopen_target(` in `capture/mod.rs`), ahead of `files_touched`.
 3. Tests for decoding (`%20`, unicode) and for the browser case staying unchanged.
 
-**Done when.** Matrix rows R15 to R17, R19, R25 pass.
+**Done when.** Matrix rows R15 to R17, R25 pass. R19 moved to RE-10 (2026-10-01): VS Code exposes no `AXDocument`, so it stays app only after this ticket.
 
 **Evidence.** Matrix rows and test output.
 
@@ -223,6 +223,8 @@ How to work this lane: test first, then fix, then rerun the matrix. The two matr
 **Do.**
 1. Table-driven mapping: VS Code (`vscode://file/<path>:<line>` when the title shows a line), Notion (keep the https URL), Figma (https URL), Slack (only when a workspace and channel id are visible in the URL).
 2. Tests per mapping; unsupported apps stay app only.
+
+**Note (from RE-03).** VS Code gives no `AXDocument`, and its default window title has only the file name (`re03-notes.txt`), not the folder. A `vscode://file/` link needs the full path from somewhere else, or R19 is documented as app only.
 
 **Done when.** R19, R26, R27 pass or are documented as app only.
 
