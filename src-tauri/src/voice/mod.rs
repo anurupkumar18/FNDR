@@ -95,6 +95,10 @@ pub enum VoiceState {
     Unavailable {
         reason: VoiceUnavailableReason,
         message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        permission: Option<VoicePermission>,
+        #[serde(rename = "settingsPane", skip_serializing_if = "Option::is_none")]
+        settings_pane: Option<VoiceSettingsPane>,
     },
 }
 
@@ -123,6 +127,15 @@ pub enum VoiceUnavailableReason {
     LanguageAssetMissing,
     PlatformUnsupported,
     PolicyNotEnabled,
+    PermissionDenied,
+    PermissionRestricted,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum VoiceSettingsPane {
+    Microphone,
+    SpeechRecognition,
 }
 
 #[derive(Debug, Clone)]
@@ -209,12 +222,33 @@ impl HelperProcess {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum HelperEvent {
     Ready,
+    RequestingPermission {
+        permission: String,
+    },
     PreparingModel,
-    Listening { level: Option<f64> },
-    Level { level: f64 },
-    Partial { text: String },
-    Final { text: String },
-    Error { code: String, message: String },
+    Listening {
+        level: Option<f64>,
+    },
+    Level {
+        level: f64,
+    },
+    Partial {
+        text: String,
+    },
+    Final {
+        text: String,
+    },
+    Unavailable {
+        reason: String,
+        permission: Option<String>,
+        #[serde(rename = "settingsPane")]
+        settings_pane: Option<String>,
+        message: String,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
 }
 
 pub struct VoiceManager {
@@ -223,9 +257,19 @@ pub struct VoiceManager {
 }
 
 impl VoiceManager {
+    #[cfg(test)]
     fn spawn(command: HelperCommand, idle_timeout: Duration, sink: EventSink) -> Self {
         let (control, control_rx) = mpsc::channel(16);
         tokio::spawn(run_actor(command, idle_timeout, sink, control_rx));
+        Self {
+            control,
+            next_session_id: AtomicU64::new(1),
+        }
+    }
+
+    fn spawn_on_tauri(command: HelperCommand, idle_timeout: Duration, sink: EventSink) -> Self {
+        let (control, control_rx) = mpsc::channel(16);
+        tauri::async_runtime::spawn(run_actor(command, idle_timeout, sink, control_rx));
         Self {
             control,
             next_session_id: AtomicU64::new(1),
@@ -239,7 +283,7 @@ impl VoiceManager {
                 tracing::warn!(error = %error, "Could not emit voice state");
             }
         });
-        Self::spawn(native_helper_command(), DEFAULT_IDLE_TIMEOUT, sink)
+        Self::spawn_on_tauri(native_helper_command(), DEFAULT_IDLE_TIMEOUT, sink)
     }
 
     pub async fn start(
@@ -472,18 +516,24 @@ fn helper_error_state(code: &str, message: String) -> VoiceState {
         return VoiceState::Unavailable {
             reason: VoiceUnavailableReason::PlatformUnsupported,
             message,
+            permission: None,
+            settings_pane: None,
         };
     }
     if normalized.contains("asset") || normalized.contains("language") {
         return VoiceState::Unavailable {
             reason: VoiceUnavailableReason::LanguageAssetMissing,
             message,
+            permission: None,
+            settings_pane: None,
         };
     }
     if normalized.contains("unavailable") {
         return VoiceState::Unavailable {
             reason: VoiceUnavailableReason::SpeechRecognitionUnavailable,
             message,
+            permission: None,
+            settings_pane: None,
         };
     }
     let code = if normalized.contains("permission") || normalized.contains("denied") {
@@ -494,6 +544,40 @@ fn helper_error_state(code: &str, message: String) -> VoiceState {
         VoiceErrorCode::RecognitionFailed
     };
     VoiceState::Error { code, message }
+}
+
+fn voice_permission(value: &str) -> Option<VoicePermission> {
+    match value {
+        "microphone" => Some(VoicePermission::Microphone),
+        "speech_recognition" => Some(VoicePermission::SpeechRecognition),
+        _ => None,
+    }
+}
+
+fn voice_settings_pane(value: &str) -> Option<VoiceSettingsPane> {
+    match value {
+        "microphone" => Some(VoiceSettingsPane::Microphone),
+        "speech-recognition" => Some(VoiceSettingsPane::SpeechRecognition),
+        _ => None,
+    }
+}
+
+fn permission_unavailable_state(
+    reason: &str,
+    permission: Option<String>,
+    settings_pane: Option<String>,
+    message: String,
+) -> VoiceState {
+    VoiceState::Unavailable {
+        reason: if reason == "permission_restricted" {
+            VoiceUnavailableReason::PermissionRestricted
+        } else {
+            VoiceUnavailableReason::PermissionDenied
+        },
+        message,
+        permission: permission.as_deref().and_then(voice_permission),
+        settings_pane: settings_pane.as_deref().and_then(voice_settings_pane),
+    }
 }
 
 async fn restart_after_crash(
@@ -516,6 +600,8 @@ async fn restart_after_crash(
             VoiceState::Unavailable {
                 reason: VoiceUnavailableReason::SpeechRecognitionUnavailable,
                 message: "The on-device speech helper stopped twice.".to_string(),
+                permission: None,
+                settings_pane: None,
             },
         );
         return;
@@ -538,6 +624,8 @@ async fn restart_after_crash(
                 VoiceState::Unavailable {
                     reason: VoiceUnavailableReason::SpeechRecognitionUnavailable,
                     message: error,
+                    permission: None,
+                    settings_pane: None,
                 },
             );
         }
@@ -592,6 +680,8 @@ async fn run_actor(
                                         VoiceState::Unavailable {
                                             reason: VoiceUnavailableReason::SpeechRecognitionUnavailable,
                                             message: error,
+                                            permission: None,
+                                            settings_pane: None,
                                         },
                                     );
                                 }
@@ -650,12 +740,22 @@ async fn run_actor(
                         let _ = response.send(Ok(()));
                     }
                     Some(Control::Unavailable { session, reason, message, response }) => {
-                        emit_terminal(&sink, &session, VoiceState::Unavailable { reason, message });
+                        emit_terminal(&sink, &session, VoiceState::Unavailable {
+                            reason,
+                            message,
+                            permission: None,
+                            settings_pane: None,
+                        });
                         let _ = response.send(Ok(()));
                     }
                     Some(Control::UnavailableActive { reason, message }) => {
                         if let Some(session) = active.take() {
-                            emit_terminal(&sink, &session, VoiceState::Unavailable { reason, message });
+                            emit_terminal(&sink, &session, VoiceState::Unavailable {
+                                reason,
+                                message,
+                                permission: None,
+                                settings_pane: None,
+                            });
                             idle_since = Some(Instant::now());
                             if let Some(process) = helper.as_mut() {
                                 let _ = process.write("cancel").await;
@@ -677,6 +777,15 @@ async fn run_actor(
                     {
                         match serde_json::from_str::<HelperEvent>(&line) {
                             Ok(HelperEvent::Ready) => {}
+                            Ok(HelperEvent::RequestingPermission { permission }) => {
+                                if let (Some(session), Some(permission)) =
+                                    (active.as_ref(), voice_permission(&permission))
+                                {
+                                    sink(session.event(VoiceState::RequestingPermission {
+                                        permission,
+                                    }));
+                                }
+                            }
                             Ok(HelperEvent::PreparingModel) => {
                                 if let Some(session) = active.as_ref() {
                                     sink(session.event(VoiceState::PreparingModel));
@@ -706,6 +815,26 @@ async fn run_actor(
                                 if active.as_ref().is_some_and(|session| session.accepting_results) {
                                     let session = active.take().expect("accepting session is active");
                                     emit_terminal(&sink, &session, VoiceState::Final { text });
+                                    idle_since = Some(Instant::now());
+                                }
+                            }
+                            Ok(HelperEvent::Unavailable {
+                                reason,
+                                permission,
+                                settings_pane,
+                                message,
+                            }) => {
+                                if let Some(session) = active.take() {
+                                    emit_terminal(
+                                        &sink,
+                                        &session,
+                                        permission_unavailable_state(
+                                            &reason,
+                                            permission,
+                                            settings_pane,
+                                            message,
+                                        ),
+                                    );
                                     idle_since = Some(Instant::now());
                                 }
                             }
@@ -845,6 +974,16 @@ mod tests {
         .expect("voice event timeout");
     }
 
+    #[test]
+    fn constructs_manager_without_an_entered_tokio_runtime() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let command = fake_helper("idle", temp.path().join("quit-marker"));
+        let manager =
+            VoiceManager::spawn_on_tauri(command, Duration::from_millis(10), Arc::new(|_| {}));
+        drop(manager);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
     #[tokio::test]
     async fn streams_partial_then_final_and_quits_after_idle_timeout() {
         let (manager, events, temp) = manager("normal", Duration::from_millis(40));
@@ -894,6 +1033,61 @@ mod tests {
             }) && events
                 .iter()
                 .any(|event| matches!(event.state, VoiceState::Idle))
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn maps_permission_request_and_denial_to_recovery_state() {
+        let (manager, events, _temp) = manager("permission_denied", Duration::from_secs(30));
+        manager
+            .start(VoiceSurface::HomeSearch, VoiceMode::Toggle)
+            .await
+            .expect("start voice");
+
+        wait_for(&events, |events| {
+            events.iter().any(|event| {
+                matches!(
+                    event.state,
+                    VoiceState::RequestingPermission {
+                        permission: VoicePermission::SpeechRecognition
+                    }
+                )
+            }) && events.iter().any(|event| {
+                matches!(
+                    event.state,
+                    VoiceState::Unavailable {
+                        reason: VoiceUnavailableReason::PermissionDenied,
+                        permission: Some(VoicePermission::SpeechRecognition),
+                        settings_pane: Some(VoiceSettingsPane::SpeechRecognition),
+                        ..
+                    }
+                )
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn maps_restricted_permission_to_recovery_state() {
+        let (manager, events, _temp) = manager("permission_restricted", Duration::from_secs(30));
+        manager
+            .start(VoiceSurface::HomeSearch, VoiceMode::Toggle)
+            .await
+            .expect("start voice");
+
+        wait_for(&events, |events| {
+            events.iter().any(|event| {
+                matches!(
+                    event.state,
+                    VoiceState::Unavailable {
+                        reason: VoiceUnavailableReason::PermissionRestricted,
+                        permission: Some(VoicePermission::Microphone),
+                        settings_pane: Some(VoiceSettingsPane::Microphone),
+                        ..
+                    }
+                )
+            })
         })
         .await;
     }

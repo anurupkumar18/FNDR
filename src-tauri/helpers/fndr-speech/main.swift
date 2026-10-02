@@ -249,14 +249,21 @@ private final class SpeechHelper: @unchecked Sendable {
 
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
-            startForCurrentMacOS()
+            requestSpeechAuthorization()
         case .notDetermined:
+            emitRequestingPermission("microphone")
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
                 guard let self else { return }
-                granted ? self.startForCurrentMacOS() : self.permissionDenied("microphone")
+                granted
+                    ? self.requestSpeechAuthorization()
+                    : self.permissionUnavailable("microphone", restricted: false)
             }
-        default:
-            permissionDenied("microphone")
+        case .denied:
+            permissionUnavailable("microphone", restricted: false)
+        case .restricted:
+            permissionUnavailable("microphone", restricted: true)
+        @unknown default:
+            permissionUnavailable("microphone", restricted: true)
         }
     }
 
@@ -271,21 +278,37 @@ private final class SpeechHelper: @unchecked Sendable {
             }
             session.start()
         } else {
-            requestSpeechAuthorization()
+            startRecognition()
         }
     }
 
     private func requestSpeechAuthorization() {
         switch SFSpeechRecognizer.authorizationStatus() {
         case .authorized:
-            startRecognition()
+            startForCurrentMacOS()
         case .notDetermined:
+            emitRequestingPermission("speech_recognition")
             SFSpeechRecognizer.requestAuthorization { [weak self] status in
                 guard let self else { return }
-                status == .authorized ? self.startRecognition() : self.permissionDenied("speech_recognition")
+                switch status {
+                case .authorized:
+                    self.startForCurrentMacOS()
+                case .denied:
+                    self.permissionUnavailable("speech_recognition", restricted: false)
+                case .restricted:
+                    self.permissionUnavailable("speech_recognition", restricted: true)
+                case .notDetermined:
+                    self.permissionUnavailable("speech_recognition", restricted: false)
+                @unknown default:
+                    self.permissionUnavailable("speech_recognition", restricted: true)
+                }
             }
-        default:
-            permissionDenied("speech_recognition")
+        case .denied:
+            permissionUnavailable("speech_recognition", restricted: false)
+        case .restricted:
+            permissionUnavailable("speech_recognition", restricted: true)
+        @unknown default:
+            permissionUnavailable("speech_recognition", restricted: true)
         }
     }
 
@@ -373,8 +396,21 @@ private final class SpeechHelper: @unchecked Sendable {
         active = false
     }
 
-    private func permissionDenied(_ permission: String) {
-        writer.emit("error", ["code": "permission_denied", "message": "\(permission) permission was not granted."])
+    private func emitRequestingPermission(_ permission: String) {
+        writer.emit("requesting_permission", ["permission": permission])
+    }
+
+    private func permissionUnavailable(_ permission: String, restricted: Bool) {
+        let isMicrophone = permission == "microphone"
+        let label = isMicrophone ? "Microphone" : "Speech Recognition"
+        writer.emit("unavailable", [
+            "reason": restricted ? "permission_restricted" : "permission_denied",
+            "permission": permission,
+            "settingsPane": isMicrophone ? "microphone" : "speech-recognition",
+            "message": restricted
+                ? "\(label) access is restricted on this Mac."
+                : "Allow \(label) access in System Settings → Privacy & Security → \(label).",
+        ])
     }
 
     private func emitLevel(_ buffer: AVAudioPCMBuffer) {

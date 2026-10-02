@@ -21,7 +21,12 @@ mkfifo "$input_pipe"
 : > "$output_log"
 
 echo "FNDR Speech Test is ready. Type start, speak, then type stop; type quit when done."
-tail -f "$output_log" &
+tail -f "$output_log" | while IFS= read -r line; do
+    case "$line" in
+        *'"type":"level"'*|*'"type": "level"'*) ;;
+        *) printf '%s\n' "$line" ;;
+    esac
+done &
 tail_pid=$!
 open -W -n -i "$input_pipe" -o "$output_log" --stderr "$output_log" "$app" &
 open_pid=$!
