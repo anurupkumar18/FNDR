@@ -5710,6 +5710,7 @@ mod tests {
                 window_title: "FNDR".to_string(),
                 window_title_verified: true,
                 browser_url: None,
+                document_path: None,
             },
             FrontmostAppContext {
                 app_name: "Google Chrome".to_string(),
@@ -5717,6 +5718,7 @@ mod tests {
                 window_title: "com.google.Chrome".to_string(),
                 window_title_verified: false,
                 browser_url: None,
+                document_path: None,
             },
             FrontmostAppContext {
                 app_name: "Google Chrome".to_string(),
@@ -5724,6 +5726,7 @@ mod tests {
                 window_title: "Practice Affinity".to_string(),
                 window_title_verified: true,
                 browser_url: Some("https://miro.com/app/board/example".to_string()),
+                document_path: None,
             },
         ]);
 
@@ -5751,6 +5754,7 @@ mod tests {
                 window_title: "com.google.Chrome".to_string(),
                 window_title_verified: false,
                 browser_url: None,
+                document_path: None,
             },
             FrontmostAppContext {
                 app_name: "Codex".to_string(),
@@ -5758,6 +5762,7 @@ mod tests {
                 window_title: "FNDR activity traces".to_string(),
                 window_title_verified: true,
                 browser_url: None,
+                document_path: None,
             },
         ]);
 
@@ -5790,6 +5795,7 @@ mod tests {
                     window_title: "Practice Affinity".to_string(),
                     window_title_verified: true,
                     browser_url: None,
+                    document_path: None,
                 }
             },
             || Ok(()),
@@ -5814,6 +5820,7 @@ mod tests {
                 window_title: "Practice Affinity".to_string(),
                 window_title_verified: true,
                 browser_url: None,
+                document_path: None,
             },
             FrontmostAppContext {
                 app_name: "Google Chrome".to_string(),
@@ -5821,6 +5828,7 @@ mod tests {
                 window_title: "com.google.Chrome".to_string(),
                 window_title_verified: false,
                 browser_url: None,
+                document_path: None,
             },
         ]);
 
