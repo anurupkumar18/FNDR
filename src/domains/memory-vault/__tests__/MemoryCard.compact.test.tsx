@@ -169,6 +169,18 @@ describe("MemoryCard — compact variant (narrow container)", () => {
         expect(screen.getByLabelText("2 files")).toBeTruthy();
     });
 
+    it("renders page N on the source line when reopen_page is set", () => {
+        renderCompact(makeCard({ reopen_page: 112, app_name: "Preview" }));
+        const sourceEl = screen.getByLabelText("Source and activity");
+        expect(sourceEl.textContent).toContain("Preview · page 112");
+    });
+
+    it("does not render a page label when reopen_page is absent", () => {
+        renderCompact(makeCard({ app_name: "Preview" }));
+        const sourceEl = screen.getByLabelText("Source and activity");
+        expect(sourceEl.textContent).not.toMatch(/page /);
+    });
+
     it("card is still interactive (has role=button and tabIndex) when onOpen is provided", () => {
         renderCompact(makeCard());
         // renderCompact doesn't pass onOpen, so no role=button

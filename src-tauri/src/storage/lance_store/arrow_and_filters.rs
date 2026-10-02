@@ -177,6 +177,10 @@ pub(super) fn records_to_batch_with_text_dim(
         .iter()
         .map(|r| r.reopen_validation_status.as_str())
         .collect();
+    let reopen_pages: Vec<Option<i64>> = records
+        .iter()
+        .map(|r| r.reopen_page.map(|page| page as i64))
+        .collect();
     let project_confidences: Vec<f32> = records.iter().map(|r| r.project_confidence).collect();
     let topic_confidences: Vec<f32> = records.iter().map(|r| r.topic_confidence).collect();
     let workflow_confidences: Vec<f32> = records.iter().map(|r| r.workflow_confidence).collect();
@@ -377,6 +381,7 @@ pub(super) fn records_to_batch_with_text_dim(
             Arc::new(Int64Array::from(reopen_captured_at)),
             Arc::new(Float32Array::from(reopen_confidences)),
             Arc::new(StringArray::from(reopen_validation_statuses)),
+            Arc::new(Int64Array::from(reopen_pages)),
             Arc::new(search_aliases_array),
             Arc::new(related_memory_ids_array),
             Arc::new(graph_node_ids_array),
@@ -608,6 +613,7 @@ pub(super) fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> 
     let reopen_captured_at = i64_col(batch, "reopen_captured_at_ms");
     let reopen_confidences = f32_col(batch, "reopen_confidence");
     let reopen_validation_statuses = str_col(batch, "reopen_validation_status");
+    let reopen_pages = i64_col(batch, "reopen_page");
     let search_aliases = list_str_col(batch, "search_aliases");
     let related_memory_ids = list_str_col(batch, "related_memory_ids");
     let graph_node_ids = list_str_col(batch, "graph_node_ids");
@@ -756,6 +762,9 @@ pub(super) fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> 
                     &reopen_validation_statuses,
                     i,
                 )),
+                reopen_page: get_opt_i64(&reopen_pages, i)
+                    .and_then(|page| u32::try_from(page).ok())
+                    .filter(|page| *page >= 1),
                 search_aliases: extract_str_list(&search_aliases, i),
                 related_memory_ids: extract_str_list(&related_memory_ids, i),
                 graph_node_ids: extract_str_list(&graph_node_ids, i),
@@ -867,6 +876,7 @@ pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> 
     let reopen_captured_at = i64_col(batch, "reopen_captured_at_ms");
     let reopen_confidences = f32_col(batch, "reopen_confidence");
     let reopen_validation_statuses = str_col(batch, "reopen_validation_status");
+    let reopen_pages = i64_col(batch, "reopen_page");
     let user_intents = str_col(batch, "user_intent");
     let topics = str_col(batch, "topic");
     let workflows = str_col(batch, "workflow");
@@ -974,6 +984,9 @@ pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> 
                     &reopen_validation_statuses,
                     i,
                 )),
+                reopen_page: get_opt_i64(&reopen_pages, i)
+                    .and_then(|page| u32::try_from(page).ok())
+                    .filter(|page| *page >= 1),
                 user_intent: get_str(&user_intents, i),
                 topic: get_str(&topics, i),
                 workflow: get_str(&workflows, i),

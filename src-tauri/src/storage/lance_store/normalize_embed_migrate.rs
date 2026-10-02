@@ -1915,6 +1915,9 @@ pub(super) async fn ensure_memory_schema_columns(table: &Table) -> Result<(), la
             "'unchecked'".to_string(),
         ));
     }
+    if !existing.contains("reopen_page") {
+        transforms.push(("reopen_page".to_string(), "CAST(NULL AS bigint)".to_string()));
+    }
     if !existing.contains("search_aliases") {
         transforms.push(("search_aliases".to_string(), empty_string_list_sql()));
     }

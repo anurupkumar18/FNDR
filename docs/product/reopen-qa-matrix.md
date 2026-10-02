@@ -66,6 +66,27 @@ Full capture run (2026-10-01, 17:54–18:04): `FNDR_DATA_DIR=…/com.fndr.app.re
 
 The first Excel fixture (one cell) and a second blank PDF were not stored: capture skipped them as near-empty or duplicate frames. Text-rich fixtures (`re03-sheet-rich.xlsx`, `report (2) ✨.pdf`) were stored. Page 112 remains RE-04. VS Code is RE-10 (title has only the file name, no folder).
 
+## RE-04 follow-up (2026-10-02)
+
+Capture now stores `reopen_page` (nullable Int64 Lance column). Detection:
+
+- Preview / native file: window title `WORD N CONNECTOR M` after a dash, or `(page N of M)`.
+- Browser PDF: keep `#page=N` on the URL; otherwise the first OCR line that is just `N / M` or `N of M`, only when the URL path ends in `.pdf`.
+- Reopen: browser URLs get `#page=N`. Preview files open as the file; the Vault row and **Open source (page N)** button state the page because Preview has no supported page-jump API.
+
+Live Preview titles on a 150-page synthetic PDF at page 112 (Accessibility / System Events window name):
+
+| Locale | Window title |
+|---|---|
+| en | `re04-preview-150.pdf – Page 112 of 150` |
+| fr | `re04-preview-150.pdf – Page 112 sur 150` |
+| de | `re04-preview-150.pdf – Seite 112 von 150` |
+| es | `re04-preview-150.pdf – Página 112 de 150` |
+
+A one-page Preview title (`x.pdf – 1 page`) still has no current page. Screenshot: [re04-preview-page-112.png](re04-preview-page-112.png).
+
+Unit tests: `cd src-tauri && cargo test --lib reopen` and `cargo test --lib memory_cards`; Vault `npm test -- MemoryCard`. Browser `#page=N` reopen is covered by `resolve_reopen_target_appends_pdf_page_to_browser_url`. Live Chrome PDF capture was not re-run in this session (still depends on storing the http URL, which RE-01 recorded as app-only).
+
 ## Matrix
 
 | Row | Scenario | Expected target | Expected reopen | Stored target | Reopen result | Build | Date | Notes |
@@ -80,11 +101,11 @@ The first Excel fixture (one cell) and a second blank PDF were not stored: captu
 | R08 | Single-page app navigation | URL after navigation, not the previous one | The later page | Same Chrome `app_bundle` card; file field later Wikipedia Nitrogen path | app only | `123cd75` | 2026-09-28 | Used Wikipedia article switch (public). Later snippet is Nitrogen, but kind stayed `app_bundle` with no `reopen_url`. |
 | R09 | URL with `?token=` or `#access_token=` | URL with the secret stripped | Page opens (or login) | No `reopen_url`; Chrome `app_bundle` only | app only | `123cd75` | 2026-09-28 | `strip_url_credentials` (`capture/mod.rs`) never ran on a stored URL because AX URL was empty. Secret did not land in `reopen_url`. |
 | R10 | Login-walled page (Canvas course page) | https URL | Login, then page | | not available | `123cd75` | 2026-09-28 | No Canvas / login-walled fixture on this run |
-| R11 | PDF open in Chrome | URL plus page if known | PDF at that page (`#page=N`) | Merged into Chrome `app_bundle`; no PDF URL, no `#page=` | app only | `123cd75` | 2026-09-28 | No page fragment. `build_reopen_target` has no page field today. |
+| R11 | PDF open in Chrome | URL plus page if known | PDF at that page (`#page=N`) | Typed path: `browser_url` + `reopen_page`; live RE-01 row was Chrome `app_bundle` with no URL | code: appends `#page=N` when URL+page stored; live capture still app-only until URL lands | RE-04 | 2026-10-02 | `url_with_pdf_page` + PDF-toolbar OCR (`N / M`) on `.pdf` URLs. Live Chrome not re-captured this session. |
 | R12 | Google Docs or Sheets | Docs URL | Same doc | Merged into Chrome `app_bundle` | app only | `123cd75` | 2026-09-28 | Public docs about page; no `docs.google.com` URL stored. |
 | R13 | URL over 2,000 characters | Stored without breaking the row | Opens | Profile still readable (14 rows); Chrome `app_bundle`, URL not stored | app only | `123cd75` | 2026-09-28 | Row did not break Lance. Did not store the long URL. |
 | R14 | `chrome://settings`, `javascript:`, `data:` on screen | Never a reopen target | Never opened | No `reopen_url` of `chrome:` / `javascript:` / `data:` | n/a | `123cd75` | 2026-09-28 | `normalize_browser_document_url` only accepts http/https. Met “never a URL target.” Existing Chrome card stayed `app_bundle`. |
-| R15 | PDF in Preview on page 112 | File path plus page 112 | File opens (page if supported) | `file_path` `…/re03-fixtures/re03-preview.pdf`; no page | exact (file; page is RE-04) | `a569e48`+RE-03 | 2026-10-01 | Full `tauri dev` capture, see RE-03 section. |
+| R15 | PDF in Preview on page 112 | File path plus page 112 | File opens (page if supported) | `file_path` plus `reopen_page=112` from title `… – Page 112 of 150` | exact file; page shown in Vault; Preview opens the file (no page jump) | RE-04 | 2026-10-02 | Live title confirmed en/fr/de/es. UI: `page 112` on the source line; file button `Open source (page 112)`. Screenshot in RE-04 section. |
 | R16 | Pages, Keynote, or Numbers document | File path | File opens | `file_path` `…/re03-fixtures/re03-pages.pages` | exact | `a569e48`+RE-03 | 2026-10-01 | Pages. Full `tauri dev` capture, see RE-03 section. |
 | R17 | Word, Excel, or PowerPoint document | File path | File opens | `file_path` `…/re03-fixtures/re03-sheet-rich.xlsx` | exact | `a569e48`+RE-03 | 2026-10-01 | Excel (Word and PowerPoint not installed). Full `tauri dev` capture, see RE-03 section. |
 | R18 | Unsaved TextEdit document | App only, labeled unsaved | App opens, honest label | `file_path` `re-01_reopen_qa_matrix_….plan.md` (relative, not the unsaved doc); no unsaved label | wrong | `123cd75` | 2026-09-28 | LLM `files_touched` beat an honest app-only/unsaved target. `build_reopen_target` then `open` would hit `canonicalize_relaxed` “no longer exists.” |
@@ -118,6 +139,7 @@ The first Excel fixture (one cell) and a second blank PDF were not stored: captu
 |---|---|
 | Browser memory is app only, no http URL | `capture/macos.rs` `read_frontmost_app_info` + `normalize_browser_document_url`; `build_reopen_target` |
 | Native doc has no file path | Accessibility not granted to the launching app, or the app exposes no `AXDocument` (VS Code); then `files_touched[0]` |
+| PDF page not stored | Preview title is total-only (`– 1 page`) or browser URL is not `.pdf`; page parsers live in `memory/reopen.rs` |
 | Download cannot reopen the file | `downloads.rs` `inject_download_memory` leaves `reopen_*` default |
 | Kind vs file disagree after merge | `capture/mod.rs` ~4795 field-wise `or` |
 | Missing file is a thrown string, not typed UI | `ipc/commands/memory.rs` `canonicalize_relaxed` + Vault `console.warn` |

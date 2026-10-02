@@ -342,6 +342,8 @@ pub struct MemoryRecord {
     pub reopen_confidence: f32,
     #[serde(default = "default_reopen_validation_status")]
     pub reopen_validation_status: ReopenValidationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_page: Option<u32>,
     #[serde(default)]
     pub search_aliases: Vec<String>,
     #[serde(default)]
@@ -541,6 +543,7 @@ impl Default for MemoryRecord {
             reopen_captured_at_ms: 0,
             reopen_confidence: 0.0,
             reopen_validation_status: default_reopen_validation_status(),
+            reopen_page: None,
             search_aliases: Vec::new(),
             related_memory_ids: Vec::new(),
             graph_node_ids: Vec::new(),
@@ -657,6 +660,8 @@ pub struct SearchResult {
     pub reopen_confidence: f32,
     #[serde(default = "default_reopen_validation_status")]
     pub reopen_validation_status: ReopenValidationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_page: Option<u32>,
     #[serde(default)]
     pub user_intent: String,
     #[serde(default = "default_unknown")]
@@ -806,6 +811,7 @@ impl Default for SearchResult {
             reopen_captured_at_ms: 0,
             reopen_confidence: 0.0,
             reopen_validation_status: default_reopen_validation_status(),
+            reopen_page: None,
             user_intent: String::new(),
             topic: default_unknown(),
             workflow: default_unknown(),
