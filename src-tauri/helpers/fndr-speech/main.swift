@@ -31,6 +31,7 @@ private final class AnalyzerSpeechSession: @unchecked Sendable {
     private var resultTask: Task<Void, Never>?
     private var tapInstalled = false
     private var active = false
+    private let transcript = StreamingTranscriptBuffer()
 
     init(writer: LineWriter) {
         self.writer = writer
@@ -38,6 +39,7 @@ private final class AnalyzerSpeechSession: @unchecked Sendable {
 
     func start() {
         guard !active, analysisTask == nil else { return }
+        transcript.reset()
         active = true
         analysisTask = Task { [weak self] in
             await self?.startAnalysis()
@@ -117,9 +119,9 @@ private final class AnalyzerSpeechSession: @unchecked Sendable {
                 do {
                     for try await result in transcriber.results {
                         guard let self else { return }
-                        let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !text.isEmpty {
-                            writer.emit(result.isFinal ? "final" : "partial", ["text": text])
+                        let text = String(result.text.characters)
+                        if let emission = transcript.observe(text, recognizerFinal: result.isFinal) {
+                            writer.emit(emission.type, ["text": emission.text])
                         }
                     }
                 } catch is CancellationError {
@@ -169,6 +171,15 @@ private final class AnalyzerSpeechSession: @unchecked Sendable {
 
             if let lastSampleTime = try await analyzer.analyzeSequence(inputs) {
                 try await analyzer.finalizeAndFinish(through: lastSampleTime)
+                await resultTask?.value
+                if let text = transcript.finish() {
+                    writer.emit("final", ["text": text])
+                } else {
+                    writer.emit("error", [
+                        "code": "recognition_failed",
+                        "message": "No speech was recognized.",
+                    ])
+                }
             } else {
                 await analyzer.cancelAndFinishNow()
             }
@@ -203,6 +214,7 @@ private final class AnalyzerSpeechSession: @unchecked Sendable {
         resultTask = nil
         analysisTask = nil
         active = false
+        transcript.reset()
     }
 }
 
@@ -249,13 +261,13 @@ private final class SpeechHelper: @unchecked Sendable {
 
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
-            requestSpeechAuthorization()
+            beginRecognition()
         case .notDetermined:
             emitRequestingPermission("microphone")
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
                 guard let self else { return }
                 granted
-                    ? self.requestSpeechAuthorization()
+                    ? self.beginRecognition()
                     : self.permissionUnavailable("microphone", restricted: false)
             }
         case .denied:
@@ -264,6 +276,18 @@ private final class SpeechHelper: @unchecked Sendable {
             permissionUnavailable("microphone", restricted: true)
         @unknown default:
             permissionUnavailable("microphone", restricted: true)
+        }
+    }
+
+    private func beginRecognition() {
+        if #available(macOS 26.0, *) {
+            // SpeechAnalyzer performs local transcription without the legacy
+            // SFSpeechRecognizer authorization request. Calling that legacy
+            // API from a standalone helper makes macOS 27 terminate the helper
+            // before it can report a recoverable state.
+            startForCurrentMacOS()
+        } else {
+            requestSpeechAuthorization()
         }
     }
 
