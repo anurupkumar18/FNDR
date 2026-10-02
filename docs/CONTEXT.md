@@ -26,6 +26,7 @@ Full documentation index (architecture, decisions, product notes, agent defaults
 - **Scoped file lookup**: an explicit filename-only macOS metadata query limited to Documents, Desktop, and Downloads. It never reads or opens a match, scans the full home directory, or persists its query/results.
 - **Notch status item**: FNDR's OS-managed menu-bar presence beside the notch. It exposes only fixed Screen Guide phases and never user questions, filenames, paths, screen text, answers, or detailed errors.
 - **Companion API**: the existing local-network API for FNDR's iPhone and Watch clients. Do not use “Companion” as the product or code name for Screen Guide.
+- **Document path**: POSIX path decoded from a native app’s Accessibility `AXDocument` `file://` URL; used as the reopen file target ahead of LLM `files_touched`. Browsers keep http(s) URLs only.
 
 ## Default quality bar
 

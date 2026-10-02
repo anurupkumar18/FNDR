@@ -14,6 +14,7 @@ pub struct FrontmostAppContext {
     pub window_title: String,
     pub window_title_verified: bool,
     pub browser_url: Option<String>,
+    pub document_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -204,14 +205,15 @@ fn read_frontmost_app_info() -> FrontmostAppContext {
             .and_then(|window| window.title.as_deref());
         let window_title_verified = native_title.is_some_and(|title| !title.trim().is_empty());
         let window_title = resolve_window_title(native_title, bundle_id.as_deref());
-        let browser_url = is_browser_app(&app_name)
-            .then(|| {
-                normalize_browser_document_url(
-                    native_window
-                        .as_ref()
-                        .and_then(|window| window.document_url.as_deref()),
-                )
-            })
+        let document_url = native_window
+            .as_ref()
+            .and_then(|window| window.document_url.as_deref());
+        let browser = is_browser_app(&app_name);
+        let browser_url = browser
+            .then(|| normalize_browser_document_url(document_url))
+            .flatten();
+        let document_path = (!browser)
+            .then(|| native_document_path_from_ax_url(document_url))
             .flatten();
 
         FrontmostAppContext {
@@ -220,6 +222,7 @@ fn read_frontmost_app_info() -> FrontmostAppContext {
             window_title,
             window_title_verified,
             browser_url,
+            document_path,
         }
     }
 }
@@ -249,6 +252,60 @@ fn resolve_window_title(native_title: Option<&str>, bundle_id: Option<&str>) -> 
 fn normalize_browser_document_url(document_url: Option<&str>) -> Option<String> {
     let url = document_url?.trim();
     (url.starts_with("http://") || url.starts_with("https://")).then(|| url.to_string())
+}
+
+fn native_document_path_from_ax_url(document_url: Option<&str>) -> Option<String> {
+    let url = document_url?.trim();
+    let scheme = url.get(..7)?;
+    if !scheme.eq_ignore_ascii_case("file://") {
+        return None;
+    }
+    let rest = &url[7..];
+    let path = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !path.starts_with('/') {
+        return None;
+    }
+    percent_decode_utf8(path).filter(|decoded| !decoded.is_empty())
+}
+
+fn percent_decode_utf8(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return None;
+            }
+            let hi = from_hex(bytes[i + 1])?;
+            let lo = from_hex(bytes[i + 2])?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn from_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+pub(super) fn preferred_reopen_file_path<'a>(
+    document_path: Option<&'a str>,
+    files_touched: &'a [String],
+) -> Option<&'a str> {
+    document_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .or_else(|| files_touched.first().map(String::as_str))
 }
 
 pub fn is_browser_app(app_name: &str) -> bool {
@@ -610,6 +667,61 @@ mod tests {
             None
         );
         assert_eq!(normalize_browser_document_url(None), None);
+    }
+
+    #[test]
+    fn native_document_path_percent_decodes_file_urls() {
+        assert_eq!(
+            native_document_path_from_ax_url(Some("file:///Users/qa/My%20Doc.pdf")),
+            Some("/Users/qa/My Doc.pdf".to_string())
+        );
+        assert_eq!(
+            native_document_path_from_ax_url(Some(
+                " file:///Users/qa/caf%C3%A9%20%F0%9F%93%81/report%20(1)%20%E2%9C%A8.txt "
+            )),
+            Some("/Users/qa/café 📁/report (1) ✨.txt".to_string())
+        );
+        assert_eq!(
+            native_document_path_from_ax_url(Some("file://localhost/Users/qa/a.txt")),
+            Some("/Users/qa/a.txt".to_string())
+        );
+        assert_eq!(
+            native_document_path_from_ax_url(Some("FILE:///Users/qa/Doc.pdf")),
+            Some("/Users/qa/Doc.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn native_document_path_rejects_non_file_urls() {
+        for input in [
+            Some("https://example.com/doc.pdf"),
+            Some("http://example.com/doc.pdf"),
+            Some("javascript:alert(1)"),
+            Some("data:text/html,hi"),
+            Some("file://relative/path"),
+            Some("   "),
+            Some(""),
+            None,
+        ] {
+            assert_eq!(native_document_path_from_ax_url(input), None, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn preferred_reopen_file_path_uses_document_path_ahead_of_files_touched() {
+        let junk = ["plan.md".to_string(), "en.wikipedia.org/wiki/Nitrogen".to_string()];
+        assert_eq!(
+            preferred_reopen_file_path(Some("/Users/qa/report.pdf"), &junk),
+            Some("/Users/qa/report.pdf")
+        );
+        assert_eq!(
+            preferred_reopen_file_path(Some("  /Users/qa/report.pdf  "), &junk),
+            Some("/Users/qa/report.pdf")
+        );
+        assert_eq!(preferred_reopen_file_path(None, &junk), Some("plan.md"));
+        assert_eq!(preferred_reopen_file_path(Some("  "), &junk), Some("plan.md"));
+        let empty: [String; 0] = [];
+        assert_eq!(preferred_reopen_file_path(None, &empty), None);
     }
 
     #[test]

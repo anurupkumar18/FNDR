@@ -34,6 +34,38 @@ text, credentials, or personal paths into this file.
 4. **Reopen result:** inferred from stored kind plus [`open_reopen_target`](../../src-tauri/src/ipc/commands/memory.rs) (`open -b` for app bundle; `open` for file; error if path missing).
 5. Public or synthetic pages and files only.
 
+## RE-03 follow-up (2026-10-01)
+
+Code on `a569e48` plus this change: native `file://` `AXDocument` is percent-decoded into `FrontmostAppContext.document_path` and passed to `build_reopen_target` ahead of `files_touched`. Browser `file://` stays dropped.
+
+Unit tests: `cd src-tauri && cargo test --lib native_document` and `cargo test --lib reopen` pass (decode `%20` / unicode / `file://localhost`, reject non-file schemes, prefer AX path over LLM junk).
+
+Two causes kept the window title and `AXDocument` empty in RE-01 and in the first RE-03 check:
+
+1. Accessibility was not granted. `tauri dev` started from Cursor's terminal inherits Cursor as the responsible app; `AXIsProcessTrusted()` was false until Cursor was added under System Settings → Privacy & Security → Accessibility.
+2. Even with Accessibility granted, the system-wide `AXFocusedApplication` lookup in `accessibility::focused_window_snapshot` failed with `-25204` (`kAXErrorCannotComplete`). Asking the frontmost app directly by PID (`AXUIElementCreateApplication`) returned the title and document. `focused_window_snapshot` now queries by PID when the caller passes one, which `read_frontmost_app_info` always does.
+
+Live re-check (2026-10-01, Accessibility granted, PID fix in): opened one synthetic fixture per row, read `get_frontmost_app_info` the way capture does, then ran `open` on the decoded path.
+
+| Row | Fixture | Window title (verified) | `document_path` | Path exists, `open` works |
+|---|---|---|---|---|
+| R15 | `re03-preview.pdf` in Preview | `re03-preview.pdf – 1 page` | `…/re03-fixtures/re03-preview.pdf` | yes |
+| R25 | `café 📁/report (1) ✨.pdf` in Preview | `report (1) ✨.pdf – 1 page` | `…/re03-fixtures/café 📁/report (1) ✨.pdf` (decomposed `e` + U+0301, as macOS reports it) | yes |
+| R16 | `re03-pages.pages` (saved by Pages) | `re03-pages.pages` | `…/re03-fixtures/re03-pages.pages` | yes |
+| R17 | `re03-sheet.xlsx` in Excel | `re03-sheet` | `…/re03-fixtures/re03-sheet.xlsx` | yes |
+| R19 | `re03-notes.txt` in VS Code | `re03-notes.txt` | none: VS Code exposes no `AXDocument` | n/a |
+
+Full capture run (2026-10-01, 17:54–18:04): `FNDR_DATA_DIR=…/com.fndr.app.reopenqa npm run tauri dev`, each fixture held frontmost ~95 s, then read `memories_v4_minilm_384` and ran `open` on the stored `reopen_file_path`.
+
+| Row | App | Stored `reopen_kind` | Stored `reopen_file_path` | Exists, `open` works |
+|---|---|---|---|---|
+| R15 | Preview | `file_path` | `…/re03-fixtures/re03-preview.pdf` | yes |
+| R16 | Pages | `file_path` | `…/re03-fixtures/re03-pages.pages` | yes |
+| R17 | Microsoft Excel | `file_path` | `…/re03-fixtures/re03-sheet-rich.xlsx` | yes |
+| R25 | Preview | `file_path` | `…/re03-fixtures/café 📁/report (2) ✨.pdf` | yes |
+
+The first Excel fixture (one cell) and a second blank PDF were not stored: capture skipped them as near-empty or duplicate frames. Text-rich fixtures (`re03-sheet-rich.xlsx`, `report (2) ✨.pdf`) were stored. Page 112 remains RE-04. VS Code is RE-10 (title has only the file name, no folder).
+
 ## Matrix
 
 | Row | Scenario | Expected target | Expected reopen | Stored target | Reopen result | Build | Date | Notes |
@@ -52,17 +84,17 @@ text, credentials, or personal paths into this file.
 | R12 | Google Docs or Sheets | Docs URL | Same doc | Merged into Chrome `app_bundle` | app only | `123cd75` | 2026-09-28 | Public docs about page; no `docs.google.com` URL stored. |
 | R13 | URL over 2,000 characters | Stored without breaking the row | Opens | Profile still readable (14 rows); Chrome `app_bundle`, URL not stored | app only | `123cd75` | 2026-09-28 | Row did not break Lance. Did not store the long URL. |
 | R14 | `chrome://settings`, `javascript:`, `data:` on screen | Never a reopen target | Never opened | No `reopen_url` of `chrome:` / `javascript:` / `data:` | n/a | `123cd75` | 2026-09-28 | `normalize_browser_document_url` only accepts http/https. Met “never a URL target.” Existing Chrome card stayed `app_bundle`. |
-| R15 | PDF in Preview on page 112 | File path plus page 112 | File opens (page if supported) | No Preview memory | error | `123cd75` | 2026-09-28 | Preview was frontmost ~80s; no flush. `file://` AX document is dropped for browsers and not passed through for native apps (`macos.rs` ~249; `capture/mod.rs` ~3180 uses `files_touched` only). |
-| R16 | Pages, Keynote, or Numbers document | File path | File opens | | not available | `123cd75` | 2026-09-28 | iWork not in this run's target list |
-| R17 | Word, Excel, or PowerPoint document | File path | File opens | | not available | `123cd75` | 2026-09-28 | Office not installed |
+| R15 | PDF in Preview on page 112 | File path plus page 112 | File opens (page if supported) | `file_path` `…/re03-fixtures/re03-preview.pdf`; no page | exact (file; page is RE-04) | `a569e48`+RE-03 | 2026-10-01 | Full `tauri dev` capture, see RE-03 section. |
+| R16 | Pages, Keynote, or Numbers document | File path | File opens | `file_path` `…/re03-fixtures/re03-pages.pages` | exact | `a569e48`+RE-03 | 2026-10-01 | Pages. Full `tauri dev` capture, see RE-03 section. |
+| R17 | Word, Excel, or PowerPoint document | File path | File opens | `file_path` `…/re03-fixtures/re03-sheet-rich.xlsx` | exact | `a569e48`+RE-03 | 2026-10-01 | Excel (Word and PowerPoint not installed). Full `tauri dev` capture, see RE-03 section. |
 | R18 | Unsaved TextEdit document | App only, labeled unsaved | App opens, honest label | `file_path` `re-01_reopen_qa_matrix_….plan.md` (relative, not the unsaved doc); no unsaved label | wrong | `123cd75` | 2026-09-28 | LLM `files_touched` beat an honest app-only/unsaved target. `build_reopen_target` then `open` would hit `canonicalize_relaxed` “no longer exists.” |
-| R19 | VS Code file | File path (and `vscode://file/...:line` if derivable) | File opens in VS Code | | not available | `123cd75` | 2026-09-28 | VS Code not installed |
+| R19 | VS Code file | File path (and `vscode://file/...:line` if derivable) | File opens in VS Code | Capture context: title `re03-notes.txt`, no `AXDocument` | app only | `a569e48`+RE-03 | 2026-10-01 | VS Code does not expose `AXDocument`; title has the file name only. Moved to RE-10 (not an RE-03 row). |
 | R20 | Finder window | Folder path | Folder revealed | `file_path` same relative plan filename, not the folder | wrong | `123cd75` | 2026-09-28 | Snippet mentioned the fixtures folder; stored reopen path did not. |
 | R21 | File moved after capture | Found again by name | Opens from new location, UI says moved | No durable absolute path to move | error | `123cd75` | 2026-09-28 | `reopen_memory` has no Spotlight lookup. Missing path → `File path no longer exists` (`memory.rs` `canonicalize_relaxed`). |
 | R22 | File deleted after capture | Stored path | Clear "no longer exists," memory still readable | Relative junk path | error | `123cd75` | 2026-09-28 | IPC can error; UI `handleReopen` only `console.warn`. Memory row would remain. |
 | R23 | File on an unmounted external drive | Stored path | Clear "drive not connected" | | not available | `123cd75` | 2026-09-28 | No external drive in this run |
 | R24 | iCloud file evicted from the Mac | Stored path | Opens and downloads, or clear message | | not available | `123cd75` | 2026-09-28 | No iCloud eviction fixture |
-| R25 | Path with spaces, accents, emoji | Stored exactly | Opens | Finder card did not store `café 📁/report (1) ✨.txt` | wrong | `123cd75` | 2026-09-28 | Unicode fixture existed on disk; reopen path was the unrelated plan filename. |
+| R25 | Path with spaces, accents, emoji | Stored exactly | Opens | `file_path` `…/re03-fixtures/café 📁/report (2) ✨.pdf` (decomposed accent, as macOS reports it) | exact | `a569e48`+RE-03 | 2026-10-01 | Preview. Stored path exists and opens. Full `tauri dev` capture, see RE-03 section. |
 | R26 | Slack channel | App, or deep link if derivable | App or channel | | not available | `123cd75` | 2026-09-28 | Slack not in this run's target list |
 | R27 | Notion desktop page | Notion URL or `notion://` | Same page | | not available | `123cd75` | 2026-09-28 | Notion desktop not in this run's target list |
 | R28 | Zoom call | App only | App, UI says no specific target | | not available | `123cd75` | 2026-09-28 | Zoom not in this run's target list |
@@ -85,7 +117,7 @@ text, credentials, or personal paths into this file.
 | Symptom | Code path |
 |---|---|
 | Browser memory is app only, no http URL | `capture/macos.rs` `read_frontmost_app_info` + `normalize_browser_document_url`; `build_reopen_target` |
-| Native doc has no file path | `capture/mod.rs` ~3180 passes `files_touched[0]`, not AX `file://` |
+| Native doc has no file path | Accessibility not granted to the launching app, or the app exposes no `AXDocument` (VS Code); then `files_touched[0]` |
 | Download cannot reopen the file | `downloads.rs` `inject_download_memory` leaves `reopen_*` default |
 | Kind vs file disagree after merge | `capture/mod.rs` ~4795 field-wise `or` |
 | Missing file is a thrown string, not typed UI | `ipc/commands/memory.rs` `canonicalize_relaxed` + Vault `console.warn` |

@@ -548,35 +548,29 @@ pub(crate) struct FocusedWindowSnapshot {
 }
 
 /// Read the active window title and document URL without launching a helper process.
-/// An expected process ID prevents a stale Accessibility focus target from being used.
+/// With an expected process ID, that app is queried directly: the system-wide
+/// `AXFocusedApplication` lookup can fail with `kAXErrorCannotComplete` even
+/// when Accessibility is granted, and querying by PID cannot hit a stale focus target.
 pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<FocusedWindowSnapshot> {
     if !has_accessibility_permission() {
         return None;
     }
 
     unsafe {
-        let system_el = AXUIElementCreateSystemWide();
-        if system_el.is_null() {
-            return None;
-        }
-        let focused_app = match ax_copy_attr_value(system_el, "AXFocusedApplication") {
-            Ok(focused_app) => focused_app,
-            Err(_) => {
+        let focused_app = match expected_pid {
+            Some(pid) if pid > 0 => AXUIElementCreateApplication(pid),
+            Some(_) => return None,
+            None => {
+                let system_el = AXUIElementCreateSystemWide();
+                if system_el.is_null() {
+                    return None;
+                }
+                let focused_app = ax_copy_attr_value(system_el, "AXFocusedApplication");
                 CFRelease(system_el);
-                return None;
+                focused_app.ok()?
             }
         };
-        CFRelease(system_el);
         if focused_app.is_null() {
-            return None;
-        }
-
-        let mut pid: PidT = 0;
-        let pid_matches = AXUIElementGetPid(focused_app, &mut pid) == K_AX_ERROR_SUCCESS
-            && pid > 0
-            && expected_pid.map_or(true, |expected| expected == pid);
-        if !pid_matches {
-            CFRelease(focused_app);
             return None;
         }
 
