@@ -52,7 +52,8 @@
             "sidecars/laya_decide_runner.py": "sidecars/laya_decide_runner.py"
         },
         "externalBin": [
-            "binaries/fndr-speech"
+            "binaries/fndr-speech",
+            "binaries/fndr-auth"
         ],
         "icon": [
             "icons/icon.png",

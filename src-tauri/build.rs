@@ -24,7 +24,48 @@ fn main() {
     if let Err(err) = build_speech_helper() {
         panic!("failed to build native speech helper: {err}");
     }
+    if let Err(err) = build_auth_helper() {
+        panic!("failed to build native authentication helper: {err}");
+    }
     tauri_build::build();
+}
+
+fn build_auth_helper() -> io::Result<()> {
+    let target = env::var("TARGET").unwrap_or_default();
+    if target != "aarch64-apple-darwin" {
+        return Ok(());
+    }
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+    let source = manifest_dir
+        .join("helpers")
+        .join("fndr-auth")
+        .join("main.swift");
+    let output = manifest_dir
+        .join("binaries")
+        .join(format!("fndr-auth-{target}"));
+    println!("cargo:rerun-if-changed={}", source.display());
+    if output_is_fresh(&source, &output)? {
+        return Ok(());
+    }
+    fs::create_dir_all(output.parent().expect("authentication helper has a parent"))?;
+    let status = Command::new("xcrun")
+        .args([
+            "swiftc",
+            "-O",
+            source.to_string_lossy().as_ref(),
+            "-framework",
+            "LocalAuthentication",
+            "-o",
+            output.to_string_lossy().as_ref(),
+        ])
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "xcrun swiftc exited with {status}"
+        )))
+    }
 }
 
 fn build_speech_helper() -> io::Result<()> {

@@ -10,6 +10,7 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -209,45 +210,67 @@ pub async fn set_preferred_inference_model(
 }
 
 // ---------------------------------------------------------------------------
-// Biometrics (Touch ID via local-authentication-rs / osascript fallback)
+// Biometrics (compiled LocalAuthentication helper)
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn request_biometric_auth(reason: String) -> Result<bool, String> {
-    // We leverage Swift to hook directly into the macOS LocalAuthentication framework.
-    // This securely triggers Touch ID natively, gracefully falling back to device password if needed.
-    let safe_reason = reason.replace('"', "\\\"");
-    let script = format!(
-        r#"
-import LocalAuthentication
-import Foundation
-
-let context = LAContext()
-var error: NSError?
-if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {{
-    let sema = DispatchSemaphore(value: 0)
-    context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "{}") {{ success, _ in
-        if success {{ print("authenticated") }}
-        else {{ print("failed") }}
-        sema.signal()
-    }}
-    sema.wait()
-}} else {{
-    print("unavailable")
-}}
-"#,
-        safe_reason
-    );
-
-    let output = tokio::process::Command::new("swift")
-        .arg("-e")
-        .arg(&script)
+pub async fn request_biometric_auth(app: AppHandle, reason: String) -> Result<bool, String> {
+    let helper = biometric_helper_path(&app)?;
+    let output = tokio::process::Command::new(helper)
+        .arg(reason)
+        .stdin(Stdio::null())
         .output()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| format!("Could not launch the native authentication helper: {error}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.trim() == "authenticated")
+    if !output.status.success() {
+        return Err("The native authentication helper did not complete.".to_string());
+    }
+    parse_biometric_helper_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn biometric_helper_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("FNDR_AUTH_HELPER") {
+        return Ok(path.into());
+    }
+    let target = if cfg!(target_arch = "aarch64") {
+        "aarch64-apple-darwin"
+    } else {
+        "x86_64-apple-darwin"
+    };
+    let name = format!("fndr-auth-{target}");
+    let mut candidates = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join(&name));
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            candidates.push(parent.join(&name));
+        }
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(&name),
+    );
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            "The native authentication helper is unavailable. Reinstall FNDR and try again."
+                .to_string()
+        })
+}
+
+fn parse_biometric_helper_output(output: &str) -> Result<bool, String> {
+    #[derive(Deserialize)]
+    struct AuthenticationResult {
+        r#type: String,
+    }
+
+    let result: AuthenticationResult = serde_json::from_str(output.trim())
+        .map_err(|_| "The native authentication helper returned an invalid result.".to_string())?;
+    Ok(result.r#type == "authenticated")
 }
 
 // ---------------------------------------------------------------------------
@@ -1007,7 +1030,7 @@ pub async fn delete_ai_model(
 
 #[cfg(test)]
 mod tests {
-    use super::system_settings_url;
+    use super::{parse_biometric_helper_output, system_settings_url};
 
     #[test]
     fn resolves_voice_permission_settings_panes() {
@@ -1020,5 +1043,13 @@ mod tests {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
         );
         assert!(system_settings_url("unknown").is_err());
+    }
+
+    #[test]
+    fn biometric_helper_only_authenticates_explicit_success() {
+        assert!(parse_biometric_helper_output("{\"type\":\"authenticated\"}\n").unwrap());
+        assert!(!parse_biometric_helper_output("{\"type\":\"cancelled\"}\n").unwrap());
+        assert!(!parse_biometric_helper_output("{\"type\":\"unavailable\"}\n").unwrap());
+        assert!(parse_biometric_helper_output("not-json\n").is_err());
     }
 }
