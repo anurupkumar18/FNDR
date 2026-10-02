@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
-use std::ffi::OsString;
+use std::ffi::{CString, OsString};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -23,6 +23,7 @@ type EventSink = Arc<dyn Fn(VoiceStateEvent) + Send + Sync>;
 struct HelperCommand {
     program: PathBuf,
     args: Vec<OsString>,
+    app_bundle: Option<PathBuf>,
 }
 
 impl HelperCommand {
@@ -30,6 +31,15 @@ impl HelperCommand {
         Self {
             program: program.into(),
             args: Vec::new(),
+            app_bundle: None,
+        }
+    }
+
+    fn app_bundle(path: impl Into<PathBuf>) -> Self {
+        Self {
+            program: PathBuf::from("/usr/bin/open"),
+            args: Vec::new(),
+            app_bundle: Some(path.into()),
         }
     }
 
@@ -190,8 +200,9 @@ enum HelperOutput {
 struct HelperProcess {
     generation: u64,
     child: Child,
-    stdin: ChildStdin,
+    stdin: Box<dyn AsyncWrite + Unpin + Send>,
     reader: JoinHandle<()>,
+    pipe_dir: Option<PathBuf>,
 }
 
 impl HelperProcess {
@@ -215,6 +226,17 @@ impl HelperProcess {
             let _ = self.child.kill().await;
         }
         self.reader.abort();
+        if let Some(pipe_dir) = self.pipe_dir.take() {
+            let _ = std::fs::remove_dir_all(pipe_dir);
+        }
+    }
+}
+
+impl Drop for HelperProcess {
+    fn drop(&mut self) {
+        if let Some(pipe_dir) = self.pipe_dir.take() {
+            let _ = std::fs::remove_dir_all(pipe_dir);
+        }
     }
 }
 
@@ -283,7 +305,8 @@ impl VoiceManager {
                 tracing::warn!(error = %error, "Could not emit voice state");
             }
         });
-        Self::spawn_on_tauri(native_helper_command(), DEFAULT_IDLE_TIMEOUT, sink)
+        let command = native_helper_command(&app);
+        Self::spawn_on_tauri(command, DEFAULT_IDLE_TIMEOUT, sink)
     }
 
     pub async fn start(
@@ -420,9 +443,28 @@ fn validate_surface_mode(surface: VoiceSurface, mode: VoiceMode) -> Result<(), S
         .ok_or_else(|| format!("Voice mode {mode:?} is not valid for surface {surface:?}"))
 }
 
-fn native_helper_command() -> HelperCommand {
+fn native_helper_command<R: Runtime>(app: &AppHandle<R>) -> HelperCommand {
     if let Some(path) = std::env::var_os("FNDR_SPEECH_HELPER") {
         return HelperCommand::new(path);
+    }
+
+    let mut app_candidates = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        app_candidates.push(resource_dir.join("FNDR Speech Helper.app"));
+    }
+    app_candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join("FNDR Speech Helper.app"),
+    );
+    if let Some(bundle) = app_candidates.into_iter().find(|candidate| {
+        candidate
+            .join("Contents")
+            .join("MacOS")
+            .join("fndr-speech")
+            .is_file()
+    }) {
+        return HelperCommand::app_bundle(bundle);
     }
 
     let suffixed_name = if cfg!(target_arch = "aarch64") {
@@ -456,6 +498,10 @@ async fn spawn_helper(
     generation: u64,
     output: mpsc::Sender<HelperOutput>,
 ) -> Result<HelperProcess, String> {
+    if let Some(app_bundle) = command.app_bundle.as_ref() {
+        return spawn_app_helper(app_bundle, generation, output).await;
+    }
+
     let mut child = Command::new(&command.program)
         .args(&command.args)
         .stdin(Stdio::piped())
@@ -477,7 +523,25 @@ async fn spawn_helper(
         .stdout
         .take()
         .ok_or_else(|| "Speech helper has no stdout".to_string())?;
-    let reader = tokio::spawn(async move {
+    let reader = spawn_helper_reader(stdout, generation, output);
+    Ok(HelperProcess {
+        generation,
+        child,
+        stdin: Box::new(stdin),
+        reader,
+        pipe_dir: None,
+    })
+}
+
+fn spawn_helper_reader<R>(
+    stdout: R,
+    generation: u64,
+    output: mpsc::Sender<HelperOutput>,
+) -> JoinHandle<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         loop {
             match lines.next_line().await {
@@ -496,12 +560,96 @@ async fn spawn_helper(
                 }
             }
         }
-    });
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn create_fifo(path: &std::path::Path) -> Result<(), String> {
+    let encoded = CString::new(path.to_string_lossy().as_bytes())
+        .map_err(|_| "Speech helper pipe path contains a null byte".to_string())?;
+    let result = unsafe { libc::mkfifo(encoded.as_ptr(), 0o600) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "Could not create speech helper pipe: {}",
+            std::io::Error::last_os_error()
+        ))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn create_fifo(_path: &std::path::Path) -> Result<(), String> {
+    Err("The native speech helper app is only supported on macOS".to_string())
+}
+
+async fn spawn_app_helper(
+    app_bundle: &std::path::Path,
+    generation: u64,
+    output: mpsc::Sender<HelperOutput>,
+) -> Result<HelperProcess, String> {
+    let pipe_dir = std::env::temp_dir().join(format!("fndr-speech-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&pipe_dir)
+        .map_err(|error| format!("Could not create speech helper pipe directory: {error}"))?;
+    let input_path = pipe_dir.join("stdin.pipe");
+    let output_path = pipe_dir.join("stdout.pipe");
+    if let Err(error) = create_fifo(&input_path).and_then(|_| create_fifo(&output_path)) {
+        let _ = std::fs::remove_dir_all(&pipe_dir);
+        return Err(error);
+    }
+
+    let mut child = Command::new("/usr/bin/open")
+        .arg("-W")
+        .arg("-n")
+        .arg("-i")
+        .arg(&input_path)
+        .arg("-o")
+        .arg(&output_path)
+        .arg("--stderr")
+        .arg("/dev/stderr")
+        .arg(app_bundle)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| {
+            let _ = std::fs::remove_dir_all(&pipe_dir);
+            format!("Could not launch speech helper app: {error}")
+        })?;
+
+    let pipes = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut input_options = tokio::fs::OpenOptions::new();
+        input_options.write(true);
+        let mut output_options = tokio::fs::OpenOptions::new();
+        output_options.read(true);
+        tokio::try_join!(
+            input_options.open(&input_path),
+            output_options.open(&output_path),
+        )
+    })
+    .await;
+    let (stdin, stdout) = match pipes {
+        Ok(Ok(pipes)) => pipes,
+        Ok(Err(error)) => {
+            let _ = child.start_kill();
+            let _ = std::fs::remove_dir_all(&pipe_dir);
+            return Err(format!("Could not open speech helper pipes: {error}"));
+        }
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = std::fs::remove_dir_all(&pipe_dir);
+            return Err("Timed out connecting to speech helper app".to_string());
+        }
+    };
+
+    let reader = spawn_helper_reader(stdout, generation, output);
     Ok(HelperProcess {
         generation,
         child,
-        stdin,
+        stdin: Box::new(stdin),
         reader,
+        pipe_dir: Some(pipe_dir),
     })
 }
 

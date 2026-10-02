@@ -2,21 +2,16 @@
 set -eu
 
 helper_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-binary="$helper_dir/../../binaries/fndr-speech-aarch64-apple-darwin"
 bundle_dir=$(mktemp -d "${TMPDIR:-/tmp}/fndr-speech-test.XXXXXX")
-app="$bundle_dir/FNDR Speech Test.app"
+app="$helper_dir/../../binaries/FNDR Speech Helper.app"
 input_pipe="$bundle_dir/stdin.pipe"
 output_log="$bundle_dir/output.log"
 
-if [ ! -x "$binary" ]; then
-    echo "Speech helper binary is missing. Run cargo check from src-tauri first." >&2
+if [ ! -x "$app/Contents/MacOS/fndr-speech" ]; then
+    echo "Speech helper app is missing. Run cargo check from src-tauri first." >&2
     exit 1
 fi
 
-mkdir -p "$app/Contents/MacOS"
-cp "$helper_dir/TestInfo.plist" "$app/Contents/Info.plist"
-cp "$binary" "$app/Contents/MacOS/fndr-speech"
-codesign --force --sign - --timestamp=none "$app" >/dev/null
 mkfifo "$input_pipe"
 : > "$output_log"
 

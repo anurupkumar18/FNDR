@@ -34,37 +34,77 @@ fn build_speech_helper() -> io::Result<()> {
     }
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
-    let source = manifest_dir.join("helpers").join("fndr-speech").join("main.swift");
+    let helper_dir = manifest_dir.join("helpers").join("fndr-speech");
+    let source = helper_dir.join("main.swift");
+    let transcript_source = helper_dir.join("StreamingTranscript.swift");
+    let privacy_plist = helper_dir.join("HelperInfo.plist");
     let binaries = manifest_dir.join("binaries");
     let output = binaries.join(format!("fndr-speech-{target}"));
+    let helper_app = binaries.join("FNDR Speech Helper.app");
+    let helper_contents = helper_app.join("Contents");
+    let helper_macos = helper_contents.join("MacOS");
+    let helper_executable = helper_macos.join("fndr-speech");
+    let helper_info = helper_contents.join("Info.plist");
 
     println!("cargo:rerun-if-changed={}", source.display());
-    if output_is_fresh(&source, &output)? {
+    println!("cargo:rerun-if-changed={}", transcript_source.display());
+    println!("cargo:rerun-if-changed={}", privacy_plist.display());
+    let binary_is_fresh = output_is_fresh(&source, &output)?
+        && output_is_fresh(&transcript_source, &output)?
+        && output_is_fresh(&privacy_plist, &output)?;
+    if !binary_is_fresh {
+        fs::create_dir_all(&binaries)?;
+        let status = Command::new("xcrun")
+            .args([
+                "swiftc",
+                "-O",
+                source.to_string_lossy().as_ref(),
+                transcript_source.to_string_lossy().as_ref(),
+                "-framework",
+                "AVFoundation",
+                "-framework",
+                "Speech",
+                "-Xlinker",
+                "-sectcreate",
+                "-Xlinker",
+                "__TEXT",
+                "-Xlinker",
+                "__info_plist",
+                "-Xlinker",
+                privacy_plist.to_string_lossy().as_ref(),
+                "-o",
+                output.to_string_lossy().as_ref(),
+            ])
+            .status()?;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "xcrun swiftc exited with {status}"
+            )));
+        }
+    }
+
+    let app_is_fresh = output_is_fresh(&output, &helper_executable)?
+        && output_is_fresh(&privacy_plist, &helper_info)?;
+    if app_is_fresh {
         return Ok(());
     }
-    fs::create_dir_all(&binaries)?;
 
-    let status = Command::new("xcrun")
+    fs::create_dir_all(&helper_macos)?;
+    fs::copy(&output, &helper_executable)?;
+    fs::copy(&privacy_plist, &helper_info)?;
+    let status = Command::new("codesign")
         .args([
-            "swiftc",
-            "-O",
-            source.to_string_lossy().as_ref(),
-            "-framework",
-            "AVFoundation",
-            "-framework",
-            "Speech",
-            "-o",
-            output.to_string_lossy().as_ref(),
+            "--force",
+            "--sign",
+            "-",
+            "--timestamp=none",
+            helper_app.to_string_lossy().as_ref(),
         ])
         .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "xcrun swiftc exited with {status}"
-        )))
+    if !status.success() {
+        return Err(io::Error::other(format!("codesign exited with {status}")));
     }
+    Ok(())
 }
 
 fn output_is_fresh(source: &Path, output: &Path) -> io::Result<bool> {
