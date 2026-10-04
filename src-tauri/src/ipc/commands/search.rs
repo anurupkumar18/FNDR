@@ -228,21 +228,13 @@ fn rank_search_results(
         );
     }
     let query_context = QueryContext::from_query(query);
-    let (mut reranked, rerank_stats) = rerank_results(&query_context, raw_results);
-    if rerank_stats.excluded_for_coverage > 0 {
-        tracing::info!(
-            excluded_for_coverage = rerank_stats.excluded_for_coverage,
-            query = %query_context.raw_query,
-            "search_memory_cards:coverage_gate"
-        );
-    }
+    let mut reranked = rerank_results(&query_context, raw_results);
     reranked.truncate(raw_limit);
     let explanation = explain.then(|| {
         serde_json::json!({
             "query_plan": query_context.debug_plan(),
             "route_candidates": route_candidates.unwrap_or_default(),
             "low_signal_exclusions": low_signal_ids.unwrap_or_default(),
-            "coverage_exclusions": rerank_stats.excluded_for_coverage,
             "final_ranks": reranked.iter().enumerate().map(|(index, result)| serde_json::json!({
                 "rank": index + 1,
                 "memory_id": result.id,

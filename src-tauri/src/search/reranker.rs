@@ -4,32 +4,19 @@ use super::query_processor::{normalize_text, QueryContext};
 
 const VECTOR_WEIGHT: f32 = 0.7;
 const COVERAGE_WEIGHT: f32 = 0.3;
-const HARD_COVERAGE_THRESHOLD: f32 = 0.15;
 
-#[derive(Debug, Clone, Default)]
-pub struct RerankStats {
-    pub excluded_for_coverage: usize,
-}
-
+/// Blend vector similarity with query-word coverage. Coverage is a soft
+/// signal only: a result that shares no query words (a paraphrase) keeps its
+/// vector score instead of being dropped.
 pub fn rerank_results(
     query_context: &QueryContext,
     results: Vec<SearchResult>,
-) -> (Vec<SearchResult>, RerankStats) {
-    if results.is_empty() {
-        return (Vec::new(), RerankStats::default());
-    }
-
-    let mut stats = RerankStats::default();
+) -> Vec<SearchResult> {
     let mut reranked = Vec::with_capacity(results.len());
 
     for mut result in results {
         let coverage = anchor_coverage_score(query_context, &result);
         result.anchor_coverage_score = coverage;
-
-        if !query_context.anchor_terms.is_empty() && coverage < HARD_COVERAGE_THRESHOLD {
-            stats.excluded_for_coverage += 1;
-            continue;
-        }
 
         let vector_similarity = result.score.clamp(0.0, 1.0);
         result.score =
@@ -44,7 +31,7 @@ pub fn rerank_results(
             .then_with(|| b.timestamp.cmp(&a.timestamp))
     });
 
-    (reranked, stats)
+    reranked
 }
 
 pub fn anchor_coverage_score(query_context: &QueryContext, result: &SearchResult) -> f32 {
@@ -109,18 +96,32 @@ mod tests {
     }
 
     #[test]
-    fn excludes_low_anchor_coverage_results() {
+    fn keeps_a_strong_vector_match_that_shares_no_query_words() {
+        // A paraphrase: the memory answers the question in different words.
+        let query = QueryContext::from_query("how much money are we losing to customers leaving");
+        let mut paraphrase = result("Q3 churn by segment", "SMB logo churn 3.9 percent");
+        paraphrase.score = 0.9;
+
+        let results = rerank_results(&query, vec![paraphrase]);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].anchor_coverage_score, 0.0);
+        assert!(results[0].score > 0.0);
+    }
+
+    #[test]
+    fn word_coverage_still_breaks_a_vector_tie() {
         let query = QueryContext::from_query("cricket");
-        let (results, stats) = rerank_results(
+        let results = rerank_results(
             &query,
             vec![
-                result("IPL Highlights", "Watched cricket highlights"),
                 result("Rust Docs", "Debugged Rust compiler issues"),
+                result("IPL Highlights", "Watched cricket highlights"),
             ],
         );
 
-        assert_eq!(stats.excluded_for_coverage, 1);
-        assert_eq!(results.len(), 1);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].window_title, "IPL Highlights");
+        assert!(results[0].score > results[1].score);
     }
 }
-
