@@ -7,15 +7,18 @@
 mod admission;
 pub mod clipboard;
 mod dedupe;
-pub mod entity_extractor;
 pub mod enrich_policy;
+pub mod entity_extractor;
 pub(crate) mod macos;
 pub mod permissions;
 mod sampling;
 pub mod text_cleanup;
 
 use admission::{classify_capture_surface_policy, CaptureSurfacePolicy};
-pub use dedupe::{dhash_9x8, hamming, is_aba, luma_9x8_from_rgba, PerceptualHasher};
+pub use dedupe::{
+    dhash_9x8, hamming, is_aba, luma_9x8_from_rgba, DedupeMatchKind, DedupeVerdict,
+    PerceptualHasher,
+};
 pub use sampling::AdaptiveSampler;
 
 /// Convenience wrapper: return just the frontmost app name on macOS.
@@ -1888,18 +1891,33 @@ pub fn spawn_capture_loop(state: Arc<AppState>) {
 
 /// Run the main capture loop
 #[cfg(debug_assertions)]
+fn dedupe_evidence(verdict: &DedupeVerdict) -> serde_json::Value {
+    json!({
+        "threshold": verdict.threshold,
+        "match_kind": verdict.match_kind.as_str(),
+        "hash_distance": verdict.hash_distance,
+        "rgb_distance": verdict.rgb_distance,
+    })
+}
+
+#[cfg(debug_assertions)]
 fn finish_memory_journey_skip(
     state: &AppState,
     journey_id: Option<&str>,
     outcome: &str,
     privacy_blocked: bool,
+    dedupe: Option<&DedupeVerdict>,
 ) {
     let Some(journey_id) = journey_id else {
         return;
     };
+    let mut details = json!({ "privacy_blocked": privacy_blocked });
+    if let Some(verdict) = dedupe {
+        details["dedupe"] = dedupe_evidence(verdict);
+    }
     if let Err(error) = state
         .memory_journey
-        .finish_skipped(journey_id, outcome, privacy_blocked)
+        .finish_skipped_with(journey_id, outcome, details)
     {
         tracing::debug!("Could not finish skipped Memory Journey: {error}");
     }
@@ -2061,7 +2079,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     #[cfg(debug_assertions)]
                     {
                         if let Some(memory_id) = state.memory_journey.active_memory_id() {
-                            if let Some(record) = batch.iter().find(|record| record.id == memory_id) {
+                            if let Some(record) = batch.iter().find(|record| record.id == memory_id)
+                            {
                                 let persisted = state
                                     .store
                                     .get_memory_by_id(&record.id)
@@ -2134,6 +2153,15 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
+        // An armed Memory Journey waits for the person to bring the target
+        // forward. Frames seen meanwhile would seed dedupe history with the
+        // target itself, so the ordinary tick is skipped until the arm starts.
+        #[cfg(debug_assertions)]
+        if state.memory_journey.defers_ordinary_capture() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+
         // Calculate sleep duration based on FPS
         let fps = sampler.get_current_fps(&config);
         if fps <= 0.0 {
@@ -2161,10 +2189,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             } else {
                 "desktop_app"
             };
-            match state
-                .memory_journey
-                .begin_capture_attempt(target_app_class)
-            {
+            match state.memory_journey.begin_capture_attempt(target_app_class) {
                 Ok(id) => {
                     if id.is_some() {
                         state.emit_memory_journey_status();
@@ -2209,6 +2234,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 memory_journey_id.as_deref(),
                 "embedder_unavailable",
                 false,
+                None,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2239,6 +2265,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 memory_journey_id.as_deref(),
                 "screen_guide_active",
                 true,
+                None,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2271,7 +2298,11 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state.as_ref(),
                 memory_journey_id.as_deref(),
                 reason.as_str(),
-                matches!(reason, crate::SkipReason::SensitiveContext | crate::SkipReason::SelfApp),
+                matches!(
+                    reason,
+                    crate::SkipReason::SensitiveContext | crate::SkipReason::SelfApp
+                ),
+                None,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2308,6 +2339,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 memory_journey_id.as_deref(),
                 "surface_policy",
                 true,
+                None,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2334,6 +2366,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     memory_journey_id.as_deref(),
                     "semantic_duplicate",
                     false,
+                    None,
                 );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
@@ -2442,6 +2475,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     memory_journey_id.as_deref(),
                     "screen_guide_active",
                     true,
+                    None,
                 );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
@@ -2472,7 +2506,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         artifact_ids: Vec::new(),
                     },
                 );
-                let _ = state.memory_journey.attach_memory_id(journey_id, &record.id);
+                let _ = state
+                    .memory_journey
+                    .attach_memory_id(journey_id, &record.id);
                 state.emit_memory_journey_status();
             }
             batch.push(record);
@@ -2521,6 +2557,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 memory_journey_id.as_deref(),
                 "app_switched_during_capture",
                 true,
+                None,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2539,6 +2576,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 memory_journey_id.as_deref(),
                 "screen_guide_active",
                 true,
+                None,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2561,6 +2599,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     memory_journey_id.as_deref(),
                     "screen_capture_failed",
                     false,
+                    None,
                 );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
@@ -2583,6 +2622,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 memory_journey_id.as_deref(),
                 "screen_guide_overlap",
                 true,
+                None,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2590,9 +2630,10 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         #[cfg(debug_assertions)]
         if let Some(journey_id) = memory_journey_id.as_deref() {
-            if let Err(error) = state
-                .memory_journey
-                .record_frame(journey_id, &image_data, pixels_duration_ms)
+            if let Err(error) =
+                state
+                    .memory_journey
+                    .record_frame(journey_id, &image_data, pixels_duration_ms)
             {
                 tracing::warn!("Memory Journey frame recording stopped: {error}");
                 memory_journey_id = None;
@@ -2603,7 +2644,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         // Deduplication check
         let dedupe_started = Instant::now();
-        let is_duplicate = hasher.is_duplicate(&image_data, config.dedupe_threshold);
+        let dedupe_verdict = hasher.check(&image_data, config.dedupe_threshold);
+        let is_duplicate = dedupe_verdict.is_duplicate;
         runtime_metrics::since_ms("capture.dedupe_ms", dedupe_started);
 
         if is_duplicate && !force_capture {
@@ -2617,6 +2659,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 memory_journey_id.as_deref(),
                 "perceptual_duplicate",
                 false,
+                Some(&dedupe_verdict),
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2637,6 +2680,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         "privacy_decision": "allowed",
                         "surface_decision": "allowed",
                         "dedupe_decision": if force_capture { "forced" } else { "novel" },
+                    "dedupe": dedupe_evidence(&dedupe_verdict),
                     }),
                     artifact_ids: Vec::new(),
                 },
@@ -2680,6 +2724,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     memory_journey_id.as_deref(),
                     "browser_semantic_low_signal",
                     false,
+                    None,
                 );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
@@ -2730,6 +2775,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                             memory_journey_id.as_deref(),
                             "ocr_failed",
                             false,
+                            None,
                         );
                         tokio::time::sleep(sleep_duration).await;
                         continue;
@@ -2947,7 +2993,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         novelty,
                     );
                     #[cfg(debug_assertions)]
-                    let visual_compose_result = if let Some(journey_id) = memory_journey_id.clone() {
+                    let visual_compose_result = if let Some(journey_id) = memory_journey_id.clone()
+                    {
                         crate::telemetry::llm_trace::with_memory_journey(
                             state.memory_journey.clone(),
                             journey_id,
@@ -2973,7 +3020,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                                     (&record.image_embedding, "captured_frame"),
                                     semantic_started.elapsed().as_millis() as u64,
                                 );
-                                let _ = state.memory_journey.attach_memory_id(journey_id, &record.id);
+                                let _ = state
+                                    .memory_journey
+                                    .attach_memory_id(journey_id, &record.id);
                                 state.emit_memory_journey_status();
                             }
                             visual_tracker.admit(
@@ -3036,6 +3085,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                                 memory_journey_id.as_deref(),
                                 "visual_compose_failed",
                                 false,
+                                None,
                             );
                         }
                     }
@@ -3062,6 +3112,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         memory_journey_id.as_deref(),
                         "visual_too_small",
                         false,
+                        None,
                     );
                 }
                 VisualAdmissionOutcome::SkippedNovelty { novelty, threshold } => {
@@ -3086,6 +3137,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         memory_journey_id.as_deref(),
                         "visual_low_novelty",
                         false,
+                        None,
                     );
                 }
                 VisualAdmissionOutcome::Failed(err) => {
@@ -3123,6 +3175,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         memory_journey_id.as_deref(),
                         "visual_admission_failed",
                         false,
+                        None,
                     );
                 }
             }
@@ -3166,6 +3219,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 memory_journey_id.as_deref(),
                 "low_signal_text",
                 false,
+                None,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -3200,6 +3254,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 memory_journey_id.as_deref(),
                 "ocr_noise",
                 false,
+                None,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -3234,6 +3289,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     memory_journey_id.as_deref(),
                     "semantic_duplicate",
                     false,
+                    None,
                 );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
@@ -3553,6 +3609,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     "grounding_gate"
                 },
                 false,
+                None,
             );
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -3983,7 +4040,10 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 "all-MiniLM-L6-v2",
                 (&text_embedding, &embedding_document.primary_text),
                 (&snippet_embedding, &embedding_document.snippet_text),
-                (&support_embedding, &embedding_document.support_texts.join("\n")),
+                (
+                    &support_embedding,
+                    &embedding_document.support_texts.join("\n"),
+                ),
                 (&image_embedding, "captured_frame"),
                 embed_latency.as_millis() as u64,
             );
@@ -6423,7 +6483,11 @@ mod tests {
             start + Duration::from_secs(299),
             interval
         ));
-        assert!(warn_interval_elapsed(Some(start), start + interval, interval));
+        assert!(warn_interval_elapsed(
+            Some(start),
+            start + interval,
+            interval
+        ));
     }
 
     #[test]
@@ -6477,9 +6541,7 @@ mod tests {
         assert!(url_has_credential_leak(
             "https://example.com/path?password=secret"
         ));
-        assert!(!url_has_credential_leak(
-            "https://example.com/path?foo=bar"
-        ));
+        assert!(!url_has_credential_leak("https://example.com/path?foo=bar"));
     }
 
     #[test]
@@ -6933,7 +6995,9 @@ Activity patterns and insights dashboard
 
         assert_eq!(merged.id, "existing-id");
         assert!(
-            merged.consolidated_from.contains(&"incoming-id".to_string()),
+            merged
+                .consolidated_from
+                .contains(&"incoming-id".to_string()),
             "consolidated_from should carry the dropped id, got {:?}",
             merged.consolidated_from
         );

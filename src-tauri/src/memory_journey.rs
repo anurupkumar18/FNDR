@@ -205,6 +205,13 @@ pub struct MemoryJourneyExportReceipt {
     pub size_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmPhase {
+    Inactive,
+    HandoffPending,
+    Started,
+}
+
 #[derive(Debug, Clone)]
 struct ArmedJourney {
     id: String,
@@ -260,6 +267,28 @@ impl MemoryJourneyRecorder {
         };
         let _ = recorder.cleanup();
         recorder
+    }
+
+    /// Where the one-shot arm is: nothing armed, waiting for the person to
+    /// bring the target forward, or ready to consume the next attempt.
+    pub fn arm_phase(&self) -> ArmPhase {
+        self.arm_phase_at(now_ms())
+    }
+
+    fn arm_phase_at(&self, now: i64) -> ArmPhase {
+        let inner = self.inner.lock();
+        match inner.armed.as_ref() {
+            Some(armed) if now < armed.ready_at_ms => ArmPhase::HandoffPending,
+            Some(_) => ArmPhase::Started,
+            None if inner.active.is_some() => ArmPhase::Started,
+            None => ArmPhase::Inactive,
+        }
+    }
+
+    /// True while the capture loop must skip its ordinary tick: frames seen
+    /// during the handoff would seed dedupe history with the target itself.
+    pub fn defers_ordinary_capture(&self) -> bool {
+        self.arm_phase() == ArmPhase::HandoffPending
     }
 
     pub fn is_inactive(&self) -> bool {
@@ -726,6 +755,21 @@ impl MemoryJourneyRecorder {
         outcome: &str,
         privacy_blocked: bool,
     ) -> Result<MemoryJourneyManifestV1, String> {
+        self.finish_skipped_with(
+            journey_id,
+            outcome,
+            json!({ "privacy_blocked": privacy_blocked }),
+        )
+    }
+
+    /// Like `finish_skipped`, with caller-supplied details (for example the
+    /// dedupe evidence behind a `perceptual_duplicate`).
+    pub fn finish_skipped_with(
+        &self,
+        journey_id: &str,
+        outcome: &str,
+        details: serde_json::Value,
+    ) -> Result<MemoryJourneyManifestV1, String> {
         self.record_stage(
             journey_id,
             MemoryJourneyStageRecord {
@@ -734,7 +778,7 @@ impl MemoryJourneyRecorder {
                 observed_at_ms: now_ms(),
                 duration_ms: None,
                 outcome: outcome.to_string(),
-                details: json!({ "privacy_blocked": privacy_blocked }),
+                details,
                 artifact_ids: Vec::new(),
             },
         )?;
@@ -1467,6 +1511,86 @@ mod tests {
             .finish_active(&armed, MemoryJourneyState::Complete)
             .unwrap();
         assert_eq!(recorder.status().unwrap().journeys.len(), 1);
+    }
+
+    fn flat_png(shade: u8) -> Vec<u8> {
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 64, image::Rgb([shade; 3])))
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn arm_phase_is_tri_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
+        assert_eq!(recorder.arm_phase(), ArmPhase::Inactive);
+        recorder.arm("phases".into()).unwrap();
+        let ready_at_ms = recorder.status().unwrap().arm_ready_at_ms.unwrap();
+        assert_eq!(
+            recorder.arm_phase_at(ready_at_ms - 1),
+            ArmPhase::HandoffPending
+        );
+        assert_eq!(recorder.arm_phase_at(ready_at_ms), ArmPhase::Started);
+        recorder
+            .begin_capture_attempt_at("browser", ready_at_ms)
+            .unwrap();
+        assert_eq!(recorder.arm_phase_at(ready_at_ms + 1), ArmPhase::Started);
+    }
+
+    #[test]
+    fn handoff_frames_cannot_make_the_armed_target_a_duplicate() {
+        use crate::capture::PerceptualHasher;
+        let target = flat_png(200);
+        let threshold = 5;
+
+        // Control: the old behavior. The ordinary tick keeps feeding the
+        // hasher during the handoff, so the target is its own duplicate.
+        let mut ungated = PerceptualHasher::new();
+        assert!(!ungated.check(&target, threshold).is_duplicate);
+        assert!(ungated.check(&target, threshold).is_duplicate);
+
+        // Fixed behavior: the capture loop skips its tick while the phase is
+        // HandoffPending, so the first armed attempt sees an empty history.
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
+        recorder.arm("handoff dedupe".into()).unwrap();
+        let ready_at_ms = recorder.status().unwrap().arm_ready_at_ms.unwrap();
+        let mut gated = PerceptualHasher::new();
+        for tick in 0..4 {
+            let now = ready_at_ms - 1 - tick;
+            if recorder.arm_phase_at(now) == ArmPhase::HandoffPending {
+                continue;
+            }
+            gated.check(&target, threshold);
+        }
+        let id = recorder
+            .begin_capture_attempt_at("browser", ready_at_ms)
+            .unwrap();
+        assert!(id.is_some());
+        let verdict = gated.check(&target, threshold);
+        assert!(!verdict.is_duplicate);
+        assert_eq!(verdict.match_kind, crate::capture::DedupeMatchKind::Novel);
+    }
+
+    #[test]
+    fn skipped_attempt_records_the_dedupe_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = MemoryJourneyRecorder::new(dir.path().join("journeys"));
+        let id = recorder.arm("dedupe evidence".into()).unwrap();
+        start_armed(&recorder, "browser");
+        recorder
+            .finish_skipped_with(
+                &id,
+                "perceptual_duplicate",
+                json!({ "dedupe": { "threshold": 5, "match_kind": "consecutive_hash", "hash_distance": 0, "rgb_distance": 0 } }),
+            )
+            .unwrap();
+        let manifest = &recorder.status().unwrap().manifests[0];
+        let stage = manifest.stages.last().unwrap();
+        assert_eq!(stage.outcome, "perceptual_duplicate");
+        assert_eq!(stage.details["dedupe"]["match_kind"], "consecutive_hash");
     }
 
     #[test]
