@@ -1,4 +1,4 @@
-//! MCP server for FNDR — local-first with secure tunnel/public deployment modes.
+//! MCP server for FNDR: local-first with secure tunnel/public deployment modes.
 //!
 //! Features:
 //!  - Deployment modes: local (default), tunnel, public
@@ -1015,7 +1015,7 @@ fn unauthorized_jsonrpc_item(payload: &Value) -> Option<Value> {
 // Route handlers
 // ---------------------------------------------------------------------------
 
-/// Unauthenticated probe — lets clients discover the server without a token.
+/// Unauthenticated probe: lets clients discover the server without a token.
 async fn root_handler(State(state): State<Arc<HttpState>>) -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -1034,7 +1034,7 @@ async fn root_handler(State(state): State<Arc<HttpState>>) -> impl IntoResponse 
     )
 }
 
-/// GET /mcp — streamable HTTP-style SSE entrypoint.
+/// GET /mcp: streamable HTTP-style SSE entrypoint.
 async fn mcp_stream_handler(
     State(state): State<Arc<HttpState>>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
@@ -1044,7 +1044,7 @@ async fn mcp_stream_handler(
     sse_handler_inner(state, peer_addr, uri, headers, true).await
 }
 
-/// POST /mcp  and  POST /mcp/messages — localhost JSON-RPC handler.
+/// POST /mcp  and  POST /mcp/messages: localhost JSON-RPC handler.
 async fn mcp_handler(
     State(state): State<Arc<HttpState>>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
@@ -1095,7 +1095,7 @@ async fn mcp_handler(
     }
 }
 
-/// GET /mcp/sse — SSE streaming transport (MCP spec 2024-11-05).
+/// GET /mcp/sse: SSE streaming transport (MCP spec 2024-11-05).
 ///
 /// Sends an initial `endpoint` event pointing the client at POST /mcp/messages,
 /// then keeps the stream alive with periodic pings.
@@ -1899,7 +1899,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "get_ambient_context",
-                "description": "Return what the user is actively working on right now: frontmost app, recent memory snippets, and window context. Use this to give code editors, AI assistants, or other clients real-time awareness of the user's current task — the 'Time Machine for IDEs' feature.",
+                "description": "Return what the user is actively working on right now: frontmost app, recent memory snippets, and window context. Use this to give code editors, AI assistants, or other clients real-time awareness of the user's current task (the 'Time Machine for IDEs' feature).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -2687,7 +2687,7 @@ async fn run_fndr_health_check(app_state: Arc<AppState>) -> Result<Value, JsonRp
 }
 
 // ---------------------------------------------------------------------------
-// Phase 4 — fndr.* namespace handlers (thin wrappers over the Phase 3 pipeline)
+// Phase 4: fndr.* namespace handlers (thin wrappers over the Phase 3 pipeline)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, Deserialize)]
