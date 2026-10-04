@@ -68,3 +68,13 @@ gitlab-plan:
 
 gitlab-sync:
 	python3 scripts/team/gitlab_sync.py sync $(if $(APPLY),--apply) $(if $(UPDATE),--update)
+
+# PD-05: Friday scoreboard. Prints one Markdown page to stdout from the retrieval
+# reference reports and the vault health evidence. Override any SCOREBOARD_*
+# variable; files that do not exist print "not measured" instead of failing.
+.PHONY: scoreboard
+SCOREBOARD_RETRIEVAL ?= $(wildcard scripts/demo/retrieval-reference/*.json)
+SCOREBOARD_VAULT_HEALTH ?= docs/evidence/W02/vault-health-owner.md
+
+scoreboard:
+	@$(PYTHON) scripts/audit/scoreboard.py $(foreach report,$(SCOREBOARD_RETRIEVAL),--retrieval "$(report)") $(if $(SCOREBOARD_VAULT_HEALTH),--vault-health "$(SCOREBOARD_VAULT_HEALTH)") $(if $(SCOREBOARD_VOICE),--voice "$(SCOREBOARD_VOICE)") $(if $(SCOREBOARD_SESSIONS),--sessions "$(SCOREBOARD_SESSIONS)") $(if $(SCOREBOARD_DATE),--date "$(SCOREBOARD_DATE)")
