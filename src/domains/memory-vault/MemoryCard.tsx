@@ -37,6 +37,8 @@ interface MemoryCardProps {
     className?: string;
     /** Compact-variant override when card has no threads in the topic_categories array. */
     threadCountHint?: number;
+    /** Compact-variant icon shown before the app name (e.g. page, document). */
+    sourceIcon?: ReactNode;
 }
 
 /** Post-capture lifecycle states surfaced on the card. */
@@ -73,6 +75,7 @@ export function MemoryCard({
     confidential,
     className,
     threadCountHint,
+    sourceIcon,
 }: MemoryCardProps) {
     const [deleteState, setDeleteState] = useState<
         "idle" | "confirming" | "deleting" | "error"
@@ -92,7 +95,7 @@ export function MemoryCard({
         .filter(Boolean)
         .join(" ");
 
-    // Compact — single row (wide) / two rows (narrow container), click to expand.
+    // Compact: single row (wide) / two rows (narrow container), click to expand.
     if (variant === "compact") {
         return (
             <motion.article
@@ -124,6 +127,7 @@ export function MemoryCard({
                 </div>
                 {/* source area: app name + activity/files chips */}
                 <div className="fndr-mc-c-source" aria-label="Source and activity">
+                    {sourceIcon}
                     <em className="fndr-mc-c-source-app">
                         {card.app_name}
                         {card.reopen_page ? ` · page ${card.reopen_page}` : null}
@@ -416,7 +420,7 @@ function isReviewed(card: MemoryCardData): boolean {
 }
 
 function pickPreviewText(card: MemoryCardData): string {
-    // 1. insight_what_happened wins — it's the synthesized, reviewer-grade summary.
+    // 1. insight_what_happened wins; it's the synthesized, reviewer-grade summary.
     const insight = safeText(card.insight_what_happened);
     if (insight) return insight;
 
@@ -434,7 +438,7 @@ function pickPreviewText(card: MemoryCardData): string {
         return context.length > 220 ? context.slice(0, 220) : context;
     }
 
-    // 4. Unreviewed display_summary / summary — only when not meta narration.
+    // 4. Unreviewed display_summary / summary, only when not meta narration.
     if (!isReviewed(card)) {
         const fallbackSummary = safeText(card.display_summary) || safeText(card.summary);
         if (fallbackSummary) return fallbackSummary;
@@ -450,7 +454,7 @@ function pickPreviewText(card: MemoryCardData): string {
         if (safe) return safe;
     }
 
-    // 6. Safe title / window fallback — never raw OCR.
+    // 6. Safe title / window fallback, never raw OCR.
     const windowTitle = safeText(card.window_title);
     if (windowTitle && windowTitle !== card.title) return windowTitle;
 
@@ -470,7 +474,7 @@ function deriveThreads(card: MemoryCardData): string[] {
     return out.slice(0, 5);
 }
 
-function reopenButtonLabel(card: MemoryCardData): string {
+export function reopenButtonLabel(card: MemoryCardData): string {
     if (!card.reopen_page) {
         return "Open source";
     }
@@ -490,7 +494,7 @@ function formatTime(timestamp: number): string {
 function formatDay(timestamp: number): string {
     const d = new Date(timestamp);
     const now = new Date();
-    // Compare calendar-day distance, not raw 24-hour buckets — a capture
+    // Compare calendar-day distance, not raw 24-hour buckets: a capture
     // from yesterday at 23:00 should read "YESTERDAY", not "TODAY", even if
     // it's less than 24 hours old.
     const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
