@@ -79,8 +79,38 @@ and to AI agents alike.
 
 ## Weekly rhythm
 
-Monday 30 minutes: plan. Wednesday noon: comment on your Doing ticket (progress, blocked, next).
-Friday 45 minutes: demo (3 minutes each) and retro. Friday afternoon: the weekly status goes to instructors.
+We rarely meet, so the week runs on written posts. Each one is short and goes where the next person will look for it.
+
+| When | What | Where | Who |
+|---|---|---|---|
+| Monday, before the 30-minute plan | Plan post: the tickets you will move this week (IDs), and anything you need from another lane | Team chat | Everyone |
+| Wednesday by noon | Check-in on each ticket in Doing: done, blocked, next (one line each) | Comment on the ticket | Ticket assignee |
+| Friday | Scoreboard: retrieval, vault health, voice, and reopen numbers, from the commands and evidence files, never from memory (PD-05 makes it one command) | Team chat | Lead posts |
+| Friday | A 3-minute recorded demo of what you moved this week; real output, not a polished mock | Link in the team chat and on the ticket | Everyone |
+| Friday, 45 minutes | Demo and retro. The retro cuts p1 first. | Call | Everyone |
+| Friday afternoon | Weekly status to instructors | As the instructors ask | Not assigned in writing yet |
+
+Templates, so posts are quick to write and quick to read:
+
+```
+Monday plan (W<nn>), <name>
+This week: <ticket IDs, p0 first>, <a p1 if time>
+Need: <lane owner>, <what> by <day>
+Away: <dates and cover, or none>
+```
+
+```
+Wednesday check-in, <ticket ID>
+Done: <what moved since Monday>
+Blocked: <what, since when, who you pinged, or none>
+Next: <the next step and when>
+```
+
+### Response norm
+
+- Reply in the team chat within one working day, even if the reply is "seen, answer by Thursday".
+- Blocked for more than one working day: ping the lane owner and the lead in the team chat, and say it on the ticket. Do not wait for Wednesday.
+- A decision talked through in chat exists only once it is a row in `docs/team/decision-log.md` (the process is at the top of that file).
 
 ## Working with AI agents
 

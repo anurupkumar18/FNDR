@@ -1,0 +1,55 @@
+# Decision log
+
+One row per decision the team has agreed to. If it is not in this table, it is not decided, however often it was discussed in chat. Newest at the bottom.
+
+## How a decision gets here
+
+1. The ticket's assignee drafts the options in the repo (an ADR under `docs/decisions/`, or a short section in the ticket's doc).
+2. Post the draft link in the team chat and tag the people it affects.
+3. Give everyone two days to comment. Silence after two days counts as agreement (`docs/team/tickets/product-decisions.md`).
+4. If someone disagrees and it is not settled in writing, the lead decides (`TEAM.md`: "Ask the lead when two lanes disagree").
+5. Add a row here in the same merge request that marks the ADR accepted. "Who agreed" names the people who said yes in writing, or says "silence after two days" and the date the clock ran out.
+
+A row never claims agreement that is not written down somewhere. Where the source does not say who agreed, the row says "not recorded".
+
+## Decisions
+
+Seeded on 2026-10-04 from decisions already recorded in the repo as accepted or decided. Where the source carries no date, the date is the commit that added it.
+
+| Date | Decision | Options considered | Who agreed | Link |
+|---|---|---|---|---|
+| 2026-09-08 | Screen Guide is opt-in, read-only, and local-first; screen pixels stay in memory for one explicit request. Amended 2026-09-28 for bounded one-turn diagnostics. | Vendoring the Clicky app (rejected in the ADR's context: cloud audio, image, and answer services, second app identity) | Not recorded | [ADR-014](../decisions/014-local-screen-guide.md) |
+| 2026-09-21 | This repo (v1) is the Beta and Final product. FNDR v2 is a read-only knowledge source. | v2 as mainline (v2 PRD addendum of 2026-09-05) or v1 | Owner (Anurup), named as decider. Team review was to happen on the merge request; no reviewer is recorded. | [ADR-015](../decisions/015-v1-product-v2-knowledge-source.md), master plan D-1 |
+| 2026-09-21 | MCP requires a bearer token by default in every mode, including Local. Only the loopback `initialize` and `tools/list` handshake is exempt. | Not listed as options. `FNDR_MCP_REQUIRE_AUTH=0` stays as a development opt-out, off by default. | Owner (Anurup), named as decider. No reviewer recorded. | [ADR-017](../decisions/017-mcp-auth-default.md) |
+| 2026-09-21 | The owner is the accountable DRI for the capture, post-capture, model, retrieval, and decision workstreams and may delegate execution. (The capacity rule in the same row is still proposed.) | Not recorded | Owner (Anurup) | Master plan section 3, D-9 |
+| 2026-09-23 | Retrieval ownership: Anurup owns retrieval and its evaluation; Minh owns embedding coverage and reopen. | Not recorded | Recorded as "decided"; who agreed is not recorded | Month plan section 12, row 2 |
+| 2026-09-23 | The notch HUD branch is merged into `main` (350105c); GS-02 reconciles it with the command surface. | Not recorded | Not recorded | Month plan section 12, row 3 |
+| 2026-09-28 | Voice policy: one microphone owner; Home and Search tap to toggle; Screen Guide push to talk; a final transcript is always reviewed before anything runs; no spoken answers by default. Implementation pending. | Not listed. Builds on UI/UX decisions D-04 and D-21. | Not recorded | [ADR-020](../decisions/020-voice-interaction-policy.md) |
+| 2026-09-28 | Activity traces show only observed steps, never content or chain-of-thought, and are never persisted. | Raw logs in the UI; a product-wide polling or telemetry system (both rejected in the ADR's context) | Not recorded | [ADR-021](../decisions/021-privacy-safe-activity-traces.md) |
+| 2026-09-30 | Command bar actions policy: twelve tools in three tiers (runs, one tap, never). Nothing sends, deletes, or buys this semester. (PD-06) | Everything one tap; allow send with confirm (both rejected in the ADR) | Not recorded | [ADR-022](../decisions/022-command-bar-actions-policy.md), [actions policy](../product/actions-policy.md) |
+| 2026-10-01 | Five destinations (Home, Search and Ask, Memory Vault, Daily Brief, Trust and Settings) plus a Labs group. No mounted panel is deleted. (PD-15) | Not listed. Builds on UI/UX decisions D-01, D-05, D-06, D-07. | Not recorded | [ADR-023](../decisions/023-five-destinations-and-labs.md) |
+
+## Earlier accepted ADRs (background, before this log)
+
+These carry an "Accepted" status line and still shape the code. They predate the team process above, so they have no "who agreed".
+
+| ADR | Status as written | Note |
+|---|---|---|
+| [006](../decisions/006-mcp-deployment-modes.md) MCP deployment modes | Accepted (Phase 1, transport hardening) | Its relaxed Local-mode auth is superseded by ADR-017 |
+| [008](../decisions/008-parent-child-chunk-rag.md) Parent-child chunk RAG | Accepted | Chunk table is empty on the owner profile (`docs/evidence/W02/VS-01-baseline.md`) |
+| [010](../decisions/010-embedding-document-manifest.md) Embedding documents and manifests | Accepted | |
+| [011](../decisions/011-event-driven-ui-status.md) Event-driven UI status | Accepted | |
+| [012](../decisions/012-required-model-gating.md) Required-model gating | Accepted (Gate 0) | |
+| [013](../decisions/013-release-channel-and-auto-update.md) Release channel and auto-update | Accepted (Gate 0) | |
+
+## Open: not decided, do not treat as agreed
+
+| Item | State | Where |
+|---|---|---|
+| ADR-018 reasoning tier (opt-in cloud reasoning) | Not drafted in the repo yet. Local models only until accepted. | PD-01 |
+| Beta date Wed Oct 21 and Final week of Dec 14 | Assumed; confirm with instructors | Master plan D-4, month plan section 12 row 8 |
+| Companion parked until after Final | Assumed | Master plan D-2 |
+| No cloud model generates training labels | Proposed | Master plan D-3 |
+| Hosted decision models never see captured content | Proposed | Master plan D-8 |
+| GitLab is the source of truth; GitHub is a mirror | Proposed | Master plan D-6 |
+| Agent write-back is notes only; no pulling from external tools this month | Recommended, with defaults | Month plan section 12 rows 5 and 6 |
