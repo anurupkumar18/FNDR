@@ -27,7 +27,7 @@
 
 | Fact | Consequence |
 |---|---|
-| GitLab `origin/main` is `d6e7188`. GitHub `gh/main` is `248f7f3` (Sep 23), **93 commits behind**. | The cloud clones GitHub. Step 0 is publishing `main` to GitHub or the cloud works on a stale tree. |
+| GitLab and GitHub `main` were level at `d6e7188` (GitHub accepted a plain fast-forward on Oct 4). The local `gh/*` refs I first saw were stale: the `gh` remote had been removed from this clone. Both remotes now sit at the same commit after this plan landed. | The cloud clones GitHub and sees current code. Teammates push to GitLab `main` at any time, so merge `origin/main` before every push; a rejected push means someone landed first, not an error. |
 | `origin` has two push URLs (GitLab and GitHub), so `git push origin main` updates both. | One command publishes. Local does it after each gated merge. |
 | GitLab is reachable only on the university VPN with the token in `~/.zshrc`. The cloud has neither. | The cloud cannot move tickets, comment, or open MRs. It writes ticket notes; local posts them. |
 | GitHub CI runs the full `cargo test --locked` on `macos-14` and frontend tests on Ubuntu, but only for `pull_request` into `main`. | The cloud opens **draft PRs** (never merged) purely to get CI. Local merges the branch into GitLab `main` itself. |
@@ -237,7 +237,7 @@ Strengths to lean on:
 ## Part 10: What the owner does
 
 1. Read this plan (10 minutes). Answer D1 to D3 or accept the defaults.
-2. Publish: commit these three files on `main` and `git push origin main` (updates GitLab and GitHub; this is also the 93-commit catch-up).
+2. Publish: commit these three files on `main` and `git push origin main` (updates GitLab and GitHub). Done on Oct 4; nothing to do unless the cloud reports it cannot see the plan files.
 3. Start the cloud session on `anurupkumar18/FNDR`, strongest model, network access that allows `github.com`, `crates.io`, `static.crates.io`, `registry.npmjs.org`, `pypi.org`, `huggingface.co`. Paste `CLOUD-KICKOFF.md`.
 4. Start the local session (new chat, so it begins with clean context). Paste `LOCAL-KICKOFF.md`. Keep the Mac on power, awake (`caffeinate -dimsu` in a spare terminal), and on the VPN.
 5. Check the two outboxes when convenient; act only on `NEEDS HUMAN (open)`.
