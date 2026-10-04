@@ -28,10 +28,13 @@ use arrow_array::{
 };
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use futures::TryStreamExt;
-use lancedb::index::scalar::BTreeIndexBuilder;
+use lancedb::index::scalar::{BTreeIndexBuilder, FtsIndexBuilder, FullTextSearchQuery};
 use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
-use lancedb::table::{AddDataMode, CompactionOptions, OptimizeAction, OptimizeStats};
+use lancedb::index::IndexType;
+use lancedb::table::{
+    AddDataMode, CompactionOptions, OptimizeAction, OptimizeOptions, OptimizeStats,
+};
 use lancedb::Table;
 
 /// Dataset version count for a Lance table (MEM-08). Fragment count is not
@@ -44,6 +47,7 @@ pub struct MemoriesTableScaleStats {
 use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 /// Active LanceDB table for memory records.
@@ -136,6 +140,24 @@ const IMAGE_EMBED_DIM: i32 = DEFAULT_IMAGE_EMBEDDING_DIM as i32;
 const VECTOR_QUERY_MULTIPLIER: usize = DEFAULT_STORE_VECTOR_QUERY_MULTIPLIER;
 const KEYWORD_QUERY_MULTIPLIER: usize = DEFAULT_STORE_KEYWORD_QUERY_MULTIPLIER;
 const MAX_KEYWORD_SCAN: usize = DEFAULT_STORE_MAX_KEYWORD_SCAN;
+/// Text columns behind the BM25 keyword index (VS-07): one inverted index
+/// per column, queried together. Tokenizer defaults: lowercase, English
+/// stemming, stop words removed, ASCII folding.
+const FTS_COLUMNS: [&str; 7] = [
+    "window_title",
+    "clean_text",
+    "snippet",
+    "memory_context",
+    "lexical_shadow",
+    "url",
+    "app_name",
+];
+/// LanceDB searches rows written after the index was built with a flat scan,
+/// so results are always current; folding them into the index only keeps
+/// queries fast. Fold after this many new rows.
+const FTS_OPTIMIZE_AFTER_ROWS: usize = 256;
+/// Name of the BM25 score column LanceDB adds to full-text results.
+const FTS_SCORE_COLUMN: &str = "_score";
 const INDEX_NOISE_HOSTS: &[&str] = &[
     "accounts.google.com",
     "auth.openai.com",
@@ -148,6 +170,7 @@ const INDEX_NOISE_HOSTS: &[&str] = &[
 pub struct Store {
     data_dir: PathBuf,
     table: Table,
+    rows_since_fts_optimize: AtomicUsize,
     memories_v5_table: Table,
     memory_chunks_table: Table,
     tasks_table: Table,
@@ -180,6 +203,13 @@ pub use normalize_embed_migrate::{
     generate_search_aliases_public, normalize_record_for_index, pollution_ratio_score,
     salience_concentration_score, topic_clarity_score,
 };
+
+async fn fold_new_rows_into_indexes(table: &Table) -> lancedb::Result<()> {
+    table
+        .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+        .await
+        .map(|_| ())
+}
 
 impl Store {
     /// Open (or create) the LanceDB store at `data_dir`.
@@ -251,6 +281,7 @@ impl Store {
         Ok(Self {
             data_dir,
             table,
+            rows_since_fts_optimize: AtomicUsize::new(0),
             memories_v5_table,
             memory_chunks_table,
             tasks_table,
@@ -1595,6 +1626,8 @@ impl Store {
             .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
             .execute()
             .await?;
+        self.rows_since_fts_optimize
+            .fetch_add(records.len(), AtomicOrdering::Relaxed);
         Ok(())
     }
 
@@ -1691,6 +1724,10 @@ impl Store {
     }
 
     /// Full-scan keyword search using SQL LIKE predicates.
+    /// BM25 keyword search over the text columns in `FTS_COLUMNS` (VS-07).
+    /// Rare words count more than common ones, every matching row is scored
+    /// before the limit applies, and English word forms match by stemming.
+    /// Scores are BM25 normalized to the best hit, blended with recency.
     pub async fn keyword_search(
         &self,
         query: &str,
@@ -1699,68 +1736,129 @@ impl Store {
         app_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
         let terms = keyword_terms(query);
-        if terms.is_empty() {
+        if terms.is_empty() || !self.has_memories().await? {
             return Ok(Vec::new());
         }
+        self.ensure_fts_indexes().await?;
+        self.optimize_fts_indexes_if_due();
+
         let base_limit = limit.max(1);
-        let retrieval_limit = if base_limit >= MAX_KEYWORD_SCAN {
-            base_limit
-        } else {
-            base_limit
-                .saturating_mul(KEYWORD_QUERY_MULTIPLIER)
-                .min(MAX_KEYWORD_SCAN)
-        };
+        let retrieval_limit = base_limit
+            .saturating_mul(KEYWORD_QUERY_MULTIPLIER)
+            .min(MAX_KEYWORD_SCAN)
+            .max(base_limit);
+        let columns = FTS_COLUMNS.map(str::to_string);
+        let fts = FullTextSearchQuery::new(query.to_string())
+            .with_columns(&columns)?
+            .limit(Some(retrieval_limit as i64));
+        let mut search = self
+            .table
+            .query()
+            .full_text_search(fts)
+            .limit(retrieval_limit);
+        if let Some(filter) = build_filter(time_filter, app_filter) {
+            search = search.only_if(filter);
+        }
+        let batches: Vec<RecordBatch> = search.execute().await?.try_collect().await?;
+
         let mut results = Vec::new();
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let per_term_limit = (retrieval_limit / terms.len().max(1))
-            .max(base_limit)
-            .min(retrieval_limit);
-
-        for term in &terms {
-            let escaped = sql_escape(&term.to_lowercase());
-            let term_clauses = [
-                format!("LOWER(text) LIKE '%{escaped}%'"),
-                format!("LOWER(clean_text) LIKE '%{escaped}%'"),
-                format!("LOWER(snippet) LIKE '%{escaped}%'"),
-                format!("LOWER(lexical_shadow) LIKE '%{escaped}%'"),
-                format!("LOWER(window_title) LIKE '%{escaped}%'"),
-                format!("LOWER(app_name) LIKE '%{escaped}%'"),
-                format!("LOWER(url) LIKE '%{escaped}%'"),
-            ];
-            let keyword_pred = format!("({})", term_clauses.join(" OR "));
-            let filter = match build_filter(time_filter, app_filter) {
-                Some(f) => format!("{keyword_pred} AND {f}"),
-                None => keyword_pred,
-            };
-
-            let batches: Vec<RecordBatch> = self
-                .table
-                .query()
-                .only_if(filter)
-                .limit(per_term_limit)
-                .execute()
-                .await?
-                .try_collect()
-                .await?;
-
-            for batch in &batches {
-                let mut batch_results = batch_to_search_results(batch);
-                // Keyword branch gets a lexical relevance score before hybrid fusion.
-                for r in &mut batch_results {
-                    let lexical = lexical_keyword_score(&terms, r);
-                    let recency = recency_score(now_ms, r.timestamp);
-                    r.score = (lexical * 0.86 + recency * 0.14).clamp(0.0, 1.0);
-                }
-                results.extend(batch_results);
+        for batch in &batches {
+            let bm25 = batch
+                .column_by_name(FTS_SCORE_COLUMN)
+                .and_then(|column| column.as_any().downcast_ref::<Float32Array>())
+                .ok_or("full-text results are missing the BM25 score column")?;
+            for (row, mut result) in batch_to_search_results(batch).into_iter().enumerate() {
+                result.score = bm25.value(row);
+                results.push(result);
             }
+        }
+        let best = results
+            .iter()
+            .map(|result| result.score)
+            .fold(0.0_f32, f32::max);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for result in &mut results {
+            let lexical = result.score / (result.score + 2.0);
+            let recency = recency_score(now_ms, result.timestamp);
+            result.score = (lexical * 0.86 + recency * 0.14).clamp(0.0, 1.0);
         }
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| b.timestamp.cmp(&a.timestamp))
+                .then_with(|| a.id.cmp(&b.id))
         });
         Ok(dedup_search_results(results, limit))
+    }
+
+    /// Create the BM25 index on each `FTS_COLUMNS` column that lacks one.
+    /// Idempotent and cheap once the indexes exist (one manifest read); an
+    /// overwrite of the table drops indexes, so this runs before every query.
+    async fn ensure_fts_indexes(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let indexed = self
+            .table
+            .list_indices()
+            .await?
+            .into_iter()
+            .filter(|index| index.index_type == IndexType::FTS)
+            .flat_map(|index| index.columns)
+            .collect::<HashSet<_>>();
+        let mut created = false;
+        for column in FTS_COLUMNS {
+            if indexed.contains(column) {
+                continue;
+            }
+            self.table
+                .create_index(&[column], Index::FTS(FtsIndexBuilder::default()))
+                .execute()
+                .await?;
+            tracing::info!(column, "lancedb:fts_index_created");
+            created = true;
+        }
+        if created {
+            // A freshly built index already covers every row.
+            self.rows_since_fts_optimize
+                .store(0, AtomicOrdering::Relaxed);
+        }
+        Ok(())
+    }
+
+    /// Fold rows written since the indexes were built into them. Until then
+    /// LanceDB still finds those rows with a flat scan, only more slowly.
+    pub async fn optimize_fts_indexes(&self) -> Result<(), Box<dyn std::error::Error>> {
+        fold_new_rows_into_indexes(&self.table).await?;
+        Ok(())
+    }
+
+    /// Run `optimize_fts_indexes` in the background once
+    /// `FTS_OPTIMIZE_AFTER_ROWS` rows have accumulated, so no query waits on it.
+    fn optimize_fts_indexes_if_due(&self) {
+        let pending = self.rows_since_fts_optimize.load(AtomicOrdering::Relaxed);
+        if pending < FTS_OPTIMIZE_AFTER_ROWS {
+            return;
+        }
+        // Only the caller that claims the count starts a fold; a concurrent
+        // fold would fail its commit.
+        if self
+            .rows_since_fts_optimize
+            .compare_exchange(pending, 0, AtomicOrdering::AcqRel, AtomicOrdering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let table = self.table.clone();
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            match fold_new_rows_into_indexes(&table).await {
+                Ok(()) => tracing::info!(
+                    folded_rows = pending,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "lancedb:fts_index_optimized"
+                ),
+                Err(error) => tracing::warn!(%error, "lancedb:fts_index_optimize_failed"),
+            }
+        });
     }
 
     /// Returns whether at least one memory row exists.

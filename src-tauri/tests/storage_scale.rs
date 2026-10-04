@@ -234,3 +234,162 @@ fn compact_and_prune_keeps_a_bounded_version_count_over_batched_writes() {
         .len();
     assert_eq!(count, 24 * 50, "compaction and pruning must not lose rows");
 }
+
+/// Deterministic, varied synthetic text so BM25 sees a realistic vocabulary
+/// (the MEM-08 rows above all share one sentence, which matches every row).
+fn varied_text(i: usize) -> String {
+    const WORDS: &[&str] = &[
+        "budget",
+        "launch",
+        "invoice",
+        "churn",
+        "hiring",
+        "roadmap",
+        "standup",
+        "deck",
+        "review",
+        "customer",
+        "renewal",
+        "pipeline",
+        "metrics",
+        "onboarding",
+        "design",
+        "contract",
+        "vendor",
+        "release",
+        "feedback",
+        "survey",
+        "interview",
+        "offer",
+        "dashboard",
+        "retention",
+        "pricing",
+        "support",
+        "ticket",
+        "deploy",
+        "staging",
+        "incident",
+        "postmortem",
+        "quarterly",
+        "forecast",
+        "segment",
+        "campaign",
+        "newsletter",
+        "security",
+        "audit",
+        "migration",
+        "schema",
+        "latency",
+        "export",
+    ];
+    let mut state = (i as u64)
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    let mut words = Vec::with_capacity(40);
+    for _ in 0..40 {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        words.push(WORDS[(state >> 33) as usize % WORDS.len()]);
+    }
+    format!("{} note {i}", words.join(" "))
+}
+
+/// VS-07: BM25 keyword latency at 10,000 rows and the cost of folding new
+/// rows into the index. Ignored by default (machine-dependent timing); run
+/// with `cargo test --test storage_scale -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn keyword_search_latency_at_10k_rows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Store::new(dir.path()).expect("store");
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    runtime.block_on(async {
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        for i in 0..ROW_COUNT {
+            let mut record = synthetic_record(i, now_ms);
+            record.clean_text = varied_text(i);
+            record.text = record.clean_text.clone();
+            batch.push(record);
+            if batch.len() == BATCH_SIZE {
+                store
+                    .add_batch_preserving_ids(&batch)
+                    .await
+                    .expect("seed batch");
+                batch.clear();
+            }
+        }
+    });
+
+    let queries = [
+        "quarterly churn forecast",
+        "vendor contract renewal",
+        "hiring interview offer",
+        "staging deploy incident postmortem",
+        "pricing survey feedback",
+        "security audit",
+        "note 4242",
+        "roadmap",
+    ];
+    let started = Instant::now();
+    runtime
+        .block_on(store.keyword_search("budget", 10, None, None))
+        .expect("first search builds the index");
+    let index_build_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    let mut timings = Vec::new();
+    for _ in 0..5 {
+        for query in queries {
+            let started = Instant::now();
+            let hits = runtime
+                .block_on(store.keyword_search(query, 20, None, None))
+                .expect("keyword search");
+            timings.push(started.elapsed().as_secs_f64() * 1000.0);
+            assert!(!hits.is_empty(), "{query} found nothing");
+        }
+    }
+    timings.sort_by(f64::total_cmp);
+    let p50 = timings[timings.len() / 2];
+    let p95 = timings[(timings.len() * 95 / 100).min(timings.len() - 1)];
+
+    // Rows written after the index are found by a flat scan until folded in.
+    runtime.block_on(async {
+        // Below FTS_OPTIMIZE_AFTER_ROWS, so no background fold races the
+        // explicit one measured below.
+        let late = (0..200)
+            .map(|i| {
+                let mut record = synthetic_record(i, now_ms);
+                record.id = format!("late-{i:03}");
+                record.timestamp = now_ms + i as i64;
+                record.clean_text = format!("{} zanzibar", varied_text(ROW_COUNT + i));
+                record
+            })
+            .collect::<Vec<_>>();
+        store
+            .add_batch_preserving_ids(&late)
+            .await
+            .expect("late rows");
+    });
+    let started = Instant::now();
+    let unindexed_hits = runtime
+        .block_on(store.keyword_search("zanzibar", 300, None, None))
+        .expect("search over unindexed rows");
+    let unindexed_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let started = Instant::now();
+    runtime
+        .block_on(store.optimize_fts_indexes())
+        .expect("fold new rows into the index");
+    let optimize_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    println!(
+        "VS-07 BM25 keyword search on {ROW_COUNT} rows ({} queries x5)\n\
+         index build: {index_build_ms:.0} ms\n\
+         keyword_search p50: {p50:.1} ms, p95: {p95:.1} ms\n\
+         200 rows written after the index: found {} of 200 in {unindexed_ms:.1} ms before folding\n\
+         folding 200 rows into the index: {optimize_ms:.0} ms",
+        queries.len(),
+        unindexed_hits.len().min(200),
+    );
+    assert!(p95 < 5_000.0, "pathological keyword latency: {p95:.0} ms");
+}

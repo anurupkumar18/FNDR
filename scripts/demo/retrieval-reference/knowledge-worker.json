@@ -14,8 +14,8 @@
       "recall_at_5": 0.9545454545454546,
       "mrr_at_10": 0.9090909090909091,
       "latency_ms": {
-        "p50": 1027,
-        "p95": 1357
+        "p50": 258,
+        "p95": 288
       },
       "recall_at_5_by_kind": {
         "app": 1.0,
@@ -26,16 +26,16 @@
       "no_match": {
         "cases": 4,
         "returned_nothing": 3,
-        "top_score_median": 0.6491444706916809,
+        "top_score_median": 0.6487306952476501,
         "positive_top_score_median": 0.8500000238418579
       }
     },
     "ask": {
       "recall_at_5": 1.0,
-      "mrr_at_10": 1.0,
+      "mrr_at_10": 0.9659090909090909,
       "latency_ms": {
-        "p50": 2344,
-        "p95": 2790
+        "p50": 1951,
+        "p95": 2074
       },
       "recall_at_5_by_kind": {
         "app": 1.0,
@@ -46,8 +46,8 @@
       "no_match": {
         "cases": 4,
         "returned_nothing": 0,
-        "top_score_median": 0.2447902038693428,
-        "positive_top_score_median": 0.47155338525772095
+        "top_score_median": 0.24898720532655716,
+        "positive_top_score_median": 0.46365004777908325
       }
     }
   },
@@ -63,15 +63,15 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.9399999976158142,
-      "ask_top_score": 0.46461182832717896
+      "ask_top_score": 0.44565528631210327
     },
     {
       "query": "how did I get python to find the data library last time",
       "kind": "paraphrase",
       "search_rank_at_10": 2,
       "ask_rank_at_10": 1,
-      "search_top_score": 0.5326889753341675,
-      "ask_top_score": 0.40113648772239685
+      "search_top_score": 0.5318272113800049,
+      "ask_top_score": 0.41542530059814453
     },
     {
       "query": "what does Dana want for the survey readout",
@@ -79,7 +79,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8500000238418579,
-      "ask_top_score": 0.5430058240890503
+      "ask_top_score": 0.4903585612773895
     },
     {
       "query": "churn drivers due Thursday",
@@ -87,15 +87,15 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8799999952316284,
-      "ask_top_score": 0.48815858364105225
+      "ask_top_score": 0.45224130153656006
     },
     {
       "query": "what customers complained about during onboarding",
       "kind": "paraphrase",
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
-      "search_top_score": 0.657805323600769,
-      "ask_top_score": 0.3201392889022827
+      "search_top_score": 0.6612219214439392,
+      "ask_top_score": 0.41772863268852234
     },
     {
       "query": "single sign-on",
@@ -103,7 +103,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 1.0,
-      "ask_top_score": 0.3587479889392853
+      "ask_top_score": 0.28992313146591187
     },
     {
       "query": "essay rubric weights",
@@ -111,15 +111,15 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8500000238418579,
-      "ask_top_score": 0.6258251667022705
+      "ask_top_score": 0.5850110650062561
     },
     {
       "query": "how much of my history grade depends on sources",
       "kind": "paraphrase",
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
-      "search_top_score": 0.7596009969711304,
-      "ask_top_score": 0.4200316071510315
+      "search_top_score": 0.7591415643692017,
+      "ask_top_score": 0.47161465883255005
     },
     {
       "query": "Field Order 15",
@@ -127,7 +127,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 1.0,
-      "ask_top_score": 0.3059003949165344
+      "ask_top_score": 0.3352892994880676
     },
     {
       "query": "labor contracts passage page 112",
@@ -135,7 +135,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.949999988079071,
-      "ask_top_score": 0.622950553894043
+      "ask_top_score": 0.5992597341537476
     },
     {
       "query": "counterargument paragraph",
@@ -143,7 +143,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 1.0,
-      "ask_top_score": 0.41698405146598816
+      "ask_top_score": 0.35498887300491333
     },
     {
       "query": "weekday vs weekend ridership chart",
@@ -151,15 +151,15 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.949999988079071,
-      "ask_top_score": 0.7164839506149292
+      "ask_top_score": 0.700381875038147
     },
     {
       "query": "which plotting library am I allowed to use",
       "kind": "paraphrase",
       "search_rank_at_10": null,
-      "ask_rank_at_10": 1,
-      "search_top_score": 0.511323869228363,
-      "ask_top_score": 0.3121047019958496
+      "ask_rank_at_10": 4,
+      "search_top_score": 0.5115669369697571,
+      "ask_top_score": 0.2942163348197937
     },
     {
       "query": "who is recording the backup video",
@@ -167,7 +167,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8500000238418579,
-      "ask_top_score": 0.48499011993408203
+      "ask_top_score": 0.46408671140670776
     },
     {
       "query": "architecture slide",
@@ -175,7 +175,7 @@
       "search_rank_at_10": 2,
       "ask_rank_at_10": 1,
       "search_top_score": 1.0,
-      "ask_top_score": 0.4380154609680176
+      "ask_top_score": 0.3832859992980957
     },
     {
       "query": "how long is the capstone demo script",
@@ -183,7 +183,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8500000238418579,
-      "ask_top_score": 0.537649929523468
+      "ask_top_score": 0.4995551109313965
     },
     {
       "query": "spring enrollment",
@@ -191,7 +191,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 1.0,
-      "ask_top_score": 0.44378501176834106
+      "ask_top_score": 0.38733699917793274
     },
     {
       "query": "duplicate survey responses removed",
@@ -199,7 +199,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.9399999976158142,
-      "ask_top_score": 0.6086729764938354
+      "ask_top_score": 0.5797919034957886
     },
     {
       "query": "food bank inventory app presentation",
@@ -207,7 +207,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.800000011920929,
-      "ask_top_score": 0.42276665568351746
+      "ask_top_score": 0.44238072633743286
     },
     {
       "query": "transit dataset assignment requirements",
@@ -215,7 +215,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8799999952316284,
-      "ask_top_score": 0.5222978591918945
+      "ask_top_score": 0.496817409992218
     },
     {
       "query": "my thesis about why Reconstruction failed",
@@ -223,7 +223,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8500000238418579,
-      "ask_top_score": 0.5547091960906982
+      "ask_top_score": 0.534682035446167
     },
     {
       "query": "the problem our capstone app solves",
@@ -231,7 +231,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8500000238418579,
-      "ask_top_score": 0.44806718826293945
+      "ask_top_score": 0.46365004777908325
     },
     {
       "query": "the essay draft I was working on earlier today",
@@ -239,15 +239,15 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.800000011920929,
-      "ask_top_score": 0.618546187877655
+      "ask_top_score": 0.6092635989189148
     },
     {
       "query": "the pandas error I hit earlier today",
       "kind": "time",
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
-      "search_top_score": 0.7588533163070679,
-      "ask_top_score": 0.4548250138759613
+      "search_top_score": 0.756790816783905,
+      "ask_top_score": 0.42163580656051636
     },
     {
       "query": "the capstone standup two days ago",
@@ -255,7 +255,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.800000011920929,
-      "ask_top_score": 0.5387796759605408
+      "ask_top_score": 0.5072234272956848
     },
     {
       "query": "the ridership charts I worked on two days ago",
@@ -263,7 +263,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8285714387893677,
-      "ask_top_score": 0.5718273520469666
+      "ask_top_score": 0.5488881468772888
     },
     {
       "query": "the survey themes I coded yesterday",
@@ -271,7 +271,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8799999952316284,
-      "ask_top_score": 0.6039415597915649
+      "ask_top_score": 0.5787398219108582
     },
     {
       "query": "the course reader chapter I read yesterday",
@@ -279,7 +279,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8999999761581421,
-      "ask_top_score": 0.4450525939464569
+      "ask_top_score": 0.4225493371486664
     },
     {
       "query": "what Dana asked me to do in Slack",
@@ -287,7 +287,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8999999761581421,
-      "ask_top_score": 0.47155338525772095
+      "ask_top_score": 0.4122554063796997
     },
     {
       "query": "the labor contracts passage in the PDF",
@@ -295,7 +295,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.9399999976158142,
-      "ask_top_score": 0.5997373461723328
+      "ask_top_score": 0.5624688863754272
     },
     {
       "query": "the survey data in Sheets",
@@ -303,7 +303,7 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
       "search_top_score": 0.8500000238418579,
-      "ask_top_score": 0.5752419829368591
+      "ask_top_score": 0.5187309980392456
     },
     {
       "query": "the pandas error in Terminal",
@@ -311,15 +311,15 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 2,
       "search_top_score": 0.8500000238418579,
-      "ask_top_score": 0.4265211224555969
+      "ask_top_score": 0.4007907211780548
     },
     {
       "query": "the pandas error from five days ago",
       "kind": "time",
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
-      "search_top_score": 0.7856123447418213,
-      "ask_top_score": 0.38855960965156555
+      "search_top_score": 0.7851670384407043,
+      "ask_top_score": 0.36131158471107483
     },
     {
       "query": "the weekday vs weekend chart from two days ago",
@@ -327,15 +327,15 @@
       "search_rank_at_10": 1,
       "ask_rank_at_10": 2,
       "search_top_score": 0.887499988079071,
-      "ask_top_score": 0.6692508459091187
+      "ask_top_score": 0.6557164192199707
     },
     {
       "query": "the pandas page I had open in Chrome",
       "kind": "app",
       "search_rank_at_10": 1,
       "ask_rank_at_10": 1,
-      "search_top_score": 0.6894755363464355,
-      "ask_top_score": 0.42982548475265503
+      "search_top_score": 0.6866903901100159,
+      "ask_top_score": 0.3669262230396271
     },
     {
       "query": "flight confirmation to Denver",
@@ -343,15 +343,15 @@
       "search_rank_at_10": null,
       "ask_rank_at_10": null,
       "search_top_score": null,
-      "ask_top_score": 0.2455010712146759
+      "ask_top_score": 0.30815213918685913
     },
     {
       "query": "organic chemistry lab report",
       "kind": "negative",
       "search_rank_at_10": null,
       "ask_rank_at_10": null,
-      "search_top_score": 0.6491444706916809,
-      "ask_top_score": 0.3508583903312683
+      "search_top_score": 0.6487306952476501,
+      "ask_top_score": 0.35063982009887695
     },
     {
       "query": "apartment lease renewal",
@@ -359,7 +359,7 @@
       "search_rank_at_10": null,
       "ask_rank_at_10": null,
       "search_top_score": null,
-      "ask_top_score": 0.23502777516841888
+      "ask_top_score": 0.1898222714662552
     },
     {
       "query": "dentist appointment reminder",
@@ -367,7 +367,7 @@
       "search_rank_at_10": null,
       "ask_rank_at_10": null,
       "search_top_score": null,
-      "ask_top_score": 0.2440793365240097
+      "ask_top_score": 0.17829442024230957
     }
   ]
 }

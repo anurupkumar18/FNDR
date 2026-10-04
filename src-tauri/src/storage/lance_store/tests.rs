@@ -869,3 +869,236 @@ async fn get_memory_by_id_redirects_through_consolidated_from_after_a_merge() {
         .expect("query");
     assert!(missing.is_none());
 }
+
+fn keyword_row(id: &str, timestamp: i64, app: &str, title: &str, text: &str) -> MemoryRecord {
+    let mut row = record(None, title, text);
+    row.id = id.to_string();
+    row.timestamp = timestamp;
+    row.app_name = app.to_string();
+    row.session_id = format!("session-{id}");
+    row
+}
+
+async fn keyword_store(rows: Vec<MemoryRecord>) -> (tempfile::TempDir, Store) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().to_path_buf();
+    let store = tokio::task::spawn_blocking(move || Store::new(&path).map_err(|e| e.to_string()))
+        .await
+        .expect("join")
+        .expect("store");
+    store.add_batch(&rows).await.expect("add rows");
+    (dir, store)
+}
+
+fn hit_ids(hits: &[SearchResult]) -> Vec<&str> {
+    hits.iter().map(|hit| hit.id.as_str()).collect()
+}
+
+#[tokio::test]
+async fn keyword_search_ranks_the_best_match_first_even_when_stored_last() {
+    // VS-06: the old scan stopped at the first rows it found, so a strong
+    // match written after many weak ones was never scored.
+    let mut rows = (0..500)
+        .map(|index| {
+            let text = if index < 250 {
+                "Notes on the weekly report for the team"
+            } else {
+                "Draft report summary for the team"
+            };
+            keyword_row(
+                &format!("weak-{index:03}"),
+                10_000 + index,
+                "Notes",
+                &format!("Team notes {index}"),
+                text,
+            )
+        })
+        .collect::<Vec<_>>();
+    // Every query word, but not as the contiguous phrase.
+    rows.push(keyword_row(
+        "best",
+        1_000,
+        "Docs",
+        "Summary",
+        "Summary of the weekly report: churn is up in SMB",
+    ));
+    let (_dir, store) = keyword_store(rows).await;
+
+    let hits = store
+        .keyword_search("weekly report summary", 10, None, None)
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits).first(), Some(&"best"));
+}
+
+#[tokio::test]
+async fn keyword_search_weights_a_rare_term_above_a_common_one() {
+    let mut rows = (0..20)
+        .map(|index| {
+            // Distinct rows: identical content is merged at insert.
+            keyword_row(
+                &format!("budget-{index:02}"),
+                50_000 + index,
+                "Sheets",
+                &format!("Budget sheet {index}"),
+                &format!("Monthly budget review {index} with budget lines for team {index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.push(keyword_row(
+        "zephyr",
+        1_000,
+        "Docs",
+        "Vendor notes",
+        "The Zephyr vendor contract renews next quarter",
+    ));
+    let (_dir, store) = keyword_store(rows).await;
+
+    let hits = store
+        .keyword_search("zephyr budget", 5, None, None)
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits).first(), Some(&"zephyr"));
+}
+
+#[tokio::test]
+async fn keyword_search_matches_word_forms_by_stemming() {
+    let (_dir, store) = keyword_store(vec![
+        keyword_row(
+            "invoice",
+            1_000,
+            "Mail",
+            "Billing",
+            "Sent the overdue invoice to the client",
+        ),
+        keyword_row(
+            "other",
+            2_000,
+            "Mail",
+            "Lunch",
+            "Ordered lunch for the team",
+        ),
+    ])
+    .await;
+
+    let hits = store
+        .keyword_search("invoices", 5, None, None)
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits), vec!["invoice"]);
+}
+
+#[tokio::test]
+async fn keyword_search_returns_nothing_when_no_word_matches() {
+    let (_dir, store) = keyword_store(vec![keyword_row(
+        "row",
+        1_000,
+        "Mail",
+        "Billing",
+        "Sent the overdue invoice to the client",
+    )])
+    .await;
+
+    let hits = store
+        .keyword_search("dentist appointment", 5, None, None)
+        .await
+        .expect("keyword search");
+
+    assert!(hits.is_empty());
+}
+
+#[tokio::test]
+async fn keyword_search_ranks_a_row_with_every_query_word_above_partial_matches() {
+    let (_dir, store) = keyword_store(vec![
+        keyword_row(
+            "single",
+            3_000,
+            "Docs",
+            "Notes",
+            "A single owner signs off on each release",
+        ),
+        keyword_row(
+            "phrase",
+            1_000,
+            "Docs",
+            "Auth",
+            "Customers asked for single sign-on during onboarding",
+        ),
+        keyword_row("sign", 2_000, "Docs", "Forms", "Please sign the form"),
+    ])
+    .await;
+
+    let hits = store
+        .keyword_search("single sign-on", 5, None, None)
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits).first(), Some(&"phrase"));
+}
+
+#[tokio::test]
+async fn keyword_search_finds_rows_added_after_the_first_search() {
+    let (_dir, store) = keyword_store(vec![keyword_row(
+        "first",
+        1_000,
+        "Mail",
+        "Billing",
+        "Sent the overdue invoice to the client",
+    )])
+    .await;
+    let first = store
+        .keyword_search("invoice", 5, None, None)
+        .await
+        .expect("first search");
+    assert_eq!(hit_ids(&first), vec!["first"]);
+
+    store
+        .add_batch(&[keyword_row(
+            "later",
+            2_000,
+            "Mail",
+            "Vendor payment",
+            "Paid the invoice from the vendor",
+        )])
+        .await
+        .expect("add later row");
+    let second = store
+        .keyword_search("invoice", 5, None, None)
+        .await
+        .expect("second search");
+
+    let mut ids = hit_ids(&second);
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["first", "later"]);
+}
+
+#[tokio::test]
+async fn keyword_search_keeps_the_app_filter() {
+    let (_dir, store) = keyword_store(vec![
+        keyword_row(
+            "slack",
+            1_000,
+            "Slack",
+            "Thread",
+            "The invoice reminder thread",
+        ),
+        keyword_row(
+            "mail",
+            2_000,
+            "Mail",
+            "Billing",
+            "The invoice reminder email",
+        ),
+    ])
+    .await;
+
+    let hits = store
+        .keyword_search("invoice reminder", 5, None, Some("Slack"))
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits), vec!["slack"]);
+}
