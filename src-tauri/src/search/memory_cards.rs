@@ -61,6 +61,8 @@ pub struct MemoryCard {
     /// Legacy `memory_context` marker parsing is fallback-only during migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reopen_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_page: Option<u32>,
     /// Insight-first layers (ADR 007), copied from search hits.
     #[serde(default)]
     pub insight_what_happened: String,
@@ -317,6 +319,7 @@ impl MemoryCardSynthesizer {
                 session_duration_mins,
                 continuation_of,
                 reopen_target,
+                reopen_page: anchor.reopen_page,
                 insight_what_happened: anchor.insight_what_happened.clone(),
                 insight_why_mattered: anchor.insight_why_mattered.clone(),
                 insight_what_changed: anchor.insight_what_changed.clone(),
@@ -862,6 +865,7 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         session_duration_mins: 0,
         continuation_of,
         reopen_target,
+        reopen_page: result.reopen_page,
         insight_what_happened: result.insight_what_happened.clone(),
         insight_why_mattered: result.insight_why_mattered.clone(),
         insight_what_changed: result.insight_what_changed.clone(),
@@ -1861,5 +1865,24 @@ mod tests {
 
         let parsed = parse_reopen_target("Reopen: https://legacy.example/path", &result);
         assert_eq!(parsed.as_deref(), Some("https://legacy.example/path"));
+    }
+
+    #[test]
+    fn memory_card_copies_reopen_page_from_anchor() {
+        let result = SearchResult {
+            reopen_kind: crate::memory::reopen::ReopenKind::FilePath,
+            reopen_file_path: Some("/Users/qa/doc.pdf".to_string()),
+            reopen_page: Some(112),
+            app_name: "Preview".to_string(),
+            window_title: "doc.pdf – Page 112 of 150".to_string(),
+            snippet: "PDF page".to_string(),
+            ..Default::default()
+        };
+        let card = fallback_card_for_result("", &result);
+        assert_eq!(card.reopen_page, Some(112));
+        assert_eq!(
+            card.reopen_target.as_deref(),
+            Some("file:///Users/qa/doc.pdf")
+        );
     }
 }

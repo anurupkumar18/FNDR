@@ -78,6 +78,8 @@ export interface MemoryCard {
     /** http(s):// URL, file:// path, or app/deep-link derived from typed
      *  reopen provenance (legacy marker parsing may still backfill old rows). */
     reopen_target?: string;
+    /** PDF page captured at memory time; shown on the Vault row. */
+    reopen_page?: number;
     insight_what_happened?: string;
     insight_why_mattered?: string;
     insight_what_changed?: string;

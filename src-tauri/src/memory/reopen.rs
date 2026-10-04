@@ -73,6 +73,8 @@ pub struct ReopenTarget {
     pub captured_at_ms: i64,
     pub confidence: f32,
     pub validation_status: ReopenValidationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
 }
 
 fn is_http_url(value: &str) -> bool {
@@ -128,6 +130,195 @@ pub fn build_reopen_target(
         confidence: 0.0,
         validation_status: ReopenValidationStatus::Invalid,
         ..Default::default()
+    }
+}
+
+const MAX_PDF_PAGE: u32 = 99_999;
+
+fn valid_page_pair(page: u32, of: u32) -> Option<u32> {
+    (page >= 1 && of >= page && of <= MAX_PDF_PAGE).then_some(page)
+}
+
+fn parse_positive_page(value: &str) -> Option<u32> {
+    let parsed = value.trim().parse::<u32>().ok()?;
+    (parsed >= 1 && parsed <= MAX_PDF_PAGE).then_some(parsed)
+}
+
+/// Current page from a Preview-style window title.
+///
+/// Matches a dash (or parenthesized) page marker: `WORD N CONNECTOR M`,
+/// where CONNECTOR is `of` / `sur` / `von` / `de`. Observed live:
+/// English `– Page N of M`, French `– Page N sur M`, German `– Seite N von M`,
+/// Spanish `– Página N de M`, plus `(page N of M)`. Requires `1 <= N <= M`.
+/// A total-only title such as `x.pdf – 1 page` is not a current page.
+pub fn page_from_window_title(title: &str) -> Option<u32> {
+    if let Some(page) = page_from_parenthesized(title) {
+        return Some(page);
+    }
+    page_from_dash_page_of(title)
+}
+
+fn page_from_parenthesized(title: &str) -> Option<u32> {
+    let mut rest = title;
+    while let Some(start) = rest.find('(') {
+        let inside = rest[start + 1..].split(')').next()?;
+        if let Some(page) = page_from_label_n_connector_m(inside) {
+            return Some(page);
+        }
+        rest = &rest[start + 1..];
+    }
+    None
+}
+
+fn page_from_dash_page_of(title: &str) -> Option<u32> {
+    for marker in ['–', '-', '—'] {
+        if let Some(idx) = title.rfind(marker) {
+            if let Some(page) = page_from_label_n_connector_m(&title[idx + marker.len_utf8()..]) {
+                return Some(page);
+            }
+        }
+    }
+    None
+}
+
+fn page_from_label_n_connector_m(value: &str) -> Option<u32> {
+    let mut parts = value.split_whitespace();
+    let _label = parts.next()?;
+    let n = parse_positive_page(parts.next()?)?;
+    let connector = parts.next()?;
+    if !is_page_connector(connector) {
+        return None;
+    }
+    let m = parse_positive_page(parts.next()?)?;
+    valid_page_pair(n, m)
+}
+
+fn is_page_connector(word: &str) -> bool {
+    matches!(word.to_ascii_lowercase().as_str(), "of" | "sur" | "von" | "de")
+}
+
+/// Reads `page=N` from a URL fragment (`#page=12` or `#page=12&zoom=100`).
+pub fn page_from_pdf_url(url: &str) -> Option<u32> {
+    let fragment = url.split_once('#')?.1;
+    for pair in fragment.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if key.eq_ignore_ascii_case("page") {
+            return parse_positive_page(value);
+        }
+    }
+    None
+}
+
+fn url_path_ends_with_pdf(url: &str) -> bool {
+    let without_fragment = url.split('#').next().unwrap_or(url);
+    let without_query = without_fragment.split('?').next().unwrap_or(without_fragment);
+    without_query.to_ascii_lowercase().ends_with(".pdf")
+}
+
+/// Chrome/Brave/Edge PDF toolbar OCR: a whole line that is `N / M` or `N of M`.
+/// Runs only when the URL path (ignoring query and fragment) ends in `.pdf`.
+pub fn page_from_pdf_viewer_ocr(url: &str, ocr_text: &str) -> Option<u32> {
+    if !url_path_ends_with_pdf(url) {
+        return None;
+    }
+    for line in ocr_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(page) = page_from_slash_pair(trimmed).or_else(|| page_from_ocr_n_of_m(trimmed)) {
+            return Some(page);
+        }
+    }
+    None
+}
+
+fn page_from_slash_pair(line: &str) -> Option<u32> {
+    let (left, right) = line.split_once('/')?;
+    let left = left.trim();
+    let right = right.trim();
+    if left.split_whitespace().nth(1).is_some() || right.split_whitespace().nth(1).is_some() {
+        return None;
+    }
+    valid_page_pair(parse_positive_page(left)?, parse_positive_page(right)?)
+}
+
+fn page_from_ocr_n_of_m(line: &str) -> Option<u32> {
+    let mut parts = line.split_whitespace();
+    let n = parse_positive_page(parts.next()?)?;
+    if !parts.next()?.eq_ignore_ascii_case("of") {
+        return None;
+    }
+    let m = parse_positive_page(parts.next()?)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    valid_page_pair(n, m)
+}
+
+/// File targets use the window title. Browser URLs use `#page=N` first, then
+/// the PDF toolbar OCR. Other kinds never store a page.
+pub fn detect_reopen_page(target: &ReopenTarget, window_title: &str, ocr_text: &str) -> Option<u32> {
+    match target.kind {
+        ReopenKind::FilePath => page_from_window_title(window_title),
+        ReopenKind::BrowserUrl => {
+            let url = target.url.as_deref().unwrap_or("");
+            page_from_pdf_url(url).or_else(|| page_from_pdf_viewer_ocr(url, ocr_text))
+        }
+        _ => None,
+    }
+}
+
+/// Replaces an existing `page=` fragment or appends `#page=N`. Any other
+/// fragment is left unchanged so text anchors and named destinations survive.
+pub fn url_with_pdf_page(url: &str, page: u32) -> String {
+    match url.split_once('#') {
+        None => format!("{url}#page={page}"),
+        Some((base, fragment)) => {
+            if fragment_has_page_key(fragment) {
+                format!("{base}#page={page}")
+            } else {
+                url.to_string()
+            }
+        }
+    }
+}
+
+fn fragment_has_page_key(fragment: &str) -> bool {
+    fragment.split('&').any(|pair| {
+        pair.split_once('=')
+            .is_some_and(|(key, _)| key.eq_ignore_ascii_case("page"))
+    })
+}
+
+/// Keep a page across a merge only when both records name the same URL or the
+/// same file. Otherwise the incoming page wins so a page from one document
+/// cannot land on another.
+pub fn merge_reopen_page(
+    incoming_url: Option<&str>,
+    incoming_path: Option<&str>,
+    incoming_page: Option<u32>,
+    existing_url: Option<&str>,
+    existing_path: Option<&str>,
+    existing_page: Option<u32>,
+) -> Option<u32> {
+    let same_url = match (incoming_url.map(str::trim).filter(|v| !v.is_empty()), existing_url.map(str::trim).filter(|v| !v.is_empty())) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    };
+    let same_path = match (
+        incoming_path.map(str::trim).filter(|v| !v.is_empty()),
+        existing_path.map(str::trim).filter(|v| !v.is_empty()),
+    ) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    };
+    if same_url || same_path {
+        incoming_page.or(existing_page)
+    } else {
+        incoming_page
     }
 }
 
@@ -307,5 +498,191 @@ mod tests {
             assert_eq!(target.kind, ReopenKind::FilePath, "{input}");
             assert_eq!(target.file_path.as_deref(), Some(input), "{input}");
         }
+    }
+
+    #[test]
+    fn page_from_window_title_matches_preview_formats() {
+        let cases: &[(&str, Option<u32>)] = &[
+            ("re03-preview.pdf – Page 112 of 150", Some(112)),
+            ("re03-preview.pdf - Page 112 of 150", Some(112)),
+            ("re03-preview.pdf — Page 3 of 10", Some(3)),
+            ("re03-preview.pdf (page 112 of 150)", Some(112)),
+            ("report (1).pdf (page 112 of 150)", Some(112)),
+            ("PDF – PAGE 3 OF 10", Some(3)),
+            ("x.pdf – 1 page", None),
+            ("re03-preview.pdf – 1 page", None),
+            ("doc.pdf – Page 200 of 150", None),
+            ("doc.pdf – Page 0 of 10", None),
+            ("doc.pdf", None),
+            ("", None),
+            ("re04-preview-150.pdf – Page 112 sur 150", Some(112)),
+            ("re04-preview-150.pdf – Seite 112 von 150", Some(112)),
+            ("re04-preview-150.pdf – Página 112 de 150", Some(112)),
+        ];
+        for (title, expected) in cases {
+            assert_eq!(page_from_window_title(title), *expected, "{title}");
+        }
+    }
+
+    #[test]
+    fn page_from_pdf_url_reads_fragment() {
+        let cases: &[(&str, Option<u32>)] = &[
+            ("https://example.com/doc.pdf#page=12", Some(12)),
+            ("https://example.com/doc.pdf#page=12&zoom=100", Some(12)),
+            ("https://example.com/doc.pdf#zoom=100&page=7", Some(7)),
+            ("https://example.com/doc.pdf#page=0", None),
+            ("https://example.com/doc.pdf#section", None),
+            ("https://example.com/doc.pdf", None),
+        ];
+        for (url, expected) in cases {
+            assert_eq!(page_from_pdf_url(url), *expected, "{url}");
+        }
+    }
+
+    #[test]
+    fn page_from_pdf_viewer_ocr_requires_pdf_url_and_toolbar_line() {
+        let pdf = "https://example.com/report.pdf?token=x#zoom=page-width";
+        assert_eq!(
+            page_from_pdf_viewer_ocr(pdf, "header\n112 / 300\nfooter"),
+            Some(112)
+        );
+        assert_eq!(page_from_pdf_viewer_ocr(pdf, "112 of 300"), Some(112));
+        assert_eq!(page_from_pdf_viewer_ocr(pdf, "0 / 10"), None);
+        assert_eq!(page_from_pdf_viewer_ocr(pdf, "200 / 150"), None);
+        assert_eq!(
+            page_from_pdf_viewer_ocr("https://example.com/article", "3 / 4"),
+            None
+        );
+        assert_eq!(
+            page_from_pdf_viewer_ocr("https://example.com/report.pdfx", "3 / 4"),
+            None
+        );
+        assert_eq!(
+            page_from_pdf_viewer_ocr(pdf, "see page 3 / 4 in the toolbar"),
+            None
+        );
+    }
+
+    #[test]
+    fn detect_reopen_page_uses_title_for_files_and_url_then_ocr_for_browsers() {
+        let file = build_reopen_target(
+            None,
+            Some("/Users/qa/doc.pdf"),
+            Some("com.apple.Preview"),
+            "Preview",
+            AT,
+        );
+        assert_eq!(
+            detect_reopen_page(&file, "doc.pdf – Page 112 of 150", "3 / 4"),
+            Some(112)
+        );
+
+        let browser = build_reopen_target(
+            Some("https://example.com/doc.pdf#page=9"),
+            None,
+            Some("com.google.Chrome"),
+            "Chrome",
+            AT,
+        );
+        assert_eq!(
+            detect_reopen_page(&browser, "doc.pdf", "112 / 300"),
+            Some(9)
+        );
+
+        let browser_ocr = build_reopen_target(
+            Some("https://example.com/doc.pdf"),
+            None,
+            Some("com.google.Chrome"),
+            "Chrome",
+            AT,
+        );
+        assert_eq!(
+            detect_reopen_page(&browser_ocr, "doc.pdf", "112 / 300"),
+            Some(112)
+        );
+
+        let app = build_reopen_target(None, None, Some("com.apple.Preview"), "Preview", AT);
+        assert_eq!(
+            detect_reopen_page(&app, "doc.pdf – Page 112 of 150", "112 / 300"),
+            None
+        );
+    }
+
+    #[test]
+    fn url_with_pdf_page_adds_or_replaces_page_fragment() {
+        assert_eq!(
+            url_with_pdf_page("https://example.com/doc.pdf", 12),
+            "https://example.com/doc.pdf#page=12"
+        );
+        assert_eq!(
+            url_with_pdf_page("https://example.com/doc.pdf#page=1", 12),
+            "https://example.com/doc.pdf#page=12"
+        );
+        assert_eq!(
+            url_with_pdf_page("https://example.com/doc.pdf#page=1&zoom=100", 12),
+            "https://example.com/doc.pdf#page=12"
+        );
+        assert_eq!(
+            url_with_pdf_page("https://example.com/doc.pdf#section", 12),
+            "https://example.com/doc.pdf#section"
+        );
+    }
+
+    #[test]
+    fn merge_reopen_page_keeps_page_only_on_the_same_document() {
+        assert_eq!(
+            merge_reopen_page(
+                Some("https://example.com/a.pdf"),
+                None,
+                Some(3),
+                Some("https://example.com/a.pdf"),
+                None,
+                Some(2),
+            ),
+            Some(3)
+        );
+        assert_eq!(
+            merge_reopen_page(
+                Some("https://example.com/a.pdf"),
+                None,
+                None,
+                Some("https://example.com/a.pdf"),
+                None,
+                Some(2),
+            ),
+            Some(2)
+        );
+        assert_eq!(
+            merge_reopen_page(
+                None,
+                Some("/tmp/a.pdf"),
+                Some(9),
+                None,
+                Some("/tmp/b.pdf"),
+                Some(2),
+            ),
+            Some(9)
+        );
+        assert_eq!(
+            merge_reopen_page(None, None, Some(9), None, None, Some(2)),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn reopen_target_page_round_trips_and_old_json_defaults_none() {
+        let mut target = build_reopen_target(
+            Some("https://example.com/doc.pdf"),
+            None,
+            None,
+            "Chrome",
+            AT,
+        );
+        target.page = Some(12);
+        let restored = deserialize_reopen_target(&serialize_reopen_target(&target)).expect("json");
+        assert_eq!(restored.page, Some(12));
+        let without_page = deserialize_reopen_target(r#"{"kind":"BrowserUrl","captured_at_ms":1,"confidence":0.0,"validation_status":"Unchecked"}"#)
+            .expect("legacy json");
+        assert_eq!(without_page.page, None);
     }
 }

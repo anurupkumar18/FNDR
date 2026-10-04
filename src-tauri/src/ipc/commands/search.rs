@@ -547,6 +547,7 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         session_duration_mins: result.session_duration_mins,
         continuation_of,
         reopen_target,
+        reopen_page: result.reopen_page,
         insight_what_happened: result.insight_what_happened.clone(),
         insight_why_mattered: result.insight_why_mattered.clone(),
         insight_what_changed: result.insight_what_changed.clone(),
