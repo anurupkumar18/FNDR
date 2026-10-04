@@ -950,10 +950,21 @@ fn is_origin_allowed(
     allowed_origins.iter().any(|item| item == &normalized)
 }
 
+/// The method that decides the loopback handshake exemption. For a batch it
+/// is the first item that is not a handshake method (or `None` for an item
+/// without one), so a handshake cannot carry other calls past the token
+/// check; a batch of handshakes only is still exempt.
 fn jsonrpc_method_hint(payload: &Value) -> Option<&str> {
     match payload {
         Value::Object(map) => map.get("method").and_then(Value::as_str),
-        Value::Array(items) => items.iter().find_map(jsonrpc_method_hint),
+        Value::Array(items) => {
+            let methods = items.iter().map(jsonrpc_method_hint).collect::<Vec<_>>();
+            methods
+                .iter()
+                .copied()
+                .find(|method| !is_local_handshake_method(*method))
+                .unwrap_or_else(|| methods.first().copied().flatten())
+        }
         _ => None,
     }
 }
@@ -5311,6 +5322,46 @@ mod tests {
                 unauthenticated_call.status(),
                 reqwest::StatusCode::UNAUTHORIZED
             );
+
+            // A handshake at the front of a batch must not carry the other
+            // items past the token check.
+            let smuggled_call = client
+                .post(&status.endpoint)
+                .header("Content-Type", "application/json")
+                .json(&json!([
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 5,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": { "name": "reqwest-test", "version": "0.1.0" }
+                        }
+                    },
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 6,
+                        "method": "tools/call",
+                        "params": { "name": "fndr_health_check", "arguments": {} }
+                    }
+                ]))
+                .send()
+                .await
+                .expect("batch with a handshake and a tools/call");
+            assert_eq!(smuggled_call.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+            let handshake_batch = client
+                .post(&status.endpoint)
+                .header("Content-Type", "application/json")
+                .json(&json!([
+                    { "jsonrpc": "2.0", "id": 7, "method": "tools/list" },
+                    { "jsonrpc": "2.0", "id": 8, "method": "tools/list" }
+                ]))
+                .send()
+                .await
+                .expect("batch of handshake methods");
+            assert_eq!(handshake_batch.status(), reqwest::StatusCode::OK);
 
             let authenticated_call = client
                 .post(&status.endpoint)
