@@ -1,162 +1,357 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "case_set": "office-pm",
-  "case_count": 20,
+  "case_count": 37,
   "case_count_by_kind": {
+    "app": 5,
     "keyword": 11,
-    "paraphrase": 9
+    "negative": 4,
+    "paraphrase": 9,
+    "time": 8
   },
   "paths": {
     "search": {
       "recall_at_5": 0.7,
       "mrr_at_10": 0.5891666666666666,
       "latency_ms": {
-        "p50": 772,
-        "p95": 911
+        "p50": 724,
+        "p95": 913
       },
       "recall_at_5_by_kind": {
+        "app": 1.0,
         "keyword": 1.0,
-        "paraphrase": 0.3333333333333333
+        "paraphrase": 0.3333333333333333,
+        "time": 0.875
+      },
+      "no_match": {
+        "cases": 4,
+        "returned_nothing": 2,
+        "top_score_median": 0.5223655104637146,
+        "positive_top_score_median": 0.8799999952316284
       }
     },
     "ask": {
       "recall_at_5": 0.9,
       "mrr_at_10": 0.6571428571428571,
       "latency_ms": {
-        "p50": 3045,
-        "p95": 3160
+        "p50": 3048,
+        "p95": 3197
       },
       "recall_at_5_by_kind": {
+        "app": 1.0,
         "keyword": 1.0,
-        "paraphrase": 0.7777777777777778
+        "paraphrase": 0.7777777777777778,
+        "time": 0.875
+      },
+      "no_match": {
+        "cases": 4,
+        "returned_nothing": 0,
+        "top_score_median": 0.23347987979650497,
+        "positive_top_score_median": 0.4740601181983948
       }
     }
   },
   "top1_agreement": {
-    "count": 3,
-    "total": 20,
-    "rate": 0.15
+    "count": 12,
+    "total": 37,
+    "rate": 0.32432432432432434
   },
   "queries": [
     {
       "query": "how much money are we losing to customers leaving",
       "kind": "paraphrase",
       "search_rank_at_10": null,
-      "ask_rank_at_10": 1
+      "ask_rank_at_10": 1,
+      "search_top_score": null,
+      "ask_top_score": 0.27245524525642395
     },
     {
       "query": "why were our payment nudges ending up in junk mail",
       "kind": "paraphrase",
       "search_rank_at_10": 4,
-      "ask_rank_at_10": null
+      "ask_rank_at_10": null,
+      "search_top_score": 0.6010417342185974,
+      "ask_top_score": 0.3359374701976776
     },
     {
       "query": "what pay range did leadership sign off on for the design hire",
       "kind": "paraphrase",
       "search_rank_at_10": 5,
-      "ask_rank_at_10": 7
+      "ask_rank_at_10": 7,
+      "search_top_score": 0.7879706621170044,
+      "ask_top_score": 0.4603448510169983
     },
     {
       "query": "which applicant came out on top for the design role",
       "kind": "paraphrase",
       "search_rank_at_10": null,
-      "ask_rank_at_10": 3
+      "ask_rank_at_10": 3,
+      "search_top_score": 0.7817652821540833,
+      "ask_top_score": 0.45202121138572693
     },
     {
       "query": "what share of new accounts got up and running quickly last quarter",
       "kind": "paraphrase",
       "search_rank_at_10": 3,
-      "ask_rank_at_10": 2
+      "ask_rank_at_10": 2,
+      "search_top_score": 0.5019983053207397,
+      "ask_top_score": 0.2934154272079468
     },
     {
       "query": "would clients recommend us, and did that improve",
       "kind": "paraphrase",
       "search_rank_at_10": null,
-      "ask_rank_at_10": 3
+      "ask_rank_at_10": 3,
+      "search_top_score": null,
+      "ask_top_score": 0.29225876927375793
     },
     {
       "query": "the applicant's past project about getting tradespeople paid on time",
       "kind": "paraphrase",
       "search_rank_at_10": null,
-      "ask_rank_at_10": 3
+      "ask_rank_at_10": 3,
+      "search_top_score": null,
+      "ask_top_score": 0.3046402037143707
     },
     {
       "query": "is there a way to stop the nudges for just one bill",
       "kind": "paraphrase",
       "search_rank_at_10": null,
-      "ask_rank_at_10": 2
+      "ask_rank_at_10": 2,
+      "search_top_score": null,
+      "ask_top_score": 0.32462188601493835
     },
     {
       "query": "who is filling in during my end-of-year vacation",
       "kind": "paraphrase",
       "search_rank_at_10": null,
-      "ask_rank_at_10": 2
+      "ask_rank_at_10": 2,
+      "search_top_score": 0.7025818228721619,
+      "ask_top_score": 0.2653238773345947
     },
     {
       "query": "SMB churn 3.9% by segment",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 1
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.9399999976158142,
+      "ask_top_score": 0.61710524559021
     },
     {
       "query": "LL-1482 spam placement 1.8%",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 2
+      "ask_rank_at_10": 2,
+      "search_top_score": 0.9399999976158142,
+      "ask_top_score": 0.5054725408554077
     },
     {
       "query": "Rafael O. staging retest 2.1%",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 1
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.925000011920929,
+      "ask_top_score": 0.38847821950912476
     },
     {
       "query": "Tobias W. interview feedback",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 1
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.8500000238418579,
+      "ask_top_score": 0.5407013893127441
     },
     {
       "query": "net new ARR $1.24M",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 1
+      "ask_rank_at_10": 1,
+      "search_top_score": 1.0,
+      "ask_top_score": 0.4926867187023163
     },
     {
       "query": "REQ-2207 pipeline stages",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 1
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.8799999952316284,
+      "ask_top_score": 0.48766398429870605
     },
     {
       "query": "Smart Reminders launch checklist",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 1
+      "ask_rank_at_10": 1,
+      "search_top_score": 1.0,
+      "ask_top_score": 0.5904956459999084
     },
     {
       "query": "launch checklist with the go/no-go meeting checked off",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 2
+      "ask_rank_at_10": 2,
+      "search_top_score": 0.9142857193946838,
+      "ask_top_score": 0.49133431911468506
     },
     {
       "query": "Hannah K. customer announcement email",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 1
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.9399999976158142,
+      "ask_top_score": 0.5919302701950073
     },
     {
       "query": "Owen P. churn excluding trial cancels",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 1
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.949999988079071,
+      "ask_top_score": 0.5539645552635193
     },
     {
       "query": "Victor S. Q3 metrics summary email",
       "kind": "keyword",
       "search_rank_at_10": 1,
-      "ask_rank_at_10": 2
+      "ask_rank_at_10": 2,
+      "search_top_score": 0.949999988079071,
+      "ask_top_score": 0.6194871068000793
+    },
+    {
+      "query": "the hiring debrief from yesterday",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.8500000238418579,
+      "ask_top_score": 0.5877814888954163
+    },
+    {
+      "query": "the Q3 numbers email I sent this morning",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.8999999761581421,
+      "ask_top_score": 0.4073665142059326
+    },
+    {
+      "query": "the launch checklist I updated yesterday",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.8799999952316284,
+      "ask_top_score": 0.5819072723388672
+    },
+    {
+      "query": "the launch review deck from two days ago",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.8714286088943481,
+      "ask_top_score": 0.4364202618598938
+    },
+    {
+      "query": "the product requirements doc I drafted last week",
+      "kind": "time",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 10,
+      "search_top_score": 0.7857142686843872,
+      "ask_top_score": 0.4351993501186371
+    },
+    {
+      "query": "what Rafael said about the spam fix earlier today",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.8125,
+      "ask_top_score": 0.5089759826660156
+    },
+    {
+      "query": "the LL-1482 thread in Slack",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.9399999976158142,
+      "ask_top_score": 0.4740601181983948
+    },
+    {
+      "query": "the candidate's portfolio case study in the PDF",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.8999999761581421,
+      "ask_top_score": 0.454519122838974
+    },
+    {
+      "query": "Q3 churn numbers in Sheets",
+      "kind": "app",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.8799999952316284,
+      "ask_top_score": 0.6006713509559631
+    },
+    {
+      "query": "the offsite venue vote on Zoom",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.9399999976158142,
+      "ask_top_score": 0.4962262809276581
+    },
+    {
+      "query": "the launch checklist from three days ago",
+      "kind": "time",
+      "search_rank_at_10": 3,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.8500000238418579,
+      "ask_top_score": 0.48051971197128296
+    },
+    {
+      "query": "the LL-1482 spam discussion from four days ago",
+      "kind": "time",
+      "search_rank_at_10": 7,
+      "ask_rank_at_10": 3,
+      "search_top_score": 0.8500000238418579,
+      "ask_top_score": 0.39369997382164
+    },
+    {
+      "query": "the churn breakdown in Excel",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "search_top_score": 0.7749999761581421,
+      "ask_top_score": 0.46269330382347107
+    },
+    {
+      "query": "rental car reservation",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "search_top_score": null,
+      "ask_top_score": 0.2884712517261505
+    },
+    {
+      "query": "SOC 2 audit evidence request",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "search_top_score": 0.5164743661880493,
+      "ask_top_score": 0.23736241459846497
+    },
+    {
+      "query": "Android app crash report",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "search_top_score": 0.5282566547393799,
+      "ask_top_score": 0.22959734499454498
+    },
+    {
+      "query": "GDPR data deletion request from a European customer",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "search_top_score": null,
+      "ask_top_score": 0.22161182761192322
     }
   ]
 }

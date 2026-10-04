@@ -21,7 +21,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-SUPPORTED_SCHEMA_VERSIONS = frozenset((1,))
+SUPPORTED_SCHEMA_VERSIONS = frozenset((1, 2))
 DEFAULT_MAX_RECALL_DROP = 0.05
 # Recall values are ratios of small integers; allow float noise at the boundary.
 EPSILON = 1e-9
@@ -153,6 +153,10 @@ def fmt_delta(before, after) -> str:
     return f"{after - before:+.3f}"
 
 
+def fmt_score(score) -> str:
+    return "none" if score is None else f"{score:.3f}"
+
+
 def fmt_agreement(agreement: dict) -> str:
     if not agreement:
         return "n/a"
@@ -214,6 +218,25 @@ def render(result: CheckResult) -> str:
                     f"| {name} | {kind} | {'n/a' if before is None else f'{before:.3f}'} "
                     f"| {'n/a' if after is None else f'{after:.3f}'} | {fmt_delta(before, after)} |"
                 )
+
+    no_match_rows = [
+        (name, result.current_paths[name]["no_match"])
+        for name in [*result.paths, *result.new_paths]
+        if result.current_paths[name].get("no_match")
+    ]
+    if no_match_rows:
+        lines += [
+            "",
+            "No-match queries (reported, not gated; VS-12 sets the threshold):",
+            "",
+            "| Path | Negative cases | Returned nothing | Median top score, negative | Median top score, positive |",
+            "|---|---:|---:|---:|---:|",
+        ]
+        for name, no_match in no_match_rows:
+            lines.append(
+                f"| {name} | {no_match.get('cases', 0)} | {no_match.get('returned_nothing', 0)} "
+                f"| {fmt_score(no_match.get('top_score_median'))} | {fmt_score(no_match.get('positive_top_score_median'))} |"
+            )
 
     if result.failures:
         lines += ["", "## Regressions", ""]

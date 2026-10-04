@@ -1,6 +1,9 @@
 //! Retrieval baseline on a seeded profile, through the two paths the app uses:
 //! the Search screen (`search_ranked_results`) and Ask's context-runtime card
 //! path (`context_runtime::run_query`). Refuses missing and real profiles.
+//! Case kinds: keyword and paraphrase (the headline Recall@5), time and app
+//! (reported per kind), and negative (no relevant memory; reported as a
+//! no-match row with top scores, never counted in recall).
 //! Usage: cargo run --example retrieval_qa -- --data-dir <profile> --cases <json>
 //!        [--out <md>] [--json <json>]
 
@@ -11,15 +14,18 @@ use fndr_lib::ipc::commands::search::search_ranked_results;
 use fndr_lib::storage::{StateStore, Store};
 use fndr_lib::AppState;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-const SCHEMA_VERSION: u8 = 1;
+const SCHEMA_VERSION: u8 = 2;
 const CASE_SET: &str = "knowledge-worker";
-const CASE_KINDS: [&str; 2] = ["keyword", "paraphrase"];
+const CASE_KINDS: [&str; 5] = ["keyword", "paraphrase", "time", "app", "negative"];
+/// Kinds behind the headline Recall@5 and MRR@10, unchanged since schema v1.
+const CORE_KINDS: [&str; 2] = ["keyword", "paraphrase"];
+const NEGATIVE_KIND: &str = "negative";
 const SEARCH_LIMIT: usize = 20;
 const ASK_LIMIT: usize = 10;
 
@@ -31,21 +37,19 @@ struct Case {
 }
 
 #[derive(Debug, Default, Serialize)]
-struct KindCounts {
-    keyword: usize,
-    paraphrase: usize,
-}
-
-#[derive(Debug, Default, Serialize)]
 struct LatencyMs {
     p50: u128,
     p95: u128,
 }
 
+/// How a path behaves on queries whose right answer is "nothing matches".
+/// VS-12 picks its weak-result threshold from these medians.
 #[derive(Debug, Default, Serialize)]
-struct RecallAt5ByKind {
-    keyword: f64,
-    paraphrase: f64,
+struct NoMatch {
+    cases: usize,
+    returned_nothing: usize,
+    top_score_median: Option<f64>,
+    positive_top_score_median: Option<f64>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -53,7 +57,9 @@ struct PathMetrics {
     recall_at_5: f64,
     mrr_at_10: f64,
     latency_ms: LatencyMs,
-    recall_at_5_by_kind: RecallAt5ByKind,
+    recall_at_5_by_kind: BTreeMap<String, f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    no_match: Option<NoMatch>,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,14 +81,16 @@ struct QueryReport {
     kind: String,
     search_rank_at_10: Option<usize>,
     ask_rank_at_10: Option<usize>,
+    search_top_score: Option<f64>,
+    ask_top_score: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
-struct RetrievalReportV1 {
+struct RetrievalReport {
     schema_version: u8,
     case_set: String,
     case_count: usize,
-    case_count_by_kind: KindCounts,
+    case_count_by_kind: BTreeMap<String, usize>,
     paths: PathReports,
     top1_agreement: Top1Agreement,
     queries: Vec<QueryReport>,
@@ -117,37 +125,73 @@ impl Score {
 
 #[derive(Default)]
 struct PathScore {
-    overall: Score,
-    keyword: Score,
-    paraphrase: Score,
+    core: Score,
+    by_kind: BTreeMap<String, Score>,
+    positive_top_scores: Vec<f64>,
+    negative_top_scores: Vec<Option<f64>>,
     latency_ms: Vec<u128>,
 }
 
 impl PathScore {
-    fn add(&mut self, kind: &str, rank: Option<usize>, latency_ms: u128) {
-        self.overall.add(rank);
-        match kind {
-            "keyword" => self.keyword.add(rank),
-            "paraphrase" => self.paraphrase.add(rank),
-            _ => {}
-        }
+    /// `top_score` is the score of the path's first result, `None` when it
+    /// returned nothing.
+    fn add(&mut self, kind: &str, rank: Option<usize>, top_score: Option<f64>, latency_ms: u128) {
         self.latency_ms.push(latency_ms);
+        if kind == NEGATIVE_KIND {
+            self.negative_top_scores.push(top_score);
+            return;
+        }
+        if CORE_KINDS.contains(&kind) {
+            self.core.add(rank);
+        }
+        self.by_kind.entry(kind.to_string()).or_default().add(rank);
+        self.positive_top_scores.extend(top_score);
     }
 
     fn metrics(&self) -> PathMetrics {
+        let no_match = (!self.negative_top_scores.is_empty()).then(|| {
+            let returned = self
+                .negative_top_scores
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            NoMatch {
+                cases: self.negative_top_scores.len(),
+                returned_nothing: self.negative_top_scores.len() - returned.len(),
+                top_score_median: median(&returned),
+                positive_top_score_median: median(&self.positive_top_scores),
+            }
+        });
         PathMetrics {
-            recall_at_5: self.overall.recall_at_5(),
-            mrr_at_10: self.overall.mrr_at_10(),
+            recall_at_5: self.core.recall_at_5(),
+            mrr_at_10: self.core.mrr_at_10(),
             latency_ms: LatencyMs {
                 p50: percentile(&self.latency_ms, 50.0),
                 p95: percentile(&self.latency_ms, 95.0),
             },
-            recall_at_5_by_kind: RecallAt5ByKind {
-                keyword: self.keyword.recall_at_5(),
-                paraphrase: self.paraphrase.recall_at_5(),
-            },
+            recall_at_5_by_kind: self
+                .by_kind
+                .iter()
+                .map(|(kind, score)| (kind.clone(), score.recall_at_5()))
+                .collect(),
+            no_match,
         }
     }
+}
+
+fn median(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let mid = sorted.len() / 2;
+    Some(if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    })
 }
 
 /// 1-based rank of the first result, within `k`, that cites a relevant memory id.
@@ -203,9 +247,12 @@ fn validate_cases(cases: &[Case]) -> Result<(), String> {
     }
     let mut seen = HashSet::new();
     for case in cases {
-        if case.query.trim().is_empty() || case.relevant_ids.is_empty() {
+        if case.query.trim().is_empty() {
+            return Err("every case needs a query".to_string());
+        }
+        if (case.kind == NEGATIVE_KIND) != case.relevant_ids.is_empty() {
             return Err(format!(
-                "every case needs a query and relevant_ids; invalid query: {:?}",
+                "negative cases need empty relevant_ids and every other case needs at least one; invalid query: {:?}",
                 case.query
             ));
         }
@@ -222,14 +269,12 @@ fn validate_cases(cases: &[Case]) -> Result<(), String> {
     Ok(())
 }
 
-fn kind_counts(cases: &[Case]) -> KindCounts {
-    KindCounts {
-        keyword: cases.iter().filter(|case| case.kind == "keyword").count(),
-        paraphrase: cases
-            .iter()
-            .filter(|case| case.kind == "paraphrase")
-            .count(),
+fn kind_counts(cases: &[Case]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for case in cases {
+        *counts.entry(case.kind.clone()).or_default() += 1;
     }
+    counts
 }
 
 /// Production config with the retrieval routes' time budgets raised to the
@@ -298,61 +343,118 @@ fn markdown_cell(value: &str) -> String {
     value.replace('|', "\\|").replace(['\n', '\r'], " ")
 }
 
-fn render_markdown(report: &RetrievalReportV1) -> String {
+fn kind_label(kind: &str) -> String {
+    let mut chars = kind.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
+}
+
+fn score_label(score: Option<f64>) -> String {
+    score.map_or_else(|| "none".to_string(), |score| format!("{score:.3}"))
+}
+
+fn render_markdown(report: &RetrievalReport) -> String {
+    let kinds = CASE_KINDS
+        .iter()
+        .copied()
+        .filter(|kind| report.case_count_by_kind.contains_key(*kind))
+        .collect::<Vec<_>>();
+    let positive_kinds = kinds
+        .iter()
+        .filter(|kind| **kind != NEGATIVE_KIND)
+        .copied()
+        .collect::<Vec<_>>();
+    let paths = [("Search", &report.paths.search), ("Ask", &report.paths.ask)];
+
     let mut lines = vec![
         format!("# Retrieval baseline: {}", report.case_set),
         String::new(),
         format!(
-            "Schema v{}; {} queries ({} keyword, {} paraphrase).",
+            "Schema v{}; {} queries ({}).",
             report.schema_version,
             report.case_count,
-            report.case_count_by_kind.keyword,
-            report.case_count_by_kind.paraphrase
+            kinds
+                .iter()
+                .map(|kind| format!("{} {kind}", report.case_count_by_kind[*kind]))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         "Search is the pre-card-synthesis ranked retrieval path used by Search; Ask is the context_runtime card path."
             .to_string(),
         "Recall@5 is case-level: a case is recalled when at least one accepted relevant ID appears in its top five results."
             .to_string(),
+        "Recall@5 and MRR@10 cover keyword and paraphrase cases; other kinds have their own columns, and negative cases are scored only in the no-match table."
+            .to_string(),
         "Route time budgets are raised to their configured maximums so ranks do not depend on machine load; latency is still measured."
             .to_string(),
         String::new(),
-        "| Path | Recall@5 | MRR@10 | Keyword Recall@5 | Paraphrase Recall@5 | p50 ms | p95 ms |"
-            .to_string(),
-        "|---|---:|---:|---:|---:|---:|---:|".to_string(),
         format!(
-            "| Search | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} |",
-            report.paths.search.recall_at_5,
-            report.paths.search.mrr_at_10,
-            report.paths.search.recall_at_5_by_kind.keyword,
-            report.paths.search.recall_at_5_by_kind.paraphrase,
-            report.paths.search.latency_ms.p50,
-            report.paths.search.latency_ms.p95
+            "| Path | Recall@5 | MRR@10 | {} | p50 ms | p95 ms |",
+            positive_kinds
+                .iter()
+                .map(|kind| format!("{} Recall@5", kind_label(kind)))
+                .collect::<Vec<_>>()
+                .join(" | ")
         ),
-        format!(
-            "| Ask | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} |",
-            report.paths.ask.recall_at_5,
-            report.paths.ask.mrr_at_10,
-            report.paths.ask.recall_at_5_by_kind.keyword,
-            report.paths.ask.recall_at_5_by_kind.paraphrase,
-            report.paths.ask.latency_ms.p50,
-            report.paths.ask.latency_ms.p95
-        ),
+        format!("|---|---:|---:|{}---:|---:|", "---:|".repeat(positive_kinds.len())),
+    ];
+    for (name, metrics) in paths {
+        lines.push(format!(
+            "| {name} | {:.3} | {:.3} | {} | {} | {} |",
+            metrics.recall_at_5,
+            metrics.mrr_at_10,
+            positive_kinds
+                .iter()
+                .map(|kind| metrics
+                    .recall_at_5_by_kind
+                    .get(*kind)
+                    .map_or_else(|| "n/a".to_string(), |recall| format!("{recall:.3}")))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            metrics.latency_ms.p50,
+            metrics.latency_ms.p95
+        ));
+    }
+    if paths.iter().any(|(_, metrics)| metrics.no_match.is_some()) {
+        lines.extend([
+            String::new(),
+            "| Path | Negative cases | Returned nothing | Median top score, negative | Median top score, positive |"
+                .to_string(),
+            "|---|---:|---:|---:|---:|".to_string(),
+        ]);
+        for (name, metrics) in paths {
+            if let Some(no_match) = &metrics.no_match {
+                lines.push(format!(
+                    "| {name} | {} | {} | {} | {} |",
+                    no_match.cases,
+                    no_match.returned_nothing,
+                    score_label(no_match.top_score_median),
+                    score_label(no_match.positive_top_score_median)
+                ));
+            }
+        }
+    }
+    lines.extend([
         String::new(),
         format!(
             "Top-1 agreement: {}/{} ({:.3}).",
             report.top1_agreement.count, report.top1_agreement.total, report.top1_agreement.rate
         ),
         String::new(),
-        "| Query | Kind | Search rank@10 | Ask rank@10 |".to_string(),
-        "|---|---|---:|---:|".to_string(),
-    ];
+        "| Query | Kind | Search rank@10 | Ask rank@10 | Search top score | Ask top score |".to_string(),
+        "|---|---|---:|---:|---:|---:|".to_string(),
+    ]);
     lines.extend(report.queries.iter().map(|query| {
         format!(
-            "| {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} |",
             markdown_cell(&query.query),
             query.kind,
             rank_label(query.search_rank_at_10),
-            rank_label(query.ask_rank_at_10)
+            rank_label(query.ask_rank_at_10),
+            score_label(query.search_top_score),
+            score_label(query.ask_top_score)
         )
     }));
     lines.join("\n") + "\n"
@@ -408,18 +510,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let relevant = case.relevant_ids.iter().cloned().collect::<HashSet<_>>();
 
         let started = Instant::now();
-        let search_ranked = runtime
-            .block_on(search_ranked_results(
-                &state,
-                &case.query,
-                None,
-                None,
-                SEARCH_LIMIT,
-            ))?
+        let search_results = runtime.block_on(search_ranked_results(
+            &state,
+            &case.query,
+            None,
+            None,
+            SEARCH_LIMIT,
+        ))?;
+        let search_latency_ms = started.elapsed().as_millis();
+        let search_top_score = search_results.first().map(|result| f64::from(result.score));
+        let search_ranked = search_results
             .into_iter()
             .map(|result| vec![result.id])
             .collect::<Vec<_>>();
-        let search_latency_ms = started.elapsed().as_millis();
 
         let started = Instant::now();
         let answer = runtime.block_on(run_query(
@@ -429,6 +532,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ComposeMode::Cards,
         ))?;
         let ask_latency_ms = started.elapsed().as_millis();
+        let ask_top_score = answer.cards.first().map(|card| f64::from(card.score));
         let ask_ranked = answer
             .cards
             .into_iter()
@@ -442,8 +546,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let search_rank = first_relevant_rank(&search_ranked, &relevant, 10);
         let ask_rank = first_relevant_rank(&ask_ranked, &relevant, 10);
-        search_score.add(&case.kind, search_rank, search_latency_ms);
-        ask_score.add(&case.kind, ask_rank, ask_latency_ms);
+        search_score.add(&case.kind, search_rank, search_top_score, search_latency_ms);
+        ask_score.add(&case.kind, ask_rank, ask_top_score, ask_latency_ms);
         if let (Some(search_first), Some(ask_first)) = (search_ranked.first(), ask_ranked.first()) {
             if search_first.iter().any(|id| ask_first.contains(id)) {
                 top1_agreement += 1;
@@ -454,11 +558,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             kind: case.kind.clone(),
             search_rank_at_10: search_rank,
             ask_rank_at_10: ask_rank,
+            search_top_score,
+            ask_top_score,
         });
     }
 
     let case_count = cases.len();
-    let report = RetrievalReportV1 {
+    let report = RetrievalReport {
         schema_version: SCHEMA_VERSION,
         case_set: case_set_name(&cases_path),
         case_count,
@@ -515,18 +621,61 @@ mod tests {
     #[test]
     fn path_score_reports_overall_and_per_kind_metrics() {
         let mut score = PathScore::default();
-        score.add("keyword", Some(1), 10);
-        score.add("keyword", None, 20);
-        score.add("paraphrase", Some(4), 30);
-        score.add("paraphrase", Some(7), 40);
+        score.add("keyword", Some(1), Some(0.9), 10);
+        score.add("keyword", None, Some(0.4), 20);
+        score.add("paraphrase", Some(4), Some(0.7), 30);
+        score.add("paraphrase", Some(7), Some(0.6), 40);
 
         let metrics = score.metrics();
         assert!((metrics.recall_at_5 - 0.5).abs() < 1e-6);
         assert!((metrics.mrr_at_10 - (1.0 + 0.25 + 1.0 / 7.0) / 4.0).abs() < 1e-6);
-        assert!((metrics.recall_at_5_by_kind.keyword - 0.5).abs() < 1e-6);
-        assert!((metrics.recall_at_5_by_kind.paraphrase - 0.5).abs() < 1e-6);
+        assert!((metrics.recall_at_5_by_kind["keyword"] - 0.5).abs() < 1e-6);
+        assert!((metrics.recall_at_5_by_kind["paraphrase"] - 0.5).abs() < 1e-6);
         assert_eq!(metrics.latency_ms.p50, 30);
         assert_eq!(metrics.latency_ms.p95, 40);
+        assert!(metrics.no_match.is_none());
+    }
+
+    #[test]
+    fn time_and_app_cases_get_their_own_recall_but_not_the_headline() {
+        let mut score = PathScore::default();
+        score.add("keyword", Some(1), Some(0.9), 10);
+        score.add("time", None, Some(0.5), 10);
+        score.add("app", Some(2), Some(0.8), 10);
+
+        let metrics = score.metrics();
+        assert!((metrics.recall_at_5 - 1.0).abs() < 1e-6);
+        assert!((metrics.mrr_at_10 - 1.0).abs() < 1e-6);
+        assert!((metrics.recall_at_5_by_kind["time"] - 0.0).abs() < 1e-6);
+        assert!((metrics.recall_at_5_by_kind["app"] - 1.0).abs() < 1e-6);
+        assert!(!metrics.recall_at_5_by_kind.contains_key("paraphrase"));
+    }
+
+    #[test]
+    fn negative_cases_are_scored_as_no_match_and_never_count_as_misses() {
+        let mut score = PathScore::default();
+        score.add("keyword", Some(1), Some(0.9), 10);
+        score.add("paraphrase", Some(2), Some(0.7), 10);
+        score.add("negative", None, Some(0.3), 10);
+        score.add("negative", None, Some(0.5), 10);
+        score.add("negative", None, None, 10);
+
+        let metrics = score.metrics();
+        assert!((metrics.recall_at_5 - 1.0).abs() < 1e-6);
+        assert!(!metrics.recall_at_5_by_kind.contains_key("negative"));
+        let no_match = metrics.no_match.expect("negative cases reported");
+        assert_eq!(no_match.cases, 3);
+        assert_eq!(no_match.returned_nothing, 1);
+        assert_eq!(no_match.top_score_median, Some(0.4));
+        assert_eq!(no_match.positive_top_score_median, Some(0.8));
+        assert_eq!(metrics.latency_ms.p50, 10);
+    }
+
+    #[test]
+    fn median_handles_even_odd_and_empty() {
+        assert_eq!(median(&[]), None);
+        assert_eq!(median(&[3.0, 1.0, 2.0]), Some(2.0));
+        assert_eq!(median(&[4.0, 1.0, 2.0, 3.0]), Some(2.5));
     }
 
     #[test]
@@ -537,22 +686,34 @@ mod tests {
     }
 
     #[test]
-    fn schema_v1_serializes_only_the_accepted_portable_fields() {
-        let report = RetrievalReportV1 {
-            schema_version: 1,
-            case_set: "knowledge-worker".to_string(),
-            case_count: 1,
-            case_count_by_kind: KindCounts {
-                keyword: 1,
-                paraphrase: 0,
+    fn schema_v2_serializes_only_the_accepted_portable_fields() {
+        let cases = vec![
+            Case {
+                query: "missing example".to_string(),
+                kind: "keyword".to_string(),
+                relevant_ids: ids(&["x"]),
             },
+            Case {
+                query: "nothing like this".to_string(),
+                kind: "negative".to_string(),
+                relevant_ids: Vec::new(),
+            },
+        ];
+        let mut search = PathScore::default();
+        search.add("keyword", None, Some(0.4), 10);
+        search.add("negative", None, None, 10);
+        let report = RetrievalReport {
+            schema_version: SCHEMA_VERSION,
+            case_set: "knowledge-worker".to_string(),
+            case_count: cases.len(),
+            case_count_by_kind: kind_counts(&cases),
             paths: PathReports {
-                search: PathMetrics::default(),
+                search: search.metrics(),
                 ask: PathMetrics::default(),
             },
             top1_agreement: Top1Agreement {
                 count: 0,
-                total: 1,
+                total: 2,
                 rate: 0.0,
             },
             queries: vec![QueryReport {
@@ -560,6 +721,8 @@ mod tests {
                 kind: "keyword".to_string(),
                 search_rank_at_10: None,
                 ask_rank_at_10: Some(2),
+                search_top_score: Some(0.4),
+                ask_top_score: None,
             }],
         };
 
@@ -577,7 +740,7 @@ mod tests {
         assert_eq!(json_keys(&value), expected);
         assert_eq!(
             json_keys(&value["case_count_by_kind"]),
-            ["keyword", "paraphrase"].into()
+            ["keyword", "negative"].into()
         );
         assert_eq!(json_keys(&value["paths"]), ["search", "ask"].into());
         assert_eq!(
@@ -587,16 +750,29 @@ mod tests {
                 "mrr_at_10",
                 "latency_ms",
                 "recall_at_5_by_kind",
+                "no_match",
             ]
             .into()
         );
+        // A path without negative cases has no no_match block.
+        assert!(value["paths"]["ask"].get("no_match").is_none());
         assert_eq!(
             json_keys(&value["paths"]["search"]["latency_ms"]),
             ["p50", "p95"].into()
         );
         assert_eq!(
             json_keys(&value["paths"]["search"]["recall_at_5_by_kind"]),
-            ["keyword", "paraphrase"].into()
+            ["keyword"].into()
+        );
+        assert_eq!(
+            json_keys(&value["paths"]["search"]["no_match"]),
+            [
+                "cases",
+                "returned_nothing",
+                "top_score_median",
+                "positive_top_score_median",
+            ]
+            .into()
         );
         assert_eq!(
             json_keys(&value["top1_agreement"]),
@@ -604,15 +780,65 @@ mod tests {
         );
         assert_eq!(
             json_keys(&value["queries"][0]),
-            ["query", "kind", "search_rank_at_10", "ask_rank_at_10",].into()
+            [
+                "query",
+                "kind",
+                "search_rank_at_10",
+                "ask_rank_at_10",
+                "search_top_score",
+                "ask_top_score",
+            ]
+            .into()
         );
-        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["schema_version"], 2);
         assert_eq!(value["case_set"], "knowledge-worker");
         assert!(value["queries"][0]["search_rank_at_10"].is_null());
         assert_eq!(value["queries"][0]["ask_rank_at_10"], 2);
+        assert!(value["queries"][0]["ask_top_score"].is_null());
         assert!(value.get("generated_at").is_none());
         assert!(value.get("cases_path").is_none());
         assert!(value.get("data_dir").is_none());
+    }
+
+    #[test]
+    fn markdown_shows_kind_columns_and_the_no_match_table() {
+        let cases = vec![
+            Case {
+                query: "a".to_string(),
+                kind: "keyword".to_string(),
+                relevant_ids: ids(&["x"]),
+            },
+            Case {
+                query: "b".to_string(),
+                kind: "time".to_string(),
+                relevant_ids: ids(&["y"]),
+            },
+            Case {
+                query: "c".to_string(),
+                kind: "negative".to_string(),
+                relevant_ids: Vec::new(),
+            },
+        ];
+        let mut path = PathScore::default();
+        path.add("keyword", Some(1), Some(0.9), 10);
+        path.add("time", None, Some(0.5), 10);
+        path.add("negative", None, Some(0.2), 10);
+        let report = RetrievalReport {
+            schema_version: SCHEMA_VERSION,
+            case_set: "demo".to_string(),
+            case_count: 3,
+            case_count_by_kind: kind_counts(&cases),
+            paths: PathReports {
+                search: path.metrics(),
+                ask: path.metrics(),
+            },
+            top1_agreement: Top1Agreement::default(),
+            queries: Vec::new(),
+        };
+        let markdown = render_markdown(&report);
+        assert!(markdown.contains("3 queries (1 keyword, 1 time, 1 negative)"));
+        assert!(markdown.contains("| Keyword Recall@5 | Time Recall@5 |"));
+        assert!(markdown.contains("| Search | 1 | 0 | 0.200 | 0.700 |"));
     }
 
     #[test]
@@ -724,12 +950,32 @@ mod tests {
 
     #[test]
     fn knowledge_worker_fixture_ids_exist_and_case_mix_is_exact() {
-        assert_persona_fixture("knowledge-worker", 20, &[("keyword", 14), ("paraphrase", 8)]);
+        assert_persona_fixture(
+            "knowledge-worker",
+            20,
+            &[
+                ("keyword", 14),
+                ("paraphrase", 8),
+                ("time", 8),
+                ("app", 5),
+                ("negative", 4),
+            ],
+        );
     }
 
     #[test]
     fn office_pm_fixture_ids_exist_and_case_mix_is_exact() {
-        assert_persona_fixture("office-pm", 40, &[("keyword", 11), ("paraphrase", 9)]);
+        assert_persona_fixture(
+            "office-pm",
+            40,
+            &[
+                ("keyword", 11),
+                ("paraphrase", 9),
+                ("time", 8),
+                ("app", 5),
+                ("negative", 4),
+            ],
+        );
     }
 
     #[test]
@@ -743,6 +989,9 @@ mod tests {
         assert!(validate_cases(&[]).is_err());
         assert!(validate_cases(&[case("a", "vibes", &["x"])]).is_err());
         assert!(validate_cases(&[case("a", "keyword", &[])]).is_err());
+        assert!(validate_cases(&[case("a", "time", &[])]).is_err());
+        assert!(validate_cases(&[case("a", "negative", &[])]).is_ok());
+        assert!(validate_cases(&[case("a", "negative", &["x"])]).is_err());
         assert!(validate_cases(&[case(" ", "keyword", &["x"])]).is_err());
         assert!(
             validate_cases(&[case("a", "keyword", &["x"]), case("a", "paraphrase", &["y"])])
@@ -770,7 +1019,8 @@ mod tests {
             },
         ];
         let counts = kind_counts(&cases);
-        assert_eq!(counts.keyword, 1);
-        assert_eq!(counts.paraphrase, 2);
+        assert_eq!(counts["keyword"], 1);
+        assert_eq!(counts["paraphrase"], 2);
+        assert_eq!(counts.len(), 2);
     }
 }

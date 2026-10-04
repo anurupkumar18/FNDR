@@ -33,7 +33,7 @@ src-tauri/models/*.gguf
 !scripts/demo/office-pm-queries.json
 !docs/evidence/W02/retrieval-baseline-seeded.json
 !scripts/demo/retrieval-reference/*.json
-!docs/evidence/W03/retrieval-baseline-office-pm.json
+!docs/evidence/W03/retrieval-baseline-*.json
 *.lancedb/
 *.db/
 *.lance/

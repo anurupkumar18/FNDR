@@ -154,6 +154,52 @@ class CompareTests(unittest.TestCase):
             rc.validate_report(bad)
 
 
+def v2_report(**kwargs):
+    """A schema-v2 report: v1 plus open kind maps, top scores, and no_match."""
+    value = report(**kwargs)
+    value["schema_version"] = 2
+    value["case_count_by_kind"]["negative"] = 1
+    for path in value["paths"].values():
+        path["no_match"] = {
+            "cases": 1,
+            "returned_nothing": 0,
+            "top_score_median": 0.31,
+            "positive_top_score_median": 0.62,
+        }
+    for query in value["queries"]:
+        query["search_top_score"] = 0.6
+        query["ask_top_score"] = 0.7
+    value["queries"].append(
+        {
+            "query": "rental car reservation",
+            "kind": "negative",
+            "search_rank_at_10": None,
+            "ask_rank_at_10": None,
+            "search_top_score": 0.31,
+            "ask_top_score": 0.29,
+        }
+    )
+    return value
+
+
+class SchemaV2Tests(unittest.TestCase):
+    def test_v2_report_is_valid(self):
+        rc.validate_report(v2_report())
+
+    def test_v1_reference_compares_with_v2_current(self):
+        result = rc.compare(report(), v2_report())
+        self.assertEqual(result.failures, [])
+        self.assertEqual(result.new_queries, ["rental car reservation"])
+
+    def test_negative_query_never_counts_as_lost(self):
+        result = rc.compare(v2_report(), v2_report())
+        self.assertEqual(result.failures, [])
+
+    def test_render_shows_no_match_rows(self):
+        text = rc.render(rc.compare(v2_report(), v2_report()))
+        self.assertIn("| search | 1 | 0 | 0.310 | 0.620 |", text)
+
+
 class RenderAndMainTests(unittest.TestCase):
     def write(self, directory, name, value):
         path = Path(directory) / name
