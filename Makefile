@@ -68,3 +68,17 @@ gitlab-plan:
 
 gitlab-sync:
 	python3 scripts/team/gitlab_sync.py sync $(if $(APPLY),--apply) $(if $(UPDATE),--update)
+
+# VS-04: retrieval merge gate. Reseeds the QA profile (QA_SKIP_SEED=1 skips it),
+# reruns retrieval_qa into a scratch report, and compares it with the accepted
+# reference for the case set. Fails on a Recall@5 drop over 0.05 on any path or
+# on any query that a path found in its top ten and now misses.
+.PHONY: qa-retrieval-check
+QA_CASE_SET ?= $(patsubst %-queries.json,%,$(notdir $(QA_QUERIES)))
+QA_REFERENCE ?= $(CURDIR)/scripts/demo/retrieval-reference/$(QA_CASE_SET).json
+QA_CHECK_DIR ?= $(CURDIR)/src-tauri/target/qa-retrieval-check/$(QA_CASE_SET)
+
+qa-retrieval-check: $(if $(QA_SKIP_SEED),,qa-seed)
+	mkdir -p "$(QA_CHECK_DIR)"
+	cd src-tauri && CARGO_BUILD_JOBS="$(CARGO_BUILD_JOBS)" cargo run --example retrieval_qa -- --data-dir "$(QA_PROFILE)" --cases "$(QA_QUERIES)" --out "$(QA_CHECK_DIR)/current.md" --json "$(QA_CHECK_DIR)/current.json" > /dev/null
+	$(PYTHON) scripts/audit/retrieval_check.py --reference "$(QA_REFERENCE)" --current "$(QA_CHECK_DIR)/current.json" --out "$(QA_CHECK_DIR)/check.md"

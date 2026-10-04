@@ -30,6 +30,7 @@ src-tauri/models/*.gguf
 !scripts/demo/knowledge-worker-week.json
 !scripts/demo/knowledge-worker-queries.json
 !docs/evidence/W02/retrieval-baseline-seeded.json
+!scripts/demo/retrieval-reference/*.json
 *.lancedb/
 *.db/
 *.lance/

@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "case_set": "knowledge-worker",
+  "case_count": 22,
+  "case_count_by_kind": {
+    "keyword": 14,
+    "paraphrase": 8
+  },
+  "paths": {
+    "search": {
+      "recall_at_5": 0.9545454545454546,
+      "mrr_at_10": 0.9090909090909091,
+      "latency_ms": {
+        "p50": 595,
+        "p95": 764
+      },
+      "recall_at_5_by_kind": {
+        "keyword": 1.0,
+        "paraphrase": 0.875
+      }
+    },
+    "ask": {
+      "recall_at_5": 1.0,
+      "mrr_at_10": 1.0,
+      "latency_ms": {
+        "p50": 1234,
+        "p95": 1418
+      },
+      "recall_at_5_by_kind": {
+        "keyword": 1.0,
+        "paraphrase": 1.0
+      }
+    }
+  },
+  "top1_agreement": {
+    "count": 17,
+    "total": 22,
+    "rate": 0.7727272727272727
+  },
+  "queries": [
+    {
+      "query": "pandas import error fix",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "how did I get python to find the data library last time",
+      "kind": "paraphrase",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "what does Dana want for the survey readout",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "churn drivers due Thursday",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "what customers complained about during onboarding",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "single sign-on",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "essay rubric weights",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "how much of my history grade depends on sources",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "Field Order 15",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "labor contracts passage page 112",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "counterargument paragraph",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "weekday vs weekend ridership chart",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "which plotting library am I allowed to use",
+      "kind": "paraphrase",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "who is recording the backup video",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "architecture slide",
+      "kind": "keyword",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "how long is the capstone demo script",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "spring enrollment",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "duplicate survey responses removed",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "food bank inventory app presentation",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "transit dataset assignment requirements",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "my thesis about why Reconstruction failed",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "the problem our capstone app solves",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    }
+  ]
+}
