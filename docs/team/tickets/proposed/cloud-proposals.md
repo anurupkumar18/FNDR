@@ -29,3 +29,22 @@ Tickets the cloud session proposes during the parallel-session campaign (`docs/s
 **Evidence.** The CI run link.
 
 **Note.** These files are owned by the local session (plan Part 2 rule 7), so the cloud did not change them. The cloud measured the fix with a never-committed 55-line shim: lib tests 883 passed, 0 failed, 10 ignored, and `make qa-retrieval-check` ranked identically to the M1 reference.
+
+## VS-41 Check MCP auth for every item of a JSON-RPC batch
+- assignee: anurupkumar
+- labels: area::vault-search, type::bug, prio::p0
+- milestone: W03-Build
+- estimate: 1h
+- depends: none
+
+**Why.** ADR-017 says `tools/call` needs the bearer token. In Local mode a loopback batch that started with `initialize` skipped the token for every item, so a local process could run any MCP tool without it.
+
+**Today.** `jsonrpc_method_hint` in `src-tauri/src/mcp/mod.rs` returned the first item's method for a batch, and `should_bypass_http_auth` exempts `initialize` and `tools/list` from loopback peers.
+
+**Do.**
+1. Failing test first: a loopback batch `[initialize, tools/call]` with no token must get 401; a batch of handshake methods only stays 200.
+2. Exempt a batch only when every item is a handshake method.
+
+**Done when.** The test fails on the old code and passes; `cargo test --lib` passes.
+
+**Evidence.** Already done by the cloud on `claude/train-f-new` (b8a2412, PR #26): `docs/evidence/W03/VS-41-cloud.md`.
