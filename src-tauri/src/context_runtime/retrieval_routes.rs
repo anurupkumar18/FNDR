@@ -279,6 +279,7 @@ pub fn memory_record_to_search_result(record: &MemoryRecord, score: f32) -> Sear
         reopen_captured_at_ms: record.reopen_captured_at_ms,
         reopen_confidence: record.reopen_confidence,
         reopen_validation_status: record.reopen_validation_status.clone(),
+        reopen_page: record.reopen_page,
         user_intent: record.user_intent.clone(),
         topic: record.topic.clone(),
         workflow: record.workflow.clone(),

@@ -124,7 +124,10 @@ export function MemoryCard({
                 </div>
                 {/* source area: app name + activity/files chips */}
                 <div className="fndr-mc-c-source" aria-label="Source and activity">
-                    <em className="fndr-mc-c-source-app">{card.app_name}</em>
+                    <em className="fndr-mc-c-source-app">
+                        {card.app_name}
+                        {card.reopen_page ? ` · page ${card.reopen_page}` : null}
+                    </em>
                     {card.activity_type && card.activity_type !== "other" && (
                         <span className="fndr-mc-c-chip fndr-mc-c-chip--activity" aria-label={`activity: ${card.activity_type}`}>
                             {card.activity_type}
@@ -204,6 +207,7 @@ export function MemoryCard({
             <div className="fndr-mc-source">
                 {card.app_name}
                 {card.window_title && variant === "expanded" ? ` · ${card.window_title}` : null}
+                {card.reopen_page ? ` · page ${card.reopen_page}` : null}
             </div>
 
             {threads.length > 0 && (
@@ -265,7 +269,7 @@ export function MemoryCard({
                         )}
                         {onReopen && card.reopen_target && (
                             <Button mono variant="secondary" onClick={() => onReopen(card)}>
-                                Open source
+                                {reopenButtonLabel(card)}
                             </Button>
                         )}
                         {onResearch && (
@@ -464,6 +468,18 @@ function deriveThreads(card: MemoryCardData): string[] {
     const ctxThread = card.insight_context_thread?.trim();
     if (ctxThread && !out.includes(ctxThread)) out.push(ctxThread);
     return out.slice(0, 5);
+}
+
+function reopenButtonLabel(card: MemoryCardData): string {
+    if (!card.reopen_page) {
+        return "Open source";
+    }
+    const target = (card.reopen_target ?? "").trim().toLowerCase();
+    const isHttp = target.startsWith("http://") || target.startsWith("https://");
+    if (isHttp) {
+        return "Open source";
+    }
+    return `Open source (page ${card.reopen_page})`;
 }
 
 function formatTime(timestamp: number): string {

@@ -4725,6 +4725,7 @@ fn memory_to_search_result(memory: &crate::storage::MemoryRecord) -> crate::stor
         reopen_captured_at_ms: memory.reopen_captured_at_ms,
         reopen_confidence: memory.reopen_confidence,
         reopen_validation_status: memory.reopen_validation_status.clone(),
+        reopen_page: memory.reopen_page,
         user_intent: memory.user_intent.clone(),
         topic: memory.topic.clone(),
         workflow: memory.workflow.clone(),

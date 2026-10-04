@@ -2356,13 +2356,15 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 format!("Visited {}", domain)
             };
             let memory_context = format!("URL-only surface capture for {} at {}", domain, snippet);
-            let reopen_target = build_reopen_target(
+            let mut reopen_target = build_reopen_target(
                 url.as_deref(),
                 macos::preferred_reopen_file_path(app_context.document_path.as_deref(), &[]),
                 app_context.bundle_id.as_deref(),
                 &app_name,
                 now.timestamp_millis(),
             );
+            reopen_target.page =
+                crate::memory::reopen::detect_reopen_page(&reopen_target, &window_title, "");
             let mut record = MemoryRecord {
                 id: uuid::Uuid::new_v4().to_string(),
                 timestamp: now.timestamp_millis(),
@@ -2414,6 +2416,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 reopen_captured_at_ms: reopen_target.captured_at_ms,
                 reopen_confidence: reopen_target.confidence,
                 reopen_validation_status: reopen_target.validation_status,
+                reopen_page: reopen_target.page,
                 schema_version: 2,
                 activity_type: "browsing".to_string(),
                 embedding_text: format!("url: {} | title: {}", domain, snippet),
@@ -3669,7 +3672,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &prior_chain,
             &config.memory_quality,
         );
-        let reopen_target = build_reopen_target(
+        let mut reopen_target = build_reopen_target(
             url.as_deref(),
             macos::preferred_reopen_file_path(
                 app_context.document_path.as_deref(),
@@ -3682,6 +3685,8 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &app_name,
             now.timestamp_millis(),
         );
+        reopen_target.page =
+            crate::memory::reopen::detect_reopen_page(&reopen_target, &window_title, &text);
         let related_memory_ids_from_chain = prior_chain
             .iter()
             .map(|row| row.id.clone())
@@ -4241,6 +4246,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             reopen_captured_at_ms: reopen_target.captured_at_ms,
             reopen_confidence: reopen_target.confidence,
             reopen_validation_status: reopen_target.validation_status,
+            reopen_page: reopen_target.page,
             search_aliases: structured_memory
                 .as_ref()
                 .map(|m| m.search_aliases.clone())
@@ -5381,6 +5387,14 @@ pub(crate) async fn merge_memory_records_with_policy(
         } else {
             existing.reopen_validation_status.clone()
         },
+        reopen_page: crate::memory::reopen::merge_reopen_page(
+            incoming.reopen_url.as_deref(),
+            incoming.reopen_file_path.as_deref(),
+            incoming.reopen_page,
+            existing.reopen_url.as_deref(),
+            existing.reopen_file_path.as_deref(),
+            existing.reopen_page,
+        ),
         search_aliases: merge_string_lists(&existing.search_aliases, &incoming.search_aliases),
         related_memory_ids: merge_string_lists(
             &existing.related_memory_ids,

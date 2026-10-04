@@ -71,4 +71,29 @@ describe("ExpandedMemoryCard", () => {
         action.click();
         expect(onOpenRelated).toHaveBeenCalledWith("memory-related");
     });
+
+    it("shows page N on the source line and labels a file reopen with the page", async () => {
+        vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
+        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({
+            seed_ids: [card.id],
+            node_count: 0,
+            edge_count: 0,
+        });
+        const onReopen = vi.fn();
+        render(
+            <ExpandedMemoryCard
+                card={{
+                    ...card,
+                    app_name: "Preview",
+                    window_title: "doc.pdf – Page 112 of 150",
+                    reopen_target: "file:///Users/qa/doc.pdf",
+                    reopen_page: 112,
+                }}
+                onClose={() => {}}
+                onReopen={onReopen}
+            />,
+        );
+        expect(screen.getByText(/Preview · doc\.pdf – Page 112 of 150 · page 112/)).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Open source (page 112)" })).toBeTruthy();
+    });
 });

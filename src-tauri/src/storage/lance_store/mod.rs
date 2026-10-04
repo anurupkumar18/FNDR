@@ -97,6 +97,7 @@ const SEARCH_RESULT_COLUMNS: &[&str] = &[
     "reopen_captured_at_ms",
     "reopen_confidence",
     "reopen_validation_status",
+    "reopen_page",
     "user_intent",
     "topic",
     "workflow",

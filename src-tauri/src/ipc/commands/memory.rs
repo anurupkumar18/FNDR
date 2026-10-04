@@ -1,7 +1,7 @@
 //! Single-memory Tauri commands.
 
 use crate::graph::GraphStore;
-use crate::memory::reopen::ReopenKind;
+use crate::memory::reopen::{url_with_pdf_page, ReopenKind};
 use crate::storage::Store;
 use crate::AppState;
 use std::path::{Path, PathBuf};
@@ -109,7 +109,13 @@ fn resolve_reopen_target(record: &crate::storage::MemoryRecord) -> Option<Resolv
             .as_deref()
             .map(str::trim)
             .filter(|value| is_http_url(value))
-            .map(|value| ResolvedReopenTarget::BrowserUrl(value.to_string())),
+            .map(|value| {
+                let url = match record.reopen_page {
+                    Some(page) => url_with_pdf_page(value, page),
+                    None => value.to_string(),
+                };
+                ResolvedReopenTarget::BrowserUrl(url)
+            }),
         ReopenKind::FilePath => record
             .reopen_file_path
             .as_deref()
@@ -736,6 +742,51 @@ mod tests {
                     ..Default::default()
                 },
                 Some(R::FilePath(PathBuf::from("plan.md"))),
+            ),
+        ]);
+    }
+
+    #[test]
+    fn resolve_reopen_target_appends_pdf_page_to_browser_url() {
+        assert_reopen_cases(vec![
+            (
+                "page on pdf url",
+                Rec {
+                    reopen_kind: ReopenKind::BrowserUrl,
+                    reopen_url: s("https://example.com/doc.pdf"),
+                    reopen_page: Some(112),
+                    ..Default::default()
+                },
+                Some(R::BrowserUrl("https://example.com/doc.pdf#page=112".into())),
+            ),
+            (
+                "replaces existing page fragment",
+                Rec {
+                    reopen_kind: ReopenKind::BrowserUrl,
+                    reopen_url: s("https://example.com/doc.pdf#page=1"),
+                    reopen_page: Some(12),
+                    ..Default::default()
+                },
+                Some(R::BrowserUrl("https://example.com/doc.pdf#page=12".into())),
+            ),
+            (
+                "no page leaves url unchanged",
+                Rec {
+                    reopen_kind: ReopenKind::BrowserUrl,
+                    reopen_url: s("https://example.com/doc.pdf"),
+                    ..Default::default()
+                },
+                Some(R::BrowserUrl("https://example.com/doc.pdf".into())),
+            ),
+            (
+                "file path ignores stored page on open",
+                Rec {
+                    reopen_kind: ReopenKind::FilePath,
+                    reopen_file_path: s("/Users/qa/doc.pdf"),
+                    reopen_page: Some(112),
+                    ..Default::default()
+                },
+                Some(R::FilePath(PathBuf::from("/Users/qa/doc.pdf"))),
             ),
         ]);
     }

@@ -154,6 +154,7 @@ pub fn memory_schema_for_text_dim(text_embed_dim: i32) -> Schema {
         Field::new("reopen_captured_at_ms", DataType::Int64, false),
         Field::new("reopen_confidence", DataType::Float32, false),
         Field::new("reopen_validation_status", DataType::Utf8, false),
+        Field::new("reopen_page", DataType::Int64, true),
         Field::new(
             "search_aliases",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
