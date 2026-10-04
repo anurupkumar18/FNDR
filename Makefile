@@ -82,3 +82,14 @@ qa-retrieval-check: $(if $(QA_SKIP_SEED),,qa-seed)
 	mkdir -p "$(QA_CHECK_DIR)"
 	cd src-tauri && CARGO_BUILD_JOBS="$(CARGO_BUILD_JOBS)" cargo run --example retrieval_qa -- --data-dir "$(QA_PROFILE)" --cases "$(QA_QUERIES)" --out "$(QA_CHECK_DIR)/current.md" --json "$(QA_CHECK_DIR)/current.json" > /dev/null
 	$(PYTHON) scripts/audit/retrieval_check.py --reference "$(QA_REFERENCE)" --current "$(QA_CHECK_DIR)/current.json" --out "$(QA_CHECK_DIR)/check.md"
+
+# VS-02: PERSONA=<name> runs the QA targets on scripts/demo/<name>-week.json and
+# <name>-queries.json in its own seeded profile, and writes its baseline under W03.
+# Without PERSONA (or with PERSONA=knowledge-worker) nothing above changes.
+ifneq ($(filter-out knowledge-worker,$(PERSONA)),)
+QA_PROFILE := $(HOME)/Library/Application Support/com.fndr.app.qa-$(PERSONA)
+QA_CORPUS := $(CURDIR)/scripts/demo/$(PERSONA)-week.json
+QA_QUERIES := $(CURDIR)/scripts/demo/$(PERSONA)-queries.json
+QA_RETRIEVAL_MD := $(CURDIR)/docs/evidence/W03/retrieval-baseline-$(PERSONA).md
+QA_RETRIEVAL_JSON := $(CURDIR)/docs/evidence/W03/retrieval-baseline-$(PERSONA).json
+endif

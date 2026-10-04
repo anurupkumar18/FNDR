@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "case_set": "office-pm",
+  "case_count": 20,
+  "case_count_by_kind": {
+    "keyword": 11,
+    "paraphrase": 9
+  },
+  "paths": {
+    "search": {
+      "recall_at_5": 0.7,
+      "mrr_at_10": 0.5891666666666666,
+      "latency_ms": {
+        "p50": 772,
+        "p95": 911
+      },
+      "recall_at_5_by_kind": {
+        "keyword": 1.0,
+        "paraphrase": 0.3333333333333333
+      }
+    },
+    "ask": {
+      "recall_at_5": 0.9,
+      "mrr_at_10": 0.6571428571428571,
+      "latency_ms": {
+        "p50": 3045,
+        "p95": 3160
+      },
+      "recall_at_5_by_kind": {
+        "keyword": 1.0,
+        "paraphrase": 0.7777777777777778
+      }
+    }
+  },
+  "top1_agreement": {
+    "count": 3,
+    "total": 20,
+    "rate": 0.15
+  },
+  "queries": [
+    {
+      "query": "how much money are we losing to customers leaving",
+      "kind": "paraphrase",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "why were our payment nudges ending up in junk mail",
+      "kind": "paraphrase",
+      "search_rank_at_10": 4,
+      "ask_rank_at_10": null
+    },
+    {
+      "query": "what pay range did leadership sign off on for the design hire",
+      "kind": "paraphrase",
+      "search_rank_at_10": 5,
+      "ask_rank_at_10": 7
+    },
+    {
+      "query": "which applicant came out on top for the design role",
+      "kind": "paraphrase",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": 3
+    },
+    {
+      "query": "what share of new accounts got up and running quickly last quarter",
+      "kind": "paraphrase",
+      "search_rank_at_10": 3,
+      "ask_rank_at_10": 2
+    },
+    {
+      "query": "would clients recommend us, and did that improve",
+      "kind": "paraphrase",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": 3
+    },
+    {
+      "query": "the applicant's past project about getting tradespeople paid on time",
+      "kind": "paraphrase",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": 3
+    },
+    {
+      "query": "is there a way to stop the nudges for just one bill",
+      "kind": "paraphrase",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": 2
+    },
+    {
+      "query": "who is filling in during my end-of-year vacation",
+      "kind": "paraphrase",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": 2
+    },
+    {
+      "query": "SMB churn 3.9% by segment",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "LL-1482 spam placement 1.8%",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 2
+    },
+    {
+      "query": "Rafael O. staging retest 2.1%",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "Tobias W. interview feedback",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "net new ARR $1.24M",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "REQ-2207 pipeline stages",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "Smart Reminders launch checklist",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "launch checklist with the go/no-go meeting checked off",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 2
+    },
+    {
+      "query": "Hannah K. customer announcement email",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "Owen P. churn excluding trial cancels",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1
+    },
+    {
+      "query": "Victor S. Q3 metrics summary email",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 2
+    }
+  ]
+}

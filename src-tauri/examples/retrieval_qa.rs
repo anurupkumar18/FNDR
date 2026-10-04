@@ -19,9 +19,7 @@ use std::time::Instant;
 
 const SCHEMA_VERSION: u8 = 1;
 const CASE_SET: &str = "knowledge-worker";
-const EXPECTED_CASES: usize = 22;
-const EXPECTED_KEYWORD_CASES: usize = 14;
-const EXPECTED_PARAPHRASE_CASES: usize = 8;
+const CASE_KINDS: [&str; 2] = ["keyword", "paraphrase"];
 const SEARCH_LIMIT: usize = 20;
 const ASK_LIMIT: usize = 10;
 
@@ -200,30 +198,38 @@ fn case_set_name(path: &Path) -> String {
 }
 
 fn validate_cases(cases: &[Case]) -> Result<(), String> {
-    let keyword = cases.iter().filter(|case| case.kind == "keyword").count();
-    let paraphrase = cases
-        .iter()
-        .filter(|case| case.kind == "paraphrase")
-        .count();
-    if cases.len() != EXPECTED_CASES
-        || keyword != EXPECTED_KEYWORD_CASES
-        || paraphrase != EXPECTED_PARAPHRASE_CASES
-    {
-        return Err(format!(
-            "expected {EXPECTED_CASES} cases ({EXPECTED_KEYWORD_CASES} keyword, {EXPECTED_PARAPHRASE_CASES} paraphrase); found {} ({keyword} keyword, {paraphrase} paraphrase)",
-            cases.len()
-        ));
+    if cases.is_empty() {
+        return Err("the case set is empty".to_string());
     }
-    if let Some(case) = cases
-        .iter()
-        .find(|case| case.query.trim().is_empty() || case.relevant_ids.is_empty())
-    {
-        return Err(format!(
-            "every case needs a query and relevant_ids; invalid query: {:?}",
-            case.query
-        ));
+    let mut seen = HashSet::new();
+    for case in cases {
+        if case.query.trim().is_empty() || case.relevant_ids.is_empty() {
+            return Err(format!(
+                "every case needs a query and relevant_ids; invalid query: {:?}",
+                case.query
+            ));
+        }
+        if !CASE_KINDS.contains(&case.kind.as_str()) {
+            return Err(format!(
+                "case {:?} has kind {:?}; expected one of {CASE_KINDS:?}",
+                case.query, case.kind
+            ));
+        }
+        if !seen.insert(case.query.as_str()) {
+            return Err(format!("duplicate query {:?}", case.query));
+        }
     }
     Ok(())
+}
+
+fn kind_counts(cases: &[Case]) -> KindCounts {
+    KindCounts {
+        keyword: cases.iter().filter(|case| case.kind == "keyword").count(),
+        paraphrase: cases
+            .iter()
+            .filter(|case| case.kind == "paraphrase")
+            .count(),
+    }
 }
 
 /// Production config with the retrieval routes' time budgets raised to the
@@ -456,10 +462,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         schema_version: SCHEMA_VERSION,
         case_set: case_set_name(&cases_path),
         case_count,
-        case_count_by_kind: KindCounts {
-            keyword: EXPECTED_KEYWORD_CASES,
-            paraphrase: EXPECTED_PARAPHRASE_CASES,
-        },
+        case_count_by_kind: kind_counts(&cases),
         paths: PathReports {
             search: search_score.metrics(),
             ask: ask_score.metrics(),
@@ -667,32 +670,41 @@ mod tests {
         assert_eq!(search.max_keyword_branch_limit, production.max_keyword_branch_limit);
     }
 
-    #[test]
-    fn every_expected_id_exists_and_case_mix_is_exact() {
-        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/demo/");
-        let cases = load_cases(format!("{root}knowledge-worker-queries.json")).expect("cases");
+    fn demo_fixture(name: &str) -> String {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/demo/").to_string() + name
+    }
+
+    /// Every relevant id must exist in the persona's corpus and must not be
+    /// the low-signal control, so a miss always means retrieval missed.
+    fn assert_persona_fixture(persona: &str, corpus_size: usize, kinds: &[(&str, usize)]) {
+        let cases = load_cases(demo_fixture(&format!("{persona}-queries.json"))).expect("cases");
         let corpus: Vec<serde_json::Value> = serde_json::from_slice(
-            &std::fs::read(format!("{root}knowledge-worker-week.json")).expect("corpus"),
+            &std::fs::read(demo_fixture(&format!("{persona}-week.json"))).expect("corpus"),
         )
         .expect("json");
-        assert_eq!(corpus.len(), 20, "knowledge-worker corpus size changed");
+        assert_eq!(corpus.len(), corpus_size, "{persona} corpus size changed");
         let known: HashSet<&str> = corpus
             .iter()
             .filter_map(|entry| entry["id"].as_str())
             .collect();
+        assert_eq!(known.len(), corpus.len(), "{persona} corpus ids are unique");
+        let low_signal: HashSet<&str> = corpus
+            .iter()
+            .filter(|entry| entry["low_signal"].as_bool().unwrap_or(false))
+            .filter_map(|entry| entry["id"].as_str())
+            .collect();
 
         validate_cases(&cases).expect("valid case set");
-        assert_eq!(cases.len(), 22);
+        for (kind, count) in kinds {
+            assert_eq!(
+                cases.iter().filter(|case| case.kind == *kind).count(),
+                *count,
+                "{persona} {kind} case count changed"
+            );
+        }
         assert_eq!(
-            cases.iter().filter(|case| case.kind == "keyword").count(),
-            14
-        );
-        assert_eq!(
-            cases
-                .iter()
-                .filter(|case| case.kind == "paraphrase")
-                .count(),
-            8
+            cases.len(),
+            kinds.iter().map(|(_, count)| count).sum::<usize>()
         );
         for case in &cases {
             for id in &case.relevant_ids {
@@ -701,7 +713,64 @@ mod tests {
                     "{} expects unknown id {id}",
                     case.query
                 );
+                assert!(
+                    !low_signal.contains(id.as_str()),
+                    "{} expects the low-signal control {id}",
+                    case.query
+                );
             }
         }
+    }
+
+    #[test]
+    fn knowledge_worker_fixture_ids_exist_and_case_mix_is_exact() {
+        assert_persona_fixture("knowledge-worker", 20, &[("keyword", 14), ("paraphrase", 8)]);
+    }
+
+    #[test]
+    fn office_pm_fixture_ids_exist_and_case_mix_is_exact() {
+        assert_persona_fixture("office-pm", 40, &[("keyword", 11), ("paraphrase", 9)]);
+    }
+
+    #[test]
+    fn case_validation_rejects_unknown_kinds_duplicates_and_empty_answers() {
+        let case = |query: &str, kind: &str, relevant: &[&str]| Case {
+            query: query.to_string(),
+            kind: kind.to_string(),
+            relevant_ids: ids(relevant),
+        };
+        assert!(validate_cases(&[case("a", "keyword", &["x"])]).is_ok());
+        assert!(validate_cases(&[]).is_err());
+        assert!(validate_cases(&[case("a", "vibes", &["x"])]).is_err());
+        assert!(validate_cases(&[case("a", "keyword", &[])]).is_err());
+        assert!(validate_cases(&[case(" ", "keyword", &["x"])]).is_err());
+        assert!(
+            validate_cases(&[case("a", "keyword", &["x"]), case("a", "paraphrase", &["y"])])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn kind_counts_come_from_the_cases_not_constants() {
+        let cases = vec![
+            Case {
+                query: "a".to_string(),
+                kind: "keyword".to_string(),
+                relevant_ids: ids(&["x"]),
+            },
+            Case {
+                query: "b".to_string(),
+                kind: "paraphrase".to_string(),
+                relevant_ids: ids(&["y"]),
+            },
+            Case {
+                query: "c".to_string(),
+                kind: "paraphrase".to_string(),
+                relevant_ids: ids(&["z"]),
+            },
+        ];
+        let counts = kind_counts(&cases);
+        assert_eq!(counts.keyword, 1);
+        assert_eq!(counts.paraphrase, 2);
     }
 }
