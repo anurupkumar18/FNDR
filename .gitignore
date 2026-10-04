@@ -34,6 +34,7 @@ src-tauri/models/*.gguf
 !docs/evidence/W02/retrieval-baseline-seeded.json
 !scripts/demo/retrieval-reference/*.json
 !docs/evidence/W03/retrieval-baseline-*.json
+!docs/evidence/W03/VS-17-bakeoff-cloud.json
 *.lancedb/
 *.db/
 *.lance/
