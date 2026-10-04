@@ -47,6 +47,7 @@ These carry an "Accepted" status line and still shape the code. They predate the
 | Item | State | Where |
 |---|---|---|
 | ADR-018 reasoning tier (opt-in cloud reasoning) | Not drafted in the repo yet. Local models only until accepted. | PD-01 |
+| Team charter: decision rights, disagreements, handoff when away | Draft, pending owner approval and each teammate's acknowledgement | PD-17, `docs/team/TEAM.md` section "Team charter" |
 | Beta date Wed Oct 21 and Final week of Dec 14 | Assumed; confirm with instructors | Master plan D-4, month plan section 12 row 8 |
 | Companion parked until after Final | Assumed | Master plan D-2 |
 | No cloud model generates training labels | Proposed | Master plan D-3 |
