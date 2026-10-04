@@ -226,6 +226,21 @@ fn validate_cases(cases: &[Case]) -> Result<(), String> {
     Ok(())
 }
 
+/// Production config with the retrieval routes' time budgets raised to the
+/// largest values `SearchConfig::normalized` allows. A route that runs past its
+/// budget silently drops its hits, so with production budgets the ranks would
+/// depend on how loaded the machine is (an unoptimized build measured a 354 ms
+/// median keyword variant against a 320 ms budget). The gate measures ranking
+/// quality; the latency columns still report how long each path took.
+fn evaluation_config() -> Config {
+    let mut config = Config::default();
+    config.search.semantic_timeout_ms = 10_000;
+    config.search.snippet_timeout_ms = 10_000;
+    config.search.keyword_timeout_ms = 10_000;
+    config.search.keyword_variant_timeout_ms = 5_000;
+    config
+}
+
 fn validate_profile_path(data_dir: &Path, real_profile: Option<&Path>) -> Result<PathBuf, String> {
     if !data_dir.is_dir() {
         return Err("seeded FNDR profile does not exist".to_string());
@@ -291,6 +306,8 @@ fn render_markdown(report: &RetrievalReportV1) -> String {
         "Search is the pre-card-synthesis ranked retrieval path used by Search; Ask is the context_runtime card path."
             .to_string(),
         "Recall@5 is case-level: a case is recalled when at least one accepted relevant ID appears in its top five results."
+            .to_string(),
+        "Route time budgets are raised to their configured maximums so ranks do not depend on machine load; latency is still measured."
             .to_string(),
         String::new(),
         "| Path | Recall@5 | MRR@10 | Keyword Recall@5 | Paraphrase Recall@5 | p50 ms | p95 ms |"
@@ -368,7 +385,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let graph = GraphStore::new(store.clone());
     let state = AppState::new(
         evaluation_dir,
-        Config::default(),
+        evaluation_config(),
         store,
         state_store,
         graph,
@@ -635,6 +652,19 @@ mod tests {
             case_set_name(Path::new("fixtures/designer-queries.json")),
             "designer"
         );
+    }
+
+    #[test]
+    fn evaluation_lifts_route_time_budgets_to_their_maximums() {
+        let search = evaluation_config().search.normalized();
+        assert_eq!(search.semantic_timeout_ms, 10_000);
+        assert_eq!(search.snippet_timeout_ms, 10_000);
+        assert_eq!(search.keyword_timeout_ms, 10_000);
+        assert_eq!(search.keyword_variant_timeout_ms, 5_000);
+        // Everything that is not a time budget stays at the production default.
+        let production = Config::default().search;
+        assert_eq!(search.max_keyword_variants, production.max_keyword_variants);
+        assert_eq!(search.max_keyword_branch_limit, production.max_keyword_branch_limit);
     }
 
     #[test]

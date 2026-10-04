@@ -83,3 +83,17 @@ Top-1 agreement: 17/22 -> 15/22 (reported, not gated).
 ```
 
 A cruder break (threshold 0.9) dropped Search Recall@5 to 0.227 and the check listed 16 lost queries; Ask stayed at 1.000 because it does not use this reranker.
+
+## Follow-up: the gate must not depend on machine load
+
+The first office-PM runs (VS-02) showed Ask ranks changing between two runs on the same seeded profile with no code change (for example "what pay range did leadership sign off on for the design hire": rank 9, then a miss). Diagnosis:
+
+1. Within one process, `run_query` was stable; across processes it was not, so it was not hash ordering alone.
+2. A probe that replays the harness order (Search, then Ask, per query) caught the Keyword route returning 10 candidates in one process and 20 in the others.
+3. The keyword route skips any variant that runs past `keyword_variant_timeout_ms` (320 ms) and stops at `keyword_timeout_ms` (900 ms). Timing `Store::keyword_search` on the 40-row office-PM profile in the unoptimized example build: 60 variants, p50 354 ms, p95 621 ms, max 643 ms. Most variants sit on the budget edge, so which hits survive depends on load.
+
+Fix (harness only): `retrieval_qa` now evaluates with the search time budgets raised to the maximums `SearchConfig::normalized` allows (semantic, snippet, and keyword 10,000 ms; keyword variant 5,000 ms). Every other setting stays at the production default (unit test `evaluation_lifts_route_time_budgets_to_their_maximums`). The report says so in its header. Latency is still measured and printed.
+
+After the fix, on Linux: three office-PM runs on one profile were identical; a reseed of the office-PM profile gave identical ranks; two knowledge-worker runs were identical and matched the M1 reference on every rank and on top-1 agreement (17/22; the earlier 18/22 was the same timeout effect). The knowledge-worker reference therefore stays valid unchanged.
+
+Product consequence (not fixed here): in the shipped app the same budgets drop keyword hits whenever a `LIKE` scan is slow, so Ask results can change with CPU load. VS-07 (BM25) replaces the scan; VS-20 measures latency at 10,000 memories. The office-PM numbers show how much is at stake: with production budgets on this container Search Recall@5 was 0.600, with lifted budgets 0.700.
