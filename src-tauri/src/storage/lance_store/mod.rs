@@ -214,7 +214,7 @@ async fn fold_new_rows_into_indexes(table: &Table) -> lancedb::Result<()> {
 impl Store {
     /// Open (or create) the LanceDB store at `data_dir`.
     ///
-    /// This is synchronous — it spins up a temporary Tokio runtime for
+    /// This is synchronous: it spins up a temporary Tokio runtime for
     /// initialization so it can be called from non-async contexts (e.g.
     /// the Tauri `setup()` callback).
     pub fn new(data_dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
@@ -1032,7 +1032,7 @@ impl Store {
         Ok(())
     }
 
-    /// Return the data directory (sync — no DB access).
+    /// Return the data directory (sync, no DB access).
     pub fn data_dir(&self) -> PathBuf {
         self.data_dir.clone()
     }
@@ -1104,7 +1104,7 @@ impl Store {
 
     /// Replace a single memory row in the v4 parent table, preserving its id
     /// and any linked memory chunks. Used by the memory_review worker after
-    /// validation succeeds; callers must not pass partial records — the full
+    /// validation succeeds; callers must not pass partial records; the full
     /// `MemoryRecord` is required because the underlying table replace pattern
     /// is delete-then-insert.
     pub async fn replace_memory_preserving_chunks(
@@ -1116,7 +1116,7 @@ impl Store {
         }
         let id = sql_escape(&record.id);
         self.table.delete(&format!("id = '{id}'")).await?;
-        // Note: deliberately not calling delete_chunks_for_memory — children
+        // Note: deliberately not calling delete_chunks_for_memory: children
         // outlive a parent review pass.
         let normalized = normalize_record_for_index(record);
         self.insert_memory_batch(&[normalized]).await

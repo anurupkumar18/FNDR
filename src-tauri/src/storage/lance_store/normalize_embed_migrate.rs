@@ -799,7 +799,7 @@ pub(super) fn generate_search_aliases(record: &MemoryRecord) -> Vec<String> {
         // `|` only appears when a structured field leaked an entire enum
         // vocabulary into a label (e.g. "coding|debugging|..."). Acronymizing
         // those produces opaque garbage like "tsapoeacdraorpws", so drop the
-        // phrase outright. Structural rule — no allow/deny lists.
+        // phrase outright. Structural rule: no allow/deny lists.
         if phrase.contains('|') {
             continue;
         }
@@ -826,7 +826,7 @@ pub(super) fn generate_search_aliases(record: &MemoryRecord) -> Vec<String> {
         }
     }
 
-    // Explicit names — entities, files, tags, related tools — surface as-is
+    // Explicit names (entities, files, tags, related tools) surface as-is
     // but never get acronymized, which is the source of the historical
     // `df`/`lco`/`mce` noise.
     for value in record
@@ -1063,7 +1063,7 @@ pub(super) fn estimate_importance_score(record: &MemoryRecord) -> f32 {
 }
 
 /// Top-k span concentration on `clean_text`. Higher means a few dense spans
-/// carry the document's signal — a strong indicator that retrieval against
+/// carry the document's signal, a strong indicator that retrieval against
 /// this record will surface meaningful matches.
 pub(super) fn estimate_salience_concentration(record: &MemoryRecord) -> f32 {
     crate::capture::text_cleanup::salience_concentration(&record.clean_text, &record.app_name)
@@ -1739,7 +1739,7 @@ pub(super) async fn ensure_memory_schema_columns(table: &Table) -> Result<(), la
         transforms.push(("lexical_shadow".to_string(), "''".to_string()));
     }
     if !existing.contains("snippet_embedding") {
-        // Placeholder zeros — will be computed properly for new captures.
+        // Placeholder zeros; will be computed properly for new captures.
         transforms.push(("snippet_embedding".to_string(), "embedding".to_string()));
     }
     if !existing.contains("support_embedding") {
