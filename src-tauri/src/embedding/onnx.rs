@@ -29,6 +29,18 @@ pub enum EmbeddingBackend {
     Mock,
 }
 
+/// Raw, unprompted text for role-aware embedding. Document context is composed
+/// before the model-specific prompt is added to each chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EmbeddingInput<'a> {
+    Query(&'a str),
+    Document {
+        text: &'a str,
+        app_name: &'a str,
+        window_title: &'a str,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingRuntimeStatus {
     pub backend: String,
@@ -342,6 +354,48 @@ impl Embedder {
             })
             .collect::<Vec<_>>();
         self.embed_chunk_groups(chunk_groups)
+    }
+
+    /// Prepare the exact prompted chunks used by `embed_inputs`, without
+    /// inference or cache writes. Exposed for tokenizer/budget measurements.
+    /// Like the legacy wrappers, fall back to raw text when chunking drops it;
+    /// the embedding low-signal check still runs before prompting.
+    pub fn prepare_input_chunks(&self, input: EmbeddingInput<'_>) -> Vec<String> {
+        use super::prefixes::{document_text_for, query_text_for};
+        let (text, mut chunks) = match input {
+            EmbeddingInput::Query(text) => (text, self.chunk_text(text)),
+            EmbeddingInput::Document {
+                text,
+                app_name,
+                window_title,
+            } => (
+                text,
+                self.chunk_text_with_context(app_name, window_title, text),
+            ),
+        };
+        if chunks.is_empty() && !text.trim().is_empty() {
+            chunks.push(text.to_string());
+        }
+        chunks
+            .into_iter()
+            .filter(|chunk| !is_embedding_low_signal(chunk))
+            .map(|chunk| match input {
+                EmbeddingInput::Query(_) => query_text_for(self.contract, &chunk),
+                EmbeddingInput::Document { .. } => document_text_for(self.contract, &chunk),
+            })
+            .collect()
+    }
+
+    /// Embed mixed raw query/document inputs in order. Prefix every chunk after
+    /// context composition; keep the existing cache, batching and mean pooling.
+    /// Legacy callers remain unchanged until their index migration is ready.
+    pub fn embed_inputs(&self, inputs: &[EmbeddingInput<'_>]) -> Result<Vec<Vec<f32>>, String> {
+        self.embed_chunk_groups(
+            inputs
+                .iter()
+                .map(|input| self.prepare_input_chunks(*input))
+                .collect(),
+        )
     }
 
     /// Generate embeddings for texts while preserving app/window context during chunking.
@@ -1183,6 +1237,156 @@ fn normalize(vec: &mut [f32]) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn role_prompt_reaches_every_long_document_chunk() {
+        use crate::embedding::prefixes::EMBEDDING_GEMMA_DOCUMENT_PREFIX;
+        let mut embedder = Embedder::mock_for_tests();
+        embedder.contract = crate::inference::model_config::embedding_v6_contract(256).unwrap();
+        embedder.backend = Backend::Mock(MockEmbedder::new(256));
+        let text = (0..500)
+            .map(|i| format!("Section {i}: the migration keeps cited source passages and the rollback checkpoint. "))
+            .collect::<String>();
+        embedder
+            .embed_inputs(&[EmbeddingInput::Document {
+                text: &text,
+                app_name: "",
+                window_title: "",
+            }])
+            .unwrap();
+        let cache = embedder.embedding_cache.lock().unwrap();
+        assert!(
+            cache.values.len() >= 3,
+            "exercise later chunks, not just the first"
+        );
+        assert!(
+            cache
+                .values
+                .keys()
+                .all(|chunk| chunk.starts_with(EMBEDDING_GEMMA_DOCUMENT_PREFIX)),
+            "every model input, including the final chunk, needs the document prompt"
+        );
+    }
+
+    #[test]
+    fn role_inputs_preserve_order_context_and_cache_identity() {
+        use crate::embedding::prefixes::{
+            EMBEDDING_GEMMA_DOCUMENT_PREFIX, EMBEDDING_GEMMA_QUERY_PREFIX,
+        };
+        let mut embedder = Embedder::mock_for_tests();
+        embedder.contract = crate::inference::model_config::embedding_v6_contract(256).unwrap();
+        embedder.backend = Backend::Mock(MockEmbedder::new(256));
+        let text = "The release checkpoint includes migration notes and rollback steps.";
+        let inputs = [
+            EmbeddingInput::Query(text),
+            EmbeddingInput::Document {
+                text,
+                app_name: "Editor",
+                window_title: "Release checklist",
+            },
+            EmbeddingInput::Query("  "),
+            EmbeddingInput::Document {
+                text,
+                app_name: "",
+                window_title: "",
+            },
+            EmbeddingInput::Query(text),
+        ];
+        let vectors = embedder.embed_inputs(&inputs).unwrap();
+        assert_eq!(vectors.len(), inputs.len());
+        for (input, vector) in inputs.iter().zip(&vectors) {
+            assert_eq!(
+                embedder.embed_inputs(&[*input]).unwrap(),
+                vec![vector.clone()]
+            );
+        }
+        assert_eq!(vectors[0], vectors[4]);
+        assert_ne!(vectors[0], vectors[3], "roles need distinct model inputs");
+        assert!(vectors[2].iter().all(|value| *value == 0.0));
+        let cache = embedder.embedding_cache.lock().unwrap();
+        assert_eq!(
+            cache.values.len(),
+            3,
+            "blank input creates no prompt and duplicate queries reuse cache"
+        );
+        assert!(cache
+            .values
+            .contains_key(&format!("{EMBEDDING_GEMMA_QUERY_PREFIX}{text}")));
+        assert!(cache
+            .values
+            .contains_key(&format!("{EMBEDDING_GEMMA_DOCUMENT_PREFIX}{text}")));
+        assert!(
+            cache.values.keys().any(|chunk| chunk.starts_with(&format!(
+                "{EMBEDDING_GEMMA_DOCUMENT_PREFIX}Release checklist\n"
+            )) && chunk.ends_with(text)),
+            "document prompt must precede title and body"
+        );
+    }
+
+    #[test]
+    fn role_prompt_reaches_every_long_query_chunk() {
+        use crate::embedding::prefixes::EMBEDDING_GEMMA_QUERY_PREFIX;
+        let mut embedder = Embedder::mock_for_tests();
+        embedder.contract = crate::inference::model_config::embedding_v6_contract(256).unwrap();
+        embedder.backend = Backend::Mock(MockEmbedder::new(256));
+        let text = (0..100).map(|i| format!("Find context for question {i} about the index migration and rollback evidence. ")).collect::<String>();
+        let vectors = embedder
+            .embed_inputs(&[EmbeddingInput::Query(&text)])
+            .unwrap();
+        assert_eq!(vectors.len(), 1);
+        assert!(vectors[0].iter().any(|value| *value != 0.0));
+        let cache = embedder.embedding_cache.lock().unwrap();
+        assert!(cache.values.len() >= 3);
+        assert!(cache
+            .values
+            .keys()
+            .all(|chunk| chunk.starts_with(EMBEDDING_GEMMA_QUERY_PREFIX)
+                && chunk.matches(EMBEDDING_GEMMA_QUERY_PREFIX).count() == 1));
+    }
+
+    #[test]
+    fn role_prompts_do_not_turn_low_signal_into_content() {
+        let mut embedder = Embedder::mock_for_tests();
+        embedder.contract = crate::inference::model_config::embedding_v6_contract(256).unwrap();
+        embedder.backend = Backend::Mock(MockEmbedder::new(256));
+        for text in ["", " \n ", "!!!", "ab"] {
+            let vectors = embedder
+                .embed_inputs(&[
+                    EmbeddingInput::Query(text),
+                    EmbeddingInput::Document {
+                        text,
+                        app_name: "",
+                        window_title: "",
+                    },
+                ])
+                .unwrap();
+            assert_eq!(vectors, vec![vec![0.0; 256]; 2]);
+        }
+        assert!(embedder.embedding_cache.lock().unwrap().values.is_empty());
+    }
+
+    #[test]
+    fn legacy_embedding_wrappers_keep_unprompted_inputs() {
+        for contract in [
+            crate::inference::model_config::embedding_v4_contract(),
+            embedding_v5_contract(),
+        ] {
+            let mut embedder = Embedder::mock_for_tests();
+            embedder.contract = contract;
+            embedder.backend = Backend::Mock(MockEmbedder::new(contract.dimensions));
+            let text = "The source passages include the release checkpoint and rollback steps.";
+            let plain = embedder.embed_batch(&[text.into()]).unwrap();
+            assert_eq!(
+                plain,
+                embedder
+                    .embed_batch_with_context(&[("".into(), "".into(), text.into())])
+                    .unwrap()
+            );
+            let cache = embedder.embedding_cache.lock().unwrap();
+            assert_eq!(cache.values.len(), 1);
+            assert!(cache.values.contains_key(text));
+        }
+    }
 
     #[test]
     fn a_matryoshka_vector_is_cut_then_renormalized() {

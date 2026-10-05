@@ -167,3 +167,40 @@ ANTI-BLOAT REVIEW
 - Verdict: approve with the documented default-off scope and remaining product gates.
 
 Still pending for this feature: Settings opt-in, Vault filtering/bulk client deletion, Privacy Activity, cleanup when a new blocklist rule matches note body text, and the native assistant-to-FNDR demo. The older decision-ledger write has its separate open policy question. These limits remain explicit in the cloud evidence and feature plan.
+
+
+## EmbeddingGemma role prefixes and workload checkpoint (VS-47 / VS-48)
+
+TDD SUMMARY
+- Behavior implemented: the opt-in `EmbeddingInput` boundary chunks raw query/document inputs and composes document context before adding the contract prompt to every chunk. It reuses existing cache keys, batch inference and mean pooling. Legacy production wrappers and the active v4 contract remain unchanged.
+- Tests added/updated: long queries/documents, mixed-role ordering and repeated-input cache reuse, contextual title placement, blank/low-signal vectors and unchanged v4/v5 wrappers. Both real-reference and measurement callers now use this raw-input boundary.
+- Failing test observed: `cargo test --locked --lib role_prompt_reaches_every_long_document_chunk` reproduced later cached model inputs without the document prefix. After the change the regression passed; `cargo test --locked --lib embedding::` passed 34 tests with one intentional ignore.
+- Measurement regression: a tokenizer configured for truncation/padding incorrectly reported `[8, 8]` rather than actual special-token-inclusive counts `[7, 3]`. The diagnostic tokenizer now disables both settings; all four `cargo test --locked --example embedding_measure` tests pass.
+- Real-model verification: the explicitly enabled fp32 `embeddinggemma_reference` test passed all 20 reference inputs at both dimensions, with lowest cosine 0.999978 (768) and 0.999980 (256). Production assets and the owner vault were not changed.
+- Files changed: existing `embedding/onnx.rs` and module exports, `examples/embedding_measure.rs`, and `tests/embeddinggemma_reference.rs`. No new runtime dependency, index or model manager.
+- Remaining risk: existing raw-text fallback after chunk cleanup is retained; this slice does not establish noise suppression, token-aware chunk sizing, production cutover or concurrent capture performance. Per-chunk truncation/normalization and record-level mean pooling are unchanged.
+
+The measurement example now offers `--single-input` with per-input latencies and rejects duplicate prepared inputs in that mode. Shared chunks still use the normal cache. Token diagnostics inspect the exact prepared strings with prompts and special tokens, after dropping the embedder and outside inference timing. Process peak RSS includes initialization and this diagnostic phase. These are debug-build process measurements, not an app latency or native-capture claim.
+
+ANTI-BLOAT REVIEW
+- Reused the existing chunker, prefix helpers, cache, inference batching and pooling; no second embedding pipeline or store.
+- Removed whole-document prompting and duplicated chunk preparation from the two inactive harness callers. Kept legacy callers unchanged until a deliberate index migration.
+- Exposed only the raw role input boundary and its prepared chunks for budget inspection. Added observable regression coverage instead of a generic harness framework.
+- Independent read-only review approved the implementation and measurement boundaries. Full application gates were not repeated for an inactive Rust-only path; focused embedding tests, example tests and real-model parity cover this change. Native QA remains deferred.
+
+### Repeated local workload measurements
+
+M1 / 8 GB, pinned fp32 assets from the earlier checkpoint, serialized fresh processes with alternating dimension order. Query mode used 12 distinct single-chunk queries per process, three processes per dimension (36 timed queries). Document mode used 12 distinct synthetic documents per process, two processes per dimension. Documents span prose, numeric OCR/tables, code/logs and multilingual text, 3,051–6,716 Unicode characters each. All 104 document chunks were unique. This is a diagnostic workload without retrieval labels, not a quality score or concurrent native capture benchmark.
+
+| Workload | Dimensions | Observed latency / throughput | Maximum process RSS, decimal MB |
+|---|---:|---|---|
+| Individual queries | 256 | 26.12 ms pooled median; 20.39–49.18 ms observed range | 760.0–831.0 |
+| Individual queries | 768 | 25.60 ms pooled median; 20.36–31.17 ms observed range | 761.5–829.6 |
+| 12 long documents / 104 chunks | 256 | 20.612–20.883 s per pass; 198.2–200.8 ms per unique chunk | 734.6–840.0 |
+| 12 long documents / 104 chunks | 768 | 20.876–21.062 s per pass; 200.7–202.5 ms per unique chunk | 822.8–828.0 |
+
+Initialization including its dimension probe took 3.134–4.868 seconds across these processes. Query inputs reached 24 actual tokens and document chunks reached 403, including prompts and special tokens; none exceeded the 2,048-token contract limit. Fresh process does not imply a cold filesystem cache. No percentile service objective or whole-app RAM guarantee is inferred from this small corpus.
+
+Recommendation remains fp32/256 for the isolated migration prototype, with 768 as comparator. Its smaller stored vectors are the benefit here; these timings do not establish an inference speed or model-residency advantage from cutting the output dimensions. Reuse a loaded model for interactive queries and measure background embedding contention before production activation.
+
+Local scratch evidence: `/tmp/fndr-integration-oct5/gemma-role-workload-summary.json`, per-process `gemma-role-{queries,documents}-{256,768}-r*.json` and `.stderr` (`/usr/bin/time -l`), and the focused red/green/reference logs in the same directory. Corpus files were retained locally rather than adding another large synthetic fixture to the repository: `gemma-queries.json` SHA-256 `aa9e3eaf5bccdd40539cde71121862658fe2ed1cd43f1d449038f86ddcd58530`; `gemma-long-documents.json` SHA-256 `c1d8908fd7d93fb9a18eb91829eced74982221d9244bdcf7c4d70a870e75f2c1`. These scratch paths are local evidence, not portable committed benchmark assets. Build with `cargo build --locked --example embedding_measure`, set `FNDR_EMBED_MODEL_DIR` to the separate pinned fp32 assets, and run the built example with `<dimension> <corpus.json>`, adding `--single-input` for the query corpus.

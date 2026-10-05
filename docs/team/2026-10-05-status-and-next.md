@@ -20,16 +20,16 @@ Goal: make FNDR a dependable local memory system that captures useful work conte
 | Retrieval discrepancy | The installed tokenizer differs from the pinned tokenizer in padding/truncation. On the same M1, the installed version reproduces the office-pm lost result; pinned assets restore its ranks. This is asset-dependent behavior, not established platform numerical tolerance. Installed assets remain untouched. |
 | Capture quality | Empty/secure-only Accessibility web areas now allow OCR fallback. Merges preserve text-source lineage, and cards/MCP/reporting show bounded source labels. Aggregate reports retain unknown historical provenance. Native Chrome discovery and the 12-app matrix remain unverified. |
 | Resume and Home | Home surfaces three recent work threads and cited next steps through the existing Vault. Resume excludes hidden/low-signal and agent-source rows. Automated and synthetic-browser checks pass; native usefulness remains to be assessed. |
-| EmbeddingGemma | Inactive v6 contract and fp32 reference parity exist. Initial M1 measurements favor fp32/256 for an isolated prototype; q8 used more peak RAM in this workload. The corpus had only single-chunk inputs. Long-text prefixes, query latency, concurrent capture and migration remain gates. |
+| EmbeddingGemma | Inactive v6 now prompts every query/document chunk correctly and retains fp32 reference parity. Repeated M1 fp32/256 runs measured 26.12 ms median individual queries and about 21 seconds for 104 long-document chunks; none exceeded the token limit. Concurrent capture, term/notice decisions and versioned migration remain gates. |
 | Agent notes | Cloud PR 35 and local corrections pass integration: project validation, capture/identity isolation, reopening, provenance, formatting, review and derived-context boundaries. Notes remain off by default. Settings/filter/activity and the native demo remain pending. |
 
-Latest full gate: **534 frontend tests and 1,066 Rust tests passed**, with 17 Rust tests intentionally ignored. Native QA is still pending.
+Last full gate (agent-note integration): **534 frontend tests and 1,066 Rust tests passed**, with 17 Rust tests intentionally ignored. The subsequent inactive embedding slice passed 34 focused embedding tests, four measurement tests and real fp32 parity at both dimensions. Native QA is still pending.
 
 ## Execution order now
 
-1. Make the EmbeddingGemma boundary correct for long query/document chunks; measure representative interactive and capture workloads. Keep the production model unchanged during this prototype.
+1. Complete the concurrent capture/model budget and shared-model integration using the corrected EmbeddingGemma boundary. Long-chunk and isolated individual-query checks now pass; keep production unchanged until migration gates pass.
 2. Coordinate the versioned re-embedding/cutover with Minh's EM-09, including recovery and coverage checks. Use seeded profiles before the owner vault.
-3. Integrate persisted graph traversal with cited paths, typed reopen outcomes and saved workflows; improve onboarding and the related-work/timeline journey alongside those slices.
+3. Make the existing Related memories action resolve persisted links after restart, then integrate graph traversal with cited paths, typed reopen outcomes and saved workflows. Improve onboarding and the related-work/timeline journey alongside those slices.
 4. Finish trust/privacy and note opt-in/filter/activity work, then run the combined native session and targeted follow-ups. Confirm capture before migrating the owner vault.
 
 The board's 323 nominal hours (157 p0) describe ticket estimates, not an agent-work capacity ceiling. Preserve teammate ownership. VS-42 to VS-51 and VS-58 to VS-61 remain the core foundation; VS-52's image-search spike keeps its go/no-go gate. "No good match" remains dependent on useful chunk-score evidence.

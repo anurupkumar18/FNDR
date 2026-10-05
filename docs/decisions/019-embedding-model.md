@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, updated 2026-10-05 (VS-17 / VS-48). Initial M1 8 GB ONNX measurements and fp32 reference parity are now recorded below. They favor fp32 over q8 for process memory on this workload; they do not yet establish long-chunk, interactive-query or concurrent capture budgets. Distribution terms remain an owner decision. Versioned migration remains coordinated with Minh's embedding tickets.
+Proposed, updated 2026-10-05 (VS-17 / VS-48). Initial M1 8 GB ONNX measurements and fp32 reference parity are now recorded below. They favor fp32 over q8 for process memory on this workload; the follow-up below now measures long chunks and individual queries. Concurrent capture and whole-app budgets remain unverified. Distribution terms remain an owner decision. Versioned migration remains coordinated with Minh's embedding tickets.
 
 ## Context
 
@@ -65,11 +65,11 @@ The cloud cost column is PyTorch fp32 on a shared 4-vCPU Linux container (fastes
 
 ## Provisional recommendation
 
-1. **EmbeddingGemma-300m at 256 dimensions using fp32 ONNX for the next isolated migration prototype.** The October 5 M1 check below supersedes the original q8 preference: q8's smaller download used more process memory in this runtime. The 256-dimension cut retains most of the measured quality while storing fewer numbers per vector than MiniLM's 384. Activation still requires representative long-chunk and interactive-query measurements, a concurrent capture budget, and a distribution-term/notice decision. Keep 768 as the quality comparator.
+1. **EmbeddingGemma-300m at 256 dimensions using fp32 ONNX for the next isolated migration prototype.** The October 5 M1 check below supersedes the original q8 preference: q8's smaller download used more process memory in this runtime. The 256-dimension cut retains most of the measured quality while storing fewer numbers per vector than MiniLM's 384. Long-chunk and isolated individual-query measurements are recorded below. Activation still requires a concurrent capture budget and a distribution-term/notice decision. Keep 768 as the quality comparator.
 2. **If the M1 cost or the license rules it out, keep MiniLM.** bge-small is not measurably better on these sets (no Recall@5 change, MRR differences inside noise), so switching to it would cost a reindex and a pooling change for no demonstrated gain. A reranker does not close the gap either: in the VS-19 spike a cross-encoder over MiniLM's top 30 lifts chunk-mode MRR@10 to 0.831, still below EmbeddingGemma alone at 0.889, at several hundred milliseconds per query on this host (`docs/evidence/W03/VS-19-spike-cloud.md`).
 3. **Reject Qwen3-Embedding-0.6B for the 8 GB target.** It does not beat MiniLM here, it lost 2 headline cases in record mode, and it peaked at 4629 MB of process memory at fp32 on this host.
 
-Before accepting: extend the initial M1 results below to representative long chunks and interactive/concurrent workloads, and rerun with a larger labeled set if available. The 42 headline queries remain too few to settle close quality differences. Numerical parity and quantized retrieval acceptance are separate checks.
+Before accepting: extend the isolated long-chunk and individual-query results below to concurrent capture workloads, and rerun retrieval with a larger labeled set if available. The 42 headline queries remain too few to settle close quality differences. Numerical parity and quantized retrieval acceptance are separate checks.
 
 ## M1 ONNX check, October 5
 
@@ -90,7 +90,15 @@ The fp32 headline rankings match the prior Python bake-off metrics. q8 changed f
 
 **Updated technical recommendation:** use fp32 at 256 dimensions for the next isolated migration prototype, keeping 768 as the quality comparator. Do not activate or ship q8 based on its smaller download alone: it used substantially more resident memory in this runtime on this workload. Repeat with representative long capture chunks, single interactive queries and capture/model concurrency before accepting the resource budget. The exact verified downloads total 1,255,324,332 bytes for fp32 and 329,781,810 bytes for q8, including the shared tokenizer. No owner-profile model assets or vectors were changed.
 
-Evidence and limitations: `docs/evidence/W04/2026-10-05-cloud-integration-local.md`. Production role-prefix placement on long chunks, shared retrieval migration and term/notice flow remain outstanding.
+### Long-text and individual-query follow-up
+
+The inactive role-aware boundary now adds each query/document prompt after chunking and context composition, with low-signal checks before prompting. Both reference and measurement callers use raw inputs. Reference parity remains unchanged at both dimensions. Production wrappers and indexes remain on their existing contracts until migration.
+
+Repeated M1 fp32 measurements used 12 distinct short queries (three fresh processes per dimension) and 12 long synthetic documents spanning prose, numeric OCR, code/logs and multilingual text (two fresh processes per dimension). At 256 dimensions, individual-query median was 26.12 ms (20.39–49.18 ms observed), and the 104-chunk document pass took 20.612–20.883 seconds. At 768, median was 25.60 ms (20.36–31.17 ms), with a 20.876–21.062-second document pass. Process maximum RSS ranged from 735 to 840 MB across all runs; initialization/probe took 3.134–4.868 seconds. Largest prepared document chunk was 403 actual tokens including its prompt and special tokens; none exceeded 2,048.
+
+These debug-process results support keeping a shared model loaded for interactive use. They support 256 for smaller stored vectors, not a claimed inference speed or model-memory advantage over 768. They do not establish retrieval quality for the unlabeled long-text corpus, concurrent capture budgets, native app latency, token-aware sizing under arbitrary configuration, or production migration safety. The resource recommendation remains fp32/256 with 768 as comparator.
+
+Evidence and limits: `docs/evidence/W04/2026-10-05-cloud-integration-local.md`. Shared retrieval migration, concurrent capture/resource scheduling and term/notice flow remain outstanding.
 
 ## Consequences if accepted
 

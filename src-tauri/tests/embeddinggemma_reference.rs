@@ -11,8 +11,7 @@
 //!   cargo test --test embeddinggemma_reference -- --ignored --nocapture
 
 use fndr_lib::config::ChunkingConfig;
-use fndr_lib::embedding::prefixes::{document_text_for, query_text_for};
-use fndr_lib::embedding::Embedder;
+use fndr_lib::embedding::{Embedder, EmbeddingInput};
 use fndr_lib::inference::model_config::embedding_v6_contract;
 use serde::Deserialize;
 
@@ -65,15 +64,20 @@ fn onnx_embedder_matches_the_reference_at_768_and_256_dimensions() {
             false,
         )
         .expect("EmbeddingGemma embedder (is FNDR_EMBED_MODEL_DIR set?)");
-        let texts = reference
+        let inputs = reference
             .items
             .iter()
             .map(|item| match item.kind.as_str() {
-                "query" => query_text_for(contract, &item.text),
-                _ => document_text_for(contract, &item.text),
+                "query" => EmbeddingInput::Query(&item.text),
+                "document" => EmbeddingInput::Document {
+                    text: &item.text,
+                    app_name: "",
+                    window_title: "",
+                },
+                other => panic!("Unknown reference input kind: {other}"),
             })
             .collect::<Vec<_>>();
-        let vectors = embedder.embed_batch(&texts).expect("embed");
+        let vectors = embedder.embed_inputs(&inputs).expect("embed");
 
         let cosines = reference
             .items
