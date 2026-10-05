@@ -771,18 +771,22 @@ pub fn parse_expansion_terms(raw: &str) -> Vec<String> {
 ///
 /// # Lifetime safety
 ///
-/// The model is intentionally leaked (`Box::leak`) to obtain a `'static` reference
-/// that the `LlamaContext<'static>` can borrow from. This is safe under the
-/// invariant that **`InferenceEngine` is a process-wide singleton held for the
-/// application lifetime**. If you ever want runtime model hot-swap, this design
-/// must change — otherwise each reload leaks a model's worth of memory and any
-/// in-flight context referencing the old model would be use-after-free.
+/// The model is intentionally leaked (`Box::leak`) to obtain the `'static`
+/// reference borrowed by `LlamaContext`. Context and backend ownership are
+/// shared by engine handles; every blocking completion retains its own handle
+/// until it finishes, even if its waiting future is cancelled or the app
+/// replaces its engine. Cloning does not allocate a second context or model.
 ///
-/// Thread-safety: `LlamaModel`, `Arc<LlamaBackend>`, and `Mutex<LlamaContext>`
-/// are individually `Send`/`Sync`, so `InferenceEngine` auto-derives both.
+/// This does not reclaim model weights. Repeated construction still retains
+/// each loaded model for process lifetime; real unload needs a separate owned
+/// model/context design and verified destruction order.
+///
+/// Thread-safety: the model is immutable after loading, context access is
+/// serialized by its shared mutex, and each handle retains the shared backend.
+#[derive(Clone)]
 pub struct InferenceEngine {
     model: &'static LlamaModel,
-    context: Mutex<LlamaContext<'static>>,
+    context: Arc<Mutex<LlamaContext<'static>>>,
     _backend: Arc<LlamaBackend>,
     chat_template: LlamaChatTemplate,
     model_id: String,
@@ -947,7 +951,7 @@ impl InferenceEngine {
 
         Ok(Self {
             model: model_ref,
-            context: Mutex::new(context),
+            context: Arc::new(Mutex::new(context)),
             _backend: backend,
             chat_template,
             model_id,
@@ -1812,36 +1816,10 @@ TRANSCRIPT:\n{}",
         max_tokens: i32,
         control: Option<InferenceRunControl>,
     ) -> String {
-        // Safety: `model` is `&'static`, so we can move a copy of the reference
-        // into the blocking closure without borrowing `self`. The context is
-        // accessed via a raw pointer bypass of the borrow checker using a
-        // self-pointer dance — simpler approach: clone what we need.
-        //
-        // We can't move `&self.context` into spawn_blocking because the future
-        // borrows `self`. Instead, grab an Arc-safe handle by temporarily
-        // restructuring: wrap the blocking body in a synchronous helper that
-        // takes the prompt + a mutex guard.
-        //
-        // Simplest correct implementation: do the lock + generation inside
-        // spawn_blocking by passing raw references that outlive the closure.
-        // Since `self` outlives any call to `complete`, we extend lifetimes
-        // via `unsafe` scoped to this function. To keep this safe, we hold
-        // an `Arc`-less lock *inside* the closure on a `&'static`-ish handle.
-        //
-        // Cleaner solution: store the Mutex in an Arc. But that's a struct
-        // change. For a drop-in fix, we accept that we block briefly on the
-        // mutex lock here (async-aware) via spawn_blocking wrapping everything.
-
-        // To keep the API change minimal, we send everything the blocking
-        // closure needs as owned data, then do the generation with a scoped
-        // 'static transmute of &self. This relies on `InferenceEngine` being
-        // a process-wide singleton (same invariant as the leaked model).
-        let self_static: &'static InferenceEngine = unsafe {
-            // SAFETY: InferenceEngine is a singleton held for application
-            // lifetime (see struct-level docs). The caller's `&self` therefore
-            // outlives any spawn_blocking future we create here.
-            std::mem::transmute::<&InferenceEngine, &'static InferenceEngine>(self)
-        };
+        // A cancelled waiter does not stop spawn_blocking. Move an owned
+        // handle into the job so its shared context and trace metadata remain
+        // valid even when the caller releases or replaces the engine.
+        let worker_engine = self.clone();
 
         let prompt_owned = prompt.to_string();
         // Task labels are tokio task-locals and do not cross into `spawn_blocking`, so read them here.
@@ -1852,13 +1830,13 @@ TRANSCRIPT:\n{}",
 
         tokio::task::spawn_blocking(move || {
             let mut usage = TokenUsage::default();
-            let output = self_static.complete_blocking(
+            let output = worker_engine.complete_blocking(
                 &prompt_owned,
                 max_tokens,
                 control.as_ref(),
                 &mut usage,
             );
-            self_static.record_trace(
+            worker_engine.record_trace(
                 task,
                 prompt_version,
                 &prompt_owned,
@@ -2084,6 +2062,81 @@ TRANSCRIPT:\n{}",
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Uses installed model weights but no owner captures/store. Cancellation
+    /// occurs before decoding. Keep the engine alive through runtime shutdown
+    /// so a regression to borrowed jobs fails without dereferencing freed data.
+    #[test]
+    #[ignore = "loads the real GGUF; known Metal teardown abort after test completion"]
+    fn cancelled_completion_keeps_context_owned_until_blocking_job_finishes() {
+        use std::future::Future;
+        use std::task::{Context, Poll};
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let model_dir = std::env::var_os("FNDR_INFERENCE_TEST_APP_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dirs::data_dir().expect("data dir").join("com.fndr.app"));
+        let mut engine = runtime
+            .block_on(InferenceEngine::new(Some(model_dir), None))
+            .expect("installed text model");
+        let traces = tempfile::tempdir().expect("isolated traces");
+        engine.trace_path = Some(traces.path().join("llm_traces.jsonl"));
+        let context = Arc::clone(&engine.context);
+        let weak_context = Arc::downgrade(&context);
+        let guard = context.lock();
+        let baseline_owners = Arc::strong_count(&context);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let control = InferenceRunControl {
+            cancelled: Arc::clone(&cancelled),
+            deadline: Instant::now() + Duration::from_secs(30),
+        };
+        let (was_pending, owned_while_waiting, owned_after_cancel) = {
+            let _entered = runtime.enter();
+            let mut waiter = Box::pin(engine.complete_with_control("synthetic", 1, Some(control)));
+            let waker = futures::task::noop_waker();
+            let was_pending = matches!(
+                waiter.as_mut().poll(&mut Context::from_waker(&waker)),
+                Poll::Pending
+            );
+            let owned_while_waiting = Arc::strong_count(&context) > baseline_owners;
+            drop(waiter);
+            let owned_after_cancel = Arc::strong_count(&context) > baseline_owners;
+            (was_pending, owned_while_waiting, owned_after_cancel)
+        };
+        // Exercise caller destruction only after observing owned job state.
+        // On the old borrowed path retain the caller through drain, so the
+        // negative test never turns its lifetime failure into undefined behavior.
+        let (engine, owned_without_caller) = if owned_after_cancel {
+            drop(engine);
+            (None, Arc::strong_count(&context) > 1)
+        } else {
+            (Some(engine), false)
+        };
+        // Release and drain before any assertion. Cancellation prevents
+        // generation after the held lock opens.
+        cancelled.store(true, Ordering::SeqCst);
+        drop(guard);
+        drop(runtime);
+        let owners_after_finish = Arc::strong_count(&context);
+        drop(engine);
+        drop(context);
+        assert!(was_pending, "held context must suspend the completion");
+        assert!(owned_while_waiting, "blocking job must own its context");
+        assert!(
+            owned_after_cancel,
+            "cancelled waiter must not release job ownership"
+        );
+        assert!(owned_without_caller, "job survives external engine destruction");
+        assert_eq!(
+            owners_after_finish,
+            baseline_owners - usize::from(owned_after_cancel),
+            "finished job releases ownership"
+        );
+        assert!(
+            weak_context.upgrade().is_none(),
+            "last owner releases context"
+        );
+    }
 
     #[test]
     fn inference_control_stops_for_cancellation_or_deadline() {

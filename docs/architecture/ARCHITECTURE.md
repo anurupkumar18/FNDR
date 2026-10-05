@@ -43,6 +43,8 @@ The code keeps public Tauri command names stable, while internal names make the 
 - `search_hybrid_memories`: semantic + keyword retrieval boundary.
 - `build_memory_cards`: search-results to MemoryCards boundary.
 
+Text inference jobs own a cloned `InferenceEngine` handle while running on the blocking executor. Handles share one context mutex and backend; cancelling the waiting future or replacing the app's engine does not free an active job's state. This is lifetime safety, not unloading: model weights remain deliberately leaked, and the cached pixel runtime remains resident. The Qwen worker's idle log reports that residency rather than claiming release.
+
 ## Configuration
 
 Pipeline knobs live in `src-tauri/src/config.rs` rather than scattered literals:

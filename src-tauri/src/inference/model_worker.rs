@@ -26,7 +26,7 @@ pub struct QwenJobRequest {
 
 /// Lazy-loading Qwen3-VL-2B worker.
 /// - Max 1 concurrent inference.
-/// - Unloads after QWEN_IDLE_UNLOAD_SECONDS of inactivity.
+/// - Reports idle intervals; the cached pixel runtime remains resident.
 /// - Queue capacity: MAX_CONCURRENT_MULTIMODAL_JOBS * 8.
 pub struct QwenVlmWorker {
     sender: mpsc::Sender<QwenJobRequest>,
@@ -83,8 +83,8 @@ async fn worker_loop(
                 break;
             }
             Err(_timeout) => {
-                // Idle timeout — no real unload API in llama_cpp_2 yet; log and continue.
-                tracing::debug!("qwen_worker: idle timeout, model unloaded");
+                // Idle timeout does not release the shared pixel runtime.
+                tracing::debug!("qwen_worker: idle timeout, cached model remains resident");
             }
         }
     }
