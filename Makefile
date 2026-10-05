@@ -97,3 +97,13 @@ QA_QUERIES := $(CURDIR)/scripts/demo/$(PERSONA)-queries.json
 QA_RETRIEVAL_MD := $(CURDIR)/docs/evidence/W03/retrieval-baseline-$(PERSONA).md
 QA_RETRIEVAL_JSON := $(CURDIR)/docs/evidence/W03/retrieval-baseline-$(PERSONA).json
 endif
+
+# PD-05: Friday scoreboard. Prints one Markdown page to stdout from the retrieval
+# reference reports and the vault health evidence. Override any SCOREBOARD_*
+# variable; files that do not exist print "not measured" instead of failing.
+.PHONY: scoreboard
+SCOREBOARD_RETRIEVAL ?= $(wildcard scripts/demo/retrieval-reference/*.json)
+SCOREBOARD_VAULT_HEALTH ?= docs/evidence/W02/vault-health-owner.md
+
+scoreboard:
+	@$(PYTHON) scripts/audit/scoreboard.py $(foreach report,$(SCOREBOARD_RETRIEVAL),--retrieval "$(report)") $(if $(SCOREBOARD_VAULT_HEALTH),--vault-health "$(SCOREBOARD_VAULT_HEALTH)") $(if $(SCOREBOARD_VOICE),--voice "$(SCOREBOARD_VOICE)") $(if $(SCOREBOARD_SESSIONS),--sessions "$(SCOREBOARD_SESSIONS)") $(if $(SCOREBOARD_DATE),--date "$(SCOREBOARD_DATE)")
