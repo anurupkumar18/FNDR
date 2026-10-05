@@ -407,4 +407,173 @@ mod tests {
         assert!((w.graph - 0.20).abs() < f32::EPSILON);
         assert!((w.vector - 0.35).abs() < f32::EPSILON);
     }
+
+    /// Small seeded generator, so the property tests need no extra crate
+    /// and every failure reproduces from its case number.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    /// Route hits shaped like the real routes: each route lists a memory at
+    /// most once per branch, the vector route has two branches (semantic and
+    /// snippet) that can both find the same memory, scores come from a few
+    /// values so ties are common, and a few fall outside 0..1.
+    fn random_route_hits(rng: &mut Lcg) -> Vec<RouteHits> {
+        const SCORES: [f32; 7] = [-0.1, 0.2, 0.4, 0.4, 0.8, 1.0, 1.3];
+        let mut groups = Vec::new();
+        for (route, branches) in [
+            (
+                Route::Vector,
+                &[RouteBranch::Semantic, RouteBranch::Snippet][..],
+            ),
+            (Route::Keyword, &[RouteBranch::Keyword][..]),
+            (Route::Temporal, &[RouteBranch::Temporal][..]),
+            (Route::Chunk, &[RouteBranch::Chunk][..]),
+        ] {
+            let mut hits = Vec::new();
+            for branch in branches {
+                for id in 0..12 {
+                    if rng.below(3) == 0 {
+                        let score = SCORES[rng.below(SCORES.len() as u64) as usize];
+                        hits.push(hit(&format!("m{id:02}"), score, *branch));
+                    }
+                }
+            }
+            groups.push(RouteHits {
+                route,
+                hits,
+                elapsed_ms: 1,
+            });
+        }
+        groups
+    }
+
+    /// The most a memory can score from the routes that found it. The vector
+    /// route counts once per branch (semantic and snippet), so it can count
+    /// twice; see `both_vector_branches_add_to_a_memorys_score`.
+    fn score_bound(weights: &FusionWeights, routes: &[Route]) -> f32 {
+        routes
+            .iter()
+            .map(|route| {
+                let branches = if *route == Route::Vector { 2.0 } else { 1.0 };
+                branches * weight_for(weights, *route)
+            })
+            .sum()
+    }
+
+    #[test]
+    fn fusion_holds_its_invariants_on_random_route_hits() {
+        let plan = dummy_plan();
+        let weights = FusionWeights::default();
+        for case in 0..500u64 {
+            let mut rng = Lcg(case);
+            let groups = random_route_hits(&mut rng);
+            let input_ids = groups
+                .iter()
+                .flat_map(|group| group.hits.iter().map(|hit| hit.memory_id.clone()))
+                .collect::<std::collections::BTreeSet<_>>();
+
+            let fused = fuse(&plan, groups.clone(), &weights);
+            let again = fuse(&plan, groups.clone(), &weights);
+            let ids = fused
+                .iter()
+                .map(|hit| hit.memory_id.clone())
+                .collect::<Vec<_>>();
+
+            // Same input, same output.
+            assert_eq!(
+                ids,
+                again
+                    .iter()
+                    .map(|hit| hit.memory_id.clone())
+                    .collect::<Vec<_>>(),
+                "case {case}"
+            );
+            // Every input memory once, best score first.
+            assert_eq!(
+                ids.len(),
+                input_ids.len().min(MAX_FUSED_HITS),
+                "case {case}"
+            );
+            assert_eq!(
+                ids.iter()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                input_ids,
+                "case {case}"
+            );
+            assert!(
+                fused.windows(2).all(|pair| pair[0].score >= pair[1].score),
+                "case {case}"
+            );
+            // Each route counts once per branch: no score above the weights
+            // of the routes that found the memory.
+            for hit in &fused {
+                assert!(
+                    hit.score <= score_bound(&weights, &hit.contributing_routes) + 1e-6,
+                    "case {case}: {} scored {} from {:?}",
+                    hit.memory_id,
+                    hit.score,
+                    hit.contributing_routes
+                );
+            }
+
+            // The order of hits inside a route does not matter.
+            let mut shuffled = groups.clone();
+            for group in &mut shuffled {
+                for i in (1..group.hits.len()).rev() {
+                    let j = rng.below(i as u64 + 1) as usize;
+                    group.hits.swap(i, j);
+                }
+            }
+            let reordered = fuse(&plan, shuffled, &weights);
+            assert_eq!(
+                ids,
+                reordered
+                    .iter()
+                    .map(|hit| hit.memory_id.clone())
+                    .collect::<Vec<_>>(),
+                "case {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn both_vector_branches_add_to_a_memorys_score() {
+        // Deliberate, and measured: counting the vector route once per memory
+        // lost Recall@5 on two of three personas (1.000 to 0.955, 0.900 to
+        // 0.850) and put real queries under the no-match bar
+        // (docs/evidence/W03/property-tests-cloud.md). Change it only with
+        // the gate and the score bars recalibrated together.
+        let plan = dummy_plan();
+        let weights = FusionWeights::default();
+        let fused = fuse(
+            &plan,
+            vec![RouteHits {
+                route: Route::Vector,
+                hits: vec![
+                    hit("both", 0.8, RouteBranch::Semantic),
+                    hit("both", 0.6, RouteBranch::Snippet),
+                    hit("one", 0.8, RouteBranch::Semantic),
+                ],
+                elapsed_ms: 1,
+            }],
+            &weights,
+        );
+        let score = |id: &str| fused.iter().find(|hit| hit.memory_id == id).unwrap().score;
+        assert!((score("both") - (0.8 + 0.6) * weights.vector).abs() < 1e-6);
+        assert!((score("one") - 0.8 * weights.vector).abs() < 1e-6);
+    }
 }
