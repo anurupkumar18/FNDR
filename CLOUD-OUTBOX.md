@@ -2,7 +2,7 @@
 
 Cloud session (Linux container, GitHub only) to local session. Updated after every ticket and at least every two hours. Newest entries first under each heading.
 
-Last update: 2026-10-05 17:55 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf and main at c124957 (Oct 5 status report, VS-42 to VS-68 filed).
+Last update: 2026-10-05 19:00 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf and main at c124957 (Oct 5 status report, VS-42 to VS-68 filed).
 
 ## NEEDS HUMAN (open)
 
@@ -10,30 +10,35 @@ None.
 
 ## Read first (local)
 
-1. **Security, merge early: train G, PR #33 (VS-61).** Three MCP auth gaps fixed, on main c124957 and independent of train F:
+1. **Main can fail its own Rust tests under load.** This is a VS-07 bug of mine: the first keyword search built seven BM25 indexes inside a 320 ms per-variant budget. On a busy runner the phrase variant timed out on the first search only.
+   - It turned PR #31 red in your `memory_journey` six-journeys test: 0.1901673 versus 0.22735563. The replay gives 0.1901673 to the last digit.
+   - Users hit it too: the first search after rows are added could lose its phrase match.
+   - Fixed on train F (b95bcb9): writes build the indexes. Under 8x load, 20 of 24 runs failed before and 0 of 24 after. No rank changed on three personas.
+2. **Security, merge early: train G, PR #33 (VS-61).** Three MCP auth gaps fixed, on main c124957 and independent of train F:
    - `FNDR_MCP_REQUIRE_AUTH=0` disabled auth in every mode, including Public, which binds to the network.
    - `FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS=1` worked in Tunnel mode, where tunnel traffic arrives from loopback.
    - The token check stopped at the first wrong byte and accepted an empty token.
    - `~/.fndr/mcp_token` was briefly world-readable.
 
    There is a route-by-route table and 13 new refused requests over real HTTP.
-2. **A crash in every Search and Ask, fixed on train F (3fe3659).** With an app whose short name is a time word installed (the monday.com app), "notes on Monday" panicked in `parse_query_filters`. The property tests found it. They also found that the parser compiled a regex per app alias per query: 56 ms per parse in debug, now 1.2 ms, and `retrieve` p50 on the seeded profiles fell by 31 to 47 ms.
-3. **For VS-63 (office-PM near-tie on the M1).** GitHub's Apple-silicon `macos-26` runner reproduced every Linux-recorded rank, on both #31 and the negative control, so "M1 versus Linux numerics" may not be the cause. Two things to check before loosening the gate:
+3. **A crash in every Search and Ask, fixed on train F (3fe3659).** With an app whose short name is a time word installed (the monday.com app), "notes on Monday" panicked in `parse_query_filters`. The property tests found it. They also found that the parser compiled a regex per app alias per query: 56 ms per parse in debug, now 1.2 ms, and `retrieve` p50 on the seeded profiles fell by 31 to 47 ms.
+4. **VS-63 is delivered on train F (7e2f178): a loss from ranks 8 to 10 is now a warning.** The background below still applies to regenerating the reference.
+
+   For VS-63 (office-PM near-tie on the M1). GitHub's Apple-silicon `macos-26` runner reproduced every Linux-recorded rank, on both #31 and the negative control, so "M1 versus Linux numerics" may not be the cause. Two things to check before loosening the gate:
    - The office-PM corpus mixes clock-time and minutes-ago entries, so ranks of near-ties move with the hour the seed runs (logged 2026-10-05 00:10).
    - Did the M1 run use the same MiniLM (sha256 `759c3cd2...`) and the lifted route budgets that `retrieval_qa` applies?
-
-   I can take VS-63 if you want; the comparator change is small either way.
-4. **Fusion counts the vector route twice** when both of its branches (full text and snippet) find a memory. Counting it once was measured and not shipped: it lost Recall@5 on two of three personas, and it moves every fused score down by about a quarter, which breaks the VS-12 bars and Ask's 0.3 verifier floor. Pinned by a test; proposal VS-70 does it properly.
-5. **Train F (#31) is up to date with main** through a merge commit (782c05d). Proposals renumbered: VS-69 (entity route on the persisted graph) and VS-70. The withdrawn keyword-weight idea never got an ID that survived.
-6. **`release.yml` still uses `macos-14`** and will hit the Swift SDK error that #24 fixed for `test.yml`.
-7. **Branch deletion is still refused here (HTTP 403):** `claude/probe`, the merged `claude/train-*` branches, and `claude/vs34-negative-control` stay until you delete them.
+5. **Fusion counts the vector route twice** when both of its branches (full text and snippet) find a memory. Counting it once was measured and not shipped: it lost Recall@5 on two of three personas, and it moves every fused score down by about a quarter, which breaks the VS-12 bars and Ask's 0.3 verifier floor. Pinned by a test; proposal VS-70 does it properly.
+6. **Train F (#31) is up to date with main** through a merge commit (782c05d). Proposals renumbered: VS-69 (entity route on the persisted graph) and VS-70. The withdrawn keyword-weight idea never got an ID that survived.
+7. **`release.yml` still uses `macos-14`** and will hit the Swift SDK error that #24 fixed for `test.yml`.
+8. **Branch deletion is still refused here (HTTP 403):** `claude/probe`, the merged `claude/train-*` branches, and `claude/vs34-negative-control` stay until you delete them.
 
 ## Merge queue for local (in this order)
 
 | # | Branch | Draft PR | Head | Tickets | Rust CI | Notes |
 |---|---|---|---|---|---|---|
-| 1 | `claude/train-g-security` | #33 | 90bb70b | VS-61 | running | On main c124957; independent; p0. |
-| 2 | `claude/train-f-retrieval` | #31 | 81666e1 | VS-33, VS-36, VS-34 (2), VS-13 follow-ups (3: deadlines, evidence fix, crash and speed); stretch: ablation, demo numbers, third persona, anti-bloat, property tests; proposals VS-69, VS-70 | retrieval gate green on 81666e1 (three personas, 6.5 min); Rust tests running | Merged with main c124957 (782c05d). `.github/workflows/retrieval-gate.yml` is new and yours to merge. |
+| 1 | `claude/train-g-security` | #33 | 90bb70b | VS-61 | green | On main c124957; independent; p0. |
+| 2 | `claude/train-f-retrieval` | #31 | b95bcb9 | VS-33, VS-36, VS-34 (2), VS-63, VS-66, VS-07 fix, VS-13 follow-ups (3: deadlines, evidence fix, crash and speed); stretch: ablation, demo numbers, third persona, anti-bloat, property tests; proposals VS-69, VS-70 | rerunning on b95bcb9 (81666e1 was red from the VS-07 race; see Read first 1) | Merged with main c124957 (782c05d). `.github/workflows/retrieval-gate.yml` is new and yours to merge. |
+| 3 | `claude/train-h-embeddings` | #34 | 1242b8b | VS-47 | green | On main c124957; independent. The v6 contract is not active (VS-48, VS-49). |
 
 ## Gate 0 capability probe (2026-10-04)
 
@@ -58,6 +63,28 @@ None.
 4. Branch policy: I only rebase (with `--force-with-lease`) commits that local has not merged. If you are mid-gate on a branch, say so in LOCAL-OUTBOX and I will stack on it instead.
 
 ## Tickets
+
+### VS-47 EmbeddingGemma vectors match the reference: delivered
+
+- `claude/train-h-embeddings`, 1242b8b, PR #34. Evidence `docs/evidence/W03/VS-47-cloud.md`.
+- Comment to post:
+  > Done in cloud: the ONNX embedder reads the export's sentence_embedding output (pooling, both dense layers, normalization), truncates and renormalizes for 256 dimensions, and uses the model card's query and document prompts. Cosine to sentence-transformers reference vectors (20 synthetic sentences): lowest 0.999978 at 768 and 0.999980 at 256. The old mean-pooling path gave 0.007. MiniLM and BGE unchanged; the retrieval gate passes on both committed personas with no rank change. The v6 contract is not active yet (VS-48, VS-49), and the numbers are Linux CPU, not the M1.
+
+### VS-07 fix: BM25 indexes built on write: delivered
+
+- `claude/train-f-retrieval`, b95bcb9, PR #31. Evidence `docs/evidence/W03/VS-07-index-on-write-cloud.md`. See Read first 1.
+
+### VS-66 Beta recall chart: delivered
+
+- `claude/train-f-retrieval`, af9c536, PR #31. Evidence `docs/evidence/W03/VS-66-cloud.md`.
+- Comment to post:
+  > Done in cloud: `make recall-chart` rebuilds docs/evidence/W03/beta-demo-recall.png from beta-demo-recall.csv, byte for byte (no timestamp in the PNG). Three tests cover the chart script.
+
+### VS-63 near-ties at the bottom of the top ten: delivered
+
+- `claude/train-f-retrieval`, 7e2f178, PR #31. Evidence `docs/evidence/W03/VS-63-cloud.md`.
+- Comment to post:
+  > Done in cloud: a query lost from ranks 8 to 10 is a warning ("PASS with N warnings"); ranks 1 to 7 and the 0.05 Recall@5 rule still fail. Your M1 office-PM loss replays as PASS with 3 warnings. Regenerating the office-PM reference on the M1 is the local half and is now optional.
 
 ### VS-61 MCP auth sweep: delivered
 
@@ -309,6 +336,9 @@ None.
 
 ## In progress (cloud)
 
-- Trains B and D complete (PR #25, #27 bodies rewritten with the four-line block and per-ticket tables).
-- Now train F: VS-33 (graph route has no data), VS-34 (retrieval gate in CI), VS-36 (task candidates).
-- Disk note: the BGE-large model for chunk runs lives outside the repo at `/root/fndr-models/bge` in the cloud container (pinned URL from `scripts/bootstrap/download-embedding-model.sh`; that script writes `tokenizer.json` into the same folder as MiniLM's, which would overwrite it: worth a separate folder on the M1 too).
+- **VS-68, the safe slice of `fndr.remember`, on a new train I stacked on train G.** It needs VS-61's auth changes.
+  - Defaults follow VS-35's recommended answers: notes are off by default, writes need a token, notes stay out of Resume, and the limits are as written.
+  - Change any of those in LOCAL-OUTBOX and I will follow.
+- **Then the stretch items:** the test-suite honesty audit and the README truth pass.
+- **VS-54, VS-55 and VS-56 wait on VS-52's go or no-go.** VS-64 waits on VS-40, whose files are local-owned.
+- **Disk note:** the BGE-large model for chunk runs lives outside the repo, at `/root/fndr-models/bge` in the cloud container. It comes from the pinned URL in `scripts/bootstrap/download-embedding-model.sh`. That script writes `tokenizer.json` into the same folder as MiniLM's, which would overwrite it, so the M1 needs a separate folder too.
