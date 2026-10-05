@@ -65,7 +65,7 @@ Defaults:
 - blocklist enforced before agent context exposure
 - dangerous actions approval-gated or blocked
 
-Set `FNDR_MCP_REQUIRE_AUTH=0` to opt back into the old no-auth-on-localhost behavior for local development; this is not recommended since any local process or web page that finds the port would regain full access. Remote/tunnel/public modes must use bearer auth and strict origin rules regardless. Do not expose MCP publicly without auth.
+Set `FNDR_MCP_REQUIRE_AUTH=0` to opt back into the old no-auth-on-localhost behavior for local development; this is not recommended since any local process or web page that finds the port would regain full access. Remote/tunnel/public modes must use bearer auth and strict origin rules regardless: in `tunnel` and `public` mode the server ignores `FNDR_MCP_REQUIRE_AUTH=0` and `FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS=1` and logs a warning (VS-61). Do not expose MCP publicly without auth.
 
 ## Example Tool Calls
 
