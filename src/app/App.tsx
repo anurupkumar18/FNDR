@@ -58,6 +58,10 @@ const PRIMARY_SIDEBAR_ITEMS = [
 const LAB_SIDEBAR_ITEMS = [
     { key: "screenGuide", text: "Screen Guide" },
     { key: "agent", text: "Hermes Agent" },
+    { key: "stats", text: "Stats" },
+    { key: "todo", text: "To-dos" },
+    { key: "wrapped", text: "FNDR Wrapped" },
+    { key: "privacyProof", text: "Privacy Activity" },
 ] as const satisfies readonly SidebarItem[];
 
 /** Visible navigation follows ADR 023. Engine diagnostics is intentionally

@@ -55,6 +55,10 @@ describe("CommandPalette interaction contract", () => {
             "Trust & Settings",
             "Screen Guide",
             "Hermes Agent",
+            "Stats",
+            "To-dos",
+            "FNDR Wrapped",
+            "Privacy Activity",
             "Pause capture",
         ]);
 
