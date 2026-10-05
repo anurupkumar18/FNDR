@@ -226,3 +226,38 @@ ANTI-BLOAT REVIEW
 - Simplifications required: none after review. `parent_id`, unused legacy `related_ids` and consolidation aliases are not invented as relationship types.
 - Testability gaps: native data quality and graph-scale costs remain unmeasured.
 - Verdict: approve after independent read-only review; preserve teammate migration ownership and continue shared-model integration separately.
+
+
+## Shared text-model session and initialization recovery
+
+GRILL WITH DOCS RESULT
+- Shared understanding: reduce duplicated local model residency while preserving caller-specific chunking, vector spaces and fallback behavior. This prepares VS-48/49 and does not implement Minh's EM-09 migration.
+- Domain/interfaces: `Embedder` remains the caller wrapper; `RealEmbedder` owns the tokenizer/ONNX session. Canonical model directory plus full contract identifies a resident backend.
+- Decisions resolved: share only the real backend; keep caches, chunkers and degradation flags separate. Use weak registry ownership, publish after the dimension probe, and serialize initialization. Search and meetings cache successful wrapper initialization only.
+- Open boundaries: static wrappers still pin their session until exit; no idle unload or priority scheduler is claimed. Distinct model initialization serializes through one registry lock. In-place replacement of resident assets requires restart.
+- Documentation: existing architecture overview, README and ADR 019 updated. No new domain term, plan or schema introduced. Next workflow: measured scheduling slice with TDD.
+
+TDD SUMMARY
+- Observed red: real MiniLM capture/search constructors produced different backend identities (`real_model_session_is_shared_without_changing_chunking`). Green after sharing the backend; vectors for the same short query match exactly while narrow capture chunking remains distinct.
+- Lifecycle checks: four simultaneous initializers converge on one session; canonical directory aliases share; distinct directories and full contracts stay isolated; missing files can recover; final-owner drop releases the weakly registered session, followed by successful reload.
+- Observed red: after a missing-model error the wrapper cache returned that same error instead of attempting the next initializer (`cached_embedder_retries_missing_assets_then_reuses_success`). Success-only caching now retries distinct failures and then reuses the initialized wrapper.
+- Focused commands: `CARGO_BUILD_JOBS=1 cargo test --locked --lib embedding::` passed 35 tests, with three asset-dependent tests ignored. Explicit real-model run with `FNDR_EMBED_MODEL_DIR=/tmp/fndr-integration-oct5/models-minilm` and `cargo test --locked --lib real_model_ -- --ignored` passed both new asset-dependent lifecycle tests.
+- Code reused: existing model resolver, contract, ONNX dimension probe and session mutex. No constructor call-site sweep, schema migration, dependency or new production module.
+
+Contention evidence: the two fp32/256 runs in ADR 019 measured 778.75 to 807.79 ms query medians and maxima 1079.56 to 1103.17 ms while all 24 query starts overlapped the background call. Background duration was 19.621 to 19.652 seconds; second-wrapper construction about 0.062 ms; peak RSS 924.1 to 924.2 MB. This changes the next action to foreground admission and smaller background batches, with asynchronous retrieval kept responsive. It does not complete native capture or whole-app RAM acceptance.
+
+Local scratch artifacts: `/tmp/fndr-integration-oct5/shared-session-{red,green,lifecycle}.log`, `shared-wrapper-red.log`, `shared-embedding-suite.log`, and `gemma-shared-contention-256-r{1,2}.{json,stderr}`. The temporary probe source is retained as `/tmp/fndr-integration-oct5/embedding_contention.rs`, SHA-256 `b2c2ab77751e3252b91aa84179049bf9d105012c2c171dfecc77fe0471a2d7f3`; its temporary repository copy was removed after building. It calls the public `embed_inputs` boundary with the same synthetic corpora recorded above and never opens a store. These local paths are diagnostic evidence, not committed portable benchmark assets. The ignored lifecycle tests are committed and reproducible with pinned MiniLM assets.
+
+ANTI-BLOAT REVIEW
+- Delivered behavior: one resident real backend per asset location/contract across existing callers, without erasing their preprocessing or fallback policies; missing-asset initialization errors no longer stick permanently in search/meetings.
+- Complexity added: a small weak registry and one tested success-cache helper in the existing embedding module. Most added lines are lifecycle regressions.
+- Simplifications: removed duplicated cached-error branches; no new model service or scheduler framework. Temporary measurement source removed from the checkout.
+- Independent review: approved, no actionable race or fallback-isolation defect. Limits above remain explicit; resident assets are immutable and runtime mock recovery is separate.
+
+
+Final broad validation for this slice: `CARGO_BUILD_JOBS=1 cargo test --locked` from `src-tauri/` passed **1,079 tests**, with 19 intentionally ignored, across 21 reported test targets including doc tests. Existing compiler warnings remain. No frontend code changed, so the previous frontend/browser evidence was not re-run. An initial invocation from the repository root stopped immediately because that directory has no Cargo manifest; the corrected command above completed successfully.
+
+Next scheduling slice: keep `RouteCtx` borrowed, clone an owned embedding handle into `spawn_blocking`, and offload cold model initialization as well as warm query inference. Handle clones should share one wrapper's cache/degradation state while separately constructed wrappers remain independent. At the real backend, admit one background chunk at a time, give waiting queries bounded preference, and serve a waiting background request after a fixed foreground burst. Verify FIFO/fairness and error release deterministically; use a current-thread async test to prove executor progress; repeat the same contention workload and report queue/service/total time. A timed-out blocking task continues running, so a timeout alone cannot provide cancellation.
+
+
+Real fp32 reference check also passed after the shared-session change: `FNDR_EMBED_MODEL_DIR=/tmp/fndr-integration-oct5/models-embeddinggemma-fp32 CARGO_BUILD_JOBS=1 cargo test --locked --test embeddinggemma_reference -- --ignored --nocapture`. Lowest cosine remained 0.999978 at 768 dimensions and 0.999980 at 256. The broad suite regenerated the unrelated storage-index timing report; that run was retained locally as `shared-session-storage-indexes.md` and the tracked historical report restored. No owner assets, vault data or active model contract changed.

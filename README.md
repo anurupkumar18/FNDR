@@ -55,7 +55,7 @@ FNDR addresses this by building a local, inspectable memory layer:
 | OCR and context extraction | Apple Vision OCR + structured memory synthesis | Stable |
 | Metadata extraction | App name, window title, URL/domain, session/event fields in `MemoryRecord` | Stable |
 | Memory cards / Memory Vault | UI surfaces under `src/domains/memory-vault/` | Stable |
-| Semantic embeddings | Local ONNX embedder (`all-MiniLM-L6-v2`, 384-d), loaded once per process; ADR 019 (Proposed) recommends EmbeddingGemma | Stable |
+| Semantic embeddings | Local ONNX embedder (`all-MiniLM-L6-v2`, 384-d), one resident ONNX session per asset directory and contract; ADR 019 (Proposed) recommends EmbeddingGemma | Stable |
 | One retrieval path | `retrieve`: vector + BM25 keyword routes, weighted fusion, time and app phrase filters (`src-tauri/src/context_runtime/retrieve.rs`, `retrieval_routes.rs`, `fusion.rs`) | Stable |
 | Chunk retrieval | BM25 over chunk text plus BGE-large (1024-d) chunk vectors, rolled up to their memory; behind `search.use_chunk_first_retrieval`, off by default until chunks are written at capture (`context_runtime/chunk_route.rs`) | Experimental |
 | "No strong matches" | `retrieve` reports `strong_match`; Search folds weak results behind a button (`retrieve.rs`, `src/domains/timeline/Timeline.tsx`) | Experimental |

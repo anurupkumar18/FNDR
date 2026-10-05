@@ -3,6 +3,7 @@
 mod chunking;
 mod clip_vision;
 mod onnx;
+pub(crate) use onnx::cached_embedder;
 pub mod prefixes;
 
 pub use chunking::{

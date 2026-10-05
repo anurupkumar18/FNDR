@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 /// Authoritative text embedding dimension for the primary semantic index.
 pub const EMBEDDING_DIM: usize = DEFAULT_TEXT_EMBEDDING_DIM;
@@ -161,8 +161,21 @@ pub struct Embedder {
     embedding_cache: Mutex<EmbeddingCache>,
 }
 
+pub(crate) fn cached_embedder(
+    cell: &OnceLock<Embedder>,
+    initialize: impl FnOnce() -> Result<Embedder, String>,
+) -> Result<&Embedder, String> {
+    if let Some(embedder) = cell.get() {
+        return Ok(embedder);
+    }
+    // Cache only success so a model installed mid-session can recover. Racing
+    // initializers share the real backend; retain the first published wrapper.
+    let _ = cell.set(initialize()?);
+    Ok(cell.get().expect("successful initialization published"))
+}
+
 enum Backend {
-    Real(RealEmbedder),
+    Real(Arc<RealEmbedder>),
     Mock(MockEmbedder),
 }
 
@@ -622,11 +635,53 @@ struct RealEmbedder {
     output_name: String,
 }
 
+struct ResidentTextModel {
+    contract: TextEmbeddingContract,
+    model_dir: PathBuf,
+    model: Weak<RealEmbedder>,
+}
+
+static RESIDENT_TEXT_MODELS: OnceLock<Mutex<Vec<ResidentTextModel>>> = OnceLock::new();
+
 impl RealEmbedder {
-    fn new(contract: TextEmbeddingContract) -> Result<Self, String> {
+    fn new(contract: TextEmbeddingContract) -> Result<Arc<Self>, String> {
         let model_dir = resolve_model_dir(contract)
             .ok_or_else(|| "Could not determine model directory".to_string())?;
+        Self::shared_from_dir(contract, model_dir)
+    }
 
+    fn shared_from_dir(
+        contract: TextEmbeddingContract,
+        model_dir: PathBuf,
+    ) -> Result<Arc<Self>, String> {
+        let model_dir = model_dir.canonicalize().map_err(|e| e.to_string())?;
+        let mut residents = RESIDENT_TEXT_MODELS
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .map_err(|e| format!("Text model registry lock poisoned: {e}"))?;
+        residents.retain(|entry| entry.model.strong_count() > 0);
+        for entry in residents.iter() {
+            if entry.contract == contract && entry.model_dir == model_dir {
+                if let Some(model) = entry.model.upgrade() {
+                    return Ok(model);
+                }
+            }
+        }
+
+        // Serialize initialization so racing callers cannot load duplicate
+        // weights. Publish only after the real model passes its dimension probe;
+        // failures remain retryable. Weak ownership permits release when the last
+        // wrapper drops, while chunking/cache/fallback stay local to each wrapper.
+        let model = Arc::new(Self::load(contract, &model_dir)?);
+        residents.push(ResidentTextModel {
+            contract,
+            model_dir,
+            model: Arc::downgrade(&model),
+        });
+        Ok(model)
+    }
+
+    fn load(contract: TextEmbeddingContract, model_dir: &std::path::Path) -> Result<Self, String> {
         let onnx_path = model_dir.join(contract.model_filename);
         let tokenizer_path = model_dir.join(contract.tokenizer_filename);
 
@@ -1237,6 +1292,126 @@ fn normalize(vec: &mut [f32]) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn cached_embedder_retries_missing_assets_then_reuses_success() {
+        let cell = OnceLock::new();
+        assert_eq!(
+            cached_embedder(&cell, || Err("model missing".into()))
+                .err()
+                .as_deref(),
+            Some("model missing")
+        );
+        assert_eq!(
+            cached_embedder(&cell, || Err("tokenizer missing".into()))
+                .err()
+                .as_deref(),
+            Some("tokenizer missing")
+        );
+        let ready = cached_embedder(&cell, || Ok(Embedder::mock_for_tests()))
+            .expect("recover after install");
+        let reused =
+            cached_embedder(&cell, || panic!("must reuse successful initialization")).unwrap();
+        assert!(std::ptr::eq(ready, reused));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[ignore = "requires pinned real MiniLM assets via FNDR_EMBED_MODEL_DIR"]
+    fn real_model_registry_retries_isolates_and_releases() {
+        let contract = active_embedding_contract();
+        let source =
+            PathBuf::from(std::env::var_os("FNDR_EMBED_MODEL_DIR").expect("pinned assets"))
+                .canonicalize()
+                .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let first_dir = temp.path().join("first");
+        let second_dir = temp.path().join("second");
+        std::fs::create_dir(&first_dir).unwrap();
+        assert!(RealEmbedder::shared_from_dir(contract, first_dir.clone()).is_err());
+        std::fs::create_dir(&second_dir).unwrap();
+        for dir in [&first_dir, &second_dir] {
+            for file in [contract.model_filename, contract.tokenizer_filename] {
+                std::os::unix::fs::symlink(source.join(file), dir.join(file)).unwrap();
+            }
+        }
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let path = first_dir.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    RealEmbedder::shared_from_dir(contract, path).unwrap()
+                })
+            })
+            .collect();
+        let models: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert!(models.iter().all(|model| Arc::ptr_eq(model, &models[0])));
+        let alias_dir = temp.path().join("alias");
+        std::os::unix::fs::symlink(&first_dir, &alias_dir).unwrap();
+        let alias = RealEmbedder::shared_from_dir(contract, alias_dir).unwrap();
+        assert!(Arc::ptr_eq(&models[0], &alias));
+        let other_path = RealEmbedder::shared_from_dir(contract, second_dir).unwrap();
+        assert!(!Arc::ptr_eq(&models[0], &other_path));
+        let mut other_contract = contract;
+        other_contract.max_sequence_length /= 2;
+        let other_model = RealEmbedder::shared_from_dir(other_contract, first_dir.clone()).unwrap();
+        assert!(!Arc::ptr_eq(&models[0], &other_model));
+        let released = Arc::downgrade(&models[0]);
+        drop(models);
+        assert!(released.upgrade().is_some());
+        drop(alias);
+        assert!(
+            released.upgrade().is_none(),
+            "registry must not keep idle weights alive"
+        );
+        let reloaded = RealEmbedder::shared_from_dir(contract, first_dir).unwrap();
+        let text = ["Find the release validation checklist".to_string()];
+        assert_eq!(
+            reloaded.embed_batch(&text).unwrap(),
+            other_path.embed_batch(&text).unwrap()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires pinned real MiniLM assets via FNDR_EMBED_MODEL_DIR"]
+    fn real_model_session_is_shared_without_changing_chunking() {
+        let contract = active_embedding_contract();
+        let narrow = ChunkingConfig {
+            max_tokens: 32,
+            overlap_tokens: 4,
+            min_tokens: 1,
+            ..Default::default()
+        };
+        let capture = Embedder::with_contract_and_chunking_config(contract, &narrow, false)
+            .expect("real capture embedder");
+        let search = Embedder::with_contract_and_chunking_config(
+            contract,
+            &ChunkingConfig::default(),
+            false,
+        )
+        .expect("real search embedder");
+        let (Backend::Real(capture_model), Backend::Real(search_model)) =
+            (&capture.backend, &search.backend)
+        else {
+            panic!("real model required")
+        };
+        assert!(
+            Arc::ptr_eq(capture_model, search_model),
+            "capture and search must share the resident model session"
+        );
+        let text = "The release checklist documents validation and deployment steps. ".repeat(24);
+        assert!(capture.chunk_text(&text).len() > search.chunk_text(&text).len());
+        let query = vec!["Find the release validation checklist".to_string()];
+        assert_eq!(
+            capture.embed_batch(&query).unwrap(),
+            search.embed_batch(&query).unwrap()
+        );
+    }
 
     #[test]
     fn role_prompt_reaches_every_long_document_chunk() {
