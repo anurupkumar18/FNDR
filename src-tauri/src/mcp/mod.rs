@@ -1,4 +1,4 @@
-//! MCP server for FNDR — local-first with secure tunnel/public deployment modes.
+//! MCP server for FNDR: local-first with secure tunnel/public deployment modes.
 //!
 //! Features:
 //!  - Deployment modes: local (default), tunnel, public
@@ -950,10 +950,21 @@ fn is_origin_allowed(
     allowed_origins.iter().any(|item| item == &normalized)
 }
 
+/// The method that decides the loopback handshake exemption. For a batch it
+/// is the first item that is not a handshake method (or `None` for an item
+/// without one), so a handshake cannot carry other calls past the token
+/// check; a batch of handshakes only is still exempt.
 fn jsonrpc_method_hint(payload: &Value) -> Option<&str> {
     match payload {
         Value::Object(map) => map.get("method").and_then(Value::as_str),
-        Value::Array(items) => items.iter().find_map(jsonrpc_method_hint),
+        Value::Array(items) => {
+            let methods = items.iter().map(jsonrpc_method_hint).collect::<Vec<_>>();
+            methods
+                .iter()
+                .copied()
+                .find(|method| !is_local_handshake_method(*method))
+                .unwrap_or_else(|| methods.first().copied().flatten())
+        }
         _ => None,
     }
 }
@@ -1004,7 +1015,7 @@ fn unauthorized_jsonrpc_item(payload: &Value) -> Option<Value> {
 // Route handlers
 // ---------------------------------------------------------------------------
 
-/// Unauthenticated probe — lets clients discover the server without a token.
+/// Unauthenticated probe: lets clients discover the server without a token.
 async fn root_handler(State(state): State<Arc<HttpState>>) -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -1023,7 +1034,7 @@ async fn root_handler(State(state): State<Arc<HttpState>>) -> impl IntoResponse 
     )
 }
 
-/// GET /mcp — streamable HTTP-style SSE entrypoint.
+/// GET /mcp: streamable HTTP-style SSE entrypoint.
 async fn mcp_stream_handler(
     State(state): State<Arc<HttpState>>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
@@ -1033,7 +1044,7 @@ async fn mcp_stream_handler(
     sse_handler_inner(state, peer_addr, uri, headers, true).await
 }
 
-/// POST /mcp  and  POST /mcp/messages — localhost JSON-RPC handler.
+/// POST /mcp  and  POST /mcp/messages: localhost JSON-RPC handler.
 async fn mcp_handler(
     State(state): State<Arc<HttpState>>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
@@ -1084,7 +1095,7 @@ async fn mcp_handler(
     }
 }
 
-/// GET /mcp/sse — SSE streaming transport (MCP spec 2024-11-05).
+/// GET /mcp/sse: SSE streaming transport (MCP spec 2024-11-05).
 ///
 /// Sends an initial `endpoint` event pointing the client at POST /mcp/messages,
 /// then keeps the stream alive with periodic pings.
@@ -1888,7 +1899,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "get_ambient_context",
-                "description": "Return what the user is actively working on right now: frontmost app, recent memory snippets, and window context. Use this to give code editors, AI assistants, or other clients real-time awareness of the user's current task — the 'Time Machine for IDEs' feature.",
+                "description": "Return what the user is actively working on right now: frontmost app, recent memory snippets, and window context. Use this to give code editors, AI assistants, or other clients real-time awareness of the user's current task (the 'Time Machine for IDEs' feature).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -2676,7 +2687,7 @@ async fn run_fndr_health_check(app_state: Arc<AppState>) -> Result<Value, JsonRp
 }
 
 // ---------------------------------------------------------------------------
-// Phase 4 — fndr.* namespace handlers (thin wrappers over the Phase 3 pipeline)
+// Phase 4: fndr.* namespace handlers (thin wrappers over the Phase 3 pipeline)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, Deserialize)]
@@ -5311,6 +5322,46 @@ mod tests {
                 unauthenticated_call.status(),
                 reqwest::StatusCode::UNAUTHORIZED
             );
+
+            // A handshake at the front of a batch must not carry the other
+            // items past the token check.
+            let smuggled_call = client
+                .post(&status.endpoint)
+                .header("Content-Type", "application/json")
+                .json(&json!([
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 5,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": { "name": "reqwest-test", "version": "0.1.0" }
+                        }
+                    },
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 6,
+                        "method": "tools/call",
+                        "params": { "name": "fndr_health_check", "arguments": {} }
+                    }
+                ]))
+                .send()
+                .await
+                .expect("batch with a handshake and a tools/call");
+            assert_eq!(smuggled_call.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+            let handshake_batch = client
+                .post(&status.endpoint)
+                .header("Content-Type", "application/json")
+                .json(&json!([
+                    { "jsonrpc": "2.0", "id": 7, "method": "tools/list" },
+                    { "jsonrpc": "2.0", "id": 8, "method": "tools/list" }
+                ]))
+                .send()
+                .await
+                .expect("batch of handshake methods");
+            assert_eq!(handshake_batch.status(), reqwest::StatusCode::OK);
 
             let authenticated_call = client
                 .post(&status.endpoint)
