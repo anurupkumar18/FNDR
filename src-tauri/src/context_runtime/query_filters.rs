@@ -174,7 +174,10 @@ fn find_time(query: &str, now: DateTime<Local>) -> Option<((usize, usize), TimeR
     }
     let found = WEEKDAY_PHRASE
         .captures_iter(query)
-        .find(|found| !is_dotted(query, found.get(0).unwrap().end()))?;
+        .find(|found| {
+            !is_dotted(query, found.get(0).unwrap().end())
+                && !after_deadline_word(query, found.get(0).unwrap().start())
+        })?;
     let whole = found.get(0)?;
     let name = found["day"].to_lowercase();
     let weekday = WEEKDAYS.iter().find(|(day, _)| *day == name)?.1;
@@ -252,6 +255,14 @@ fn after_article(query: &str, start: usize) -> bool {
     ["the", "a", "an"]
         .iter()
         .any(|article| before == *article || before.ends_with(&format!(" {article}")))
+}
+
+/// "due Thursday", "by Friday": a deadline in the future, not a day to search.
+fn after_deadline_word(query: &str, start: usize) -> bool {
+    let before = query[..start].trim_end().to_lowercase();
+    ["due", "by", "until", "before", "till", "next"]
+        .iter()
+        .any(|word| before == *word || before.ends_with(&format!(" {word}")))
 }
 
 /// "Monday.com" or "Slack.app": a word followed by a dot and a letter is a name.
@@ -494,6 +505,8 @@ mod tests {
             "what does Dana want for the survey readout",
             "the today show transcript",
             "net new ARR $1.24M",
+            "churn drivers due Thursday",
+            "send the readout by Friday",
         ] {
             let parsed = parse(query);
             assert_eq!(parsed.time, None, "{query}");
