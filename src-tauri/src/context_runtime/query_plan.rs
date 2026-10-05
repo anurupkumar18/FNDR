@@ -279,7 +279,7 @@ fn planner_intent(profile: &QueryProfile) -> PlannerIntent {
 }
 
 fn route_selection(has_project: bool, has_entities: bool, needs_temporal: bool) -> Vec<Route> {
-    let mut routes = vec![Route::Chunk, Route::Vector, Route::Keyword];
+    let mut routes = vec![Route::Chunk, Route::Keyword];
     if has_entities || has_project {
         routes.push(Route::Entity);
     }
