@@ -2,7 +2,7 @@
 
 Cloud session (Linux container, GitHub only) to local session. Updated after every ticket and at least every two hours. Newest entries first under each heading.
 
-Last update: 2026-10-04 23:45 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf (main at b948dfd).
+Last update: 2026-10-05 00:55 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf (main at b948dfd).
 
 ## NEEDS HUMAN (open)
 
@@ -11,7 +11,7 @@ None.
 ## Read first (local)
 
 1. **Security fix, merge early:** VS-41 on `claude/train-f-new` (PR #26). In Local mode a loopback JSON-RPC **batch** that starts with `initialize` skipped the token check for every item, so `[initialize, tools/call]` ran any tool without the token (against ADR-017). Fixed and covered by the existing HTTP auth test; it touches only `jsonrpc_method_hint` in `src-tauri/src/mcp/mod.rs`. Please also check whether a follow-up task was created for it in the Claude app (a sub-agent tried and timed out); VS-41 is that follow-up, file it from `docs/team/tickets/proposed/cloud-proposals.md` once I add it there (next docs push).
-2. **GitHub Rust CI has been red on main since at least 2026-09-30.** The Swift speech helper uses `SpeechAnalyzer` (macOS 26 SDK only) and `test.yml` runs on `macos-14`, so `build.rs:25` panics before any test. Draft PR #24 moves the job to `macos-26`: the build then passes and 885 of 886 lib tests pass. The one failure, `memory_journey::tests::six_synthetic_journeys_reconstruct_from_temporary_storage_and_search`, is load-dependent: all embeddings in that test are equal, so the result rests on the keyword route, whose 320 ms per-variant budget drops hits on a slow runner (same root cause as below). BM25 (VS-07) makes the keyword route fast; train B (#25) carries the ported `macos-26` change so its CI will show whether that test passes there. `release.yml` still uses `macos-14` and will hit the same Swift error.
+2. **GitHub Rust CI has been red on main since at least 2026-09-30.** The Swift speech helper uses `SpeechAnalyzer` (macOS 26 SDK only) and `test.yml` runs on `macos-14`, so `build.rs:25` panics before any test. Draft PR #24 moves the job to `macos-26`: the build then passes and 885 of 886 lib tests pass. The one failure, `memory_journey::tests::six_synthetic_journeys_reconstruct_from_temporary_storage_and_search`, is load-dependent: all embeddings in that test are equal, so the result rests on the keyword route, whose 320 ms per-variant budget drops hits on a slow runner (same root cause as below). BM25 (VS-07) makes the keyword route fast; train B (#25) carries the ported `macos-26` change and **its full Rust job passed there, this test included** (1b5d623). Trains F (#26) and D (#27) carry the same runner change without BM25 and fail only this test (comment on #26 explains; not ported, so a retrieval change does not ride the security train). Simplest order: merge #24, then train B, and every later train goes green. `release.yml` still uses `macos-14` and will hit the same Swift error.
 3. **Retrieval timing bug (product):** route time budgets (`keyword_variant_timeout_ms` 320, `keyword_timeout_ms` 900) silently drop keyword hits when a `LIKE` scan is slow, so Ask results can change with CPU load. The eval now lifts budgets (VS-04 second commit) so the gate is deterministic; VS-07 replaces the scan with BM25 (Search p95 1357 to 288 ms on the knowledge-worker set).
 4. **Ask depends on Search (product, for VS-21):** the same Ask query ranks the target card 2nd in a fresh process and 11th when Search ran earlier in the same process (office-PM profile, "the product requirements doc I drafted last week"). First suspect: the text-keyed embedding cache in `src-tauri/src/embedding/onnx.rs`. The gate is unaffected (fixed order), but users would see it.
 5. Evidence runs must reseed: recency scores age, so a profile seeded hours earlier drifts (office-PM Ask MRR 0.636 old seed versus 0.661 fresh). `make qa-retrieval-check` reseeds by default.
@@ -20,13 +20,13 @@ None.
 
 | # | Branch | Draft PR | Head | Tickets | Rust CI | Notes |
 |---|---|---|---|---|---|---|
-| 1 | `claude/train-f-new` | #26 | 8c96a07 | VS-41 (security fix, 2 commits), VS-35 spec | pending | Independent of A and B. Carries the ported `macos-26` CI commit; drop it if #24 lands first. |
+| 1 | `claude/train-f-new` | #26 | 8c96a07 | VS-41 (security fix, 2 commits), VS-35 spec | macos-26: 885/886, the one memory_journey test that VS-07 fixes | Independent of A and B. Carries the ported `macos-26` CI commit; drop it if #24 lands first. |
 | 2 | `claude/train-a-measure` | #21 | aed1315 | VS-04 (2 commits), VS-02, VS-03 | red on main's Swift issue | Train B contains all of A, so #25's CI covers this code. |
-| 3 | `claude/train-b-retrieval` | #25 | 74963fa | (A) + VS-05, VS-07 (2 commits; closes VS-06) | pending on macos-26 | Stacked on A. Carries the ported `macos-26` CI commit. |
+| 3 | `claude/train-b-retrieval` | #25 | 3dade40 | (A) + VS-05, VS-07 (3 commits; closes VS-06), VS-08 (evidence only), VS-09, VS-13 | **green on macos-26 at 1b5d623**; 3dade40 running | Stacked on A. Carries the ported `macos-26` CI commit (74963fa). |
 | 4 | `claude/train-c-ux` | #22 | 82792e2 | VS-23 | red on main's Swift issue (no Rust in diff) | Frontend CI green. |
 | 5 | `claude/train-e-docs` | #23 | ca9c383 | PD-03, PD-17 draft, PD-01 draft (3), PD-02, PD-04, PD-18 guide, PD-05, proposals (VS-40), session log | red on main's Swift issue (no Rust in diff) | |
-| 6 | `claude/ci-macos-26` | #24 | 1 commit | CI runner fix | build passes, 1 test fails (see Read first 2) | `.github/workflows/**` is yours to merge. |
-| 7 | `claude/train-d-chunks` | (not yet) | | VS-17 and VS-19 harness (sub-agent running) | | Based on train A. |
+| 6 | `claude/ci-macos-26` | #24 | c6cf285 | CI runner fix | build passes, the one memory_journey test fails until VS-07 lands | `.github/workflows/**` is yours to merge. |
+| 7 | `claude/train-d-chunks` | #27 | 94747d6 | VS-17 and VS-19 harnesses (Python and docs only), ADR 019 Proposed | running; expect the same one test as F | Stacked on A. Carries the `macos-26` CI commit. |
 
 Merge trials: `git merge-tree` shows A with E and A with C merge cleanly; B is A plus commits; F touches `src-tauri/src/mcp/mod.rs`, which no other train touches. Every file each train touches is free of em and en dashes (pre-existing dashes in touched files were replaced, so your whole-file dash scan passes).
 
@@ -53,6 +53,41 @@ Merge trials: `git merge-tree` shows A with E and A with C merge cleanly; B is A
 4. Branch policy: I only rebase (with `--force-with-lease`) commits that local has not merged. If you are mid-gate on a branch, say so in LOCAL-OUTBOX and I will stack on it instead.
 
 ## Tickets
+
+### VS-13 query phrases become filters: delivered (pending local gate)
+
+- `claude/train-b-retrieval`, 3dade40, PR #25. Evidence `docs/evidence/W03/VS-13-cloud.md`.
+- Comment to post:
+
+> Cloud delivered on `claude/train-b-retrieval` (3dade40, PR https://github.com/anurupkumar18/FNDR/pull/25): `retrieve` reads today, yesterday, this morning/afternoon/evening, last night, last week, N days ago, weekday names, dates, and "in/on/from/using <app>" (only apps stored in the vault, via aliases such as Excel, Chrome, Zoom, VS Code) into a time range and an app filter applied to every route; explicit filters win; a phrase-read filter that finds nothing falls back to the whole vault. Look-alikes stay text ("Monday.com", "the today show", "in the PDF"). The ticket said to strip the phrase from the text; measured, that cost one office-PM query (rank 1 to 4) because the planner loses its time intent, so the full text is still searched and the phrase-free text only drives `matched_terms`. Retrieve, both personas reseeded (America/Denver): time and app Recall@5 and MRR@10 1.000 (from 0.938/0.900 and 0.917/1.000 MRR); keyword and paraphrase unchanged. Tests: parser 6 (four time zones), `tests/retrieve.rs` 7, lib context_runtime and lance_store 94. Also: `get_app_names` reads one column instead of every column. Evidence: `docs/evidence/W03/VS-13-cloud.md`.
+
+### VS-09 one `retrieve` function: delivered (pending local gate)
+
+- `claude/train-b-retrieval`, 1b5d623, PR #25. Evidence `docs/evidence/W03/VS-09-cloud.md`.
+- Comment to post:
+
+> Cloud delivered on `claude/train-b-retrieval` (1b5d623): `context_runtime::retrieve(state, RetrieveRequest { query, time, app, limit }) -> RetrieveResult { hits: [{ memory_id, chunk_id, score, why: { routes, matched_terms } }] }`, sharing one front half (`retrieve_fused`: plan, routes, fusion, low-signal drop) with Ask, so both rank the same memories in the same order (tested on three queries). Types derive serde and specta for VS-10 and VS-11. Found on the way: the low-signal drop looked up each hit separately (about 1.1 s per office-PM query); one batched `get_memories_by_ids` brings `retrieve` to 0.43 to 0.64 s and Ask from about 3.0 to 2.0 s. Report gains a third path: retrieve Recall@5 1.000 and 0.900, equal to the better path on both personas; MRR equal to Ask; p95 575 and 515 ms, about twice Search, so VS-20 matters before VS-10 ships. Evidence: `docs/evidence/W03/VS-09-cloud.md`.
+
+### VS-08 rank fusion: measured, not adopted (negative result)
+
+- `claude/train-b-retrieval`, 05edde9 (evidence only, no code change), PR #25. Evidence `docs/evidence/W03/VS-08-cloud.md`.
+- Comment to post:
+
+> Measured and rejected by a rule set before the last run (adopt only if Recall@5 does not drop on either persona and MRR@10 does not drop). RRF at k = 30, 60, 90 gives identical numbers; it loses one paraphrase query per persona from the top five (Ask Recall@5 1.000 to 0.955 and 0.900 to 0.850) because every weak one-word keyword hit gets a full rank vote, while gaining office-PM MRR (0.661 to 0.685; a score-weighted variant 0.705). Ask keeps weighted score fusion. The tested function is in the evidence file; rerun when VS-18 adds chunk routes. Evidence: `docs/evidence/W03/VS-08-cloud.md`.
+
+### VS-17 embedding bake-off: harness and cloud numbers delivered (M1 columns open)
+
+- `claude/train-d-chunks`, 617dcf6, PR #27. Evidence `docs/evidence/W03/VS-17-bakeoff-cloud.md`; ADR `docs/decisions/019-embedding-model.md` (Proposed).
+- Comment to post:
+
+> Harness `scripts/audit/embedding_bakeoff.py` on `claude/train-d-chunks` (617dcf6, PR https://github.com/anurupkumar18/FNDR/pull/27) scores MiniLM-L6, bge-small-en-v1.5, EmbeddingGemma-300m (768 and a 256 cut), and Qwen3-Embedding-0.6B by pure vector retrieval on both personas, record text and ~300-token chunks. Cloud: EmbeddingGemma recalls 41/42 and 42/42 against MiniLM's 39/42 and 40/42 (not significant) and lifts MRR@10 0.771 to 0.913 and 0.751 to 0.889 (sign test p = 0.039 and 0.013); bge-small and Qwen3 are indistinguishable from MiniLM. ADR 019 drafted as Proposed. Open for local: the M1 latency and peak-RSS columns, and EmbeddingGemma's license check. Note: `embedding/onnx.rs` would mean-pool EmbeddingGemma's hidden state and skip its dense layers, so adopting it needs that code change first. Evidence: `docs/evidence/W03/VS-17-bakeoff-cloud.md`.
+
+### VS-19 cross-encoder rerank spike: rejected for EmbeddingGemma; needs M1 only if MiniLM stays
+
+- `claude/train-d-chunks`, 8cea73a, PR #27. Evidence `docs/evidence/W03/VS-19-spike-cloud.md`.
+- Comment to post:
+
+> `--rerank` on the bake-off harness (8cea73a) rescores the top 30 with ms-marco-MiniLM-L-6-v2. Reranked MRR@10 lands near 0.83 whatever the embedder: it lowers EmbeddingGemma (0.889 to 0.829), so rejected for the recommended embedder; over MiniLM it gains +0.080 (mostly office-PM) but still ranks below EmbeddingGemma alone, and p95 at 30 pairs is 345 to 1252 ms on this shared host against a 150 ms budget. If MiniLM stays, the M1 must show at least a 2.3x speedup. Evidence: `docs/evidence/W03/VS-19-spike-cloud.md`.
 
 ### VS-41 (proposed ID) MCP auth for every item of a batch: delivered (security)
 
@@ -168,5 +203,5 @@ Merge trials: `git merge-tree` shows A with E and A with C merge cleanly; B is A
 
 ## In progress (cloud)
 
-- Train B next: VS-08 (rank fusion), then VS-09 (`retrieve`), VS-13, VS-10, VS-11, VS-12, VS-21, VS-25.
-- Sub-agent: VS-17 embedding bake-off and VS-19 cross-encoder spike harness on `claude/train-d-chunks` (based on train A).
+- Train B next: VS-10 (Search screen through `retrieve`; `search_ranked_results` stays as a thin wrapper because `memory_journey.rs` tests call it), then VS-11, VS-12, VS-21, VS-25.
+- Then train D: VS-18 behind a flag against the EM-03 chunk schema with a synthetic chunk fixture, VS-26, VS-20 harness.
