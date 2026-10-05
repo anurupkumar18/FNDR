@@ -135,3 +135,10 @@ The same fresh-process fp32/256 synthetic probe was repeated twice with 12 docum
 | Process peak RSS, decimal MB | 924.1 to 924.2 | 731.9 to 823.6 |
 
 The scheduled runs each recorded exactly 12 foreground admissions and 104 background admissions. Median foreground queue wait was 140.45 and 173.82 ms; median service time was 26.16 and 26.05 ms. The remaining delay is principally waiting for the current background chunk to finish. RSS varies across fresh processes; these samples are not a whole-app RAM guarantee or a reliable p95 estimate. They support the scheduling change without establishing native capture/VLM acceptance. Existing runtime metrics record queue/service duration under static priority labels, without captured text.
+
+
+### Combined text workload diagnostic (October 5)
+
+One Qwen-only and one Qwen-plus-fp32/256-Gemma process exercised the same eight synthetic extractions on the M1 8 GB. All eight parsed with identical outputs and no repairs/cap hits. With Qwen and 104 background chunks active, all 32 Gemma queries overlapped both workloads: median 228 ms, maximum 945 ms; background completion 29.366 s. Extraction medians were 12.736 s alone and 14.541 s combined. Combined process peak RSS was 2.160 GB; peak physical footprint 1.311 GB (`/usr/bin/time -l`, decimal units). These exclude the pixel runtime and the rest of the app. Host pressure was high or moderate; the existing heavy-model policy recommended skipping for much of the experiment. One run per alternative does not establish a production budget.
+
+Both processes saved measurements before the known Metal teardown abort (exit 134). Model outputs also contained unsupported intent, advice and a wrong spreadsheet row count despite successful parsing. Activation therefore still needs lifecycle, grounding, migration and native workload acceptance. The next local slices are owned blocking-inference state before unload, and source-based extraction validation using the existing harness. Full method, asset/source hashes, limitations and scratch artifacts are in `docs/evidence/W04/2026-10-05-cloud-integration-local.md`, Combined Qwen extraction and Gemma contention.
