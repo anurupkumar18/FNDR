@@ -103,6 +103,25 @@ Opening that Chrome URL with `#:~:text=` scrolls and highlights the passage in C
 
 Unit tests: `cd src-tauri && cargo test --lib reopen` and `cargo test --lib semantic`.
 
+## RE-06 follow-up (2026-10-05)
+
+A merge now keeps one whole reopen target instead of merging each field on its own, so the stored kind and its fields always come from the same capture. The higher rank wins. On a tie the newer `reopen_captured_at_ms` wins, and equal times go to the incoming record. The winner keeps only its own kind's fields plus app name and metadata, so a stray file path cannot ride along on an app target.
+
+| Rank | Target |
+|---|---|
+| 7 | Absolute file path with a page |
+| 6 | Absolute file path |
+| 5 | http(s) URL with a passage or page |
+| 4 | http(s) URL |
+| 3 | App deep link |
+| 2 | App bundle id |
+| 1 | Relative file path |
+| 0 | Unknown, or a kind missing its own field |
+
+The R36 card (`app_bundle` with a stray `en.wikipedia.org/wiki/Nitrogen` file path) merged with a Chrome `browser_url` capture now stores `browser_url` and no file path. A Preview file at page 112 stays a file target when a newer app-only frame merges in. Two captures of the same URL keep the existing passage when the incoming one has none.
+
+Unit tests: `cd src-tauri && cargo test --lib reopen` (44 passed) and `cargo test --lib merge` (18 passed). `make test`: typecheck, 353 frontend tests, and 818 Rust lib tests pass. The only failure is `capture_fixtures::ocr_plus_cleanup_stays_within_each_fixtures_cer_budget`, an OCR accuracy budget unrelated to reopen that also failed before this change.
+
 ## Matrix
 
 | Row | Scenario | Expected target | Expected reopen | Stored target | Reopen result | Build | Date | Notes |
@@ -142,7 +161,7 @@ Unit tests: `cd src-tauri && cargo test --lib reopen` and `cargo test --lib sema
 | R33 | Second download with the same name (`report (1).pdf`) | Separate memory, its own path | Correct file | Separate tracker rows for `fndr-re01-report.pdf` and `fndr-re01-report (1).pdf`; neither has a file reopen path | app only | `123cd75` | 2026-09-28 | Separate memories yes; reopen cannot pick the file. |
 | R34 | Downloaded file renamed in Finder | Found again | Opens the renamed file | Extra tracker row `fndr-re01-report-renamed.pdf`; old name row remains | wrong | `123cd75` | 2026-09-28 | Watcher treated rename as a new file. No “found again” / `OpenedMoved`. |
 | R35 | `.dmg`, `.pkg`, `.app`, or `.command` download | File path | Revealed in Finder, never opened or run | Tracker `Downloaded: fndr-re01-dummy.pkg`, `app_bundle` Finder | app only | `123cd75` | 2026-09-28 | Did not execute the pkg (`open -b com.apple.finder`). Did not reveal the file. `downloads.rs` has no installer special case. |
-| R36 | Memory merged from frames with different targets | The most specific, newest target | That target | Chrome card: `reopen_kind=app_bundle` **and** `reopen_file_path=en.wikipedia.org/wiki/Nitrogen` | wrong | `123cd75` | 2026-09-28 | Field-wise merge `incoming.or(existing)` at `capture/mod.rs` ~4795. Kind and file disagree. `resolve_reopen_target` follows kind → opens Chrome, ignores the file field. |
+| R36 | Memory merged from frames with different targets | The most specific, newest target | That target | Merge of the RE-01 Chrome card (`app_bundle` plus a stray file path) with a `browser_url` capture: `browser_url` `https://en.wikipedia.org/wiki/Nitrogen`, no file path | pass: reopens the URL | RE-06 | 2026-10-05 | Whole-target merge by rank (see RE-06 section). Covered by `merge_keeps_browser_target_over_app_with_stray_file_r36`. Unit-test verified, not a live capture. |
 | R37 | Memory captured before this change | Backfilled target or honest "app only" | As stored | | n/a | `123cd75` | 2026-09-28 | Fresh profile has no pre-change rows. Read path: `normalize_embed_migrate.rs` backfills `Unknown` from `url` / `files_touched` / bundle. |
 | R38 | Deleted memory | Nothing | Not reachable | Not deleted in the UI | n/a | `123cd75` | 2026-09-28 | Not exercised live. `reopen_memory` errors `Memory not found` if the id is gone. |
 | R39 | Blocklisted site | Nothing stored | Not applicable | Blocklist not changed in Settings | n/a | `123cd75` | 2026-09-28 | Default blocklist is apps (1Password, Keychain, System Settings). Skip path: `capture_context_skip_reason` + `Blocklist`. |

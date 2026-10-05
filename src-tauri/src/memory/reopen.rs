@@ -299,40 +299,91 @@ fn nonempty_ref(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|v| !v.is_empty())
 }
 
-/// Same URL or same file path. A page or passage from one document must not
-/// land on another.
-fn same_reopen_document(
-    incoming_url: Option<&str>,
-    incoming_path: Option<&str>,
-    existing_url: Option<&str>,
-    existing_path: Option<&str>,
-) -> bool {
-    let same_url = match (nonempty_ref(incoming_url), nonempty_ref(existing_url)) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
-    };
-    let same_path = match (nonempty_ref(incoming_path), nonempty_ref(existing_path)) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
-    };
-    same_url || same_path
+/// How precisely a target reopens what the user saw, from 7 (absolute file at
+/// a page) down to 0 (nothing usable). A kind without its own field ranks 0.
+/// Relative file paths rank 1 because they cannot be opened reliably.
+pub fn reopen_rank(target: &ReopenTarget) -> u8 {
+    match target.kind {
+        ReopenKind::FilePath => match nonempty_ref(target.file_path.as_deref()) {
+            Some(path) if path.starts_with('/') => {
+                if target.page.is_some() {
+                    7
+                } else {
+                    6
+                }
+            }
+            Some(_) => 1,
+            None => 0,
+        },
+        ReopenKind::BrowserUrl => match nonempty_ref(target.url.as_deref()) {
+            Some(url) if is_http_url(url) => {
+                if nonempty_ref(target.text_anchor.as_deref()).is_some() || target.page.is_some() {
+                    5
+                } else {
+                    4
+                }
+            }
+            _ => 0,
+        },
+        ReopenKind::AppDeepLink => {
+            if nonempty_ref(target.app_deep_link.as_deref()).is_some() {
+                3
+            } else {
+                0
+            }
+        }
+        ReopenKind::AppBundle => {
+            if nonempty_ref(target.app_bundle_id.as_deref()).is_some() {
+                2
+            } else {
+                0
+            }
+        }
+        ReopenKind::Unknown => 0,
+    }
 }
 
-/// Keep a page across a merge only when both records name the same URL or the
-/// same file. Otherwise the incoming page wins so a page from one document
-/// cannot land on another.
-pub fn merge_reopen_page(
-    incoming_url: Option<&str>,
-    incoming_path: Option<&str>,
-    incoming_page: Option<u32>,
-    existing_url: Option<&str>,
-    existing_path: Option<&str>,
-    existing_page: Option<u32>,
-) -> Option<u32> {
-    if same_reopen_document(incoming_url, incoming_path, existing_url, existing_path) {
-        incoming_page.or(existing_page)
+impl ReopenTarget {
+    /// Keeps only the fields the kind reopens with, plus app name and metadata.
+    pub fn normalized(self) -> Self {
+        let mut out = ReopenTarget {
+            kind: self.kind.clone(),
+            app_name: self.app_name,
+            captured_at_ms: self.captured_at_ms,
+            confidence: self.confidence,
+            validation_status: self.validation_status,
+            ..Default::default()
+        };
+        match self.kind {
+            ReopenKind::BrowserUrl => {
+                out.url = self.url;
+                out.page = self.page;
+                out.text_anchor = self.text_anchor;
+            }
+            ReopenKind::FilePath => {
+                out.file_path = self.file_path;
+                out.page = self.page;
+            }
+            ReopenKind::AppBundle => out.app_bundle_id = self.app_bundle_id,
+            ReopenKind::AppDeepLink => out.app_deep_link = self.app_deep_link,
+            ReopenKind::Unknown => {}
+        }
+        out
+    }
+}
+
+/// Keeps the whole higher-ranked target so the kind and its fields always come
+/// from the same capture. On a tie the newer capture wins; equal times go to
+/// the incoming target.
+pub fn merge_reopen_targets(incoming: ReopenTarget, existing: ReopenTarget) -> ReopenTarget {
+    let incoming_rank = reopen_rank(&incoming);
+    let existing_rank = reopen_rank(&existing);
+    let keep_existing = existing_rank > incoming_rank
+        || (existing_rank == incoming_rank && existing.captured_at_ms > incoming.captured_at_ms);
+    if keep_existing {
+        existing.normalized()
     } else {
-        incoming_page
+        incoming.normalized()
     }
 }
 
@@ -442,24 +493,6 @@ pub fn url_with_text_anchor(url: &str, anchor: &str) -> String {
         return url.to_string();
     }
     format!("{url}#:~:text={}", encode_text_fragment(anchor))
-}
-
-/// Incoming passage wins. The existing one is kept only for the same URL or file.
-pub fn merge_reopen_text_anchor(
-    incoming_url: Option<&str>,
-    incoming_path: Option<&str>,
-    incoming_anchor: Option<&str>,
-    existing_url: Option<&str>,
-    existing_path: Option<&str>,
-    existing_anchor: Option<&str>,
-) -> Option<String> {
-    let incoming = nonempty_ref(incoming_anchor).map(str::to_string);
-    let existing = nonempty_ref(existing_anchor).map(str::to_string);
-    if same_reopen_document(incoming_url, incoming_path, existing_url, existing_path) {
-        incoming.or(existing)
-    } else {
-        incoming
-    }
 }
 
 pub fn serialize_reopen_target(target: &ReopenTarget) -> String {
@@ -768,45 +801,163 @@ mod tests {
         );
     }
 
+    fn target(kind: ReopenKind, captured_at_ms: i64) -> ReopenTarget {
+        ReopenTarget {
+            kind,
+            captured_at_ms,
+            ..Default::default()
+        }
+    }
+
+    fn file_target(path: &str, page: Option<u32>) -> ReopenTarget {
+        ReopenTarget {
+            file_path: Some(path.into()),
+            page,
+            ..target(ReopenKind::FilePath, AT)
+        }
+    }
+
+    fn url_target(url: &str, text_anchor: Option<&str>) -> ReopenTarget {
+        ReopenTarget {
+            url: Some(url.into()),
+            text_anchor: text_anchor.map(str::to_string),
+            ..target(ReopenKind::BrowserUrl, AT)
+        }
+    }
+
+    /// One target per rank, highest first.
+    fn one_target_per_rank() -> Vec<(u8, ReopenTarget)> {
+        vec![
+            (7, file_target("/Users/qa/doc.pdf", Some(112))),
+            (6, file_target("/Users/qa/doc.pdf", None)),
+            (5, url_target("https://example.com/a", Some("a passage on the page"))),
+            (4, url_target("https://example.com/a", None)),
+            (
+                3,
+                ReopenTarget {
+                    app_deep_link: Some("notion://page/abc".into()),
+                    ..target(ReopenKind::AppDeepLink, AT)
+                },
+            ),
+            (
+                2,
+                ReopenTarget {
+                    app_bundle_id: Some("com.google.Chrome".into()),
+                    ..target(ReopenKind::AppBundle, AT)
+                },
+            ),
+            (1, file_target("plan.md", None)),
+            (0, target(ReopenKind::Unknown, AT)),
+        ]
+    }
+
     #[test]
-    fn merge_reopen_page_keeps_page_only_on_the_same_document() {
-        assert_eq!(
-            merge_reopen_page(
-                Some("https://example.com/a.pdf"),
-                None,
-                Some(3),
-                Some("https://example.com/a.pdf"),
-                None,
-                Some(2),
-            ),
-            Some(3)
-        );
-        assert_eq!(
-            merge_reopen_page(
-                Some("https://example.com/a.pdf"),
-                None,
-                None,
-                Some("https://example.com/a.pdf"),
-                None,
-                Some(2),
-            ),
-            Some(2)
-        );
-        assert_eq!(
-            merge_reopen_page(
-                None,
-                Some("/tmp/a.pdf"),
-                Some(9),
-                None,
-                Some("/tmp/b.pdf"),
-                Some(2),
-            ),
-            Some(9)
-        );
-        assert_eq!(
-            merge_reopen_page(None, None, Some(9), None, None, Some(2)),
-            Some(9)
-        );
+    fn reopen_rank_orders_targets_by_specificity() {
+        for (expected, sample) in one_target_per_rank() {
+            assert_eq!(reopen_rank(&sample), expected, "{sample:?}");
+        }
+        let browser_pdf_page = ReopenTarget {
+            page: Some(3),
+            ..url_target("https://example.com/a.pdf", None)
+        };
+        assert_eq!(reopen_rank(&browser_pdf_page), 5);
+        assert_eq!(reopen_rank(&file_target("en.wikipedia.org/wiki/Nitrogen", None)), 1);
+        assert_eq!(reopen_rank(&file_target("   ", None)), 0);
+        assert_eq!(reopen_rank(&target(ReopenKind::BrowserUrl, AT)), 0);
+        assert_eq!(reopen_rank(&url_target("javascript:alert(1)", None)), 0);
+        assert_eq!(reopen_rank(&target(ReopenKind::AppBundle, AT)), 0);
+        assert_eq!(reopen_rank(&target(ReopenKind::AppDeepLink, AT)), 0);
+    }
+
+    #[test]
+    fn merge_reopen_targets_keeps_the_higher_rank_for_every_pair() {
+        let samples = one_target_per_rank();
+        for (incoming_rank, incoming) in &samples {
+            for (existing_rank, existing) in &samples {
+                if incoming_rank == existing_rank {
+                    continue;
+                }
+                let merged = merge_reopen_targets(incoming.clone(), existing.clone());
+                let winner = if incoming_rank > existing_rank { incoming } else { existing };
+                let label = format!("incoming rank {incoming_rank} vs existing rank {existing_rank}");
+                assert_eq!(merged.kind, winner.kind, "{label}");
+                assert_eq!(reopen_rank(&merged), (*incoming_rank).max(*existing_rank), "{label}");
+                assert_eq!(merged.url, winner.url, "{label}");
+                assert_eq!(merged.file_path, winner.file_path, "{label}");
+                assert_eq!(merged.page, winner.page, "{label}");
+            }
+        }
+    }
+
+    #[test]
+    fn merge_reopen_targets_prefers_the_newer_target_on_a_tie() {
+        let older = ReopenTarget {
+            captured_at_ms: 1,
+            ..url_target("https://example.com/older", None)
+        };
+        let newer = ReopenTarget {
+            captured_at_ms: 2,
+            ..url_target("https://example.com/newer", None)
+        };
+        for (incoming, existing) in [(newer.clone(), older.clone()), (older.clone(), newer.clone())] {
+            let merged = merge_reopen_targets(incoming, existing);
+            assert_eq!(merged.url.as_deref(), Some("https://example.com/newer"));
+        }
+
+        let same_time_incoming = url_target("https://example.com/incoming", None);
+        let same_time_existing = url_target("https://example.com/existing", None);
+        let merged = merge_reopen_targets(same_time_incoming, same_time_existing);
+        assert_eq!(merged.url.as_deref(), Some("https://example.com/incoming"));
+    }
+
+    #[test]
+    fn merge_reopen_targets_keeps_the_whole_winner_including_its_passage() {
+        let incoming = url_target("https://example.com/a", None);
+        let existing = url_target("https://example.com/a", Some("existing passage stays here"));
+        let merged = merge_reopen_targets(incoming, existing);
+        assert_eq!(merged.text_anchor.as_deref(), Some("existing passage stays here"));
+
+        let incoming_app = ReopenTarget {
+            app_bundle_id: Some("com.apple.Preview".into()),
+            ..target(ReopenKind::AppBundle, AT + 10)
+        };
+        let merged = merge_reopen_targets(incoming_app, file_target("/Users/qa/doc.pdf", Some(112)));
+        assert_eq!(merged.kind, ReopenKind::FilePath);
+        assert_eq!(merged.file_path.as_deref(), Some("/Users/qa/doc.pdf"));
+        assert_eq!(merged.page, Some(112));
+        assert_eq!(merged.app_bundle_id, None);
+    }
+
+    #[test]
+    fn merge_reopen_targets_drops_fields_that_do_not_belong_to_the_kind() {
+        let app_with_stray_file = ReopenTarget {
+            app_bundle_id: Some("com.google.Chrome".into()),
+            app_name: Some("Google Chrome".into()),
+            file_path: Some("en.wikipedia.org/wiki/Nitrogen".into()),
+            url: Some("https://stale.example".into()),
+            page: Some(4),
+            text_anchor: Some("stale passage".into()),
+            ..target(ReopenKind::AppBundle, AT)
+        };
+        let merged = merge_reopen_targets(app_with_stray_file, target(ReopenKind::Unknown, AT));
+        assert_eq!(merged.kind, ReopenKind::AppBundle);
+        assert_eq!(merged.app_bundle_id.as_deref(), Some("com.google.Chrome"));
+        assert_eq!(merged.app_name.as_deref(), Some("Google Chrome"));
+        assert_eq!(merged.file_path, None);
+        assert_eq!(merged.url, None);
+        assert_eq!(merged.page, None);
+        assert_eq!(merged.text_anchor, None);
+
+        let file_with_stray_url = ReopenTarget {
+            url: Some("https://stale.example".into()),
+            text_anchor: Some("stale passage".into()),
+            ..file_target("/Users/qa/doc.pdf", Some(2))
+        };
+        let normalized = file_with_stray_url.normalized();
+        assert_eq!(normalized.file_path.as_deref(), Some("/Users/qa/doc.pdf"));
+        assert_eq!(normalized.page, Some(2));
+        assert_eq!(normalized.url, None);
+        assert_eq!(normalized.text_anchor, None);
     }
 
     #[test]
@@ -905,57 +1056,6 @@ mod tests {
         assert_eq!(
             url_with_text_anchor("https://example.com/article", "  "),
             "https://example.com/article"
-        );
-    }
-
-    #[test]
-    fn merge_reopen_text_anchor_keeps_passage_only_on_the_same_document() {
-        assert_eq!(
-            merge_reopen_text_anchor(
-                Some("https://example.com/a"),
-                None,
-                Some("incoming passage wins here"),
-                Some("https://example.com/a"),
-                None,
-                Some("existing passage stays"),
-            )
-            .as_deref(),
-            Some("incoming passage wins here")
-        );
-        assert_eq!(
-            merge_reopen_text_anchor(
-                Some("https://example.com/a"),
-                None,
-                None,
-                Some("https://example.com/a"),
-                None,
-                Some("existing passage stays"),
-            )
-            .as_deref(),
-            Some("existing passage stays")
-        );
-        assert_eq!(
-            merge_reopen_text_anchor(
-                Some("https://example.com/b"),
-                None,
-                Some("incoming only"),
-                Some("https://example.com/a"),
-                None,
-                Some("existing passage stays"),
-            )
-            .as_deref(),
-            Some("incoming only")
-        );
-        assert_eq!(
-            merge_reopen_text_anchor(
-                Some("https://example.com/b"),
-                None,
-                None,
-                Some("https://example.com/a"),
-                None,
-                Some("existing passage stays"),
-            ),
-            None
         );
     }
 
