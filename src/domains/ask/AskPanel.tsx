@@ -45,6 +45,10 @@ function sourceTime(card: MemoryCard): string {
     return `${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} · ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
 }
 
+/** Raised only by the renderer's own timer so the trace can tell it apart from
+ *  a backend failure. */
+class ClientAnswerTimeout extends Error {}
+
 /** Ask FNDR: grounded, citation-validated answers from local memories via
  *  `fndr_answer`, with an honest refusal when evidence is missing. */
 export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps) {
@@ -82,7 +86,7 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
             const result = await Promise.race([
                 fndrAnswer(question),
                 new Promise<never>((_, reject) =>
-                    window.setTimeout(() => reject(new Error("timeout")), ANSWER_TIMEOUT_MS)
+                    window.setTimeout(() => reject(new ClientAnswerTimeout()), ANSWER_TIMEOUT_MS)
                 ),
             ]);
             if (id === seq.current) {
@@ -125,16 +129,17 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
             }
         } catch (err) {
             if (id !== seq.current) return;
-            const timedOut = err instanceof Error && err.message === "timeout";
+            const timedOut = err instanceof ClientAnswerTimeout;
             const failedAtMs = Date.now();
             setActivityTrace((current) => {
                 if (!current || current.id !== `ask-${id}`) return current;
                 return recordActivityStep(current, {
                     id: "request",
                     label: timedOut ? "Answer timed out" : "Answer failed",
-                    actor: "FNDR answer service",
+                    // A renderer timeout is not a report from the backend.
+                    actor: timedOut ? "Ask FNDR" : "FNDR answer service",
                     status: "failed",
-                    evidence: "ipc-boundary",
+                    evidence: timedOut ? "frontend-event" : "ipc-boundary",
                     atMs: failedAtMs,
                     durationMs: Math.max(0, failedAtMs - startedAtMs),
                     detail: timedOut ? "Client timeout" : "Backend request failed",
