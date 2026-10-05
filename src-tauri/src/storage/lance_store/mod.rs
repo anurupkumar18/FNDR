@@ -2401,6 +2401,37 @@ impl Store {
     }
 
     /// Fetch a single record by id.
+    /// Fetch many memories with one `id IN (...)` scan per 200 ids. Ids that
+    /// are not stored are absent from the map; unlike `get_memory_by_id` this
+    /// does not follow merged-away ids, so pass ids read from current rows.
+    pub async fn get_memories_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<HashMap<String, MemoryRecord>, Box<dyn std::error::Error>> {
+        let mut found = HashMap::with_capacity(ids.len());
+        for chunk in ids.chunks(200) {
+            let list = chunk
+                .iter()
+                .map(|id| format!("'{}'", sql_escape(id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let batches: Vec<RecordBatch> = self
+                .table
+                .query()
+                .only_if(format!("id IN ({list})"))
+                .execute()
+                .await?
+                .try_collect()
+                .await?;
+            for batch in &batches {
+                for record in batch_to_memory_records(batch) {
+                    found.insert(record.id.clone(), record);
+                }
+            }
+        }
+        Ok(found)
+    }
+
     pub async fn get_memory_by_id(
         &self,
         memory_id: &str,

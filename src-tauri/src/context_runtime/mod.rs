@@ -27,10 +27,13 @@ pub mod graph_plan;
 pub mod graph_route;
 pub mod keyword_route;
 pub mod query_plan;
+pub mod retrieve;
 pub mod retrieval_routes;
 pub mod temporal_route;
 pub mod vector_route;
 pub mod verifier;
+
+pub use retrieve::{retrieve, RetrieveHit, RetrieveRequest, RetrieveResult, RetrieveWhy};
 mod wiki_policy;
 
 static URL_RE: Lazy<Regex> =
@@ -2109,7 +2112,7 @@ fn infer_repo_slug_from_url(url: Option<&str>) -> Option<String> {
         }
     }
 
-    // Generic `owner/repo/<resource>/...` paths (GitHub, GitLab, Gitea, etc.) — no host allowlist.
+    // Generic `owner/repo/<resource>/...` paths (GitHub, GitLab, Gitea, etc.): no host allowlist.
     const REPO_CHILD_SEGMENTS: &[&str] = &[
         "pull",
         "pulls",
@@ -2305,7 +2308,7 @@ fn infer_activity_type(record: &MemoryRecord) -> String {
 }
 
 /// True when a decision string starts with a generic design/proposal verb.
-/// Stems-only — independent of any product or library naming.
+/// Stems only, independent of any product or library naming.
 fn decision_verb_stem_design(decision: &str) -> bool {
     let lower = decision.trim().to_ascii_lowercase();
     let first = lower.split_whitespace().next().unwrap_or("");
@@ -3021,10 +3024,10 @@ fn recursive_size(path: &std::path::Path) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3 — agentic graph rag entry point
+// Phase 3: agentic graph rag entry point
 // ---------------------------------------------------------------------------
 
-/// Compose mode for [`run_query`] — caller picks deterministic cards vs. a
+/// Compose mode for [`run_query`]: caller picks deterministic cards vs. a
 /// grounded LLM answer (still bundled with cards + evidence + verifier outcome).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComposeMode {
@@ -3038,30 +3041,54 @@ pub(crate) async fn drop_low_signal_hits(
     fused: Vec<context_pack::FusedHit>,
     store: &crate::storage::Store,
 ) -> Vec<context_pack::FusedHit> {
-    let mut kept = Vec::with_capacity(fused.len());
-    for hit in fused {
-        match store.get_memory_by_id(&hit.memory_id).await {
-            Ok(Some(record))
-                if crate::memory_quality::record_low_signal_reason(&record).is_some() =>
-            {
+    // One batched lookup: per-hit lookups were most of a query's time (VS-09).
+    let ids = fused
+        .iter()
+        .map(|hit| hit.memory_id.clone())
+        .collect::<Vec<_>>();
+    let records = match store.get_memories_by_ids(&ids).await {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::warn!(%error, "context_runtime:low_signal_lookup_failed");
+            return fused;
+        }
+    };
+    fused
+        .into_iter()
+        .filter(|hit| {
+            let low_signal = records.get(&hit.memory_id).is_some_and(|record| {
+                crate::memory_quality::record_low_signal_reason(record).is_some()
+            });
+            if low_signal {
                 tracing::debug!(memory_id = %hit.memory_id, "context_runtime:drop_low_signal_hit");
             }
-            _ => kept.push(hit),
-        }
-    }
-    kept
+            !low_signal
+        })
+        .collect()
 }
 
 /// Single-call entry point that drives the full Phase 3 pipeline:
 /// plan → RouteRunner::dispatch (5 routes) → fuse → collect_evidence → verify
 /// → compose. Returns the bundled [`ComposedAnswer`] (always carrying cards +
 /// evidence + verify_outcome regardless of mode).
-pub async fn run_query(
+/// The shared front half of every retrieval (VS-09): plan, route dispatch,
+/// fusion, and the low-signal drop. `retrieve` and `run_query` both start
+/// here, so Search, Ask, and agents rank memories the same way.
+pub(crate) struct FusedRetrieval {
+    pub plan: query_plan::QueryPlan,
+    pub weights: context_pack::FusionWeights,
+    pub route_hits: Vec<retrieval_routes::RouteHits>,
+    pub fused: Vec<context_pack::FusedHit>,
+    pub inference: Option<std::sync::Arc<crate::inference::InferenceEngine>>,
+}
+
+pub(crate) async fn retrieve_fused(
     state: &AppState,
     query: &str,
     limit: usize,
-    mode: ComposeMode,
-) -> Result<context_pack::ComposedAnswer, String> {
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+) -> FusedRetrieval {
     let plan = query_plan::plan(query, &query_plan::PlanHints::default());
     let weights = context_pack::FusionWeights::for_intent(plan.intent);
 
@@ -3081,7 +3108,7 @@ pub async fn run_query(
     let search_config = state.config.read().search.clone().normalized();
     let mut ctx = retrieval_routes::RouteCtx::new(&state.store, &search_config)
         .with_graph(&graph_index, &nodes, &edges)
-        .with_limits(limit.max(1), None, None, &[])
+        .with_limits(limit.max(1), time_filter, app_filter, &[])
         .with_now_ms(chrono::Utc::now().timestamp_millis());
     if let Some(emb) = embedder.as_ref() {
         ctx = ctx.with_embedder(emb);
@@ -3093,6 +3120,28 @@ pub async fn run_query(
     let route_hits = retrieval_routes::RouteRunner::dispatch(&plan, &ctx).await;
     let fused = fusion::fuse(&plan, route_hits.clone(), &weights);
     let fused = drop_low_signal_hits(fused, &state.store).await;
+    FusedRetrieval {
+        plan,
+        weights,
+        route_hits,
+        fused,
+        inference,
+    }
+}
+
+pub async fn run_query(
+    state: &AppState,
+    query: &str,
+    limit: usize,
+    mode: ComposeMode,
+) -> Result<context_pack::ComposedAnswer, String> {
+    let FusedRetrieval {
+        plan,
+        weights,
+        route_hits,
+        fused,
+        inference,
+    } = retrieve_fused(state, query, limit, None, None).await;
     let debug_trace = search_debug_trace(&plan, &route_hits, &fused, &weights);
     let evidence = evidence_pack::collect_evidence(&fused, &state.store).await;
     let outcome = verifier::verify(&plan, &fused, &evidence);

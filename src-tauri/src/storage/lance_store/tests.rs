@@ -1102,3 +1102,32 @@ async fn keyword_search_keeps_the_app_filter() {
 
     assert_eq!(hit_ids(&hits), vec!["slack"]);
 }
+
+#[tokio::test]
+async fn get_memories_by_ids_fetches_many_rows_in_one_call_and_skips_unknown_ids() {
+    let (_dir, store) = keyword_store(vec![
+        keyword_row("a", 1_000, "Mail", "First", "First row text"),
+        keyword_row("b'quote", 2_000, "Mail", "Second", "Second row text"),
+        keyword_row("c", 3_000, "Mail", "Third", "Third row text"),
+    ])
+    .await;
+
+    let found = store
+        .get_memories_by_ids(&[
+            "a".to_string(),
+            "b'quote".to_string(),
+            "missing".to_string(),
+        ])
+        .await
+        .expect("batch lookup");
+
+    let mut ids = found.keys().map(String::as_str).collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["a", "b'quote"]);
+    assert_eq!(found["a"].window_title, "First");
+    assert!(store
+        .get_memories_by_ids(&[])
+        .await
+        .expect("empty lookup")
+        .is_empty());
+}
