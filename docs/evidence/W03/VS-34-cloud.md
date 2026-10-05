@@ -13,7 +13,16 @@ The job fails when any path's Recall@5 drops more than 0.05, or when a query a p
 
 ## Runs
 
-Two runs are needed for the done-when: one on this branch (PR #31), which should pass, and one on a throwaway negative-control branch that takes the keyword route out of planning, which should fail. Both are recorded in the next commit once they have run.
+| Run | Commit | Job | Result | Time |
+|---|---|---|---|---|
+| Pass: PR #31 (train F) | ba06763 | https://github.com/anurupkumar18/FNDR/actions/runs/37340425264/job/111865808214 | success; both personas PASS, "No per-query rank changed" | 15 min 27 s, cold caches |
+| Fail: negative control, PR #32 (closed) | 27fac82, the planner drops the vector route | https://github.com/anurupkumar18/FNDR/actions/runs/37340909547/job/111867434041 | failure; office-PM lost five paraphrase queries from the top ten | 17 min 21 s |
+
+- **The negative control fails on the rule it should.** Office-PM lost five queries from the top ten, for example "which applicant came out on top for the design role" (rank 3 to a miss). The cloud measured the same change before pushing: knowledge-worker lost "which plotting library am I allowed to use" (rank 4 to a miss), and office-PM paraphrase Recall@5 fell 0.778 to 0.444.
+- **macOS and Linux agree query by query.** On the negative control, every office-PM rank in the CI log equals the cloud's Linux run on the same change. For example, "who is filling in during my end-of-year vacation" went 1 to 4 and "LL-1482 spam placement 1.8%" went 2 to 1 on both. On #31 the macOS run reproduced the Linux-recorded references exactly. So the references can stay platform-independent.
+- **The first choice of control passed the gate, which is itself a finding.** Taking the keyword route out did not lower Recall@5. It moved knowledge-worker to 1.000 and office-PM from 0.900 to 0.950, and lowered MRR@10 (0.966 to 0.947, 0.661 to 0.648). No top-ten hit was lost, so the gate passed. Dropping the vector route was used instead. See `retrieval-ablation-cloud.md`.
+- **The MiniLM cache works.** The first run downloaded and saved it (key `minilm-751bff3...`), and the hash check passed.
+- The Rust test job also failed on #32, as its body said it would (`tests/query_plan_rules.rs` expects the vector route); only the gate job is the evidence here.
 
 ## Why the job could not have worked before today
 
