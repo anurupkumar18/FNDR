@@ -119,6 +119,54 @@ fn request(query: &str) -> RetrieveRequest {
 }
 
 #[test]
+fn related_memories_use_surviving_text_only_when_no_links_are_stored() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (_dir, state) = seeded_state(&runtime);
+    let vendor = runtime
+        .block_on(state.store.get_memory_by_id("vendor"))
+        .unwrap()
+        .unwrap();
+    let source = record(
+        "related-source",
+        "Editor",
+        "Zephyr vendor renewal",
+        "The Zephyr vendor contract renews next quarter at the same price",
+        1_000,
+        vendor.embedding,
+    );
+    runtime
+        .block_on(state.store.add_batch_preserving_ids(&[source]))
+        .unwrap();
+    let stored = runtime
+        .block_on(state.store.get_memory_by_id("related-source"))
+        .unwrap()
+        .unwrap();
+    assert!(stored.text.is_empty());
+    assert!(stored.related_memory_ids.is_empty());
+    let cards = runtime
+        .block_on(fndr_lib::context_runtime::related_memories(
+            &state, &stored.id, 1,
+        ))
+        .unwrap();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].id, "vendor");
+    let reason = cards[0].surfacing_reason.as_ref().unwrap();
+    assert_eq!(reason.headline, "Similar context");
+    assert!(!reason.routes.is_empty());
+    assert!(!reason.routes.iter().any(|route| route == "stored_link"));
+    // A newly excluded result must not return through the similarity fallback.
+    state.config.write().blocklist.push("Slack".into());
+    let cards = runtime
+        .block_on(fndr_lib::context_runtime::related_memories(
+            &state, &stored.id, 12,
+        ))
+        .unwrap();
+    assert!(cards
+        .iter()
+        .all(|card| card.app_name != "Slack" && card.id != stored.id));
+}
+
+#[test]
 fn retrieve_explains_which_routes_and_words_found_each_hit() {
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let (_dir, state) = seeded_state(&runtime);

@@ -166,21 +166,33 @@ export function ExpandedMemoryCard({
                 <p className="fndr-emc-meta">Finding related memories…</p>
             ) : related.length > 0 ? (
                 <ul className="fndr-emc-related">
-                    {related.map((r) => (
-                        <li key={r.id}>
-                            {onOpenRelated ? (
-                                <button
-                                    type="button"
-                                    onClick={() => onOpenRelated(r.id)}
-                                    aria-label={`Open related memory: ${r.title}`}
-                                >
-                                    {r.title}
-                                </button>
-                            ) : (
-                                r.title
-                            )}
-                        </li>
-                    ))}
+                    {related.map((r) => {
+                        const relation = r.surfacing_reason?.routes.includes("stored_link")
+                            ? "Stored link"
+                            : r.surfacing_reason?.headline === "Similar context"
+                            ? "Similar context"
+                            : "";
+                        const author = r.source_type === "agent"
+                            ? `Agent note · Added by ${r.added_by?.trim() || "Unknown client"}`
+                            : "";
+                        const metadata = [relation, author].filter(Boolean).join(" · ");
+                        return (
+                            <li key={r.id}>
+                                {onOpenRelated ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => onOpenRelated(r.id)}
+                                        aria-label={`Open related memory: ${r.title}`}
+                                    >
+                                        {r.title}
+                                    </button>
+                                ) : (
+                                    r.title
+                                )}
+                                {metadata && <p className="fndr-emc-meta">{metadata}</p>}
+                            </li>
+                        );
+                    })}
                 </ul>
             ) : (
                 <p className="fndr-emc-meta">No related memories found.</p>

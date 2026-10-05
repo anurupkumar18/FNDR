@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import type { MemoryCard } from "@/shared/ipc/tauri";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
 import { fndrGetMemorySubgraph, fndrGetRelatedMemories } from "@/shared/ipc/tauri";
@@ -30,6 +30,37 @@ afterEach(() => {
 });
 
 describe("ExpandedMemoryCard", () => {
+    it.each([true, false])("shows each related memory's reason and author (interactive: %s)", async (interactive) => {
+        vi.mocked(fndrGetRelatedMemories).mockResolvedValue([
+            {
+                ...card, id: "linked-note", title: "A linked decision", source_type: "agent", added_by: "Claude Code",
+                surfacing_reason: { headline: "Linked from source", routes: ["stored_link"] },
+            },
+            {
+                ...card, id: "similar-screen", title: "A similar capture", source_type: "screen",
+                surfacing_reason: { headline: "Similar context", routes: ["keyword"] },
+            },
+            { ...card, id: "unknown-note", title: "A legacy note", source_type: "agent", added_by: "   " },
+        ]);
+        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({ seed_ids: [card.id], node_count: 0, edge_count: 0 });
+        const onOpenRelated = vi.fn();
+        render(<ExpandedMemoryCard card={{ ...card, source_type: "agent", added_by: "Parent author" }} onClose={() => {}} onOpenRelated={interactive ? onOpenRelated : undefined} />);
+
+        const linkedRow = (await screen.findByText("A linked decision")).closest("li")!;
+        expect(within(linkedRow).getByText("Stored link · Agent note · Added by Claude Code")).toBeTruthy();
+        expect(within(linkedRow).queryByText(/Parent author/)).toBeNull();
+        const similarRow = screen.getByText("A similar capture").closest("li")!;
+        expect(within(similarRow).getByText("Similar context")).toBeTruthy();
+        expect(within(similarRow).queryByText(/Agent note/)).toBeNull();
+        const unknownRow = screen.getByText("A legacy note").closest("li")!;
+        expect(within(unknownRow).getByText("Agent note · Added by Unknown client")).toBeTruthy();
+        expect(within(unknownRow).queryByText(/Stored link|Similar context/)).toBeNull();
+        if (interactive) {
+            within(linkedRow).getByRole("button", { name: "Open related memory: A linked decision" }).click();
+            expect(onOpenRelated).toHaveBeenCalledWith("linked-note");
+        }
+    });
+
     it("owns modal focus and shows bounded load failures instead of hanging", async () => {
         vi.mocked(fndrGetRelatedMemories).mockRejectedValue(new Error("offline"));
         vi.mocked(fndrGetMemorySubgraph).mockRejectedValue(new Error("offline"));

@@ -107,27 +107,8 @@ pub async fn fndr_get_related_memories(
     memory_id: String,
     limit: Option<usize>,
 ) -> Result<Vec<MemoryCard>, String> {
-    let Some(record) = state
-        .store
-        .get_memory_by_id(&memory_id)
-        .await
-        .map_err(|e| e.to_string())?
-    else {
-        return Ok(Vec::new());
-    };
     crate::telemetry::runtime_metrics::bump("fndr.mcp.get_related_memories.calls");
-    let answer = run_query(
-        state.inner(),
-        &record.text,
-        limit.unwrap_or(8),
-        ComposeMode::Cards,
-    )
-    .await?;
-    Ok(answer
-        .cards
-        .into_iter()
-        .filter(|c| c.id != memory_id)
-        .collect())
+    crate::context_runtime::related_memories(state.inner(), &memory_id, limit.unwrap_or(8)).await
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Default)]

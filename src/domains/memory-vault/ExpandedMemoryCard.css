@@ -106,6 +106,12 @@
 
 .fndr-emc-related li {
     position: relative;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.fndr-emc-related .fndr-emc-meta {
+    margin: 4px 0 8px;
 }
 
 .fndr-emc-related button {
@@ -118,6 +124,7 @@
     color: var(--fg);
     font: inherit;
     text-align: left;
+    white-space: normal;
     cursor: pointer;
 }
 

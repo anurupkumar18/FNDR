@@ -7,12 +7,13 @@ use crate::context_runtime::query_filters::parse_query_filters;
 use crate::context_runtime::query_plan::Route;
 use crate::context_runtime::retrieval_routes::memory_record_to_search_result;
 use crate::context_runtime::{retrieve_fused, FusedRetrieval};
+use crate::search::memory_cards::{build_fallback_card, MemoryCard};
 use crate::search::{normalize_text, QueryContext};
-use crate::storage::SearchResult;
+use crate::storage::{MemoryRecord, SearchResult};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// One request to the shared retrieval path.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type, PartialEq)]
@@ -89,6 +90,151 @@ pub async fn retrieve(
     request: &RetrieveRequest,
 ) -> Result<RetrieveResult, String> {
     Ok(retrieve_with_fused(state, request).await.0)
+}
+
+/// Resolve persisted peer links before considering similar context. Links are
+/// directed evidence from the source row, not inferred graph edges. A missing
+/// or excluded linked target is never replaced with a similarity suggestion.
+pub async fn related_memories(
+    state: &AppState,
+    memory_id: &str,
+    limit: usize,
+) -> Result<Vec<MemoryCard>, String> {
+    const MAX_RELATED_CARDS: usize = 12;
+    const MAX_LINK_LOOKUPS: usize = 64;
+    let limit = limit.min(MAX_RELATED_CARDS);
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(seed) = state
+        .store
+        .get_memory_by_id(memory_id)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(Vec::new());
+    };
+    let blocklist = state.config.read().blocklist.clone();
+    let visible = |record: &MemoryRecord| {
+        // Notes are admitted against title, body and project; later rules must
+        // apply to those same retained fields when following their links.
+        let context = if record.is_agent_note() {
+            format!(
+                "{}\n{}\n{}",
+                record.window_title, record.clean_text, record.project
+            )
+        } else {
+            record.window_title.clone()
+        };
+        !record.is_soft_deleted
+            && crate::memory_quality::record_low_signal_reason(record).is_none()
+            && !crate::privacy::Blocklist::is_internal_app(
+                &record.app_name,
+                record.bundle_id.as_deref(),
+            )
+            && !crate::privacy::Blocklist::is_blocked(&record.app_name, &blocklist)
+            && !crate::privacy::Blocklist::is_context_blocked(
+                record.url.as_deref(),
+                Some(&context),
+                &blocklist,
+            )
+    };
+    if !visible(&seed) {
+        return Ok(Vec::new());
+    }
+
+    if !seed.related_memory_ids.is_empty() {
+        let mut seen = HashSet::new();
+        let ids = seed
+            .related_memory_ids
+            .iter()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty() && seen.insert((*id).to_string()))
+            .take(MAX_LINK_LOOKUPS)
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let mut found = state
+            .store
+            .get_memories_by_ids(&ids)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut canonical_ids = HashSet::from([seed.id.clone()]);
+        let mut records = Vec::new();
+        for id in ids {
+            let record = match found.remove(&id) {
+                Some(record) => Some(record),
+                // Old citations may name a frame consolidated into a survivor.
+                None => state
+                    .store
+                    .get_memory_by_id(&id)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            };
+            if let Some(record) =
+                record.filter(|record| visible(record) && canonical_ids.insert(record.id.clone()))
+            {
+                records.push(record);
+            }
+        }
+        records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| a.id.cmp(&b.id)));
+        return Ok(records
+            .iter()
+            .take(limit)
+            .map(|record| {
+                // A stored link has no numerical semantic similarity score.
+                let mut result = memory_record_to_search_result(record, 0.0);
+                result.matched_routes = vec!["stored_link".into()];
+                let mut card = build_fallback_card("", &result);
+                card.surfacing_reason =
+                    Some(crate::context_runtime::context_pack::SurfacingReason {
+                        headline: format!("Linked from ‘{}’", seed.window_title),
+                        routes: vec!["stored_link".into()],
+                        graph_path: None,
+                        anchor_terms_hit: Vec::new(),
+                        recency_boost: 0.0,
+                    });
+                card
+            })
+            .collect());
+    }
+
+    // Assistant notes expose only their explicit references. Ordinary memories
+    // retain the existing hybrid-similarity fallback using text that survives
+    // compaction, with retrieval scores/routes distinguished from stored links.
+    if seed.is_agent_note() {
+        return Ok(Vec::new());
+    }
+    let query = crate::memory_compaction::best_embedding_text(&seed);
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let (_, retrieval) = retrieve_with_fused(
+        state,
+        &RetrieveRequest {
+            query: query.clone(),
+            limit: limit + 1,
+            ..Default::default()
+        },
+    )
+    .await;
+    let mut seen = HashSet::from([seed.id]);
+    Ok(retrieval
+        .fused
+        .iter()
+        .filter_map(|hit| {
+            let record = retrieval.records.get(&hit.memory_id)?;
+            if !visible(record) || !seen.insert(record.id.clone()) {
+                return None;
+            }
+            let mut card =
+                build_fallback_card(&query, &memory_record_to_search_result(record, hit.score));
+            let mut reason = hit.surfacing_reason.clone();
+            reason.headline = "Similar context".into();
+            card.surfacing_reason = Some(reason);
+            Some(card)
+        })
+        .take(limit)
+        .collect())
 }
 
 /// `retrieve` plus each hit's stored row as a `SearchResult`, in hit order,

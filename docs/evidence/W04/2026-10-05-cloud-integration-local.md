@@ -204,3 +204,25 @@ Initialization including its dimension probe took 3.134–4.868 seconds across t
 Recommendation remains fp32/256 for the isolated migration prototype, with 768 as comparator. Its smaller stored vectors are the benefit here; these timings do not establish an inference speed or model-residency advantage from cutting the output dimensions. Reuse a loaded model for interactive queries and measure background embedding contention before production activation.
 
 Local scratch evidence: `/tmp/fndr-integration-oct5/gemma-role-workload-summary.json`, per-process `gemma-role-{queries,documents}-{256,768}-r*.json` and `.stderr` (`/usr/bin/time -l`), and the focused red/green/reference logs in the same directory. Corpus files were retained locally rather than adding another large synthetic fixture to the repository: `gemma-queries.json` SHA-256 `aa9e3eaf5bccdd40539cde71121862658fe2ed1cd43f1d449038f86ddcd58530`; `gemma-long-documents.json` SHA-256 `c1d8908fd7d93fb9a18eb91829eced74982221d9244bdcf7c4d70a870e75f2c1`. These scratch paths are local evidence, not portable committed benchmark assets. Build with `cargo build --locked --example embedding_measure`, set `FNDR_EMBED_MODEL_DIR` to the separate pinned fp32 assets, and run the built example with `<dimension> <corpus.json>`, adding `--single-input` for the query corpus.
+
+
+## Persisted Related memories
+
+DIAGNOSIS REPORT
+- Observed failure: Vault and MCP queried `record.text` instead of following saved links. Compaction cleared that field while `related_memory_ids` survived, so the restart fixture returned no related card.
+- Smallest repro: `CARGO_BUILD_JOBS=1 cargo test --locked --lib related_memories_resolve_persisted_links_after_restart`. Observed red: `[]` instead of `["linked-target"]`; green after the shared resolver.
+- Root cause and fix: both adapters duplicated similarity lookup. They now delegate to one existing-runtime resolver that follows persisted links, resolves consolidated aliases, deduplicates canonical IDs, excludes self, and applies current visibility to source and targets. It reads at most 64 distinct references and returns at most 12 cards, ordered by time then ID. Missing or hidden links do not trigger similarity replacement.
+- Additional observed red: a later blocklist rule matching only an assistant note's body/project still exposed links. The resolver now checks the same retained title/body/project context as note admission; all four seed/target cases pass.
+- Ordinary memories without links use surviving compacted text through existing hybrid retrieval, retaining ranked scores and route evidence. Unlinked notes remain leaves. Stored links have score zero and `stored_link` provenance, without invented semantic scores or graph paths.
+- Verification: 6 focused related-memory regressions passed; the encompassing MCP module suite passed 20 tests. Retrieval integration passed 15 tests, including compacted-text fallback, seed exclusion and current app filtering. Expanded-card/panel tests passed 16 tests and typecheck passed. Commands: `cargo test --locked --lib related_memories_`, `cargo test --locked --lib mcp::tests::`, `cargo test --locked --test retrieve` (all with `CARGO_BUILD_JOBS=1`); `npm run typecheck`; `npm test -- src/domains/memory-vault/ExpandedMemoryCard.test.tsx src/domains/memory-vault/MemoryCardsPanel.test.tsx`.
+- Browser evidence: synthetic IPC fixture at 1280 px and 360x800 showed stored-link labels, note authorship and wrapping long unbroken titles/client names without horizontal overflow. Clicking a related note opened its actual expanded-card UI and preserved attribution. Console contained only the React DevTools information message. Screenshots retained locally under `/tmp/fndr-integration-oct5/related-browser/`; mock browser evidence does not prove native capture or owner-vault quality.
+- Temporary instrumentation removed: no production instrumentation added; owned browser and Vite server closed.
+- Remaining risk: persisted graph traversal, timeline integration, native usefulness and global note cleanup on changed blocklist rules remain separate work. This slice checks current rules on related reads; it does not claim global deletion.
+
+ANTI-BLOAT REVIEW
+- Behavior delivered: saved relationships remain useful after restart for humans and agents, with truthful relationship labels and provenance.
+- Complexity added: one bounded resolver in the existing context runtime and metadata in the existing card; no schema, dependency, service or new UI surface.
+- Code removed/merged: duplicated IPC/MCP similarity logic replaced by shared resolution; existing storage lookup, privacy, card conversion and hybrid retrieval reused.
+- Simplifications required: none after review. `parent_id`, unused legacy `related_ids` and consolidation aliases are not invented as relationship types.
+- Testability gaps: native data quality and graph-scale costs remain unmeasured.
+- Verdict: approve after independent read-only review; preserve teammate migration ownership and continue shared-model integration separately.

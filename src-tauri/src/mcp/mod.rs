@@ -3003,27 +3003,13 @@ async fn run_fndr_namespace_related_memories(
         code: -32602,
         message: format!("Invalid fndr.get_related_memories args: {err}"),
     })?;
-    let Some(record) = app_state
-        .store
-        .get_memory_by_id(&args.memory_id)
-        .await
-        .map_err(internal_tool_error)?
-    else {
-        return Ok(tool_success(json!({ "cards": [] })));
-    };
-    let answer = crate::context_runtime::run_query(
+    let cards = crate::context_runtime::related_memories(
         &app_state,
-        &record.text,
+        &args.memory_id,
         args.limit.unwrap_or(8),
-        crate::context_runtime::ComposeMode::Cards,
     )
     .await
     .map_err(internal_tool_error)?;
-    let cards: Vec<_> = answer
-        .cards
-        .into_iter()
-        .filter(|c| c.id != args.memory_id)
-        .collect();
     Ok(tool_success(json!({ "cards": cards })))
 }
 
@@ -5307,6 +5293,378 @@ mod tests {
             None,
             None,
         ))
+    }
+
+    fn related_test_state(path: &std::path::Path) -> Arc<AppState> {
+        let data_dir = path.to_path_buf();
+        let store = Arc::new(Store::new(&data_dir).expect("store"));
+        let state_store = Arc::new(StateStore::new(&data_dir).expect("state store"));
+        let graph = GraphStore::new(store.clone());
+        Arc::new(AppState::new(
+            data_dir,
+            Config::default(),
+            store,
+            state_store,
+            graph,
+            None,
+            None,
+        ))
+    }
+
+    fn related_test_record(id: &str) -> MemoryRecord {
+        let text = "Reviewed the deployment checklist and documented remaining verification steps for the release.";
+        MemoryRecord {
+            id: id.into(),
+            timestamp: 1_800_000_000_000,
+            app_name: "Editor".into(),
+            window_title: format!("Release checklist {id}"),
+            text: text.into(),
+            clean_text: text.into(),
+            snippet: text.into(),
+            memory_context: text.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn related_memories_hide_notes_when_later_blocklist_matches_body_or_project() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let mut rows = Vec::new();
+        let mut seed_ids = Vec::new();
+        for side in ["seed", "target"] {
+            for field in ["body", "project"] {
+                let seed_id = format!("{side}-{field}-seed");
+                let target_id = format!("{side}-{field}-target");
+                let mut seed = related_test_record(&seed_id);
+                let mut target = related_test_record(&target_id);
+                seed.related_memory_ids = vec![target_id];
+                let note = if side == "seed" {
+                    &mut seed
+                } else {
+                    &mut target
+                };
+                note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.into();
+                note.related_agents = vec!["Example assistant".into()];
+                if field == "body" {
+                    note.clean_text
+                        .push_str(" Discussed Sealed-Project details.");
+                } else {
+                    note.project = "Sealed-Project".into();
+                }
+                rows.extend([seed, target]);
+                seed_ids.push(seed_id);
+            }
+        }
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&rows))
+            .unwrap();
+        // The rule is added after the notes were stored; it must apply on reads.
+        state.config.write().blocklist = vec!["sealed-project".into()];
+        for seed_id in seed_ids {
+            let cards = runtime
+                .block_on(crate::context_runtime::related_memories(
+                    &state, &seed_id, 4,
+                ))
+                .unwrap();
+            assert!(
+                cards.is_empty(),
+                "later body/project blocklist must hide {seed_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn related_memories_resolve_persisted_links_after_restart() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let dir = tempdir().expect("tempdir");
+        let open_state = || related_test_state(dir.path());
+        let source_text =
+            "Prepared the deployment checklist and recorded the remaining release checks.";
+        let target_text = "Reviewed ceramic kiln temperature curves and documented the cooling schedule for the workshop.";
+        let source = MemoryRecord {
+            id: "linked-source".into(),
+            timestamp: 1_800_000_000_000,
+            app_name: "Editor".into(),
+            window_title: "Release checklist".into(),
+            text: source_text.into(),
+            clean_text: source_text.into(),
+            snippet: source_text.into(),
+            memory_context: source_text.into(),
+            related_memory_ids: vec!["linked-target".into()],
+            ..Default::default()
+        };
+        let target = MemoryRecord {
+            id: "linked-target".into(),
+            timestamp: 1_500_000_000_000,
+            app_name: "Browser".into(),
+            window_title: "Workshop cooling schedule".into(),
+            source_type: "browser".into(),
+            text: target_text.into(),
+            clean_text: target_text.into(),
+            snippet: target_text.into(),
+            memory_context: target_text.into(),
+            raw_evidence: r#"{"source_kind":"ax"}"#.into(),
+            ..Default::default()
+        };
+        {
+            let state = open_state();
+            runtime
+                .block_on(state.store.add_batch_preserving_ids(&[source, target]))
+                .expect("persist links");
+        }
+        let state = open_state();
+        let stored_source = runtime
+            .block_on(state.store.get_memory_by_id("linked-source"))
+            .unwrap()
+            .unwrap();
+        assert!(stored_source.text.is_empty(), "capture text was compacted");
+        assert_eq!(stored_source.related_memory_ids, ["linked-target"]);
+        let direct = runtime
+            .block_on(crate::context_runtime::related_memories(
+                &state,
+                "linked-source",
+                4,
+            ))
+            .expect("shared resolver");
+        let response = runtime
+            .block_on(run_fndr_namespace_related_memories(
+                state,
+                json!({ "memory_id": "linked-source", "limit": 4 }),
+            ))
+            .expect("related memories");
+        let cards = response["structuredContent"]["cards"]
+            .as_array()
+            .expect("cards");
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| card["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["linked-target"],
+            "the persisted relationship must survive compaction and restart"
+        );
+        assert_eq!(cards[0]["source_type"], "browser");
+        assert_eq!(cards[0]["text_source"], "ax");
+        assert_eq!(
+            serde_json::to_value(direct).unwrap(),
+            Value::Array(cards.clone())
+        );
+        assert_eq!(cards[0]["score"], 0.0);
+        assert_eq!(
+            cards[0]["surfacing_reason"]["routes"],
+            json!(["stored_link"])
+        );
+        assert!(cards[0]["surfacing_reason"]["graph_path"].is_null());
+    }
+
+    #[test]
+    fn related_memories_resolve_aliases_without_self_links_or_duplicates() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let mut seed = related_test_record("seed");
+        seed.consolidated_from = vec!["old-seed".into()];
+        seed.related_memory_ids = [
+            "old-target",
+            "target",
+            "target",
+            "old-seed",
+            "seed",
+            "missing",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        let mut target = related_test_record("target");
+        target.consolidated_from = vec!["old-target".into()];
+        let unrelated = related_test_record("unrelated");
+        runtime
+            .block_on(
+                state
+                    .store
+                    .add_batch_preserving_ids(&[seed, target, unrelated]),
+            )
+            .unwrap();
+        let cards = runtime
+            .block_on(crate::context_runtime::related_memories(
+                &state, "old-seed", 12,
+            ))
+            .unwrap();
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| card.id.as_str())
+                .collect::<Vec<_>>(),
+            ["target"]
+        );
+    }
+
+    #[test]
+    fn related_memories_exclude_hidden_targets_and_hidden_seeds() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let mut rows = vec![related_test_record("visible")];
+        for kind in [
+            "deleted",
+            "internal",
+            "low-signal",
+            "blocked-app",
+            "blocked-url",
+            "blocked-title",
+        ] {
+            let mut record = related_test_record(kind);
+            record.related_memory_ids = vec!["visible".into()];
+            match kind {
+                "deleted" => record.is_soft_deleted = true,
+                "internal" => record.app_name = "FNDR".into(),
+                "low-signal" => record.storage_outcome = "visual_semantics_failed".into(),
+                "blocked-app" => record.app_name = "PrivateWorkspace".into(),
+                "blocked-url" => record.url = Some("https://private.example/research".into()),
+                "blocked-title" => record.window_title = "Confidential Ledger".into(),
+                _ => unreachable!(),
+            }
+            rows.push(record);
+        }
+        let hidden_ids = rows
+            .iter()
+            .skip(1)
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
+        let mut seed = related_test_record("seed");
+        seed.related_memory_ids = hidden_ids.clone();
+        seed.related_memory_ids.push("missing".into());
+        rows.push(seed);
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&rows))
+            .unwrap();
+        state.config.write().blocklist = vec![
+            "privateworkspace".into(),
+            "private.example".into(),
+            "confidential ledger".into(),
+        ];
+        for seed_id in std::iter::once("seed").chain(hidden_ids.iter().map(String::as_str)) {
+            let cards = runtime
+                .block_on(crate::context_runtime::related_memories(
+                    &state, seed_id, 12,
+                ))
+                .unwrap();
+            assert!(
+                cards.is_empty(),
+                "hidden seed/targets must not surface through {seed_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn related_memories_obey_zero_limit_cap_and_stable_time_order() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let mut rows = (0..16)
+            .map(|index| {
+                let mut row = related_test_record(&format!("target-{index:02}"));
+                row.timestamp += index / 2;
+                row
+            })
+            .collect::<Vec<_>>();
+        let mut seed = related_test_record("seed");
+        seed.related_memory_ids = rows.iter().rev().map(|row| row.id.clone()).collect();
+        rows.push(seed);
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&rows))
+            .unwrap();
+        assert!(runtime
+            .block_on(crate::context_runtime::related_memories(&state, "seed", 0))
+            .unwrap()
+            .is_empty());
+        let cards = runtime
+            .block_on(crate::context_runtime::related_memories(
+                &state,
+                "seed",
+                usize::MAX,
+            ))
+            .unwrap();
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| card.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "target-14",
+                "target-15",
+                "target-12",
+                "target-13",
+                "target-10",
+                "target-11",
+                "target-08",
+                "target-09",
+                "target-06",
+                "target-07",
+                "target-04",
+                "target-05",
+            ]
+        );
+        let first = runtime
+            .block_on(crate::context_runtime::related_memories(&state, "seed", 1))
+            .unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].id, "target-14");
+    }
+
+    #[test]
+    fn related_memories_preserve_note_attribution_without_derived_writes() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let mut seed = related_test_record("seed-note");
+        seed.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.into();
+        seed.related_memory_ids = vec!["target-note".into()];
+        let mut target = related_test_record("target-note");
+        target.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.into();
+        target.related_agents = vec!["Example assistant".into()];
+        target.project = "Synthetic release".into();
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&[seed, target]))
+            .unwrap();
+        let before = runtime.block_on(state.store.list_all_memories()).unwrap();
+        let cards = runtime
+            .block_on(crate::context_runtime::related_memories(
+                &state,
+                "seed-note",
+                4,
+            ))
+            .unwrap();
+        assert_eq!(cards.len(), 1);
+        let card = serde_json::to_value(&cards[0]).unwrap();
+        assert_eq!(card["id"], "target-note");
+        assert_eq!(card["source_type"], "agent");
+        assert_eq!(card["added_by"], "Example assistant");
+        assert!(cards[0].reopen_target.is_none());
+        assert!(
+            runtime
+                .block_on(crate::context_runtime::related_memories(
+                    &state,
+                    "target-note",
+                    4
+                ))
+                .unwrap()
+                .is_empty(),
+            "unlinked notes must not infer peer links"
+        );
+        assert!(runtime
+            .block_on(state.store.list_activity_events(20, None))
+            .unwrap()
+            .is_empty());
+        let graph = crate::graph::graph_store::GraphStore::new(state.store.clone());
+        assert!(runtime.block_on(graph.all_nodes()).unwrap().is_empty());
+        assert!(runtime.block_on(graph.all_edges()).unwrap().is_empty());
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(runtime.block_on(state.store.list_all_memories()).unwrap())
+                .unwrap()
+        );
     }
 
     /// Four synthetic memories a few minutes old, for the search contract.
