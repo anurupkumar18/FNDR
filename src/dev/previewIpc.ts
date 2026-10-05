@@ -33,7 +33,8 @@ const previewMemoryCards: MemoryCard[] = [
         context: ["Home", "visual hierarchy", "accessibility"],
         timestamp: previewNow - 24 * 60 * 1000,
         app_name: "Figma",
-        window_title: "FNDR — Home concepts",
+        window_title: "FNDR: Home concepts",
+        project: "FNDR UI overhaul",
         score: 0.96,
         source_count: 7,
         continuity: true,
@@ -57,7 +58,8 @@ const previewMemoryCards: MemoryCard[] = [
         context: ["React", "Tauri mocks", "browser QA"],
         timestamp: previewNow - 76 * 60 * 1000,
         app_name: "Visual Studio Code",
-        window_title: "previewIpc.ts — FNDR",
+        window_title: "previewIpc.ts - FNDR",
+        project: "FNDR UI overhaul",
         score: 0.93,
         source_count: 5,
         raw_snippets: [],
@@ -101,6 +103,7 @@ const previewMemoryCards: MemoryCard[] = [
         timestamp: previewNow - 22 * 60 * 60 * 1000,
         app_name: "Terminal",
         window_title: "FNDR UI audit notes",
+        project: "FNDR UI overhaul",
         score: 0.88,
         source_count: 3,
         raw_snippets: [],
@@ -120,7 +123,7 @@ const previewMemoryCards: MemoryCard[] = [
         context: ["Preview", "PDF"],
         timestamp: previewNow - 40 * 60 * 1000,
         app_name: "Preview",
-        window_title: "re03-preview.pdf – Page 112 of 150",
+        window_title: "re03-preview.pdf - Page 112 of 150",
         reopen_target: "file:///Users/qa/re03-fixtures/re03-preview.pdf",
         reopen_page: 112,
         score: 0.86,
@@ -131,6 +134,61 @@ const previewMemoryCards: MemoryCard[] = [
         files_touched: ["/Users/qa/re03-fixtures/re03-preview.pdf"],
         session_duration_mins: 6,
         topic_categories: ["reopen"],
+        enrichment_status: "reviewed_local",
+        storage_outcome: "enriched_memory_card",
+    },
+    // Yesterday: one project thread with near-duplicate captures, plus a download.
+    ...[26, 26.25, 26.5].map((hoursAgo, index): MemoryCard => ({
+        id: `memory-beta-script-${index + 1}`,
+        title: "Drafted the Beta demo script",
+        summary: "Wrote the four-minute Beta walkthrough: capture, search, Ask, and reopen.",
+        display_summary: "The demo opens on a real question and ends on the reopened source.",
+        action: "Wrote a script",
+        context: ["Beta demo", "script"],
+        timestamp: previewNow - hoursAgo * 60 * 60 * 1000,
+        app_name: "Notes",
+        window_title: "Beta demo script",
+        project: "FNDR Beta demo",
+        score: 0.84,
+        source_count: 1,
+        raw_snippets: [],
+        activity_type: "docs",
+        enrichment_status: "reviewed_local",
+        storage_outcome: "enriched_memory_card",
+    })),
+    {
+        id: "memory-beta-rubric",
+        title: "Checked the Beta judging rubric",
+        summary: "Read how judges score the Beta: a working demo, measured results, and a clear story.",
+        display_summary: "Measured results carry the most weight in the Beta rubric.",
+        action: "Read a rubric",
+        context: ["Beta demo", "rubric"],
+        timestamp: previewNow - 27 * 60 * 60 * 1000,
+        app_name: "Google Chrome",
+        window_title: "Beta rubric",
+        url: "https://example.com/beta-rubric",
+        reopen_target: "https://example.com/beta-rubric",
+        project: "FNDR Beta demo",
+        score: 0.82,
+        source_count: 1,
+        raw_snippets: [],
+        activity_type: "browsing",
+        enrichment_status: "reviewed_local",
+        storage_outcome: "enriched_memory_card",
+    },
+    {
+        id: "memory-beta-download",
+        title: "Downloaded beta-checklist.pdf",
+        summary: "A synthetic checklist PDF arrived in Downloads.",
+        display_summary: "A synthetic checklist PDF arrived in Downloads.",
+        action: "Downloaded a file",
+        context: ["Downloads"],
+        timestamp: previewNow - 29 * 60 * 60 * 1000,
+        app_name: "Finder",
+        window_title: "Downloads",
+        score: 0.7,
+        source_count: 1,
+        raw_snippets: [],
         enrichment_status: "reviewed_local",
         storage_outcome: "enriched_memory_card",
     },
@@ -165,7 +223,7 @@ const previewSimilarResults = [
         id: "similar-home-review",
         timestamp: previewNow - 2 * 60 * 60 * 1000,
         app_name: "Figma",
-        window_title: "FNDR — Contrast concepts",
+        window_title: "FNDR: Contrast concepts",
         session_id: "preview-design-session",
         text: "Compared a stable foreground card against the ambient Film wallpaper.",
         snippet: "Compared foreground contrast options for the FNDR home experience.",
@@ -891,6 +949,30 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "list_needs_signal_memory_cards":
                 return clonePreview(previewNeedsSignalCards);
+            case "get_full_graph": {
+                // Synthetic Connections strip: one node per memory, linked to its project.
+                const createdAt = new Date(previewNow).toISOString();
+                const projects = [...new Set(previewCards.map((card) => card.project).filter(Boolean))] as string[];
+                const node = (id: string, nodeType: string, label: string, sourceIds: string[]) => ({
+                    id, node_type: nodeType, label, confidence: 0.9, source_memory_ids: sourceIds,
+                    created_at: createdAt, updated_at: createdAt, stale: false, metadata: {},
+                });
+                return {
+                    nodes: [
+                        ...projects.map((project) => node(`project:${project}`, "project", project, [])),
+                        ...previewCards.map((card) => node(`memory:${card.id}`, "memory", card.title, [card.id])),
+                    ],
+                    edges: previewCards
+                        .filter((card) => card.project)
+                        .map((card) => ({
+                            id: `edge:${card.id}`, source_id: `memory:${card.id}`, target_id: `project:${card.project}`,
+                            edge_type: "part_of_project", confidence: 0.9, conflict_flag: false,
+                            created_at: createdAt, metadata: {},
+                        })),
+                    louvain: {},
+                    cluster_0_name: "",
+                };
+            }
             case "fndr_get_related_memories": {
                 const memoryId =
                     typeof payload === "object" && payload !== null && "memoryId" in payload

@@ -17,8 +17,9 @@ import "./MemoryCardsPanel.css";
 import { InsightLayers } from "./InsightLayers";
 import { KnowledgeGraph } from "./KnowledgeGraph";
 import { GRAPH_SIM_MAX_TICKS, useGraph } from "./useGraph";
-import { MemoryCard as MemoryCardComponent } from "./MemoryCard";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
+import { VaultDayList } from "./VaultDayList";
+import { groupVaultMemories } from "./vaultGrouping";
 import { KnowledgeGraph3D, GraphErrorBoundary } from "@/features/graph/components";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
@@ -118,7 +119,7 @@ function matchesFilters(
         if (timeFilter === "last_7d" && timestamp < now - 7 * 24 * 60 * 60 * 1000) return false;
     }
 
-    // 2. Perspective Filtering — prefer structured activity_type when present
+    // 2. Perspective Filtering: prefer structured activity_type when present
     if (perspectiveFilter === PERSPECTIVE_FILTER_ALL) {
         return true;
     }
@@ -213,6 +214,7 @@ export function MemoryCardsPanel({
     const [cards, setCards] = useState<MemoryCard[]>([]);
     const [needsSignalCards, setNeedsSignalCards] = useState<NeedsSignalCard[]>([]);
     const [showNeedsSignal, setShowNeedsSignal] = useState(false);
+    const [showConnections, setShowConnections] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [vaultActivity, setVaultActivity] = useState<ActivityTraceSnapshot | null>(null);
@@ -237,7 +239,8 @@ export function MemoryCardsPanel({
     const isGraphFeature = feature === "graph";
     const showListSurface = !isGraphFeature && browseMode === "list";
     const showGraphSurface = !isVaultFeature && (browseMode === "graph" || browseMode === "project");
-    const showEmbeddedGraphStrip = feature === "mixed" && browseMode === "list";
+    const showEmbeddedGraphStrip = showListSurface && showConnections;
+    const wantsGraph = !isVaultFeature || showConnections;
 
     useEffect(() => {
         if (feature === "vault" && browseMode !== "list") {
@@ -272,20 +275,22 @@ export function MemoryCardsPanel({
         [cards, timeFilter, perspectiveFilter]
     );
 
+    const vaultDays = useMemo(
+        () => groupVaultMemories(filteredCards.slice(0, renderedCardLimit), Date.now()),
+        [filteredCards, renderedCardLimit]
+    );
+
     useEffect(() => {
         setRenderedCardLimit(MEMORY_RENDER_BATCH);
     }, [appFilter, timeFilter, perspectiveFilter]);
 
 
     useEffect(() => {
-        if (!isVisible) {
-            return;
-        }
-        if (isVaultFeature) {
+        if (!isVisible || !wantsGraph) {
             return;
         }
         void loadGraph({ mode: "full" });
-    }, [isVisible, loadGraph, isVaultFeature]);
+    }, [isVisible, loadGraph, wantsGraph]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -664,6 +669,16 @@ export function MemoryCardsPanel({
                             Excluded captures ({needsSignalCards.length})
                         </button>
                     )}
+                    {showListSurface && !showNeedsSignal && (
+                        <button
+                            type="button"
+                            className={`ui-action-btn memory-cards-tab${showConnections ? " memory-cards-tab--active" : ""}`}
+                            aria-pressed={showConnections}
+                            onClick={() => setShowConnections((current) => !current)}
+                        >
+                            Connections
+                        </button>
+                    )}
                     {showGraphSurface && (
                         <div className="memory-cards-count">
                             {(subgraph?.nodes?.length ?? 0)} nodes · {(subgraph?.edges?.length ?? 0)} links
@@ -769,7 +784,7 @@ export function MemoryCardsPanel({
                     </section>
                 ) : <>
                 {showEmbeddedGraphStrip && (
-                <section className="memory-vault-global-graph" aria-label="Global memory graph">
+                <section className="memory-vault-global-graph" aria-label="Connections">
                     {subgraph?.cluster_0_name ? (
                         <div className="memory-vault-cluster-legend" title="Louvain community 0 label">
                             {subgraph.cluster_0_name}
@@ -780,11 +795,14 @@ export function MemoryCardsPanel({
                             {graphError}
                         </div>
                     )}
-                    {graphLoading && (subgraph?.nodes?.length ?? 0) === 0 && !graphError && (
+                    {(graphLoading || !subgraph) && (subgraph?.nodes?.length ?? 0) === 0 && !graphError && (
                         <div className="memory-vault-graph-strip-loading">
                             <ThinkingIndicator state="searching" size="md" />
-                            <p>Loading global graph…</p>
+                            <p>Loading connections…</p>
                         </div>
+                    )}
+                    {!graphLoading && subgraph && subgraph.nodes.length === 0 && (
+                        <p className="memory-vault-graph-strip-empty">No connections to show yet.</p>
                     )}
                     {(subgraph?.nodes?.length ?? 0) > 0 && (
                         <KnowledgeGraph
@@ -832,22 +850,12 @@ export function MemoryCardsPanel({
 
                 {filteredCards.length > 0 && (
                     <div className="memory-cards-stream">
-                        {filteredCards.slice(0, renderedCardLimit).map((card) => (
-                            <MemoryCardComponent
-                                key={card.id}
-                                card={card}
-                                variant="compact"
-                                onOpen={(c) => {
-                                    setOpenExpandedId(c.id);
-                                }}
-                                threadCountHint={
-                                    card.topic_categories?.length ||
-                                    (card.insight_context_thread?.trim() ? 1 : 0) ||
-                                    card.files_touched?.length ||
-                                    undefined
-                                }
-                            />
-                        ))}
+                        <VaultDayList
+                            days={vaultDays}
+                            focusMemoryId={focusMemoryId}
+                            onOpen={(c) => setOpenExpandedId(c.id)}
+                            onReopen={(c) => void handleReopen(c.id)}
+                        />
                         {filteredCards.length > renderedCardLimit && (
                             <button
                                 type="button"
@@ -900,7 +908,7 @@ export function MemoryCardsPanel({
                         )}
                         {(subgraph?.nodes?.length ?? 0) > 0 && (
                             <div className="memory-graph-stage" style={{ position: "relative" }}>
-                                {/* 2D / 3D mode switch — explicit segmented control */}
+                                {/* 2D / 3D mode switch: explicit segmented control */}
                                 <div className="mg-mode-segmented" role="tablist" aria-label="Graph view mode">
                                     <button
                                         type="button"
