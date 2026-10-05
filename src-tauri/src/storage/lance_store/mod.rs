@@ -1727,7 +1727,7 @@ impl Store {
     /// BM25 keyword search over the text columns in `FTS_COLUMNS` (VS-07).
     /// Rare words count more than common ones, every matching row is scored
     /// before the limit applies, and English word forms match by stemming.
-    /// Scores are BM25 normalized to the best hit, blended with recency.
+    /// Scores are bm25 / (bm25 + 2), blended with recency.
     pub async fn keyword_search(
         &self,
         query: &str,
@@ -1772,10 +1772,6 @@ impl Store {
                 results.push(result);
             }
         }
-        let best = results
-            .iter()
-            .map(|result| result.score)
-            .fold(0.0_f32, f32::max);
         let now_ms = chrono::Utc::now().timestamp_millis();
         for result in &mut results {
             let lexical = result.score / (result.score + 2.0);
