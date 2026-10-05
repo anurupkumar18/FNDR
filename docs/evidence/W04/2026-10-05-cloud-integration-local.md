@@ -123,3 +123,47 @@ ANTI-BLOAT REVIEW
 - Interface improvements: compact labels shared by humans and agents; raw evidence stays internal.
 - Testability gaps: native source distribution and historical lost lineage remain unproven.
 - Verdict: approve. The focused Rust parser test passed after adding the matching Unicode cases; public-diff scan and whitespace checks passed.
+
+## Agent write-back integration (VS-68)
+
+Reviewed cloud PR 35 at `3a41b4e75b22e30701b32b28343908bc7effda9e`; its live checks passed, including macOS Rust tests. Merged locally at `d9b132f`, preserving both sides of the append-only cloud session log. The feature remains off by default and the owner configuration was not changed.
+
+Local review found gaps outside the cloud corpus's immediate write assertions. Behavioral regressions observed before fixes:
+
+| Boundary | Observed failure | Local correction |
+|---|---|---|
+| Project metadata | HTTP requests with a secret or blocked term only in `project` were stored. | Apply the existing detector and blocklist to title, body and project. |
+| Other memories' review context | A recording provider received an agent note as a neighboring candidate while reviewing an ordinary capture. | Exclude notes before truncating the candidate set. |
+| Capture merging | Four stored/batch tests selected the note or changed the screen ID to the note ID, including deliberately stale continuity anchors. | Exclude notes from semantic/lexical candidates, incoming story eligibility and both anchor shortcuts. |
+| Reopening | Legacy `Reopen:` note text produced a URL target in cards and the actual command's resolver. | Guard both resolvers before any typed or legacy fallback; include URL, file and deep-link regressions. No OS open action was performed by these tests. |
+| Read provenance | Stored SearchResult JSON omitted source type; MCP inferred `application`. | Project existing source/client fields through SearchResult and cards. Agent MCP rows report agent origin; existing non-agent MCP categories remain compatible. |
+| Derived work context | Reading a note through a context pack created an activity record. | Keep notes out of activity/graph/project derivation, including direct sync; preserve the stored row unchanged. |
+| Answer evidence | Ask presented note snippets without attribution. | Label note evidence with client, timestamp and memory ID in an explicit untrusted-data JSON block. |
+
+Agent cards bypass generative synthesis and capture-specific text cleanup, preserving the note's own text. Frontend regressions also exposed capture icons/status and a hidden narration-filtered note. Notes now show Added, Title and client attribution, with neither reopen controls nor screen-similarity actions. The UI renders URL-like text as plain text. No new persistence schema or framework was introduced.
+
+Browser checks at 1280x900 and 360x800 used synthetic fixtures, including a note containing `Reopen: https://example.com`. The final card showed Added and the client, no actionable link/reopen control and no screen-similarity button. Document width matched the viewport. The initial page opened without a Tauri mock and logged unavailable-IPC errors; after fixture initialization there were no further console errors. These are frontend checks, not a Claude Code native demo.
+
+Additional review caught capture normalization flattening note whitespace/removing literal `[LOW_CONF]`, and first-sentence answer snippets omitting later qualifications. Their storage/answer regressions and final integration results are recorded at the next checkpoint below.
+
+### Final local checkpoint
+
+- The small normalization regression reproduced lost newlines/indentation and literal marker removal. Capture cleanup now skips authored note bodies. The 4,000-character real-store roundtrip includes code, indentation, a literal marker and a final-word keyword lookup.
+- Batch persistence still dropped a screen record beside an identical note after merge isolation was fixed. A separate search regression returned one row instead of two notes plus their matching capture. Insert/search dedup now keys notes by their ID, preserving ordinary capture dedup behavior.
+- The maximum-length storage test exposed an existing non-advancing chunk loop. A process sample located it in `chunk_by_chars_with_spans`: a whitespace match at offset zero left the start unchanged. The initial full gate was stopped after the test exceeded 90 seconds. Ignoring that zero-offset boundary restores forward progress; ASCII and multibyte regressions check complete span coverage, limits and preserved tails. The formerly hanging storage test passes.
+- Ask now uses the full stored note body in its attributed JSON block. A two-sentence correction regression first reproduced the omitted qualification, then caught a duplicated first sentence when derived context was preferred over the body; the final test passes.
+- Final `CARGO_BUILD_JOBS=1 make test`: typecheck, 80 frontend files / 534 tests, production frontend build, and 1,066 Rust tests passed / 17 ignored, zero failures. This includes the real HTTP injected-note corpus, capture fixtures, merge replay, retrieval and storage integration suites. The generated storage-index benchmark was saved in scratch evidence and the historical report restored.
+- Final synthetic browser pass additionally checked multiline note text and indentation at 1280x900 and 360x800. Computed whitespace mode was `pre-wrap`, document/body widths matched the viewport, URL text produced no links, and this fresh fixture-first session logged no errors.
+- Source inspection added a post-inference real-backend check: even when development mock fallback is enabled, a real-model failure must not admit a mock-vector note. The focused MCP rerun passed all 34 tests, including the HTTP corpus; no runtime ONNX-failure injection is claimed. Final whitespace and added-line public-data checks passed.
+
+ANTI-BLOAT REVIEW
+- Behavior delivered: independently stored, attributed, inert assistant notes and fixes for concrete integration failures.
+- Complexity added: derived DTO fields and guards in existing capture, storage, review and presentation boundaries.
+- Bloat risks: duplicated source heuristics were considered; the existing non-agent MCP category behavior was deliberately retained for compatibility.
+- Simplifications required: use stored note bodies, existing source identity and current normalizers; no parallel note store or framework.
+- Code to delete or merge: capture-only actions and cleanup are bypassed for notes; obsolete one-page status claims were replaced in place.
+- Interface improvements: notes expose origin/client and cannot supply reopening targets or become derived work context.
+- Testability gaps: native assistant demo, settings opt-in and the remaining product work below stay pending.
+- Verdict: approve with the documented default-off scope and remaining product gates.
+
+Still pending for this feature: Settings opt-in, Vault filtering/bulk client deletion, Privacy Activity, cleanup when a new blocklist rule matches note body text, and the native assistant-to-FNDR demo. The older decision-ledger write has its separate open policy question. These limits remain explicit in the cloud evidence and feature plan.

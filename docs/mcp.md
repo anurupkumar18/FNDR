@@ -81,18 +81,20 @@ An assistant can save a short note, decision, summary, or to-do into memory. The
 - **Refused before storing:**
   - unknown arguments, so a caller cannot set `source_type`, `app_name`, `url`, or a time;
   - hidden or control characters;
-  - anything the capture secret detector flags;
-  - blocklisted words;
+  - anything the capture secret detector flags in the title, body or project;
+  - blocklisted words in any of those fields;
   - any call made while the real embedding model is missing.
 
   Refusals return a stable code in `structuredContent.error` and never repeat the note.
 - **Stored as a leaf.**
   - A note is one memory with `source_type = "agent"`, app "Agent note", and its own card.
-  - It has no open target and is never compacted.
-  - Memory review skips it, and nothing derives graph, tasks, or project context from it.
+  - It has no open target, including when its text contains a legacy `Reopen:` marker, and is never compacted.
+  - Capture merging and memory review exclude it, including review context for other memories. Building a work-context pack does not promote it to graph/activity/project context.
+  - Search/Vault cards and MCP search rows preserve `source_type = "agent"` and `added_by`. Cards say "Added" and preserve note text. Other MCP row source categories retain their existing behavior.
+  - Ask labels note evidence with its client, time and memory ID. Client names are self-reported, not verified identities.
 - **Not in this slice:**
-  - the Settings toggle, the "Added by" badge, and the Vault filter;
-  - `source_type` and `added_by` on read results (reads show the app "Agent note" and a title such as "Decision from Claude Code");
+  - the Settings toggle and the Vault filter;
+  - adding notes to derived work-context packs;
   - Privacy Activity lines;
   - gating `fndr_remember_decision` the same way.
 
