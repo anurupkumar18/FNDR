@@ -276,10 +276,14 @@ class RenderAndMainTests(unittest.TestCase):
 
     def test_committed_references_are_valid_reports(self):
         root = Path(__file__).resolve().parents[2]
-        for case_set in ["knowledge-worker", "office-pm"]:
-            reference = json.loads(
-                (root / f"scripts/demo/retrieval-reference/{case_set}.json").read_text()
-            )
+        references = sorted((root / "scripts/demo/retrieval-reference").glob("*.json"))
+        self.assertTrue(
+            {"knowledge-worker", "office-pm", "software-engineer"}
+            <= {path.stem for path in references}
+        )
+        for path in references:
+            case_set = path.stem
+            reference = json.loads(path.read_text())
             rc.validate_report(reference)
             self.assertEqual(reference["case_set"], case_set)
             # VS-09 added the shared retrieve path to Search and Ask.

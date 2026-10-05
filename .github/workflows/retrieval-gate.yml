@@ -2,7 +2,7 @@ name: retrieval-gate
 
 # VS-34: the retrieval merge gate (VS-04) on pull requests into main that
 # touch retrieval code, the seed corpora, or the gate itself.
-# It seeds both synthetic personas from scripts/demo/ and fails when any
+# It seeds the three synthetic personas from scripts/demo/ and fails when any
 # path's Recall@5 drops more than 0.05 against scripts/demo/retrieval-reference/,
 # or when a query a path found in its top ten becomes a miss
 # (scripts/audit/retrieval_check.py). No real data is involved: the runner
@@ -97,6 +97,10 @@ jobs:
       - name: Gate, office-pm
         if: success() || failure()
         run: make qa-retrieval-check PERSONA=office-pm CARGO_BUILD_JOBS=4
+
+      - name: Gate, software-engineer
+        if: success() || failure()
+        run: make qa-retrieval-check PERSONA=software-engineer CARGO_BUILD_JOBS=4
 
       - name: Publish the check reports
         if: success() || failure()
