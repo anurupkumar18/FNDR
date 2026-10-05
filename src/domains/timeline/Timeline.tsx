@@ -70,9 +70,11 @@ export function Timeline({
     evalUi = false,
 }: TimelineProps) {
     const [visibleCount, setVisibleCount] = useState<number>(TIMELINE_STREAM.initialVisible);
+    const [showWeakMatches, setShowWeakMatches] = useState(false);
 
     useEffect(() => {
         setVisibleCount(TIMELINE_STREAM.initialVisible);
+        setShowWeakMatches(false);
     }, [query]);
 
     if (isLoading) {
@@ -104,11 +106,38 @@ export function Timeline({
         );
     }
 
+    // The backend marks every card weak when no result for the query reached
+    // the strong-match bar (VS-12); say so instead of showing them as answers.
+    const noStrongMatch = results.every((result) => result.weak_match === true);
+    if (noStrongMatch && !showWeakMatches) {
+        const count = results.length;
+        return (
+            <div className="timeline-state">
+                <div className="empty-icon"><Icon name="search" size={48} /></div>
+                <h3>No strong matches</h3>
+                <p className="timeline-query-preview">“{formatQueryPreview(query)}”</p>
+                <p>Nothing saved matches this well. Try other words, or change the time range or app filter.</p>
+                <button
+                    type="button"
+                    className="ui-action-btn"
+                    onClick={() => setShowWeakMatches(true)}
+                >
+                    {`Show ${count} weaker ${count === 1 ? "match" : "matches"}`}
+                </button>
+            </div>
+        );
+    }
+
     const visibleResults = cleanupCardsForRender(results.slice(0, visibleCount));
     const hasMore = results.length > visibleCount;
     const filteredResults = filterConsecutiveSimilar(visibleResults);
     return (
         <div className="timeline-container">
+            {noStrongMatch && (
+                <p className="timeline-weak-note" role="note">
+                    No strong matches. These are the closest saved memories.
+                </p>
+            )}
             <div className="timeline-stream">
                 {filteredResults.map((result) => {
                     const cleanSummary = stripLegacySources(result.display_summary ?? result.summary);

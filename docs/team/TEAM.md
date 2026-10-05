@@ -52,6 +52,7 @@ in this section is the one to follow.
 
 A ticket is done only when all are true:
 - Merged, with `make test` output pasted in the merge request
+- Search, capture-text, chunking, and embedding merge requests also paste `make qa-retrieval-check` output; a deliberate change to the accepted numbers updates `scripts/demo/retrieval-reference/` in the same merge request and says why
 - Reviewed by a teammate other than the author
 - Evidence attached, label `evidence::attached`
 - No real captures, tokens, or database files in the diff

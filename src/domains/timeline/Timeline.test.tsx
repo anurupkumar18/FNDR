@@ -66,6 +66,51 @@ describe("Timeline", () => {
         expect(screen.getByText(/time range or app filter/i)).toBeInTheDocument();
     });
 
+    it("says there are no strong matches and folds the weak results away", () => {
+        render(
+            <Timeline
+                results={[{ ...sample, weak_match: true }]}
+                isLoading={false}
+                query="dentist appointment reminder"
+                selectedResultId={null}
+                onSelectResult={vi.fn()}
+            />
+        );
+
+        expect(screen.getByRole("heading", { name: "No strong matches" })).toBeInTheDocument();
+        expect(screen.queryByRole("article")).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: "Show 1 weaker match" }));
+
+        expect(screen.getByRole("article")).toBeInTheDocument();
+        expect(screen.getByText(/closest saved memories/i)).toBeInTheDocument();
+    });
+
+    it("shows results as usual when the query has a strong match", () => {
+        render(
+            <Timeline
+                results={[
+                    { ...sample, weak_match: false },
+                    {
+                        ...sample,
+                        id: "2",
+                        title: "Quarterly budget sheet",
+                        window_title: "Quarterly budget sheet",
+                        summary: "Updated the quarterly budget sheet with the new vendor costs.",
+                        weak_match: false,
+                    },
+                ]}
+                isLoading={false}
+                query="test"
+                selectedResultId={null}
+                onSelectResult={vi.fn()}
+            />
+        );
+
+        expect(screen.getAllByRole("article")).toHaveLength(2);
+        expect(screen.queryByText("No strong matches")).not.toBeInTheDocument();
+    });
+
     it("renders result meta including score in eval UI", () => {
         render(
             <Timeline
@@ -92,8 +137,8 @@ describe("Timeline", () => {
     it("does not repeat a summary that says the same thing as its title", () => {
         const duplicate = {
             ...sample,
-            title: "Alpha demo script – Google Docs",
-            summary: "Alpha demo script – Google Docs",
+            title: "Alpha demo script \u2013 Google Docs",
+            summary: "Alpha demo script \u2013 Google Docs",
         };
         render(
             <Timeline
@@ -105,7 +150,7 @@ describe("Timeline", () => {
             />
         );
 
-        expect(screen.getAllByText(/Alpha demo script – Google Docs/)).toHaveLength(1);
+        expect(screen.getAllByText(/Alpha demo script \u2013 Google Docs/)).toHaveLength(1);
         expect(screen.queryByRole("button", { name: "Delete this memory" })).not.toBeInTheDocument();
     });
 

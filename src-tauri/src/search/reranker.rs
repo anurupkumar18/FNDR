@@ -2,51 +2,10 @@ use crate::storage::SearchResult;
 
 use super::query_processor::{normalize_text, QueryContext};
 
-const VECTOR_WEIGHT: f32 = 0.7;
-const COVERAGE_WEIGHT: f32 = 0.3;
-const HARD_COVERAGE_THRESHOLD: f32 = 0.15;
-
-#[derive(Debug, Clone, Default)]
-pub struct RerankStats {
-    pub excluded_for_coverage: usize,
-}
-
-pub fn rerank_results(
-    query_context: &QueryContext,
-    results: Vec<SearchResult>,
-) -> (Vec<SearchResult>, RerankStats) {
-    if results.is_empty() {
-        return (Vec::new(), RerankStats::default());
-    }
-
-    let mut stats = RerankStats::default();
-    let mut reranked = Vec::with_capacity(results.len());
-
-    for mut result in results {
-        let coverage = anchor_coverage_score(query_context, &result);
-        result.anchor_coverage_score = coverage;
-
-        if !query_context.anchor_terms.is_empty() && coverage < HARD_COVERAGE_THRESHOLD {
-            stats.excluded_for_coverage += 1;
-            continue;
-        }
-
-        let vector_similarity = result.score.clamp(0.0, 1.0);
-        result.score =
-            (vector_similarity * VECTOR_WEIGHT + coverage * COVERAGE_WEIGHT).clamp(0.0, 1.0);
-        reranked.push(result);
-    }
-
-    reranked.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.timestamp.cmp(&a.timestamp))
-    });
-
-    (reranked, stats)
-}
-
+/// Share of the query's anchor terms found in a result's text, plus a small
+/// bonus when the whole query appears. Search cards group by it; it no longer
+/// reorders anything (VS-25 removed the coverage rerank, VS-10 moved Search
+/// onto `retrieve`).
 pub fn anchor_coverage_score(query_context: &QueryContext, result: &SearchResult) -> f32 {
     if query_context.anchor_terms.is_empty() {
         return 1.0;
@@ -102,25 +61,16 @@ mod tests {
             snippet: summary.to_string(),
             display_summary: summary.to_string(),
             clean_text: summary.to_string(),
-            extracted_entities: Vec::new(),
-            score: 0.8,
             ..Default::default()
         }
     }
 
     #[test]
-    fn excludes_low_anchor_coverage_results() {
-        let query = QueryContext::from_query("cricket");
-        let (results, stats) = rerank_results(
-            &query,
-            vec![
-                result("IPL Highlights", "Watched cricket highlights"),
-                result("Rust Docs", "Debugged Rust compiler issues"),
-            ],
-        );
-
-        assert_eq!(stats.excluded_for_coverage, 1);
-        assert_eq!(results.len(), 1);
+    fn coverage_counts_the_query_words_a_result_contains() {
+        let query = QueryContext::from_query("cricket highlights");
+        let full = anchor_coverage_score(&query, &result("IPL", "Watched cricket highlights"));
+        let none = anchor_coverage_score(&query, &result("Rust", "Debugged compiler issues"));
+        assert!(full > 0.99);
+        assert_eq!(none, 0.0);
     }
 }
-

@@ -1,6 +1,6 @@
 //! Tauri command handlers
 
-mod common;
+pub(crate) mod common;
 pub mod search;
 
 pub use search::{
@@ -23,7 +23,7 @@ pub use export::*;
 mod privacy;
 pub use privacy::*;
 
-mod stats;
+pub(crate) mod stats;
 pub use stats::*;
 
 mod autofill;

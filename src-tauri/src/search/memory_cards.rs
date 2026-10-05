@@ -54,7 +54,7 @@ pub struct MemoryCard {
     pub session_duration_mins: u32,
     /// Short id of the prior card this one continues from, parsed out of
     /// the durable `memory_context` "Continues from <short_id>" marker.
-    /// Never persisted on its own — derived from `memory_context` metadata.
+    /// Never persisted on its own; derived from `memory_context` metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_of: Option<String>,
     /// URL / file:// / app:// link derived from typed persisted reopen provenance.
@@ -94,7 +94,7 @@ pub struct MemoryCard {
     /// Synonym/alias terms surfaced by synthesis.
     #[serde(default)]
     pub search_aliases: Vec<String>,
-    /// Phase 3 — "Why this surfaced" populated by the composer when this card
+    /// Phase 3: "Why this surfaced" populated by the composer when this card
     /// was produced by the agentic-graph-rag pipeline. Defaults to `None` for
     /// legacy code paths so existing frontend / serde consumers stay unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,7 +105,11 @@ pub struct MemoryCard {
     pub matched_chunk_ids: Vec<String>,
     #[serde(default)]
     pub chunk_evidence: Vec<crate::storage::MatchedChunkEvidence>,
-    /// Lifecycle status from `MemoryRecord.enrichment_status` — surfaced so the
+    /// True when no result for the query reached the strong-match bar, so
+    /// Search says "No strong matches" and folds these cards away (VS-12).
+    #[serde(default)]
+    pub weak_match: bool,
+    /// Lifecycle status from `MemoryRecord.enrichment_status`, surfaced so the
     /// vault can render DEVELOPED / PENDING / REVIEW_FAILED chips deterministically.
     #[serde(default)]
     pub enrichment_status: String,
@@ -338,6 +342,7 @@ impl MemoryCardSynthesizer {
                 matched_routes: anchor.matched_routes.clone(),
                 matched_chunk_ids: anchor.matched_chunk_ids.clone(),
                 chunk_evidence: anchor.chunk_evidence.clone(),
+                weak_match: false,
                 enrichment_status: anchor.enrichment_status.clone(),
                 reviewed_at_ms: anchor.reviewed_at_ms,
                 reviewer_generation: anchor.reviewer_generation,
@@ -350,6 +355,7 @@ impl MemoryCardSynthesizer {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| b.timestamp.cmp(&a.timestamp))
+                .then_with(|| a.id.cmp(&b.id))
         });
         apply_story_continuity(&mut cards);
 
@@ -382,7 +388,7 @@ fn group_results_with_query_support(
     enforce_query_support: bool,
 ) -> Vec<SessionGroup> {
     let mut sorted = results.to_vec();
-    sorted.sort_by_key(|r| std::cmp::Reverse(r.timestamp));
+    sorted.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| a.id.cmp(&b.id)));
 
     let mut groups: Vec<SessionGroup> = Vec::new();
     let mut key_to_group_idx: HashMap<String, usize> = HashMap::new();
@@ -636,6 +642,7 @@ fn select_anchor(results: &[SearchResult]) -> SearchResult {
                 .partial_cmp(&b.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.timestamp.cmp(&b.timestamp))
+                .then_with(|| b.id.cmp(&a.id))
         })
         .cloned()
         .unwrap_or_else(|| results[0].clone())
@@ -677,6 +684,7 @@ fn collect_evidence_ids(results: &[SearchResult], max_ids: usize) -> Vec<String>
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.timestamp.cmp(&a.timestamp))
+            .then_with(|| a.id.cmp(&b.id))
     });
 
     ranked
@@ -884,6 +892,7 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         matched_routes: result.matched_routes.clone(),
         matched_chunk_ids: result.matched_chunk_ids.clone(),
         chunk_evidence: result.chunk_evidence.clone(),
+        weak_match: false,
         enrichment_status: result.enrichment_status.clone(),
         reviewed_at_ms: result.reviewed_at_ms,
         reviewer_generation: result.reviewer_generation,
@@ -1016,7 +1025,7 @@ pub fn parse_reopen_target(memory_context: &str, result: &SearchResult) -> Optio
 }
 
 /// Classify the high-level activity from content-derived signals only.
-/// All cues are generic English / file-extension morphology — no app names,
+/// All cues are generic English / file-extension morphology: no app names,
 /// no URL-host allowlists.
 fn infer_activity_type(_app_name: &str, _window_title: &str, snippets: &[String]) -> String {
     let haystack = snippets.join(" ").to_lowercase();
@@ -1874,7 +1883,7 @@ mod tests {
             reopen_file_path: Some("/Users/qa/doc.pdf".to_string()),
             reopen_page: Some(112),
             app_name: "Preview".to_string(),
-            window_title: "doc.pdf – Page 112 of 150".to_string(),
+            window_title: "doc.pdf \u{2013} Page 112 of 150".to_string(),
             snippet: "PDF page".to_string(),
             ..Default::default()
         };

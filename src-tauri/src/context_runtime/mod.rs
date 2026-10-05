@@ -1,6 +1,5 @@
-use crate::embedding::Embedder;
+use crate::embedding::{Embedder, EmbeddingBackend};
 use crate::mcp;
-use crate::search::HybridSearcher;
 use crate::storage::{
     ActivityEvent, CodeContext, CommandEvent, CommitRef, ContextDelta, ContextPack,
     ContextPackItemReason, ContextRuntimeStatus, ContextTask, DecisionLedgerEntry, DecisionSummary,
@@ -26,11 +25,18 @@ pub mod fusion;
 pub mod graph_plan;
 pub mod graph_route;
 pub mod keyword_route;
+pub mod query_filters;
 pub mod query_plan;
 pub mod retrieval_routes;
+pub mod retrieve;
 pub mod temporal_route;
 pub mod vector_route;
 pub mod verifier;
+
+pub use retrieve::{
+    retrieve, retrieve_search_results, RetrieveHit, RetrieveRequest, RetrieveResult, RetrieveWhy,
+    STRONG_MATCH_SCORE, STRONG_MATCH_SCORE_WITH_CHUNKS,
+};
 mod wiki_policy;
 
 static URL_RE: Lazy<Regex> =
@@ -325,17 +331,17 @@ pub async fn build_context_pack(
             .await
             .map_err(|e| e.to_string())?
     } else {
-        let embedder = Embedder::new().map_err(|e| e.to_string())?;
-        HybridSearcher::search(
-            &state.store,
-            &embedder,
-            request.query.trim(),
-            DEFAULT_SEARCH_LIMIT,
-            None,
-            None,
+        // The same ranked memories Search and Ask see (VS-11).
+        retrieve_search_results(
+            state,
+            &RetrieveRequest {
+                query: request.query.trim().to_string(),
+                limit: DEFAULT_SEARCH_LIMIT,
+                ..Default::default()
+            },
         )
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
+        .1
     };
 
     let mut events = Vec::new();
@@ -2109,7 +2115,7 @@ fn infer_repo_slug_from_url(url: Option<&str>) -> Option<String> {
         }
     }
 
-    // Generic `owner/repo/<resource>/...` paths (GitHub, GitLab, Gitea, etc.) — no host allowlist.
+    // Generic `owner/repo/<resource>/...` paths (GitHub, GitLab, Gitea, etc.): no host allowlist.
     const REPO_CHILD_SEGMENTS: &[&str] = &[
         "pull",
         "pulls",
@@ -2305,7 +2311,7 @@ fn infer_activity_type(record: &MemoryRecord) -> String {
 }
 
 /// True when a decision string starts with a generic design/proposal verb.
-/// Stems-only — independent of any product or library naming.
+/// Stems only, independent of any product or library naming.
 fn decision_verb_stem_design(decision: &str) -> bool {
     let lower = decision.trim().to_ascii_lowercase();
     let first = lower.split_whitespace().next().unwrap_or("");
@@ -3021,10 +3027,10 @@ fn recursive_size(path: &std::path::Path) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3 — agentic graph rag entry point
+// Phase 3: agentic graph rag entry point
 // ---------------------------------------------------------------------------
 
-/// Compose mode for [`run_query`] — caller picks deterministic cards vs. a
+/// Compose mode for [`run_query`]: caller picks deterministic cards vs. a
 /// grounded LLM answer (still bundled with cards + evidence + verifier outcome).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComposeMode {
@@ -3034,38 +3040,83 @@ pub enum ComposeMode {
 
 /// Ask FNDR must never cite captures the read-side policy keeps out of search.
 /// Unknown ids are kept; downstream evidence collection already tolerates them.
-pub(crate) async fn drop_low_signal_hits(
+/// Drop hits no surface may show: low-signal captures and FNDR's own
+/// windows. Returns the kept hits and the stored rows it looked up.
+pub(crate) async fn drop_hidden_hits(
     fused: Vec<context_pack::FusedHit>,
     store: &crate::storage::Store,
-) -> Vec<context_pack::FusedHit> {
-    let mut kept = Vec::with_capacity(fused.len());
-    for hit in fused {
-        match store.get_memory_by_id(&hit.memory_id).await {
-            Ok(Some(record))
-                if crate::memory_quality::record_low_signal_reason(&record).is_some() =>
-            {
-                tracing::debug!(memory_id = %hit.memory_id, "context_runtime:drop_low_signal_hit");
-            }
-            _ => kept.push(hit),
+) -> (Vec<context_pack::FusedHit>, HashMap<String, MemoryRecord>) {
+    // One batched lookup: per-hit lookups were most of a query's time (VS-09).
+    let ids = fused
+        .iter()
+        .map(|hit| hit.memory_id.clone())
+        .collect::<Vec<_>>();
+    let records = match store.get_memories_by_ids(&ids).await {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::warn!(%error, "context_runtime:low_signal_lookup_failed");
+            return (fused, HashMap::new());
         }
-    }
-    kept
+    };
+    let kept = fused
+        .into_iter()
+        .filter(|hit| {
+            let hidden = records.get(&hit.memory_id).is_some_and(|record| {
+                crate::memory_quality::record_low_signal_reason(record).is_some()
+                    || crate::privacy::Blocklist::is_internal_app(
+                        &record.app_name,
+                        record.bundle_id.as_deref(),
+                    )
+            });
+            if hidden {
+                tracing::debug!(memory_id = %hit.memory_id, "context_runtime:drop_hidden_hit");
+            }
+            !hidden
+        })
+        .collect();
+    (kept, records)
 }
 
-/// Single-call entry point that drives the full Phase 3 pipeline:
-/// plan → RouteRunner::dispatch (5 routes) → fuse → collect_evidence → verify
-/// → compose. Returns the bundled [`ComposedAnswer`] (always carrying cards +
-/// evidence + verify_outcome regardless of mode).
-pub async fn run_query(
+/// The shared front half of every retrieval (VS-09): plan, route dispatch,
+/// fusion, and the hidden-memory drop. `retrieve` and `run_query` both start
+/// here, so Search, Ask, and agents rank memories the same way.
+pub(crate) struct FusedRetrieval {
+    pub plan: query_plan::QueryPlan,
+    pub weights: context_pack::FusionWeights,
+    pub route_hits: Vec<retrieval_routes::RouteHits>,
+    pub fused: Vec<context_pack::FusedHit>,
+    /// Stored rows of the fused hits, from the lookup the drop already made.
+    pub records: HashMap<String, MemoryRecord>,
+    pub inference: Option<std::sync::Arc<crate::inference::InferenceEngine>>,
+}
+
+/// How many candidates each route gathers, whatever page size the caller
+/// asked for, so a short page is the start of a long one (VS-21). Routes
+/// sized their pools from the page size, so Ask (10) and Search (20) gave
+/// different memories the temporal bonus. Equal to fusion's own cap.
+const ROUTE_CANDIDATE_POOL: usize = 50;
+
+pub(crate) async fn retrieve_fused(
     state: &AppState,
     query: &str,
     limit: usize,
-    mode: ComposeMode,
-) -> Result<context_pack::ComposedAnswer, String> {
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+) -> FusedRetrieval {
     let plan = query_plan::plan(query, &query_plan::PlanHints::default());
     let weights = context_pack::FusionWeights::for_intent(plan.intent);
 
-    let embedder = Embedder::new().ok();
+    // Reuse the process's loaded model: loading it took about 175 ms per
+    // query (VS-10). Without a real model loaded, build one per query as
+    // before, so a model downloaded mid-session is still picked up.
+    let shared_embedder = crate::ipc::commands::common::shared_embedder()
+        .ok()
+        .filter(|embedder| matches!(embedder.backend(), EmbeddingBackend::Real));
+    let fresh_embedder = match shared_embedder {
+        Some(_) => None,
+        None => Embedder::new().ok(),
+    };
+    let embedder = shared_embedder.or(fresh_embedder.as_ref());
     // The typed insight graph (`graph::schema`) is not yet persisted; until the
     // typed-graph storage table lands, the graph route runs against an empty
     // in-memory index built fresh per query. The other four routes still hit
@@ -3079,11 +3130,19 @@ pub async fn run_query(
     };
 
     let search_config = state.config.read().search.clone().normalized();
+    // A loaded local model widens short abstract queries before they are
+    // embedded, as Search did before it moved onto `retrieve` (VS-25).
+    let expansion = crate::search::llm_query_expansion(inference.as_deref(), query).await;
     let mut ctx = retrieval_routes::RouteCtx::new(&state.store, &search_config)
         .with_graph(&graph_index, &nodes, &edges)
-        .with_limits(limit.max(1), None, None, &[])
+        .with_limits(
+            limit.max(ROUTE_CANDIDATE_POOL),
+            time_filter,
+            app_filter,
+            &expansion,
+        )
         .with_now_ms(chrono::Utc::now().timestamp_millis());
-    if let Some(emb) = embedder.as_ref() {
+    if let Some(emb) = embedder {
         ctx = ctx.with_embedder(emb);
     }
     if let Some(eng) = inference.as_deref() {
@@ -3092,7 +3151,45 @@ pub async fn run_query(
 
     let route_hits = retrieval_routes::RouteRunner::dispatch(&plan, &ctx).await;
     let fused = fusion::fuse(&plan, route_hits.clone(), &weights);
-    let fused = drop_low_signal_hits(fused, &state.store).await;
+    let (fused, records) = drop_hidden_hits(fused, &state.store).await;
+    FusedRetrieval {
+        plan,
+        weights,
+        route_hits,
+        fused,
+        records,
+        inference,
+    }
+}
+
+/// Single-call entry point that drives the full Phase 3 pipeline:
+/// plan, RouteRunner::dispatch (5 routes), fuse, collect_evidence, verify,
+/// compose. Returns the bundled [`ComposedAnswer`] (always carrying cards,
+/// evidence, and verify_outcome regardless of mode).
+pub async fn run_query(
+    state: &AppState,
+    query: &str,
+    limit: usize,
+    mode: ComposeMode,
+) -> Result<context_pack::ComposedAnswer, String> {
+    // Through `retrieve`, so Ask reads time and app phrases as filters the
+    // same way Search and agents do (VS-11).
+    let request = RetrieveRequest {
+        query: query.to_string(),
+        limit,
+        ..Default::default()
+    };
+    let (
+        _,
+        FusedRetrieval {
+            plan,
+            weights,
+            route_hits,
+            fused,
+            inference,
+            ..
+        },
+    ) = retrieve::retrieve_with_fused(state, &request).await;
     let debug_trace = search_debug_trace(&plan, &route_hits, &fused, &weights);
     let evidence = evidence_pack::collect_evidence(&fused, &state.store).await;
     let outcome = verifier::verify(&plan, &fused, &evidence);
@@ -3374,7 +3471,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_low_signal_hits_removes_visual_fallback_memories() {
+    fn drop_hidden_hits_removes_visual_fallback_memories() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = crate::storage::Store::new(dir.path()).expect("store");
         let now = chrono::Utc::now().timestamp_millis();
@@ -3419,10 +3516,11 @@ mod tests {
             surfacing_reason: Default::default(),
             contributing_routes: Vec::new(),
         };
-        let kept = rt.block_on(drop_low_signal_hits(
+        let (kept, records) = rt.block_on(drop_hidden_hits(
             vec![hit("good"), hit("junk"), hit("missing")],
             &store,
         ));
+        assert!(records.contains_key("good") && records.contains_key("junk"));
         let ids: Vec<&str> = kept.iter().map(|h| h.memory_id.as_str()).collect();
         assert_eq!(ids, vec!["good", "missing"]);
     }

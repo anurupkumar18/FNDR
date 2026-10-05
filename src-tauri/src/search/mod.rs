@@ -12,5 +12,8 @@ pub use hybrid::HybridSearcher;
 pub use memory_cards::{
     parse_continuation_of, parse_reopen_target, MemoryCard, MemoryCardSynthesizer,
 };
-pub use query_processor::{QueryContext, QueryExpansionDebug, QueryIntent, QueryProfile};
-pub use reranker::{anchor_coverage_score, rerank_results, RerankStats};
+pub use query_processor::{
+    normalize_text, QueryContext, QueryExpansionDebug, QueryIntent, QueryProfile,
+};
+pub(crate) use hybrid::llm_query_expansion;
+pub use reranker::anchor_coverage_score;

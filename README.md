@@ -10,9 +10,9 @@ The core runtime is a React + TypeScript UI (`src/`) on top of a Tauri 2 + Rust 
 
 ## Who This Is For
 
-- **People who lose track of what they were doing.** You close a tab, forget a URL, or can't recall which doc had that one number — FNDR lets you search or ask for it instead of reconstructing it from memory.
+- **People who lose track of what they were doing.** You close a tab, forget a URL, or can't recall which doc had that one number; FNDR lets you search or ask for it instead of reconstructing it from memory.
 - **Developers and agent builders** who want a local, inspectable memory layer to plug into their own tools over MCP, without shipping raw personal activity to a cloud service to get it.
-- **Privacy-conscious users** who want the benefit of an "AI that remembers your screen" without a third party holding that data — everything here runs and stays on-device by default.
+- **Privacy-conscious users** who want the benefit of an "AI that remembers your screen" without a third party holding that data: everything here runs and stays on-device by default.
 
 It is not a screen-recording surveillance tool, a cloud memory service, or a general-purpose screenshot archive.
 
@@ -22,11 +22,11 @@ It is not a screen-recording surveillance tool, a cloud memory service, or a gen
 
 FNDR captures desktop activity and converts it into structured memory records. A memory record includes cleaned text, app/window/url metadata, retrieval fields, embeddings, and insight fields used to improve recall quality.
 
-Search is hybrid by design: semantic vector retrieval and lexical retrieval run together, then get fused and reranked. This avoids the common failure mode where pure vector search loses exact identifiers and pure keyword search misses paraphrases.
+Every search surface ranks through one function, `context_runtime::retrieve` (`src-tauri/src/context_runtime/retrieve.rs`): the Search screen, Ask, the raw search commands, autofill, and the MCP search tools other than `memory.search_raw`. It plans the query, runs vector retrieval and BM25 keyword retrieval (LanceDB full-text indexes over seven text columns) side by side, adds a temporal route when the query names a time and an entity route when it names a project or entity (`route_selection` in `query_plan.rs`), adds the routes' scores with per-intent weights, and drops low-signal captures and FNDR's own windows. Time and app phrases in a query ("yesterday", "in Slack") become filters. Running vector and keyword retrieval together avoids the common failure where pure vector search loses exact identifiers and pure keyword search misses paraphrases. Ties break by score, then newest, then id, so the same query returns the same results.
 
 FNDR also supports retrieval-grounded answering (`fndr_answer`) through a context runtime that plans retrieval routes, composes evidence, and returns cited answers. The same local memory can be exposed to external tools through an MCP server with explicit local/tunnel/public deployment modes.
 
-Knowledge graph support exists in two forms: a legacy graph and an insight graph persisted in LanceDB (`graph_nodes`, `graph_edges`) for typed entities/relations and graph-aware recall workflows.
+Knowledge graph support exists in two forms: a legacy graph and an insight graph persisted in LanceDB (`graph_nodes`, `graph_edges`) for typed entities and relations. Retrieval does not use the graph yet: the graph route runs over an empty in-memory graph until the typed graph is loaded into it (`retrieve_fused` in `src-tauri/src/context_runtime/mod.rs`).
 
 Privacy is a first-class system constraint: data stays local by default, capture can be paused, blocklists are enforced, and destructive deletion operations are implemented in source.
 
@@ -55,13 +55,15 @@ FNDR addresses this by building a local, inspectable memory layer:
 | OCR and context extraction | Apple Vision OCR + structured memory synthesis | Stable |
 | Metadata extraction | App name, window title, URL/domain, session/event fields in `MemoryRecord` | Stable |
 | Memory cards / Memory Vault | UI surfaces under `src/domains/memory-vault/` | Stable |
-| Semantic embeddings | Local ONNX embedder (`all-MiniLM-L6-v2`, 384-d) | Stable |
-| Hybrid retrieval | Semantic + keyword fusion and reranking (`src-tauri/src/search/`) | Stable |
+| Semantic embeddings | Local ONNX embedder (`all-MiniLM-L6-v2`, 384-d), loaded once per process; ADR 019 (Proposed) recommends EmbeddingGemma | Stable |
+| One retrieval path | `retrieve`: vector + BM25 keyword routes, weighted fusion, time and app phrase filters (`src-tauri/src/context_runtime/retrieve.rs`, `retrieval_routes.rs`, `fusion.rs`) | Stable |
+| Chunk retrieval | BM25 over chunk text plus BGE-large (1024-d) chunk vectors, rolled up to their memory; behind `search.use_chunk_first_retrieval`, off by default until chunks are written at capture (`context_runtime/chunk_route.rs`) | Experimental |
+| "No strong matches" | `retrieve` reports `strong_match`; Search folds weak results behind a button (`retrieve.rs`, `src/domains/timeline/Timeline.tsx`) | Experimental |
 | Retrieval-grounded Q&A | `fndr_answer` / context runtime pipeline (`src-tauri/src/context_runtime/`) | Stable |
 | Screen Guide | Hold-to-talk, on-device screen guidance and scoped filename lookup, with local speech, a click-through answer overlay, and fixed-state notch/menu-bar feedback | Experimental |
 | Local vector store | LanceDB-backed memory + graph tables | Stable |
 | Visual similarity retrieval | CLIP-based `image_embedding` + `find_visually_similar_memories` | Stable |
-| Insight knowledge graph | Typed node/edge tables + graph UI hooks | Stable |
+| Insight knowledge graph | Typed node/edge tables + graph UI hooks; not used for ranking yet | Stable |
 | MCP server for agents | `src-tauri/src/mcp/`, MCP deployment modes + auth/tls controls | Stable |
 | Agent-oriented tools/prompts | `agent.*`, `memory.*`, prompt/resources in MCP | Stable |
 | Manual photo import (Meta glasses flow) | `import_meta_glasses_photo` pipeline | Experimental |
@@ -81,7 +83,7 @@ flowchart LR
     D --> G["LanceDB Memory Tables"]
     E --> G
     F --> G
-    G --> H["Hybrid Retrieval (Vector + Keyword + Rerank)"]
+    G --> H["retrieve (Vector + BM25 Keyword, optional Chunks, weighted fusion)"]
     H --> I["Memory Cards / Memory Vault UI"]
     H --> J["Context Runtime (fndr_search / fndr_answer)"]
     G --> K["Insight Graph (graph_nodes / graph_edges)"]
@@ -97,8 +99,8 @@ flowchart LR
 | `src-tauri/src/ocr/` | OCR extraction and metadata |
 | `src-tauri/src/embedding/` | Text and image embedding utilities |
 | `src-tauri/src/storage/lance_store/` | LanceDB schema, normalization, persistence, retrieval IO |
-| `src-tauri/src/search/` | Hybrid search, scoring, reranking, memory card shaping |
-| `src-tauri/src/context_runtime/` | Retrieval planning, evidence composition, grounded answering |
+| `src-tauri/src/search/` | Query parsing, memory card shaping, and the older hybrid searcher (still used by the companion, the legacy graph, and `memory.search_raw`) |
+| `src-tauri/src/context_runtime/` | The one retrieval function (`retrieve`), its routes and fusion, evidence composition, grounded answering |
 | `src-tauri/src/graph/` | Insight graph entities/edges/store/pathing |
 | `src-tauri/src/mcp/` | MCP transport, auth/origin controls, tool/resource/prompt handlers |
 | `src/domains/*` | Search, Memory Vault, timeline, command palette, workspace UI |
@@ -107,7 +109,7 @@ flowchart LR
 
 - Default text embedding contract in current code: `384` dimensions (`all-MiniLM-L6-v2`).
 - Image embedding contract: `512` dimensions (CLIP column for visual similarity retrieval).
-- Hybrid ranking combines semantic and lexical branches, then reranks with quality and relevance signals.
+- Ranking: each route scores its hits, fusion adds the scores with per-intent weights, and every route sizes its candidate pool from a fixed 50, not from the page size asked for, so a short page is the start of a long one. Keyword scores are bm25 / (bm25 + 2) blended with recency counted in whole minutes.
 - Insight fields (for example `memory_context`, `insight_what_happened`, `insight_why_mattered`) are persisted and reused during retrieval/composition.
 
 ---
