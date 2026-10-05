@@ -5,9 +5,13 @@
 pub mod pack;
 
 use crate::storage::{MemoryRecord, Store};
+use crate::tasks::extract_from_memory::{extract_task_candidates, TaskCandidate};
 use pack::{pack_within_budget, PackItem, PackResult};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// A thread suggests at most this many next steps.
+const MAX_SUGGESTED_NEXT_STEPS: usize = 3;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ResumeThread {
@@ -15,6 +19,9 @@ pub struct ResumeThread {
     pub last_state: String,
     pub age_minutes: i64,
     pub next_steps: Vec<String>,
+    /// Steps from anywhere in the thread, newest memory first, one per step,
+    /// each citing the memory it came from (VS-36).
+    pub suggested_next_steps: Vec<TaskCandidate>,
     pub evidence: Vec<String>,
     pub pack: PackResult,
 }
@@ -39,7 +46,7 @@ fn thread_key(record: &MemoryRecord) -> String {
 }
 
 fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize) -> ResumeThread {
-    group.sort_by_key(|record| record.timestamp);
+    group.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
     let newest = group.last().expect("build_thread requires a non-empty group");
 
     let title = thread_key(newest);
@@ -58,6 +65,14 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
         .iter()
         .map(|step| step.trim().to_string())
         .filter(|step| !step.is_empty())
+        .collect();
+    let mut seen_steps = HashSet::new();
+    let suggested_next_steps = group
+        .iter()
+        .rev()
+        .flat_map(extract_task_candidates)
+        .filter(|step| seen_steps.insert(crate::tasks::normalize_task_text(&step.title)))
+        .take(MAX_SUGGESTED_NEXT_STEPS)
         .collect();
 
     let mut candidates = Vec::new();
@@ -91,6 +106,7 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
         last_state,
         age_minutes,
         next_steps,
+        suggested_next_steps,
         evidence,
         pack,
     }

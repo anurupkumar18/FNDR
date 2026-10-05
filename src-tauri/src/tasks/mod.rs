@@ -4,7 +4,7 @@ pub mod extract_from_memory;
 
 pub use crate::storage::{Task, TaskType};
 
-fn normalize_task_text(value: &str) -> String {
+pub(crate) fn normalize_task_text(value: &str) -> String {
     value
         .to_lowercase()
         .split(|ch: char| !ch.is_alphanumeric())
