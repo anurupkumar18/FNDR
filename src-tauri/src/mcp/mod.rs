@@ -614,8 +614,11 @@ pub async fn start(
         LOOPBACK_HOST.to_string()
     };
     let port = port.unwrap_or(0);
-    let require_auth = mcp_require_auth(mode);
-    let allow_loopback_auth_bypass = mcp_allow_loopback_auth_bypass(mode);
+    let (require_auth, allow_loopback_auth_bypass) = auth_settings(
+        mode,
+        env_bool("FNDR_MCP_REQUIRE_AUTH"),
+        env_bool("FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS"),
+    );
     let allowed_origins = mcp_allowed_origins();
 
     {
@@ -785,8 +788,19 @@ fn check_auth(headers: &HeaderMap, expected_token: &str) -> bool {
 
     auth_header
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|t| t == expected_token)
-        .unwrap_or(false)
+        .is_some_and(|t| tokens_match(t, expected_token))
+}
+
+/// Compares in time that does not depend on where the first wrong byte is,
+/// and never accepts an empty token.
+fn tokens_match(given: &str, expected: &str) -> bool {
+    !expected.is_empty()
+        && given.len() == expected.len()
+        && given
+            .bytes()
+            .zip(expected.bytes())
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
 }
 
 fn mcp_mode() -> McpDeploymentMode {
@@ -805,18 +819,35 @@ fn mcp_mode() -> McpDeploymentMode {
     }
 }
 
-fn mcp_require_auth(mode: McpDeploymentMode) -> bool {
-    std::env::var("FNDR_MCP_REQUIRE_AUTH")
+fn env_bool(name: &str) -> Option<bool> {
+    std::env::var(name)
         .ok()
         .and_then(|value| parse_bool_env(&value))
-        .unwrap_or_else(|| mode.default_require_auth())
 }
 
-fn mcp_allow_loopback_auth_bypass(mode: McpDeploymentMode) -> bool {
-    std::env::var("FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS")
-        .ok()
-        .and_then(|value| parse_bool_env(&value))
-        .unwrap_or_else(|| mode.default_loopback_auth_bypass())
+/// `(require_auth, allow_loopback_auth_bypass)` for a mode (VS-61). The two
+/// environment overrides may only loosen auth in Local mode, where the server
+/// binds to loopback and every peer is the owner's own machine. Public mode
+/// binds to the network and a tunnel delivers internet traffic from loopback,
+/// so there both stay strict whatever the environment says (`docs/mcp.md`).
+fn auth_settings(
+    mode: McpDeploymentMode,
+    require_auth_override: Option<bool>,
+    loopback_bypass_override: Option<bool>,
+) -> (bool, bool) {
+    if mode.local_only() {
+        return (
+            require_auth_override.unwrap_or_else(|| mode.default_require_auth()),
+            loopback_bypass_override.unwrap_or_else(|| mode.default_loopback_auth_bypass()),
+        );
+    }
+    if require_auth_override == Some(false) || loopback_bypass_override == Some(true) {
+        tracing::warn!(
+            mode = mode.as_str(),
+            "Ignoring an MCP auth override that would loosen auth outside local mode"
+        );
+    }
+    (true, false)
 }
 
 fn mcp_use_tls() -> bool {
@@ -5411,6 +5442,108 @@ mod tests {
     }
 
     #[test]
+    fn auth_overrides_only_loosen_local_mode() {
+        use McpDeploymentMode::{Local, Public, Tunnel};
+        // Local binds to loopback: the owner's development opt-outs apply.
+        assert_eq!(auth_settings(Local, None, None), (true, true));
+        assert_eq!(auth_settings(Local, Some(false), None), (false, true));
+        assert_eq!(auth_settings(Local, None, Some(false)), (true, false));
+        // Tunnel and Public are reached from other machines (a tunnel's
+        // traffic arrives from loopback): always strict.
+        for mode in [Tunnel, Public] {
+            assert_eq!(auth_settings(mode, None, None), (true, false));
+            assert_eq!(auth_settings(mode, Some(false), None), (true, false));
+            assert_eq!(auth_settings(mode, None, Some(true)), (true, false));
+            assert_eq!(auth_settings(mode, Some(false), Some(true)), (true, false));
+            assert_eq!(auth_settings(mode, Some(true), Some(false)), (true, false));
+        }
+    }
+
+    #[test]
+    fn only_loopback_peers_get_the_handshake_exemption() {
+        for peer in [
+            "192.168.1.20:5000",
+            "10.0.0.7:5000",
+            "0.0.0.0:5000",
+            "[2001:db8::1]:5000",
+        ] {
+            let peer: SocketAddr = peer.parse().unwrap();
+            assert!(
+                !should_bypass_http_auth(peer, true, true, Some("initialize")),
+                "{peer}"
+            );
+        }
+        let v6_loopback: SocketAddr = "[::1]:5000".parse().unwrap();
+        assert!(should_bypass_http_auth(
+            v6_loopback,
+            true,
+            true,
+            Some("tools/list")
+        ));
+    }
+
+    #[test]
+    fn the_token_must_match_exactly() {
+        let check = |value: &str, expected: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::AUTHORIZATION, HeaderValue::from_str(value).unwrap());
+            check_auth(&headers, expected)
+        };
+        assert!(check("Bearer abc123", "abc123"));
+        for wrong in [
+            "Bearer abc12",
+            "Bearer abc1234",
+            "Bearer ABC123",
+            "bearer abc123",
+            "abc123",
+            "Bearer  abc123",
+            "Basic abc123",
+            "Bearer ",
+        ] {
+            assert!(!check(wrong, "abc123"), "{wrong}");
+        }
+        assert!(!check_auth(&HeaderMap::new(), "abc123"));
+        // An empty expected token never matches, not even an empty one.
+        assert!(!check("Bearer ", ""));
+    }
+
+    #[test]
+    fn no_payload_shape_carries_a_call_past_the_handshake_exemption() {
+        let peer: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+        let exempt = |payload: &Value| {
+            should_bypass_http_auth(peer, true, true, jsonrpc_method_hint(payload))
+        };
+        for payload in [
+            json!([[{ "jsonrpc": "2.0", "id": 1, "method": "tools/call" }]]),
+            json!({ "jsonrpc": "2.0", "method": "tools/call" }),
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "fndr/dump" }),
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "Tools/List" }),
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list " }),
+            json!([]),
+            json!([
+                { "method": "tools/list" },
+                { "method": "initialize" },
+                { "method": "tools/call" }
+            ]),
+            json!([{ "method": "tools/list" }, { "jsonrpc": "2.0", "method": "tools/call" }]),
+            json!([{ "method": "tools/list" }, { "id": 2 }]),
+            json!({ "jsonrpc": "2.0", "id": 1, "method": 7 }),
+            json!({ "jsonrpc": "2.0", "id": 1 }),
+            json!("tools/list"),
+            json!(null),
+        ] {
+            assert!(!exempt(&payload), "{payload}");
+        }
+        // Handshakes alone stay exempt.
+        assert!(exempt(
+            &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" })
+        ));
+        assert!(exempt(
+            &json!([{ "method": "tools/list" }, { "method": "initialize" }])
+        ));
+    }
+
+    #[test]
     fn localhost_handshake_bypasses_auth_but_tools_call_requires_token() {
         std::env::remove_var("FNDR_MCP_REQUIRE_AUTH");
         let app_state = build_test_app_state();
@@ -5542,6 +5675,142 @@ mod tests {
             let tool_call_body: Value = authenticated_call.json().await.expect("tools/call json");
             assert_eq!(tool_call_body["jsonrpc"], "2.0");
             assert!(tool_call_body["result"]["structuredContent"]["health"].is_object());
+
+            // VS-61: every other shape without a valid token is refused.
+            let call = json!({
+                "jsonrpc": "2.0",
+                "id": 20,
+                "method": "tools/call",
+                "params": { "name": "fndr_health_check", "arguments": {} }
+            });
+            let refused_payloads = [
+                ("nested batch", json!([[call.clone()]])),
+                (
+                    "notification",
+                    json!({
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": { "name": "fndr_health_check", "arguments": {} }
+                    }),
+                ),
+                (
+                    "unknown method",
+                    json!({ "jsonrpc": "2.0", "id": 21, "method": "fndr/dump" }),
+                ),
+                (
+                    "handshake name in another case",
+                    json!({ "jsonrpc": "2.0", "id": 22, "method": "Tools/List" }),
+                ),
+                ("empty batch", json!([])),
+                (
+                    "call after two handshakes",
+                    json!([
+                        { "jsonrpc": "2.0", "id": 23, "method": "tools/list" },
+                        { "jsonrpc": "2.0", "id": 24, "method": "tools/list" },
+                        call.clone()
+                    ]),
+                ),
+            ];
+            for (label, payload) in refused_payloads {
+                let response = client
+                    .post(&status.endpoint)
+                    .header("Content-Type", "application/json")
+                    .json(&payload)
+                    .send()
+                    .await
+                    .expect(label);
+                assert_eq!(
+                    response.status(),
+                    reqwest::StatusCode::UNAUTHORIZED,
+                    "{label}"
+                );
+            }
+            for (label, authorization) in [
+                ("wrong token", "Bearer not-the-token".to_string()),
+                ("token without the Bearer prefix", status.token.clone()),
+                ("lowercase bearer", format!("bearer {}", status.token)),
+            ] {
+                let response = client
+                    .post(&status.endpoint)
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", authorization)
+                    .json(&call)
+                    .send()
+                    .await
+                    .expect(label);
+                assert_eq!(
+                    response.status(),
+                    reqwest::StatusCode::UNAUTHORIZED,
+                    "{label}"
+                );
+            }
+            // A body that is not declared as JSON never reaches the handler.
+            let wrong_type = client
+                .post(&status.endpoint)
+                .header("Content-Type", "text/plain")
+                .body(call.to_string())
+                .send()
+                .await
+                .expect("text/plain body");
+            assert_eq!(
+                wrong_type.status(),
+                reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+            );
+            // A web page's origin is refused even with the token.
+            let web_page = client
+                .post(&status.endpoint)
+                .header("Content-Type", "application/json")
+                .header("Origin", "https://evil.example")
+                .header("Authorization", format!("Bearer {}", status.token))
+                .json(&call)
+                .send()
+                .await
+                .expect("request with a web origin");
+            assert_eq!(web_page.status(), reqwest::StatusCode::FORBIDDEN);
+            // The streaming entry points need the token too.
+            for path in ["mcp", "mcp/sse"] {
+                let response = client
+                    .get(format!("{base_url}{path}"))
+                    .send()
+                    .await
+                    .expect(path);
+                assert_eq!(
+                    response.status(),
+                    reqwest::StatusCode::UNAUTHORIZED,
+                    "{path}"
+                );
+            }
+            // The root probe answers without a token, with server facts only.
+            let probe: Value = client
+                .get(&base_url)
+                .send()
+                .await
+                .expect("root probe")
+                .json()
+                .await
+                .expect("root probe json");
+            let mut keys = probe
+                .as_object()
+                .expect("probe object")
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.sort();
+            assert_eq!(
+                keys,
+                [
+                    "auth_mode",
+                    "auth_required",
+                    "local_only",
+                    "mcp_endpoint",
+                    "mode",
+                    "name",
+                    "public_endpoint",
+                    "public_sse_endpoint",
+                    "sse_endpoint",
+                    "transport"
+                ]
+            );
 
             let _ = stop().await;
         });
