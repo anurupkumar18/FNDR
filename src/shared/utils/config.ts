@@ -10,6 +10,8 @@ export const STORAGE_KEYS = {
     wallpaper: "fndr-wallpaper",
     automations: "fndr-automations",
     searchHistory: "fndr-search-history",
+    /** Whether developer-only diagnostics may be shown in navigation. */
+    developerMode: "fndr-developer-mode",
     /** Selected top-level shell mode: "immersive" (scroll experience) or "work" (productive). */
     appMode: "fndr_app_mode",
 } as const;

@@ -20,6 +20,7 @@ interface AppPanelsProps {
     activePanel: MountedPanelKey | null;
     appNames: string[];
     appToasts: AppToast[];
+    developerMode: boolean;
     isCapturePaused: boolean;
     isPrivateMode: boolean;
     query: string;
@@ -32,6 +33,7 @@ interface AppPanelsProps {
     onDeleteMemory: (memoryId: string) => void;
     onDismissToast: (toastId: string) => void;
     onGoHome: () => void;
+    onOpenSettings: () => void;
     onMemoryDeleted: (memoryId: string) => void;
     onOpenPanel: (panel: PanelKey) => void;
     onRunQuery: (query: string) => void;
@@ -47,6 +49,7 @@ export function AppPanels({
     activePanel,
     appNames,
     appToasts,
+    developerMode,
     isCapturePaused,
     isPrivateMode,
     query,
@@ -59,6 +62,7 @@ export function AppPanels({
     onDeleteMemory,
     onDismissToast,
     onGoHome,
+    onOpenSettings,
     onMemoryDeleted,
     onOpenPanel,
     onRunQuery,
@@ -161,12 +165,14 @@ export function AppPanels({
                     query,
                     onOpenPanel,
                     onGoHome,
+                    onOpenSettings,
                     onSearch: onRunQuery,
                     onSearchApp,
                     onClearSearch,
                     onDeleteMemory,
                     isCapturePaused,
                 }}
+                developerMode={developerMode}
             />
             <AppToasts toasts={appToasts} onAction={onToastAction} onDismiss={onDismissToast} />
         </>

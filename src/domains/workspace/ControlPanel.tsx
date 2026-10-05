@@ -50,6 +50,10 @@ interface ControlPanelProps {
     status: CaptureStatus | null;
     compact?: boolean;
     evalUi?: boolean;
+    isOpen?: boolean;
+    onOpenChange?: (isOpen: boolean) => void;
+    developerMode?: boolean;
+    onDeveloperModeChange?: (enabled: boolean) => void;
 }
 
 type QualityStatus = {
@@ -155,8 +159,19 @@ export function ControlPanel({
     status,
     compact: _compact = false,
     evalUi: _evalUi = false,
+    isOpen: controlledIsOpen,
+    onOpenChange,
+    developerMode = false,
+    onDeveloperModeChange,
 }: ControlPanelProps) {
-    const [isOpen, setIsOpen] = useState(false);
+    const [uncontrolledIsOpen, setUncontrolledIsOpen] = useState(false);
+    const isOpen = controlledIsOpen ?? uncontrolledIsOpen;
+    const setIsOpen = useCallback((next: boolean) => {
+        if (controlledIsOpen === undefined) {
+            setUncontrolledIsOpen(next);
+        }
+        onOpenChange?.(next);
+    }, [controlledIsOpen, onOpenChange]);
     const [theme, setTheme] = useState<"dark" | "light">(
         () => (localStorage.getItem(STORAGE_KEYS.theme) as "dark" | "light") || "dark",
     );
@@ -713,6 +728,23 @@ export function ControlPanel({
                                     )}
                                 </ul>
                             </section>
+
+                            {onDeveloperModeChange && (
+                                <section className="panel-section" aria-labelledby="settings-developer-mode-title">
+                                    <h3 id="settings-developer-mode-title">Developer Mode</h3>
+                                    <p className="section-hint">
+                                        Show experimental diagnostics in Labs. Keep this off for normal use.
+                                    </p>
+                                    <button
+                                        type="button"
+                                        className="ui-action-btn btn-secondary"
+                                        aria-pressed={developerMode}
+                                        onClick={() => onDeveloperModeChange(!developerMode)}
+                                    >
+                                        {developerMode ? "Developer Mode is on" : "Enable Developer Mode"}
+                                    </button>
+                                </section>
+                            )}
                         </div>
                     </aside>
                 </>,

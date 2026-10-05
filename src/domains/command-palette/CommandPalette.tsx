@@ -41,6 +41,7 @@ interface CommandContext {
     onClearSearch: () => void;
     onDeleteMemory: (id: string) => void;
     onGoHome: () => void;
+    onOpenSettings: () => void;
     isCapturePaused: boolean;
 }
 
@@ -67,16 +68,13 @@ export type PanelKey =
 // of truth for the reduced command palette.
 export const DEMO_COMMAND_IDS = [
     "go-home",
-    "memory-cards",
     "ask-fndr",
-    "daily-summary",
-    "stats",
-    "todo",
-    "wrapped",
-    "hermes-agent",
+    "memory-cards",
+    "daily-brief",
+    "trust-settings",
     "screen-guide",
+    "hermes-agent",
     "engine-metrics",
-    "privacy-proof",
     "pause-capture",
     "resume-capture",
 ] as const;
@@ -104,14 +102,6 @@ const COMMANDS: Command[] = [
         category: "navigate",
         keywords: ["search", "ask", "question", "answer", "context"],
         run: ({ onOpenPanel }) => onOpenPanel("ask"),
-    },
-    {
-        id: "wrapped",
-        label: "FNDR Wrapped",
-        description: "Review a selected week and export its recap",
-        category: "navigate",
-        keywords: ["week", "recap", "wrapped", "review"],
-        run: ({ onOpenPanel }) => onOpenPanel("wrapped"),
     },
     {
         id: "focus-session",
@@ -154,12 +144,20 @@ const COMMANDS: Command[] = [
         run: ({ onOpenPanel }) => onOpenPanel("knowledgeGraph"),
     },
     {
-        id: "daily-summary",
-        label: "Daily Summary",
-        description: "Review a locally generated summary for a selected day",
+        id: "daily-brief",
+        label: "Daily Brief",
+        description: "Review today's summary, follow-ups, and reflection",
         category: "navigate",
-        keywords: ["summary", "today", "daily", "recap"],
+        keywords: ["summary", "today", "daily", "brief", "recap"],
         run: ({ onOpenPanel }) => onOpenPanel("dailySummary"),
+    },
+    {
+        id: "trust-settings",
+        label: "Trust & Settings",
+        description: "Manage capture, privacy, permissions, models, and appearance",
+        category: "navigate",
+        keywords: ["settings", "trust", "privacy", "capture", "permissions", "models"],
+        run: ({ onOpenSettings }) => onOpenSettings(),
     },
     {
         id: "search-history",
@@ -385,9 +383,17 @@ interface CommandPaletteProps {
     selectedMemory: MemoryCard | null;
     context: Omit<CommandContext, "selectedMemory">;
     demoOnly?: boolean;
+    developerMode?: boolean;
 }
 
-export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoOnly = false }: CommandPaletteProps) {
+export function CommandPalette({
+    isOpen,
+    onClose,
+    selectedMemory,
+    context,
+    demoOnly = false,
+    developerMode = false,
+}: CommandPaletteProps) {
     const [query, setQuery] = useState("");
     const [activeIdx, setActiveIdx] = useState(0);
     const [pendingCommand, setPendingCommand] = useState<Command | null>(null);
@@ -405,6 +411,7 @@ export function CommandPalette({ isOpen, onClose, selectedMemory, context, demoO
     // Filter + sort commands
     const visible = COMMANDS.filter((cmd) => {
         if (demoOnly && !isDemoCommand(cmd.id)) return false;
+        if (cmd.id === "engine-metrics" && !developerMode) return false;
         if (cmd.memoryOnly && !selectedMemory) return false;
         if (cmd.id === "pause-capture" && ctx.isCapturePaused) return false;
         if (cmd.id === "resume-capture" && !ctx.isCapturePaused) return false;
