@@ -344,6 +344,9 @@ pub struct MemoryRecord {
     pub reopen_validation_status: ReopenValidationStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reopen_page: Option<u32>,
+    /// Passage the browser should scroll to on reopen. Taken only from stored text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_text_anchor: Option<String>,
     #[serde(default)]
     pub search_aliases: Vec<String>,
     #[serde(default)]
@@ -544,6 +547,7 @@ impl Default for MemoryRecord {
             reopen_confidence: 0.0,
             reopen_validation_status: default_reopen_validation_status(),
             reopen_page: None,
+            reopen_text_anchor: None,
             search_aliases: Vec::new(),
             related_memory_ids: Vec::new(),
             graph_node_ids: Vec::new(),

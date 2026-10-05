@@ -3195,6 +3195,17 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         );
         reopen_target.page =
             crate::memory::reopen::detect_reopen_page(&reopen_target, &window_title, &text);
+        if reopen_target.kind == crate::memory::reopen::ReopenKind::BrowserUrl
+            && reopen_target.page.is_none()
+        {
+            reopen_target.text_anchor = crate::memory::reopen::text_anchor_from(
+                &text,
+                semantic_page
+                    .as_ref()
+                    .map(|page| page.visible_passage.as_str()),
+                &app_name,
+            );
+        }
         let related_memory_ids_from_chain = prior_chain
             .iter()
             .map(|row| row.id.clone())
@@ -3707,6 +3718,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             reopen_confidence: reopen_target.confidence,
             reopen_validation_status: reopen_target.validation_status,
             reopen_page: reopen_target.page,
+            reopen_text_anchor: reopen_target.text_anchor,
             search_aliases: structured_memory
                 .as_ref()
                 .map(|m| m.search_aliases.clone())
@@ -4844,6 +4856,14 @@ pub(crate) async fn merge_memory_records_with_policy(
             existing.reopen_url.as_deref(),
             existing.reopen_file_path.as_deref(),
             existing.reopen_page,
+        ),
+        reopen_text_anchor: crate::memory::reopen::merge_reopen_text_anchor(
+            incoming.reopen_url.as_deref(),
+            incoming.reopen_file_path.as_deref(),
+            incoming.reopen_text_anchor.as_deref(),
+            existing.reopen_url.as_deref(),
+            existing.reopen_file_path.as_deref(),
+            existing.reopen_text_anchor.as_deref(),
         ),
         search_aliases: merge_string_lists(&existing.search_aliases, &incoming.search_aliases),
         related_memory_ids: merge_string_lists(
@@ -6226,6 +6246,7 @@ mod tests {
                     .to_string(),
             nav_ratio: 0.08,
             content_signal_score: 0.84,
+            ..Default::default()
         };
         let extraction = build_structured_from_browser_semantics(
             "Google Chrome",

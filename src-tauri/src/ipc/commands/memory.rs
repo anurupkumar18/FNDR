@@ -1,7 +1,7 @@
 //! Single-memory Tauri commands.
 
 use crate::graph::GraphStore;
-use crate::memory::reopen::{url_with_pdf_page, ReopenKind};
+use crate::memory::reopen::{url_with_pdf_page, url_with_text_anchor, ReopenKind};
 use crate::storage::Store;
 use crate::AppState;
 use std::path::{Path, PathBuf};
@@ -112,7 +112,10 @@ fn resolve_reopen_target(record: &crate::storage::MemoryRecord) -> Option<Resolv
             .map(|value| {
                 let url = match record.reopen_page {
                     Some(page) => url_with_pdf_page(value, page),
-                    None => value.to_string(),
+                    None => match record.reopen_text_anchor.as_deref() {
+                        Some(anchor) => url_with_text_anchor(value, anchor),
+                        None => value.to_string(),
+                    },
                 };
                 ResolvedReopenTarget::BrowserUrl(url)
             }),
@@ -787,6 +790,49 @@ mod tests {
                     ..Default::default()
                 },
                 Some(R::FilePath(PathBuf::from("/Users/qa/doc.pdf"))),
+            ),
+        ]);
+    }
+
+    #[test]
+    fn resolve_reopen_target_appends_text_anchor_unless_page_or_fragment() {
+        let anchor = "Nitrogen is a chemical element with the symbol";
+        assert_reopen_cases(vec![
+            (
+                "anchor on article url",
+                Rec {
+                    reopen_kind: ReopenKind::BrowserUrl,
+                    reopen_url: s("https://example.com/article"),
+                    reopen_text_anchor: s(anchor),
+                    ..Default::default()
+                },
+                Some(R::BrowserUrl(format!(
+                    "https://example.com/article#:~:text={}",
+                    anchor.replace(' ', "%20")
+                ))),
+            ),
+            (
+                "page wins over anchor",
+                Rec {
+                    reopen_kind: ReopenKind::BrowserUrl,
+                    reopen_url: s("https://example.com/doc.pdf"),
+                    reopen_page: Some(12),
+                    reopen_text_anchor: s(anchor),
+                    ..Default::default()
+                },
+                Some(R::BrowserUrl("https://example.com/doc.pdf#page=12".into())),
+            ),
+            (
+                "existing fragment is left unchanged",
+                Rec {
+                    reopen_kind: ReopenKind::BrowserUrl,
+                    reopen_url: s("https://example.com/article#section"),
+                    reopen_text_anchor: s(anchor),
+                    ..Default::default()
+                },
+                Some(R::BrowserUrl(
+                    "https://example.com/article#section".into(),
+                )),
             ),
         ]);
     }
