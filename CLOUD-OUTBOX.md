@@ -2,7 +2,7 @@
 
 Cloud session (Linux container, GitHub only) to local session. Updated after every ticket and at least every two hours. Newest entries first under each heading.
 
-Last update: 2026-10-05 03:50 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf (main at b948dfd).
+Last update: 2026-10-05 04:24 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf (main at b948dfd).
 
 ## NEEDS HUMAN (open)
 
@@ -26,7 +26,7 @@ None.
 | 4 | `claude/train-c-ux` | #22 | 82792e2 | VS-23 | red on main's Swift issue (no Rust in diff) | Frontend CI green. |
 | 5 | `claude/train-e-docs` | #23 | ca9c383 | PD-03, PD-17 draft, PD-01 draft (3), PD-02, PD-04, PD-18 guide, PD-05, proposals (VS-40), session log | red on main's Swift issue (no Rust in diff) | |
 | 6 | `claude/ci-macos-26` | #24 | c6cf285 | CI runner fix | build passes, the one memory_journey test fails until VS-07 lands | `.github/workflows/**` is yours to merge. |
-| 7 | `claude/train-d-chunks` | #27 | 94747d6 | VS-17 and VS-19 harnesses (Python and docs only), ADR 019 Proposed | **green on macos-26** | Stacked on A. Carries the `macos-26` CI commit. |
+| 7 | `claude/train-d-chunks` | #27 | d3b6735 | VS-17, VS-19 harnesses; VS-18 (chunk route behind its flag), VS-20 (scale harness), VS-26 (README): **train complete** | green on macos-26 at 94747d6; later heads running | Contains train B through a merge commit (1ede0fb), because a force-push to restack it was denied; merge after #21 and #25. |
 
 Merge trials: `git merge-tree` shows A with E and A with C merge cleanly; B is A plus commits; F touches `src-tauri/src/mcp/mod.rs`, which no other train touches. Every file each train touches is free of em and en dashes (pre-existing dashes in touched files were replaced, so your whole-file dash scan passes).
 
@@ -53,6 +53,27 @@ Merge trials: `git merge-tree` shows A with E and A with C merge cleanly; B is A
 4. Branch policy: I only rebase (with `--force-with-lease`) commits that local has not merged. If you are mid-gate on a branch, say so in LOCAL-OUTBOX and I will stack on it instead.
 
 ## Tickets
+
+### VS-26 README search rows: delivered (walkthrough file does not exist yet)
+
+- `claude/train-d-chunks`, d3b6735, PR #27. Evidence `docs/evidence/W03/VS-26-cloud.md`.
+- Comment to post:
+
+> Cloud delivered on `claude/train-d-chunks` (d3b6735, PR https://github.com/anurupkumar18/FNDR/pull/27): the README's search rows, overview, diagram, module map, and notes now describe one `retrieve` path (every surface except `memory.search_raw`), BM25 over seven columns, the planner's routes, per-intent fusion, phrase filters, deterministic ties, chunk retrieval behind its flag, "No strong matches", and MiniLM with ADR 019 proposed; the rerank and graph-aware recall claims are gone (the rerank is retired, the graph route runs over an empty graph). Every claim maps to code in the evidence table. `docs/product/qa-walkthrough.md` does not exist yet (the QA reset plan has the owner create it), so cards 5 and 6 are not edited; the evidence gives their text. Evidence: `docs/evidence/W03/VS-26-cloud.md`.
+
+### VS-20 scale harness: delivered; M1 run needed for the done-when
+
+- `claude/train-d-chunks`, 80d665c, PR #27. Evidence `docs/evidence/W03/VS-20-cloud.md`.
+- Comment to post:
+
+> Harness on `claude/train-d-chunks` (80d665c): `cargo test --test storage_scale retrieve_latency -- --ignored --nocapture` (set `FNDR_EMBED_MODEL_DIR` to the BGE model folder) seeds 10,000 memories, their BGE parents, and 60,000 chunks and times `retrieve` and Search with the chunk route on, under production and lifted budgets, with per-route medians. Cloud debug build on shared vCPUs: `retrieve` p95 1,355 to 1,436 ms; the chunk route sets the total (about 1.1 to 1.2 s), mostly the flat scan over 60,000 x 1024-d chunks (654 ms p50) and the BGE query embedding; a cold-cache run returned 4 of 24 queries empty under production budgets. Needs the M1 release run for the p95 500 ms done-when; an IVF-PQ index on chunk embeddings is the first step only if that run is over budget. Evidence: `docs/evidence/W03/VS-20-cloud.md`.
+
+### VS-18 chunk retrieval: delivered behind the flag (pending local gate and EM-03)
+
+- `claude/train-d-chunks`, c0eb3ef, PR #27. Evidence `docs/evidence/W03/VS-18-cloud.md`.
+- Comment to post:
+
+> Cloud delivered on `claude/train-d-chunks` (c0eb3ef): behind `search.use_chunk_first_retrieval` (off by default), the chunk route adds BM25 over chunk text (works without the BGE model) to the BGE chunk vectors, scores a memory by its best chunk plus 0.01 per other chunk within 0.05 (max 3), and `retrieve` hits carry `chunk_id` and `matched_text` (Search rows carry the chunk evidence). `make qa-retrieval-check QA_CHUNKS=1` indexes the evaluation copy and reports the chunk-on row. Same seed, off to on: office-PM Recall@5 0.900 to 0.950, paraphrase 0.778 to 0.889, MRR@10 0.661 to 0.699 on all three paths; knowledge-worker at the 1.000 ceiling, MRR 0.966 to 0.970; no query worse; p50 about +130 ms (BGE-large on CPU, debug). Caveat: each synthetic memory is one chunk, so this mostly measures the added BGE and chunk-text signals. A chunk-found hit uses a 0.45 no-match bar (scores rise with the route). Needs from EM-03 (Minh): chunk rows at capture; the measured gain on a real vault comes after that. Evidence: `docs/evidence/W03/VS-18-cloud.md`.
 
 ### VS-25 retired search code: delivered (pending local gate); contract notes for five callers
 
@@ -238,5 +259,6 @@ Merge trials: `git merge-tree` shows A with E and A with C merge cleanly; B is A
 
 ## In progress (cloud)
 
-- Train B complete (PR #25 body rewritten with one Promise / How / What can go wrong / How we would know block and a per-ticket table).
-- Now train D: VS-18 (chunk routes behind a flag against the EM-03 chunk table, synthetic chunk fixture), then VS-26 (README and walkthrough), VS-20 (10,000-memory harness).
+- Trains B and D complete (PR #25, #27 bodies rewritten with the four-line block and per-ticket tables).
+- Now train F: VS-33 (graph route has no data), VS-34 (retrieval gate in CI), VS-36 (task candidates).
+- Disk note: the BGE-large model for chunk runs lives outside the repo at `/root/fndr-models/bge` in the cloud container (pinned URL from `scripts/bootstrap/download-embedding-model.sh`; that script writes `tokenizer.json` into the same folder as MiniLM's, which would overwrite it: worth a separate folder on the M1 too).
