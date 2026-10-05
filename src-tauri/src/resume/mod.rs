@@ -47,7 +47,9 @@ fn thread_key(record: &MemoryRecord) -> String {
 
 fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize) -> ResumeThread {
     group.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
-    let newest = group.last().expect("build_thread requires a non-empty group");
+    let newest = group
+        .last()
+        .expect("build_thread requires a non-empty group");
 
     let title = thread_key(newest);
     let age_minutes = (now_ms - newest.timestamp).max(0) / 60_000;
@@ -131,6 +133,18 @@ pub async fn build_resume_threads(
 
     let mut by_key: HashMap<String, Vec<MemoryRecord>> = HashMap::new();
     for record in records {
+        // Match existing read-side admission before a row can influence
+        // thread state, suggestions or citations. Agent notes are not
+        // observed work and remain excluded by the remember contract.
+        if crate::memory_quality::record_low_signal_reason(&record).is_some()
+            || crate::privacy::Blocklist::is_internal_app(
+                &record.app_name,
+                record.bundle_id.as_deref(),
+            )
+            || record.source_type.trim().eq_ignore_ascii_case("agent")
+        {
+            continue;
+        }
         by_key.entry(thread_key(&record)).or_default().push(record);
     }
 
@@ -219,5 +233,130 @@ mod tests {
         assert_eq!(thread.age_minutes, 1);
         assert_eq!(thread.next_steps, vec!["Measure p95 latency".to_string()]);
         assert_eq!(thread.evidence, vec!["m-1".to_string(), "m-2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn resume_excludes_hidden_and_agent_rows_before_building_threads() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let store =
+            tokio::task::spawn_blocking(move || Store::new(&path).map_err(|e| e.to_string()))
+                .await
+                .expect("join")
+                .expect("store");
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut eligible = record("eligible", "Parser", now - 600_000);
+        eligible.app_name = "Cursor".into();
+        eligible.clean_text = "Reviewed the parser's query filters and fixed weekday aliases hiding the requested app.".into();
+        eligible.ocr_block_count = 5;
+        eligible.ocr_confidence = 0.9;
+
+        let mut low_quality = eligible.clone();
+        low_quality.id = "low-quality".into();
+        low_quality.timestamp = now - 1_200_000;
+        low_quality.storage_outcome = "low_quality_evidence".into();
+        let mut grounded = low_quality.clone();
+        grounded.id = "grounded".into();
+        grounded.timestamp = now - 900_000;
+        grounded.synthesis_branch = "llm_ocr_grounded_visual_fallback".into();
+
+        let mut hidden = Vec::new();
+        for kind in [
+            "quarantine",
+            "failed",
+            "image",
+            "internal-name",
+            "internal-bundle",
+            "agent",
+        ] {
+            let mut row = eligible.clone();
+            row.id = format!("EXCLUDED_{kind}");
+            row.timestamp = now - 60_000;
+            row.topic = row.id.clone();
+            row.memory_context = row.id.clone();
+            row.next_steps = vec![row.id.clone()];
+            match kind {
+                "quarantine" => row.storage_outcome = "quarantine_low_grounding".into(),
+                "failed" => {
+                    row.raw_evidence = r#"{"extraction_issues":["visual_semantics_failed"]}"#.into()
+                }
+                "image" => {
+                    row.enrichment_status = "visual_metadata_fallback".into();
+                    row.clean_text.clear();
+                    row.ocr_block_count = 0;
+                    row.ocr_confidence = 0.0;
+                }
+                "internal-name" => row.app_name = "FNDR".into(),
+                "internal-bundle" => row.bundle_id = Some("com.fndr.app".into()),
+                "agent" => row.source_type = " Agent ".into(),
+                _ => unreachable!(),
+            }
+            hidden.push(row);
+        }
+        let mut hidden_project = hidden[0].clone();
+        hidden_project.id = "EXCLUDED_project".into();
+        hidden_project.project = "Excluded project".into();
+        hidden.push(hidden_project);
+        let excluded_ids = hidden.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+        let mut records = vec![low_quality, grounded, eligible];
+        records.extend(hidden);
+        store
+            .add_batch_preserving_ids(&records)
+            .await
+            .expect("insert");
+
+        let threads = build_resume_threads(&store, 24, 2000)
+            .await
+            .expect("resume");
+        assert_eq!(threads.len(), 1, "hidden-only projects must not appear");
+        let thread = &threads[0];
+        assert_eq!(thread.title, "Parser");
+        assert_eq!(thread.age_minutes, 10);
+        assert_eq!(thread.last_state, "reviewing capture pipeline in_progress");
+        assert_eq!(thread.evidence, vec!["low-quality", "grounded", "eligible"]);
+        let serialized = serde_json::to_string(&threads).expect("serialize threads");
+        for id in excluded_ids {
+            assert!(!serialized.contains(&id), "excluded source leaked: {id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_rechecks_stored_eligibility_and_deletions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let store =
+            tokio::task::spawn_blocking(move || Store::new(&path).map_err(|e| e.to_string()))
+                .await
+                .expect("join")
+                .expect("store");
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut reviewed = record("reviewed", "Parser", now - 600_000);
+        let deleted = record("deleted", "Parser", now - 300_000);
+        store
+            .add_batch_preserving_ids(&[reviewed.clone(), deleted])
+            .await
+            .expect("insert");
+        let before = build_resume_threads(&store, 24, 2000)
+            .await
+            .expect("initial resume");
+        assert_eq!(before[0].evidence, vec!["reviewed", "deleted"]);
+
+        reviewed.storage_outcome = "quarantine_low_grounding".into();
+        store
+            .replace_memory_preserving_chunks(&reviewed)
+            .await
+            .expect("update eligibility");
+        store
+            .delete_memory_by_id("deleted")
+            .await
+            .expect("delete memory");
+
+        let after = build_resume_threads(&store, 24, 2000)
+            .await
+            .expect("refresh resume");
+        assert!(
+            after.is_empty(),
+            "hidden and deleted records must not return"
+        );
     }
 }
