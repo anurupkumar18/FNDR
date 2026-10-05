@@ -1890,6 +1890,21 @@ pub fn spawn_capture_loop(state: Arc<AppState>) {
 }
 
 /// Run the main capture loop
+/// Accessibility text is used instead of OCR when it has at least this many
+/// characters (VS-16); shorter reads fall back to OCR as before.
+const AX_TEXT_MIN_CHARS: usize = 200;
+/// Bound for stored Accessibility text, kept for chunking.
+const AX_TEXT_MAX_CHARS: usize = 20_000;
+
+fn prefer_ax_text(char_count: usize) -> bool {
+    char_count >= AX_TEXT_MIN_CHARS
+}
+
+/// `FNDR_AX_TEXT=0` turns Accessibility-first capture off.
+fn ax_text_enabled() -> bool {
+    std::env::var("FNDR_AX_TEXT").map(|value| value != "0").unwrap_or(true)
+}
+
 #[cfg(debug_assertions)]
 fn dedupe_evidence(verdict: &DedupeVerdict) -> serde_json::Value {
     json!({
@@ -2735,8 +2750,43 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         #[cfg(debug_assertions)]
         let mut memory_journey_positioned_line_count: Option<usize> = None;
         let ocr_start = Instant::now();
+        // VS-16: exact Accessibility text beats OCR when the window exposes
+        // enough of it. Browser semantic content keeps priority (it already
+        // gives page text); privacy gates above have run for this frame.
+        let ax_candidate = if semantic_page.as_ref().is_some_and(|page| page.has_signal())
+            || !ax_text_enabled()
+        {
+            None
+        } else {
+            let ax_started = Instant::now();
+            let found = crate::accessibility::frontmost_focused_text(AX_TEXT_MAX_CHARS);
+            runtime_metrics::since_ms("capture.ax_ms", ax_started);
+            found.filter(|ax| prefer_ax_text(ax.text.chars().count()))
+        };
         let (text, qwen_cleaned_text, capture_quality, observed_confidence, observed_block_count) =
-            if let Some(semantic) = semantic_page.as_ref().filter(|page| page.has_signal()) {
+            if let Some(ax) = ax_candidate {
+                source_kind = "ax";
+                runtime_metrics::bump("capture.text_source_ax");
+                let high_signal = text_cleanup::build_high_signal_text_for_app(&app_name, &ax.text);
+                let mut stats = high_signal.stats;
+                if stats.total_lines == 0 {
+                    stats.total_lines = 1;
+                }
+                if stats.kept_lines == 0 && !high_signal.text.trim().is_empty() {
+                    stats.kept_lines = 1;
+                }
+                stats.low_conf_lines = 0;
+                // Accessibility text is exact, not recognized: no OCR confidence.
+                stats.avg_line_score = 0.9;
+                let kept = high_signal.stats.kept_lines.max(1);
+                (
+                    high_signal.text.clone(),
+                    high_signal.text,
+                    stats,
+                    0.95,
+                    kept,
+                )
+            } else if let Some(semantic) = semantic_page.as_ref().filter(|page| page.has_signal()) {
                 source_kind = "browser_semantic";
                 let semantic_text = semantic.content_text();
                 let high_signal =
@@ -2782,6 +2832,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     }
                 };
                 runtime_metrics::since_ms("capture.ocr_ms", ocr_stage_started);
+                runtime_metrics::bump("capture.text_source_ocr");
                 #[cfg(debug_assertions)]
                 if let Some(journey_id) = memory_journey_id.as_deref() {
                     memory_journey_positioned_line_count =
@@ -6443,6 +6494,13 @@ fn should_text_heavy_override(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn accessibility_text_replaces_ocr_only_at_two_hundred_characters() {
+        assert!(!super::prefer_ax_text(0));
+        assert!(!super::prefer_ax_text(199));
+        assert!(super::prefer_ax_text(200));
+    }
+
     use super::*;
 
     #[test]

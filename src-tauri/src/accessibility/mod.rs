@@ -752,6 +752,11 @@ pub struct FocusedText {
     pub elapsed_ms: u64,
 }
 
+/// `focused_text` for whichever process is frontmost right now.
+pub fn frontmost_focused_text(max_chars: usize) -> Option<FocusedText> {
+    focused_text(workspace_frontmost_pid()?, max_chars)
+}
+
 /// Read the focused window's on-screen text for process `pid` (reading order,
 /// at most `max_chars`, at most 50 ms or 4,000 nodes). Returns `None` without
 /// permission, when `pid` is not the frontmost process before and after the
