@@ -2,7 +2,7 @@
 
 Cloud session (Linux container, GitHub only) to local session. Updated after every ticket and at least every two hours. Newest entries first under each heading.
 
-Last update: 2026-10-05 16:15 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf and main at 342e5a2 (integrate/cloud-1).
+Last update: 2026-10-05 17:00 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf and main at 342e5a2 (integrate/cloud-1).
 
 ## NEEDS HUMAN (open)
 
@@ -13,14 +13,16 @@ None.
 1. **Trains A to F are on main (342e5a2), and PRs #21 to #27 show merged.** Thank you for the gate fixes. I stopped watching those PRs. New work stacks on main as `claude/train-f-retrieval`, one commit per ticket.
 2. **The weekday bug you fixed at the gate (b1a1776) also broke the gate itself.** The knowledge-worker memory for "churn drivers due Thursday" is seeded three days before the run day, so before your fix the query passed only on Sundays (the reference was recorded on Sunday 2026-10-04). Cloud hit the same failure on train D's head this morning. With b1a1776 the query no longer depends on the run day. One gap remains in the same rule: dates and day phrases after a deadline word still become capture-time filters ("the grant report due October 9" filters to October 9; "the invoice due today" to today). Proposed as a small VS-13 follow-up on train F (test-first, both personas gated), unless you prefer to take it.
 3. **VS-33's premise was partly wrong, recorded in the evidence.** The insight graph is persisted (`graph_nodes`, `graph_edges` in LanceDB, written by the capture flush and idle `commit_graph_updates`). `retrieve` simply never loads it, so the graph route ran over an empty list, and the entity route (which also reads graph nodes) finds nothing on every real query. VS-33 stops planning the graph route and deletes the dead empty-graph wiring and the no-op `graph_rerank.rs`. It keeps `GraphRoute` and the `Route::Graph` contract fields (20 files, including MCP and Ask JSON). Proposal to file: load the persisted graph for the entity and graph routes behind a flag, measured on a seeded graph, or delete both routes.
-4. **`release.yml` still uses `macos-14`** and will hit the Swift SDK error that #24 fixed for `test.yml`.
-5. **Branch deletion is still refused here (HTTP 403):** `claude/probe` and the merged `claude/train-*` branches stay until you delete them.
+4. **The retrieval gate now runs in CI (VS-34, PR #31), and macOS agrees with Linux query by query.** On the negative control (#32, drops the vector route) every office-PM rank in the CI log equals the cloud's Linux run, so the references are platform-independent. A gate change that only keeps BM25 out passes the gate (it lowers MRR, not top-ten recall); worth knowing when reading a green gate.
+5. **Ablation and a third persona (stretch).** Fused stays the best default on all three personas. A finding from the first two personas ("BM25 hurts paraphrases") did not hold on the third, so the keyword-weight proposal (VS-43) was withdrawn before filing. Chunks remain the only change that gains without a trade. `docs/evidence/W03/retrieval-ablation-cloud.md`.
+6. **`release.yml` still uses `macos-14`** and will hit the Swift SDK error that #24 fixed for `test.yml`.
+7. **Branch deletion is still refused here (HTTP 403):** `claude/probe` and the merged `claude/train-*` branches stay until you delete them.
 
 ## Merge queue for local (in this order)
 
 | # | Branch | Draft PR | Head | Tickets | Rust CI | Notes |
 |---|---|---|---|---|---|---|
-| 1 | `claude/train-f-retrieval` | (opening next) | 0591489 (local, pushing after the gate rerun on main) | VS-33 | not yet run | Rebased on main 342e5a2. VS-34 (gate workflow) and VS-36 (Resume next steps) follow on the same branch. |
+| 1 | `claude/train-f-retrieval` | #31 | 33d4814 | VS-33, VS-36, VS-34 (2 commits), VS-13 follow-up (2 commits); stretch: ablation, Beta demo numbers, third persona; proposals VS-42 | green on ba06763 (Rust tests, retrieval gate, frontend); 33d4814 running | On main 342e5a2. `.github/workflows/retrieval-gate.yml` is new and yours to merge; it runs the gate on three personas in about 15 minutes. #32 was a throwaway negative control (closed). |
 
 ## Gate 0 capability probe (2026-10-04)
 
@@ -46,10 +48,38 @@ None.
 
 ## Tickets
 
-### VS-33 graph route out of retrieval: delivered locally, push pending the gate rerun on main
+### Third persona (stretch): delivered
 
-- `claude/train-f-retrieval`, 0591489 (rebased on 342e5a2). Evidence `docs/evidence/W03/VS-33-cloud.md`.
-- Gate on train D's head before and after, same seed: every rank identical on both personas. The knowledge-worker gate failed both times on the weekday query (Read first 2), not because of this change. Rerun on main in progress.
+- `claude/train-f-retrieval`, 11cb682, PR #31. Evidence `docs/evidence/W03/persona-software-engineer-cloud.md`.
+- 26 memories, 34 queries written before any run; Recall@5 1.000 and MRR@10 0.831 on every path; a fresh seed reproduced every rank. Added to the CI gate.
+
+### Ablation and Beta demo numbers (stretch): delivered
+
+- `claude/train-f-retrieval`, ad96b03 and 33d4814 (ablation), f41c696 (demo numbers), PR #31. Evidence `retrieval-ablation-cloud.md`, `beta-demo-recall-cloud.md`, `beta-demo-recall.csv`; `docs/product/qa-prep.md` 4:10 row updated.
+- Demo line the evidence supports: office-PM Search finds the right memory in the top five for 18 of 20 questions, up from 14; Search and Ask always agree on the top result. Do not claim Ask improved.
+
+### VS-13 follow-up (dates and day phrases after deadline words): delivered
+
+- `claude/train-f-retrieval`, 98045d1 and 1619e08 (evidence correction), PR #31. Evidence `docs/evidence/W03/VS-13-deadlines-cloud.md`.
+- Comment to post:
+  > Follow-up in cloud: your deadline-word rule (b1a1776) now also covers dates and day phrases ("due October 9", "due today"). Every rank unchanged on both personas. Note: retrieve falls back to an unfiltered search when a filter matches nothing, so the date case only bites when the misread day has captures (profiles older than a year, or "due today").
+
+### VS-34 retrieval gate in GitHub Actions: delivered
+
+- `claude/train-f-retrieval`, 6a102db and e916f1b, PR #31. Evidence `docs/evidence/W03/VS-34-cloud.md`.
+- Comment to post:
+  > Done in cloud: retrieval-gate.yml runs make qa-retrieval-check per persona on macos-26 with the pinned MiniLM cached and hash-checked. Pass: https://github.com/anurupkumar18/FNDR/actions/runs/37340425264/job/111865808214 (PR #31). Fail: https://github.com/anurupkumar18/FNDR/actions/runs/37340909547/job/111867434041 (negative control #32, vector route dropped, closed). macOS ranks equal Linux ranks query by query. Runner is macos-26, not macos-14 (the Swift helper needs the macOS 26 SDK).
+
+### VS-36 Resume next steps: delivered
+
+- `claude/train-f-retrieval`, 3e9c16c, PR #31. Evidence `docs/evidence/W03/VS-36-cloud.md`.
+- Comment to post:
+  > Done in cloud: extract_task_candidates now reads stored memories and feeds ResumeThread.suggested_next_steps (up to three, newest first, deduplicated, each with its source memory). next_steps is unchanged. Test written first; every retrieval rank unchanged.
+
+### VS-33 graph route out of retrieval: delivered
+
+- `claude/train-f-retrieval`, fda001c, PR #31. Evidence `docs/evidence/W03/VS-33-cloud.md`.
+- Gate before and after on main: every rank identical, all four runs pass.
 - Comment to post:
   > VS-33 done in cloud. Retrieval no longer plans the graph route or builds the empty graph it searched; the no-op graph_rerank stub is deleted. Every rank is unchanged on both personas. Correction to the ticket: the insight graph is persisted in LanceDB; retrieve never loads it, which also leaves the entity route empty. GraphRoute and its contract fields stay until a seeded graph can measure turning it on. Evidence: docs/evidence/W03/VS-33-cloud.md.
 
