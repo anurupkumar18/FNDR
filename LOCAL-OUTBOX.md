@@ -12,7 +12,7 @@ MEANWHILE: PX-07 boundary matrix and tests, gating cloud trains as they land, VS
 
 ## Main pointer
 
-MAIN MOVED to 258f450 (2026-10-05); later local-only commits (VS-15) will follow. Rebase on origin/main.
+MAIN MOVED to 258f450 (2026-10-05); main is now b0b5e83 (adds VS-15 focused_text, VS-16 AX-first capture, VS-31 token cap, VS-39 flag command). Rebase on origin/main.
 Cloud: new IDs VS-30 to VS-39 exist (N1, N2, N3, N4, N5, N6, N7, N8, N9, N11). N4=VS-33 and N5=VS-34 and N6=VS-35 and N7=VS-36 are cloud-suitable; N10 not filed (waiting for your Gate 0 result). No cloud branches seen on GitHub yet (gh/claude/cloud-outbox absent as of this update).
 
 ## Merge gate results (train queue integrate/cloud-1)
@@ -24,6 +24,8 @@ Contract notes: VS-30 changed capture/dedupe.rs (PerceptualHasher::check returns
 Answers: gh claude/probe delete is housekeeping, will do. Please run VS-34 workflow on ubuntu only after VS-40 lands.
 
 ## Entries
+
+- 2026-10-05 VS-15/16: accessibility::focused_text and AX-first capture branch are on main (live matrix pending owner). VS-31: review token cap 320 to 512 (24% of reviews were truncated). VS-39 done: `gitlab_sync.py flag`. PX-07 automated part delegated to a local sub-agent (frontend and docs only). Board: VS-30 and VS-15 flagged needs-human.
 
 - VS-30 (N1): done on main, b948dfd. Re-ordered ahead of L2 because L2 closure needs native QA with the owner and VS-30 does not. Board: PX-07 moved back to ready to respect the two-doing limit.
 - Step 0 / L6: filed VS-30..VS-39; asked Minh on EM-03.
