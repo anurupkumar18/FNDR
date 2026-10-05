@@ -48,3 +48,40 @@ Tickets the cloud session proposes during the parallel-session campaign (`docs/s
 **Done when.** The test fails on the old code and passes; `cargo test --lib` passes.
 
 **Evidence.** Already done by the cloud on `claude/train-f-new` (b8a2412, PR #26): `docs/evidence/W03/VS-41-cloud.md`.
+
+## VS-42 Feed the persisted insight graph to the entity route, or remove it
+- assignee: anurupkumar
+- labels: area::vault-search, type::spike, prio::p2
+- milestone: W04-Prove
+- estimate: 4h
+- depends: VS-33
+
+**Why.** VS-33 found that the insight graph is persisted (`graph_nodes`, `graph_edges` in LanceDB, written by the capture flush and idle `commit_graph_updates`), but `retrieve` never loads it. The entity route matches query entities against graph nodes, so it returns nothing on every real query, while the planner still schedules it for project and entity queries. The graph route was taken out of planning for the same reason.
+
+**Do.**
+1. Add graph rows to one seeded persona (`seed_demo` writes nodes for its projects and people), so the effect can be measured.
+2. Behind a flag, load project and entity nodes once per query (or cache them per store version) and pass them to the entity route.
+3. Measure with `make qa-retrieval-check` on all personas, and time the load at 10,000 nodes.
+4. If neither recall nor MRR improves, remove the entity route from planning, as VS-33 did for the graph route (anti-bloat gate).
+
+**Done when.** Either the entity route returns graph-backed hits with no Recall@5 drop on any path, or it is out of the planner with the reason recorded.
+
+**Evidence.** Gate output before and after, and the load timing.
+
+## VS-43 Lower the keyword weight for paraphrase-like queries
+- assignee: anurupkumar
+- labels: area::vault-search, type::spike, prio::p2
+- milestone: W04-Prove
+- estimate: 3h
+- depends: VS-07
+
+**Why.** The ablation (`docs/evidence/W03/retrieval-ablation-cloud.md`) shows BM25 pulling literal-word matches above the right memory for three office-PM paraphrases ("how much money are we losing to customers leaving" ranks 5 fused, 1 without BM25). Removing BM25 entirely costs identifier, time, and app queries, so a per-query weight is the candidate.
+
+**Do.**
+1. Classify a query as paraphrase-like when it has no digits, no capitalized name after the first word, no quoted phrase, and no identifier shape (`LL-1482`, `test_*`, a path).
+2. For those queries only, lower the fusion keyword weight; sweep three values on knowledge-worker and office-PM.
+3. Accept only if the `software-engineer` persona (queries written before any run) does not lose Recall@5 or MRR@10 on any path, and the no-match bar still holds no real query.
+
+**Done when.** A measured keep-or-drop decision, with the gate on three personas.
+
+**Evidence.** The sweep table and the gate output.
