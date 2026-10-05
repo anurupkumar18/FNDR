@@ -425,6 +425,11 @@ pub fn normalize_structured_memory_json(raw: &str) -> String {
     serde_json::to_string(&value).unwrap_or_else(|_| raw.to_string())
 }
 
+/// 19 of 78 recorded memory_review calls on the owner profile stopped at the old
+/// 320 token cap, leaving unbalanced JSON that `extract_json_object` rejects
+/// (VS-31). The seven short string fields fit in 512.
+const MEMORY_REVIEW_MAX_TOKENS: i32 = 512;
+
 fn extract_json_object(raw: &str) -> Option<String> {
     let bytes = raw.as_bytes();
     let mut i = 0;
@@ -1531,7 +1536,9 @@ Rules:\n\
         );
 
         let prompt = self.build_prompt(&system_msg, &user_msg).ok()?;
-        let raw = self.complete_task("memory_review", &prompt, 320).await;
+        let raw = self
+            .complete_task("memory_review", &prompt, MEMORY_REVIEW_MAX_TOKENS)
+            .await;
         let candidate = extract_json_object(&raw)?;
         match serde_json::from_str::<MemoryReviewPromptOutput>(&candidate) {
             Ok(mut parsed) => {
@@ -1548,7 +1555,7 @@ Rules:\n\
                 );
                 let repair_prompt = self.build_prompt(&system_msg, &repair_msg).ok()?;
                 let repaired_raw = self
-                    .complete_task("memory_review_repair", &repair_prompt, 320)
+                    .complete_task("memory_review_repair", &repair_prompt, MEMORY_REVIEW_MAX_TOKENS)
                     .await;
                 let repaired_candidate = extract_json_object(&repaired_raw)?;
                 serde_json::from_str::<MemoryReviewPromptOutput>(&repaired_candidate)
