@@ -16,6 +16,7 @@ use lancedb::table::{AddDataMode, NewColumnTransform};
 use lancedb::{Connection, Table};
 
 use crate::config::{DEFAULT_EMBEDDING_MODEL_NAME, DEFAULT_TEXT_EMBEDDING_DIM};
+use crate::inference::extraction_evidence::has_source_evidence;
 use crate::memory::reopen::{build_reopen_target, ReopenKind};
 use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
 use crate::memory_embedding_document::{
@@ -196,11 +197,23 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     }
     normalize_event_fields(&mut normalized);
 
+    let source_backed = has_source_evidence(&normalized.raw_evidence);
+    if source_backed {
+        // Source quotes describe observations, not ownership or pending work.
+        normalized.user_intent.clear();
+        normalized.intent_analysis = Default::default();
+        normalized.intent_score = 0.0;
+        normalized.next_steps.clear();
+        normalized.todos.clear();
+        normalized.action_items.clear();
+    }
+
     if normalized.memory_context.trim().is_empty() {
         normalized.memory_context = derive_memory_context(&normalized);
     }
-    if normalized.user_intent.trim().is_empty()
-        || normalized.intent_analysis.intent_label.is_empty()
+    if !source_backed
+        && (normalized.user_intent.trim().is_empty()
+            || normalized.intent_analysis.intent_label.is_empty())
     {
         let analysis = infer_intent_analysis(&normalized);
         normalized.user_intent = analysis.intent_label.clone();
@@ -229,7 +242,7 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     if !visual_semantics_failed && normalized.extracted_entities_structured.is_empty() {
         normalized.extracted_entities_structured = derive_structured_entities(&normalized);
     }
-    if !visual_semantics_failed && normalized.action_items.is_empty() {
+    if !source_backed && !visual_semantics_failed && normalized.action_items.is_empty() {
         normalized.action_items = derive_action_items(&normalized);
     }
     if normalized.topic_confidence <= 0.0 {
@@ -477,7 +490,9 @@ pub(super) fn derive_memory_context_with_config(
         parts.push(summary.to_string());
     }
 
-    let intent = if !record.user_intent.trim().is_empty() {
+    let intent = if has_source_evidence(&record.raw_evidence) {
+        String::new()
+    } else if !record.user_intent.trim().is_empty() {
         record.user_intent.trim().to_string()
     } else if !record.activity_type.trim().is_empty() {
         record.activity_type.trim().to_string()

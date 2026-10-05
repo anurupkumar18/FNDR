@@ -34,9 +34,8 @@ pub mod vector_route;
 pub mod verifier;
 
 pub use retrieve::{
-    related_memories, retrieve, retrieve_search_results, RetrieveHit, RetrieveRequest, RetrieveResult,
-    RetrieveWhy,
-    STRONG_MATCH_SCORE, STRONG_MATCH_SCORE_WITH_CHUNKS,
+    memory_source_statements, related_memories, retrieve, retrieve_search_results, RetrieveHit,
+    RetrieveRequest, RetrieveResult, RetrieveWhy, STRONG_MATCH_SCORE, STRONG_MATCH_SCORE_WITH_CHUNKS,
 };
 
 static URL_RE: Lazy<Regex> =
@@ -3185,7 +3184,8 @@ pub async fn run_query(
         },
     ) = retrieve::retrieve_with_fused(state, &request).await;
     let debug_trace = search_debug_trace(&plan, &route_hits, &fused, &weights);
-    let evidence = evidence_pack::collect_evidence(&fused, &state.store).await;
+    let blocklist = state.config.read().blocklist.clone();
+    let evidence = evidence_pack::collect_evidence(&fused, &state.store, &blocklist).await;
     let outcome = verifier::verify(&plan, &fused, &evidence);
 
     let answer = match mode {

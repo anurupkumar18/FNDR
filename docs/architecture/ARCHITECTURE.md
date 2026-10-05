@@ -45,6 +45,8 @@ The code keeps public Tauri command names stable, while internal names make the 
 
 Text inference jobs own a cloned `InferenceEngine` handle while running on the blocking executor. Handles share one context mutex and backend; cancelling the waiting future or replacing the app's engine does not free an active job's state. This is lifetime safety, not unloading: model weights remain deliberately leaked, and the cached pixel runtime remains resident. The Qwen worker's idle log reports that residency rather than claiming release.
 
+Text extraction uses model-selected source lines resolved by Rust into exact observed statements. Bounded snapshot evidence remains in `raw_evidence`, survives fusion/merge, and is exposed separately from inferred summaries and pending tasks. Canonical intent/action fields stay unset for this contract through storage and review; legacy extraction and actual pixel inference remain separate paths. Snapshot hashes identify original extraction inputs, not the current merged text. Quotes do not enter embedding prose (ADR 007).
+
 ## Configuration
 
 Pipeline knobs live in `src-tauri/src/config.rs` rather than scattered literals:

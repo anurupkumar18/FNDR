@@ -11,6 +11,7 @@ Full documentation index (architecture, decisions, product notes, agent defaults
 ## Engineering vocabulary
 
 - **Memory record** (`MemoryRecord`): persisted unit of captured context stored and indexed for search. This is the **parent** in the parent-child RAG model — the authoritative record for card synthesis, holding full OCR, insight fields, and metadata.
+- **Source statement**: an exact quote resolved by Rust from a model-selected line and its adjacent lines in the bounded extraction input. Its snapshot hash and line identify where it appeared; they do not establish speaker ownership, pending status, truth, or permission to act. New text extractions retain these observations in `raw_evidence.source_evidence` instead of generating canonical intent or tasks. Generated descriptive context remains unverified.
 - **Memory chunk** (`MemoryChunkRecord`, to be added by Subagent 7): an overlapping text window derived from a parent `MemoryRecord`, carrying its own embedding and a `parent_id` foreign key. Used by the chunk-first retrieval path for higher-precision vector search. See ADR 008.
 - **Embedding document** (`MemoryEmbeddingDocument`): the canonical in-memory retrieval document used to derive primary/search text, snippet text, support text, chunk text, visual semantic text, and graph-node text before vectors are written. Its provenance is stored additively under `raw_evidence.embedding_manifest`. See ADR 010.
 - **Memory card**: UI-facing presentation of a search hit / browse item.

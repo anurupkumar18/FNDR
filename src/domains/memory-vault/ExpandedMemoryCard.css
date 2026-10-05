@@ -175,6 +175,23 @@
     line-height: 1.45;
 }
 
+.fndr-emc-statements {
+    margin-top: 8px;
+}
+
+.fndr-emc-statements blockquote {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.fndr-emc-statements cite {
+    font-style: normal;
+    font-size: 11px;
+    color: var(--fg-3);
+    overflow-wrap: anywhere;
+}
+
 .fndr-emc-chunk-meta {
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;

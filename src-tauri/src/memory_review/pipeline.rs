@@ -21,6 +21,7 @@
 //!    explicit `reindex_memories_v5` path.
 
 use crate::embedding::Embedder;
+use crate::inference::extraction_evidence::has_source_evidence;
 use crate::memory_embedding_document::compose_memory_embedding_document;
 use crate::memory_insight::derive_insight_for_record;
 use crate::storage::{MemoryRecord, Store};
@@ -369,7 +370,16 @@ fn apply_reviewed_to_record(
     if !reviewed.topic.trim().is_empty() {
         record.topic = reviewed.topic.trim().to_string();
     }
-    if !reviewed.user_intent.trim().is_empty() {
+    if has_source_evidence(&record.raw_evidence) {
+        // Review may improve narrative context but cannot turn quoted speech
+        // into the user's intent or pending work before re-embedding.
+        record.user_intent.clear();
+        record.intent_analysis = Default::default();
+        record.intent_score = 0.0;
+        record.next_steps.clear();
+        record.todos.clear();
+        record.action_items.clear();
+    } else if !reviewed.user_intent.trim().is_empty() {
         record.user_intent = reviewed.user_intent.trim().to_string();
     }
     if !reviewed.activity_type.trim().is_empty() {
@@ -629,6 +639,42 @@ mod tests {
             current_display_summary: String::new(),
             synthesis_branch: "llm".to_string(),
             same_day_candidates: candidates,
+        }
+    }
+
+    #[test]
+    fn source_backed_review_keeps_intent_and_actions_unset() {
+        for raw in [r#"{"source_evidence":{}}"#, r#"{"source_evidence":{"version":99}}"#] {
+            let mut record = MemoryRecord {
+                raw_evidence: raw.into(),
+                user_intent: "Stale inferred intent".into(),
+                next_steps: vec!["Stale pending action".into()],
+                todos: vec!["Stale todo".into()],
+                action_items: vec![crate::storage::MemoryActionItem {
+                    text: "Stale action".into(), ..Default::default()
+                }],
+                ..Default::default()
+            };
+            record.intent_analysis.intent_label = "Stale inferred intent".into();
+            record.intent_analysis.confidence = 0.8;
+            record.intent_score = 0.8;
+            let reviewed = ReviewedMemory {
+                memory_context: "A discussion about a draft awaiting approval.".into(),
+                user_intent: "Review the draft now".into(),
+                ..Default::default()
+            };
+            apply_reviewed_to_record(&mut record, &reviewed, "Draft discussion", 123,
+                STATUS_REVIEWED_LOCAL, SYNTHESIS_BRANCH_REVIEWED_LOCAL);
+            assert!(record.user_intent.is_empty(), "review must not assign ownership: {}", record.user_intent);
+            assert!(record.intent_analysis.intent_label.is_empty());
+            assert_eq!(record.intent_analysis.confidence, 0.0);
+            assert_eq!(record.intent_score, 0.0);
+            assert!(record.next_steps.is_empty());
+            assert!(record.todos.is_empty());
+            assert!(record.action_items.is_empty());
+            assert_eq!(record.memory_context, reviewed.memory_context);
+            assert_eq!(record.raw_evidence, raw);
+            assert_eq!(record.enrichment_status, STATUS_REVIEWED_LOCAL);
         }
     }
 

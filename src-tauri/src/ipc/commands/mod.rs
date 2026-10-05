@@ -76,8 +76,8 @@ pub use debug::{get_memory_timeline_thread, inspect_memory_pipeline};
 
 pub mod retrieval;
 pub use retrieval::{
-    fndr_answer, fndr_build_context_pack, fndr_get_memory_subgraph, fndr_get_related_memories,
-    fndr_quality_status, fndr_search, fndr_timeline,
+    fndr_answer, fndr_build_context_pack, fndr_get_memory_source_statements, fndr_get_memory_subgraph,
+    fndr_get_related_memories, fndr_quality_status, fndr_search, fndr_timeline,
 };
 
 mod companion;

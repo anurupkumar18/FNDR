@@ -20,6 +20,7 @@ vi.mock("@/shared/ipc/tauri", () => ({
         node_count: 0,
         edge_count: 0,
     }),
+    fndrGetMemorySourceStatements: vi.fn().mockResolvedValue([]),
     fndrGetRelatedMemories: vi.fn().mockResolvedValue([]),
     getMemoryDebugInspector: vi.fn().mockResolvedValue({}),
     listMemoryCards: vi.fn(),

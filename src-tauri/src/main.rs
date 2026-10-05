@@ -696,6 +696,7 @@ fn main() {
             ipc::commands::retrieval::fndr_build_context_pack,
             ipc::commands::retrieval::fndr_get_memory_subgraph,
             ipc::commands::retrieval::fndr_get_related_memories,
+            ipc::commands::retrieval::fndr_get_memory_source_statements,
             ipc::commands::retrieval::fndr_quality_status,
             ipc::commands::retrieval::fndr_timeline,
             ipc::commands::search::find_visually_similar_memories,

@@ -126,6 +126,19 @@ pub struct EvidencePack {
     pub errors: Vec<ErrorRef>,
     pub todos: Vec<TaskRef>,
     pub urls: Vec<UrlRef>,
+    /// Exact observed statements, without inferred ownership or pending status.
+    #[serde(default)]
+    pub source_statements: Vec<SourceStatementRef>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type, PartialEq)]
+pub struct SourceStatementRef {
+    pub memory_ids: Vec<String>,
+    pub kind: String,
+    pub quote: String,
+    /// Identifies the original source snapshot, including after memory merges.
+    pub source_sha256: String,
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type, PartialEq)]

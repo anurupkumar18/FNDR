@@ -37,6 +37,9 @@ use crate::config::{
 };
 use crate::context_runtime;
 use crate::embedding::{embed_imported_image, Embedder, EmbeddingBackend, EMBEDDING_DIM};
+use crate::inference::extraction_evidence::{
+    has_source_evidence, source_evidence_sets_from_raw, validate_source_evidence,
+};
 use crate::inference::vlm_router::{
     should_run_vlm, vlm_capability_label, vlm_runtime_status_label, VlmRouteDecision, VlmRouteInput,
 };
@@ -274,6 +277,18 @@ async fn try_admit_visual_capture(
     }
 }
 
+fn visual_insight_from_structured(
+    extraction: &StructuredMemoryExtraction,
+) -> (
+    crate::inference::ImageSemanticInsight,
+    Option<crate::inference::extraction_evidence::ExtractionEvidence>,
+) {
+    (
+        crate::inference::insight_from_structured(extraction),
+        extraction.source_evidence.clone(),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn compose_visual_capture_record(
     state: &AppState,
@@ -339,13 +354,13 @@ async fn compose_visual_capture_record(
         engine
             .extract_structured_memory(app_name, window_title, &llm_fallback_context)
             .await
-            .map(|s| crate::inference::insight_from_structured(&s))
+            .map(|s| visual_insight_from_structured(&s))
     };
 
     // Removed ungrounded low-RAM visual capture gate: store captures even without OCR/VLM grounding
 
     let structure_started = Instant::now();
-    let insight = if !vlm_route.runs_pixel_vlm() {
+    let (insight, source_evidence) = if !vlm_route.runs_pixel_vlm() {
         let reason = vlm_route
             .fallback_reason()
             .unwrap_or_else(|| vlm_route.label());
@@ -356,11 +371,14 @@ async fn compose_visual_capture_record(
         if let Some(i) = try_llm_fallback().await {
             i
         } else {
-            crate::inference::insight_from_ocr_only(
-                &synthetic_filename,
-                Some(app_name),
-                Some(window_title),
-                "",
+            (
+                crate::inference::insight_from_ocr_only(
+                    &synthetic_filename,
+                    Some(app_name),
+                    Some(window_title),
+                    "",
+                ),
+                None,
             )
         }
     } else {
@@ -375,7 +393,7 @@ async fn compose_visual_capture_record(
         )
         .await
         {
-            Ok(i) => i,
+            Ok(i) => (i, None),
             Err(e) => {
                 tracing::warn!(
                     app = %app_name,
@@ -384,11 +402,14 @@ async fn compose_visual_capture_record(
                 if let Some(i) = try_llm_fallback().await {
                     i
                 } else {
-                    crate::inference::insight_from_ocr_only(
-                        &synthetic_filename,
-                        Some(app_name),
-                        Some(window_title),
-                        "",
+                    (
+                        crate::inference::insight_from_ocr_only(
+                            &synthetic_filename,
+                            Some(app_name),
+                            Some(window_title),
+                            "",
+                        ),
+                        None,
                     )
                 }
             }
@@ -431,7 +452,9 @@ async fn compose_visual_capture_record(
     } else {
         "unknown".to_string()
     };
-    let user_intent = if !composed.user_intent.trim().is_empty() {
+    let user_intent = if source_evidence.is_some() {
+        String::new()
+    } else if !composed.user_intent.trim().is_empty() {
         composed.user_intent.clone()
     } else {
         composed.activity_type.clone()
@@ -533,6 +556,7 @@ async fn compose_visual_capture_record(
     );
     let raw_evidence = upsert_embedding_manifest(&json!({
         "source_kind": "visual_capture",
+        "source_evidence": source_evidence,
         "vision_model_id": insight.model_id,
         "semantic_confidence": insight.confidence,
         "synthesis_branch": synthesis_branch,
@@ -1289,6 +1313,7 @@ fn validate_structured_memory_extraction(
     app_name: &str,
     window_title: &str,
     clean_text: &str,
+    source_text: &str,
 ) -> (f32, Vec<String>) {
     let evidence_norm = normalize_evidence_text(&format!("{app_name} {window_title} {clean_text}"));
     let mut issues = Vec::new();
@@ -1380,6 +1405,9 @@ fn validate_structured_memory_extraction(
         issues.push("possible_ungrounded_extraction".to_string());
     }
 
+    // Fusion/browser seeds may refill model-rejected intent/action fields. Check
+    // against the exact model input snapshot, not the differently cleaned OCR.
+    issues.extend(validate_source_evidence(extraction, source_text));
     extraction.confidence = extraction.confidence.clamp(0.0, 1.0);
     (grounding_confidence, issues)
 }
@@ -3432,7 +3460,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let validate_started = Instant::now();
         let (mut extraction_grounding_confidence, mut extraction_issues) =
             if let Some(memory) = structured_memory.as_mut() {
-                validate_structured_memory_extraction(memory, &app_name, &window_title, &text)
+                validate_structured_memory_extraction(
+                    memory,
+                    &app_name,
+                    &window_title,
+                    &text,
+                    &qwen_cleaned_text,
+                )
             } else {
                 (0.0, vec!["structured_extraction_unavailable".to_string()])
             };
@@ -3498,7 +3532,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 );
                 let validate_started = Instant::now();
                 let validated = if let Some(memory) = structured_memory.as_mut() {
-                    validate_structured_memory_extraction(memory, &app_name, &window_title, &text)
+                    validate_structured_memory_extraction(
+                        memory,
+                        &app_name,
+                        &window_title,
+                        &text,
+                        &qwen_cleaned_text,
+                    )
                 } else {
                     (0.0, vec!["structured_extraction_unavailable".to_string()])
                 };
@@ -3859,7 +3899,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             user_intent: structured_memory
                 .as_ref()
                 .map(|m| {
-                    if m.user_intent.trim().is_empty() {
+                    if m.source_evidence.is_some() {
+                        String::new()
+                    } else if m.user_intent.trim().is_empty() {
                         m.activity_type.clone()
                     } else {
                         m.user_intent.clone()
@@ -4243,6 +4285,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 },
                 "raw_pixels_persisted": false,
             },
+            "source_evidence": structured_memory.as_ref().and_then(|m| m.source_evidence.as_ref()),
             "extraction_grounding_confidence": extraction_grounding_confidence,
             "extraction_issues": extraction_issues.clone(),
             "primary_embed_input": primary_embed_input.chars().take(900).collect::<String>(),
@@ -4315,7 +4358,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             user_intent: structured_memory
                 .as_ref()
                 .map(|m| {
-                    if m.user_intent.trim().is_empty() {
+                    if m.source_evidence.is_some() {
+                        String::new()
+                    } else if m.user_intent.trim().is_empty() {
                         m.activity_type.clone()
                     } else {
                         m.user_intent.clone()
@@ -5139,6 +5184,25 @@ pub(crate) async fn merge_memory_records_with_policy(
     recompute_embedding: bool,
     allow_llm_summary: bool,
 ) -> MemoryRecord {
+    let raw_evidence = merge_text_source_evidence(&existing.raw_evidence, &incoming.raw_evidence);
+    let source_backed = has_source_evidence(&raw_evidence);
+    // Historical model guesses must not become pending work merely because a
+    // source-backed observation merges into an older record (in either order).
+    let user_intent = if source_backed {
+        String::new()
+    } else {
+        prefer_non_empty(&incoming.user_intent, &existing.user_intent)
+    };
+    let todos = if source_backed {
+        Vec::new()
+    } else {
+        merge_string_lists(&existing.todos, &incoming.todos)
+    };
+    let next_steps = if source_backed {
+        Vec::new()
+    } else {
+        merge_string_lists(&existing.next_steps, &incoming.next_steps)
+    };
     let merged_clean_text = merge_story_text(&existing.clean_text, &incoming.clean_text, 6400);
     let snippet_fallback = merge_story_text(&existing.snippet, &incoming.snippet, 260);
     let llm_snippet = if allow_llm_summary {
@@ -5213,11 +5277,11 @@ pub(crate) async fn merge_memory_records_with_policy(
         source_type: prefer_non_empty(&incoming.source_type, &existing.source_type),
         topic: prefer_non_empty(&incoming.topic, &existing.topic),
         workflow: prefer_non_empty(&incoming.workflow, &existing.workflow),
-        user_intent: prefer_non_empty(&incoming.user_intent, &existing.user_intent),
+        user_intent: user_intent.clone(),
         memory_context: prefer_non_empty(&incoming.memory_context, &existing.memory_context),
         commands: merge_string_lists(&existing.commands, &incoming.commands),
         blockers: merge_string_lists(&existing.blockers, &incoming.blockers),
-        todos: merge_string_lists(&existing.todos, &incoming.todos),
+        todos: todos.clone(),
         open_questions: merge_string_lists(&existing.open_questions, &incoming.open_questions),
         results: merge_string_lists(&existing.results, &incoming.results),
         search_aliases: merge_string_lists(&existing.search_aliases, &incoming.search_aliases),
@@ -5229,7 +5293,7 @@ pub(crate) async fn merge_memory_records_with_policy(
         entities: merge_string_lists(&existing.entities, &incoming.entities),
         decisions: merge_string_lists(&existing.decisions, &incoming.decisions),
         errors: merge_string_lists(&existing.errors, &incoming.errors),
-        next_steps: merge_string_lists(&existing.next_steps, &incoming.next_steps),
+        next_steps: next_steps.clone(),
         outcome: prefer_non_empty(&incoming.outcome, &existing.outcome),
         extraction_confidence: existing
             .extraction_confidence
@@ -5344,7 +5408,6 @@ pub(crate) async fn merge_memory_records_with_policy(
     let entities = merge_string_lists(&existing.entities, &incoming.entities);
     let decisions = merge_string_lists(&existing.decisions, &incoming.decisions);
     let errors = merge_string_lists(&existing.errors, &incoming.errors);
-    let next_steps = merge_string_lists(&existing.next_steps, &incoming.next_steps);
     let git_stats = incoming.git_stats.clone().or(existing.git_stats.clone());
     let outcome = prefer_non_empty(&incoming.outcome, &existing.outcome);
     let extraction_confidence = existing
@@ -5398,7 +5461,6 @@ pub(crate) async fn merge_memory_records_with_policy(
         .insight_card_confidence
         .max(incoming.insight_card_confidence);
     let raw_evidence = {
-        let raw = merge_text_source_evidence(&existing.raw_evidence, &incoming.raw_evidence);
         if recompute_embedding {
             let manifest = build_embedding_manifest(
                 &merge_embedding_document,
@@ -5406,9 +5468,9 @@ pub(crate) async fn merge_memory_records_with_policy(
                 image_embedding_status(&incoming.image_embedding),
                 VisualSemanticSource::TextCapture,
             );
-            upsert_embedding_manifest(&raw, &manifest)
+            upsert_embedding_manifest(&raw_evidence, &manifest)
         } else {
-            raw
+            raw_evidence
         }
     };
 
@@ -5455,8 +5517,10 @@ pub(crate) async fn merge_memory_records_with_policy(
         source_type: prefer_non_empty(&incoming.source_type, &existing.source_type),
         topic: prefer_non_empty(&incoming.topic, &existing.topic),
         workflow: prefer_non_empty(&incoming.workflow, &existing.workflow),
-        user_intent: prefer_non_empty(&incoming.user_intent, &existing.user_intent),
-        intent_analysis: if incoming.intent_analysis.confidence
+        user_intent,
+        intent_analysis: if source_backed {
+            crate::storage::IntentAnalysis::default()
+        } else if incoming.intent_analysis.confidence
             >= existing.intent_analysis.confidence
         {
             incoming.intent_analysis.clone()
@@ -5466,7 +5530,7 @@ pub(crate) async fn merge_memory_records_with_policy(
         memory_context: prefer_non_empty(&incoming.memory_context, &existing.memory_context),
         commands: merge_string_lists(&existing.commands, &incoming.commands),
         blockers: merge_string_lists(&existing.blockers, &incoming.blockers),
-        todos: merge_string_lists(&existing.todos, &incoming.todos),
+        todos,
         open_questions: merge_string_lists(&existing.open_questions, &incoming.open_questions),
         results: merge_string_lists(&existing.results, &incoming.results),
         related_tools: merge_string_lists(&existing.related_tools, &incoming.related_tools),
@@ -5650,6 +5714,40 @@ fn merge_text_source_evidence(existing: &str, incoming: &str) -> String {
         kinds.first().copied().unwrap_or("unknown")
     });
     evidence["text_source_kinds"] = json!(kinds);
+    // References remain relative to each original snapshot; merging text must
+    // never reinterpret an older line number against the concatenated record.
+    // Latest metadata wins for a repeated hash, including rejected statements.
+    let mut snapshots = source_evidence_sets_from_raw(incoming);
+    snapshots.extend(source_evidence_sets_from_raw(existing));
+    let mut seen = HashSet::new();
+    snapshots.retain(|snapshot| seen.insert(snapshot.source_sha256.clone()));
+    snapshots.truncate(4);
+    let incoming_raw = serde_json::from_str::<serde_json::Value>(incoming).unwrap_or_default();
+    let existing_raw = serde_json::from_str::<serde_json::Value>(existing).unwrap_or_default();
+    // Keep an unsupported current contract as current, rather than silently
+    // substituting a parsed historical snapshot or reverting to legacy fields.
+    let current_marker = [&incoming_raw, &existing_raw].into_iter().find_map(|raw| {
+        raw.get("source_evidence").filter(|value| value.is_object())
+    });
+    if let Some(current) = current_marker {
+        evidence["source_evidence"] = current.clone();
+        if let Some(hash) = current.get("source_sha256").and_then(|value| value.as_str()) {
+            snapshots.retain(|snapshot| snapshot.source_sha256 != hash);
+        }
+        snapshots.truncate(3);
+        evidence["source_evidence_history"] = json!(snapshots);
+    } else if let Some(current) = snapshots.first() {
+        evidence["source_evidence"] = json!(current);
+        evidence["source_evidence_history"] = json!(&snapshots[1..]);
+    } else if let Some(history) = [&incoming_raw, &existing_raw].into_iter().find_map(|raw| {
+        raw.get("source_evidence_history")
+            .and_then(|value| value.as_array())
+            .filter(|values| !values.is_empty())
+    }) {
+        // Even unreadable historical evidence is a managed-record marker. Do
+        // not remove that boundary just because no quotes can be exposed.
+        evidence["source_evidence_history"] = json!(history.iter().take(3).collect::<Vec<_>>());
+    }
     evidence.to_string()
 }
 
@@ -7130,6 +7228,118 @@ Activity patterns and insights dashboard
         assert!(entities.iter().any(|e| e.eq_ignore_ascii_case("Obsidian")));
     }
 
+    fn source_evidence_fixture(index: u8) -> serde_json::Value {
+        json!({
+            "version": 1,
+            "source_sha256": format!("{index:064x}"),
+            "statements": [{"kind": "action", "line": 2, "quote": format!("Alex: please review item {index}.")}],
+            "issues": []
+        })
+    }
+
+    #[tokio::test]
+    async fn source_backed_merge_does_not_resurrect_legacy_intent_or_actions() {
+        for source_first in [false, true] {
+            let mut sourced = merge_test_record("sourced");
+            sourced.raw_evidence = json!({
+                "source_kind": "ax",
+                "source_evidence": source_evidence_fixture(1),
+            }).to_string();
+            sourced.user_intent.clear();
+            sourced.todos.clear();
+            sourced.next_steps.clear();
+            let mut legacy = merge_test_record("legacy");
+            legacy.user_intent = "Invented launch strategy".into();
+            legacy.intent_analysis.intent_label = "Invented launch strategy".into();
+            legacy.intent_analysis.confidence = 0.99;
+            legacy.todos = vec!["Invented deploy obligation".into()];
+            legacy.next_steps = vec!["Invented funding action".into()];
+            let (existing, incoming) = if source_first {
+                (sourced, legacy)
+            } else {
+                (legacy, sourced)
+            };
+            let merged =
+                merge_memory_records_with_policy(existing, incoming, None, None, true, false).await;
+            assert!(merged.user_intent.is_empty(), "source_first={source_first}");
+            assert!(merged.todos.is_empty());
+            assert!(merged.next_steps.is_empty());
+            assert!(merged.intent_analysis.intent_label.is_empty());
+            assert_eq!(merged.intent_analysis.confidence, 0.0);
+            assert!(!merged.embedding_text.contains("Invented"));
+            let raw: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+            assert_eq!(raw["source_evidence"], source_evidence_fixture(1));
+            assert!(!merged.internal_context.contains("Next:"));
+            assert!(!merged.internal_context.contains("Intent:"));
+        }
+    }
+
+    #[test]
+    fn source_backed_visual_fallback_retains_observation_metadata() {
+        let source = "Alex: please review the parser tests.";
+        let mut extraction = StructuredMemoryExtraction {
+            topic: "Parser tests".into(),
+            memory_context: "The parser test discussion is visible.".into(),
+            ..Default::default()
+        };
+        extraction.source_refs.actions = vec![json!(1)];
+        crate::inference::extraction_evidence::finalize_extraction(&mut extraction, source);
+        let (insight, evidence) = visual_insight_from_structured(&extraction);
+        assert_eq!(
+            serde_json::to_value(evidence).unwrap(),
+            serde_json::to_value(extraction.source_evidence).unwrap()
+        );
+        assert!(insight.actions.is_empty());
+        assert!(!insight.summary_detailed.contains(source));
+        assert_eq!(insight.summary_short, "Parser tests");
+    }
+
+    #[tokio::test]
+    async fn source_backed_merge_keeps_unsupported_contract_protected() {
+        for with_history in [false, true] {
+            let mut protected = merge_test_record("protected");
+            let unsupported = json!({"version": 99, "source_sha256": format!("{:064x}", 7)});
+            protected.raw_evidence = json!({
+                "source_evidence": unsupported,
+                "source_evidence_history": if with_history { vec![source_evidence_fixture(1)] } else { Vec::new() },
+            }).to_string();
+            let mut legacy = merge_test_record("legacy");
+            legacy.raw_evidence = json!({"source_kind": "ocr"}).to_string();
+            legacy.user_intent = "Invented intent".into();
+            legacy.next_steps = vec!["Invented next step".into()];
+            let merged = merge_memory_records_with_policy(protected, legacy, None, None, false, false).await;
+            assert!(has_source_evidence(&merged.raw_evidence));
+            assert!(merged.user_intent.is_empty());
+            assert!(merged.next_steps.is_empty());
+            let raw: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+            assert_eq!(raw["source_evidence"], unsupported);
+            if with_history {
+                assert_eq!(raw["source_evidence_history"], json!([source_evidence_fixture(1)]));
+            }
+        }
+    }
+
+    #[test]
+    fn source_backed_merge_preserves_bounded_original_snapshots() {
+        let mut raw = json!({"source_evidence": source_evidence_fixture(1)}).to_string();
+        for index in 2..=6 {
+            let incoming = json!({"source_evidence": source_evidence_fixture(index)}).to_string();
+            raw = merge_text_source_evidence(&raw, &incoming);
+            // Repeated observations must not consume the bounded history again.
+            raw = merge_text_source_evidence(&raw, &incoming);
+        }
+        let evidence: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(evidence["source_evidence"], source_evidence_fixture(6));
+        let history = evidence["source_evidence_history"].as_array().unwrap();
+        assert_eq!(history.len(), 3);
+        for index in 3..=5 {
+            assert!(
+                history.contains(&source_evidence_fixture(index)),
+                "missing original snapshot {index}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn merge_preserves_text_source_lineage_across_repeated_merges() {
         let mut existing = merge_test_record("existing");
@@ -7322,6 +7532,56 @@ Activity patterns and insights dashboard
     }
 
     #[test]
+    fn source_backed_validator_checks_original_snapshot_after_fusion() {
+        use crate::inference::extraction_evidence::finalize_extraction;
+        let original_source = "Alex: please review the parser tests.";
+        let mut extraction = StructuredMemoryExtraction {
+            confidence: 0.95,
+            topic: "parser tests".into(),
+            ..Default::default()
+        };
+        extraction.source_refs.actions = vec![json!(1)];
+        finalize_extraction(&mut extraction, original_source);
+        // A browser/fusion seed can fill fields after model finalization.
+        extraction.user_intent = "review the parser tests".into();
+        extraction.todos = vec!["review the parser tests".into()];
+        extraction.next_steps = vec!["review the parser tests".into()];
+        let (_, issues) = validate_structured_memory_extraction(
+            &mut extraction,
+            "Editor",
+            "parser tests",
+            "parser tests cleaned differently",
+            original_source,
+        );
+        assert!(extraction.user_intent.is_empty());
+        assert!(extraction.todos.is_empty() && extraction.next_steps.is_empty());
+        assert_eq!(
+            extraction.source_evidence.as_ref().unwrap().statements.len(),
+            1
+        );
+        assert!(!issues
+            .iter()
+            .any(|issue| issue == "source_evidence_hash_mismatch"));
+
+        let (_, issues) = validate_structured_memory_extraction(
+            &mut extraction,
+            "Editor",
+            "parser tests",
+            original_source,
+            "A changed model source snapshot.",
+        );
+        assert!(issues
+            .iter()
+            .any(|issue| issue == "source_evidence_hash_mismatch"));
+        assert!(extraction
+            .source_evidence
+            .as_ref()
+            .unwrap()
+            .statements
+            .is_empty());
+    }
+
+    #[test]
     fn extraction_validator_strips_unsupported_fields_when_low_confidence() {
         let mut extraction = StructuredMemoryExtraction {
             confidence: 0.42,
@@ -7339,6 +7599,7 @@ Activity patterns and insights dashboard
             "Google Chrome",
             "Random docs page",
             "Navigation links and generic toolbar labels",
+            "",
         );
 
         assert!(grounding < 0.55);
@@ -7377,6 +7638,7 @@ Activity patterns and insights dashboard
             "Codex",
             "memory_cards.rs",
             "Improved memory card search ranking quality in src-tauri/src/search/memory_cards.rs using MemoryCardSynthesizer",
+            "",
         );
 
         assert!(grounding > 0.80);
@@ -7620,6 +7882,7 @@ Activity patterns and insights dashboard
             "Chrome",
             "title",
             "valid topic appeared in evidence",
+            "",
         );
         assert_eq!(extraction.activity_type, "unknown");
         assert!(
@@ -7639,8 +7902,13 @@ Activity patterns and insights dashboard
             user_intent: "intent|other".to_string(),
             ..Default::default()
         };
-        let (_, issues) =
-            validate_structured_memory_extraction(&mut extraction, "App", "Title", "Evidence body");
+        let (_, issues) = validate_structured_memory_extraction(
+            &mut extraction,
+            "App",
+            "Title",
+            "Evidence body",
+            "",
+        );
         assert!(extraction.topic.is_empty());
         assert!(extraction.workflow.is_empty());
         assert!(extraction.user_intent.is_empty());

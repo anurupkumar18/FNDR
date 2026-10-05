@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import type { MemoryCard } from "@/shared/ipc/tauri";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
-import { fndrGetMemorySubgraph, fndrGetRelatedMemories } from "@/shared/ipc/tauri";
+import { fndrGetMemorySourceStatements, fndrGetMemorySubgraph, fndrGetRelatedMemories } from "@/shared/ipc/tauri";
 
 vi.mock("@/shared/ipc/tauri", () => ({
+    fndrGetMemorySourceStatements: vi.fn().mockResolvedValue([]),
     fndrBuildContextPack: vi.fn().mockResolvedValue({}),
     fndrGetMemorySubgraph: vi.fn(),
     fndrGetRelatedMemories: vi.fn(),
@@ -27,9 +28,56 @@ const card: MemoryCard = {
 afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.mocked(fndrGetMemorySourceStatements).mockResolvedValue([]);
 });
 
 describe("ExpandedMemoryCard", () => {
+    it("shows exact observed quotes as text with snapshot citations and uncertainty", async () => {
+        const quote = '<script>alert("sample")</script>\nDiscuss the possible release.';
+        vi.mocked(fndrGetMemorySourceStatements).mockResolvedValue([{
+            memory_ids: ["canonical-memory"], kind: "intent", quote,
+            line: 7, source_sha256: "a".repeat(64),
+        }]);
+        vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
+        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({ seed_ids: [], node_count: 0, edge_count: 0 });
+        const { container } = render(<ExpandedMemoryCard card={card} onClose={() => {}} />);
+
+        await screen.findByText("Observed statement; ownership and status unverified.");
+        expect(container.querySelector("blockquote")?.textContent).toBe(quote);
+        expect(container.querySelector("script")).toBeNull();
+        expect(screen.getByText(/Memory canonical-memory · line 7 · snapshot aaaaaaaaaaaa/)).toHaveAttribute("title", expect.stringContaining("a".repeat(64)));
+        expect(fndrGetMemorySourceStatements).toHaveBeenCalledWith(card.id);
+    });
+
+    it("does not replace the current memory's statements with a late previous response", async () => {
+        type Statements = Awaited<ReturnType<typeof fndrGetMemorySourceStatements>>;
+        let finishFirst!: (statements: Statements) => void;
+        const first = new Promise<Statements>((resolve) => { finishFirst = resolve; });
+        const statement = (quote: string) => ({ memory_ids: ["memory-next"], kind: "action", quote, line: 1, source_sha256: "b".repeat(64) });
+        vi.mocked(fndrGetMemorySourceStatements).mockReturnValueOnce(first).mockResolvedValueOnce([statement("Current source quote")]);
+        vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
+        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({ seed_ids: [], node_count: 0, edge_count: 0 });
+        const { rerender } = render(<ExpandedMemoryCard card={card} onClose={() => {}} />);
+        expect(screen.getByText("Loading observed statements…")).toBeTruthy();
+        rerender(<ExpandedMemoryCard card={{ ...card, id: "memory-next" }} onClose={() => {}} />);
+        await screen.findByText("Current source quote");
+        await act(async () => { finishFirst([statement("Old source quote")]); });
+        expect(screen.queryByText("Old source quote")).toBeNull();
+        expect(screen.getByText("Current source quote")).toBeTruthy();
+    });
+
+    it("distinguishes an unavailable source read from an empty one", async () => {
+        vi.mocked(fndrGetMemorySourceStatements).mockRejectedValueOnce(new Error("unavailable")).mockResolvedValueOnce([]);
+        vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
+        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({ seed_ids: [], node_count: 0, edge_count: 0 });
+        const { rerender } = render(<ExpandedMemoryCard card={card} onClose={() => {}} />);
+        await screen.findByText("Observed statements unavailable.");
+        rerender(<ExpandedMemoryCard card={{ ...card, id: "empty" }} onClose={() => {}} />);
+        await waitFor(() => expect(screen.queryByText("Loading observed statements…")).toBeNull());
+        expect(screen.queryByText("Observed statements unavailable.")).toBeNull();
+        expect(screen.queryByText("Observed statements")).toBeNull();
+    });
+
     it.each([true, false])("shows each related memory's reason and author (interactive: %s)", async (interactive) => {
         vi.mocked(fndrGetRelatedMemories).mockResolvedValue([
             {

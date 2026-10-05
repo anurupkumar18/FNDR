@@ -573,6 +573,61 @@ fn normalize_record_for_index_strips_low_confidence_markers() {
     assert!(!normalized.display_summary.contains("[LOW_CONF]"));
 }
 
+#[tokio::test]
+async fn source_backed_storage_roundtrip_does_not_regenerate_intent_or_actions() {
+    let mut source = record(None, "Draft discussion", "Mira: I will review the draft after approval.");
+    source.memory_context = "A discussion about the draft and its approval condition.".into();
+    source.decisions = vec!["Wait for approval before review".into()];
+    source.errors = vec!["Approval is unavailable".into()];
+    source.next_steps = vec!["INVENTED_PENDING_TASK".into()];
+    source.todos = vec!["INVENTED_TODO".into()];
+    source.raw_evidence = serde_json::json!({"source_evidence": {
+        "version":1, "source_sha256":"a".repeat(64), "issues":[],
+        "statements":[{"kind":"action", "line":1,
+            "quote":"Mira: I will review the draft after approval."}]
+    }}).to_string();
+    let (_dir, store) = keyword_store(vec![source.clone()]).await;
+    let written = store.get_memory_by_id(&source.id).await.unwrap().unwrap();
+    assert!(written.user_intent.is_empty(), "storage inferred intent: {}", written.user_intent);
+    assert!(written.intent_analysis.intent_label.is_empty());
+    assert_eq!(written.intent_analysis.confidence, 0.0);
+    assert!(written.next_steps.is_empty());
+    assert!(written.todos.is_empty());
+    assert!(written.action_items.is_empty());
+    assert_eq!(written.memory_context, source.memory_context);
+    assert_eq!(written.decisions, source.decisions);
+    assert_eq!(written.errors, source.errors);
+    let evidence = crate::inference::extraction_evidence::source_evidence_sets_from_raw(&written.raw_evidence)
+        .into_iter().next().unwrap();
+    assert_eq!(evidence.statements[0].quote, "Mira: I will review the draft after approval.");
+}
+
+#[test]
+fn source_backed_normalization_clears_stale_intent_and_actions_even_with_invalid_marker() {
+    let mut source = record(None, "Draft discussion", "Mira discussed a conditional review.");
+    source.raw_evidence = r#"{"source_evidence":{"version":99}}"#.into();
+    source.user_intent = "Review draft".into();
+    source.intent_analysis.intent_label = "Review draft".into();
+    source.intent_analysis.confidence = 0.9;
+    source.intent_score = 0.9;
+    source.activity_type = "browsing".into();
+    source.next_steps = vec!["Review draft".into()];
+    source.todos = vec!["Review draft".into()];
+    source.action_items = vec![crate::storage::MemoryActionItem {
+        text: "Review draft".into(), status: "pending".into(), ..Default::default()
+    }];
+    let normalized = normalize_record_for_index(&source);
+    assert!(normalized.user_intent.is_empty());
+    assert!(normalized.intent_analysis.intent_label.is_empty());
+    assert_eq!(normalized.intent_analysis.confidence, 0.0);
+    assert_eq!(normalized.intent_score, 0.0);
+    assert!(!normalized.memory_context.contains("Intent:"));
+    assert!(!normalized.memory_context.contains("Next actions:"));
+    assert!(normalized.next_steps.is_empty());
+    assert!(normalized.todos.is_empty());
+    assert!(normalized.action_items.is_empty());
+}
+
 #[test]
 fn normalize_agent_note_preserves_literal_text_and_formatting() {
     let body = "Keep this code exactly:\n```python\nif ready:\n    print(\"[LOW_CONF]\")\n```\n\nKeep the final qualification.";

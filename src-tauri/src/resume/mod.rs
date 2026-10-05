@@ -4,6 +4,9 @@
 
 pub mod pack;
 
+use crate::inference::extraction_evidence::{
+    has_source_evidence, render_source_statements, source_evidence_sets_from_raw,
+};
 use crate::storage::{MemoryRecord, Store};
 use crate::tasks::extract_from_memory::{extract_task_candidates, TaskCandidate};
 use pack::{pack_within_budget, PackItem, PackResult};
@@ -62,9 +65,11 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
             topic.to_string()
         }
     };
+    let newest_source_backed = has_source_evidence(&newest.raw_evidence);
     let next_steps: Vec<String> = newest
         .next_steps
         .iter()
+        .filter(|_| !newest_source_backed)
         .map(|step| step.trim().to_string())
         .filter(|step| !step.is_empty())
         .collect();
@@ -81,9 +86,21 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
     let mut evidence = Vec::new();
     for record in &group {
         evidence.push(record.id.clone());
+        let source_backed = has_source_evidence(&record.raw_evidence);
+        for snapshot in source_evidence_sets_from_raw(&record.raw_evidence) {
+            let text = render_source_statements(&snapshot);
+            if !text.trim().is_empty() {
+                candidates.push(PackItem {
+                    memory_id: record.id.clone(),
+                    text,
+                    ts_ms: record.timestamp,
+                });
+            }
+        }
         for text in record
             .next_steps
             .iter()
+            .filter(|_| !source_backed)
             .chain(record.decisions.iter())
             .chain(record.errors.iter())
             .chain(std::iter::once(&record.memory_context))
@@ -93,7 +110,11 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
             }
             candidates.push(PackItem {
                 memory_id: record.id.clone(),
-                text: text.clone(),
+                text: if source_backed {
+                    format!("Generated context (unverified): {text}")
+                } else {
+                    text.clone()
+                },
                 ts_ms: record.timestamp,
             });
         }
@@ -180,6 +201,40 @@ mod tests {
             memory_context: "Looked at the merge decision path.".to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn source_backed_resume_packs_observations_without_suggesting_tasks() {
+        let mut observed = record("observed-chat", "Draft", 1_800_000_000_000);
+        let quote = "Mira: I will review the draft after approval.";
+        observed.next_steps = vec!["INVENTED_PENDING_TASK".into()];
+        observed.errors = vec!["The preview reported a validation failure.".into()];
+        observed.memory_context = "A chat discussed a draft review requiring approval.".into();
+        observed.raw_evidence = serde_json::json!({
+            "source_evidence": {
+                "version":1, "source_sha256":"a".repeat(64),
+                "statements":[{"kind":"action", "line":2, "quote":quote}],
+                "issues":[]
+            }
+        })
+        .to_string();
+        let thread = build_thread(vec![observed], 1_800_000_060_000, 1000);
+        assert!(thread.next_steps.is_empty());
+        assert!(thread.suggested_next_steps.is_empty());
+        let packed = serde_json::to_string(&thread.pack).unwrap();
+        assert!(packed.contains(quote));
+        assert!(
+            packed.contains("observed-chat"),
+            "pack retains its memory citation"
+        );
+        assert!(
+            packed.contains("A chat discussed a draft review requiring approval."),
+            "useful descriptive context remains available"
+        );
+        assert!(
+            !packed.contains("INVENTED_PENDING_TASK"),
+            "stale next steps must not re-enter the resume pack"
+        );
     }
 
     #[test]

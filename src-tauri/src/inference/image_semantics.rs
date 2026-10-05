@@ -1811,6 +1811,8 @@ mod tests {
     #[test]
     fn insight_from_structured_maps_topic_and_entities() {
         let structured = crate::inference::StructuredMemoryExtraction {
+            source_refs: Default::default(),
+            source_evidence: None,
             session_key: String::new(),
             activity_type: "coding".to_string(),
             project: String::new(),

@@ -92,6 +92,50 @@ pub async fn retrieve(
     Ok(retrieve_with_fused(state, request).await.0)
 }
 
+pub(super) fn memory_is_visible(record: &MemoryRecord, blocklist: &[String]) -> bool {
+    // Notes are admitted against title, body and project; later rules must
+    // apply to those same retained fields when following their links.
+    let context = if record.is_agent_note() {
+        format!(
+            "{}\n{}\n{}",
+            record.window_title, record.clean_text, record.project
+        )
+    } else {
+        record.window_title.clone()
+    };
+    !record.is_soft_deleted
+        && crate::memory_quality::record_low_signal_reason(record).is_none()
+        && !crate::privacy::Blocklist::is_internal_app(
+            &record.app_name,
+            record.bundle_id.as_deref(),
+        )
+        && !crate::privacy::Blocklist::is_blocked(&record.app_name, blocklist)
+        && !crate::privacy::Blocklist::is_context_blocked(
+            record.url.as_deref(),
+            Some(&context),
+            blocklist,
+        )
+}
+
+pub async fn memory_source_statements(
+    state: &AppState,
+    memory_id: &str,
+) -> Result<Vec<crate::context_runtime::context_pack::SourceStatementRef>, String> {
+    let Some(record) = state
+        .store
+        .get_memory_by_id(memory_id)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(Vec::new());
+    };
+    let blocklist = state.config.read().blocklist.clone();
+    if !memory_is_visible(&record, &blocklist) {
+        return Ok(Vec::new());
+    }
+    Ok(crate::context_runtime::evidence_pack::source_statements_for_record(&record))
+}
+
 /// Resolve persisted peer links before considering similar context. Links are
 /// directed evidence from the source row, not inferred graph edges. A missing
 /// or excluded linked target is never replaced with a similarity suggestion.
@@ -115,31 +159,7 @@ pub async fn related_memories(
         return Ok(Vec::new());
     };
     let blocklist = state.config.read().blocklist.clone();
-    let visible = |record: &MemoryRecord| {
-        // Notes are admitted against title, body and project; later rules must
-        // apply to those same retained fields when following their links.
-        let context = if record.is_agent_note() {
-            format!(
-                "{}\n{}\n{}",
-                record.window_title, record.clean_text, record.project
-            )
-        } else {
-            record.window_title.clone()
-        };
-        !record.is_soft_deleted
-            && crate::memory_quality::record_low_signal_reason(record).is_none()
-            && !crate::privacy::Blocklist::is_internal_app(
-                &record.app_name,
-                record.bundle_id.as_deref(),
-            )
-            && !crate::privacy::Blocklist::is_blocked(&record.app_name, &blocklist)
-            && !crate::privacy::Blocklist::is_context_blocked(
-                record.url.as_deref(),
-                Some(&context),
-                &blocklist,
-            )
-    };
-    if !visible(&seed) {
+    if !memory_is_visible(&seed, &blocklist) {
         return Ok(Vec::new());
     }
 
@@ -170,9 +190,9 @@ pub async fn related_memories(
                     .await
                     .map_err(|e| e.to_string())?,
             };
-            if let Some(record) =
-                record.filter(|record| visible(record) && canonical_ids.insert(record.id.clone()))
-            {
+            if let Some(record) = record.filter(|record| {
+                memory_is_visible(record, &blocklist) && canonical_ids.insert(record.id.clone())
+            }) {
                 records.push(record);
             }
         }
@@ -223,7 +243,7 @@ pub async fn related_memories(
         .iter()
         .filter_map(|hit| {
             let record = retrieval.records.get(&hit.memory_id)?;
-            if !visible(record) || !seen.insert(record.id.clone()) {
+            if !memory_is_visible(record, &blocklist) || !seen.insert(record.id.clone()) {
                 return None;
             }
             let mut card =
@@ -479,6 +499,118 @@ fn matched_terms(terms: &[String], text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source_statement_test_state(path: &std::path::Path) -> AppState {
+        let store = std::sync::Arc::new(crate::storage::Store::new(path).unwrap());
+        let state_store = std::sync::Arc::new(crate::storage::StateStore::new(path).unwrap());
+        let graph = crate::graph::GraphStore::new(store.clone());
+        AppState::new(
+            path.to_path_buf(),
+            crate::config::Config::default(),
+            store,
+            state_store,
+            graph,
+            None,
+            None,
+        )
+    }
+
+    fn source_statement_record(id: &str) -> MemoryRecord {
+        let text = "Reviewed the deployment checklist and recorded release verification evidence.";
+        MemoryRecord {
+            id: id.into(), app_name: "Editor".into(), window_title: "Release checklist".into(),
+            text: text.into(), clean_text: text.into(), snippet: text.into(), memory_context: text.into(),
+            raw_evidence: serde_json::json!({
+                "source_evidence": {"version":1,"source_sha256":"a".repeat(64),"statements":[{"kind":"action","line":3,"quote":"Check the release evidence."}],"issues":[]},
+                "source_evidence_history":[{"version":1,"source_sha256":"b".repeat(64),"statements":[{"kind":"intent","line":1,"quote":"We discussed a possible rollback."}],"issues":[]}]
+            }).to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn selected_source_statements_resolve_aliases_and_preserve_snapshot_citations() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = source_statement_test_state(dir.path());
+        let mut record = source_statement_record("survivor");
+        record.consolidated_from = vec!["earlier-frame".into()];
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&[record]))
+            .unwrap();
+        let statements = runtime
+            .block_on(memory_source_statements(&state, "earlier-frame"))
+            .unwrap();
+        assert_eq!(statements.len(), 2);
+        assert!(statements.iter().all(|s| s.memory_ids == ["survivor"]));
+        assert!(statements
+            .iter()
+            .any(|s| s.quote == "Check the release evidence."
+                && s.line == 3
+                && s.source_sha256 == "a".repeat(64)));
+        assert!(statements
+            .iter()
+            .any(|s| s.quote == "We discussed a possible rollback."
+                && s.line == 1
+                && s.source_sha256 == "b".repeat(64)));
+    }
+
+    #[test]
+    fn selected_source_statements_hide_missing_deleted_internal_low_signal_and_blocked_rows() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = source_statement_test_state(dir.path());
+        let kinds = [
+            "deleted",
+            "internal",
+            "low-signal",
+            "blocked-app",
+            "blocked-title",
+            "blocked-url",
+            "blocked-note-body",
+            "blocked-note-project",
+        ];
+        let rows = kinds
+            .iter()
+            .map(|kind| {
+                let mut record = source_statement_record(kind);
+                match *kind {
+                    "deleted" => record.is_soft_deleted = true,
+                    "internal" => record.bundle_id = Some("com.fndr.app".into()),
+                    "low-signal" => record.storage_outcome = "visual_semantics_failed".into(),
+                    "blocked-app" => record.app_name = "PrivateWorkspace".into(),
+                    "blocked-title" => record.window_title = "PrivateWorkspace planning".into(),
+                    "blocked-url" => {
+                        record.url = Some("https://privateworkspace.example/notes".into())
+                    }
+                    "blocked-note-body" => {
+                        record.source_type = "agent".into();
+                        record.clean_text =
+                            "PrivateWorkspace project plans remain under discussion.".into();
+                    }
+                    "blocked-note-project" => {
+                        record.source_type = "agent".into();
+                        record.project = "PrivateWorkspace".into();
+                    }
+                    _ => unreachable!(),
+                }
+                record
+            })
+            .collect::<Vec<_>>();
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&rows))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+        for id in kinds.into_iter().chain(["missing"]) {
+            assert!(
+                runtime
+                    .block_on(memory_source_statements(&state, id))
+                    .unwrap()
+                    .is_empty(),
+                "{id}"
+            );
+        }
+    }
 
     fn terms(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()

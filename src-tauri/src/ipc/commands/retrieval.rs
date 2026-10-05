@@ -102,6 +102,14 @@ pub async fn fndr_get_memory_subgraph(
 }
 
 #[tauri::command]
+pub async fn fndr_get_memory_source_statements(
+    state: State<'_, Arc<AppState>>,
+    memory_id: String,
+) -> Result<Vec<crate::context_runtime::context_pack::SourceStatementRef>, String> {
+    crate::context_runtime::memory_source_statements(state.inner(), &memory_id).await
+}
+
+#[tauri::command]
 pub async fn fndr_get_related_memories(
     state: State<'_, Arc<AppState>>,
     memory_id: String,

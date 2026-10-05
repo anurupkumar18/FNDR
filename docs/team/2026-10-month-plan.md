@@ -29,6 +29,8 @@ The full scope has five outcomes: useful screen-context extraction with local mo
 
 The related-memory follow-up now resolves persisted `related_memory_ids` through the same Vault/MCP boundary after restart, including consolidation aliases and current exclusion rules. Stored links are identified separately from fallback similarity; assistant notes retain their author and only expose explicit references. This is a bounded one-hop relationship view, not completed graph traversal. Live board inspection still showed Minh's EM-09 migration Ready; preserve that assignment and prepare shared-model integration and acceptance evidence alongside it.
 
+The next extraction slice replaces generated intent/tasks with exact observed source statements for new text extractions. Snapshot citations survive capture, merge, storage and review, and appear separately in Vault details and agent evidence. Descriptive summaries remain unverified; legacy records and actual pixel inference are not rewritten. Shared model migration, native usefulness and broader retrieval card/debug visibility still require their own checks; see the dated evidence report for results and remaining limits.
+
 ## 1. What we are building, in one sentence
 
 FNDR is the work memory for your Mac: find anything you have seen by what it meant, reopen it exactly where you were, act on it with a quick command or your voice, and share that memory with your AI assistants, with everything that leaves your Mac visible to you.
@@ -75,7 +77,7 @@ Cross-cutting acceptance: VS-58 to VS-61 cover egress, credentials, secret handl
 | Search p95 latency at 10,000 memories | not measured | 500 ms or lower |
 | Memories that reopen to the exact page or file | 10% | 90% of a live day |
 | Median stored text per memory | 129 characters | 800 or more |
-| Memories with a project and next steps | 0% | 60% or more |
+| Source-backed action coverage | not measured | Retain explicit action statements with citations; assess recall on labeled cases, without requiring a task on passive captures |
 | Memories with chunk-level vectors | 0 rows | every memory |
 | Voice: first partial text, final text after release | none, several seconds | 0.5 s, 1 s |
 | Voice commands done correctly on a 50-utterance script | not possible | 45 of 50 |
@@ -127,7 +129,7 @@ Pending the batched native QA session. The originally scheduled September pass d
 
 Independent slices may overlap; these stages express dependencies, not six serial projects. Recheck branch/ownership state before each slice rather than treating this plan as a live board.
 
-**Immediate local queue, updated October 5:** cloud security, shared retrieval, inactive Gemma correctness and default-off agent notes are integrated; published local slices also cover capture-source lineage, persisted related links, shared model sessions and bounded query scheduling (`2780932`). The combined synthetic Qwen/Gemma experiment completed with 228 ms query median, but both processes aborted during known Metal teardown and extraction outputs contained unsupported intent/actions and a wrong row count. Blocking inference now owns its shared context through completion, including waiter cancellation and external engine release; real-model lifetime assertions pass but the known teardown abort remains. Next: strengthen extraction grounding through existing tests/evaluators, then measure pixel/whole-app behavior and implement actual unload with safe ownership. Gemma remains inactive; preserve Minh's EM-09 and Kunj's lifecycle/scheduling ownership and integrate their work. Check live branches and board state at each boundary; no reassignment or board-status change is implied. Current methods and limits are recorded in the one-page status, ADR 019 and October 5 evidence file.
+**Immediate local queue, updated October 5:** cloud integration, capture provenance, persisted related links, shared model sessions, bounded query scheduling and owned blocking inference are implemented. New text-extraction observations now retain source citations through storage/review and human/agent reads, with canonical intent/tasks suppressed and oversized extraction prompts rejected intact. The compact prompt parses the eight development fixtures, but larger-chat quote recall and generated-summary contradictions remain open. Next: close shared retrieval card/debug visibility gaps, then test constrained source selection and narrative quality with Kunj's LM-05 boundary, followed by pixel/whole-app measurements and safe unloading. Gemma remains inactive; preserve Minh's EM-09 and Kunj's lifecycle/scheduling ownership. Check live branches and board state at integration boundaries; no reassignment or board-status change is implied. Current results and limitations are in the one-page status and October 5 evidence file.
 
 Architecture records should be amended with the implementing slice: ADRs 002/008/019 for the embedding contract and migration; ADR-018 for resource-aware local-first reasoning; and the command-surface contract for bounded UI automation. A graph decision should define persisted traversal, provenance, deletion and query limits using the existing stores. Do not create another framework or roadmap to hold these decisions.
 

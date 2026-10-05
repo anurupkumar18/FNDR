@@ -205,6 +205,14 @@ export interface ErrorRef { error: string; memory_ids: string[] }
 export interface TaskRef { task: string; memory_ids: string[] }
 export interface UrlRef { url: string; memory_ids: string[] }
 
+export interface SourceStatementRef {
+    memory_ids: string[];
+    kind: string;
+    quote: string;
+    source_sha256: string;
+    line: number;
+}
+
 export interface EvidencePack {
     files: FileRef[];
     commands: CommandRef[];
@@ -212,6 +220,7 @@ export interface EvidencePack {
     errors: ErrorRef[];
     todos: TaskRef[];
     urls: UrlRef[];
+    source_statements?: SourceStatementRef[];
 }
 
 export type VerifyOutcome =
@@ -256,6 +265,10 @@ export async function fndrGetRelatedMemories(
     limit?: number,
 ): Promise<MemoryCard[]> {
     return invoke("fndr_get_related_memories", { memoryId, limit });
+}
+
+export async function fndrGetMemorySourceStatements(memoryId: string): Promise<SourceStatementRef[]> {
+    return invoke("fndr_get_memory_source_statements", { memoryId });
 }
 
 export async function fndrGetMemorySubgraph(
