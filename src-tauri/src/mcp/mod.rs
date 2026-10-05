@@ -1,4 +1,4 @@
-//! MCP server for FNDR — local-first with secure tunnel/public deployment modes.
+//! MCP server for FNDR: local-first with secure tunnel/public deployment modes.
 //!
 //! Features:
 //!  - Deployment modes: local (default), tunnel, public
@@ -1004,7 +1004,7 @@ fn unauthorized_jsonrpc_item(payload: &Value) -> Option<Value> {
 // Route handlers
 // ---------------------------------------------------------------------------
 
-/// Unauthenticated probe — lets clients discover the server without a token.
+/// Unauthenticated probe: lets clients discover the server without a token.
 async fn root_handler(State(state): State<Arc<HttpState>>) -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -1023,7 +1023,7 @@ async fn root_handler(State(state): State<Arc<HttpState>>) -> impl IntoResponse 
     )
 }
 
-/// GET /mcp — streamable HTTP-style SSE entrypoint.
+/// GET /mcp: streamable HTTP-style SSE entrypoint.
 async fn mcp_stream_handler(
     State(state): State<Arc<HttpState>>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
@@ -1033,7 +1033,7 @@ async fn mcp_stream_handler(
     sse_handler_inner(state, peer_addr, uri, headers, true).await
 }
 
-/// POST /mcp  and  POST /mcp/messages — localhost JSON-RPC handler.
+/// POST /mcp  and  POST /mcp/messages: localhost JSON-RPC handler.
 async fn mcp_handler(
     State(state): State<Arc<HttpState>>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
@@ -1084,7 +1084,7 @@ async fn mcp_handler(
     }
 }
 
-/// GET /mcp/sse — SSE streaming transport (MCP spec 2024-11-05).
+/// GET /mcp/sse: SSE streaming transport (MCP spec 2024-11-05).
 ///
 /// Sends an initial `endpoint` event pointing the client at POST /mcp/messages,
 /// then keeps the stream alive with periodic pings.
@@ -1888,7 +1888,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "get_ambient_context",
-                "description": "Return what the user is actively working on right now: frontmost app, recent memory snippets, and window context. Use this to give code editors, AI assistants, or other clients real-time awareness of the user's current task — the 'Time Machine for IDEs' feature.",
+                "description": "Return what the user is actively working on right now: frontmost app, recent memory snippets, and window context. Use this to give code editors, AI assistants, or other clients real-time awareness of the user's current task (the 'Time Machine for IDEs' feature).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -2429,14 +2429,15 @@ async fn run_search_memories(
     )
     .await
     .map_err(internal_tool_error)?;
-    let embedder = Embedder::new().map_err(internal_tool_error)?;
-    let results = HybridSearcher::search(
-        &app_state.store,
-        &embedder,
-        &args.query,
-        limit,
-        args.time_filter.as_deref(),
-        args.app_filter.as_deref(),
+    // The same ranked memories as the Search screen and Ask (VS-11).
+    let (_, results) = context_runtime::retrieve_search_results(
+        &app_state,
+        &context_runtime::RetrieveRequest {
+            query: args.query.clone(),
+            time: args.time_filter.clone(),
+            app: args.app_filter.clone(),
+            limit,
+        },
     )
     .await
     .map_err(internal_tool_error)?;
@@ -2464,10 +2465,16 @@ async fn run_ask_fndr(app_state: Arc<AppState>, args: AskFndrArgs) -> Result<Val
     .await
     .map_err(internal_tool_error)?;
 
-    let embedder = Embedder::new().map_err(internal_tool_error)?;
-    let results = HybridSearcher::search(&app_state.store, &embedder, &args.query, 8, None, None)
-        .await
-        .map_err(internal_tool_error)?;
+    let (_, results) = context_runtime::retrieve_search_results(
+        &app_state,
+        &context_runtime::RetrieveRequest {
+            query: args.query.clone(),
+            limit: 8,
+            ..Default::default()
+        },
+    )
+    .await
+    .map_err(internal_tool_error)?;
 
     if results.is_empty() && pack.evidence.is_empty() && pack.relevant_files.is_empty() {
         return Ok(tool_success(json!({
@@ -2676,7 +2683,7 @@ async fn run_fndr_health_check(app_state: Arc<AppState>) -> Result<Value, JsonRp
 }
 
 // ---------------------------------------------------------------------------
-// Phase 4 — fndr.* namespace handlers (thin wrappers over the Phase 3 pipeline)
+// Phase 4: fndr.* namespace handlers (thin wrappers over the Phase 3 pipeline)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, Deserialize)]
@@ -2936,34 +2943,34 @@ async fn run_memory_search_full_context(
     let limit = args.limit.clamp(1, 100);
     let time_window = parse_time_window_value(args.time_window.as_ref())?;
     let index_status = inspect_memory_index_status(&app_state).await?;
-    let embedder = Embedder::new().map_err(internal_tool_error)?;
 
-    let semantic_matches = filter_results_by_window(
-        HybridSearcher::search(
-            &app_state.store,
-            &embedder,
-            args.query.trim(),
+    // One ranked list from the shared retrieval path (VS-11); the keyword
+    // matches are the ones its keyword route found, in the same order.
+    let time = time_window.time_filter.clone().or_else(|| {
+        time_window.start_ms.map(|start| {
+            let end = time_window
+                .end_ms
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            format!("range:{start}:{}", end.saturating_add(1))
+        })
+    });
+    let (_, retrieved) = context_runtime::retrieve_search_results(
+        &app_state,
+        &context_runtime::RetrieveRequest {
+            query: args.query.trim().to_string(),
+            time,
+            app: None,
             limit,
-            time_window.time_filter.as_deref(),
-            None,
-        )
-        .await
-        .map_err(internal_tool_error)?,
-        &time_window,
-    );
-    let keyword_matches = filter_results_by_window(
-        app_state
-            .store
-            .keyword_search(
-                args.query.trim(),
-                limit,
-                time_window.time_filter.as_deref(),
-                None,
-            )
-            .await
-            .map_err(internal_tool_error)?,
-        &time_window,
-    );
+        },
+    )
+    .await
+    .map_err(internal_tool_error)?;
+    let semantic_matches = filter_results_by_window(retrieved, &time_window);
+    let keyword_matches = semantic_matches
+        .iter()
+        .filter(|result| result.matched_routes.iter().any(|route| route == "keyword"))
+        .cloned()
+        .collect::<Vec<_>>();
 
     let merged = dedupe_results_by_id(
         semantic_matches
@@ -5114,7 +5121,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::graph::GraphStore;
-    use crate::storage::{StateStore, Store};
+    use crate::storage::{MemoryRecord, StateStore, Store};
     use tempfile::tempdir;
 
     fn build_test_app_state() -> Arc<AppState> {
@@ -5133,6 +5140,137 @@ mod tests {
             None,
             None,
         ))
+    }
+
+    /// Four synthetic memories a few minutes old, for the search contract.
+    fn build_seeded_search_state(runtime: &tokio::runtime::Runtime) -> Arc<AppState> {
+        std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
+        let app_state = build_test_app_state();
+        let rows = [
+            (
+                "vendor",
+                "Slack",
+                "Vendor thread",
+                "The Zephyr vendor contract renews next quarter at the same price",
+            ),
+            (
+                "budget",
+                "Sheets",
+                "Budget review",
+                "Monthly budget review with budget lines for the design team",
+            ),
+            (
+                "standup",
+                "Zoom",
+                "Daily standup",
+                "Standup notes: deploy blocked on the staging database migration",
+            ),
+            (
+                "lunch",
+                "Slack",
+                "Lunch",
+                "Ordered sandwiches for the team lunch on Friday, contract caterer",
+            ),
+        ];
+        let texts = rows.iter().map(|row| row.3.to_string()).collect::<Vec<_>>();
+        let embeddings = crate::embedding::Embedder::new()
+            .expect("embedder")
+            .embed_batch(&texts)
+            .expect("embeddings");
+        let now = chrono::Utc::now().timestamp_millis();
+        let records = rows
+            .iter()
+            .zip(embeddings)
+            .enumerate()
+            .map(
+                |(index, ((id, app, title, text), embedding))| MemoryRecord {
+                    id: id.to_string(),
+                    timestamp: now - (index as i64 + 1) * 60_000,
+                    app_name: app.to_string(),
+                    window_title: title.to_string(),
+                    session_id: format!("session-{id}"),
+                    text: text.to_string(),
+                    clean_text: text.to_string(),
+                    snippet: text.to_string(),
+                    summary_source: "llm".to_string(),
+                    embedding: embedding.clone(),
+                    snippet_embedding: embedding,
+                    support_embedding: vec![0.0; crate::embedding::EMBEDDING_DIM],
+                    image_embedding: vec![0.0; crate::config::DEFAULT_IMAGE_EMBEDDING_DIM],
+                    decay_score: 1.0,
+                    ..Default::default()
+                },
+            )
+            .collect::<Vec<_>>();
+        runtime
+            .block_on(app_state.store.add_batch(&records))
+            .expect("add records");
+        app_state
+    }
+
+    #[test]
+    fn search_tools_return_the_search_screens_ids_in_its_order() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let app_state = build_seeded_search_state(&runtime);
+        let ids = |rows: &Value, key: &str| {
+            rows.as_array()
+                .expect("rows")
+                .iter()
+                .map(|row| row[key].as_str().expect("id").to_string())
+                .collect::<Vec<_>>()
+        };
+
+        // The last query carries an app phrase that every path must read
+        // the same way (VS-13).
+        for query in [
+            "zephyr contract",
+            "staging database migration",
+            "team lunch on Friday",
+            "the contract in Slack",
+        ] {
+            let screen = runtime
+                .block_on(crate::ipc::commands::search::search_ranked_results(
+                    &app_state, query, None, None, 10,
+                ))
+                .expect("search")
+                .into_iter()
+                .map(|result| result.id)
+                .collect::<Vec<_>>();
+            assert!(!screen.is_empty(), "{query}");
+            let call = |name: &str| {
+                runtime
+                    .block_on(call_tool(
+                        Some(json!({
+                            "name": name,
+                            "arguments": { "query": query, "limit": 10 }
+                        })),
+                        app_state.clone(),
+                    ))
+                    .expect(name)
+            };
+
+            let search_memories = call("search_memories");
+            assert_eq!(
+                ids(&search_memories["structuredContent"]["results"], "id"),
+                screen,
+                "search_memories: {query}"
+            );
+            let full_context = call("memory.search_full_context");
+            assert_eq!(
+                ids(
+                    &full_context["structuredContent"]["semantic_matches"],
+                    "memory_id"
+                ),
+                screen,
+                "memory.search_full_context: {query}"
+            );
+            let fndr_search = call("fndr.search");
+            assert_eq!(
+                ids(&fndr_search["structuredContent"]["cards"], "id"),
+                screen,
+                "fndr.search: {query}"
+            );
+        }
     }
 
     async fn wait_for_server(base_url: &str) {

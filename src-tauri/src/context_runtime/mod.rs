@@ -1,6 +1,5 @@
 use crate::embedding::{Embedder, EmbeddingBackend};
 use crate::mcp;
-use crate::search::HybridSearcher;
 use crate::storage::{
     ActivityEvent, CodeContext, CommandEvent, CommitRef, ContextDelta, ContextPack,
     ContextPackItemReason, ContextRuntimeStatus, ContextTask, DecisionLedgerEntry, DecisionSummary,
@@ -28,8 +27,8 @@ pub mod graph_route;
 pub mod keyword_route;
 pub mod query_filters;
 pub mod query_plan;
-pub mod retrieve;
 pub mod retrieval_routes;
+pub mod retrieve;
 pub mod temporal_route;
 pub mod vector_route;
 pub mod verifier;
@@ -331,17 +330,17 @@ pub async fn build_context_pack(
             .await
             .map_err(|e| e.to_string())?
     } else {
-        let embedder = Embedder::new().map_err(|e| e.to_string())?;
-        HybridSearcher::search(
-            &state.store,
-            &embedder,
-            request.query.trim(),
-            DEFAULT_SEARCH_LIMIT,
-            None,
-            None,
+        // The same ranked memories Search and Ask see (VS-11).
+        retrieve_search_results(
+            state,
+            &RetrieveRequest {
+                query: request.query.trim().to_string(),
+                limit: DEFAULT_SEARCH_LIMIT,
+                ..Default::default()
+            },
         )
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
+        .1
     };
 
     let mut events = Vec::new();
@@ -3158,14 +3157,24 @@ pub async fn run_query(
     limit: usize,
     mode: ComposeMode,
 ) -> Result<context_pack::ComposedAnswer, String> {
-    let FusedRetrieval {
-        plan,
-        weights,
-        route_hits,
-        fused,
-        inference,
-        ..
-    } = retrieve_fused(state, query, limit, None, None).await;
+    // Through `retrieve`, so Ask reads time and app phrases as filters the
+    // same way Search and agents do (VS-11).
+    let request = RetrieveRequest {
+        query: query.to_string(),
+        limit,
+        ..Default::default()
+    };
+    let (
+        _,
+        FusedRetrieval {
+            plan,
+            weights,
+            route_hits,
+            fused,
+            inference,
+            ..
+        },
+    ) = retrieve::retrieve_with_fused(state, &request).await;
     let debug_trace = search_debug_trace(&plan, &route_hits, &fused, &weights);
     let evidence = evidence_pack::collect_evidence(&fused, &state.store).await;
     let outcome = verifier::verify(&plan, &fused, &evidence);

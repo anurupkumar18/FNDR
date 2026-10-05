@@ -68,7 +68,7 @@ pub async fn retrieve(
     state: &AppState,
     request: &RetrieveRequest,
 ) -> Result<RetrieveResult, String> {
-    Ok(retrieve_inner(state, request).await.0)
+    Ok(retrieve_with_fused(state, request).await.0)
 }
 
 /// `retrieve` plus each hit's stored row as a `SearchResult`, in hit order,
@@ -79,7 +79,7 @@ pub async fn retrieve_search_results(
     state: &AppState,
     request: &RetrieveRequest,
 ) -> Result<(RetrieveResult, Vec<SearchResult>), String> {
-    let (result, retrieval) = retrieve_inner(state, request).await;
+    let (result, retrieval) = retrieve_with_fused(state, request).await;
     let embedding_labels = retrieval
         .fused
         .iter()
@@ -111,7 +111,9 @@ pub async fn retrieve_search_results(
     Ok((result, rows))
 }
 
-async fn retrieve_inner(
+/// `retrieve` plus the fused retrieval behind it, for Ask (`run_query`),
+/// which adds evidence, verification, and cards on top (VS-11).
+pub(crate) async fn retrieve_with_fused(
     state: &AppState,
     request: &RetrieveRequest,
 ) -> (RetrieveResult, FusedRetrieval) {
