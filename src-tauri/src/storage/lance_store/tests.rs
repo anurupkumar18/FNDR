@@ -1121,6 +1121,55 @@ async fn writes_build_the_keyword_indexes_so_no_search_pays_for_them() {
 }
 
 #[tokio::test]
+async fn remember_keeps_full_note_text() {
+    // VS-68: an agent note is stored whole, is its own card, and has no
+    // reopen target; capture rows are compacted (text emptied, clean_text
+    // cut to a few hundred characters).
+    let ending = " The last words mention zephyrquartz.";
+    let body = "a".repeat(4000 - ending.chars().count()) + ending;
+    assert_eq!(body.chars().count(), 4000);
+    let mut note = keyword_row(
+        "note-1",
+        5_000,
+        "Agent note",
+        "Decision from Claude Code",
+        &body,
+    );
+    note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string();
+    note.session_key = format!("{}note-1", crate::storage::AGENT_NOTE_SESSION_PREFIX);
+    note.snippet = "A decision.".to_string();
+    let (_dir, store) = keyword_store(Vec::new()).await;
+    store
+        .add_batch_preserving_ids(std::slice::from_ref(&note))
+        .await
+        .expect("store note");
+
+    let stored = store
+        .get_memory_by_id("note-1")
+        .await
+        .expect("read")
+        .expect("note exists");
+    let kept = |field: &str| format!("{} of 4000 characters", field.chars().count());
+    assert!(stored.text == body, "text: {}", kept(&stored.text));
+    assert!(
+        stored.clean_text == body,
+        "clean_text: {}",
+        kept(&stored.clean_text)
+    );
+    assert_eq!(stored.session_key, "agent_note:note-1");
+    assert_eq!(
+        stored.reopen_kind,
+        crate::memory::reopen::ReopenKind::Unknown
+    );
+    assert_eq!(stored.reopen_app_name, None);
+    let hits = store
+        .keyword_search("zephyrquartz", 5, None, None)
+        .await
+        .expect("keyword search");
+    assert_eq!(hit_ids(&hits), vec!["note-1"]);
+}
+
+#[tokio::test]
 async fn keyword_search_keeps_the_app_filter() {
     let (_dir, store) = keyword_store(vec![
         keyword_row(

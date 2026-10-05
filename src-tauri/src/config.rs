@@ -734,6 +734,10 @@ pub struct Config {
     /// Kill switch: every command-surface action is refused while true.
     #[serde(default)]
     pub actions_kill_switch: bool,
+    /// "Let assistants add notes": `fndr.remember` stores nothing while false
+    /// (VS-68). Off by default, because it widens what memory holds.
+    #[serde(default)]
+    pub agent_notes_enabled: bool,
     /// Authoritative local embedding model contract.
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -1115,6 +1119,7 @@ impl Default for Config {
             autofill: AutofillConfig::default(),
             screen_guide: ScreenGuideConfig::default(),
             actions_kill_switch: false,
+            agent_notes_enabled: false,
             embedding: EmbeddingConfig::default(),
             chunking: ChunkingConfig::default(),
             search: SearchConfig::default(),

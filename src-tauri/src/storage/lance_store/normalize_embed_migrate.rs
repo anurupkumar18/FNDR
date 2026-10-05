@@ -171,7 +171,8 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
         normalized.source_type = infer_source_type(&normalized);
     }
     normalized.activity_type = crate::inference::normalize_activity_type(&normalized.activity_type);
-    if normalized.reopen_kind == ReopenKind::Unknown {
+    // An agent note never becomes an open target (VS-68).
+    if normalized.reopen_kind == ReopenKind::Unknown && !normalized.is_agent_note() {
         let derived = build_reopen_target(
             normalized.url.as_deref(),
             normalized.files_touched.first().map(|value| value.as_str()),
@@ -1209,7 +1210,11 @@ pub(super) fn sanitize_index_url(url: Option<&str>, title: &str, snippet: &str) 
 }
 
 pub(super) fn build_index_session_key(record: &MemoryRecord) -> String {
-    if record.session_key.starts_with("meeting:") {
+    if record.session_key.starts_with("meeting:")
+        || record
+            .session_key
+            .starts_with(crate::storage::AGENT_NOTE_SESSION_PREFIX)
+    {
         return record.session_key.clone();
     }
 
