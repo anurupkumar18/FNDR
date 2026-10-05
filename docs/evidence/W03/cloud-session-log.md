@@ -11,3 +11,8 @@
 - 2026-10-04 23:15 VS-35 work found a loopback batch auth gap in MCP; verified in code and fixed test-first as VS-41 on train F ahead of the retrieval trains.
 - 2026-10-04 23:20 PR #24 (macos-26) builds the Swift helper and runs the tests: 885 of 886 pass; the failing memory-journey test has the keyword time-budget cause. Ported the runner change into trains B and F so their Rust CI means something.
 - 2026-10-04 23:30 Local's whole-file dash scan would fail on pre-existing dashes in files a train touches; replaced them in every touched file (storage, MCP) in follow-up commits.
+- 2026-10-04 23:50 VS-08: RRF at k = 30, 60, 90 lost one paraphrase query per persona from Ask's top five; rejected by the pre-set adopt rule, no code change; rerun once VS-18 adds chunk routes.
+- 2026-10-05 00:05 VS-09: the low-signal drop looked up each fused hit separately (about 1.1 s per office-PM query); batched it in `retrieve` and Ask instead of deferring to VS-20.
+- 2026-10-05 00:10 Seeded corpora mix clock-time and minutes-ago entries, so ranks shift with the seeding time of day; evidence runs now reseed under TZ=America/Denver.
+- 2026-10-05 00:30 VS-13: stripping time and app phrases from the text cost one office-PM query (planner lost its time intent); shipped filters with the full text searched, phrase-free text only for matched words.
+- 2026-10-05 00:45 Trains F and D fail only the memory-journey keyword-budget test on macos-26; train B passes it with BM25. Not porting VS-07 into other trains; recommended merge order #24 then train B.
