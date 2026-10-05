@@ -4,8 +4,10 @@
 
 Local's merge gate fixed weekdays (b1a1776): "churn drivers due Thursday" no longer filters to memories captured last Thursday. The same reading still applied to the other two time phrases VS-13 parses:
 
-- **Dates.** "the grant report due October 9", asked on October 3, filtered to memories captured on October 9 *of last year*, because a date later than today is read as last year's. The query returns nothing from this year.
+- **Dates.** "the grant report due October 9", asked on October 3, filtered to memories captured on October 9 *of last year*, because a date later than today is read as last year's. For anyone with captures from that day, the results are limited to it.
 - **Day phrases.** "the invoice due today" filtered to memories captured today, hiding the invoice captured last week that says it is due today.
+
+**When it shows (correction to the first version of this note).** `retrieve` searches again without the filter when a parsed filter matches nothing (`retrieve_with_fused`). So the date case changes results only when the misread day has captures. That is the case for a profile more than a year old, and always for "due today". On a profile younger than a year, "due October 9" falls back to an unfiltered search and is unaffected. The third persona's "Postgres 16 runbook due October 9" query ranks the same with and without this change for that reason (`persona-software-engineer-cloud.md`).
 
 ## The change
 
