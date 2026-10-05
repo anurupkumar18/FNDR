@@ -16,6 +16,7 @@ const OCR_TARGET_MIN: usize = DEFAULT_CHUNK_OCR_TARGET_MIN_CHARS;
 const OCR_TARGET_MAX: usize = DEFAULT_CHUNK_OCR_TARGET_MAX_CHARS;
 
 /// Text chunker for splitting long texts.
+#[derive(Clone)]
 pub struct TextChunker {
     max_chars: usize,
     overlap_chars: usize,

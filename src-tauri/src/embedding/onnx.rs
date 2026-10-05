@@ -1,5 +1,6 @@
 //! Local text embedding backend via native ONNX Runtime.
 
+use super::admission::{AdmissionGate, EmbeddingPriority};
 use super::{chunk_screen_text, TextChunker};
 use crate::config::{
     ChunkingConfig, DEFAULT_EMBEDDING_CACHE_CAPACITY, DEFAULT_EMBEDDING_MODEL_NAME,
@@ -151,14 +152,16 @@ pub fn embedding_runtime_status() -> EmbeddingRuntimeStatus {
     }
 }
 
-/// Embedder with pluggable backend.
+/// Cloneable request handle. Clones share this wrapper's cache and fallback state;
+/// separately constructed wrappers retain their own policy and preprocessing.
+#[derive(Clone)]
 pub struct Embedder {
     contract: TextEmbeddingContract,
     chunker: TextChunker,
     backend: Backend,
-    degraded_to_mock: AtomicBool,
+    degraded_to_mock: Arc<AtomicBool>,
     allow_mock_fallback: bool,
-    embedding_cache: Mutex<EmbeddingCache>,
+    embedding_cache: Arc<Mutex<EmbeddingCache>>,
 }
 
 pub(crate) fn cached_embedder(
@@ -174,6 +177,7 @@ pub(crate) fn cached_embedder(
     Ok(cell.get().expect("successful initialization published"))
 }
 
+#[derive(Clone)]
 enum Backend {
     Real(Arc<RealEmbedder>),
     Mock(MockEmbedder),
@@ -216,6 +220,12 @@ impl EmbeddingCache {
 }
 
 impl Embedder {
+    #[cfg(test)]
+    pub(crate) fn with_embedding_cache_locked_for_test(&self, f: impl FnOnce()) {
+        let _guard = self.embedding_cache.lock().expect("embedding cache");
+        f();
+    }
+
     pub fn new() -> Result<Self, String> {
         Self::with_chunking_config(&ChunkingConfig::default())
     }
@@ -262,9 +272,11 @@ impl Embedder {
                     contract,
                     chunker,
                     backend: Backend::Real(real),
-                    degraded_to_mock: AtomicBool::new(false),
+                    degraded_to_mock: Arc::new(AtomicBool::new(false)),
                     allow_mock_fallback,
-                    embedding_cache: Mutex::new(EmbeddingCache::new(EMBEDDING_CACHE_CAPACITY)),
+                    embedding_cache: Arc::new(Mutex::new(EmbeddingCache::new(
+                        EMBEDDING_CACHE_CAPACITY,
+                    ))),
                 })
             }
             Err(err) => {
@@ -281,9 +293,11 @@ impl Embedder {
                         contract,
                         chunker,
                         backend: Backend::Mock(MockEmbedder::new(contract.dimensions)),
-                        degraded_to_mock: AtomicBool::new(true),
+                        degraded_to_mock: Arc::new(AtomicBool::new(true)),
                         allow_mock_fallback,
-                        embedding_cache: Mutex::new(EmbeddingCache::new(EMBEDDING_CACHE_CAPACITY)),
+                        embedding_cache: Arc::new(Mutex::new(EmbeddingCache::new(
+                            EMBEDDING_CACHE_CAPACITY,
+                        ))),
                     })
                 } else {
                     set_runtime_state_for_contract(
@@ -313,9 +327,9 @@ impl Embedder {
             contract,
             chunker: TextChunker::new(),
             backend: Backend::Mock(MockEmbedder::new(contract.dimensions)),
-            degraded_to_mock: AtomicBool::new(false),
+            degraded_to_mock: Arc::new(AtomicBool::new(false)),
             allow_mock_fallback: false,
-            embedding_cache: Mutex::new(EmbeddingCache::new(EMBEDDING_CACHE_CAPACITY)),
+            embedding_cache: Arc::new(Mutex::new(EmbeddingCache::new(EMBEDDING_CACHE_CAPACITY))),
         }
     }
 
@@ -355,6 +369,23 @@ impl Embedder {
 
     /// Generate embeddings for a batch of texts.
     pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        self.embed_batch_with_priority(texts, EmbeddingPriority::Background)
+    }
+
+    /// Legacy query text is already composed/prefixed by its caller. Admission
+    /// changes scheduling only; it must not change v4/v5 query prompts.
+    pub fn embed_query(&self, text: &str) -> Result<Vec<f32>, String> {
+        self.embed_batch_with_priority(&[text.to_string()], EmbeddingPriority::Foreground)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "Embedder returned no query vector".into())
+    }
+
+    fn embed_batch_with_priority(
+        &self,
+        texts: &[String],
+        priority: EmbeddingPriority,
+    ) -> Result<Vec<Vec<f32>>, String> {
         let chunk_groups = texts
             .iter()
             .map(|text| {
@@ -366,7 +397,7 @@ impl Embedder {
                 }
             })
             .collect::<Vec<_>>();
-        self.embed_chunk_groups(chunk_groups)
+        self.embed_chunk_groups(chunk_groups, priority)
     }
 
     /// Prepare the exact prompted chunks used by `embed_inputs`, without
@@ -400,14 +431,23 @@ impl Embedder {
     }
 
     /// Embed mixed raw query/document inputs in order. Prefix every chunk after
-    /// context composition; keep the existing cache, batching and mean pooling.
-    /// Legacy callers remain unchanged until their index migration is ready.
+    /// context composition. Query-only calls receive foreground admission;
+    /// document/mixed calls yield between chunks. Vector pooling is unchanged.
     pub fn embed_inputs(&self, inputs: &[EmbeddingInput<'_>]) -> Result<Vec<Vec<f32>>, String> {
+        let priority = if inputs
+            .iter()
+            .all(|input| matches!(input, EmbeddingInput::Query(_)))
+        {
+            EmbeddingPriority::Foreground
+        } else {
+            EmbeddingPriority::Background
+        };
         self.embed_chunk_groups(
             inputs
                 .iter()
                 .map(|input| self.prepare_input_chunks(*input))
                 .collect(),
+            priority,
         )
     }
 
@@ -427,7 +467,7 @@ impl Embedder {
                 }
             })
             .collect::<Vec<_>>();
-        self.embed_chunk_groups(chunk_groups)
+        self.embed_chunk_groups(chunk_groups, EmbeddingPriority::Background)
     }
 
     /// Product-named wrapper for the capture -> chunking -> embedding boundary.
@@ -447,7 +487,11 @@ impl Embedder {
         .ok_or_else(|| "Embedder returned no vector for memory chunk".to_string())
     }
 
-    fn embed_chunks_cached(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    fn embed_chunks_cached(
+        &self,
+        texts: &[String],
+        priority: EmbeddingPriority,
+    ) -> Result<Vec<Vec<f32>>, String> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
@@ -499,9 +543,15 @@ impl Embedder {
 
         if !missing_unique.is_empty() {
             let mut computed = Vec::with_capacity(missing_unique.len());
-            for chunk in missing_unique.chunks(self.contract.max_batch_size.max(1)) {
+            // Yield after each background chunk so a newly queued query need
+            // not wait for a padded multi-document ONNX batch to finish.
+            let batch_size = match priority {
+                EmbeddingPriority::Background => 1,
+                EmbeddingPriority::Foreground => self.contract.max_batch_size.max(1),
+            };
+            for chunk in missing_unique.chunks(batch_size) {
                 let batch = chunk.to_vec();
-                let vectors = self.backend_embed_batch(&batch)?;
+                let vectors = self.backend_embed_batch(&batch, priority)?;
                 computed.extend(vectors);
             }
 
@@ -535,7 +585,11 @@ impl Embedder {
             .collect())
     }
 
-    fn embed_chunk_groups(&self, chunk_groups: Vec<Vec<String>>) -> Result<Vec<Vec<f32>>, String> {
+    fn embed_chunk_groups(
+        &self,
+        chunk_groups: Vec<Vec<String>>,
+        priority: EmbeddingPriority,
+    ) -> Result<Vec<Vec<f32>>, String> {
         if chunk_groups.is_empty() {
             return Ok(Vec::new());
         }
@@ -554,7 +608,7 @@ impl Embedder {
             return Ok(vec![vec![0.0; self.dimension()]; ranges.len()]);
         }
 
-        let chunk_embeddings = self.embed_chunks_cached(&flattened_chunks)?;
+        let chunk_embeddings = self.embed_chunks_cached(&flattened_chunks, priority)?;
         if chunk_embeddings.len() != flattened_chunks.len() {
             return Err(format!(
                 "Embedding backend returned {} vectors for {} chunks",
@@ -576,14 +630,18 @@ impl Embedder {
         Ok(merged)
     }
 
-    fn backend_embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    fn backend_embed_batch(
+        &self,
+        texts: &[String],
+        priority: EmbeddingPriority,
+    ) -> Result<Vec<Vec<f32>>, String> {
         match &self.backend {
             Backend::Real(real) => {
                 if self.degraded_to_mock.load(Ordering::Relaxed) {
                     return Ok(MockEmbedder::new(self.dimension()).embed_batch(texts));
                 }
 
-                match real.embed_batch(texts) {
+                match real.embed_scheduled(texts, priority) {
                     Ok(vectors) => Ok(vectors),
                     Err(err) => {
                         if self.allow_mock_fallback && allow_mock_embedder() {
@@ -628,6 +686,7 @@ impl Default for Embedder {
 }
 
 struct RealEmbedder {
+    admission: AdmissionGate,
     contract: TextEmbeddingContract,
     session: Mutex<Session>,
     tokenizer: tokenizers::Tokenizer,
@@ -769,6 +828,7 @@ impl RealEmbedder {
             "Native ort text embedder initialized"
         );
         let embedder = Self {
+            admission: AdmissionGate::default(),
             contract,
             session: Mutex::new(session),
             tokenizer,
@@ -798,6 +858,39 @@ impl RealEmbedder {
             return Err("Embedding probe returned an all-zero vector".to_string());
         }
         Ok(embedder)
+    }
+
+    fn embed_scheduled(
+        &self,
+        texts: &[String],
+        priority: EmbeddingPriority,
+    ) -> Result<Vec<Vec<f32>>, String> {
+        let queued = std::time::Instant::now();
+        let _permit = self.admission.enter(priority)?;
+        let queue_ms = queued.elapsed().as_secs_f64() * 1000.0;
+        let started = std::time::Instant::now();
+        let result = self.embed_batch(texts);
+        let service_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let (queue_op, service_op) = match priority {
+            EmbeddingPriority::Foreground => (
+                "embedding.foreground_queue_ms",
+                "embedding.foreground_service_ms",
+            ),
+            EmbeddingPriority::Background => (
+                "embedding.background_queue_ms",
+                "embedding.background_service_ms",
+            ),
+        };
+        crate::telemetry::runtime_metrics::record_ms(queue_op, queue_ms as u64);
+        crate::telemetry::runtime_metrics::record_ms(service_op, service_ms as u64);
+        tracing::debug!(
+            ?priority,
+            queue_ms,
+            service_ms,
+            chunks = texts.len(),
+            "embedding admission completed"
+        );
+        result
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
@@ -959,7 +1052,7 @@ impl RealEmbedder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MockEmbedder {
     dimensions: usize,
 }
@@ -1292,6 +1385,31 @@ fn normalize(vec: &mut [f32]) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn query_admission_preserves_legacy_text_and_cloned_handle_state() {
+        for contract in [active_embedding_contract(), embedding_v5_contract()] {
+            let mut original = Embedder::mock_for_tests();
+            original.contract = contract;
+            original.backend = Backend::Mock(MockEmbedder::new(contract.dimensions));
+            let text = super::super::prefixes::query_text_for(contract, "Find release validation");
+            let expected = original.embed_batch(&[text.clone()]).unwrap().remove(0);
+            let handle = original.clone();
+            assert_eq!(handle.embed_query(&text).unwrap(), expected);
+            assert!(Arc::ptr_eq(
+                &handle.embedding_cache,
+                &original.embedding_cache
+            ));
+            handle.degraded_to_mock.store(true, Ordering::Relaxed);
+            assert!(original.degraded_to_mock.load(Ordering::Relaxed));
+            let independent = Embedder::mock_for_tests();
+            assert!(!independent.degraded_to_mock.load(Ordering::Relaxed));
+            assert!(!Arc::ptr_eq(
+                &independent.embedding_cache,
+                &original.embedding_cache
+            ));
+        }
+    }
 
     #[test]
     fn cached_embedder_retries_missing_assets_then_reuses_success() {
@@ -1686,9 +1804,9 @@ mod tests {
                 contract: embedding_v5_contract(),
                 chunker: TextChunker::new(),
                 backend: Backend::Mock(MockEmbedder::new(embedding_v5_contract().dimensions)),
-                degraded_to_mock: AtomicBool::new(false),
+                degraded_to_mock: Arc::new(AtomicBool::new(false)),
                 allow_mock_fallback: false,
-                embedding_cache: Mutex::new(EmbeddingCache::new(8)),
+                embedding_cache: Arc::new(Mutex::new(EmbeddingCache::new(8))),
             })
         };
 

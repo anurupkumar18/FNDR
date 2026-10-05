@@ -3996,7 +3996,10 @@ async fn run_memory_search_raw(
     let index_status = inspect_memory_index_status(&app_state).await?;
     let time_window = parse_time_window_value(args.time_window.as_ref())?;
     let limit = args.limit.clamp(1, 100);
-    let embedder = Embedder::new().map_err(internal_tool_error)?;
+    let embedder = tokio::task::spawn_blocking(Embedder::new)
+        .await
+        .map_err(internal_tool_error)?
+        .map_err(internal_tool_error)?;
     let semantic = filter_results_by_window(
         HybridSearcher::search(
             &app_state.store,

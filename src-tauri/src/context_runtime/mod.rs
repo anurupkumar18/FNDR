@@ -3105,17 +3105,20 @@ pub(crate) async fn retrieve_fused(
     let plan = query_plan::plan(query, &query_plan::PlanHints::default());
     let weights = context_pack::FusionWeights::for_intent(plan.intent);
 
-    // Reuse the process's loaded model: loading it took about 175 ms per
-    // query (VS-10). Without a real model loaded, build one per query as
-    // before, so a model downloaded mid-session is still picked up.
-    let shared_embedder = crate::ipc::commands::common::shared_embedder()
-        .ok()
-        .filter(|embedder| matches!(embedder.backend(), EmbeddingBackend::Real));
-    let fresh_embedder = match shared_embedder {
-        Some(_) => None,
-        None => Embedder::new().ok(),
-    };
-    let embedder = shared_embedder.or(fresh_embedder.as_ref());
+    // Initialization can load model assets or wait on the shared backend.
+    // Keep both the shared lookup and fallback off the async executor.
+    let embedder = tokio::task::spawn_blocking(|| {
+        crate::ipc::commands::common::shared_embedder()
+            .ok()
+            .filter(|embedder| matches!(embedder.backend(), EmbeddingBackend::Real))
+            .cloned()
+            .or_else(|| Embedder::new().ok())
+    })
+    .await
+    .unwrap_or_else(|err| {
+        tracing::warn!(err = %err, "retrieval:embedder_initialization_task_failed");
+        None
+    });
     let inference = {
         let guard = state.inference.read();
         guard.as_ref().map(std::sync::Arc::clone)
@@ -3133,7 +3136,7 @@ pub(crate) async fn retrieve_fused(
             &expansion,
         )
         .with_now_ms(chrono::Utc::now().timestamp_millis());
-    if let Some(emb) = embedder {
+    if let Some(emb) = embedder.as_ref() {
         ctx = ctx.with_embedder(emb);
     }
     if let Some(eng) = inference.as_deref() {

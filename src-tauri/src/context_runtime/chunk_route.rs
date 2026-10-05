@@ -114,14 +114,14 @@ async fn chunk_vector_hits(
     ctx: &RouteCtx<'_>,
     search_limit: usize,
 ) -> Result<Vec<MemoryChunkSearchResult>, &'static str> {
-    let bge = shared_bge_v5_query_embedder().map_err(|_| "bge_unavailable")?;
     let query_text = prefix_query_for_search(&chunk_query_text(plan, ctx.expansion));
-    let query_embedding = bge
-        .embed_batch(&[query_text])
-        .map_err(|_| "query_embedding_failed")?
-        .into_iter()
-        .next()
-        .unwrap_or_default();
+    let query_embedding = tokio::task::spawn_blocking(move || {
+        let bge = shared_bge_v5_query_embedder().map_err(|_| "bge_unavailable")?;
+        bge.embed_query(&query_text)
+            .map_err(|_| "query_embedding_failed")
+    })
+    .await
+    .map_err(|_| "query_embedding_task_failed")??;
     if query_embedding.len() != BGE_V5_DIMENSIONS {
         return Err("query_dimension_mismatch");
     }

@@ -2,7 +2,7 @@ use crate::context_runtime::query_plan::{QueryPlan, Route};
 use crate::context_runtime::retrieval_routes::{
     finish_route, hit_from_search_result, RetrievalRoute, RouteBranch, RouteCtx, RouteHits,
 };
-use crate::embedding::EmbeddingBackend;
+use crate::embedding::{Embedder, EmbeddingBackend};
 use crate::search::QueryProfile;
 use crate::telemetry::runtime_metrics;
 use futures::future::BoxFuture;
@@ -39,8 +39,15 @@ impl RetrievalRoute for VectorRoute {
 
             let embedding_query = profile.embedding_query_with_extras(ctx.expansion);
             let embed_started = Instant::now();
-            let query_embedding = match embedder.embed_batch(&[embedding_query]) {
-                Ok(vectors) => vectors.into_iter().next().unwrap_or_default(),
+            let worker_embedder = Embedder::clone(embedder);
+            let query_embedding = match tokio::task::spawn_blocking(move || {
+                worker_embedder.embed_query(&embedding_query)
+            })
+            .await
+            .map_err(|err| format!("Query embedding task failed: {err}"))
+            .and_then(|result| result)
+            {
+                Ok(vector) => vector,
                 Err(err) => {
                     tracing::warn!(err = %err, "hybrid_search:embed_failed");
                     runtime_metrics::record_ms(
@@ -168,6 +175,64 @@ mod tests {
             decay_score: 1.0,
             ..Default::default()
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn query_embedding_wait_does_not_block_current_thread_executor() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let store = tokio::task::spawn_blocking(move || Store::new(&path).expect("store"))
+            .await
+            .expect("store task");
+        store
+            .add_batch(&[record(
+                "responsive-query",
+                "planner graph route vector recall",
+                vec![0.2; EMBEDDING_DIM],
+            )])
+            .await
+            .expect("seed record");
+        let embedder = Arc::new(Embedder::mock_for_tests());
+        let config = SearchConfig::default().normalized();
+        let plan = crate::context_runtime::query_plan::plan(
+            "planner graph route vector recall",
+            &crate::context_runtime::query_plan::PlanHints::default(),
+        );
+        let ctx = RouteCtx::new(&store, &config)
+            .with_embedder(&embedder)
+            .allowing_mock_vectors();
+
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let watchdog_fired = Arc::new(AtomicBool::new(false));
+        let worker_embedder = Arc::clone(&embedder);
+        let worker_watchdog = Arc::clone(&watchdog_fired);
+        let holder = std::thread::spawn(move || {
+            worker_embedder.with_embedding_cache_locked_for_test(|| {
+                locked_tx.send(()).expect("signal locked cache");
+                if release_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+                    worker_watchdog.store(true, Ordering::SeqCst);
+                }
+            });
+        });
+        locked_rx.recv().expect("cache lock acquired");
+
+        // Poll the real route first. Synchronous inference blocks this thread
+        // until the watchdog; offloaded inference yields to the release branch.
+        let (hits, ()) = tokio::join!(
+            biased;
+            VectorRoute.run(&plan, &ctx),
+            async { let _ = release_tx.send(()); },
+        );
+        holder.join().expect("cache holder thread");
+        assert!(
+            !watchdog_fired.load(Ordering::SeqCst),
+            "query embedding blocked the executor until the cache watchdog released it"
+        );
+        assert!(hits.hits.iter().any(|hit| hit.memory_id == "responsive-query"));
     }
 
     #[tokio::test]

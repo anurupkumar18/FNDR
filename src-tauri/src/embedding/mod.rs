@@ -1,5 +1,6 @@
 //! Text chunking and ONNX embedding generation for the memory pipeline.
 
+mod admission;
 mod chunking;
 mod clip_vision;
 mod onnx;

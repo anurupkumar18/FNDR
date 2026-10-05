@@ -34,7 +34,9 @@ pub async fn search_memories(
 
     let started = Instant::now();
 
-    let embedder = Embedder::new()
+    let embedder = tokio::task::spawn_blocking(Embedder::new)
+        .await
+        .map_err(|e| CompanionError::Internal(format!("embedder init task failed: {e}")))?
         .map_err(|e| CompanionError::Internal(format!("embedder init failed: {e}")))?;
     let search_config = app_state.config.read().search.clone().normalized();
 
