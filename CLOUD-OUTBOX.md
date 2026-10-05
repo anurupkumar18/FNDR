@@ -2,7 +2,7 @@
 
 Cloud session (Linux container, GitHub only) to local session. Updated after every ticket and at least every two hours. Newest entries first under each heading.
 
-Last update: 2026-10-05 04:24 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf (main at b948dfd).
+Last update: 2026-10-05 16:15 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf and main at 342e5a2 (integrate/cloud-1).
 
 ## NEEDS HUMAN (open)
 
@@ -10,25 +10,17 @@ None.
 
 ## Read first (local)
 
-1. **Security fix, merge early:** VS-41 on `claude/train-f-new` (PR #26). In Local mode a loopback JSON-RPC **batch** that starts with `initialize` skipped the token check for every item, so `[initialize, tools/call]` ran any tool without the token (against ADR-017). Fixed and covered by the existing HTTP auth test; it touches only `jsonrpc_method_hint` in `src-tauri/src/mcp/mod.rs`. Please also check whether a follow-up task was created for it in the Claude app (a sub-agent tried and timed out); VS-41 is that follow-up, file it from `docs/team/tickets/proposed/cloud-proposals.md` once I add it there (next docs push).
-2. **GitHub Rust CI has been red on main since at least 2026-09-30.** The Swift speech helper uses `SpeechAnalyzer` (macOS 26 SDK only) and `test.yml` runs on `macos-14`, so `build.rs:25` panics before any test. Draft PR #24 moves the job to `macos-26`: the build then passes and 885 of 886 lib tests pass. The one failure, `memory_journey::tests::six_synthetic_journeys_reconstruct_from_temporary_storage_and_search`, depends on runner load: all embeddings in that test are equal, so the result rests on the keyword route, whose 320 ms per-variant budget drops hits on a slow runner. Correction to my earlier note: it is intermittent, not certain. Train D (#27) passed it on macos-26 without BM25, while #24 and train F (#26) failed it. Train B (#25) passes it on every push since VS-07 (BM25), and is green on macos-26 at 483b6e1. Simplest order: merge #24, then train B. `release.yml` still uses `macos-14` and will hit the same Swift error.
-3. **Retrieval timing bug (product):** route time budgets (`keyword_variant_timeout_ms` 320, `keyword_timeout_ms` 900) silently drop keyword hits when a `LIKE` scan is slow, so Ask results can change with CPU load. The eval now lifts budgets (VS-04 second commit) so the gate is deterministic; VS-07 replaces the scan with BM25 (Search p95 1357 to 288 ms on the knowledge-worker set).
-4. **Same query, different results (product, VS-21, fixed on train B at fd03afa):** three causes, each measured. (a) The temporal route gave a placeholder score of 1.0 to every memory in the asked-about window and kept a `HashMap`-ordered `limit` of them, so a random subset got the time bonus on each call. (b) `QueryProfile.number_terms` was a `HashSet` joined into the text the vector route embeds, so queries with two or more numbers ("LL-1482 spam placement 1.8%") embedded different text on each call. (c) Every route sized its candidate pool from the caller's page size, so Ask (10) and Search (20) ranked differently. The earlier "Ask depends on Search" observation is (a) and (b), not the embedding cache.
-5. Evidence runs must reseed: recency scores age, so a profile seeded hours earlier drifts (office-PM Ask MRR 0.636 old seed versus 0.661 fresh). `make qa-retrieval-check` reseeds by default.
+1. **Trains A to F are on main (342e5a2), and PRs #21 to #27 show merged.** Thank you for the gate fixes. I stopped watching those PRs. New work stacks on main as `claude/train-f-retrieval`, one commit per ticket.
+2. **The weekday bug you fixed at the gate (b1a1776) also broke the gate itself.** The knowledge-worker memory for "churn drivers due Thursday" is seeded three days before the run day, so before your fix the query passed only on Sundays (the reference was recorded on Sunday 2026-10-04). Cloud hit the same failure on train D's head this morning. With b1a1776 the query no longer depends on the run day. One gap remains in the same rule: dates and day phrases after a deadline word still become capture-time filters ("the grant report due October 9" filters to October 9; "the invoice due today" to today). Proposed as a small VS-13 follow-up on train F (test-first, both personas gated), unless you prefer to take it.
+3. **VS-33's premise was partly wrong, recorded in the evidence.** The insight graph is persisted (`graph_nodes`, `graph_edges` in LanceDB, written by the capture flush and idle `commit_graph_updates`). `retrieve` simply never loads it, so the graph route ran over an empty list, and the entity route (which also reads graph nodes) finds nothing on every real query. VS-33 stops planning the graph route and deletes the dead empty-graph wiring and the no-op `graph_rerank.rs`. It keeps `GraphRoute` and the `Route::Graph` contract fields (20 files, including MCP and Ask JSON). Proposal to file: load the persisted graph for the entity and graph routes behind a flag, measured on a seeded graph, or delete both routes.
+4. **`release.yml` still uses `macos-14`** and will hit the Swift SDK error that #24 fixed for `test.yml`.
+5. **Branch deletion is still refused here (HTTP 403):** `claude/probe` and the merged `claude/train-*` branches stay until you delete them.
 
 ## Merge queue for local (in this order)
 
 | # | Branch | Draft PR | Head | Tickets | Rust CI | Notes |
 |---|---|---|---|---|---|---|
-| 1 | `claude/train-f-new` | #26 | 8c96a07 | VS-41 (security fix, 2 commits), VS-35 spec | macos-26: 885/886, the intermittent memory_journey test (see Read first 2) | Independent of A and B. Carries the ported `macos-26` CI commit; drop it if #24 lands first. |
-| 2 | `claude/train-a-measure` | #21 | aed1315 | VS-04 (2 commits), VS-02, VS-03 | red on main's Swift issue | Train B contains all of A, so #25's CI covers this code. |
-| 3 | `claude/train-b-retrieval` | #25 | 7f4e673 | (A) + VS-05, VS-07 (3 commits; closes VS-06), VS-08 (evidence only), VS-09, VS-13, VS-10, VS-11, VS-21, VS-12, VS-25: **train complete** | green on macos-26 at 483b6e1; later heads running | Stacked on A. Carries the ported `macos-26` CI commit (74963fa). VS-10 makes Search show weak results for no-match queries until VS-12; merge the train whole. |
-| 4 | `claude/train-c-ux` | #22 | 82792e2 | VS-23 | red on main's Swift issue (no Rust in diff) | Frontend CI green. |
-| 5 | `claude/train-e-docs` | #23 | ca9c383 | PD-03, PD-17 draft, PD-01 draft (3), PD-02, PD-04, PD-18 guide, PD-05, proposals (VS-40), session log | red on main's Swift issue (no Rust in diff) | |
-| 6 | `claude/ci-macos-26` | #24 | c6cf285 | CI runner fix | build passes, the one memory_journey test fails until VS-07 lands | `.github/workflows/**` is yours to merge. |
-| 7 | `claude/train-d-chunks` | #27 | d3b6735 | VS-17, VS-19 harnesses; VS-18 (chunk route behind its flag), VS-20 (scale harness), VS-26 (README): **train complete** | green on macos-26 at 94747d6; later heads running | Contains train B through a merge commit (1ede0fb), because a force-push to restack it was denied; merge after #21 and #25. |
-
-Merge trials: `git merge-tree` shows A with E and A with C merge cleanly; B is A plus commits; F touches `src-tauri/src/mcp/mod.rs`, which no other train touches. Every file each train touches is free of em and en dashes (pre-existing dashes in touched files were replaced, so your whole-file dash scan passes).
+| 1 | `claude/train-f-retrieval` | (opening next) | 0591489 (local, pushing after the gate rerun on main) | VS-33 | not yet run | Rebased on main 342e5a2. VS-34 (gate workflow) and VS-36 (Resume next steps) follow on the same branch. |
 
 ## Gate 0 capability probe (2026-10-04)
 
@@ -53,6 +45,13 @@ Merge trials: `git merge-tree` shows A with E and A with C merge cleanly; B is A
 4. Branch policy: I only rebase (with `--force-with-lease`) commits that local has not merged. If you are mid-gate on a branch, say so in LOCAL-OUTBOX and I will stack on it instead.
 
 ## Tickets
+
+### VS-33 graph route out of retrieval: delivered locally, push pending the gate rerun on main
+
+- `claude/train-f-retrieval`, 0591489 (rebased on 342e5a2). Evidence `docs/evidence/W03/VS-33-cloud.md`.
+- Gate on train D's head before and after, same seed: every rank identical on both personas. The knowledge-worker gate failed both times on the weekday query (Read first 2), not because of this change. Rerun on main in progress.
+- Comment to post:
+  > VS-33 done in cloud. Retrieval no longer plans the graph route or builds the empty graph it searched; the no-op graph_rerank stub is deleted. Every rank is unchanged on both personas. Correction to the ticket: the insight graph is persisted in LanceDB; retrieve never loads it, which also leaves the entity route empty. GraphRoute and its contract fields stay until a seeded graph can measure turning it on. Evidence: docs/evidence/W03/VS-33-cloud.md.
 
 ### VS-26 README search rows: delivered (walkthrough file does not exist yet)
 
