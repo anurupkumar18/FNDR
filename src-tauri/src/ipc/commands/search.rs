@@ -340,6 +340,7 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         context,
         timestamp: result.timestamp,
         app_name,
+        text_source: result.text_source.clone(),
         window_title,
         url,
         score,
@@ -965,6 +966,19 @@ mod tests {
     use crate::embedding::{Embedder, EMBEDDING_DIM};
     use crate::graph::GraphStore;
     use crate::storage::{MemoryRecord, StateStore, Store};
+
+    #[test]
+    fn serialized_vault_card_text_source_preserves_capture_method() {
+        let record = MemoryRecord {
+            raw_evidence: r#"{"source_kind":"ocr"}"#.to_string(),
+            synthesis_branch: "vlm".to_string(),
+            ..Default::default()
+        };
+        let result =
+            crate::context_runtime::retrieval_routes::memory_record_to_search_result(&record, 1.0);
+        let card = memory_card_from_result(result);
+        assert_eq!(serde_json::to_value(card).unwrap()["text_source"], "ocr");
+    }
 
     #[test]
     fn search_cards_are_weak_when_nothing_matches_well() {

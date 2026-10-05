@@ -615,6 +615,9 @@ pub struct SearchResult {
     pub id: String,
     pub timestamp: i64,
     pub app_name: String,
+    /// Capture text method derived from existing raw evidence; never persisted separately.
+    #[serde(default = "default_unknown")]
+    pub text_source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
     pub window_title: String,
@@ -787,6 +790,7 @@ impl Default for SearchResult {
             id: String::new(),
             timestamp: 0,
             app_name: String::new(),
+            text_source: default_unknown(),
             bundle_id: None,
             window_title: String::new(),
             session_id: String::new(),

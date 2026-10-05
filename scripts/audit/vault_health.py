@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime
+import json
 import os
 from pathlib import Path
 
@@ -33,9 +34,12 @@ PARENT_AGGREGATE_COLUMNS = (
     "clean_text",
     *STRUCTURED_FIELDS,
     "summary_source",
+    "raw_evidence",
     "reopen_kind",
 )
 CHUNK_AGGREGATE_COLUMNS = ("created_at", "embedding")
+TEXT_SOURCE_METHODS = frozenset(("ax", "ocr", "browser_semantic", "unknown"))
+TEXT_SOURCE_CATEGORIES = TEXT_SOURCE_METHODS | {"mixed"}
 
 SUMMARY_SOURCE_CATEGORIES = frozenset(
     (
@@ -88,6 +92,30 @@ def _safe_summary_source(value) -> str:
     return label if label in SUMMARY_SOURCE_CATEGORIES else "<other>"
 
 
+def _safe_text_source(raw_evidence) -> str:
+    """Read known observation lineage, never expose arbitrary evidence labels."""
+    try:
+        evidence = json.loads(raw_evidence)
+    except (TypeError, ValueError, RecursionError):
+        return "unknown"
+    if not isinstance(evidence, dict):
+        return "unknown"
+    sources = evidence.get("text_source_kinds")
+    if isinstance(sources, list) and sources:
+        kinds = set()
+        for value in sources:
+            label = value.strip() if isinstance(value, str) else "unknown"
+            label = label.lower() if label.isascii() else "unknown"
+            kinds.add(label if label in TEXT_SOURCE_METHODS else "unknown")
+            if len(kinds) > 1:
+                return "mixed"
+        return next(iter(kinds))
+    value = evidence.get("source_kind")
+    label = value.strip() if isinstance(value, str) else "unknown"
+    label = label.lower() if label.isascii() else "unknown"
+    return label if label in TEXT_SOURCE_CATEGORIES else "unknown"
+
+
 def _date_bucket(timestamp_ms) -> str | None:
     if timestamp_ms is None:
         return None
@@ -108,10 +136,16 @@ def _read_aggregate_columns(table, requested: tuple[str, ...]) -> tuple[int, dic
     if selected:
         arrow = table.search().select(selected).to_arrow()
         rows = arrow.num_rows
-        values = {
-            column: arrow.column(column).to_pylist() if column in selected else [None] * rows
-            for column in requested
-        }
+        values = {}
+        for column in requested:
+            if column not in selected:
+                values[column] = [None] * rows
+            elif column == "raw_evidence":
+                # Discard each raw JSON value immediately; retain categorical
+                # labels only, not a second Python list of sensitive blobs.
+                values[column] = [_safe_text_source(value.as_py()) for value in arrow.column(column)]
+            else:
+                values[column] = arrow.column(column).to_pylist()
         return rows, values
 
     rows = table.count_rows()
@@ -132,6 +166,7 @@ def _empty_table_health(name: str, role: str) -> dict:
         "clean_text_chars_p50": None,
         "structured_pct": None,
         "summary_source": None,
+        "text_source": None,
         "exact_reopen_pct": None,
     }
 
@@ -174,6 +209,7 @@ def _table_health(
         "clean_text_chars_p50": None,
         "structured_pct": None,
         "summary_source": None,
+        "text_source": None,
         "exact_reopen_pct": None,
     }
     if not parent:
@@ -183,6 +219,9 @@ def _table_health(
     source_counts = collections.Counter(
         _safe_summary_source(value) for value in values["summary_source"]
     )
+    source_lengths = collections.defaultdict(list)
+    for source, length in zip(values["raw_evidence"], text_lengths):
+        source_lengths[source if source in TEXT_SOURCE_CATEGORIES else "unknown"].append(length)
     exact_reopens = sum(
         1
         for value in values["reopen_kind"]
@@ -200,6 +239,15 @@ def _table_health(
                 else None
             ),
             "summary_source": dict(sorted(source_counts.items())) if rows else None,
+            "text_source": {
+                source: {
+                    "rows": len(lengths),
+                    "share_pct": _pct(len(lengths), rows),
+                    "clean_text_chars_p50": float(np.median(lengths)),
+                    "under_200_chars_pct": _pct(sum(length < 200 for length in lengths), len(lengths)),
+                }
+                for source, lengths in sorted(source_lengths.items())
+            } if rows else None,
             "exact_reopen_pct": _pct(exact_reopens, rows) if rows else None,
         }
     )
@@ -260,6 +308,7 @@ def summarize(db_path: str) -> dict:
                 "clean_text_chars_p50": v4["clean_text_chars_p50"],
                 "structured_pct": v4["structured_pct"],
                 "summary_source": v4["summary_source"],
+                "text_source": v4["text_source"],
                 "reopen_specific_pct": v4["exact_reopen_pct"],
                 "exact_reopen_pct": v4["exact_reopen_pct"],
                 "chunk_rows": {
@@ -334,6 +383,19 @@ def render(report: dict) -> str:
                 key=lambda item: (-item[1], item[0]),
             )
         ]
+        if row.get("text_source"):
+            lines += [
+                "", f"## Text source: `{name}`", "",
+                "Known observation lineage, not per-character attribution; older merges may be incomplete.", "",
+                "| source | rows | share | median clean chars | under 200 chars |",
+                "|---|---:|---:|---:|---:|",
+            ]
+            lines += [
+                f"| {source} | {metrics['rows']} | {metrics['share_pct']}% | "
+                f"{metrics['clean_text_chars_p50']:g} | {metrics['under_200_chars_pct']}% |"
+                for source, metrics in sorted(row["text_source"].items())
+                if source in TEXT_SOURCE_CATEGORIES
+            ]
     return "\n".join(lines) + "\n"
 
 

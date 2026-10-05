@@ -298,18 +298,18 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 - estimate: 4h
 - depends: VS-16
 
-**Why.** VS-16 chooses Accessibility or OCR per frame but only the debug journey and metrics record it; the stored memory does not, so search and QA cannot slice by source.
+**Why.** People and agents need to distinguish Accessibility, OCR and browser text, including memories assembled from more than one capture method.
 
-**Today.** `source_kind` ('ax', 'ocr', 'browser_semantic') exists in the capture loop and the journey `text_source` stage.
+**Today.** Source review on October 5 found `raw_evidence.source_kind` already persisted. The gap was merge preservation: combined text could be labeled only with the incoming source. Reuse that metadata instead of adding a duplicate database column or migration.
 
 **Do.**
-1. Add `text_source` to the memory record with a migration that backfills 'ocr' (or 'unknown') for existing rows.
-2. Write it at capture and keep it through merge and review.
-3. Expose it on the card data for the UI.
+1. Keep bounded, sorted contributing methods in `raw_evidence.text_source_kinds` during merge; use `mixed` when more than one method contributes. Missing or malformed legacy provenance stays `unknown`, never guessed OCR.
+2. Preserve lineage through repeated merges, embedding-manifest changes and review/storage roundtrips.
+3. Derive compact `text_source` response fields for cards and agent results, and show the readable label in the existing expanded-card provenance strip. Grouped cards include all members; no debug-inspector fetch is needed.
 
-**Done when.** New memories carry `text_source`, old ones backfill, and the migration test passes.
+**Done when.** New and merged memories preserve the known methods; old missing provenance displays Unknown without rewriting the database; serialized card/agent and review-persistence tests pass.
 
-**Evidence.** Test output and the schema diff.
+**Evidence.** Merge, review-persistence, serialization and UI test output. This is known observation lineage, not per-character attribution; older historical merges cannot be reconstructed from a scalar source.
 
 ## VS-46 Report text source and text length together in vault health
 - assignee: anurupkumar

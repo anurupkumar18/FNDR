@@ -217,6 +217,32 @@ class RetrievalTests(ScoreboardTestCase):
 
 
 class VaultHealthTests(ScoreboardTestCase):
+    def test_text_source_aggregates_reach_scoreboard_without_private_labels(self):
+        text = VAULT_HEALTH_MD + """
+## Text source: `memories_v4_minilm_384`
+
+| source | rows | share | median clean chars | under 200 chars |
+|---|---:|---:|---:|---:|
+| ax | 2 | 25.0% | 200 | 50.0% |
+| mixed | 3 | 37.5% | 400 | 0.0% |
+| PrivateCustomerName | 3 | 37.5% | 20 | 100.0% |
+
+## Text source: `memories_v5_bge_1024`
+
+| source | rows | share | median clean chars | under 200 chars |
+|---|---:|---:|---:|---:|
+| ocr | 99 | 100.0% | 900 | 0.0% |
+"""
+        _, output = self.run_main("--vault-health", self.write("health.md", text))
+        self.assertIn("| ax | 2 | 25.0% | 200 | 50.0% |", output)
+        self.assertIn("| mixed | 3 | 37.5% | 400 | 0.0% |", output)
+        self.assertNotIn("PrivateCustomerName", output)
+        self.assertNotIn("| ocr | 99 |", output)
+
+    def test_old_report_marks_text_source_not_measured(self):
+        _, output = self.run_main("--vault-health", self.write("health.md", VAULT_HEALTH_MD))
+        self.assertIn("Text source breakdown: not measured", output)
+
     def test_parses_aggregate_numbers(self):
         parsed = sb.parse_vault_health(VAULT_HEALTH_MD)
         self.assertEqual(parsed["memories"], 29)
@@ -301,6 +327,9 @@ class VaultHealthTests(ScoreboardTestCase):
                 "exact_reopen_pct": 55.0,
                 "structured_pct": {field: 25.0 for field in vh.STRUCTURED_FIELDS},
                 "summary_source": {"llm": 40},
+                "text_source": {"mixed": {"rows": 40, "share_pct": 100.0,
+                                         "clean_text_chars_p50": 199.5,
+                                         "under_200_chars_pct": 50.0}},
             }
         )
         report["table_health"][vh.CHUNK_TABLE].update({"present": True, "rows": 90})
@@ -310,6 +339,9 @@ class VaultHealthTests(ScoreboardTestCase):
         self.assertEqual(parsed["exact_reopen_pct"], 55.0)
         self.assertEqual(parsed["chunk_rows"], 90)
         self.assertEqual(parsed["structured_pct"]["next_steps"], 25.0)
+        self.assertEqual(parsed["text_source"]["mixed"]["clean_text_chars_p50"], 199.5)
+        _, output = self.run_main("--vault-health", self.write("health.md", vh.render(report)))
+        self.assertIn("| mixed | 40 | 100.0% | 199.5 | 50.0% |", output)
 
 
 class PageTests(ScoreboardTestCase):

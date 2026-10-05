@@ -4683,6 +4683,7 @@ fn build_memory_rows(memories: &[crate::storage::MemoryRecord], include_raw: boo
                 "memory_id": memory.id,
                 "timestamp": memory.timestamp,
                 "app_name": memory.app_name,
+                "text_source": crate::memory_quality::text_source_from_raw_evidence(&memory.raw_evidence),
                 "window_title": memory.window_title,
                 "url": memory.url,
                 "project": (!memory.project.is_empty()).then(|| memory.project.clone()),
@@ -4716,6 +4717,7 @@ fn result_row_to_json(
         "memory_id": row.id,
         "timestamp": row.timestamp,
         "app_name": row.app_name,
+        "text_source": row.text_source,
         "window_title": row.window_title,
         "url": row.url,
         "project": (!row.project.is_empty()).then(|| row.project.clone()),
@@ -4746,86 +4748,7 @@ fn result_row_to_json(
 }
 
 fn memory_to_search_result(memory: &crate::storage::MemoryRecord) -> crate::storage::SearchResult {
-    crate::storage::SearchResult {
-        id: memory.id.clone(),
-        timestamp: memory.timestamp,
-        app_name: memory.app_name.clone(),
-        bundle_id: memory.bundle_id.clone(),
-        window_title: memory.window_title.clone(),
-        session_id: memory.session_id.clone(),
-        text: memory.text.clone(),
-        clean_text: memory.clean_text.clone(),
-        ocr_confidence: memory.ocr_confidence,
-        ocr_block_count: memory.ocr_block_count,
-        snippet: memory.snippet.clone(),
-        display_summary: memory.display_summary.clone(),
-        internal_context: memory.internal_context.clone(),
-        summary_source: memory.summary_source.clone(),
-        noise_score: memory.noise_score,
-        session_key: memory.session_key.clone(),
-        lexical_shadow: memory.lexical_shadow.clone(),
-        memory_context: memory.memory_context.clone(),
-        reopen_kind: memory.reopen_kind.clone(),
-        reopen_url: memory.reopen_url.clone(),
-        reopen_file_path: memory.reopen_file_path.clone(),
-        reopen_app_bundle_id: memory.reopen_app_bundle_id.clone(),
-        reopen_app_name: memory.reopen_app_name.clone(),
-        reopen_app_deep_link: memory.reopen_app_deep_link.clone(),
-        reopen_captured_at_ms: memory.reopen_captured_at_ms,
-        reopen_confidence: memory.reopen_confidence,
-        reopen_validation_status: memory.reopen_validation_status.clone(),
-        reopen_page: memory.reopen_page,
-        user_intent: memory.user_intent.clone(),
-        topic: memory.topic.clone(),
-        workflow: memory.workflow.clone(),
-        search_aliases: memory.search_aliases.clone(),
-        related_memory_ids: memory.related_memory_ids.clone(),
-        evidence_confidence: memory.evidence_confidence,
-        confidence_score: memory.confidence_score,
-        importance_score: memory.importance_score,
-        specificity_score: memory.specificity_score,
-        intent_score: memory.intent_score,
-        entity_score: memory.entity_score,
-        agent_usefulness_score: memory.agent_usefulness_score,
-        ocr_noise_score: memory.ocr_noise_score,
-        score: 1.0,
-        screenshot_path: memory.screenshot_path.clone(),
-        url: memory.url.clone(),
-        decay_score: memory.decay_score,
-        schema_version: memory.schema_version,
-        activity_type: memory.activity_type.clone(),
-        files_touched: memory.files_touched.clone(),
-        session_duration_mins: memory.session_duration_mins,
-        project: memory.project.clone(),
-        tags: memory.tags.clone(),
-        outcome: memory.outcome.clone(),
-        extraction_confidence: memory.extraction_confidence,
-        anchor_coverage_score: memory.anchor_coverage_score,
-        extracted_entities: memory.entities.clone(),
-        content_hash: memory.content_hash.clone(),
-        dedup_fingerprint: memory.dedup_fingerprint.clone(),
-        is_consolidated: memory.is_consolidated,
-        is_soft_deleted: memory.is_soft_deleted,
-        insight_what_happened: memory.insight_what_happened.clone(),
-        insight_why_mattered: memory.insight_why_mattered.clone(),
-        insight_what_changed: memory.insight_what_changed.clone(),
-        insight_context_thread: memory.insight_context_thread.clone(),
-        insight_spans_json: memory.insight_spans_json.clone(),
-        insight_card_confidence: memory.insight_card_confidence,
-        synthesis_branch: memory.synthesis_branch.clone(),
-        topic_categories: memory.topic_categories.clone(),
-        matched_routes: Vec::new(),
-        matched_chunk_ids: Vec::new(),
-        chunk_evidence: Vec::new(),
-        embedding_provenance: crate::memory_embedding_document::search_embedding_provenance(
-            &memory.raw_evidence,
-        ),
-        embedding_reason_labels: Vec::new(),
-        enrichment_status: memory.enrichment_status.clone(),
-        reviewed_at_ms: memory.reviewed_at_ms,
-        reviewer_generation: memory.reviewer_generation,
-        storage_outcome: memory.storage_outcome.clone(),
-    }
+    crate::context_runtime::retrieval_routes::memory_record_to_search_result(memory, 1.0)
 }
 
 fn aggregate_urls(
@@ -5165,6 +5088,28 @@ mod tests {
     use crate::graph::GraphStore;
     use crate::storage::{MemoryRecord, StateStore, Store};
     use tempfile::tempdir;
+
+    #[test]
+    fn serialized_mcp_rows_include_text_source_without_raw_evidence() {
+        for (raw_evidence, expected) in [
+            (r#"{"source_kind":"ocr"}"#, "ocr"),
+            (r#"{"text_source_kinds":["ax","ocr"]}"#, "mixed"),
+            ("{}", "unknown"),
+        ] {
+            let memory = MemoryRecord {
+                raw_evidence: raw_evidence.to_string(),
+                ..Default::default()
+            };
+            let result = memory_to_search_result(&memory);
+            let mut rows = build_memory_rows(&[memory], false);
+            rows.push(result_row_to_json(&result, None, false));
+            for row in rows {
+                assert_eq!(row["text_source"], expected);
+                assert!(row.get("raw").is_none());
+                assert!(row.get("raw_evidence").is_none());
+            }
+        }
+    }
 
     fn build_test_app_state() -> Arc<AppState> {
         let temp_dir = tempdir().expect("tempdir");

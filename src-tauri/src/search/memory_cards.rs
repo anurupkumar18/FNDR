@@ -30,6 +30,9 @@ pub struct MemoryCard {
     pub context: Vec<String>,
     pub timestamp: i64,
     pub app_name: String,
+    /// Capture method, independent of the synthesis branch.
+    #[serde(default)]
+    pub text_source: String,
     pub window_title: String,
     pub url: Option<String>,
     pub score: f32,
@@ -300,6 +303,15 @@ impl MemoryCardSynthesizer {
                 context,
                 timestamp: anchor.timestamp,
                 app_name: anchor.app_name.clone(),
+                text_source: if group
+                    .members
+                    .iter()
+                    .all(|member| member.text_source == anchor.text_source)
+                {
+                    anchor.text_source.clone()
+                } else {
+                    "mixed".to_string()
+                },
                 window_title: anchor.window_title.clone(),
                 url: anchor.url.clone(),
                 score,
@@ -850,6 +862,7 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         context,
         timestamp: result.timestamp,
         app_name: result.app_name.clone(),
+        text_source: result.text_source.clone(),
         window_title: result.window_title.clone(),
         url: result.url.clone(),
         score: result.score,
@@ -1677,6 +1690,80 @@ fn normalize_effective_url(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serialized_card_text_source_uses_capture_evidence() {
+        for (raw_evidence, expected) in [
+            (r#"{"source_kind":"ax"}"#, "ax"),
+            (r#"{"source_kind":"ocr"}"#, "ocr"),
+            (r#"{"source_kind":"browser_semantic"}"#, "browser_semantic"),
+            (
+                r#"{"source_kind":"ocr","text_source_kinds":["ax","ocr"]}"#,
+                "mixed",
+            ),
+            ("{}", "unknown"),
+        ] {
+            let record = crate::storage::MemoryRecord {
+                raw_evidence: raw_evidence.to_string(),
+                synthesis_branch: "browser_semantic".to_string(),
+                ..Default::default()
+            };
+            let result = crate::context_runtime::retrieval_routes::memory_record_to_search_result(
+                &record, 1.0,
+            );
+            let card = fallback_card_for_result("", &result);
+            assert_eq!(serde_json::to_value(card).unwrap()["text_source"], expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn serialized_grouped_card_text_source_includes_every_member() {
+        for (sources, expected) in [
+            (["ax", "ax"], "ax"),
+            (["ax", "ocr"], "mixed"),
+            (["ax", "unknown"], "mixed"),
+            (["mixed", "ax"], "mixed"),
+        ] {
+            let results: Vec<_> = sources
+                .iter()
+                .enumerate()
+                .map(|(index, source)| {
+                    let record = crate::storage::MemoryRecord {
+                        id: format!("source-{index}"),
+                        timestamp: 3_000_000 - index as i64 * 60_000,
+                        app_name: "VS Code".to_string(),
+                        window_title: "capture provenance".to_string(),
+                        session_id: "capture-session".to_string(),
+                        session_key: "vscode:capture".to_string(),
+                        anchor_coverage_score: 0.9,
+                        text: "Reviewed capture provenance sources".to_string(),
+                        clean_text: "Reviewed capture provenance sources".to_string(),
+                        snippet: "Reviewed capture provenance sources".to_string(),
+                        raw_evidence: serde_json::json!({"source_kind": source}).to_string(),
+                        ..Default::default()
+                    };
+                    crate::context_runtime::retrieval_routes::memory_record_to_search_result(
+                        &record, 1.0,
+                    )
+                })
+                .collect();
+            let cards = MemoryCardSynthesizer::from_results_with_policy(
+                None,
+                "capture",
+                &results,
+                6,
+                3,
+                Duration::from_millis(2),
+            )
+            .await;
+            assert_eq!(cards.len(), 1);
+            assert_eq!(cards[0].source_count, 2);
+            assert_eq!(
+                serde_json::to_value(&cards[0]).unwrap()["text_source"],
+                expected
+            );
+        }
+    }
 
     #[test]
     fn groups_nearby_same_session_hits() {

@@ -166,6 +166,19 @@ describe("MemoryCard — lifecycle chip rendering (expanded variant)", () => {
 });
 
 describe("MemoryProvenanceStrip", () => {
+    it.each([
+        ["ax", "Accessibility"],
+        ["ocr", "Screen text (OCR)"],
+        ["browser_semantic", "Browser page text"],
+        ["mixed", "Multiple sources"],
+        ["unknown", "Unknown"],
+        [undefined, "Unknown"],
+    ] as const)("shows captured text source %s independently of synthesis", (source, label) => {
+        render(<MemoryProvenanceStrip card={makeCard({ synthesis_branch: "vlm", text_source: source })} />);
+        expect(screen.getByText("Text captured via")).toBeTruthy();
+        expect(screen.getByText(label)).toBeTruthy();
+    });
+
     it("does not treat synthesis_branch alone as DEVELOPED", () => {
         render(
             <MemoryProvenanceStrip

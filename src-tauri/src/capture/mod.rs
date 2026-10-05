@@ -5385,7 +5385,7 @@ pub(crate) async fn merge_memory_records_with_policy(
         .insight_card_confidence
         .max(incoming.insight_card_confidence);
     let raw_evidence = {
-        let raw = prefer_non_empty(&incoming.raw_evidence, &existing.raw_evidence);
+        let raw = merge_text_source_evidence(&existing.raw_evidence, &incoming.raw_evidence);
         if recompute_embedding {
             let manifest = build_embedding_manifest(
                 &merge_embedding_document,
@@ -5619,6 +5619,25 @@ fn prefer_non_empty(incoming: &str, existing: &str) -> String {
     } else {
         existing.trim().to_string()
     }
+}
+
+fn merge_text_source_evidence(existing: &str, incoming: &str) -> String {
+    let preferred = prefer_non_empty(incoming, existing);
+    let mut evidence = serde_json::from_str::<serde_json::Value>(&preferred)
+        .ok()
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    let mut kinds = crate::memory_quality::text_source_kinds_from_raw_evidence(existing);
+    kinds.extend(crate::memory_quality::text_source_kinds_from_raw_evidence(
+        incoming,
+    ));
+    evidence["source_kind"] = json!(if kinds.len() > 1 {
+        "mixed"
+    } else {
+        kinds.first().copied().unwrap_or("unknown")
+    });
+    evidence["text_source_kinds"] = json!(kinds);
+    evidence.to_string()
 }
 
 fn merge_string_lists(existing: &[String], incoming: &[String]) -> Vec<String> {
@@ -6985,6 +7004,69 @@ Activity patterns and insights dashboard
             .iter()
             .any(|e| e.eq_ignore_ascii_case("Screenpipe")));
         assert!(entities.iter().any(|e| e.eq_ignore_ascii_case("Obsidian")));
+    }
+
+    #[tokio::test]
+    async fn merge_preserves_text_source_lineage_across_repeated_merges() {
+        let mut existing = merge_test_record("existing");
+        existing.clean_text = "Accessibility captured the original parser implementation.".into();
+        existing.raw_evidence = r#"{"source_kind":"ax"}"#.into();
+        let mut incoming = merge_test_record("incoming");
+        incoming.clean_text = "OCR captured the regression test and its failure output.".into();
+        incoming.raw_evidence = r#"{"source_kind":"ocr","ocr_quality":{"kept_lines":4},"embedding_manifest":{"marker":"preserve"}}"#.into();
+
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+        assert!(merged.clean_text.contains("original parser"));
+        assert!(merged.clean_text.contains("regression test"));
+        let evidence: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+        assert_eq!(evidence["source_kind"], "mixed");
+        assert_eq!(evidence["text_source_kinds"], json!(["ax", "ocr"]));
+        assert_eq!(evidence["ocr_quality"]["kept_lines"], 4);
+        assert_eq!(evidence["embedding_manifest"]["marker"], "preserve");
+
+        let mut later = merge_test_record("later");
+        later.raw_evidence = r#"{"source_kind":"ax"}"#.into();
+        let merged = merge_memory_records_with_policy(merged, later, None, None, true, false).await;
+        let evidence: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+        assert_eq!(evidence["source_kind"], "mixed");
+        assert_eq!(evidence["text_source_kinds"], json!(["ax", "ocr"]));
+        assert!(evidence["embedding_manifest"].is_object());
+    }
+
+    #[tokio::test]
+    async fn merge_text_source_lineage_never_guesses_a_legacy_extraction_method() {
+        for raw in [
+            "",
+            "not json",
+            "[]",
+            "{}",
+            r#"{"source_kind":"visual_capture"}"#,
+            r#"{"source_kind":"private arbitrary label"}"#,
+        ] {
+            let mut existing = merge_test_record("existing");
+            existing.raw_evidence = raw.into();
+            let mut incoming = merge_test_record("incoming");
+            incoming.raw_evidence = r#"{"source_kind":"ocr"}"#.into();
+            let merged =
+                merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+            let evidence: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+            assert_eq!(evidence["source_kind"], "mixed", "{raw}");
+            assert_eq!(
+                evidence["text_source_kinds"],
+                json!(["ocr", "unknown"]),
+                "{raw}"
+            );
+        }
+
+        let mut existing = merge_test_record("existing");
+        existing.raw_evidence = r#"{"source_kind":"browser_semantic"}"#.into();
+        let incoming = existing.clone();
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+        let evidence: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+        assert_eq!(evidence["source_kind"], "browser_semantic");
+        assert_eq!(evidence["text_source_kinds"], json!(["browser_semantic"]));
     }
 
     #[tokio::test]

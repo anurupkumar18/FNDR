@@ -938,6 +938,11 @@ pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> 
                 id: get_str(&ids, i),
                 timestamp: timestamps.as_ref().map(|c| c.value(i)).unwrap_or(0),
                 app_name: get_str(&app_names, i),
+                text_source: crate::memory_quality::text_source_from_raw_evidence(&get_str(
+                    &raw_evidences,
+                    i,
+                ))
+                .to_string(),
                 bundle_id: get_opt_str(&bundle_ids, i),
                 window_title: get_str(&window_titles, i),
                 session_id: get_str(&session_ids, i),
@@ -1059,6 +1064,36 @@ pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> 
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod text_source_tests {
+    use super::*;
+
+    #[test]
+    fn serialized_search_result_text_source_uses_existing_arrow_evidence() {
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "raw_evidence",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                r#"{"source_kind":"ax"}"#,
+                r#"{"source_kind":"ocr","text_source_kinds":["ocr","browser_semantic"]}"#,
+                "{}",
+            ]))],
+        )
+        .unwrap();
+        let results = batch_to_search_results(&batch);
+        for (result, expected) in results.iter().zip(["ax", "mixed", "unknown"]) {
+            assert_eq!(
+                serde_json::to_value(result).unwrap()["text_source"],
+                expected
+            );
+        }
+    }
 }
 
 // ── Arrow column helpers ─────────────────────────────────────────────────────

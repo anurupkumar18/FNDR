@@ -761,6 +761,7 @@ mod tests {
 
         let mut record = MemoryRecord::default();
         record.id = "mem-success".to_string();
+        record.raw_evidence = r#"{"source_kind":"mixed","text_source_kinds":["ax","ocr"]}"#.into();
         record.timestamp = 1_700_000_000_000;
         record.app_name = "Chrome".to_string();
         record.window_title = "FNDR architecture - Notion".to_string();
@@ -818,6 +819,9 @@ mod tests {
         assert_eq!(written.reviewed_at_ms, 1_700_000_002_000);
         assert_eq!(written.reviewer_generation, 1);
         assert_eq!(written.synthesis_branch, SYNTHESIS_BRANCH_REVIEWED_LOCAL);
+        let evidence: serde_json::Value = serde_json::from_str(&written.raw_evidence).unwrap();
+        assert_eq!(evidence["source_kind"], "mixed");
+        assert_eq!(evidence["text_source_kinds"], serde_json::json!(["ax", "ocr"]));
         assert!(written.memory_context.contains("chunk-first"));
         assert_eq!(
             written.embedding_text,

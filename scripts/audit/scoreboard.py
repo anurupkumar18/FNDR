@@ -36,6 +36,7 @@ TARGETED_STRUCTURED_FIELDS = (("project", "Memories with a project"), ("next_ste
 
 NOT_MEASURED = "not measured"
 LONG_DASHES = {0x2013: "-", 0x2014: "-"}
+TEXT_SOURCE_CATEGORIES = frozenset(("ax", "ocr", "browser_semantic", "mixed", "unknown"))
 
 
 # Retrieval reports
@@ -222,6 +223,7 @@ def parse_vault_health(text: str) -> dict:
         "exact_reopen_pct": None,
         "chunk_rows": None,
         "structured_pct": {},
+        "text_source": {},
     }
     parent_table = None
     for heading, header, rows in markdown_tables(text):
@@ -246,6 +248,20 @@ def parse_vault_health(text: str) -> dict:
                 value = parse_number(cells.get("filled"))
                 if cells.get("field") and value is not None:
                     parsed["structured_pct"][cells["field"]] = value
+        elif parent_table and heading == f"Text source: `{parent_table}`":
+            for row in rows:
+                cells = dict(zip(header, row))
+                source = cells.get("source")
+                if source not in TEXT_SOURCE_CATEGORIES:
+                    continue
+                metrics = {
+                    "rows": parse_int(cells.get("rows")),
+                    "share_pct": parse_number(cells.get("share")),
+                    "clean_text_chars_p50": parse_number(cells.get("median clean chars")),
+                    "under_200_chars_pct": parse_number(cells.get("under 200 chars")),
+                }
+                if all(value is not None for value in metrics.values()):
+                    parsed["text_source"][source] = metrics
     return parsed
 
 
@@ -306,6 +322,20 @@ def vault_section(path: Path | None) -> list[str]:
         "Chunk rows count chunks, not memories, so a non-zero count does not prove every memory is covered. "
         "Exact reopen is the stored share across the whole vault, not a live day.",
     ]
+    sources = parsed["text_source"]
+    if sources:
+        lines += [
+            "", "Text source breakdown (known observation lineage; older merges may be incomplete):", "",
+            "| source | rows | share | median clean chars | under 200 chars |",
+            "|---|---:|---:|---:|---:|",
+        ]
+        lines += [
+            f"| {source} | {metrics['rows']} | {fmt_pct(metrics['share_pct'])} | "
+            f"{fmt_plain(metrics['clean_text_chars_p50'])} | {fmt_pct(metrics['under_200_chars_pct'])} |"
+            for source, metrics in sorted(sources.items())
+        ]
+    else:
+        lines += ["", f"Text source breakdown: {NOT_MEASURED}."]
     return lines
 
 

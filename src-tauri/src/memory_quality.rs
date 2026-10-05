@@ -12,6 +12,56 @@ pub const VISUAL_SEMANTICS_FAILED_OUTCOME: &str = "visual_semantics_failed";
 pub const LOW_EVIDENCE_VISUAL_FALLBACK_REASON: &str =
     "low_evidence_visual_fallback=clip_vector_without_text_or_pixel_vlm_semantics";
 
+fn canonical_text_source(value: &Value) -> &'static str {
+    match value.as_str().map(str::trim) {
+        Some(label) if label.eq_ignore_ascii_case("ax") => "ax",
+        Some(label) if label.eq_ignore_ascii_case("browser_semantic") => "browser_semantic",
+        Some(label) if label.eq_ignore_ascii_case("ocr") => "ocr",
+        _ => "unknown",
+    }
+}
+
+fn text_source_kinds(evidence: &Value) -> std::collections::BTreeSet<&'static str> {
+    if let Some(kinds) = evidence["text_source_kinds"]
+        .as_array()
+        .filter(|kinds| !kinds.is_empty())
+    {
+        kinds.iter().map(canonical_text_source).collect()
+    } else {
+        [canonical_text_source(&evidence["source_kind"])]
+            .into_iter()
+            .collect()
+    }
+}
+
+/// Bounded observation lineage, not attribution of individual stored characters.
+/// Legacy missing sources remain unknown; visual capture does not identify a text method.
+pub(crate) fn text_source_kinds_from_raw_evidence(
+    raw: &str,
+) -> std::collections::BTreeSet<&'static str> {
+    let evidence = serde_json::from_str::<Value>(raw).unwrap_or(Value::Null);
+    text_source_kinds(&evidence)
+}
+
+/// A fixed display/report category; arbitrary raw evidence labels never escape.
+pub fn text_source_from_raw_evidence(raw: &str) -> &'static str {
+    let evidence = serde_json::from_str::<Value>(raw).unwrap_or(Value::Null);
+    let kinds = text_source_kinds(&evidence);
+    let has_lineage = evidence["text_source_kinds"]
+        .as_array()
+        .is_some_and(|kinds| !kinds.is_empty());
+    if kinds.len() > 1
+        || (!has_lineage
+            && evidence["source_kind"]
+                .as_str()
+                .is_some_and(|label| label.trim().eq_ignore_ascii_case("mixed")))
+    {
+        "mixed"
+    } else {
+        kinds.first().copied().unwrap_or("unknown")
+    }
+}
+
 pub fn default_memory_quality_config() -> MemoryQualityConfig {
     MemoryQualityConfig {
         primary_memory_specificity_min: DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN,
@@ -747,6 +797,54 @@ mod tests {
         build_embedding_manifest, compose_memory_embedding_document, upsert_embedding_manifest,
         EmbeddingStatus, VisualSemanticSource,
     };
+
+    #[test]
+    fn text_source_categories_are_bounded_and_lineage_takes_precedence() {
+        for (raw, expected) in [
+            (r#"{"source_kind":" AX "}"#, "ax"),
+            (r#"{"source_kind":"browser_semantic"}"#, "browser_semantic"),
+            (r#"{"source_kind":"browser_ſemantic"}"#, "unknown"),
+            (
+                r#"{"source_kind":"ax","text_source_kinds":["browser_ſemantic"]}"#,
+                "unknown",
+            ),
+            (
+                r#"{"text_source_kinds":["browser_ſemantic","browser_semantic"]}"#,
+                "mixed",
+            ),
+            (r#"{"source_kind":"ocr"}"#, "ocr"),
+            (r#"{"source_kind":"mixed"}"#, "mixed"),
+            (r#"{"source_kind":"visual_capture"}"#, "unknown"),
+            (r#"{"source_kind":"private label"}"#, "unknown"),
+            (
+                r#"{"source_kind":"ocr","text_source_kinds":["ax","ax"]}"#,
+                "ax",
+            ),
+            (
+                r#"{"source_kind":"ocr","text_source_kinds":["ax",42]}"#,
+                "mixed",
+            ),
+            (
+                r#"{"source_kind":"ocr","text_source_kinds":["private label",null]}"#,
+                "unknown",
+            ),
+            (r#"{"source_kind":"ocr","text_source_kinds":[]}"#, "ocr"),
+            (
+                r#"{"source_kind":"ocr","text_source_kinds":"invalid"}"#,
+                "ocr",
+            ),
+            ("not json", "unknown"),
+            ("[]", "unknown"),
+            ("{}", "unknown"),
+        ] {
+            assert_eq!(text_source_from_raw_evidence(raw), expected, "{raw}");
+        }
+        assert_eq!(
+            text_source_kinds_from_raw_evidence(r#"{"source_kind":"mixed"}"#),
+            ["unknown"].into_iter().collect(),
+            "a mixed label alone cannot reconstruct contributing methods"
+        );
+    }
 
     fn valid_memory_record() -> MemoryRecord {
         let mut record = MemoryRecord {

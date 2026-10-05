@@ -5,6 +5,14 @@ interface Props {
     card: MemoryCardData;
 }
 
+const TEXT_SOURCE_LABELS = {
+    ax: "Accessibility",
+    ocr: "Screen text (OCR)",
+    browser_semantic: "Browser page text",
+    mixed: "Multiple sources",
+    unknown: "Unknown",
+};
+
 /** Tabular provenance strip — mono caps. Used in expanded variant. */
 export function MemoryProvenanceStrip({ card }: Props) {
     const d = new Date(card.timestamp);
@@ -26,6 +34,10 @@ export function MemoryProvenanceStrip({ card }: Props) {
             <div>
                 <dt>Source</dt>
                 <dd>{card.app_name}</dd>
+            </div>
+            <div>
+                <dt>Text captured via</dt>
+                <dd>{TEXT_SOURCE_LABELS[card.text_source ?? "unknown"] ?? "Unknown"}</dd>
             </div>
             {card.window_title && (
                 <div>

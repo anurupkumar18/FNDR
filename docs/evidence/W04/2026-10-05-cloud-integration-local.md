@@ -101,3 +101,25 @@ After these changes: TypeScript passed; all 80 frontend files / 521 tests passed
 Browser verification used the real frontend at 1280x900 and 360x800 with synthetic Tauri IPC fixtures: populated threads, suggested-source navigation to the Vault dialog, Home reentry, error/retry, empty state, refresh, and light/dark presentation. At 360 px both document and body width were 360 px; no horizontal overflow. No browser console errors appeared. These checks establish frontend presentation/navigation only; exact source callback IDs are covered by component tests, while native Vault/reopening remains in batched QA. Screenshots are local scratch artifacts, not captured user data.
 
 Independent final source review found no new blocking Resume/UI findings. Follow-on commits: `c6b12f1` (Resume eligibility), `124caa6` (Home presentation and dead branch removal), `25a95df` (isolated ONNX measurement and ADR update).
+
+## Capture-source evidence (VS-45 / VS-46)
+
+Reused persisted `raw_evidence.source_kind`; no database column or migration. New merges retain sorted, bounded `text_source_kinds` observation lineage. Missing or unrecognized methods remain unknown, including visual-only captures. A mixed label alone cannot reconstruct historical constituents. The array takes precedence when nonempty; arbitrary labels never enter the derived DTO or reports. This describes observed methods, not attribution of individual stored characters.
+
+Search, Vault, grouped cards and MCP responses expose the same compact category. Expanded cards show "Text captured via" without fetching the debug inspector. Removed the duplicate MCP-to-search converter in favor of the existing shared converter. The health report and scoreboard show source count/share, median clean-text length and share under 200 characters. Python discards raw JSON after categorization rather than retaining another list of evidence blobs; the existing Arrow read is not a new streaming scanner.
+
+Observed red then green at merge lineage, serialized cards/MCP and UI labels. Review also found Python Unicode case folding accepted a label Rust rejected: three new confusable-label cases failed before aligning Python to ASCII labels. Focused audit tests: 37 passed. Full validation before that parser-only correction: 952 Rust library tests passed / 9 ignored, 527 frontend tests passed, typecheck passed, and 104 audit tests run / 1 skipped. The real-store review persistence regression passed separately. Ticket-plan validation and whitespace checks passed.
+
+Synthetic seeded-profile CLI proof: `vault-health` followed by `scoreboard` preserved unknown provenance for all 20 legacy rows (100%), median 188.5 characters, and 60% under 200 characters. This is report plumbing evidence, not a measured native capture-quality claim. No owner vault was read or changed.
+
+Browser verification used synthetic IPC fixtures at 1280x900 and 360x800. The expanded card showed "Multiple sources"; viewport/document widths matched, no debug-inspector request occurred, and the console contained no errors. A missing graph-response mock was corrected before the final screenshots. Native capture and the 12-app matrix remain deferred to batched manual QA.
+
+ANTI-BLOAT REVIEW
+- Behavior delivered: trustworthy source labels and an aggregate quality breakdown.
+- Complexity added: bounded JSON normalization and one derived DTO field; no database schema or query layer.
+- Bloat risks: duplicated category rules across Rust/Python, covered with matching edge cases.
+- Simplifications required: Unicode normalization aligned before delivery.
+- Code to delete or merge: duplicate 80-line MCP converter removed.
+- Interface improvements: compact labels shared by humans and agents; raw evidence stays internal.
+- Testability gaps: native source distribution and historical lost lineage remain unproven.
+- Verdict: approve. The focused Rust parser test passed after adding the matching Unicode cases; public-diff scan and whitespace checks passed.

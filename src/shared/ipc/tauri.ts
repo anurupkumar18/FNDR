@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+export type CaptureTextSource = "ax" | "ocr" | "browser_semantic" | "mixed" | "unknown";
+
 export interface SearchResult {
     id: string;
     timestamp: number;
     app_name: string;
+    text_source?: CaptureTextSource;
     bundle_id?: string;
     window_title: string;
     session_id: string;
@@ -57,6 +60,7 @@ export interface MemoryCard {
     context: string[];
     timestamp: number;
     app_name: string;
+    text_source?: CaptureTextSource;
     window_title: string;
     url?: string;
     score: number;

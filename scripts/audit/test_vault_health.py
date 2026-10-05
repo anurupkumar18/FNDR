@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -36,6 +37,8 @@ def parent_rows(*, second_vector, second_reopen):
             "decisions": pa.array([[], ["Chose"]], type=pa.list_(pa.string())),
             "errors": pa.array([[], ["Failed"]], type=pa.list_(pa.string())),
             "summary_source": ["llm", "fallback"],
+            "raw_evidence": [json.dumps({"source_kind": "ax", "private": SECRET}),
+                             json.dumps({"source_kind": "ocr", "private": SECRET})],
             "reopen_kind": ["browser_url", second_reopen],
             # These sensitive columns exist to prove the audit never selects or renders them.
             "title": [SECRET, SECRET],
@@ -85,6 +88,71 @@ class RecordingDatabase:
 
 
 class VaultHealthTest(unittest.TestCase):
+    def test_non_ascii_source_labels_do_not_alias_known_categories(self):
+        for evidence, expected in [
+            ({"source_kind": "browser_ſemantic"}, "unknown"),
+            ({"source_kind": "ax", "text_source_kinds": ["browser_ſemantic"]}, "unknown"),
+            ({"text_source_kinds": ["browser_ſemantic", "browser_semantic"]}, "mixed"),
+        ]:
+            with self.subTest(evidence=evidence):
+                self.assertEqual(vh._safe_text_source(json.dumps(evidence)), expected)
+
+    def test_text_source_lineage_is_allowlisted_and_array_takes_precedence(self):
+        for evidence, expected in [
+            ({"source_kind": "OCR"}, "ocr"),
+            ({"source_kind": "mixed"}, "mixed"),
+            ({"source_kind": "ax", "text_source_kinds": ["ocr", "ocr"]}, "ocr"),
+            ({"source_kind": "ax", "text_source_kinds": ["ax", "ocr"]}, "mixed"),
+            ({"source_kind": "ax", "text_source_kinds": ["ax", SECRET]}, "mixed"),
+            ({"source_kind": "ax", "text_source_kinds": [None, "ax"]}, "mixed"),
+            ({"source_kind": "ax", "text_source_kinds": []}, "ax"),
+            ({"source_kind": "ax", "text_source_kinds": "ocr"}, "ax"),
+            ({"source_kind": "visual_capture"}, "unknown"),
+            ({"text_source_kinds": [SECRET, None]}, "unknown"),
+            ({"source_kind": SECRET}, "unknown"),
+            ([], "unknown"),
+        ]:
+            self.assertEqual(vh._safe_text_source(json.dumps(evidence)), expected)
+        for raw in [None, "", "{malformed", "null"]:
+            self.assertEqual(vh._safe_text_source(raw), "unknown")
+
+    def test_text_source_table_reports_only_aggregate_lengths_and_shares(self):
+        source = pa.table({
+            "clean_text": ["x" * n for n in [100, 300, 199, 200, 50, 500, 150, 250]],
+            "raw_evidence": [json.dumps({"source_kind": kind, "private": SECRET})
+                             for kind in ["ax", "ax", "ocr", "browser_semantic", "mixed", SECRET]]
+                            + [None, "malformed"],
+        })
+        selections = []
+        row = vh._table_health(RecordingTable(source, selections), vh.V4_PARENT_TABLE,
+                               "current parent", vh.PARENT_AGGREGATE_COLUMNS, "timestamp", True)
+        self.assertEqual(row["text_source"]["ax"], {
+            "rows": 2, "share_pct": 25.0, "clean_text_chars_p50": 200,
+            "under_200_chars_pct": 50.0,
+        })
+        self.assertEqual(row["text_source"]["unknown"]["rows"], 3)
+        self.assertEqual(row["text_source"]["unknown"]["clean_text_chars_p50"], 250)
+        self.assertEqual(row["text_source"]["browser_semantic"]["under_200_chars_pct"], 0.0)
+        self.assertNotIn(SECRET, json.dumps(row))
+        _, projected = vh._read_aggregate_columns(RecordingTable(source, []), vh.PARENT_AGGREGATE_COLUMNS)
+        self.assertNotIn(SECRET, json.dumps(projected))
+
+    def test_legacy_rows_without_evidence_are_unknown_not_ocr(self):
+        source = parent_rows(second_vector=[0.0, 0.0], second_reopen="app_bundle").drop(["raw_evidence"])
+        row = vh._table_health(RecordingTable(source, []), vh.V4_PARENT_TABLE,
+                               "current parent", vh.PARENT_AGGREGATE_COLUMNS, "timestamp", True)
+        self.assertEqual(row["text_source"], {"unknown": {
+            "rows": 2, "share_pct": 100.0, "clean_text_chars_p50": 160,
+            "under_200_chars_pct": 50.0,
+        }})
+
+    def test_text_source_median_preserves_fractional_character_counts(self):
+        source = pa.table({"clean_text": ["x" * 199, "x" * 200]})
+        row = vh._table_health(RecordingTable(source, []), vh.V4_PARENT_TABLE,
+                               "current parent", vh.PARENT_AGGREGATE_COLUMNS, "timestamp", True)
+        self.assertEqual(row["text_source"]["unknown"]["clean_text_chars_p50"], 199.5)
+        self.assertEqual(row["text_source"]["unknown"]["under_200_chars_pct"], 50.0)
+
     def seed_all_tables(self, directory):
         db = lancedb.connect(directory)
         db.create_table(
