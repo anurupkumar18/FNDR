@@ -118,7 +118,10 @@ static DATE_PHRASE: Lazy<Regex> = Lazy::new(|| {
 
 fn find_time(query: &str, now: DateTime<Local>) -> Option<((usize, usize), TimeRange)> {
     let today = now.date_naive();
-    if let Some(found) = DATE_PHRASE.captures(query) {
+    if let Some(found) = DATE_PHRASE
+        .captures_iter(query)
+        .find(|found| !after_deadline_word(query, found.get(0).unwrap().start()))
+    {
         let whole = found.get(0)?;
         let month_name = found["month"].to_lowercase();
         let month = MONTHS
@@ -137,6 +140,7 @@ fn find_time(query: &str, now: DateTime<Local>) -> Option<((usize, usize), TimeR
     }
     if let Some(found) = DAY_PHRASE.captures_iter(query).find(|found| {
         !after_article(query, found.get(0).unwrap().start())
+            && !after_deadline_word(query, found.get(0).unwrap().start())
             && !is_dotted(query, found.get(0).unwrap().end())
     }) {
         let whole = found.get(0)?;
@@ -257,7 +261,8 @@ fn after_article(query: &str, start: usize) -> bool {
         .any(|article| before == *article || before.ends_with(&format!(" {article}")))
 }
 
-/// "due Thursday", "by Friday": a deadline in the future, not a day to search.
+/// "due Thursday", "by Friday", "due October 9", "due today": a deadline the
+/// memory mentions, not the day it was captured.
 fn after_deadline_word(query: &str, start: usize) -> bool {
     let before = query[..start].trim_end().to_lowercase();
     ["due", "by", "until", "before", "till", "next"]
@@ -507,6 +512,8 @@ mod tests {
             "net new ARR $1.24M",
             "churn drivers due Thursday",
             "send the readout by Friday",
+            "the grant report due October 9",
+            "the invoice due today",
         ] {
             let parsed = parse(query);
             assert_eq!(parsed.time, None, "{query}");
