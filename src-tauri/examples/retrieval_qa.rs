@@ -1,6 +1,7 @@
-//! Retrieval baseline on a seeded profile, through the two paths the app uses:
-//! the Search screen (`search_ranked_results`) and Ask's context-runtime card
-//! path (`context_runtime::run_query`). Refuses missing and real profiles.
+//! Retrieval baseline on a seeded profile, through the Search screen
+//! (`search_ranked_results`), Ask's context-runtime card path
+//! (`context_runtime::run_query`), and the shared `context_runtime::retrieve`
+//! every surface is moving to (VS-09). Refuses missing and real profiles.
 //! Case kinds: keyword and paraphrase (the headline Recall@5), time and app
 //! (reported per kind), and negative (no relevant memory; reported as a
 //! no-match row with top scores, never counted in recall).
@@ -8,7 +9,9 @@
 //!        [--out <md>] [--json <json>]
 
 use fndr_lib::config::Config;
-use fndr_lib::context_runtime::{run_query, ComposeMode};
+use fndr_lib::context_runtime::{
+    retrieve, run_query, ComposeMode, RetrieveRequest, STRONG_MATCH_SCORE,
+};
 use fndr_lib::graph::GraphStore;
 use fndr_lib::ipc::commands::search::search_ranked_results;
 use fndr_lib::storage::{StateStore, Store};
@@ -48,6 +51,12 @@ struct LatencyMs {
 struct NoMatch {
     cases: usize,
     returned_nothing: usize,
+    /// Negative cases whose best result is under `STRONG_MATCH_SCORE` (or
+    /// that returned nothing): the screen says "No strong matches" (VS-12).
+    no_strong_match: usize,
+    /// Positive cases whose best result is under the bar: these would wrongly
+    /// say "No strong matches".
+    positive_without_strong_match: usize,
     top_score_median: Option<f64>,
     positive_top_score_median: Option<f64>,
 }
@@ -66,6 +75,7 @@ struct PathMetrics {
 struct PathReports {
     search: PathMetrics,
     ask: PathMetrics,
+    retrieve: PathMetrics,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -81,8 +91,10 @@ struct QueryReport {
     kind: String,
     search_rank_at_10: Option<usize>,
     ask_rank_at_10: Option<usize>,
+    retrieve_rank_at_10: Option<usize>,
     search_top_score: Option<f64>,
     ask_top_score: Option<f64>,
+    retrieve_top_score: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,11 +135,16 @@ impl Score {
     }
 }
 
+fn is_strong(top_score: Option<f64>) -> bool {
+    top_score.is_some_and(|score| score >= f64::from(STRONG_MATCH_SCORE))
+}
+
 #[derive(Default)]
 struct PathScore {
     core: Score,
     by_kind: BTreeMap<String, Score>,
     positive_top_scores: Vec<f64>,
+    positive_without_strong_match: usize,
     negative_top_scores: Vec<Option<f64>>,
     latency_ms: Vec<u128>,
 }
@@ -146,6 +163,9 @@ impl PathScore {
         }
         self.by_kind.entry(kind.to_string()).or_default().add(rank);
         self.positive_top_scores.extend(top_score);
+        if !is_strong(top_score) {
+            self.positive_without_strong_match += 1;
+        }
     }
 
     fn metrics(&self) -> PathMetrics {
@@ -159,6 +179,12 @@ impl PathScore {
             NoMatch {
                 cases: self.negative_top_scores.len(),
                 returned_nothing: self.negative_top_scores.len() - returned.len(),
+                no_strong_match: self
+                    .negative_top_scores
+                    .iter()
+                    .filter(|score| !is_strong(**score))
+                    .count(),
+                positive_without_strong_match: self.positive_without_strong_match,
                 top_score_median: median(&returned),
                 positive_top_score_median: median(&self.positive_top_scores),
             }
@@ -366,7 +392,11 @@ fn render_markdown(report: &RetrievalReport) -> String {
         .filter(|kind| **kind != NEGATIVE_KIND)
         .copied()
         .collect::<Vec<_>>();
-    let paths = [("Search", &report.paths.search), ("Ask", &report.paths.ask)];
+    let paths = [
+        ("Search", &report.paths.search),
+        ("Ask", &report.paths.ask),
+        ("Retrieve", &report.paths.retrieve),
+    ];
 
     let mut lines = vec![
         format!("# Retrieval baseline: {}", report.case_set),
@@ -381,7 +411,7 @@ fn render_markdown(report: &RetrievalReport) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        "Search is the pre-card-synthesis ranked retrieval path used by Search; Ask is the context_runtime card path."
+        "Search is the pre-card-synthesis ranked retrieval path used by Search; Ask is the context_runtime card path; Retrieve is the shared `retrieve` function (VS-09)."
             .to_string(),
         "Recall@5 is case-level: a case is recalled when at least one accepted relevant ID appears in its top five results."
             .to_string(),
@@ -420,16 +450,19 @@ fn render_markdown(report: &RetrievalReport) -> String {
     if paths.iter().any(|(_, metrics)| metrics.no_match.is_some()) {
         lines.extend([
             String::new(),
-            "| Path | Negative cases | Returned nothing | Median top score, negative | Median top score, positive |"
-                .to_string(),
-            "|---|---:|---:|---:|---:|".to_string(),
+            format!(
+                "| Path | Negative cases | Returned nothing | No strong match (under {STRONG_MATCH_SCORE:.2}) | Positives under the bar | Median top score, negative | Median top score, positive |"
+            ),
+            "|---|---:|---:|---:|---:|---:|---:|".to_string(),
         ]);
         for (name, metrics) in paths {
             if let Some(no_match) = &metrics.no_match {
                 lines.push(format!(
-                    "| {name} | {} | {} | {} | {} |",
+                    "| {name} | {} | {} | {} | {} | {} | {} |",
                     no_match.cases,
                     no_match.returned_nothing,
+                    no_match.no_strong_match,
+                    no_match.positive_without_strong_match,
                     score_label(no_match.top_score_median),
                     score_label(no_match.positive_top_score_median)
                 ));
@@ -443,18 +476,20 @@ fn render_markdown(report: &RetrievalReport) -> String {
             report.top1_agreement.count, report.top1_agreement.total, report.top1_agreement.rate
         ),
         String::new(),
-        "| Query | Kind | Search rank@10 | Ask rank@10 | Search top score | Ask top score |".to_string(),
-        "|---|---|---:|---:|---:|---:|".to_string(),
+        "| Query | Kind | Search rank@10 | Ask rank@10 | Retrieve rank@10 | Search top score | Ask top score | Retrieve top score |".to_string(),
+        "|---|---|---:|---:|---:|---:|---:|---:|".to_string(),
     ]);
     lines.extend(report.queries.iter().map(|query| {
         format!(
-            "| {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {} | {} |",
             markdown_cell(&query.query),
             query.kind,
             rank_label(query.search_rank_at_10),
             rank_label(query.ask_rank_at_10),
+            rank_label(query.retrieve_rank_at_10),
             score_label(query.search_top_score),
-            score_label(query.ask_top_score)
+            score_label(query.ask_top_score),
+            score_label(query.retrieve_top_score)
         )
     }));
     lines.join("\n") + "\n"
@@ -504,6 +539,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut search_score = PathScore::default();
     let mut ask_score = PathScore::default();
+    let mut retrieve_score = PathScore::default();
     let mut top1_agreement = 0usize;
     let mut queries = Vec::with_capacity(cases.len());
     for case in &cases {
@@ -544,10 +580,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .collect::<Vec<_>>();
 
+        let started = Instant::now();
+        let retrieved = runtime.block_on(retrieve(
+            &state,
+            &RetrieveRequest {
+                query: case.query.clone(),
+                limit: SEARCH_LIMIT,
+                ..Default::default()
+            },
+        ))?;
+        let retrieve_latency_ms = started.elapsed().as_millis();
+        let retrieve_top_score = retrieved.hits.first().map(|hit| f64::from(hit.score));
+        let retrieve_ranked = retrieved
+            .hits
+            .into_iter()
+            .map(|hit| vec![hit.memory_id])
+            .collect::<Vec<_>>();
+
         let search_rank = first_relevant_rank(&search_ranked, &relevant, 10);
         let ask_rank = first_relevant_rank(&ask_ranked, &relevant, 10);
         search_score.add(&case.kind, search_rank, search_top_score, search_latency_ms);
         ask_score.add(&case.kind, ask_rank, ask_top_score, ask_latency_ms);
+        let retrieve_rank = first_relevant_rank(&retrieve_ranked, &relevant, 10);
+        retrieve_score.add(
+            &case.kind,
+            retrieve_rank,
+            retrieve_top_score,
+            retrieve_latency_ms,
+        );
         if let (Some(search_first), Some(ask_first)) = (search_ranked.first(), ask_ranked.first()) {
             if search_first.iter().any(|id| ask_first.contains(id)) {
                 top1_agreement += 1;
@@ -558,8 +618,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             kind: case.kind.clone(),
             search_rank_at_10: search_rank,
             ask_rank_at_10: ask_rank,
+            retrieve_rank_at_10: retrieve_rank,
             search_top_score,
             ask_top_score,
+            retrieve_top_score,
         });
     }
 
@@ -572,6 +634,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         paths: PathReports {
             search: search_score.metrics(),
             ask: ask_score.metrics(),
+            retrieve: retrieve_score.metrics(),
         },
         top1_agreement: Top1Agreement {
             count: top1_agreement,
@@ -652,6 +715,22 @@ mod tests {
     }
 
     #[test]
+    fn no_match_counts_queries_whose_best_result_is_weak() {
+        let mut score = PathScore::default();
+        score.add("keyword", Some(1), Some(0.9), 10);
+        score.add("time", Some(3), Some(0.2), 10);
+        score.add("negative", None, Some(0.5), 10);
+        score.add("negative", None, Some(0.1), 10);
+        score.add("negative", None, None, 10);
+
+        let no_match = score.metrics().no_match.expect("negative cases reported");
+        // A negative is right when nothing clears the bar; a positive whose
+        // best result is under it would show "No strong matches" (VS-12).
+        assert_eq!(no_match.no_strong_match, 2);
+        assert_eq!(no_match.positive_without_strong_match, 1);
+    }
+
+    #[test]
     fn negative_cases_are_scored_as_no_match_and_never_count_as_misses() {
         let mut score = PathScore::default();
         score.add("keyword", Some(1), Some(0.9), 10);
@@ -710,6 +789,7 @@ mod tests {
             paths: PathReports {
                 search: search.metrics(),
                 ask: PathMetrics::default(),
+                retrieve: PathMetrics::default(),
             },
             top1_agreement: Top1Agreement {
                 count: 0,
@@ -721,8 +801,10 @@ mod tests {
                 kind: "keyword".to_string(),
                 search_rank_at_10: None,
                 ask_rank_at_10: Some(2),
+                retrieve_rank_at_10: Some(1),
                 search_top_score: Some(0.4),
                 ask_top_score: None,
+                retrieve_top_score: Some(0.3),
             }],
         };
 
@@ -742,7 +824,10 @@ mod tests {
             json_keys(&value["case_count_by_kind"]),
             ["keyword", "negative"].into()
         );
-        assert_eq!(json_keys(&value["paths"]), ["search", "ask"].into());
+        assert_eq!(
+            json_keys(&value["paths"]),
+            ["search", "ask", "retrieve"].into()
+        );
         assert_eq!(
             json_keys(&value["paths"]["search"]),
             [
@@ -769,6 +854,8 @@ mod tests {
             [
                 "cases",
                 "returned_nothing",
+                "no_strong_match",
+                "positive_without_strong_match",
                 "top_score_median",
                 "positive_top_score_median",
             ]
@@ -785,8 +872,10 @@ mod tests {
                 "kind",
                 "search_rank_at_10",
                 "ask_rank_at_10",
+                "retrieve_rank_at_10",
                 "search_top_score",
                 "ask_top_score",
+                "retrieve_top_score",
             ]
             .into()
         );
@@ -831,6 +920,7 @@ mod tests {
             paths: PathReports {
                 search: path.metrics(),
                 ask: path.metrics(),
+                retrieve: path.metrics(),
             },
             top1_agreement: Top1Agreement::default(),
             queries: Vec::new(),
@@ -838,7 +928,7 @@ mod tests {
         let markdown = render_markdown(&report);
         assert!(markdown.contains("3 queries (1 keyword, 1 time, 1 negative)"));
         assert!(markdown.contains("| Keyword Recall@5 | Time Recall@5 |"));
-        assert!(markdown.contains("| Search | 1 | 0 | 0.200 | 0.700 |"));
+        assert!(markdown.contains("| Search | 1 | 0 | 1 | 0 | 0.200 | 0.700 |"));
     }
 
     #[test]
@@ -893,7 +983,10 @@ mod tests {
         // Everything that is not a time budget stays at the production default.
         let production = Config::default().search;
         assert_eq!(search.max_keyword_variants, production.max_keyword_variants);
-        assert_eq!(search.max_keyword_branch_limit, production.max_keyword_branch_limit);
+        assert_eq!(
+            search.max_keyword_branch_limit,
+            production.max_keyword_branch_limit
+        );
     }
 
     fn demo_fixture(name: &str) -> String {
@@ -993,10 +1086,11 @@ mod tests {
         assert!(validate_cases(&[case("a", "negative", &[])]).is_ok());
         assert!(validate_cases(&[case("a", "negative", &["x"])]).is_err());
         assert!(validate_cases(&[case(" ", "keyword", &["x"])]).is_err());
-        assert!(
-            validate_cases(&[case("a", "keyword", &["x"]), case("a", "paraphrase", &["y"])])
-                .is_err()
-        );
+        assert!(validate_cases(&[
+            case("a", "keyword", &["x"]),
+            case("a", "paraphrase", &["y"])
+        ])
+        .is_err());
     }
 
     #[test]

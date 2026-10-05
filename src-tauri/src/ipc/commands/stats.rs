@@ -436,7 +436,12 @@ pub async fn set_retention_days(state: State<'_, Arc<AppState>>, days: u32) -> R
 /// Get unique app names for filter dropdown
 #[tauri::command]
 pub async fn get_app_names(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
-    let app_state = state.inner();
+    cached_app_names(state.inner()).await
+}
+
+/// Stored app names minus FNDR's own, cached like the other derived stats.
+/// Also used by retrieval to recognize "in Slack" in a query (VS-13).
+pub(crate) async fn cached_app_names(app_state: &AppState) -> Result<Vec<String>, String> {
     if let Some((apps, computed_at_ms)) = app_state.app_names_cache.read().clone() {
         if cache_is_fresh(computed_at_ms) {
             return Ok(apps);
@@ -1364,7 +1369,7 @@ pub async fn set_focus_task(
     // Always clear embedding first so the capture loop never sees a stale
     // embedding paired with a new task (or vice-versa). The brief window where
     // embedding is None means the loop skips drift detection for at most one
-    // capture cycle — an acceptable trade-off for consistency.
+    // capture cycle, an acceptable trade-off for consistency.
     *state.focus_task_embedding.write() = None;
     *state.focus_task.write() = task.clone();
     state.focus_drift_count.store(0, Ordering::Relaxed);

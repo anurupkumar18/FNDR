@@ -87,7 +87,7 @@ pub(super) fn records_to_batch_with_text_dim(
         .collect();
     let urls: Vec<Option<&str>> = records.iter().map(|r| r.url.as_deref()).collect();
 
-    // Text embeddings — flatten all embeddings into one Float32Array.
+    // Text embeddings: flatten all embeddings into one Float32Array.
     let flat_text: Vec<f32> = records
         .iter()
         .flat_map(|r| r.embedding.iter().copied())
@@ -2185,7 +2185,14 @@ pub(super) fn time_filter_to_sql(tf: &str) -> Option<String> {
         )),
         "today" => local_day_range_filter(0),
         "yesterday" => local_day_range_filter(1),
-        _ => None,
+        // An explicit window from parsed query phrases (VS-13):
+        // "range:<start_ms>:<end_ms>", half open.
+        other => other.strip_prefix("range:").and_then(|range| {
+            let (start, end) = range.split_once(':')?;
+            let start = start.parse::<i64>().ok()?;
+            let end = end.parse::<i64>().ok()?;
+            (start < end).then(|| format!("timestamp >= {start} AND timestamp < {end}"))
+        }),
     }
 }
 

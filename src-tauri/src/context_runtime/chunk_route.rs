@@ -177,6 +177,7 @@ pub(crate) async fn assemble_chunk_parent_results(
                     .partial_cmp(&right.distance)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
+            .then_with(|| left.chunk.memory_id.cmp(&right.chunk.memory_id))
     });
     ranked.truncate(limit.max(1));
 

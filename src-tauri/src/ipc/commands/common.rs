@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 static SHARED_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
 
-pub(super) fn shared_embedder() -> Result<&'static Embedder, String> {
+pub(crate) fn shared_embedder() -> Result<&'static Embedder, String> {
     match SHARED_EMBEDDER.get_or_init(Embedder::new) {
         Ok(embedder) => Ok(embedder),
         Err(err) => Err(err.clone()),

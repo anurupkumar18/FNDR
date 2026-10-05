@@ -1,11 +1,12 @@
 //! Search-related Tauri commands and helpers.
 
-use super::common::{shared_embedder, strip_internal_fndr_results, truncate_chars};
+use super::common::{strip_internal_fndr_results, truncate_chars};
+use crate::context_runtime::{retrieve_search_results, RetrieveRequest};
 use crate::graph::graph_store::GraphStore;
 use crate::memory_quality::{partition_surfaceable, LowSignalReason};
 use crate::privacy::Blocklist;
 use crate::search::{
-    rerank_results, HybridSearcher, MemoryCard, MemoryCardSynthesizer, QueryContext,
+    anchor_coverage_score, MemoryCard, MemoryCardSynthesizer, QueryContext,
 };
 use crate::storage::SearchResult;
 use crate::AppState;
@@ -18,6 +19,8 @@ const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
 const MEMORY_GRAPH_LIMIT: usize = 1_500;
 const MEMORY_DERIVED_CACHE_TTL_MS: i64 = 30_000;
 
+/// Ranked rows for the raw `search` commands, autofill, and quality checks:
+/// the same `retrieve` that Search, Ask, and agents use (VS-25).
 pub(super) async fn run_search_query(
     state: &AppState,
     query: &str,
@@ -25,125 +28,20 @@ pub(super) async fn run_search_query(
     app_filter: Option<&str>,
     limit: usize,
 ) -> Result<Vec<SearchResult>, String> {
-    run_search_query_internal(state, query, time_filter, app_filter, limit, false)
-        .await
-        .map(|(results, _)| results)
+    let request = RetrieveRequest {
+        query: query.to_string(),
+        time: time_filter.map(str::to_string),
+        app: app_filter.map(str::to_string),
+        limit: limit.clamp(1, 50),
+    };
+    let (_, results) = retrieve_search_results(state, &request).await?;
+    Ok(results)
 }
 
-async fn run_search_query_internal(
-    state: &AppState,
-    query: &str,
-    time_filter: Option<&str>,
-    app_filter: Option<&str>,
-    limit: usize,
-    explain: bool,
-) -> Result<(Vec<SearchResult>, Option<serde_json::Value>), String> {
-    let limit = limit.clamp(1, 50);
-
-    if !state
-        .store
-        .has_memories()
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        return Ok((
-            Vec::new(),
-            explain.then(|| serde_json::json!({ "outcome": "empty_store" })),
-        ));
-    }
-
-    let search_config = {
-        let config = state.config.read();
-        config.search.clone()
-    };
-
-    // When an InferenceEngine is loaded, route through the expansion variant
-    // so abstract concept queries ("sport", "design") can semantically reach
-    // domain-specific captures that don't contain the literal query term.
-    let engine_arc = state.inference_engine();
-    let engine_ref = engine_arc.as_deref();
-
-    let (hybrid_result, fallback_outcome) = match shared_embedder() {
-        Ok(embedder) => {
-            #[cfg(debug_assertions)]
-            let result = if explain {
-                HybridSearcher::search_with_expansion_explained(
-                    &state.store,
-                    embedder,
-                    engine_ref,
-                    query,
-                    limit,
-                    time_filter,
-                    app_filter,
-                    &search_config,
-                )
-                .await
-                .map(|(results, explanation)| (results, Some(explanation)))
-            } else {
-                HybridSearcher::search_with_expansion(
-                    &state.store,
-                    embedder,
-                    engine_ref,
-                    query,
-                    limit,
-                    time_filter,
-                    app_filter,
-                    &search_config,
-                )
-                .await
-                .map(|results| (results, None))
-                .map_err(|error| error.to_string())
-            };
-            #[cfg(not(debug_assertions))]
-            let result = HybridSearcher::search_with_expansion(
-                &state.store,
-                embedder,
-                engine_ref,
-                query,
-                limit,
-                time_filter,
-                app_filter,
-                &search_config,
-            )
-            .await
-            .map(|results| (results, None))
-            .map_err(|error| error.to_string());
-            (result, "keyword_fallback")
-        }
-        Err(error) => (Err(error.to_string()), "keyword_only"),
-    };
-
-    let (results, explanation) = match hybrid_result {
-        Ok(success) => success,
-        Err(reason) => {
-            tracing::warn!(
-                reason = %reason,
-                outcome = fallback_outcome,
-                "Semantic search unavailable; falling back to keyword-only search"
-            );
-            let started = Instant::now();
-            let results = state
-                .store
-                .keyword_search(query, limit, time_filter, app_filter)
-                .await
-                .map_err(|e| e.to_string())?;
-            let explanation = explain.then(|| {
-                serde_json::json!({
-                    "outcome": fallback_outcome,
-                    "reason": reason,
-                    "latency_ms": started.elapsed().as_millis() as u64,
-                })
-            });
-            (results, explanation)
-        }
-    };
-
-    Ok((strip_internal_fndr_results(results), explanation))
-}
-
-/// The ranked retrieval stage Search uses before card synthesis: hybrid
-/// retrieval, low-signal removal, then the anchor-coverage rerank. Public so
-/// `examples/retrieval_qa.rs` can baseline that boundary without duplicating it.
+/// The ranked retrieval stage Search uses before card synthesis: the one
+/// retrieval function (`context_runtime::retrieve`, VS-10), so Search ranks
+/// exactly what Ask and agents rank. Public so `examples/retrieval_qa.rs`
+/// measures what users see.
 pub async fn search_ranked_results(
     state: &AppState,
     query: &str,
@@ -151,7 +49,7 @@ pub async fn search_ranked_results(
     app_filter: Option<&str>,
     raw_limit: usize,
 ) -> Result<Vec<SearchResult>, String> {
-    let (results, _) = search_ranked_results_internal(
+    let (results, _, _) = search_ranked_results_internal(
         state,
         query,
         time_filter,
@@ -170,80 +68,30 @@ async fn search_ranked_results_internal(
     app_filter: Option<&str>,
     raw_limit: usize,
     explain: bool,
-) -> Result<(Vec<SearchResult>, Option<serde_json::Value>), String> {
-    let (raw_results, production_retrieval) = run_search_query_internal(
-        state,
-        query,
-        time_filter,
-        app_filter,
-        raw_limit,
-        explain,
-    )
-    .await?;
-
-    let (results, mut explanation) = rank_search_results(raw_results, query, raw_limit, explain);
-    if let (Some(details), Some(production_retrieval)) =
-        (explanation.as_mut(), production_retrieval)
-    {
-        details["production_retrieval"] = production_retrieval;
-    }
-    Ok((results, explanation))
-}
-
-fn rank_search_results(
-    mut raw_results: Vec<SearchResult>,
-    query: &str,
-    raw_limit: usize,
-    explain: bool,
-) -> (Vec<SearchResult>, Option<serde_json::Value>) {
-    raw_results.truncate(raw_limit);
-    let route_candidates = explain.then(|| {
-        raw_results
-            .iter()
-            .map(|result| {
-                serde_json::json!({
-                    "memory_id": result.id,
-                    "score_before_rerank": result.score,
-                    "matched_routes": result.matched_routes,
-                    "matched_chunk_ids": result.matched_chunk_ids,
-                    "embedding_reasons": result.embedding_reason_labels,
-                })
-            })
-            .collect::<Vec<_>>()
-    });
-    let (raw_results, low_signal) = partition_surfaceable(raw_results);
-    let low_signal_ids = explain.then(|| {
-        low_signal
-            .iter()
-            .map(|(result, reason)| serde_json::json!({
-                "memory_id": result.id,
-                "reason": reason.code(),
-            }))
-            .collect::<Vec<_>>()
-    });
-    if !low_signal.is_empty() {
-        tracing::info!(
-            hidden = low_signal.len(),
-            "search_memory_cards:low_signal_hidden"
-        );
-    }
+) -> Result<(Vec<SearchResult>, Option<serde_json::Value>, bool), String> {
+    let started = Instant::now();
+    let request = RetrieveRequest {
+        query: query.to_string(),
+        time: time_filter.map(str::to_string),
+        app: app_filter.map(str::to_string),
+        limit: raw_limit.clamp(1, 50),
+    };
+    let (retrieved, mut results) = retrieve_search_results(state, &request).await?;
+    // Card grouping reads how many query words each row covers; this no
+    // longer reorders anything.
     let query_context = QueryContext::from_query(query);
-    let (mut reranked, rerank_stats) = rerank_results(&query_context, raw_results);
-    if rerank_stats.excluded_for_coverage > 0 {
-        tracing::info!(
-            excluded_for_coverage = rerank_stats.excluded_for_coverage,
-            query = %query_context.raw_query,
-            "search_memory_cards:coverage_gate"
-        );
+    for result in &mut results {
+        result.anchor_coverage_score = anchor_coverage_score(&query_context, result);
     }
-    reranked.truncate(raw_limit);
     let explanation = explain.then(|| {
         serde_json::json!({
-            "query_plan": query_context.debug_plan(),
-            "route_candidates": route_candidates.unwrap_or_default(),
-            "low_signal_exclusions": low_signal_ids.unwrap_or_default(),
-            "coverage_exclusions": rerank_stats.excluded_for_coverage,
-            "final_ranks": reranked.iter().enumerate().map(|(index, result)| serde_json::json!({
+            "production_retrieval": {
+                "path": "retrieve",
+                "filters": retrieved.filters,
+                "hits": retrieved.hits,
+                "latency_ms": started.elapsed().as_millis() as u64,
+            },
+            "final_ranks": results.iter().enumerate().map(|(index, result)| serde_json::json!({
                 "rank": index + 1,
                 "memory_id": result.id,
                 "score": result.score,
@@ -253,7 +101,7 @@ fn rank_search_results(
             })).collect::<Vec<_>>(),
         })
     });
-    (reranked, explanation)
+    Ok((results, explanation, retrieved.strong_match))
 }
 
 #[cfg(debug_assertions)]
@@ -264,7 +112,7 @@ pub async fn search_ranked_results_explained(
     app_filter: Option<&str>,
     raw_limit: usize,
 ) -> Result<(Vec<SearchResult>, serde_json::Value), String> {
-    let (results, explanation) = search_ranked_results_internal(
+    let (results, explanation, _) = search_ranked_results_internal(
         state,
         query,
         time_filter,
@@ -274,47 +122,6 @@ pub async fn search_ranked_results_explained(
     )
     .await?;
     Ok((results, explanation.unwrap_or_default()))
-}
-
-#[cfg(test)]
-mod explanation_tests {
-    use super::*;
-
-    fn result(id: &str, title: &str, score: f32) -> SearchResult {
-        SearchResult {
-            id: id.to_string(),
-            window_title: title.to_string(),
-            display_summary: title.to_string(),
-            snippet: title.to_string(),
-            clean_text: title.to_string(),
-            score,
-            matched_routes: vec!["Vector".to_string()],
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn explained_and_normal_ranking_outputs_are_identical() {
-        let input = vec![
-            result("a", "Memory Journey retrieval", 0.8),
-            result("b", "Unrelated weather", 0.95),
-        ];
-        let (normal, no_explanation) =
-            rank_search_results(input.clone(), "memory journey", 10, false);
-        let (explained, explanation) = rank_search_results(input, "memory journey", 10, true);
-        assert!(no_explanation.is_none());
-        assert!(explanation.is_some());
-        assert_eq!(
-            normal
-                .iter()
-                .map(|result| (&result.id, result.score, result.anchor_coverage_score))
-                .collect::<Vec<_>>(),
-            explained
-                .iter()
-                .map(|result| (&result.id, result.score, result.anchor_coverage_score))
-                .collect::<Vec<_>>()
-        );
-    }
 }
 
 pub(super) fn cache_is_fresh(computed_at_ms: i64) -> bool {
@@ -590,6 +397,7 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         matched_routes: result.matched_routes.clone(),
         matched_chunk_ids: result.matched_chunk_ids.clone(),
         chunk_evidence: result.chunk_evidence.clone(),
+        weak_match: false,
         enrichment_status,
         reviewed_at_ms: result.reviewed_at_ms,
         reviewer_generation: result.reviewer_generation,
@@ -743,15 +551,21 @@ pub(super) async fn search_memory_cards_inner(
     }
 
     let raw_limit = limit.max(18).min(50);
-    let raw_results = search_ranked_results(
+    let (raw_results, _, strong_match) = search_ranked_results_internal(
         state,
         query,
         time_filter,
         app_filter,
         raw_limit,
+        false,
     )
     .await?;
-    let cards = synthesize_memory_cards_from_ranked(state, query, raw_results, limit).await;
+    let mut cards = synthesize_memory_cards_from_ranked(state, query, raw_results, limit).await;
+    // "No strong matches" (VS-12): the whole query is judged by its best
+    // result, because a right answer can rank below a wrong one near the bar.
+    for card in &mut cards {
+        card.weak_match = !strong_match;
+    }
     tracing::info!(
         total_ms = started.elapsed().as_millis(),
         cards = cards.len(),
@@ -1142,4 +956,78 @@ fn build_grounded_search_summary(query: &str, evidence: &[SummaryEvidence]) -> S
     }
 
     summary
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, DEFAULT_IMAGE_EMBEDDING_DIM};
+    use crate::embedding::{Embedder, EMBEDDING_DIM};
+    use crate::graph::GraphStore;
+    use crate::storage::{MemoryRecord, StateStore, Store};
+
+    #[test]
+    fn search_cards_are_weak_when_nothing_matches_well() {
+        std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(Store::new(dir.path()).expect("store"));
+        let state_store = Arc::new(StateStore::new(dir.path()).expect("state store"));
+        let text = "The Zephyr vendor contract renews next quarter at the same price";
+        let embedding = Embedder::new()
+            .expect("embedder")
+            .embed_batch(&[text.to_string()])
+            .expect("embedding")
+            .remove(0);
+        let record = MemoryRecord {
+            id: "vendor".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis() - 60_000,
+            app_name: "Slack".to_string(),
+            window_title: "Vendor thread".to_string(),
+            session_id: "session-vendor".to_string(),
+            text: text.to_string(),
+            clean_text: text.to_string(),
+            snippet: text.to_string(),
+            summary_source: "llm".to_string(),
+            embedding: embedding.clone(),
+            snippet_embedding: embedding,
+            support_embedding: vec![0.0; EMBEDDING_DIM],
+            image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
+            decay_score: 1.0,
+            ..Default::default()
+        };
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime
+            .block_on(store.add_batch(&[record]))
+            .expect("add record");
+        let graph = GraphStore::new(store.clone());
+        // Budgets lifted: under ~900 parallel lib tests a production keyword
+        // budget can drop the hit this test is about.
+        let mut config = Config::default();
+        config.search.semantic_timeout_ms = 10_000;
+        config.search.snippet_timeout_ms = 10_000;
+        config.search.keyword_timeout_ms = 10_000;
+        config.search.keyword_variant_timeout_ms = 5_000;
+        let state = AppState::new(
+            dir.path().to_path_buf(),
+            config,
+            store,
+            state_store,
+            graph,
+            None,
+            None,
+        );
+        let cards = |query: &str| {
+            runtime
+                .block_on(search_memory_cards_inner(&state, query, None, None, 10))
+                .expect("search")
+        };
+
+        let related = cards("zephyr vendor contract");
+        assert!(!related.is_empty());
+        assert!(related.iter().all(|card| !card.weak_match));
+        // Without a model the unrelated query finds nothing at all.
+        assert!(cards("dentist appointment reminder")
+            .iter()
+            .all(|card| card.weak_match));
+    }
 }
