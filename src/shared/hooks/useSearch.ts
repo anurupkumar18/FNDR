@@ -7,6 +7,14 @@ import {
     type ActivityTraceSnapshot,
 } from "@/shared/activity/activityTrace";
 
+/** Raised only by the renderer's own timer, so the trace can tell it apart from
+ * a backend error whose message happens to mention a timeout. */
+class ClientSearchTimeout extends Error {
+    constructor() {
+        super("Search timed out");
+    }
+}
+
 function getAdaptiveDebounceMs(query: string): number {
     if (!query.trim()) {
         return 0;
@@ -93,7 +101,7 @@ export function useSearch(query: string, timeFilter: string | null, appFilter: s
             try {
                 const timeoutMs = getAdaptiveTimeoutMs(trimmedQuery, 0);
                 const timeoutPromise = new Promise<never>((_, reject) => {
-                    timeoutHandle = setTimeout(() => reject(new Error("Search timed out")), timeoutMs);
+                    timeoutHandle = setTimeout(() => reject(new ClientSearchTimeout()), timeoutMs);
                 });
 
                 const searchPromise = searchMemoryCards(
@@ -146,6 +154,7 @@ export function useSearch(query: string, timeFilter: string | null, appFilter: s
                 }
                 const errorMessage = e instanceof Error ? e.message : "Search failed";
                 const timedOut = errorMessage.toLowerCase().includes("timed out");
+                const clientTimedOut = e instanceof ClientSearchTimeout;
                 setError(timedOut
                     ? "Search timed out. Try a shorter query or remove filters."
                     : errorMessage);
@@ -155,13 +164,14 @@ export function useSearch(query: string, timeFilter: string | null, appFilter: s
                     if (!current || current.id !== `search-${requestId}`) return current;
                     return recordActivityStep(current, {
                         id: "retrieval",
-                        label: timedOut ? "Search timed out" : "Search failed",
-                        actor: "FNDR search service",
+                        label: clientTimedOut ? "Search timed out" : "Search failed",
+                        // A renderer timeout is not a report from the backend.
+                        actor: clientTimedOut ? "FNDR search" : "FNDR search service",
                         status: "failed",
-                        evidence: "ipc-boundary",
+                        evidence: clientTimedOut ? "frontend-event" : "ipc-boundary",
                         atMs: failedAtMs,
                         durationMs: Math.max(0, failedAtMs - retrievalStartedAtMs),
-                        detail: timedOut ? "Client timeout" : "Backend request failed",
+                        detail: clientTimedOut ? "Client timeout" : "Backend request failed",
                     });
                 });
             } finally {
