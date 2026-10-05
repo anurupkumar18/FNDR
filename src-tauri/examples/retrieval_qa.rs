@@ -11,8 +11,10 @@
 use fndr_lib::config::Config;
 use fndr_lib::context_runtime::{
     retrieve, run_query, ComposeMode, RetrieveRequest, STRONG_MATCH_SCORE,
+    STRONG_MATCH_SCORE_WITH_CHUNKS,
 };
 use fndr_lib::graph::GraphStore;
+use fndr_lib::ipc::commands::reindex_memories_v5_for_state;
 use fndr_lib::ipc::commands::search::search_ranked_results;
 use fndr_lib::storage::{StateStore, Store};
 use fndr_lib::AppState;
@@ -57,6 +59,9 @@ struct NoMatch {
     /// Positive cases whose best result is under the bar: these would wrongly
     /// say "No strong matches".
     positive_without_strong_match: usize,
+    /// The bar used: `STRONG_MATCH_SCORE`, or the chunk-route bar with
+    /// `--chunks` (VS-18).
+    bar: f64,
     top_score_median: Option<f64>,
     positive_top_score_median: Option<f64>,
 }
@@ -105,7 +110,16 @@ struct RetrievalReport {
     case_count_by_kind: BTreeMap<String, usize>,
     paths: PathReports,
     top1_agreement: Top1Agreement,
+    chunk_route: ChunkRouteReport,
     queries: Vec<QueryReport>,
+}
+
+/// Whether the chunk route ran (`--chunks`, VS-18) and how many chunk rows
+/// the evaluation copy held.
+#[derive(Debug, Default, Serialize)]
+struct ChunkRouteReport {
+    enabled: bool,
+    chunks: usize,
 }
 
 #[derive(Default)]
@@ -135,10 +149,6 @@ impl Score {
     }
 }
 
-fn is_strong(top_score: Option<f64>) -> bool {
-    top_score.is_some_and(|score| score >= f64::from(STRONG_MATCH_SCORE))
-}
-
 #[derive(Default)]
 struct PathScore {
     core: Score,
@@ -147,9 +157,20 @@ struct PathScore {
     positive_without_strong_match: usize,
     negative_top_scores: Vec<Option<f64>>,
     latency_ms: Vec<u128>,
+    /// The strong-match bar; `None` means `STRONG_MATCH_SCORE`.
+    strong_bar: Option<f64>,
 }
 
 impl PathScore {
+    fn bar(&self) -> f64 {
+        self.strong_bar
+            .unwrap_or_else(|| f64::from(STRONG_MATCH_SCORE))
+    }
+
+    fn is_strong(&self, top_score: Option<f64>) -> bool {
+        top_score.is_some_and(|score| score >= self.bar())
+    }
+
     /// `top_score` is the score of the path's first result, `None` when it
     /// returned nothing.
     fn add(&mut self, kind: &str, rank: Option<usize>, top_score: Option<f64>, latency_ms: u128) {
@@ -163,7 +184,7 @@ impl PathScore {
         }
         self.by_kind.entry(kind.to_string()).or_default().add(rank);
         self.positive_top_scores.extend(top_score);
-        if !is_strong(top_score) {
+        if !self.is_strong(top_score) {
             self.positive_without_strong_match += 1;
         }
     }
@@ -182,9 +203,10 @@ impl PathScore {
                 no_strong_match: self
                     .negative_top_scores
                     .iter()
-                    .filter(|score| !is_strong(**score))
+                    .filter(|score| !self.is_strong(**score))
                     .count(),
                 positive_without_strong_match: self.positive_without_strong_match,
+                bar: self.bar(),
                 top_score_median: median(&returned),
                 positive_top_score_median: median(&self.positive_top_scores),
             }
@@ -401,6 +423,15 @@ fn render_markdown(report: &RetrievalReport) -> String {
     let mut lines = vec![
         format!("# Retrieval baseline: {}", report.case_set),
         String::new(),
+        if report.chunk_route.enabled {
+            format!(
+                "Chunk route: on, {} chunks indexed.",
+                report.chunk_route.chunks
+            )
+        } else {
+            "Chunk route: off.".to_string()
+        },
+        String::new(),
         format!(
             "Schema v{}; {} queries ({}).",
             report.schema_version,
@@ -450,17 +481,17 @@ fn render_markdown(report: &RetrievalReport) -> String {
     if paths.iter().any(|(_, metrics)| metrics.no_match.is_some()) {
         lines.extend([
             String::new(),
-            format!(
-                "| Path | Negative cases | Returned nothing | No strong match (under {STRONG_MATCH_SCORE:.2}) | Positives under the bar | Median top score, negative | Median top score, positive |"
-            ),
-            "|---|---:|---:|---:|---:|---:|---:|".to_string(),
+            "| Path | Negative cases | Returned nothing | Bar | Negatives under the bar | Positives under the bar | Median top score, negative | Median top score, positive |"
+                .to_string(),
+            "|---|---:|---:|---:|---:|---:|---:|---:|".to_string(),
         ]);
         for (name, metrics) in paths {
             if let Some(no_match) = &metrics.no_match {
                 lines.push(format!(
-                    "| {name} | {} | {} | {} | {} | {} | {} |",
+                    "| {name} | {} | {} | {:.2} | {} | {} | {} | {} |",
                     no_match.cases,
                     no_match.returned_nothing,
+                    no_match.bar,
                     no_match.no_strong_match,
                     no_match.positive_without_strong_match,
                     score_label(no_match.top_score_median),
@@ -526,20 +557,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(Store::new(&evaluation_dir)?);
     let state_store = Arc::new(StateStore::new(&evaluation_dir)?);
     let graph = GraphStore::new(store.clone());
-    let state = AppState::new(
+    // `--chunks` (VS-18): index the copy with BGE parent and chunk rows,
+    // then measure with the chunk route on.
+    let with_chunks = std::env::args().any(|arg| arg == "--chunks");
+    let mut config = evaluation_config();
+    config.search.use_chunk_first_retrieval = with_chunks;
+    let state = Arc::new(AppState::new(
         evaluation_dir,
-        evaluation_config(),
+        config,
         store,
         state_store,
         graph,
         None,
         None,
-    );
+    ));
     let runtime = tokio::runtime::Runtime::new()?;
+    let chunk_route = if with_chunks {
+        let summary = runtime
+            .block_on(reindex_memories_v5_for_state(state.clone()))
+            .map_err(|error| std::io::Error::other(format!("--chunks: {error}")))?;
+        eprintln!(
+            "chunk route: {} memories and {} chunks indexed with {}",
+            summary.reindexed, summary.chunks_reindexed, summary.model_name
+        );
+        ChunkRouteReport {
+            enabled: true,
+            chunks: summary.chunks_reindexed,
+        }
+    } else {
+        ChunkRouteReport::default()
+    };
 
-    let mut search_score = PathScore::default();
-    let mut ask_score = PathScore::default();
-    let mut retrieve_score = PathScore::default();
+    let strong_bar = with_chunks.then(|| f64::from(STRONG_MATCH_SCORE_WITH_CHUNKS));
+    let new_score = || PathScore {
+        strong_bar,
+        ..PathScore::default()
+    };
+    let mut search_score = new_score();
+    let mut ask_score = new_score();
+    let mut retrieve_score = new_score();
     let mut top1_agreement = 0usize;
     let mut queries = Vec::with_capacity(cases.len());
     for case in &cases {
@@ -641,6 +697,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             total: case_count,
             rate: top1_agreement as f64 / case_count.max(1) as f64,
         },
+        chunk_route,
         queries,
     };
 
@@ -796,6 +853,7 @@ mod tests {
                 total: 2,
                 rate: 0.0,
             },
+            chunk_route: ChunkRouteReport::default(),
             queries: vec![QueryReport {
                 query: "missing example".to_string(),
                 kind: "keyword".to_string(),
@@ -816,10 +874,15 @@ mod tests {
             "case_count_by_kind",
             "paths",
             "top1_agreement",
+            "chunk_route",
             "queries",
         ]
         .into();
         assert_eq!(json_keys(&value), expected);
+        assert_eq!(
+            json_keys(&value["chunk_route"]),
+            ["enabled", "chunks"].into()
+        );
         assert_eq!(
             json_keys(&value["case_count_by_kind"]),
             ["keyword", "negative"].into()
@@ -856,6 +919,7 @@ mod tests {
                 "returned_nothing",
                 "no_strong_match",
                 "positive_without_strong_match",
+                "bar",
                 "top_score_median",
                 "positive_top_score_median",
             ]
@@ -923,12 +987,22 @@ mod tests {
                 retrieve: path.metrics(),
             },
             top1_agreement: Top1Agreement::default(),
+            chunk_route: ChunkRouteReport::default(),
             queries: Vec::new(),
         };
         let markdown = render_markdown(&report);
+        assert!(markdown.contains("Chunk route: off."));
+        let markdown = render_markdown(&RetrievalReport {
+            chunk_route: ChunkRouteReport {
+                enabled: true,
+                chunks: 57,
+            },
+            ..report
+        });
+        assert!(markdown.contains("Chunk route: on, 57 chunks indexed."));
         assert!(markdown.contains("3 queries (1 keyword, 1 time, 1 negative)"));
         assert!(markdown.contains("| Keyword Recall@5 | Time Recall@5 |"));
-        assert!(markdown.contains("| Search | 1 | 0 | 1 | 0 | 0.200 | 0.700 |"));
+        assert!(markdown.contains("| Search | 1 | 0 | 0.25 | 1 | 0 | 0.200 | 0.700 |"));
     }
 
     #[test]

@@ -32,6 +32,13 @@ pub struct RetrieveRequest {
 /// eight (they reach 0.35), so the bar sits where it hides no real match.
 pub const STRONG_MATCH_SCORE: f32 = 0.25;
 
+/// The bar when the chunk route found the best hit (VS-18): it adds its
+/// weight to every score, so the same evidence scores about 0.2 higher. With
+/// chunks on, the labeled sets put the same three no-match queries at 0.401
+/// to 0.407 and every real query at 0.532 or more. Provisional until chunks
+/// exist on a real vault (EM-03).
+pub const STRONG_MATCH_SCORE_WITH_CHUNKS: f32 = 0.45;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type, PartialEq)]
 pub struct RetrieveResult {
     pub hits: Vec<RetrieveHit>,
@@ -58,8 +65,11 @@ pub struct RetrieveFilters {
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq)]
 pub struct RetrieveHit {
     pub memory_id: String,
-    /// The matched chunk once chunk retrieval lands (VS-18).
+    /// The chunk the chunk route matched (VS-18); empty when that route did
+    /// not find this memory or is off.
     pub chunk_id: Option<String>,
+    /// That chunk's text, so a surface can show the sentence that matched.
+    pub matched_text: Option<String>,
     pub score: f32,
     pub why: RetrieveWhy,
 }
@@ -104,12 +114,29 @@ pub async fn retrieve_search_results(
             (hit.memory_id.as_str(), labels)
         })
         .collect::<HashMap<_, _>>();
+    // The chunk route's evidence, so cards can show the sentence (VS-18).
+    let chunk_rows = retrieval
+        .route_hits
+        .iter()
+        .filter(|group| group.route == Route::Chunk)
+        .flat_map(|group| group.hits.iter())
+        .filter_map(|hit| {
+            hit.signals
+                .search_result
+                .as_ref()
+                .map(|result| (hit.memory_id.as_str(), result))
+        })
+        .collect::<HashMap<_, _>>();
     let rows = result
         .hits
         .iter()
         .filter_map(|hit| {
             let record = retrieval.records.get(&hit.memory_id)?;
             let mut row = memory_record_to_search_result(record, hit.score);
+            if let Some(chunk_row) = chunk_rows.get(hit.memory_id.as_str()) {
+                row.matched_chunk_ids = chunk_row.matched_chunk_ids.clone();
+                row.chunk_evidence = chunk_row.chunk_evidence.clone();
+            }
             row.matched_routes = hit.why.routes.clone();
             row.embedding_reason_labels = embedding_labels
                 .get(hit.memory_id.as_str())
@@ -170,6 +197,19 @@ pub(crate) async fn retrieve_with_fused(
                 .map(|result| (hit.memory_id.as_str(), searchable_text(result)))
         })
         .collect::<HashMap<_, _>>();
+    let matched_chunks = retrieval
+        .route_hits
+        .iter()
+        .filter(|group| group.route == Route::Chunk)
+        .flat_map(|group| group.hits.iter())
+        .filter_map(|hit| {
+            let evidence = hit.signals.search_result.as_ref()?.chunk_evidence.first()?;
+            Some((
+                hit.memory_id.as_str(),
+                (evidence.chunk_id.clone(), evidence.text.clone()),
+            ))
+        })
+        .collect::<HashMap<_, _>>();
     // Report matched words without the filter phrases ("yesterday", "Slack").
     let terms = QueryContext::from_query(&words_without_phrases).anchor_terms;
 
@@ -179,7 +219,12 @@ pub(crate) async fn retrieve_with_fused(
         .take(limit)
         .map(|hit| RetrieveHit {
             memory_id: hit.memory_id.clone(),
-            chunk_id: None,
+            chunk_id: matched_chunks
+                .get(hit.memory_id.as_str())
+                .map(|(id, _)| id.clone()),
+            matched_text: matched_chunks
+                .get(hit.memory_id.as_str())
+                .map(|(_, text)| text.clone()),
             score: hit.score,
             why: RetrieveWhy {
                 routes: hit
@@ -205,7 +250,8 @@ pub(crate) async fn retrieve_with_fused(
     )
 }
 
-/// A hit is a strong match when its score reaches `STRONG_MATCH_SCORE`, or
+/// A hit is a strong match when its score reaches `STRONG_MATCH_SCORE` (or
+/// `STRONG_MATCH_SCORE_WITH_CHUNKS` when the chunk route found it), or
 /// when the keyword route found every word of the query in it. The second
 /// rule keeps exact matches strong when no embedding model is loaded: then
 /// only the keyword route scores, and a perfect match fuses to about 0.20.
@@ -214,7 +260,12 @@ fn is_strong_match(hit: &RetrieveHit, terms: &[String]) -> bool {
         .iter()
         .filter(|term| !term.contains(' '))
         .collect::<Vec<_>>();
-    hit.score >= STRONG_MATCH_SCORE
+    let bar = if hit.why.routes.iter().any(|route| route == "chunk") {
+        STRONG_MATCH_SCORE_WITH_CHUNKS
+    } else {
+        STRONG_MATCH_SCORE
+    };
+    hit.score >= bar
         || (!words.is_empty()
             && words
                 .iter()
@@ -285,6 +336,26 @@ mod tests {
 
     fn terms(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn the_chunk_route_raises_the_strong_match_bar() {
+        let hit = |score: f32, routes: &[&str]| RetrieveHit {
+            memory_id: "m".to_string(),
+            chunk_id: None,
+            matched_text: None,
+            score,
+            why: RetrieveWhy {
+                routes: routes.iter().map(|route| route.to_string()).collect(),
+                matched_terms: Vec::new(),
+            },
+        };
+        let words = terms(&["dentist", "appointment"]);
+        assert!(is_strong_match(&hit(0.30, &["vector", "keyword"]), &words));
+        assert!(!is_strong_match(&hit(0.20, &["vector"]), &words));
+        // With chunks the same evidence scores higher (VS-18), so the bar rises.
+        assert!(!is_strong_match(&hit(0.41, &["chunk", "vector"]), &words));
+        assert!(is_strong_match(&hit(0.53, &["chunk", "vector"]), &words));
     }
 
     #[test]

@@ -53,6 +53,8 @@ class CheckResult:
     rank_changes: list[RankChange] = field(default_factory=list)
     new_paths: list[str] = field(default_factory=list)
     new_queries: list[str] = field(default_factory=list)
+    reference_chunk_route: dict = field(default_factory=dict)
+    current_chunk_route: dict = field(default_factory=dict)
 
 
 def rank_key(path: str) -> str:
@@ -105,6 +107,8 @@ def compare(reference: dict, current: dict, max_recall_drop: float = DEFAULT_MAX
         new_paths=[name for name in cur_paths if name not in ref_paths],
         reference_top1=reference.get("top1_agreement") or {},
         current_top1=current.get("top1_agreement") or {},
+        reference_chunk_route=reference.get("chunk_route") or {},
+        current_chunk_route=current.get("chunk_route") or {},
     )
 
     for name in ref_paths:
@@ -151,6 +155,21 @@ def fmt_delta(before, after) -> str:
     if before is None or after is None:
         return "n/a"
     return f"{after - before:+.3f}"
+
+
+def chunk_route_lines(result):
+    """One line when the chunk route (VS-18) differs between the two runs."""
+
+    ref_on = bool(result.reference_chunk_route.get("enabled"))
+    cur_on = bool(result.current_chunk_route.get("enabled"))
+    cur_chunks = result.current_chunk_route.get("chunks", 0)
+    if ref_on == cur_on:
+        return []
+    return [
+        f"Chunk route: {'on' if ref_on else 'off'} in the reference, "
+        f"{'on' if cur_on else 'off'} in this run"
+        + (f" ({cur_chunks} chunks)." if cur_on else ".")
+    ]
 
 
 def fmt_count(value):
@@ -224,6 +243,10 @@ def render(result: CheckResult) -> str:
                     f"| {'n/a' if after is None else f'{after:.3f}'} | {fmt_delta(before, after)} |"
                 )
 
+    chunk_lines = chunk_route_lines(result)
+    if chunk_lines:
+        lines += ["", *chunk_lines]
+
     no_match_rows = [
         (name, result.current_paths[name]["no_match"])
         for name in [*result.paths, *result.new_paths]
@@ -235,13 +258,14 @@ def render(result: CheckResult) -> str:
             "No-match queries (reported, not gated). A negative is right when its best result is under the"
             " strong-match bar (VS-12); a positive under the bar would wrongly say \"No strong matches\".",
             "",
-            "| Path | Negative cases | Returned nothing | Negatives under the bar | Positives under the bar "
-            "| Median top score, negative | Median top score, positive |",
-            "|---|---:|---:|---:|---:|---:|---:|",
+            "| Path | Negative cases | Returned nothing | Bar | Negatives under the bar "
+            "| Positives under the bar | Median top score, negative | Median top score, positive |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
         ]
         for name, no_match in no_match_rows:
             lines.append(
                 f"| {name} | {no_match.get('cases', 0)} | {no_match.get('returned_nothing', 0)} "
+                f"| {'n/a' if no_match.get('bar') is None else format(no_match['bar'], '.2f')} "
                 f"| {fmt_count(no_match.get('no_strong_match'))} "
                 f"| {fmt_count(no_match.get('positive_without_strong_match'))} "
                 f"| {fmt_score(no_match.get('top_score_median'))} | {fmt_score(no_match.get('positive_top_score_median'))} |"

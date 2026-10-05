@@ -58,6 +58,8 @@ use std::sync::Arc;
 pub const MEMORIES_TABLE: &str = crate::inference::model_config::MEMORIES_V4_TABLE;
 pub const MEMORIES_V5_PARENT_TABLE: &str = MEMORIES_V5_TABLE;
 pub const MEMORY_CHUNKS_TABLE: &str = "memory_chunks_v1_bge_1024";
+/// The chunk column `chunk_keyword_search` indexes (VS-18).
+const CHUNK_FTS_COLUMN: &str = "text";
 pub const TASKS_TABLE: &str = "tasks";
 pub const MEETINGS_TABLE: &str = "meetings";
 pub const SEGMENTS_TABLE: &str = "segments";
@@ -1347,6 +1349,80 @@ impl Store {
         Ok(chunks)
     }
 
+    /// BM25 over chunk text (VS-18): the chunk holding the words a person
+    /// remembers ranks first, whatever the rest of its memory says. Scores are
+    /// bm25 / (bm25 + 2), as in `keyword_search`. The index is built on first
+    /// use; chunks written later are still found (by a flat scan) until
+    /// `optimize_fts_indexes` folds them in.
+    pub async fn chunk_keyword_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryChunkSearchResult>, Box<dyn std::error::Error>> {
+        if keyword_terms(query).is_empty() || self.memory_chunks_table.count_rows(None).await? == 0
+        {
+            return Ok(Vec::new());
+        }
+        self.ensure_chunk_fts_index().await?;
+        let fts = FullTextSearchQuery::new(query.to_string())
+            .with_columns(&[CHUNK_FTS_COLUMN.to_string()])?
+            .limit(Some(limit.max(1) as i64));
+        let batches: Vec<RecordBatch> = self
+            .memory_chunks_table
+            .query()
+            .full_text_search(fts)
+            .limit(limit.max(1))
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
+        let mut hits = Vec::new();
+        for batch in &batches {
+            let bm25 = batch
+                .column_by_name(FTS_SCORE_COLUMN)
+                .and_then(|column| column.as_any().downcast_ref::<Float32Array>())
+                .ok_or("chunk full-text results are missing the BM25 score column")?;
+            for (row, chunk) in batch_to_memory_chunks(batch).into_iter().enumerate() {
+                let score = bm25.value(row);
+                hits.push(MemoryChunkSearchResult {
+                    chunk,
+                    score: score / (score + 2.0),
+                    distance: 0.0,
+                });
+            }
+        }
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.chunk.id.cmp(&b.chunk.id))
+        });
+        Ok(hits)
+    }
+
+    async fn ensure_chunk_fts_index(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let indexed = self
+            .memory_chunks_table
+            .list_indices()
+            .await?
+            .into_iter()
+            .any(|index| {
+                index.index_type == IndexType::FTS
+                    && index
+                        .columns
+                        .iter()
+                        .any(|column| column == CHUNK_FTS_COLUMN)
+            });
+        if !indexed {
+            self.memory_chunks_table
+                .create_index(&[CHUNK_FTS_COLUMN], Index::FTS(FtsIndexBuilder::default()))
+                .execute()
+                .await?;
+            tracing::info!("lancedb:chunk_fts_index_created");
+        }
+        Ok(())
+    }
+
     pub async fn has_chunk_retrieval_index(&self) -> Result<bool, Box<dyn std::error::Error>> {
         let parent_count = self.memories_v5_table.count_rows(None).await?;
         if parent_count == 0 {
@@ -1824,6 +1900,7 @@ impl Store {
     /// LanceDB still finds those rows with a flat scan, only more slowly.
     pub async fn optimize_fts_indexes(&self) -> Result<(), Box<dyn std::error::Error>> {
         fold_new_rows_into_indexes(&self.table).await?;
+        fold_new_rows_into_indexes(&self.memory_chunks_table).await?;
         Ok(())
     }
 

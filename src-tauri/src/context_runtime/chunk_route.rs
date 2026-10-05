@@ -12,6 +12,12 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
 
+/// A memory's other chunks within this gap of its best chunk each add
+/// `CLOSE_CHUNK_BONUS`, at most `MAX_CLOSE_CHUNKS` times (the bake-off's rule).
+const CLOSE_CHUNK_GAP: f32 = 0.05;
+const CLOSE_CHUNK_BONUS: f32 = 0.01;
+const MAX_CLOSE_CHUNKS: usize = 3;
+
 pub struct ChunkRoute;
 
 impl RetrievalRoute for ChunkRoute {
@@ -44,62 +50,36 @@ impl RetrievalRoute for ChunkRoute {
                 }
             }
 
-            let bge = match shared_bge_v5_query_embedder() {
-                Ok(embedder) => embedder,
-                Err(err) => {
-                    tracing::warn!(
-                        err = %err,
-                        "chunk_first_retrieval:fallback reason=bge_unavailable"
-                    );
-                    return finish_route(Route::Chunk, route_started, Vec::new());
-                }
-            };
-
-            let query_text = prefix_query_for_search(&chunk_query_text(plan, ctx.expansion));
-            let query_embedding = match bge.embed_batch(&[query_text]) {
-                Ok(vectors) => vectors.into_iter().next().unwrap_or_default(),
-                Err(err) => {
-                    tracing::warn!(
-                        err = %err,
-                        "chunk_first_retrieval:fallback reason=query_embedding_failed"
-                    );
-                    return finish_route(Route::Chunk, route_started, Vec::new());
-                }
-            };
-            if query_embedding.len() != BGE_V5_DIMENSIONS {
-                tracing::warn!(
-                    actual_dim = query_embedding.len(),
-                    expected_dim = BGE_V5_DIMENSIONS,
-                    "chunk_first_retrieval:fallback reason=query_dimension_mismatch"
-                );
-                return finish_route(Route::Chunk, route_started, Vec::new());
-            }
-
             let search_limit = ctx.limit.max(1) * 3;
-            let search_timeout = Duration::from_millis(ctx.search_config.semantic_timeout_ms);
-            let chunk_hits = match timeout(
-                search_timeout,
-                ctx.store
-                    .chunk_vector_search(&query_embedding, search_limit),
+            let mut chunk_hits = Vec::new();
+
+            // BM25 over chunk text (VS-18) needs no model, so the words a
+            // person remembers still find their chunk without one.
+            let keyword_timeout = Duration::from_millis(ctx.search_config.keyword_timeout_ms);
+            match timeout(
+                keyword_timeout,
+                ctx.store.chunk_keyword_search(&plan.raw, search_limit),
             )
             .await
             {
-                Ok(Ok(results)) => results,
+                Ok(Ok(results)) => chunk_hits.extend(results),
                 Ok(Err(err)) => {
-                    tracing::warn!(
-                        err = %err,
-                        "chunk_first_retrieval:fallback reason=chunk_search_failed"
-                    );
-                    return finish_route(Route::Chunk, route_started, Vec::new());
+                    tracing::warn!(err = %err, "chunk_first_retrieval:keyword_failed");
                 }
                 Err(_) => {
                     tracing::warn!(
-                        timeout_ms = search_timeout.as_millis(),
-                        "chunk_first_retrieval:fallback reason=chunk_search_timeout"
+                        timeout_ms = keyword_timeout.as_millis(),
+                        "chunk_first_retrieval:keyword_timeout"
                     );
-                    return finish_route(Route::Chunk, route_started, Vec::new());
                 }
-            };
+            }
+
+            match chunk_vector_hits(plan, ctx, search_limit).await {
+                Ok(results) => chunk_hits.extend(results),
+                Err(reason) => {
+                    tracing::info!(reason, "chunk_first_retrieval:vector_skipped");
+                }
+            }
 
             let results = assemble_chunk_parent_results(
                 ctx.store,
@@ -128,6 +108,37 @@ impl RetrievalRoute for ChunkRoute {
     }
 }
 
+/// Chunk vector hits from the BGE chunk model, or why there are none.
+async fn chunk_vector_hits(
+    plan: &QueryPlan,
+    ctx: &RouteCtx<'_>,
+    search_limit: usize,
+) -> Result<Vec<MemoryChunkSearchResult>, &'static str> {
+    let bge = shared_bge_v5_query_embedder().map_err(|_| "bge_unavailable")?;
+    let query_text = prefix_query_for_search(&chunk_query_text(plan, ctx.expansion));
+    let query_embedding = bge
+        .embed_batch(&[query_text])
+        .map_err(|_| "query_embedding_failed")?
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    if query_embedding.len() != BGE_V5_DIMENSIONS {
+        return Err("query_dimension_mismatch");
+    }
+    let search_timeout = Duration::from_millis(ctx.search_config.semantic_timeout_ms);
+    match timeout(
+        search_timeout,
+        ctx.store
+            .chunk_vector_search(&query_embedding, search_limit),
+    )
+    .await
+    {
+        Ok(Ok(results)) => Ok(results),
+        Ok(Err(_)) => Err("chunk_search_failed"),
+        Err(_) => Err("chunk_search_timeout"),
+    }
+}
+
 fn chunk_query_text(plan: &QueryPlan, expansion: &[String]) -> String {
     let mut parts = vec![plan.raw.trim().to_string()];
     let extras = expansion
@@ -149,24 +160,50 @@ pub(crate) async fn assemble_chunk_parent_results(
     time_filter: Option<&str>,
     app_filter: Option<&str>,
 ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
-    let mut best_by_parent: HashMap<String, MemoryChunkSearchResult> = HashMap::new();
+    // One score per chunk (the better of its vector and BM25 hits), then
+    // one per memory: its best chunk plus a small bonus for each other chunk
+    // close behind (VS-18), so a memory that matches in several places wins
+    // a near tie.
+    let mut by_chunk: HashMap<String, MemoryChunkSearchResult> = HashMap::new();
     for hit in chunk_hits {
         if hit.chunk.memory_id.trim().is_empty() {
             continue;
         }
-        let replace = best_by_parent
-            .get(&hit.chunk.memory_id)
-            .map(|existing| {
-                hit.score > existing.score
-                    || (hit.score == existing.score && hit.distance < existing.distance)
-            })
+        let replace = by_chunk
+            .get(&hit.chunk.id)
+            .map(|existing| hit.score > existing.score)
             .unwrap_or(true);
         if replace {
-            best_by_parent.insert(hit.chunk.memory_id.clone(), hit);
+            by_chunk.insert(hit.chunk.id.clone(), hit);
         }
     }
-
-    let mut ranked = best_by_parent.into_values().collect::<Vec<_>>();
+    let mut by_parent: HashMap<String, Vec<MemoryChunkSearchResult>> = HashMap::new();
+    for hit in by_chunk.into_values() {
+        by_parent
+            .entry(hit.chunk.memory_id.clone())
+            .or_default()
+            .push(hit);
+    }
+    let mut ranked = by_parent
+        .into_values()
+        .map(|mut chunks| {
+            chunks.sort_by(|left, right| {
+                right
+                    .score
+                    .partial_cmp(&left.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| left.chunk.id.cmp(&right.chunk.id))
+            });
+            let mut best = chunks.swap_remove(0);
+            let close = chunks
+                .iter()
+                .filter(|chunk| chunk.score >= best.score - CLOSE_CHUNK_GAP)
+                .count()
+                .min(MAX_CLOSE_CHUNKS);
+            best.score = (best.score + CLOSE_CHUNK_BONUS * close as f32).min(1.0);
+            best
+        })
+        .collect::<Vec<_>>();
     ranked.sort_by(|left, right| {
         right
             .score
@@ -300,6 +337,90 @@ mod tests {
             .text
             .contains("parent-child retrieval"));
         assert!(results.iter().all(|result| result.id != "missing-parent"));
+    }
+
+    #[tokio::test]
+    async fn several_matching_chunks_lift_their_memory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let store = tokio::task::spawn_blocking(move || Store::new(&path).expect("store"))
+            .await
+            .expect("store task");
+        store
+            .add_v5_batch_preserving_ids(&[parent("many", "Many"), parent("one", "One")])
+            .await
+            .expect("v5 parents");
+
+        let results = assemble_chunk_parent_results(
+            &store,
+            vec![
+                chunk("many-0", "many", 0.91, "First matching chunk"),
+                chunk("many-1", "many", 0.89, "Second matching chunk"),
+                chunk("many-2", "many", 0.88, "Third matching chunk"),
+                chunk("many-3", "many", 0.50, "Unrelated chunk"),
+                chunk("one-0", "one", 0.92, "Single strong chunk"),
+            ],
+            4,
+            None,
+            None,
+        )
+        .await
+        .expect("assemble");
+
+        // Best chunk 0.91 plus 0.01 for each of the two others within 0.05.
+        assert_eq!(results[0].id, "many");
+        assert!(
+            (results[0].score - 0.93).abs() < 1e-5,
+            "{}",
+            results[0].score
+        );
+        assert_eq!(results[0].matched_chunk_ids, vec!["many-0"]);
+        assert_eq!(results[1].id, "one");
+    }
+
+    #[tokio::test]
+    async fn chunk_route_finds_words_even_without_the_chunk_model() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let store = tokio::task::spawn_blocking(move || Store::new(&path).expect("store"))
+            .await
+            .expect("store task");
+        store
+            .add_v5_batch_preserving_ids(&[parent("vendor", "Vendor"), parent("lunch", "Lunch")])
+            .await
+            .expect("v5 parents");
+        let mut vendor = chunk(
+            "vendor-1",
+            "vendor",
+            0.0,
+            "The Zephyr vendor contract renews at the same price",
+        );
+        vendor.chunk.chunk_index = 1;
+        store
+            .upsert_memory_chunks(&[
+                chunk("vendor-0", "vendor", 0.0, "Pricing table for the quarter").chunk,
+                vendor.chunk,
+                chunk("lunch-0", "lunch", 0.0, "Team lunch on Friday").chunk,
+            ])
+            .await
+            .expect("chunks");
+        let mut config = SearchConfig::default();
+        config.use_chunk_first_retrieval = true;
+        let config = config.normalized();
+        let plan = crate::context_runtime::query_plan::plan(
+            "zephyr contract",
+            &crate::context_runtime::query_plan::PlanHints::default(),
+        );
+        let ctx = RouteCtx::new(&store, &config);
+
+        let hits = ChunkRoute.run(&plan, &ctx).await;
+
+        let top = hits.hits.first().expect("a chunk hit");
+        assert_eq!(top.memory_id, "vendor");
+        let result = top.signals.search_result.as_ref().expect("parent row");
+        assert_eq!(result.matched_chunk_ids, vec!["vendor-1"]);
+        assert!(result.chunk_evidence[0].text.contains("Zephyr"));
+        assert!(hits.hits.iter().all(|hit| hit.memory_id != "lunch"));
     }
 
     #[tokio::test]

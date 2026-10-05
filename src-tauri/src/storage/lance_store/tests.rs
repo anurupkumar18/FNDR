@@ -1170,3 +1170,52 @@ fn keyword_recency_is_the_same_within_a_minute() {
     );
     assert!(recency_score(stored + 3_600_000, stored) < recency_score(stored + 60_000, stored));
 }
+
+#[tokio::test]
+async fn chunk_keyword_search_finds_the_chunk_that_holds_the_words() {
+    let (_dir, store) = keyword_store(Vec::new()).await;
+    let chunk = |id: &str, memory_id: &str, index: u32, text: &str| MemoryChunkRecord {
+        chunk_index: index,
+        text: text.to_string(),
+        ..memory_chunk(id, memory_id, BGE_V5_DIMENSIONS)
+    };
+    store
+        .upsert_memory_chunks(&[
+            chunk(
+                "lunch-0",
+                "lunch",
+                0,
+                "Team lunch notes and the weekly agenda",
+            ),
+            chunk(
+                "vendor-0",
+                "vendor",
+                0,
+                "Pricing table for the next quarter",
+            ),
+            chunk(
+                "vendor-1",
+                "vendor",
+                1,
+                "The Zephyr vendor contract renews at the same price",
+            ),
+        ])
+        .await
+        .expect("upsert chunks");
+
+    let hits = store
+        .chunk_keyword_search("zephyr contract", 10)
+        .await
+        .expect("chunk keyword search");
+
+    let top = hits.first().expect("a hit");
+    assert_eq!(top.chunk.id, "vendor-1");
+    assert_eq!(top.chunk.memory_id, "vendor");
+    assert!(top.score > 0.0 && top.score < 1.0, "{}", top.score);
+    assert!(hits.iter().all(|hit| hit.chunk.id != "lunch-0"));
+    assert!(store
+        .chunk_keyword_search("dentist appointment", 10)
+        .await
+        .expect("no match")
+        .is_empty());
+}

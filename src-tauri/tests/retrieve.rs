@@ -228,6 +228,7 @@ fn retrieve_types_carry_the_documented_fields() {
     let hit = serde_json::to_value(fndr_lib::context_runtime::RetrieveHit {
         memory_id: "m".to_string(),
         chunk_id: None,
+        matched_text: None,
         score: 0.5,
         why: fndr_lib::context_runtime::RetrieveWhy {
             routes: vec!["vector".to_string()],
@@ -243,7 +244,7 @@ fn retrieve_types_carry_the_documented_fields() {
         .collect::<HashSet<_>>();
     assert_eq!(
         keys,
-        ["memory_id", "chunk_id", "score", "why"]
+        ["memory_id", "chunk_id", "matched_text", "score", "why"]
             .map(String::from)
             .into()
     );
@@ -677,4 +678,104 @@ fn retrieve_says_when_nothing_matches_well() {
         "{top:?}"
     );
     assert!(related.strong_match);
+}
+
+#[test]
+fn retrieve_names_the_chunk_that_matched() {
+    use fndr_lib::inference::model_config::BGE_V5_DIMENSIONS;
+    use fndr_lib::storage::MemoryChunkRecord;
+
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (dir, state) = seeded_state(&runtime);
+    // The chunk route reads parents from the BGE table; write them with
+    // placeholder vectors, as the v5 reindex would with real ones.
+    let parents = ["vendor", "lunch"]
+        .iter()
+        .map(|id| {
+            let mut parent = runtime
+                .block_on(state.store.get_memory_by_id(id))
+                .expect("lookup")
+                .expect("stored");
+            parent.embedding = vec![0.01; BGE_V5_DIMENSIONS];
+            parent.snippet_embedding = vec![0.01; BGE_V5_DIMENSIONS];
+            parent.support_embedding = vec![0.01; BGE_V5_DIMENSIONS];
+            parent
+        })
+        .collect::<Vec<_>>();
+    runtime
+        .block_on(state.store.add_v5_batch_preserving_ids(&parents))
+        .expect("v5 parents");
+    let chunk = |id: &str, memory_id: &str, index: u32, text: &str| MemoryChunkRecord {
+        id: id.to_string(),
+        memory_id: memory_id.to_string(),
+        chunk_index: index,
+        line_kind: "plain".to_string(),
+        text: text.to_string(),
+        embedding: vec![0.01; BGE_V5_DIMENSIONS],
+        created_at: 1_000,
+        app_name: "Slack".to_string(),
+        window_title: "Vendor thread".to_string(),
+        day_bucket: "2026-10-01".to_string(),
+        content_hash: format!("hash-{id}"),
+    };
+    runtime
+        .block_on(state.store.upsert_memory_chunks(&[
+            chunk("vendor-0", "vendor", 0, "Thread opened by procurement"),
+            chunk(
+                "vendor-1",
+                "vendor",
+                1,
+                "The Zephyr vendor contract renews next quarter at the same price",
+            ),
+            chunk(
+                "lunch-0",
+                "lunch",
+                0,
+                "Ordered sandwiches for the team lunch",
+            ),
+        ]))
+        .expect("chunks");
+    let mut config = ranking_config();
+    config.search.use_chunk_first_retrieval = true;
+    let state = AppState::new(
+        dir.path().to_path_buf(),
+        config,
+        state.store.clone(),
+        state.state_store.clone(),
+        GraphStore::new(state.store.clone()),
+        None,
+        None,
+    );
+
+    let hits = runtime
+        .block_on(retrieve(&state, &request("zephyr contract")))
+        .expect("retrieve")
+        .hits;
+
+    let top = hits.first().expect("a hit");
+    assert_eq!(top.memory_id, "vendor");
+    assert!(top.why.routes.iter().any(|route| route == "chunk"));
+    assert_eq!(top.chunk_id.as_deref(), Some("vendor-1"));
+    assert!(top
+        .matched_text
+        .as_deref()
+        .is_some_and(|text| text.contains("Zephyr vendor contract")));
+    // Hits the chunk route did not find carry no chunk.
+    for hit in hits
+        .iter()
+        .filter(|hit| !hit.why.routes.iter().any(|r| r == "chunk"))
+    {
+        assert!(hit.chunk_id.is_none() && hit.matched_text.is_none());
+    }
+    // Search rows carry the same chunk, so its cards can show the sentence.
+    let rows = runtime
+        .block_on(search_ranked_results(
+            &state,
+            "zephyr contract",
+            None,
+            None,
+            10,
+        ))
+        .expect("search");
+    assert_eq!(rows[0].matched_chunk_ids, vec!["vendor-1"]);
 }

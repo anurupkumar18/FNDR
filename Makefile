@@ -76,11 +76,15 @@ gitlab-sync:
 .PHONY: qa-retrieval-check
 QA_CASE_SET ?= $(patsubst %-queries.json,%,$(notdir $(QA_QUERIES)))
 QA_REFERENCE ?= $(CURDIR)/scripts/demo/retrieval-reference/$(QA_CASE_SET).json
-QA_CHECK_DIR ?= $(CURDIR)/src-tauri/target/qa-retrieval-check/$(QA_CASE_SET)
+QA_CHECK_DIR ?= $(CURDIR)/src-tauri/target/qa-retrieval-check/$(QA_CASE_SET)$(if $(QA_CHUNKS),-chunks,)
+# VS-18: QA_CHUNKS=1 indexes the evaluation copy with BGE chunk rows and turns
+# the chunk route on; the check against the usual reference then shows the
+# chunk-on deltas. Needs the BGE model (scripts/bootstrap/download-embedding-model.sh).
+QA_CHUNK_ARGS := $(if $(QA_CHUNKS),--chunks,)
 
 qa-retrieval-check: $(if $(QA_SKIP_SEED),,qa-seed)
 	mkdir -p "$(QA_CHECK_DIR)"
-	cd src-tauri && CARGO_BUILD_JOBS="$(CARGO_BUILD_JOBS)" cargo run --example retrieval_qa -- --data-dir "$(QA_PROFILE)" --cases "$(QA_QUERIES)" --out "$(QA_CHECK_DIR)/current.md" --json "$(QA_CHECK_DIR)/current.json" > /dev/null
+	cd src-tauri && CARGO_BUILD_JOBS="$(CARGO_BUILD_JOBS)" cargo run --example retrieval_qa -- --data-dir "$(QA_PROFILE)" --cases "$(QA_QUERIES)" --out "$(QA_CHECK_DIR)/current.md" --json "$(QA_CHECK_DIR)/current.json" $(QA_CHUNK_ARGS) > /dev/null
 	$(PYTHON) scripts/audit/retrieval_check.py --reference "$(QA_REFERENCE)" --current "$(QA_CHECK_DIR)/current.json" --out "$(QA_CHECK_DIR)/check.md"
 
 # VS-02: PERSONA=<name> runs the QA targets on scripts/demo/<name>-week.json and
