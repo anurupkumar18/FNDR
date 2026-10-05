@@ -35,6 +35,7 @@ pub mod verifier;
 
 pub use retrieve::{
     retrieve, retrieve_search_results, RetrieveHit, RetrieveRequest, RetrieveResult, RetrieveWhy,
+    STRONG_MATCH_SCORE,
 };
 mod wiki_policy;
 

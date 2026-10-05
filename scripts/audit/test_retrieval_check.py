@@ -163,6 +163,8 @@ def v2_report(**kwargs):
         path["no_match"] = {
             "cases": 1,
             "returned_nothing": 0,
+            "no_strong_match": 1,
+            "positive_without_strong_match": 0,
             "top_score_median": 0.31,
             "positive_top_score_median": 0.62,
         }
@@ -197,7 +199,15 @@ class SchemaV2Tests(unittest.TestCase):
 
     def test_render_shows_no_match_rows(self):
         text = rc.render(rc.compare(v2_report(), v2_report()))
-        self.assertIn("| search | 1 | 0 | 0.310 | 0.620 |", text)
+        self.assertIn("| search | 1 | 0 | 1 | 0 | 0.310 | 0.620 |", text)
+
+    def test_render_marks_no_match_counts_older_reports_lack(self):
+        current = v2_report()
+        for path in current["paths"].values():
+            del path["no_match"]["no_strong_match"]
+            del path["no_match"]["positive_without_strong_match"]
+        text = rc.render(rc.compare(v2_report(), current))
+        self.assertIn("| search | 1 | 0 | n/a | n/a | 0.310 | 0.620 |", text)
 
 
 class RenderAndMainTests(unittest.TestCase):
@@ -255,14 +265,16 @@ class RenderAndMainTests(unittest.TestCase):
         self.assertNotIn("/tmp", text)
         self.assertNotIn(str(Path.home()), text)
 
-    def test_committed_reference_is_a_valid_schema_v1_report(self):
+    def test_committed_references_are_valid_reports(self):
         root = Path(__file__).resolve().parents[2]
-        reference = json.loads(
-            (root / "scripts/demo/retrieval-reference/knowledge-worker.json").read_text()
-        )
-        rc.validate_report(reference)
-        self.assertEqual(reference["case_set"], "knowledge-worker")
-        self.assertEqual(set(reference["paths"]), {"search", "ask"})
+        for case_set in ["knowledge-worker", "office-pm"]:
+            reference = json.loads(
+                (root / f"scripts/demo/retrieval-reference/{case_set}.json").read_text()
+            )
+            rc.validate_report(reference)
+            self.assertEqual(reference["case_set"], case_set)
+            # VS-09 added the shared retrieve path to Search and Ask.
+            self.assertEqual(set(reference["paths"]), {"search", "ask", "retrieve"})
 
 
 if __name__ == "__main__":

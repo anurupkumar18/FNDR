@@ -153,6 +153,11 @@ def fmt_delta(before, after) -> str:
     return f"{after - before:+.3f}"
 
 
+def fmt_count(value):
+    """A count, or n/a for reports made before the field existed."""
+    return "n/a" if value is None else str(value)
+
+
 def fmt_score(score) -> str:
     return "none" if score is None else f"{score:.3f}"
 
@@ -227,14 +232,18 @@ def render(result: CheckResult) -> str:
     if no_match_rows:
         lines += [
             "",
-            "No-match queries (reported, not gated; VS-12 sets the threshold):",
+            "No-match queries (reported, not gated). A negative is right when its best result is under the"
+            " strong-match bar (VS-12); a positive under the bar would wrongly say \"No strong matches\".",
             "",
-            "| Path | Negative cases | Returned nothing | Median top score, negative | Median top score, positive |",
-            "|---|---:|---:|---:|---:|",
+            "| Path | Negative cases | Returned nothing | Negatives under the bar | Positives under the bar "
+            "| Median top score, negative | Median top score, positive |",
+            "|---|---:|---:|---:|---:|---:|---:|",
         ]
         for name, no_match in no_match_rows:
             lines.append(
                 f"| {name} | {no_match.get('cases', 0)} | {no_match.get('returned_nothing', 0)} "
+                f"| {fmt_count(no_match.get('no_strong_match'))} "
+                f"| {fmt_count(no_match.get('positive_without_strong_match'))} "
                 f"| {fmt_score(no_match.get('top_score_median'))} | {fmt_score(no_match.get('positive_top_score_median'))} |"
             )
 

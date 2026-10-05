@@ -25,11 +25,21 @@ pub struct RetrieveRequest {
     pub limit: usize,
 }
 
+/// The best hit's score must reach this for a query to count as matched;
+/// under it a surface says "No strong matches" (VS-12). Set from the labeled
+/// sets: every positive query's best hit scores 0.29 or more, and three of
+/// eight no-match queries score under 0.20. No single score separates all
+/// eight (they reach 0.35), so the bar sits where it hides no real match.
+pub const STRONG_MATCH_SCORE: f32 = 0.25;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type, PartialEq)]
 pub struct RetrieveResult {
     pub hits: Vec<RetrieveHit>,
     /// What was actually searched, so a surface can show "yesterday, Slack".
     pub filters: RetrieveFilters,
+    /// Whether the best hit reaches `STRONG_MATCH_SCORE` or contains every
+    /// word of the query; when false, surfaces say "No strong matches".
+    pub strong_match: bool,
 }
 
 /// The text and filters a request was searched with after time and app
@@ -163,7 +173,7 @@ pub(crate) async fn retrieve_with_fused(
     // Report matched words without the filter phrases ("yesterday", "Slack").
     let terms = QueryContext::from_query(&words_without_phrases).anchor_terms;
 
-    let hits = retrieval
+    let hits: Vec<RetrieveHit> = retrieval
         .fused
         .iter()
         .take(limit)
@@ -184,7 +194,31 @@ pub(crate) async fn retrieve_with_fused(
             },
         })
         .collect();
-    (RetrieveResult { hits, filters }, retrieval)
+    let strong_match = hits.first().is_some_and(|hit| is_strong_match(hit, &terms));
+    (
+        RetrieveResult {
+            hits,
+            filters,
+            strong_match,
+        },
+        retrieval,
+    )
+}
+
+/// A hit is a strong match when its score reaches `STRONG_MATCH_SCORE`, or
+/// when the keyword route found every word of the query in it. The second
+/// rule keeps exact matches strong when no embedding model is loaded: then
+/// only the keyword route scores, and a perfect match fuses to about 0.20.
+fn is_strong_match(hit: &RetrieveHit, terms: &[String]) -> bool {
+    let words = terms
+        .iter()
+        .filter(|term| !term.contains(' '))
+        .collect::<Vec<_>>();
+    hit.score >= STRONG_MATCH_SCORE
+        || (!words.is_empty()
+            && words
+                .iter()
+                .all(|word| hit.why.matched_terms.contains(word)))
 }
 
 /// Read time and app phrases out of the query (VS-13). Returns the filters

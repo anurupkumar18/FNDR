@@ -1,7 +1,9 @@
 //! VS-09: one retrieval function every surface calls.
 
 use fndr_lib::config::{Config, DEFAULT_IMAGE_EMBEDDING_DIM};
-use fndr_lib::context_runtime::{retrieve, run_query, ComposeMode, RetrieveRequest};
+use fndr_lib::context_runtime::{
+    retrieve, run_query, ComposeMode, RetrieveRequest, STRONG_MATCH_SCORE,
+};
 use fndr_lib::embedding::{Embedder, EMBEDDING_DIM};
 use fndr_lib::graph::GraphStore;
 use fndr_lib::ipc::commands::search::search_ranked_results;
@@ -36,6 +38,18 @@ fn record(
         decay_score: 1.0,
         ..Default::default()
     }
+}
+
+/// Route time budgets lifted to their maximums, as `retrieval_qa` does:
+/// these tests check ranking, and with production budgets a loaded machine
+/// (twelve tests in parallel on a debug build) drops keyword hits.
+fn ranking_config() -> Config {
+    let mut config = Config::default();
+    config.search.semantic_timeout_ms = 10_000;
+    config.search.snippet_timeout_ms = 10_000;
+    config.search.keyword_timeout_ms = 10_000;
+    config.search.keyword_variant_timeout_ms = 5_000;
+    config
 }
 
 fn seeded_state(runtime: &tokio::runtime::Runtime) -> (tempfile::TempDir, AppState) {
@@ -86,7 +100,7 @@ fn seeded_state(runtime: &tokio::runtime::Runtime) -> (tempfile::TempDir, AppSta
     let graph = GraphStore::new(store.clone());
     let state = AppState::new(
         dir.path().to_path_buf(),
-        Config::default(),
+        ranking_config(),
         store,
         state_store,
         graph,
@@ -240,6 +254,19 @@ fn retrieve_types_carry_the_documented_fields() {
         .cloned()
         .collect::<HashSet<_>>();
     assert_eq!(why, ["routes", "matched_terms"].map(String::from).into());
+
+    let result = serde_json::to_value(fndr_lib::context_runtime::RetrieveResult::default())
+        .expect("result json");
+    let keys = result
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        keys,
+        ["hits", "filters", "strong_match"].map(String::from).into()
+    );
 }
 
 fn day_state(runtime: &tokio::runtime::Runtime) -> (tempfile::TempDir, AppState) {
@@ -287,7 +314,7 @@ fn day_state(runtime: &tokio::runtime::Runtime) -> (tempfile::TempDir, AppState)
     let graph = GraphStore::new(store.clone());
     let state = AppState::new(
         dir.path().to_path_buf(),
-        Config::default(),
+        ranking_config(),
         store,
         state_store,
         graph,
@@ -417,9 +444,10 @@ fn search_lists_what_retrieve_found_in_the_same_order() {
                 .collect::<Vec<_>>(),
             "{query}"
         );
-        // Same evidence strength; recency moves it by the time between calls.
+        // Same evidence strength; recency counts whole minutes, so two calls
+        // that straddle a minute differ by about 2e-5 here.
         for (result, hit) in results.iter().zip(&hits) {
-            assert!((result.score - hit.score).abs() < 1e-5, "{query}");
+            assert!((result.score - hit.score).abs() < 1e-3, "{query}");
         }
     }
 
@@ -536,7 +564,7 @@ fn busy_week_state(runtime: &tokio::runtime::Runtime) -> (tempfile::TempDir, App
     let graph = GraphStore::new(store.clone());
     let state = AppState::new(
         dir.path().to_path_buf(),
-        Config::default(),
+        ranking_config(),
         store,
         state_store,
         graph,
@@ -625,4 +653,28 @@ fn a_short_page_is_the_start_of_a_long_page() {
             assert_eq!(short, expected, "{query}, limit {limit}");
         }
     }
+}
+
+#[test]
+fn retrieve_says_when_nothing_matches_well() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (_dir, state) = seeded_state(&runtime);
+
+    let unrelated = runtime
+        .block_on(retrieve(&state, &request("dentist appointment reminder")))
+        .expect("retrieve");
+    assert!(!unrelated.strong_match, "{:?}", unrelated.hits.first());
+
+    let related = runtime
+        .block_on(retrieve(&state, &request("zephyr vendor contract")))
+        .expect("retrieve");
+    let top = related.hits.first().expect("a hit");
+    assert_eq!(top.memory_id, "vendor");
+    // Strong by score with a model loaded; without one only the keyword
+    // route scores, and containing every query word is what makes it strong.
+    assert!(
+        top.score >= STRONG_MATCH_SCORE || top.why.matched_terms.len() >= 3,
+        "{top:?}"
+    );
+    assert!(related.strong_match);
 }

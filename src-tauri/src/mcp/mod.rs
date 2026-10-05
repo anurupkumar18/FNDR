@@ -5145,7 +5145,28 @@ mod tests {
     /// Four synthetic memories a few minutes old, for the search contract.
     fn build_seeded_search_state(runtime: &tokio::runtime::Runtime) -> Arc<AppState> {
         std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
-        let app_state = build_test_app_state();
+        let temp_dir = tempdir().expect("tempdir");
+        let data_dir = temp_dir.path().to_path_buf();
+        std::mem::forget(temp_dir);
+        let store = Arc::new(Store::new(&data_dir).expect("store"));
+        let state_store = Arc::new(StateStore::new(&data_dir).expect("state store"));
+        let graph = GraphStore::new(store.clone());
+        // Route time budgets lifted: this compares rankings, and under the
+        // parallel lib tests a production keyword budget can drop a hit.
+        let mut config = Config::default();
+        config.search.semantic_timeout_ms = 10_000;
+        config.search.snippet_timeout_ms = 10_000;
+        config.search.keyword_timeout_ms = 10_000;
+        config.search.keyword_variant_timeout_ms = 5_000;
+        let app_state = Arc::new(AppState::new(
+            data_dir,
+            config,
+            store,
+            state_store,
+            graph,
+            None,
+            None,
+        ));
         let rows = [
             (
                 "vendor",

@@ -105,6 +105,10 @@ pub struct MemoryCard {
     pub matched_chunk_ids: Vec<String>,
     #[serde(default)]
     pub chunk_evidence: Vec<crate::storage::MatchedChunkEvidence>,
+    /// True when no result for the query reached the strong-match bar, so
+    /// Search says "No strong matches" and folds these cards away (VS-12).
+    #[serde(default)]
+    pub weak_match: bool,
     /// Lifecycle status from `MemoryRecord.enrichment_status`, surfaced so the
     /// vault can render DEVELOPED / PENDING / REVIEW_FAILED chips deterministically.
     #[serde(default)]
@@ -338,6 +342,7 @@ impl MemoryCardSynthesizer {
                 matched_routes: anchor.matched_routes.clone(),
                 matched_chunk_ids: anchor.matched_chunk_ids.clone(),
                 chunk_evidence: anchor.chunk_evidence.clone(),
+                weak_match: false,
                 enrichment_status: anchor.enrichment_status.clone(),
                 reviewed_at_ms: anchor.reviewed_at_ms,
                 reviewer_generation: anchor.reviewer_generation,
@@ -887,6 +892,7 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         matched_routes: result.matched_routes.clone(),
         matched_chunk_ids: result.matched_chunk_ids.clone(),
         chunk_evidence: result.chunk_evidence.clone(),
+        weak_match: false,
         enrichment_status: result.enrichment_status.clone(),
         reviewed_at_ms: result.reviewed_at_ms,
         reviewer_generation: result.reviewer_generation,

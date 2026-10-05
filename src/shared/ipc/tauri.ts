@@ -30,7 +30,7 @@ export interface SearchResult {
     reviewed_at_ms?: number;
     /** Monotonic counter incremented on each successful review pass. */
     reviewer_generation?: number;
-    /** Coarse persisted gate outcome — "enriched_memory_card",
+    /** Coarse persisted gate outcome: "enriched_memory_card",
      *  "visual_semantics_failed", "metadata_only", etc. */
     storage_outcome?: string;
 }
@@ -66,7 +66,7 @@ export interface MemoryCard {
     evidence_ids?: string[];
     confidence?: number;
     anchor_coverage_score?: number;
-    /** High-level activity category — content-derived, never tied to an app name. */
+    /** High-level activity category: content-derived, never tied to an app name. */
     activity_type?: string;
     /** File paths or code symbols touched in this session */
     files_touched?: string[];
@@ -98,12 +98,14 @@ export interface MemoryCard {
     topic_categories?: string[];
     /** Semantic search aliases / synonyms */
     search_aliases?: string[];
+    /** True when no result for the query reached the strong-match bar (VS-12). */
+    weak_match?: boolean;
     matched_routes?: string[];
     matched_chunk_ids?: string[];
     chunk_evidence?: MatchedChunkEvidence[];
     embedding_provenance?: SearchEmbeddingProvenance;
     embedding_reason_labels?: string[];
-    /** Phase 3 — deterministic "Why this surfaced" attached by the
+    /** Phase 3: deterministic "Why this surfaced" attached by the
      *  agentic-graph-rag composer. Absent on legacy code paths. */
     surfacing_reason?: SurfacingReason;
     /** Post-capture review lifecycle:
@@ -113,7 +115,7 @@ export interface MemoryCard {
     reviewed_at_ms?: number;
     /** Monotonic counter incremented on each successful review pass. */
     reviewer_generation?: number;
-    /** Coarse persisted gate outcome — "enriched_memory_card",
+    /** Coarse persisted gate outcome: "enriched_memory_card",
      *  "visual_semantics_failed", "metadata_only", etc. */
     storage_outcome?: string;
 }
@@ -402,7 +404,7 @@ export interface RetrievalEvalReport {
  *
  * Mirrors `crate::ipc::commands::stats::CapturePipelineBreakdown` (Rust).
  * Every terminal branch in the capture loop bumps exactly one counter, so
- * `stored_total + skipped_total` accounts for every evaluated frame —
+ * `stored_total + skipped_total` accounts for every evaluated frame:
  * unlike the legacy `frames_captured` / `frames_dropped` numbers which
  * only counted successful stores and dedup drops.
  */
@@ -1807,7 +1809,7 @@ export interface HermesBridgeStatus {
     focus_task: string | null;
     recent_memory_count: number;
     open_task_count: number;
-    /** True when Ollama is configured and reachable — chat works without the Hermes CLI. */
+    /** True when Ollama is configured and reachable: chat works without the Hermes CLI. */
     direct_ollama_ready: boolean;
     top_apps: HermesAppContext[];
     recent_memories: HermesMemoryDigest[];
@@ -1991,7 +1993,7 @@ export async function quickSetupOllama(): Promise<HermesBridgeStatus> {
 }
 
 /**
- * Send a message directly to Ollama — no Hermes CLI required.
+ * Send a message directly to Ollama: no Hermes CLI required.
  * messages is the prior conversation in OpenAI format: [{role, content}].
  */
 export async function sendDirectChat(
@@ -2652,7 +2654,7 @@ export async function companionRevokeDevice(deviceId: string): Promise<boolean> 
     return invoke<boolean>("companion_revoke_device", { deviceId });
 }
 
-// Notch HUD — the panel parked on the display's camera housing.
+// Notch HUD: the panel parked on the display's camera housing.
 
 export const NOTCH_HUD_HOVER_EVENT = "notch-hud://hover";
 export const NOTCH_HUD_GEOMETRY_EVENT = "notch-hud://geometry";
@@ -2686,7 +2688,7 @@ export async function setNotchHudHitRect(rect: {
     return invoke("set_notch_hud_hit_rect", { rect });
 }
 
-/** Take or release the keyboard — the HUD is not focusable at rest. */
+/** Take or release the keyboard: the HUD is not focusable at rest. */
 export async function setNotchHudKeyboard(active: boolean): Promise<void> {
     return invoke("set_notch_hud_keyboard", { active });
 }
@@ -2704,7 +2706,7 @@ export async function notchHudOpenMemory(memoryId: string): Promise<void> {
 }
 
 
-// Computer use — the notch operates the Mac through open-computer-use.
+// Computer use: the notch operates the Mac through open-computer-use.
 
 export const COMPUTER_USE_EVENT = "computer-use://event";
 

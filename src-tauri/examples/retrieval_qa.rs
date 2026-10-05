@@ -9,7 +9,9 @@
 //!        [--out <md>] [--json <json>]
 
 use fndr_lib::config::Config;
-use fndr_lib::context_runtime::{retrieve, run_query, ComposeMode, RetrieveRequest};
+use fndr_lib::context_runtime::{
+    retrieve, run_query, ComposeMode, RetrieveRequest, STRONG_MATCH_SCORE,
+};
 use fndr_lib::graph::GraphStore;
 use fndr_lib::ipc::commands::search::search_ranked_results;
 use fndr_lib::storage::{StateStore, Store};
@@ -49,6 +51,12 @@ struct LatencyMs {
 struct NoMatch {
     cases: usize,
     returned_nothing: usize,
+    /// Negative cases whose best result is under `STRONG_MATCH_SCORE` (or
+    /// that returned nothing): the screen says "No strong matches" (VS-12).
+    no_strong_match: usize,
+    /// Positive cases whose best result is under the bar: these would wrongly
+    /// say "No strong matches".
+    positive_without_strong_match: usize,
     top_score_median: Option<f64>,
     positive_top_score_median: Option<f64>,
 }
@@ -127,11 +135,16 @@ impl Score {
     }
 }
 
+fn is_strong(top_score: Option<f64>) -> bool {
+    top_score.is_some_and(|score| score >= f64::from(STRONG_MATCH_SCORE))
+}
+
 #[derive(Default)]
 struct PathScore {
     core: Score,
     by_kind: BTreeMap<String, Score>,
     positive_top_scores: Vec<f64>,
+    positive_without_strong_match: usize,
     negative_top_scores: Vec<Option<f64>>,
     latency_ms: Vec<u128>,
 }
@@ -150,6 +163,9 @@ impl PathScore {
         }
         self.by_kind.entry(kind.to_string()).or_default().add(rank);
         self.positive_top_scores.extend(top_score);
+        if !is_strong(top_score) {
+            self.positive_without_strong_match += 1;
+        }
     }
 
     fn metrics(&self) -> PathMetrics {
@@ -163,6 +179,12 @@ impl PathScore {
             NoMatch {
                 cases: self.negative_top_scores.len(),
                 returned_nothing: self.negative_top_scores.len() - returned.len(),
+                no_strong_match: self
+                    .negative_top_scores
+                    .iter()
+                    .filter(|score| !is_strong(**score))
+                    .count(),
+                positive_without_strong_match: self.positive_without_strong_match,
                 top_score_median: median(&returned),
                 positive_top_score_median: median(&self.positive_top_scores),
             }
@@ -428,16 +450,19 @@ fn render_markdown(report: &RetrievalReport) -> String {
     if paths.iter().any(|(_, metrics)| metrics.no_match.is_some()) {
         lines.extend([
             String::new(),
-            "| Path | Negative cases | Returned nothing | Median top score, negative | Median top score, positive |"
-                .to_string(),
-            "|---|---:|---:|---:|---:|".to_string(),
+            format!(
+                "| Path | Negative cases | Returned nothing | No strong match (under {STRONG_MATCH_SCORE:.2}) | Positives under the bar | Median top score, negative | Median top score, positive |"
+            ),
+            "|---|---:|---:|---:|---:|---:|---:|".to_string(),
         ]);
         for (name, metrics) in paths {
             if let Some(no_match) = &metrics.no_match {
                 lines.push(format!(
-                    "| {name} | {} | {} | {} | {} |",
+                    "| {name} | {} | {} | {} | {} | {} | {} |",
                     no_match.cases,
                     no_match.returned_nothing,
+                    no_match.no_strong_match,
+                    no_match.positive_without_strong_match,
                     score_label(no_match.top_score_median),
                     score_label(no_match.positive_top_score_median)
                 ));
@@ -690,6 +715,22 @@ mod tests {
     }
 
     #[test]
+    fn no_match_counts_queries_whose_best_result_is_weak() {
+        let mut score = PathScore::default();
+        score.add("keyword", Some(1), Some(0.9), 10);
+        score.add("time", Some(3), Some(0.2), 10);
+        score.add("negative", None, Some(0.5), 10);
+        score.add("negative", None, Some(0.1), 10);
+        score.add("negative", None, None, 10);
+
+        let no_match = score.metrics().no_match.expect("negative cases reported");
+        // A negative is right when nothing clears the bar; a positive whose
+        // best result is under it would show "No strong matches" (VS-12).
+        assert_eq!(no_match.no_strong_match, 2);
+        assert_eq!(no_match.positive_without_strong_match, 1);
+    }
+
+    #[test]
     fn negative_cases_are_scored_as_no_match_and_never_count_as_misses() {
         let mut score = PathScore::default();
         score.add("keyword", Some(1), Some(0.9), 10);
@@ -813,6 +854,8 @@ mod tests {
             [
                 "cases",
                 "returned_nothing",
+                "no_strong_match",
+                "positive_without_strong_match",
                 "top_score_median",
                 "positive_top_score_median",
             ]
@@ -885,7 +928,7 @@ mod tests {
         let markdown = render_markdown(&report);
         assert!(markdown.contains("3 queries (1 keyword, 1 time, 1 negative)"));
         assert!(markdown.contains("| Keyword Recall@5 | Time Recall@5 |"));
-        assert!(markdown.contains("| Search | 1 | 0 | 0.200 | 0.700 |"));
+        assert!(markdown.contains("| Search | 1 | 0 | 1 | 0 | 0.200 | 0.700 |"));
     }
 
     #[test]

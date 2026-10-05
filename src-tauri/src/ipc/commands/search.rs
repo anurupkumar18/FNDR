@@ -153,7 +153,7 @@ pub async fn search_ranked_results(
     app_filter: Option<&str>,
     raw_limit: usize,
 ) -> Result<Vec<SearchResult>, String> {
-    let (results, _) = search_ranked_results_internal(
+    let (results, _, _) = search_ranked_results_internal(
         state,
         query,
         time_filter,
@@ -172,7 +172,7 @@ async fn search_ranked_results_internal(
     app_filter: Option<&str>,
     raw_limit: usize,
     explain: bool,
-) -> Result<(Vec<SearchResult>, Option<serde_json::Value>), String> {
+) -> Result<(Vec<SearchResult>, Option<serde_json::Value>, bool), String> {
     let started = Instant::now();
     let request = RetrieveRequest {
         query: query.to_string(),
@@ -205,7 +205,7 @@ async fn search_ranked_results_internal(
             })).collect::<Vec<_>>(),
         })
     });
-    Ok((results, explanation))
+    Ok((results, explanation, retrieved.strong_match))
 }
 
 #[cfg(debug_assertions)]
@@ -216,7 +216,7 @@ pub async fn search_ranked_results_explained(
     app_filter: Option<&str>,
     raw_limit: usize,
 ) -> Result<(Vec<SearchResult>, serde_json::Value), String> {
-    let (results, explanation) = search_ranked_results_internal(
+    let (results, explanation, _) = search_ranked_results_internal(
         state,
         query,
         time_filter,
@@ -501,6 +501,7 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         matched_routes: result.matched_routes.clone(),
         matched_chunk_ids: result.matched_chunk_ids.clone(),
         chunk_evidence: result.chunk_evidence.clone(),
+        weak_match: false,
         enrichment_status,
         reviewed_at_ms: result.reviewed_at_ms,
         reviewer_generation: result.reviewer_generation,
@@ -654,15 +655,21 @@ pub(super) async fn search_memory_cards_inner(
     }
 
     let raw_limit = limit.max(18).min(50);
-    let raw_results = search_ranked_results(
+    let (raw_results, _, strong_match) = search_ranked_results_internal(
         state,
         query,
         time_filter,
         app_filter,
         raw_limit,
+        false,
     )
     .await?;
-    let cards = synthesize_memory_cards_from_ranked(state, query, raw_results, limit).await;
+    let mut cards = synthesize_memory_cards_from_ranked(state, query, raw_results, limit).await;
+    // "No strong matches" (VS-12): the whole query is judged by its best
+    // result, because a right answer can rank below a wrong one near the bar.
+    for card in &mut cards {
+        card.weak_match = !strong_match;
+    }
     tracing::info!(
         total_ms = started.elapsed().as_millis(),
         cards = cards.len(),
@@ -1053,4 +1060,78 @@ fn build_grounded_search_summary(query: &str, evidence: &[SummaryEvidence]) -> S
     }
 
     summary
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, DEFAULT_IMAGE_EMBEDDING_DIM};
+    use crate::embedding::{Embedder, EMBEDDING_DIM};
+    use crate::graph::GraphStore;
+    use crate::storage::{MemoryRecord, StateStore, Store};
+
+    #[test]
+    fn search_cards_are_weak_when_nothing_matches_well() {
+        std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(Store::new(dir.path()).expect("store"));
+        let state_store = Arc::new(StateStore::new(dir.path()).expect("state store"));
+        let text = "The Zephyr vendor contract renews next quarter at the same price";
+        let embedding = Embedder::new()
+            .expect("embedder")
+            .embed_batch(&[text.to_string()])
+            .expect("embedding")
+            .remove(0);
+        let record = MemoryRecord {
+            id: "vendor".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis() - 60_000,
+            app_name: "Slack".to_string(),
+            window_title: "Vendor thread".to_string(),
+            session_id: "session-vendor".to_string(),
+            text: text.to_string(),
+            clean_text: text.to_string(),
+            snippet: text.to_string(),
+            summary_source: "llm".to_string(),
+            embedding: embedding.clone(),
+            snippet_embedding: embedding,
+            support_embedding: vec![0.0; EMBEDDING_DIM],
+            image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
+            decay_score: 1.0,
+            ..Default::default()
+        };
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime
+            .block_on(store.add_batch(&[record]))
+            .expect("add record");
+        let graph = GraphStore::new(store.clone());
+        // Budgets lifted: under ~900 parallel lib tests a production keyword
+        // budget can drop the hit this test is about.
+        let mut config = Config::default();
+        config.search.semantic_timeout_ms = 10_000;
+        config.search.snippet_timeout_ms = 10_000;
+        config.search.keyword_timeout_ms = 10_000;
+        config.search.keyword_variant_timeout_ms = 5_000;
+        let state = AppState::new(
+            dir.path().to_path_buf(),
+            config,
+            store,
+            state_store,
+            graph,
+            None,
+            None,
+        );
+        let cards = |query: &str| {
+            runtime
+                .block_on(search_memory_cards_inner(&state, query, None, None, 10))
+                .expect("search")
+        };
+
+        let related = cards("zephyr vendor contract");
+        assert!(!related.is_empty());
+        assert!(related.iter().all(|card| !card.weak_match));
+        // Without a model the unrelated query finds nothing at all.
+        assert!(cards("dentist appointment reminder")
+            .iter()
+            .all(|card| card.weak_match));
+    }
 }
