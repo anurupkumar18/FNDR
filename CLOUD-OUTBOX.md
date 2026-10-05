@@ -2,7 +2,7 @@
 
 Cloud session (Linux container, GitHub only) to local session. Updated after every ticket and at least every two hours. Newest entries first under each heading.
 
-Last update: 2026-10-05 03:15 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf (main at b948dfd).
+Last update: 2026-10-05 03:50 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf (main at b948dfd).
 
 ## NEEDS HUMAN (open)
 
@@ -22,7 +22,7 @@ None.
 |---|---|---|---|---|---|---|
 | 1 | `claude/train-f-new` | #26 | 8c96a07 | VS-41 (security fix, 2 commits), VS-35 spec | macos-26: 885/886, the intermittent memory_journey test (see Read first 2) | Independent of A and B. Carries the ported `macos-26` CI commit; drop it if #24 lands first. |
 | 2 | `claude/train-a-measure` | #21 | aed1315 | VS-04 (2 commits), VS-02, VS-03 | red on main's Swift issue | Train B contains all of A, so #25's CI covers this code. |
-| 3 | `claude/train-b-retrieval` | #25 | fd03afa | (A) + VS-05, VS-07 (3 commits; closes VS-06), VS-08 (evidence only), VS-09, VS-13, VS-10, VS-11, VS-21 | **green on macos-26 at 483b6e1**; fd03afa running | Stacked on A. Carries the ported `macos-26` CI commit (74963fa). VS-10 makes Search show weak results for no-match queries until VS-12; merge the train whole. |
+| 3 | `claude/train-b-retrieval` | #25 | 7f4e673 | (A) + VS-05, VS-07 (3 commits; closes VS-06), VS-08 (evidence only), VS-09, VS-13, VS-10, VS-11, VS-21, VS-12, VS-25: **train complete** | green on macos-26 at 483b6e1; later heads running | Stacked on A. Carries the ported `macos-26` CI commit (74963fa). VS-10 makes Search show weak results for no-match queries until VS-12; merge the train whole. |
 | 4 | `claude/train-c-ux` | #22 | 82792e2 | VS-23 | red on main's Swift issue (no Rust in diff) | Frontend CI green. |
 | 5 | `claude/train-e-docs` | #23 | ca9c383 | PD-03, PD-17 draft, PD-01 draft (3), PD-02, PD-04, PD-18 guide, PD-05, proposals (VS-40), session log | red on main's Swift issue (no Rust in diff) | |
 | 6 | `claude/ci-macos-26` | #24 | c6cf285 | CI runner fix | build passes, the one memory_journey test fails until VS-07 lands | `.github/workflows/**` is yours to merge. |
@@ -53,6 +53,20 @@ Merge trials: `git merge-tree` shows A with E and A with C merge cleanly; B is A
 4. Branch policy: I only rebase (with `--force-with-lease`) commits that local has not merged. If you are mid-gate on a branch, say so in LOCAL-OUTBOX and I will stack on it instead.
 
 ## Tickets
+
+### VS-25 retired search code: delivered (pending local gate); contract notes for five callers
+
+- `claude/train-b-retrieval`, 7f4e673, PR #25. Evidence `docs/evidence/W03/VS-25-cloud.md`.
+- Comment to post:
+
+> Cloud delivered on `claude/train-b-retrieval` (7f4e673): the raw `search`/`search_raw_results` commands (Pipeline Inspector), autofill, and quality checks rank through `retrieve`; the LLM query expansion for short abstract queries moved into `retrieve` (it fixes a VS-10 regression: Search lost the expansion whenever a local model was loaded; untested here, no local model in the cloud). Removed `HybridSearcher::search_with_expansion(_explained)`, `fuse_and_rerank`, the explain plumbing, `reranker::rerank_results`, and the IPC module's own hybrid search. Lib tests 907 to 906 (two `rerank_results` tests go with it, one coverage test added). Same seed: every rank and metric identical. Five callers outside this lane keep the engine: `src/companion/handlers/search.rs`, `src/graph/legacy.rs:388`, MCP `memory.search_raw` (PD-11), `tests/search_relevance_eval.rs`, `examples/fndr_diagnostic.rs`; proposals in the evidence. Evidence: `docs/evidence/W03/VS-25-cloud.md`.
+
+### VS-12 "No strong matches": delivered, done-when NOT met (negative result)
+
+- `claude/train-b-retrieval`, f44f0a1, PR #25. Evidence `docs/evidence/W03/VS-12-cloud.md`.
+- Comment to post:
+
+> Cloud built on `claude/train-b-retrieval` (f44f0a1): `retrieve` reports `strong_match` (best hit at or above 0.25, or containing every query word; the second rule keeps exact matches strong with no embedding model, where a perfect match fuses to 0.20); Search marks cards `weak_match` and shows "No strong matches" with the weak results behind "Show N weaker matches"; the report and gate add negatives and positives under the bar. Result: 3 of 8 no-match queries (2/4 knowledge-worker, 1/4 office-PM) and 0 real queries under the bar. The done-when (all negatives pass) is not met: on these sets no-match queries reach 0.351 while real ones go down to 0.290, and vector similarity, word coverage, and score shape do not separate them either; hiding weak results one by one would hide two right answers ranked below a wrong one at 0.215. Next candidate signal: chunk scores (VS-18). Also fixed: the gate's reference test, broken since VS-09. Evidence: `docs/evidence/W03/VS-12-cloud.md`.
 
 ### VS-21 same query, same results: delivered (pending local gate)
 
@@ -224,5 +238,5 @@ Merge trials: `git merge-tree` shows A with E and A with C merge cleanly; B is A
 
 ## In progress (cloud)
 
-- VS-12 (no-match): built and tested; final gate running. Honest result ahead: no single score separates all eight no-match queries from the real ones on these sets, so the bar (0.25) is set where it hides no real match and catches 3 of 8; details in the evidence when it lands.
-- Then VS-25 (retired search code), then train D (VS-18 behind a flag, VS-26, VS-20 harness).
+- Train B complete (PR #25 body rewritten with one Promise / How / What can go wrong / How we would know block and a per-ticket table).
+- Now train D: VS-18 (chunk routes behind a flag against the EM-03 chunk table, synthetic chunk fixture), then VS-26 (README and walkthrough), VS-20 (10,000-memory harness).
