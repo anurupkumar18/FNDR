@@ -58,7 +58,7 @@ fn onnx_embedder_matches_the_reference_at_768_and_256_dimensions() {
     assert_eq!(reference.items.len(), 20);
 
     for dimensions in [768, 256] {
-        let contract = embedding_v6_contract(dimensions);
+        let contract = embedding_v6_contract(dimensions).expect("supported dimension");
         let embedder = Embedder::with_contract_and_chunking_config(
             contract,
             &ChunkingConfig::default(),

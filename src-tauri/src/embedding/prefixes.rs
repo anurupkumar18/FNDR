@@ -72,7 +72,7 @@ mod tests {
         use crate::inference::model_config::{
             embedding_v4_contract, embedding_v5_contract, embedding_v6_contract,
         };
-        let gemma = embedding_v6_contract(768);
+        let gemma = embedding_v6_contract(768).expect("supported dimension");
         assert_eq!(
             query_text_for(gemma, " where is the runbook "),
             "task: search result | query: where is the runbook"

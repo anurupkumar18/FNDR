@@ -1181,11 +1181,16 @@ mod tests {
         use crate::inference::model_config::{
             embedding_v4_contract, embedding_v5_contract, embedding_v6_contract,
         };
-        let short = embedding_v6_contract(256);
+        let short = embedding_v6_contract(256).expect("supported dimension");
         assert!(short.supports_truncation());
         assert_eq!(short.dimensions, 256);
         assert_eq!(short.table_name, "memories_v6_embeddinggemma_256");
-        assert_eq!(embedding_v6_contract(768).dimensions, 768);
+        assert_eq!(
+            embedding_v6_contract(768)
+                .expect("supported dimension")
+                .dimensions,
+            768
+        );
         assert!(!embedding_v4_contract().supports_truncation());
         assert!(!embedding_v5_contract().supports_truncation());
     }

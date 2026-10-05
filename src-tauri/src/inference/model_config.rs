@@ -134,8 +134,12 @@ pub const fn embedding_v5_contract() -> TextEmbeddingContract {
 
 /// EmbeddingGemma at `dimensions`: 768 (full) or a Matryoshka truncation
 /// (512, 256, 128), which the embedder cuts and renormalizes (VS-47).
-pub const fn embedding_v6_contract(dimensions: usize) -> TextEmbeddingContract {
-    TextEmbeddingContract {
+/// Unsupported dimensions are rejected so different vector sizes cannot claim
+/// the same table identity.
+pub const fn embedding_v6_contract(
+    dimensions: usize,
+) -> Result<TextEmbeddingContract, &'static str> {
+    Ok(TextEmbeddingContract {
         version: EmbeddingContractVersion::V6EmbeddingGemma,
         model_id: EMBEDDING_GEMMA_MODEL_ID,
         model_filename: EMBEDDING_GEMMA_MODEL_FILENAME,
@@ -147,9 +151,10 @@ pub const fn embedding_v6_contract(dimensions: usize) -> TextEmbeddingContract {
             768 => "memories_v6_embeddinggemma_768",
             512 => "memories_v6_embeddinggemma_512",
             256 => "memories_v6_embeddinggemma_256",
-            _ => "memories_v6_embeddinggemma_128",
+            128 => "memories_v6_embeddinggemma_128",
+            _ => return Err("EmbeddingGemma dimensions must be one of 128, 256, 512, or 768"),
         },
-    }
+    })
 }
 
 impl TextEmbeddingContract {
@@ -269,6 +274,32 @@ mod tests {
         assert_eq!(v5.tokenizer_filename, "tokenizer.json");
         assert_ne!(v4.model_id, v5.model_id);
         assert_ne!(v4.table_name, v5.table_name);
+    }
+
+    #[test]
+    fn embeddinggemma_contract_rejects_unsupported_dimensions() {
+        for dimensions in [0, 1, 127, 129, 384, 769, usize::MAX] {
+            assert!(
+                embedding_v6_contract(dimensions).is_err(),
+                "unsupported dimension {dimensions} must not claim an EmbeddingGemma table"
+            );
+        }
+    }
+
+    #[test]
+    fn embeddinggemma_contract_preserves_supported_table_identities() {
+        for (dimensions, table_name) in [
+            (128, "memories_v6_embeddinggemma_128"),
+            (256, "memories_v6_embeddinggemma_256"),
+            (512, "memories_v6_embeddinggemma_512"),
+            (768, "memories_v6_embeddinggemma_768"),
+        ] {
+            let contract = embedding_v6_contract(dimensions).expect("supported dimension");
+            assert_eq!(contract.dimensions, dimensions);
+            assert_eq!(contract.table_name, table_name);
+            assert_eq!(contract.model_id, EMBEDDING_GEMMA_MODEL_ID);
+        }
+        assert_eq!(active_embedding_contract(), embedding_v4_contract());
     }
 
     #[test]
