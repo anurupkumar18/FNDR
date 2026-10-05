@@ -1131,3 +1131,31 @@ async fn get_memories_by_ids_fetches_many_rows_in_one_call_and_skips_unknown_ids
         .expect("empty lookup")
         .is_empty());
 }
+
+#[tokio::test]
+async fn keyword_search_accepts_an_explicit_time_range() {
+    let (_dir, store) = keyword_store(vec![
+        keyword_row(
+            "old",
+            1_000,
+            "Mail",
+            "Old invoice",
+            "The invoice from last month",
+        ),
+        keyword_row(
+            "new",
+            5_000,
+            "Mail",
+            "New invoice",
+            "The invoice from this week",
+        ),
+    ])
+    .await;
+
+    let hits = store
+        .keyword_search("invoice", 5, Some("range:4000:6000"), None)
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits), vec!["new"]);
+}

@@ -23,7 +23,7 @@ pub use export::*;
 mod privacy;
 pub use privacy::*;
 
-mod stats;
+pub(crate) mod stats;
 pub use stats::*;
 
 mod autofill;

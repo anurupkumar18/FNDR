@@ -240,3 +240,150 @@ fn retrieve_types_carry_the_documented_fields() {
         .collect::<HashSet<_>>();
     assert_eq!(why, ["routes", "matched_terms"].map(String::from).into());
 }
+
+fn day_state(runtime: &tokio::runtime::Runtime) -> (tempfile::TempDir, AppState) {
+    std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Arc::new(Store::new(dir.path()).expect("store"));
+    let state_store = Arc::new(StateStore::new(dir.path()).expect("state store"));
+    let embedder = Embedder::new().expect("embedder");
+    let day = 24 * 60 * 60 * 1000;
+    let rows = [
+        (
+            "standup-today",
+            "Zoom",
+            "Standup",
+            "Standup notes about the launch checklist",
+            60_000,
+        ),
+        (
+            "standup-old",
+            "Zoom",
+            "Standup",
+            "Standup notes about the launch checklist and pricing",
+            3 * day,
+        ),
+        (
+            "checklist-slack",
+            "Slack",
+            "Launch",
+            "Launch checklist thread in the channel",
+            2 * day,
+        ),
+    ];
+    let texts = rows.iter().map(|row| row.3.to_string()).collect::<Vec<_>>();
+    let embeddings = embedder.embed_batch(&texts).expect("embeddings");
+    let records = rows
+        .iter()
+        .zip(embeddings)
+        .map(|((id, app, title, text, age), embedding)| {
+            record(id, app, title, text, *age, embedding)
+        })
+        .collect::<Vec<_>>();
+    runtime
+        .block_on(store.add_batch(&records))
+        .expect("add records");
+    let graph = GraphStore::new(store.clone());
+    let state = AppState::new(
+        dir.path().to_path_buf(),
+        Config::default(),
+        store,
+        state_store,
+        graph,
+        None,
+        None,
+    );
+    (dir, state)
+}
+
+#[test]
+fn retrieve_turns_time_and_app_phrases_into_filters() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (_dir, state) = day_state(&runtime);
+
+    let three_days_ago = runtime
+        .block_on(retrieve(
+            &state,
+            &request("the standup notes from three days ago"),
+        ))
+        .expect("retrieve");
+    // The text keeps its words; the phrase becomes a filter.
+    assert_eq!(
+        three_days_ago.filters.query,
+        "the standup notes from three days ago"
+    );
+    assert!(three_days_ago
+        .filters
+        .time
+        .as_deref()
+        .is_some_and(|time| time.starts_with("range:")));
+    assert_eq!(
+        three_days_ago
+            .hits
+            .iter()
+            .map(|hit| hit.memory_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["standup-old"]
+    );
+
+    let in_slack = runtime
+        .block_on(retrieve(&state, &request("the launch checklist in Slack")))
+        .expect("retrieve");
+    assert_eq!(in_slack.filters.app.as_deref(), Some("Slack"));
+    let top = in_slack.hits.first().expect("a hit");
+    assert!(!top.why.matched_terms.iter().any(|term| term == "slack"));
+    assert_eq!(
+        in_slack
+            .hits
+            .iter()
+            .map(|hit| hit.memory_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["checklist-slack"]
+    );
+}
+
+#[test]
+fn retrieve_falls_back_to_the_whole_vault_when_a_parsed_filter_finds_nothing() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (_dir, state) = day_state(&runtime);
+
+    let result = runtime
+        .block_on(retrieve(
+            &state,
+            &request("launch checklist from 10 days ago on Notion"),
+        ))
+        .expect("retrieve");
+
+    // "on Notion" names no stored app, so it stays text; nothing is ten days
+    // old here, so the search widens to everything with the words as typed.
+    assert!(!result.hits.is_empty());
+    assert_eq!(result.filters.time, None);
+    assert_eq!(
+        result.filters.query,
+        "launch checklist from 10 days ago on Notion"
+    );
+}
+
+#[test]
+fn explicit_request_filters_win_over_phrases() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (_dir, state) = day_state(&runtime);
+
+    let result = runtime
+        .block_on(retrieve(
+            &state,
+            &RetrieveRequest {
+                query: "launch checklist in Slack".to_string(),
+                app: Some("Zoom".to_string()),
+                limit: 10,
+                ..Default::default()
+            },
+        ))
+        .expect("retrieve");
+
+    assert_eq!(result.filters.app.as_deref(), Some("Zoom"));
+    assert!(result
+        .hits
+        .iter()
+        .all(|hit| hit.memory_id.starts_with("standup")));
+}

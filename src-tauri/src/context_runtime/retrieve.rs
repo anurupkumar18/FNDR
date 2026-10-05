@@ -3,6 +3,7 @@
 //! returns ranked memory ids with why each one matched, before any card
 //! synthesis or answer composition.
 
+use crate::context_runtime::query_filters::parse_query_filters;
 use crate::context_runtime::query_plan::Route;
 use crate::context_runtime::retrieve_fused;
 use crate::search::{normalize_text, QueryContext};
@@ -26,6 +27,19 @@ pub struct RetrieveRequest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type, PartialEq)]
 pub struct RetrieveResult {
     pub hits: Vec<RetrieveHit>,
+    /// What was actually searched, so a surface can show "yesterday, Slack".
+    pub filters: RetrieveFilters,
+}
+
+/// The text and filters a request was searched with after time and app
+/// phrases were read out of the query (VS-13). The text keeps the phrases:
+/// removing them cost the planner its time intent ("last week") on the
+/// labeled sets. Explicit request filters win over phrases.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type, PartialEq)]
+pub struct RetrieveFilters {
+    pub query: String,
+    pub time: Option<String>,
+    pub app: Option<String>,
 }
 
 /// One ranked memory. `score` is its evidence strength (the weighted sum of
@@ -54,14 +68,36 @@ pub async fn retrieve(
     request: &RetrieveRequest,
 ) -> Result<RetrieveResult, String> {
     let limit = request.limit.max(1);
-    let retrieval = retrieve_fused(
+    let (filters, words_without_phrases) = read_filters(state, request).await;
+    let mut retrieval = retrieve_fused(
         state,
-        &request.query,
+        &filters.query,
         limit,
-        request.time.as_deref(),
-        request.app.as_deref(),
+        filters.time.as_deref(),
+        filters.app.as_deref(),
     )
     .await;
+    let parsed_filter = (request.time.is_none() && filters.time.is_some())
+        || (request.app.is_none() && filters.app.is_some());
+    let filters = if retrieval.fused.is_empty() && parsed_filter {
+        // A phrase we read as a filter matched nothing: search everything
+        // with the words as typed rather than show an empty page.
+        retrieval = retrieve_fused(
+            state,
+            &request.query,
+            limit,
+            request.time.as_deref(),
+            request.app.as_deref(),
+        )
+        .await;
+        RetrieveFilters {
+            query: request.query.clone(),
+            time: request.time.clone(),
+            app: request.app.clone(),
+        }
+    } else {
+        filters
+    };
     let keyword_texts = retrieval
         .route_hits
         .iter()
@@ -74,7 +110,8 @@ pub async fn retrieve(
                 .map(|result| (hit.memory_id.as_str(), searchable_text(result)))
         })
         .collect::<HashMap<_, _>>();
-    let terms = QueryContext::from_query(&request.query).anchor_terms;
+    // Report matched words without the filter phrases ("yesterday", "Slack").
+    let terms = QueryContext::from_query(&words_without_phrases).anchor_terms;
 
     let hits = retrieval
         .fused
@@ -97,7 +134,30 @@ pub async fn retrieve(
             },
         })
         .collect();
-    Ok(RetrieveResult { hits })
+    Ok(RetrieveResult { hits, filters })
+}
+
+/// Read time and app phrases out of the query (VS-13). Returns the filters
+/// to search with and the query's words without those phrases.
+async fn read_filters(state: &AppState, request: &RetrieveRequest) -> (RetrieveFilters, String) {
+    let apps = if request.app.is_none() {
+        crate::ipc::commands::stats::cached_app_names(state)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let parsed = parse_query_filters(&request.query, chrono::Local::now(), &apps);
+    let filters = RetrieveFilters {
+        query: request.query.clone(),
+        time: request.time.clone().or_else(|| {
+            parsed
+                .time
+                .map(|range| format!("range:{}:{}", range.start_ms, range.end_ms))
+        }),
+        app: request.app.clone().or(parsed.app),
+    };
+    (filters, parsed.text)
 }
 
 fn route_name(route: Route) -> &'static str {

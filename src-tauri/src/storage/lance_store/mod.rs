@@ -2307,7 +2307,14 @@ impl Store {
 
     /// Return sorted list of unique app names.
     pub async fn get_app_names(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let batches: Vec<RecordBatch> = self.table.query().execute().await?.try_collect().await?;
+        let batches: Vec<RecordBatch> = self
+            .table
+            .query()
+            .select(Select::columns(&["app_name"]))
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
 
         let mut names = std::collections::HashSet::new();
         for batch in &batches {

@@ -26,6 +26,7 @@ pub mod fusion;
 pub mod graph_plan;
 pub mod graph_route;
 pub mod keyword_route;
+pub mod query_filters;
 pub mod query_plan;
 pub mod retrieve;
 pub mod retrieval_routes;
