@@ -60,8 +60,8 @@ describe("Screen Guide activity boundaries", () => {
             ["answering_chat_gpt", "failed"],
         ]);
         expect(failed.status).toBe("failed");
-        expect(failed.steps.at(-1)?.label).toBe("Stopped while answering with ChatGPT");
-        expect(failed.steps.at(-1)?.durationMs).toBe(900);
+        expect(failed.steps[failed.steps.length - 1]?.label).toBe("Stopped while answering with ChatGPT");
+        expect(failed.steps[failed.steps.length - 1]?.durationMs).toBe(900);
     });
 
     it("cancels the same stable step without inventing a stage", () => {

@@ -61,7 +61,7 @@ describe("voice activity boundaries", () => {
         expect(trace.steps.find((step) => step.id === "transcription-request")?.status).toBe(
             event === "transcription-failed" ? "failed" : status,
         );
-        expect(trace.steps.at(-1)?.status).toBe(status);
+        expect(trace.steps[trace.steps.length - 1]?.status).toBe(status);
         // The request step is updated in place, never duplicated.
         for (const id of idsBefore) {
             expect(trace.steps.filter((step) => step.id === id)).toHaveLength(1);
