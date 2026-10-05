@@ -36,16 +36,10 @@ pub fn parse_query_filters(
     let time_found = find_time(query, now);
     // "notes on Monday" with the monday.com app stored: the same words read
     // as a day and an app. Read them as the day, and never cut them twice.
-    let app = find_app(query, known_apps)
-        .filter(|((start, end), _)| {
-            time_found
-                .as_ref()
-                .is_none_or(|((time_start, time_end), _)| end <= time_start || time_end <= start)
-        })
-        .map(|(span, app)| {
-            spans.push(span);
-            app
-        });
+    let app = find_app(query, known_apps, time_found.map(|(span, _)| span)).map(|(span, app)| {
+        spans.push(span);
+        app
+    });
     let time = time_found.map(|(span, range)| {
         spans.push(span);
         range
@@ -186,12 +180,10 @@ fn find_time(query: &str, now: DateTime<Local>) -> Option<((usize, usize), TimeR
         };
         return Some((span, range));
     }
-    let found = WEEKDAY_PHRASE
-        .captures_iter(query)
-        .find(|found| {
-            !is_dotted(query, found.get(0).unwrap().end())
-                && !after_deadline_word(query, found.get(0).unwrap().start())
-        })?;
+    let found = WEEKDAY_PHRASE.captures_iter(query).find(|found| {
+        !is_dotted(query, found.get(0).unwrap().end())
+            && !after_deadline_word(query, found.get(0).unwrap().start())
+    })?;
     let whole = found.get(0)?;
     let name = found["day"].to_lowercase();
     let weekday = WEEKDAYS.iter().find(|(day, _)| *day == name)?.1;
@@ -210,7 +202,11 @@ fn find_time(query: &str, now: DateTime<Local>) -> Option<((usize, usize), TimeR
     ))
 }
 
-fn find_app(query: &str, known_apps: &[String]) -> Option<((usize, usize), String)> {
+fn find_app(
+    query: &str,
+    known_apps: &[String],
+    time_span: Option<(usize, usize)>,
+) -> Option<((usize, usize), String)> {
     let mut aliases = known_apps
         .iter()
         .flat_map(|app| app_aliases(app).into_iter().map(move |alias| (alias, app)))
@@ -221,11 +217,12 @@ fn find_app(query: &str, known_apps: &[String]) -> Option<((usize, usize), Strin
         let Some(pattern) = app_phrase_pattern(&alias) else {
             continue;
         };
-        if let Some(found) = pattern.find(query) {
-            if !is_dotted(query, found.end()) {
-                return Some(((found.start(), found.end()), app.clone()));
-            }
-        }
+        if let Some(found) = pattern.find_iter(query).find(|found| {
+            !is_dotted(query, found.end())
+                && time_span.is_none_or(|(start, end)| found.end() <= start || end <= found.start())
+        }) {
+            return Some(((found.start(), found.end()), app.clone()));
+        };
     }
     None
 }
@@ -700,5 +697,15 @@ mod tests {
         let parsed = parse_query_filters("notes on Monday", now(), &tricky_apps());
         assert!(parsed.time.is_some() || parsed.app.is_some());
         assert!(!parsed.text.is_empty());
+    }
+
+    #[test]
+    fn overlapping_weekday_alias_does_not_hide_a_separate_app_filter() {
+        for query in ["notes on Monday from Slack", "notes from Slack on Monday"] {
+            let parsed = parse_query_filters(query, now(), &tricky_apps());
+            assert_eq!(parsed.time, Some(day_range(9, 28)), "{query}");
+            assert_eq!(parsed.app.as_deref(), Some("Slack"), "{query}");
+            assert_eq!(parsed.text, "notes", "{query}");
+        }
     }
 }
