@@ -69,6 +69,13 @@ gitlab-plan:
 gitlab-sync:
 	python3 scripts/team/gitlab_sync.py sync $(if $(APPLY),--apply) $(if $(UPDATE),--update)
 
+# VS-66: rebuild the Beta demo recall chart (CSV and PNG) from committed
+# evidence: the VS-03 baselines and the accepted references. The PNG needs
+# matplotlib.
+.PHONY: recall-chart
+recall-chart:
+	$(PYTHON) scripts/audit/recall_chart.py
+
 # VS-04: retrieval merge gate. Reseeds the QA profile (QA_SKIP_SEED=1 skips it),
 # reruns retrieval_qa into a scratch report, and compares it with the accepted
 # reference for the case set. Fails on a Recall@5 drop over 0.05 on any path or

@@ -29,7 +29,6 @@ Chart data: `docs/evidence/W03/beta-demo-recall.csv` (one row per persona, path,
 - **Chunks** (VS-18, flag off by default) raise office-PM Recall@5 to 0.950 and paraphrase to 0.889 on this set. That is not the shipped default, and each synthetic memory is one chunk, so it is not a claim about long documents.
 - **The sets are small:** 76 labeled queries over 60 synthetic memories. A third persona and a real-vault spot check (VS-01) are the honest next steps before calling this general.
 
-## Suggested charts
+## The chart
 
-1. Recall@5, before and after, grouped by persona and path (four pairs of bars, from the CSV's `recall_at_5`).
-2. Office-PM Recall@5 by kind, before and after (paraphrase is the visible change: 0.333 to 0.778 in Search).
+`docs/evidence/W03/beta-demo-recall.png`, rebuilt with `make recall-chart` (VS-66). Left panel: Recall@5 before and after, by persona and path. Right panel: paraphrase Recall@5, where the office-PM change is visible (Search 0.33 to 0.78).
