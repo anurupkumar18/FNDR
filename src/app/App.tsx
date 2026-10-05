@@ -3,6 +3,7 @@ import { AppPanels } from "./AppPanels";
 import { isMountedPanelKey, type MountedPanelKey } from "./panels";
 import { BiometricLockScreen } from "./BiometricLockScreen";
 import { HomeHero } from "./HomeHero";
+import { ResumeWork } from "./ResumeWork";
 import type { AppToast } from "./types";
 import { SearchBar } from "@/domains/search/SearchBar";
 import { Timeline } from "@/domains/timeline/Timeline";
@@ -620,7 +621,7 @@ function App() {
                 </SidebarDrawer>
             )}
 
-                <main className={`app-main ${isFocusMode ? "search-centered" : "has-active-search"}`}>
+                <main className={`app-main ${isFocusMode ? "search-centered" : "has-active-search"}${isHomeActive && !EVAL_UI ? " has-resume" : ""}`}>
                 {isFocusMode ? (
                     <div className="home-hero-stage">
                         <HomeHero
@@ -632,24 +633,11 @@ function App() {
                                 void handleSearchSubmit(q);
                             }}
                         />
-                        {query.trim() && (
-                            <section className="search-shell is-active">
-                                <SearchBar
-                                    value={queryDraft}
-                                    submittedValue={query}
-                                    onChange={setQueryDraft}
-                                    onSubmit={(v) => void handleSearchSubmit(v)}
-                                    timeFilter={timeFilter}
-                                    onTimeFilterChange={setTimeFilter}
-                                    appFilter={appFilter}
-                                    onAppFilterChange={setAppFilter}
-                                    onSetMemoryCardsPanelOpen={(open) => setActivePanel(open ? "memoryCards" : null)}
-                                    appNames={appNames}
-                                    resultCount={visibleResults.length}
-                                    searchResults={visibleResults}
-                                    disabled={!searchAllowed}
-                                />
-                            </section>
+                        {isHomeActive && !EVAL_UI && (
+                            <ResumeWork
+                                onOpenMemory={handleOpenMemoryById}
+                                onOpenVault={() => handleOpenPanel("memoryCards")}
+                            />
                         )}
                     </div>
                 ) : (

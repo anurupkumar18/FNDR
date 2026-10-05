@@ -264,6 +264,25 @@ export async function fndrTimeline(args?: {
     return invoke("fndr_timeline", args ?? {});
 }
 
+export interface ResumeThread {
+    title: string;
+    last_state: string;
+    age_minutes: number;
+    next_steps: string[];
+    suggested_next_steps: Array<{ title: string; source_memory_id: string; confidence: number }>;
+    evidence: string[];
+    pack: {
+        items: Array<{ memory_id: string; text: string; ts_ms: number }>;
+        dropped_for_budget: number;
+        estimated_tokens: number;
+    };
+}
+
+/** Recent observed work, with source citations; does not execute actions. */
+export async function resumeWork(): Promise<ResumeThread[]> {
+    return invoke("resume_work", { hours: 24, budgetTokens: 800 });
+}
+
 export async function fndrQualityStatus(): Promise<{
     stored_count: number;
     dropped_count: number;

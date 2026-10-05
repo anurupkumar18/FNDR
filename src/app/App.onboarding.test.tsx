@@ -3,20 +3,23 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 
 const getOnboardingState = vi.hoisted(() => vi.fn());
 const useSearchMock = vi.hoisted(() => vi.fn());
+const resumeWork = vi.hoisted(() => vi.fn());
 
 vi.mock("./AppPanels", () => ({
     AppPanels: ({
         activePanel,
         onClosePanel,
+        memoryVaultFocusId,
     }: {
         activePanel: string | null;
         onClosePanel: () => void;
+        memoryVaultFocusId: string | null;
     }) => activePanel
-        ? <button type="button" onClick={onClosePanel}>Close mock panel</button>
+        ? <><button type="button" onClick={onClosePanel}>Close mock panel</button><span data-testid="vault-focus">{memoryVaultFocusId}</span></>
         : null,
 }));
 vi.mock("./BiometricLockScreen", () => ({
-    BiometricLockScreen: () => <div data-testid="biometric-lock" />,
+    BiometricLockScreen: ({ onUnlock }: { onUnlock: () => void }) => <button data-testid="biometric-lock" onClick={onUnlock}>Unlock mock</button>,
 }));
 vi.mock("./HomeHero", () => ({
     HomeHero: ({ onHeroSearch }: { onHeroSearch: (query: string) => void }) => (
@@ -75,6 +78,7 @@ vi.mock("@/shared/ipc/tauri", () => ({
         },
     }),
     getFunGreeting: vi.fn().mockResolvedValue("Welcome back to FNDR."),
+    resumeWork,
 }));
 
 import App from "./App";
@@ -82,6 +86,8 @@ import App from "./App";
 beforeEach(() => {
     getOnboardingState.mockReset();
     useSearchMock.mockReset();
+    resumeWork.mockReset();
+    resumeWork.mockResolvedValue([]);
     useSearchMock.mockReturnValue({
         results: [],
         isLoading: false,
@@ -112,6 +118,44 @@ describe("App onboarding gate", () => {
 
         expect(await screen.findByTestId("home")).toBeInTheDocument();
         expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument();
+    });
+
+    it("shows recent work on Home after onboarding", async () => {
+        getOnboardingState.mockResolvedValue(completedOnboarding);
+        resumeWork.mockResolvedValue([{
+            title: "Parser",
+            last_state: "Fixed weekday aliases",
+            age_minutes: 12,
+            next_steps: [],
+            suggested_next_steps: [],
+            evidence: ["parser-memory"],
+            pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+        }]);
+
+        render(<App />);
+
+        expect(await screen.findByRole("heading", { name: "Pick up where you left off" })).toBeInTheDocument();
+        expect(await screen.findByText("Fixed weekday aliases")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "View latest source for Parser" }));
+        expect(screen.getByTestId("vault-focus")).toHaveTextContent("parser-memory");
+        expect(screen.queryByRole("heading", { name: "Pick up where you left off" })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Close mock panel" }));
+        await waitFor(() => expect(resumeWork).toHaveBeenCalledTimes(2));
+    });
+
+    it("does not load recent work before onboarding or biometric unlock", async () => {
+        getOnboardingState.mockResolvedValueOnce({ ...completedOnboarding, step: "welcome" });
+        const setup = render(<App />);
+        await screen.findByTestId("onboarding");
+        expect(resumeWork).not.toHaveBeenCalled();
+        setup.unmount();
+
+        getOnboardingState.mockResolvedValueOnce({ ...completedOnboarding, biometric_enabled: true });
+        render(<App />);
+        await screen.findByTestId("biometric-lock");
+        expect(resumeWork).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("button", { name: "Unlock mock" }));
+        await waitFor(() => expect(resumeWork).toHaveBeenCalledOnce());
     });
 
     it("makes Home inert behind a full-screen panel and restores shell focus after close", async () => {
