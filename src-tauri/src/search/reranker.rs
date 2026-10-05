@@ -2,38 +2,10 @@ use crate::storage::SearchResult;
 
 use super::query_processor::{normalize_text, QueryContext};
 
-const VECTOR_WEIGHT: f32 = 0.7;
-const COVERAGE_WEIGHT: f32 = 0.3;
-
-/// Blend vector similarity with query-word coverage. Coverage is a soft
-/// signal only: a result that shares no query words (a paraphrase) keeps its
-/// vector score instead of being dropped.
-pub fn rerank_results(
-    query_context: &QueryContext,
-    results: Vec<SearchResult>,
-) -> Vec<SearchResult> {
-    let mut reranked = Vec::with_capacity(results.len());
-
-    for mut result in results {
-        let coverage = anchor_coverage_score(query_context, &result);
-        result.anchor_coverage_score = coverage;
-
-        let vector_similarity = result.score.clamp(0.0, 1.0);
-        result.score =
-            (vector_similarity * VECTOR_WEIGHT + coverage * COVERAGE_WEIGHT).clamp(0.0, 1.0);
-        reranked.push(result);
-    }
-
-    reranked.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.timestamp.cmp(&a.timestamp))
-    });
-
-    reranked
-}
-
+/// Share of the query's anchor terms found in a result's text, plus a small
+/// bonus when the whole query appears. Search cards group by it; it no longer
+/// reorders anything (VS-25 removed the coverage rerank, VS-10 moved Search
+/// onto `retrieve`).
 pub fn anchor_coverage_score(query_context: &QueryContext, result: &SearchResult) -> f32 {
     if query_context.anchor_terms.is_empty() {
         return 1.0;
@@ -89,39 +61,16 @@ mod tests {
             snippet: summary.to_string(),
             display_summary: summary.to_string(),
             clean_text: summary.to_string(),
-            extracted_entities: Vec::new(),
-            score: 0.8,
             ..Default::default()
         }
     }
 
     #[test]
-    fn keeps_a_strong_vector_match_that_shares_no_query_words() {
-        // A paraphrase: the memory answers the question in different words.
-        let query = QueryContext::from_query("how much money are we losing to customers leaving");
-        let mut paraphrase = result("Q3 churn by segment", "SMB logo churn 3.9 percent");
-        paraphrase.score = 0.9;
-
-        let results = rerank_results(&query, vec![paraphrase]);
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].anchor_coverage_score, 0.0);
-        assert!(results[0].score > 0.0);
-    }
-
-    #[test]
-    fn word_coverage_still_breaks_a_vector_tie() {
-        let query = QueryContext::from_query("cricket");
-        let results = rerank_results(
-            &query,
-            vec![
-                result("Rust Docs", "Debugged Rust compiler issues"),
-                result("IPL Highlights", "Watched cricket highlights"),
-            ],
-        );
-
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].window_title, "IPL Highlights");
-        assert!(results[0].score > results[1].score);
+    fn coverage_counts_the_query_words_a_result_contains() {
+        let query = QueryContext::from_query("cricket highlights");
+        let full = anchor_coverage_score(&query, &result("IPL", "Watched cricket highlights"));
+        let none = anchor_coverage_score(&query, &result("Rust", "Debugged compiler issues"));
+        assert!(full > 0.99);
+        assert_eq!(none, 0.0);
     }
 }

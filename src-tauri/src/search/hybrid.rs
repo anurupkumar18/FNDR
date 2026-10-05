@@ -10,6 +10,38 @@ use crate::telemetry::runtime_metrics;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use tokio::time::{timeout, Duration, Instant};
 
+/// Extra terms a loaded local model suggests for a short abstract query
+/// ("sport" to sports, athletics, match), appended to the text the vector
+/// route embeds. Empty without a model, for concrete queries, or when the
+/// model takes longer than 600 ms. Moved here from the retired Search-only
+/// path so `retrieve` (Search, Ask, agents) keeps it (VS-25).
+pub(crate) async fn llm_query_expansion(
+    engine: Option<&crate::inference::InferenceEngine>,
+    query: &str,
+) -> Vec<String> {
+    let Some(engine) = engine else {
+        return Vec::new();
+    };
+    if !QueryProfile::from_query(query).is_abstract_concept_query() {
+        return Vec::new();
+    }
+    match timeout(
+        Duration::from_millis(600),
+        engine.expand_search_query(query),
+    )
+    .await
+    {
+        Ok(terms) => {
+            tracing::info!(query = %query, expanded = ?terms, "retrieve:llm_expansion");
+            terms
+        }
+        Err(_) => {
+            tracing::warn!(query = %query, "retrieve:expansion_timeout");
+            Vec::new()
+        }
+    }
+}
+
 /// Hybrid searcher combining semantic + lexical retrieval and sentence-aware reranking.
 pub struct HybridSearcher;
 
@@ -198,10 +230,6 @@ impl QueryProfile {
         variants
     }
 
-    fn embedding_query(&self) -> String {
-        self.embedding_query_with_extras(&[])
-    }
-
     /// Build the embedding query, optionally augmented with extra concept
     /// terms (e.g., LLM-expanded synonyms for the original query).
     pub(crate) fn embedding_query_with_extras(&self, extras: &[String]) -> String {
@@ -302,66 +330,6 @@ impl HybridSearcher {
         .await
     }
 
-    /// Like `search_hybrid_memories` but with an optional InferenceEngine
-    /// used for LLM-driven query expansion on short abstract queries
-    /// (e.g., "sport" → ["sport", "sports", "athletics", "game", "match"]).
-    /// When the engine is `None`, behaves identically to the standard variant.
-    pub async fn search_with_expansion(
-        store: &Store,
-        embedder: &Embedder,
-        engine: Option<&crate::inference::InferenceEngine>,
-        query: &str,
-        limit: usize,
-        time_filter: Option<&str>,
-        app_filter: Option<&str>,
-        search_config: &SearchConfig,
-    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
-        // Pre-compute expansion terms; pass them down through a thread-local-free
-        // mechanism by stashing on the search config or via an explicit param.
-        let expansion: Vec<String> = if let Some(engine) = engine {
-            let profile = QueryProfile::from_query(query);
-            if profile.is_abstract_concept_query() {
-                // Race the LLM expansion against a tight timeout. If we don't
-                // get a response in 600ms, proceed without expansion.
-                match timeout(
-                    Duration::from_millis(600),
-                    engine.expand_search_query(query),
-                )
-                .await
-                {
-                    Ok(terms) => {
-                        tracing::info!(
-                            query = %query,
-                            expanded = ?terms,
-                            "hybrid_search:llm_expansion"
-                        );
-                        terms
-                    }
-                    Err(_) => {
-                        tracing::warn!(query = %query, "hybrid_search:expansion_timeout");
-                        Vec::new()
-                    }
-                }
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
-        Self::search_with_config_and_expansion(
-            store,
-            embedder,
-            query,
-            limit,
-            time_filter,
-            app_filter,
-            search_config,
-            &expansion,
-        )
-        .await
-    }
-
     /// Perform hybrid search with query understanding, weighted fusion, and reranking.
     pub async fn search(
         store: &Store,
@@ -420,83 +388,10 @@ impl HybridSearcher {
         search_config: &SearchConfig,
         expansion: &[String],
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
-        let (results, _) = Self::search_with_config_and_expansion_internal(
-            store,
-            embedder,
-            query,
-            limit,
-            time_filter,
-            app_filter,
-            search_config,
-            expansion,
-            false,
-        )
-        .await?;
-        Ok(results)
-    }
-
-    #[cfg(debug_assertions)]
-    pub async fn search_with_expansion_explained(
-        store: &Store,
-        embedder: &Embedder,
-        engine: Option<&crate::inference::InferenceEngine>,
-        query: &str,
-        limit: usize,
-        time_filter: Option<&str>,
-        app_filter: Option<&str>,
-        search_config: &SearchConfig,
-    ) -> Result<(Vec<SearchResult>, serde_json::Value), String> {
-        let expansion = if let Some(engine) = engine {
-            let profile = QueryProfile::from_query(query);
-            if profile.is_abstract_concept_query() {
-                timeout(
-                    Duration::from_millis(600),
-                    engine.expand_search_query(query),
-                )
-                .await
-                .unwrap_or_default()
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-        let (results, explanation) = Self::search_with_config_and_expansion_internal(
-            store,
-            embedder,
-            query,
-            limit,
-            time_filter,
-            app_filter,
-            search_config,
-            &expansion,
-            true,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-        Ok((results, explanation.unwrap_or_default()))
-    }
-
-    async fn search_with_config_and_expansion_internal(
-        store: &Store,
-        embedder: &Embedder,
-        query: &str,
-        limit: usize,
-        time_filter: Option<&str>,
-        app_filter: Option<&str>,
-        search_config: &SearchConfig,
-        expansion: &[String],
-        explain: bool,
-    ) -> Result<(Vec<SearchResult>, Option<serde_json::Value>), Box<dyn std::error::Error>> {
         let started = Instant::now();
         let profile = QueryProfile::from_query(query);
         if profile.is_empty() {
-            return Ok((Vec::new(), explain.then(|| serde_json::json!({
-                "expansions": expansion,
-                "routes": [],
-                "fusion_inputs": {},
-                "rerank_deltas": [],
-            }))));
+            return Ok(Vec::new());
         }
         let search_config = search_config.clone().normalized();
 
@@ -518,24 +413,6 @@ impl HybridSearcher {
             .with_embedder(embedder)
             .with_limits(limit, time_filter, app_filter, expansion);
         let route_hits = RouteRunner::dispatch(&route_plan, &route_ctx).await;
-        let route_trace = explain.then(|| {
-            route_hits
-                .iter()
-                .map(|group| serde_json::json!({
-                    "route": format!("{:?}", group.route).to_lowercase(),
-                    "latency_ms": group.elapsed_ms,
-                    "candidates": group.hits.iter().filter_map(|hit| {
-                        hit.signals.search_result.as_ref().map(|result| serde_json::json!({
-                            "memory_id": result.id,
-                            "branch": format!("{:?}", hit.signals.branch).to_lowercase(),
-                            "score": hit.score,
-                            "embedding_reasons": result.embedding_reason_labels,
-                        }))
-                    }).collect::<Vec<_>>(),
-                }))
-                .collect::<Vec<_>>()
-        });
-
         let mut chunk_results = Vec::new();
         let mut semantic_results = Vec::new();
         let mut snippet_results = Vec::new();
@@ -583,12 +460,6 @@ impl HybridSearcher {
             &keyword_results,
             &search_config,
         );
-        let fused_scores = explain.then(|| {
-            fused
-                .iter()
-                .map(|result| (result.id.clone(), result.score))
-                .collect::<HashMap<_, _>>()
-        });
         let reranked = Self::rerank_with_profile(&profile, fused, limit, &search_config);
         tracing::info!(
             results = reranked.len(),
@@ -597,48 +468,7 @@ impl HybridSearcher {
         );
         runtime_metrics::record_ms("hybrid.total_ms", started.elapsed().as_millis() as u64);
 
-        let explanation = explain.then(|| serde_json::json!({
-            "expansions": expansion,
-            "query_plan": route_plan,
-            "routes": route_trace.unwrap_or_default(),
-            "fusion_inputs": {
-                "chunk": branch_trace(&chunk_results),
-                "semantic": branch_trace(&semantic_results),
-                "snippet": branch_trace(&snippet_results),
-                "keyword": branch_trace(&keyword_results),
-            },
-            "rerank_deltas": reranked.iter().enumerate().map(|(index, result)| {
-                let before = fused_scores
-                    .as_ref()
-                    .and_then(|scores| scores.get(&result.id))
-                    .copied()
-                    .unwrap_or(result.score);
-                serde_json::json!({
-                    "memory_id": result.id,
-                    "rank": index + 1,
-                    "score_before_rerank": before,
-                    "score_after_rerank": result.score,
-                    "delta": result.score - before,
-                    "embedding_reasons": result.embedding_reason_labels,
-                })
-            }).collect::<Vec<_>>(),
-            "latency_ms": started.elapsed().as_millis() as u64,
-        }));
-
-        Ok((reranked, explanation))
-    }
-
-    /// Merge semantic + keyword candidates, then rerank with the standard policy.
-    pub fn fuse_and_rerank(
-        query: &str,
-        semantic: &[SearchResult],
-        keyword: &[SearchResult],
-        limit: usize,
-    ) -> Vec<SearchResult> {
-        let profile = QueryProfile::from_query(query);
-        let config = SearchConfig::default();
-        let fused = Self::hybrid_fusion(&profile, &[], semantic, &[], keyword, &config);
-        Self::rerank_with_profile(&profile, fused, limit, &config)
+        Ok(reranked)
     }
 
     fn hybrid_fusion(
@@ -1158,21 +988,6 @@ impl HybridSearcher {
             search_config,
         )
     }
-}
-
-fn branch_trace(results: &[SearchResult]) -> Vec<serde_json::Value> {
-    results
-        .iter()
-        .map(|result| {
-            serde_json::json!({
-                "memory_id": result.id,
-                "score": result.score,
-                "matched_routes": result.matched_routes,
-                "matched_chunk_ids": result.matched_chunk_ids,
-                "embedding_reasons": result.embedding_reason_labels,
-            })
-        })
-        .collect()
 }
 
 fn apply_relevance_gate(

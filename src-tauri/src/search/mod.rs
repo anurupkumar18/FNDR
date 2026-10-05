@@ -15,4 +15,5 @@ pub use memory_cards::{
 pub use query_processor::{
     normalize_text, QueryContext, QueryExpansionDebug, QueryIntent, QueryProfile,
 };
-pub use reranker::{anchor_coverage_score, rerank_results};
+pub(crate) use hybrid::llm_query_expansion;
+pub use reranker::anchor_coverage_score;

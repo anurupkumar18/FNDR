@@ -1,12 +1,12 @@
 //! Search-related Tauri commands and helpers.
 
-use super::common::{shared_embedder, strip_internal_fndr_results, truncate_chars};
+use super::common::{strip_internal_fndr_results, truncate_chars};
 use crate::context_runtime::{retrieve_search_results, RetrieveRequest};
 use crate::graph::graph_store::GraphStore;
 use crate::memory_quality::{partition_surfaceable, LowSignalReason};
 use crate::privacy::Blocklist;
 use crate::search::{
-    anchor_coverage_score, HybridSearcher, MemoryCard, MemoryCardSynthesizer, QueryContext,
+    anchor_coverage_score, MemoryCard, MemoryCardSynthesizer, QueryContext,
 };
 use crate::storage::SearchResult;
 use crate::AppState;
@@ -19,6 +19,8 @@ const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
 const MEMORY_GRAPH_LIMIT: usize = 1_500;
 const MEMORY_DERIVED_CACHE_TTL_MS: i64 = 30_000;
 
+/// Ranked rows for the raw `search` commands, autofill, and quality checks:
+/// the same `retrieve` that Search, Ask, and agents use (VS-25).
 pub(super) async fn run_search_query(
     state: &AppState,
     query: &str,
@@ -26,120 +28,14 @@ pub(super) async fn run_search_query(
     app_filter: Option<&str>,
     limit: usize,
 ) -> Result<Vec<SearchResult>, String> {
-    run_search_query_internal(state, query, time_filter, app_filter, limit, false)
-        .await
-        .map(|(results, _)| results)
-}
-
-async fn run_search_query_internal(
-    state: &AppState,
-    query: &str,
-    time_filter: Option<&str>,
-    app_filter: Option<&str>,
-    limit: usize,
-    explain: bool,
-) -> Result<(Vec<SearchResult>, Option<serde_json::Value>), String> {
-    let limit = limit.clamp(1, 50);
-
-    if !state
-        .store
-        .has_memories()
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        return Ok((
-            Vec::new(),
-            explain.then(|| serde_json::json!({ "outcome": "empty_store" })),
-        ));
-    }
-
-    let search_config = {
-        let config = state.config.read();
-        config.search.clone()
+    let request = RetrieveRequest {
+        query: query.to_string(),
+        time: time_filter.map(str::to_string),
+        app: app_filter.map(str::to_string),
+        limit: limit.clamp(1, 50),
     };
-
-    // When an InferenceEngine is loaded, route through the expansion variant
-    // so abstract concept queries ("sport", "design") can semantically reach
-    // domain-specific captures that don't contain the literal query term.
-    let engine_arc = state.inference_engine();
-    let engine_ref = engine_arc.as_deref();
-
-    let (hybrid_result, fallback_outcome) = match shared_embedder() {
-        Ok(embedder) => {
-            #[cfg(debug_assertions)]
-            let result = if explain {
-                HybridSearcher::search_with_expansion_explained(
-                    &state.store,
-                    embedder,
-                    engine_ref,
-                    query,
-                    limit,
-                    time_filter,
-                    app_filter,
-                    &search_config,
-                )
-                .await
-                .map(|(results, explanation)| (results, Some(explanation)))
-            } else {
-                HybridSearcher::search_with_expansion(
-                    &state.store,
-                    embedder,
-                    engine_ref,
-                    query,
-                    limit,
-                    time_filter,
-                    app_filter,
-                    &search_config,
-                )
-                .await
-                .map(|results| (results, None))
-                .map_err(|error| error.to_string())
-            };
-            #[cfg(not(debug_assertions))]
-            let result = HybridSearcher::search_with_expansion(
-                &state.store,
-                embedder,
-                engine_ref,
-                query,
-                limit,
-                time_filter,
-                app_filter,
-                &search_config,
-            )
-            .await
-            .map(|results| (results, None))
-            .map_err(|error| error.to_string());
-            (result, "keyword_fallback")
-        }
-        Err(error) => (Err(error.to_string()), "keyword_only"),
-    };
-
-    let (results, explanation) = match hybrid_result {
-        Ok(success) => success,
-        Err(reason) => {
-            tracing::warn!(
-                reason = %reason,
-                outcome = fallback_outcome,
-                "Semantic search unavailable; falling back to keyword-only search"
-            );
-            let started = Instant::now();
-            let results = state
-                .store
-                .keyword_search(query, limit, time_filter, app_filter)
-                .await
-                .map_err(|e| e.to_string())?;
-            let explanation = explain.then(|| {
-                serde_json::json!({
-                    "outcome": fallback_outcome,
-                    "reason": reason,
-                    "latency_ms": started.elapsed().as_millis() as u64,
-                })
-            });
-            (results, explanation)
-        }
-    };
-
-    Ok((strip_internal_fndr_results(results), explanation))
+    let (_, results) = retrieve_search_results(state, &request).await?;
+    Ok(results)
 }
 
 /// The ranked retrieval stage Search uses before card synthesis: the one

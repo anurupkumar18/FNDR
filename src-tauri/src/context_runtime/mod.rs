@@ -3130,13 +3130,16 @@ pub(crate) async fn retrieve_fused(
     };
 
     let search_config = state.config.read().search.clone().normalized();
+    // A loaded local model widens short abstract queries before they are
+    // embedded, as Search did before it moved onto `retrieve` (VS-25).
+    let expansion = crate::search::llm_query_expansion(inference.as_deref(), query).await;
     let mut ctx = retrieval_routes::RouteCtx::new(&state.store, &search_config)
         .with_graph(&graph_index, &nodes, &edges)
         .with_limits(
             limit.max(ROUTE_CANDIDATE_POOL),
             time_filter,
             app_filter,
-            &[],
+            &expansion,
         )
         .with_now_ms(chrono::Utc::now().timestamp_millis());
     if let Some(emb) = embedder {
