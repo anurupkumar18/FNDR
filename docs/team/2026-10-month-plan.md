@@ -1,8 +1,29 @@
 # FNDR October plan: from demo to daily tool
 
-**Status:** Draft v0.3, 2026-09-23 (lanes reassigned by the owner; tickets written). Becomes v1 after the owner's hands-on QA pass (Sep 24 to 27) and the Monday Sep 28 meeting. Covers Mon Sep 28 to Sun Oct 25; Beta is Wed Oct 21.
+**Status:** Working revision, 2026-10-05. The owner is refining the broader plan through short Q&A rounds. October 16 is the teammate delivery checkpoint, not a scope ceiling for the owner's work; the owner expects roughly two additional months for implementation and refinement. The October 21 Beta remains a proposed milestone, not a newly confirmed deadline. Older measurements below are dated baselines, not current results.
 
 **Read with:** `docs/product/qa-walkthrough.md` (how each feature works today and how we score it), `docs/superpowers/plans/2026-09-23-user-first-qa-reset.md` (what the sweep found, Parts 1 and 1b), `docs/team/TEAM.md` (workflow, definition of done).
+
+### Owner direction, updated October 5
+
+The full scope has five outcomes: useful screen-context extraction with local models; shared hybrid search for people and agents; agentic actions and deterministic workflows; easy setup and enjoyable sustained use; and connected memories that support graph traversal and timelines over long histories. VS-42 through VS-68 cover part of this scope and must be integrated with the existing team lanes.
+
+**Decided in Q&A round 1:**
+
+- Support the 8 GB Mac with adaptive local models, resource-aware scheduling and unloading. Cloud reasoning remains explicit opt-in; capture, storage and embeddings remain local. Model utilization is useful only when it improves context quality within the device budget.
+- Deliver typed, testable actions and saved workflows first, then bounded UI automation where app APIs or deep links are insufficient. Initial restoration means returning to supported resources and positions with explicit outcomes and fallbacks. Arbitrary unsaved application state is not currently reconstructable.
+- EmbeddingGemma remains the chosen text-model direction. VS-47 reference parity, VS-48 M1 measurements and ADR 019 acceptance precede the VS-49 migration coordinated with Minh's EM-09.
+- Defer the combined 60-minute native QA session until implementation and automated integration are ready. Batch requests for human help; use earlier focused native probes only when needed to resolve an implementation decision. Build and test migration on seeded profiles first; VS-51's owner-profile migration still follows live capture validation.
+- Use parallel agents for independent implementation or review with explicit ownership. Inspect cloud changes at integration boundaries without waiting for the whole cloud session. Reuse existing portable skills, test harnesses and ticket evidence; remove obsolete code and consolidate active docs within the touched slice. Preserve historical evidence.
+
+**Decided in Q&A round 2:**
+
+| Decision | Accepted direction | Sequence |
+|---|---|---|
+| First connected-memory experience | Cited related work and a timeline | Build a richer graph explorer next, using the same data |
+| Everyday entry point | Resume-focused Home with a prominent search/command box | Keep Vault and Connections one step away |
+
+**Source-review findings that constrain implementation:** source provenance already exists in `raw_evidence.source_kind`; duplicate frames already exit before Accessibility reads; the ONNX export's pooled output must be inspected before adding dense-layer code; and persisted insight graph data exists even though shared retrieval currently builds an empty graph. Reconcile VS-43, VS-45, VS-47 and VS-33 with those boundaries before implementation. Source inspection does not establish native correctness or performance.
 
 ## 1. What we are building, in one sentence
 
@@ -24,6 +45,22 @@ Out of scope this month: phone companion, general life logging, teams sharing on
 
 **The one metric:** time to correctly recover prior work (find it, reopen it, know the next step), compared with the person's normal tools. Measured with the Resume task in the walkthrough, with five outside users before Beta, and with local-only in-app counts.
 
+### Acceptance contract for the broader scope
+
+These are proposed implementation and verification criteria derived from the owner's five outcomes. They do not claim completed behavior or human-approved quality labels. Both rounds of product direction are accepted; implementation details follow source inspection and the existing ticket contracts.
+
+| Outcome | Observable acceptance | Existing boundary and evidence |
+|---|---|---|
+| Useful local context | A permitted public/synthetic workflow produces source-linked facts about the work, its changes and any evidenced next step; unsupported intent stays unknown. Deferred enrichment survives restart, interactive requests take priority, and resource use is measured on the 8 GB Mac. | `capture/`, `memory_embedding_document.rs`, inference worker and review validation; VS-27 to VS-29, VS-42 to VS-46, LM-01 to LM-10. Report pipeline integrity, factual usefulness and agent grounding separately. |
+| Shared human/agent retrieval | Exact identifiers, paraphrases, time/app filters and long multi-chunk documents return the relevant source passages through the same retrieval boundary. Search, Ask and MCP agree for equivalent requests. Unsupported questions do not produce unsupported answers. | `context_runtime::retrieve`, `chunk_route`, VS-04, VS-18, VS-47 to VS-51 and EM-03/04/09. Run the production composer and hybrid path as well as model-reference parity; report exact-match and paraphrase results separately. |
+| Actions and deterministic workflows | A captured resource reopens through one typed outcome contract. Saved sequences execute the registered steps, journal outcomes and stop on a failed precondition. Missing/moved files, app-only fallback and unsupported state are explicit. Later UI automation must verify its target and postcondition and stop if the expected state is absent. | Minh's RE-07/12, Kunj's GS-03/04/09/11/12 and SK-01 to SK-05, plus VS-67/68. Unit/fixture tests cover dispatch and failures; final native checks cover actual reopening and execution. |
+| Easy setup and sustained use | A clean profile reaches required-model readiness, captures a deliberate public example, finds it and reopens it. Interrupted downloads, skipped/denied permissions, an empty vault and failed actions have a clear next step. Keyboard navigation and long-history loading remain usable. | Existing Onboarding, Home, Search and Vault surfaces; Felipe's OB-04 to OB-06 and PX work, plus VS-23. Browser checks establish UI behavior; batched native QA establishes permissions and first recovery. |
+| Connected long-term memory | Persisted nodes and edges survive restart; a keyword/semantic seed finds a related memory through a bounded, cited path. People and agents can inspect the relationship and its timeline. Deleted or excluded memories cannot reappear through graph expansion. Histories with many memories have measured traversal cost. | Existing `graph_store`, `graph_index`, `graph_route`, graph IPC and MCP interfaces. Start with a restart/one-hop integration fixture, then expand to timeline and explorer journeys. Reconcile VS-33 before changing the graph route; no duplicate store. |
+
+The shared data flow is permitted capture -> source-preserving memory and chunks -> versioned local embeddings and persisted relationships -> shared retrieval -> cited human/agent context -> explicitly requested action -> typed outcome and journal. Extracted screen content supplies evidence, never authority to execute actions. Graph links and model summaries must retain source provenance rather than turn inferred relationships into facts.
+
+Cross-cutting acceptance: VS-58 to VS-61 cover egress, credentials, secret handling and MCP authentication. Migration must resume after interruption, preserve readable old data until validation, and remove stale vectors and links when a memory is deleted. Latency and memory claims require named hardware, workload and model configuration. Existing numeric targets below remain targets until measured; larger model utilization alone is not success.
+
 **Beta targets** (numbers come from `make vault-health`, `make qa-retrieval`, and the named logs; "today" is the owner's profile or the seeded profile on 2026-09-23):
 
 | Measure | Today | Beta target |
@@ -42,7 +79,7 @@ Out of scope this month: phone companion, general life logging, teams sharing on
 
 ## 4. What the hands-on pass found
 
-To be filled from the scorecard and Pass D numbers on Sep 27.
+Pending the batched native QA session. The originally scheduled September pass did not supply completed results here; do not infer a verdict from an empty row.
 
 | Feature | Useful 1 to 5 | Trust 1 to 5 | Verdict | One sentence |
 |---|---|---|---|---|
@@ -68,9 +105,27 @@ To be filled from the scorecard and Pass D numbers on Sep 27.
 3. **Voice that is fast and visible.** Streaming on-device transcription with partial text and clear stages.
 4. **Quick actions by command or voice.** Open apps, documents, and memories; paste; run your Shortcuts; make a reminder. Approval where it matters, everything journaled.
 5. **Resume Work** on top of the above (it is only as good as retrieval and stored fields).
-6. **Assistants write back** (agent notes with provenance). Not ticketed this round; picked up after Beta or by whichever lane finishes its p0 early.
+6. **Assistants write back** (agent notes with provenance). VS-68 covers the first slice after the VS-35 specification and VS-61 authentication work.
 7. **Skills from what worked** (a first slice: save a successful command sequence as a skill, run it by name, share it with Claude Code).
 8. Stretch: **Seen before** (a cited nudge when an error or document comes back).
+9. **Connected long-term memory.** Reuse persisted entities and relationships for bounded, cited traversal and timeline continuity. Deliver cited related work and a timeline first, then a richer graph explorer over the same data.
+
+### Execution order and ownership
+
+| Stage | Deliverable and dependencies | Work distribution |
+|---|---|---|
+| 1. Make changes measurable | Reuse Memory Journey and the retrieval gate; reconcile source-review findings with ticket premises. Start VS-62 to VS-65 where their dependencies allow. For VS-63, establish whether cross-platform misses are numerical near-ties before changing tolerance; preserve visibility of actual regressions. | Anurup owns retrieval evidence. Verify VS-40 before the Linux work in VS-64; VS-65 follows. Check cloud branch/commit state before claiming any offered slice. |
+| 2. Improve capture and model correctness | Capture coverage/provenance (VS-42 to VS-46) and EmbeddingGemma reference parity (VS-47) can progress independently. Validate the existing ONNX export before implementing extra pooling or dense layers. Use synthetic/public multi-step workflows while human gold labels remain pending. | Anurup's capture lane; cloud-suitable VS-47; integrate Kunj's scheduling and extraction work rather than building another model harness. |
+| 3. Unify text retrieval | VS-48 chooses the dimension from M1 evidence; VS-49 integrates with EM-09 and EM-03/04/05. Test resumable migration and production hybrid retrieval on seeded profiles. VS-50 retires models only after migration validation; VS-51 performs the owner-profile migration after native capture validation. | Minh retains the embedding lifecycle and versioned migration boundary; Anurup owns retrieval comparisons and integration. |
+| 4. Connect the user journeys | Deliver persisted-graph retrieval with cited paths, typed reopen outcomes, saved workflows and onboarding-to-first-recovery. UI presentation follows round 2. Run privacy work alongside these changes, with authentication before agent write-back. | Reuse Minh's RE, Kunj's GS/SK/LM and Felipe's OB/PX/VO lanes. Anurup integrates graph/retrieval, VS-58 to VS-61 and VS-67/68. No teammate reassignment is implied. |
+| 5. Add measured visual retrieval | VS-52 defines and tests its go/no-go bar. On go, VS-53 to VS-56 deliver the image index, route, tests and UI; VS-57 accounts for resource use. Verify that legacy image backfill has an available source before promising coverage; never assume old screenshots were retained. | Anurup owns the spike and native measurements; cloud-suitable route/tests/UI slices follow the go decision. Image search is independent of the single text-model contract. |
+| 6. Accept and refine | Integrate team outputs, regenerate evidence charts (VS-66 after VS-63), run automated gates, then the combined native session and targeted follow-ups. Confirm capture before the real-vault migration and compare retrieval afterward. Use longer-term dogfood findings to refine all five outcomes. | Batch owner QA; keep automated, native and human-usefulness evidence distinct. October 16 remains a team checkpoint. |
+
+Independent slices may overlap; these stages express dependencies, not six serial projects. Recheck branch/ownership state before each slice rather than treating this plan as a live board.
+
+**Immediate local queue, inspected October 5:** cloud has already pushed VS-61 at `90bb70b` (`claude/train-g-security`) and VS-47 at `1242b8b` (`claude/train-h-embeddings`), both based on `c124957`. The fetched cloud outbox (`34319d7`) recommends reviewing/gating security, retrieval train F (`b95bcb9`), then embeddings. It also reports VS-68 in progress and proposes VS-69 for persisted-graph retrieval. Review and verify those exact changes locally before integration; do not rebuild the offered work or treat cloud-reported CI as locally verified. Then proceed to VS-48 M1 measurements and the remaining capture/graph work, reconciling the VS-69 proposal with this plan. The authenticated board read still shows VS-30, GS-17, GS-15 and VS-15 in Doing; reconcile actual evidence/needs-human status before claiming additional implementation under the board's work-in-progress limit.
+
+Architecture records should be amended with the implementing slice: ADRs 002/008/019 for the embedding contract and migration; ADR-018 for resource-aware local-first reasoning; and the command-surface contract for bounded UI automation. A graph decision should define persisted traversal, provenance, deletion and query limits using the existing stores. Do not create another framework or roadmap to hold these decisions.
 
 Product shape:
 
@@ -90,18 +145,19 @@ Every merge request describes its feature against this section. If the code does
 
 **What LanceDB is and why we use it.** LanceDB is a database that lives inside FNDR as files in `~/Library/Application Support/com.fndr.app/lancedb` (no server). Each table stores rows with ordinary columns (app, title, URL, time, text) and vector columns (lists of numbers that capture meaning). It answers "find the rows whose vectors are closest to this query's vector, where app is Slack and time is last week" in one call, and it also supports a full-text (BM25) keyword index. That combination, meaning plus keywords plus filters, local and file-based, is why it fits FNDR.
 
-**Today:**
+**Current source baseline, October 5 (`c124957`):**
 
-1. Capture stores one row per memory in `memories_v4_minilm_384` (113 columns) with three 384-number MiniLM vectors computed from a short composed summary (median 129 characters of text on the owner's profile).
-2. The chunk tables for the design in ADR-008 (`memory_chunks_v1_bge_1024`) are empty unless someone runs a manual reindex.
-3. The Search screen runs `search/`: vector search plus a `LIKE '%word%'` scan, then a reranker that drops results sharing under 15% of the query's words. Ask and MCP run `context_runtime/`: a planner with vector, keyword, time, entity, and graph routes (the graph is empty), fused. Two paths, two rankings.
+1. The live text embedding contract is MiniLM 384 dimensions. Capture can use browser semantic text, Accessibility text or OCR and records source provenance; the combined native capture validation is pending. The earlier 129-character median is a historical owner-profile measurement.
+2. BGE 1024-dimensional chunk retrieval exists behind a flag. End-to-end capture coverage and the migration to one text model remain work to verify, not established completion.
+3. Search, Ask and the main MCP search surfaces share `context_runtime::retrieve`, with BM25, vector retrieval, deterministic fusion and time/app filters. Legacy/raw exceptions remain to audit. See `2026-10-05-status-and-next.md` for the previously recorded gate results; no fresh gate is implied here.
+4. Insight graph storage and traversal exist, but `retrieve_fused` constructs empty graph inputs. Connecting persisted graph data to shared retrieval requires bounded expansion and tests for provenance, privacy filtering and restart behavior.
 
 **Target by Beta:**
 
 1. **One retrieval function** in `context_runtime` used by the Search screen, Ask, Resume, Quick Find, and every MCP tool.
 2. **Real text in the index.** Each memory keeps its cleaned screen text (Accessibility text first, OCR as fallback), split into chunks of about 300 tokens, embedded at capture time into one chunk table. The memory row keeps its summary vector.
 3. **Keywords plus meaning.** A LanceDB full-text (BM25) index over chunk text, title, and URL, plus vector search over chunks and summaries, combined with reciprocal rank fusion. No hard word-overlap cutoff.
-4. **One embedding model chosen by measurement** on the M1 8 GB: MiniLM-L6 (today), bge-small-en-v1.5, EmbeddingGemma-300M, Qwen3-Embedding-0.6B. Criteria: Recall@5 on the labeled set, milliseconds per chunk, memory. Optionally a small cross-encoder reranker on the top 30, kept only if it wins within the latency budget.
+4. **One text embedding model:** integrate EmbeddingGemma through VS-47 to VS-51, choosing its dimension with reference parity, retrieval quality, latency and memory measurements on the M1 8 GB. ADR 019 remains proposed until its acceptance gates pass. Image embeddings remain a separate modality. Keep a reranker only if measured gains justify its latency and memory cost.
 5. **Query understanding** for time and app ("last Tuesday," "in Slack") as filters.
 6. **Consistency guard:** `make qa-retrieval` runs before any retrieval change merges; Recall@5 may not drop more than 0.05 on any path.
 
@@ -160,17 +216,19 @@ Four lanes, one per person. The tickets are the source of truth (`docs/team/tick
 | Command surface, skills, local models | Kunj | FNDR does useful things by text or voice, learns skills from what worked, and gets real use out of local models | Command contract; notch HUD (merged Sep 23) reconciled with the command surface; tool registry and executors; grammar router; Quick Find as command bar; risk policy; journal and skills; model usage measured; enrichment policy wired; interactive before background | `kunj-command-skills-models.md` (GS-01 to GS-14, SK-01 to SK-07, LM-01 to LM-10) |
 | Voice, onboarding, tests | Felipe | One fast, visible voice pipeline everywhere; onboarding that gets a new user to a first useful moment; tests that protect what users do | Voice baseline and contract; native speech helper; shared voice control on Home, Search, command bar; Touch ID fix; onboarding copy and permissions; five destinations; test audit and journey tests | `felipe-voice-onboarding-tests.md` (VO-01 to VO-13, OB-01 to OB-07, PX-01 to PX-06, QT-01 to QT-07) |
 
-Load (nominal hours without an agent, from `make gitlab-plan` on 2026-09-23): p0 is 66 to 75 hours per person against about 60 hours of month capacity, so p0 already assumes agent help; p1 and p2 are the backlog, pulled only when a person's p0 for the week is done or blocked. The Friday retro cuts p1 first.
+Historical load (nominal hours without an agent, from `make gitlab-plan` on 2026-09-23): p0 was 66 to 75 hours per person against about 60 hours of month capacity. These estimates describe the original team schedule, not a limit on the owner's broader scope. Sequence the owner's work by dependencies, verification and review capacity; retain each teammate's assignment unless explicitly changed.
 
 Cross-lane contracts: `retrieve` (Anurup) is used by Kunj's `search` tool and Minh's reopen checks; `reopen_memory` (Minh) is used by Kunj's `open_memory_source`; `voice://state` (Felipe) feeds Kunj's router; the risk policy (Kunj) gates MCP reopen (Minh). Each contract is written down in the first ticket that defines it.
 
 ## 8. Weekly gates
 
+Original October coordination milestones follow. October 16 is the teammate checkpoint; broader owner work continues beyond it. Native acceptance is batched after implementation and automated integration, with remaining findings tracked explicitly.
+
 | Week | Dates | Theme | Friday demo must show |
 |---|---|---|---|
 | W1 | Sep 28 to Oct 4 | Right answers, right place | One retrieval path with BM25; first `make qa-retrieval` improvement; reopen v1 on a live day; labels done; ADR-018 decided; notch HUD (merged Sep 23) reconciled with the command surface; five-destination sidebar |
 | W2 | Oct 5 to 11 | Real RAG, real voice | Chunk index live with the chosen embedder; Recall@5 on both personas; streaming voice with partial text; first tools running from Quick Find; two user sessions |
-| W3 | Oct 12 to 18 | Act and prove it | Voice commands doing real work; skills first slice; agent notes; downloads found by content; five user sessions; freeze Fri Oct 16 |
+| W3 | Oct 12 to 18 | Act and prove it | Voice commands doing real work; skills first slice; agent notes; downloads found by content; five user sessions; teammate delivery checkpoint Fri Oct 16 |
 | W4 | Oct 19 to 25 | Beta | Beta Wed Oct 21; retro Fri Oct 23; November plan from what we learned |
 
 ## 9. Beta demo (5 minutes)
@@ -218,9 +276,9 @@ Cross-lane contracts: `retrieve` (Anurup) is used by Kunj's `search` tool and Mi
 
 ## 12. Decisions for the owner
 
-| # | Decision | Recommendation | Default if not decided by Sep 28 |
+| # | Decision | Recommendation / accepted direction | Fallback or status |
 |---|---|---|---|
-| 1 | Opt-in cloud reasoning with the person's own key | Yes, for structuring, the intent router, Ask, and "about this screen" | Local only |
+| 1 | Opt-in cloud reasoning with the person's own key | Decided 2026-10-05: adaptive local-first with 8 GB support; cloud reasoning explicitly optional | Local until opted in |
 | 2 | Retrieval ownership | Decided 2026-09-23: Anurup owns retrieval and its evaluation; Minh owns embedding coverage and reopen | Done |
 | 3 | Notch HUD branch | Merged into main on 2026-09-23 (350105c); GS-02 reconciles it with the command surface | Done |
 | 4 | Tools that change things | Paste, reminders, and Shortcuts with one-tap confirm; nothing that sends or deletes this month | As written |
