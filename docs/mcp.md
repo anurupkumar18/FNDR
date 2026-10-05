@@ -67,6 +67,35 @@ Defaults:
 
 Set `FNDR_MCP_REQUIRE_AUTH=0` to opt back into the old no-auth-on-localhost behavior for local development; this is not recommended since any local process or web page that finds the port would regain full access. Remote/tunnel/public modes must use bearer auth and strict origin rules regardless: in `tunnel` and `public` mode the server ignores `FNDR_MCP_REQUIRE_AUTH=0` and `FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS=1` and logs a warning (VS-61). Do not expose MCP publicly without auth.
 
+## Agent notes: `fndr.remember` (VS-68)
+
+An assistant can save a short note, decision, summary, or to-do into memory. The contract is `docs/product/fndr-remember-spec.md`; this is its smallest safe slice.
+
+- **Off by default.** Set `agent_notes_enabled = true` in FNDR's `config.toml` to turn it on. Until then every call answers `notes_disabled`. The actions kill switch answers `actions_off`.
+- **Token required.** A note needs the bearer token. With `FNDR_MCP_REQUIRE_AUTH=0`, every call answers `auth_required_for_writes`, even one that carries the token.
+- **Who wrote it.** The client name comes from `clientInfo.name` at `initialize`. The response carries an `Mcp-Session-Id` header, and later calls send it back. A missing name, or one that starts with "FNDR", is stored as "Unknown client". The name is self-reported, because the token is shared.
+- **Limits.**
+  - 4,000 characters, never cut: a longer note is refused whole.
+  - 10 notes per minute and 200 per day per client.
+  - 30 per minute and 500 per day for all clients together.
+- **Refused before storing:**
+  - unknown arguments, so a caller cannot set `source_type`, `app_name`, `url`, or a time;
+  - hidden or control characters;
+  - anything the capture secret detector flags;
+  - blocklisted words;
+  - any call made while the real embedding model is missing.
+
+  Refusals return a stable code in `structuredContent.error` and never repeat the note.
+- **Stored as a leaf.**
+  - A note is one memory with `source_type = "agent"`, app "Agent note", and its own card.
+  - It has no open target and is never compacted.
+  - Memory review skips it, and nothing derives graph, tasks, or project context from it.
+- **Not in this slice:**
+  - the Settings toggle, the "Added by" badge, and the Vault filter;
+  - `source_type` and `added_by` on read results (reads show the app "Agent note" and a title such as "Decision from Claude Code");
+  - Privacy Activity lines;
+  - gating `fndr_remember_decision` the same way.
+
 ## Example Tool Calls
 
 ```json

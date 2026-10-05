@@ -1,13 +1,15 @@
 # `fndr.remember`: agent write-back spec
 
-Status: Proposed 2026-10-04, waiting for owner review.
+Status: Proposed 2026-10-04, waiting for owner review. The smallest slice
+(sections 3, 5 to 8, and the storage and isolation rules of section 9) is
+implemented by VS-68; see `docs/evidence/W03/VS-68-cloud.md` for what is not.
 Ticket: VS-35 (`docs/team/tickets/anurup-followups-2026-10.md`).
 Plan: month plan section 5 priority 6 and section 6 "Assistants write back" and "Trust" (`docs/team/2026-10-month-plan.md`).
 Corpus: `src-tauri/tests/fixtures/agent_notes/injected-notes.json`.
 Evidence and open questions: `docs/evidence/W03/VS-35-cloud.md`.
 
-Nothing in this document is implemented. Sections marked **Today** describe
-the code at commit `b948dfd` and cite it. Everything else is a **proposal**.
+Sections marked **Today** describe the code at commit `b948dfd` and cite it.
+Everything else is a **proposal**.
 
 ## 1. Purpose
 

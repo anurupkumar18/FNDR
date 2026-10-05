@@ -279,6 +279,21 @@ impl Embedder {
         }
     }
 
+    /// The feature-hashing mock with the active contract, for tests that need
+    /// non-zero vectors without the model on disk.
+    #[cfg(test)]
+    pub(crate) fn mock_for_tests() -> Self {
+        let contract = active_embedding_contract();
+        Self {
+            contract,
+            chunker: TextChunker::new(),
+            backend: Backend::Mock(MockEmbedder::new(contract.dimensions)),
+            degraded_to_mock: AtomicBool::new(false),
+            allow_mock_fallback: false,
+            embedding_cache: Mutex::new(EmbeddingCache::new(EMBEDDING_CACHE_CAPACITY)),
+        }
+    }
+
     pub fn dimension(&self) -> usize {
         self.contract.dimensions
     }
@@ -845,10 +860,14 @@ impl MockEmbedder {
             vector[idx] += 1.0;
 
             if token.len() > 4 {
-                let prefix = &token[..3];
-                let suffix = &token[token.len() - 3..];
-                vector[stable_hash(prefix) % self.dimensions] += 0.4;
-                vector[stable_hash(suffix) % self.dimensions] += 0.4;
+                // Three characters, not bytes: a chunk can start mid-word.
+                let chars = token.chars().collect::<Vec<_>>();
+                let prefix = chars.iter().take(3).collect::<String>();
+                let suffix = chars[chars.len().saturating_sub(3)..]
+                    .iter()
+                    .collect::<String>();
+                vector[stable_hash(&prefix) % self.dimensions] += 0.4;
+                vector[stable_hash(&suffix) % self.dimensions] += 0.4;
             }
         }
 
@@ -1192,6 +1211,26 @@ mod tests {
             similar > unrelated,
             "expected similar phrases ({similar}) to outrank unrelated ({unrelated})"
         );
+    }
+
+    #[test]
+    fn mock_embeds_multibyte_words_without_panicking() {
+        // VS-68 corpus case an-008: a chunk that starts mid-word gave the token
+        // "ot\u{e9}e", and byte slicing split its accented 'e'.
+        let mock = MockEmbedder::new(EMBEDDING_DIM);
+        let vectors = mock.embed_batch(&["ot\u{e9}e, caf\u{e9}".to_string()]);
+        assert!(vectors[0].iter().any(|value| *value != 0.0));
+        // ASCII words keep the vectors they had.
+        let ascii = mock.embed_single("parser");
+        let mut expected = vec![0.0f32; EMBEDDING_DIM];
+        expected[stable_hash("parser") % EMBEDDING_DIM] += 1.0;
+        expected[stable_hash("par") % EMBEDDING_DIM] += 0.4;
+        expected[stable_hash("ser") % EMBEDDING_DIM] += 0.4;
+        for window in b"parser".windows(3) {
+            expected[stable_hash_bytes(window) % EMBEDDING_DIM] += 0.05;
+        }
+        normalize(&mut expected);
+        assert_eq!(ascii, expected);
     }
 
     #[test]

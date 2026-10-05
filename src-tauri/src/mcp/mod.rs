@@ -10,6 +10,9 @@
 //!  - `spawn_blocking` for SQLite + embedding calls
 //!  - 30-second timeout on LLM inference
 
+mod remember;
+#[cfg(test)]
+mod remember_http_tests;
 pub mod tls;
 pub mod token;
 
@@ -120,6 +123,97 @@ struct HttpState {
     allowed_origins: Vec<String>,
     public_endpoint: Option<String>,
     public_sse_endpoint: Option<String>,
+    sessions: Arc<Mutex<ClientSessions>>,
+    note_limiter: Arc<remember::RememberLimiter>,
+    note_embedder: remember::NoteEmbedder,
+}
+
+const MCP_SESSION_HEADER: &str = "mcp-session-id";
+const MAX_CLIENT_SESSIONS: usize = 64;
+
+/// Client names reported at `initialize`, keyed by the `Mcp-Session-Id` the
+/// response carries; the 64 most recently used sessions are kept. The name
+/// labels agent notes (VS-68). It comes from the client software, not from
+/// tool arguments a prompt-injected model controls, but it is self-reported.
+#[derive(Default)]
+struct ClientSessions {
+    recent: std::collections::VecDeque<String>,
+    names: HashMap<String, String>,
+}
+
+impl ClientSessions {
+    fn open(&mut self, client: String) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.names.insert(id.clone(), client);
+        self.recent.push_back(id.clone());
+        while self.recent.len() > MAX_CLIENT_SESSIONS {
+            if let Some(oldest) = self.recent.pop_front() {
+                self.names.remove(&oldest);
+            }
+        }
+        id
+    }
+
+    fn client(&mut self, id: &str) -> Option<String> {
+        let name = self.names.get(id)?.clone();
+        if let Some(position) = self.recent.iter().position(|known| known == id) {
+            let id = self.recent.remove(position).unwrap_or_default();
+            self.recent.push_back(id);
+        }
+        Some(name)
+    }
+}
+
+/// What the transport learned about one HTTP request, shared by every
+/// JSON-RPC item in it.
+#[derive(Clone)]
+struct McpRequest {
+    /// Who may write through `fndr.remember`: a caller when auth is on and a
+    /// valid token came with the request, else the refusal to answer with.
+    writer: Result<remember::WriteCaller, remember::Refusal>,
+}
+
+impl McpRequest {
+    fn without_writes() -> Self {
+        Self {
+            writer: Err(remember::Refusal::new(
+                "auth_required_for_writes",
+                "FNDR takes notes only from a client that sends the MCP token, and token checks are off. Turn them back on to let assistants add notes.",
+            )),
+        }
+    }
+}
+
+/// The client name for this request: a new session for an `initialize` that
+/// names its client (returned so the response can carry its id), else the
+/// session the `Mcp-Session-Id` header names.
+fn request_client(
+    state: &HttpState,
+    headers: &HeaderMap,
+    payload: &Value,
+) -> (String, Option<String>) {
+    let initialize = match payload {
+        Value::Array(items) => items
+            .iter()
+            .find(|item| item.get("method").and_then(Value::as_str) == Some("initialize")),
+        item if item.get("method").and_then(Value::as_str) == Some("initialize") => Some(item),
+        _ => None,
+    };
+    if let Some(initialize) = initialize {
+        let client = remember::sanitize_client_name(
+            initialize
+                .pointer("/params/clientInfo/name")
+                .and_then(Value::as_str),
+        );
+        let session = state.sessions.lock().open(client.clone());
+        return (client, Some(session));
+    }
+    let client = headers
+        .get(MCP_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|id| state.sessions.lock().client(id))
+        .unwrap_or_else(|| remember::UNKNOWN_CLIENT.to_string());
+    (client, None)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -696,6 +790,9 @@ pub async fn start(
         allowed_origins,
         public_endpoint: public_endpoint.clone(),
         public_sse_endpoint: public_sse_endpoint.clone(),
+        sessions: Arc::new(Mutex::new(ClientSessions::default())),
+        note_limiter: Arc::new(remember::RememberLimiter::new()),
+        note_embedder: remember::NoteEmbedder::Shared,
     });
 
     let cors = CorsLayer::new()
@@ -703,13 +800,7 @@ pub async fn start(
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let router = Router::new()
-        .route("/", get(root_handler))
-        .route("/mcp", get(mcp_stream_handler).post(mcp_handler))
-        .route("/mcp/sse", get(sse_handler))
-        .route("/mcp/messages", post(mcp_handler))
-        .with_state(server_state)
-        .layer(cors);
+    let router = mcp_router(server_state).layer(cors);
 
     let (shutdown_tx, _shutdown_rx) = oneshot::channel();
     let handle = axum_server::Handle::new();
@@ -754,6 +845,15 @@ pub async fn start(
     rt.task = Some(task);
     rt.last_error = None;
     Ok(to_status(&rt))
+}
+
+fn mcp_router(server_state: Arc<HttpState>) -> Router {
+    Router::new()
+        .route("/", get(root_handler))
+        .route("/mcp", get(mcp_stream_handler).post(mcp_handler))
+        .route("/mcp/sse", get(sse_handler))
+        .route("/mcp/messages", post(mcp_handler))
+        .with_state(server_state)
 }
 
 pub async fn stop() -> McpServerStatus {
@@ -1108,16 +1208,36 @@ async fn mcp_handler(
         return unauthorized_jsonrpc_response(&payload);
     }
 
+    let (client, new_session) = request_client(&state, &headers, &payload);
+    let request = if state.require_auth && check_auth(&headers, &state.token) {
+        McpRequest {
+            writer: Ok(remember::WriteCaller {
+                client,
+                limiter: state.note_limiter.clone(),
+                embedder: state.note_embedder.clone(),
+            }),
+        }
+    } else {
+        McpRequest::without_writes()
+    };
     let app_state = state.app_state.clone();
     let handled = tokio::task::spawn_blocking(move || {
         let handle = tokio::runtime::Handle::current();
-        handle.block_on(handle_payload(payload, app_state))
+        handle.block_on(handle_payload(payload, app_state, request))
     })
     .await;
 
+    let with_session = |mut response: Response| {
+        if let Some(value) = new_session.and_then(|id| HeaderValue::from_str(&id).ok()) {
+            response.headers_mut().insert(MCP_SESSION_HEADER, value);
+        }
+        response
+    };
     match handled {
-        Ok(Some(response_payload)) => (StatusCode::OK, Json(response_payload)).into_response(),
-        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Some(response_payload)) => {
+            with_session((StatusCode::OK, Json(response_payload)).into_response())
+        }
+        Ok(None) => with_session(StatusCode::NO_CONTENT.into_response()),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("MCP handler task failed: {err}") })),
@@ -1205,11 +1325,15 @@ async fn sse_handler_inner(
 // JSON-RPC dispatch
 // ---------------------------------------------------------------------------
 
-async fn handle_payload(payload: Value, app_state: Arc<AppState>) -> Option<Value> {
+async fn handle_payload(
+    payload: Value,
+    app_state: Arc<AppState>,
+    request: McpRequest,
+) -> Option<Value> {
     if let Value::Array(items) = payload {
         let mut responses = Vec::new();
         for item in items {
-            if let Some(resp) = handle_single_request(item, app_state.clone()).await {
+            if let Some(resp) = handle_single_request(item, app_state.clone(), &request).await {
                 responses.push(resp);
             }
         }
@@ -1219,11 +1343,15 @@ async fn handle_payload(payload: Value, app_state: Arc<AppState>) -> Option<Valu
             Some(Value::Array(responses))
         }
     } else {
-        handle_single_request(payload, app_state).await
+        handle_single_request(payload, app_state, &request).await
     }
 }
 
-async fn handle_single_request(raw: Value, app_state: Arc<AppState>) -> Option<Value> {
+async fn handle_single_request(
+    raw: Value,
+    app_state: Arc<AppState>,
+    request: &McpRequest,
+) -> Option<Value> {
     let req: JsonRpcRequest = match serde_json::from_value(raw) {
         Ok(req) => req,
         Err(err) => {
@@ -1259,7 +1387,7 @@ async fn handle_single_request(raw: Value, app_state: Arc<AppState>) -> Option<V
         }
         "ping" => Ok(json!({})),
         "tools/list" | "tools.list" => Ok(tools_list_result()),
-        "tools/call" | "tools.call" => call_tool(req.params, app_state).await,
+        "tools/call" | "tools.call" => call_tool(req.params, app_state, request).await,
         "resources/list" | "resources.list" => Ok(resources_list_result()),
         "resources/read" | "resources.read" => read_resource(req.params, app_state).await,
         "prompts/list" | "prompts.list" => Ok(prompts_list_result()),
@@ -1441,7 +1569,7 @@ async fn read_resource(
 }
 
 fn tools_list_result() -> Value {
-    json!({
+    let mut listing = json!({
         "tools": [
             {
                 "name": "memory.search_full_context",
@@ -2111,14 +2239,22 @@ fn tools_list_result() -> Value {
                 }
             }
         ]
-    })
+    });
+    if let Some(tools) = listing["tools"].as_array_mut() {
+        tools.push(remember::tool_listing());
+    }
+    listing
 }
 
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
 
-async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Value, JsonRpcError> {
+async fn call_tool(
+    params: Option<Value>,
+    app_state: Arc<AppState>,
+    request: &McpRequest,
+) -> Result<Value, JsonRpcError> {
     let params: ToolCallParams = serde_json::from_value(params.unwrap_or_else(|| json!({})))
         .map_err(|err| JsonRpcError {
             code: -32602,
@@ -2142,6 +2278,27 @@ async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Va
             crate::agent::risk_policy::Decision::Refuse(reason) => {
                 return Ok(tool_error(reason.message().to_string()));
             }
+        }
+    }
+
+    // MCP writes (VS-68): a valid token, then the kill switch, then the
+    // notes setting, all before the handler reads any argument.
+    if crate::agent::risk_policy::mcp_write_tools().contains(&params.name.as_str()) {
+        if let Err(refusal) = &request.writer {
+            return Ok(refusal.clone().into_tool_result());
+        }
+        let (kill_switch, notes_enabled) = {
+            let config = app_state.config.read();
+            (config.actions_kill_switch, config.agent_notes_enabled)
+        };
+        if let crate::agent::risk_policy::Decision::Refuse(reason) =
+            crate::agent::risk_policy::decide_mcp_write(kill_switch, notes_enabled)
+        {
+            let code = match reason {
+                crate::agent::risk_policy::RefuseReason::KillSwitch => "actions_off",
+                crate::agent::risk_policy::RefuseReason::AgentNotesOff => "notes_disabled",
+            };
+            return Ok(remember::Refusal::new(code, reason.message()).into_tool_result());
         }
     }
 
@@ -2425,6 +2582,10 @@ async fn call_tool(params: Option<Value>, app_state: Arc<AppState>) -> Result<Va
                 .unwrap_or_else(|_| ContextRequest::default());
             run_fndr_get_recent_working_state(app_state, args).await
         }
+        remember::TOOL_NAME => match &request.writer {
+            Ok(writer) => Ok(remember::run(app_state, writer, params.arguments).await),
+            Err(refusal) => Ok(refusal.clone().into_tool_result()),
+        },
         "fndr_remember_decision" => {
             let args: DecisionProposal =
                 serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
@@ -5308,6 +5469,7 @@ mod tests {
                             "arguments": { "query": query, "limit": 10 }
                         })),
                         app_state.clone(),
+                        &McpRequest::without_writes(),
                     ))
                     .expect(name)
             };
@@ -5867,6 +6029,7 @@ mod tests {
                     "arguments": { "hours": 999, "budget_tokens": 9999 }
                 })),
                 app_state,
+                &McpRequest::without_writes(),
             ))
             .expect("resume work response");
 

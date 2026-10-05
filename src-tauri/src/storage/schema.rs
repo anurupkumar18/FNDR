@@ -55,6 +55,20 @@ fn default_source_type() -> String {
     "screen".to_string()
 }
 
+/// `source_type` of a note an assistant wrote through `fndr.remember`
+/// (VS-68). Such a row is a leaf: stored whole, found, shown with its
+/// provenance, and deleted; never merged, reviewed, or reopened.
+pub const AGENT_NOTE_SOURCE_TYPE: &str = "agent";
+
+/// Session-key prefix that keeps every agent note its own card.
+pub const AGENT_NOTE_SESSION_PREFIX: &str = "agent_note:";
+
+impl MemoryRecord {
+    pub fn is_agent_note(&self) -> bool {
+        self.source_type == AGENT_NOTE_SOURCE_TYPE
+    }
+}
+
 fn default_unknown() -> String {
     "unknown".to_string()
 }
