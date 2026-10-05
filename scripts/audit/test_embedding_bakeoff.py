@@ -280,6 +280,39 @@ class MetricTests(unittest.TestCase):
         self.assertAlmostEqual(eb.mcnemar_exact(6, 1), 0.125)
 
 
+class RerankTests(unittest.TestCase):
+    def test_candidates_are_the_top_depth_with_their_best_chunk_text(self):
+        case = {
+            "ranked": [["a", 0.9], ["b", 0.8], ["c", 0.7]],
+            "best_chunk": {"a": "text a", "b": "text b", "c": "text c"},
+        }
+        self.assertEqual(eb.rerank_candidates(case, 2), [["a", "text a"], ["b", "text b"]])
+
+    def test_reranked_head_then_the_untouched_vector_tail(self):
+        ranked = [["a", 0.9], ["b", 0.8], ["c", 0.7], ["d", 0.6]]
+        reordered = eb.apply_rerank(ranked, {"a": 0.1, "b": 2.5, "c": 2.5})
+        # b and c tie on the cross-encoder and fall back to id order; d keeps its vector place.
+        self.assertEqual([memory_id for memory_id, _ in reordered], ["b", "c", "a", "d"])
+        self.assertEqual(reordered[0][1], 2.5)
+        self.assertEqual(reordered[-1], ["d", 0.6])
+
+    def test_rule_rejects_an_mrr_gain_under_three_hundredths(self):
+        verdict, reason = eb.rerank_verdict(0.75, 0.779, 40.0)
+        self.assertEqual(verdict, "rejected")
+        self.assertIn("+0.029", reason)
+
+    def test_rule_needs_the_m1_when_quality_passes(self):
+        verdict, reason = eb.rerank_verdict(0.75, 0.78, 40.0)
+        self.assertEqual(verdict, "needs-M1")
+        self.assertIn("under 150 ms", reason)
+        verdict, reason = eb.rerank_verdict(0.70, 0.80, 400.0)
+        self.assertEqual(verdict, "needs-M1")
+        self.assertIn("over 150 ms", reason)
+
+    def test_rule_never_keeps_on_cloud_latency(self):
+        self.assertNotEqual(eb.rerank_verdict(0.1, 0.9, 1.0)[0], "kept")
+
+
 class CorpusTests(unittest.TestCase):
     def test_low_signal_control_is_excluded_and_cases_validate(self):
         with tempfile.TemporaryDirectory() as tmp:

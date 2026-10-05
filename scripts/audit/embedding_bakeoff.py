@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Embedding model bake-off on the labeled demo personas (VS-17).
+"""Embedding model bake-off on the labeled demo personas (VS-17), with an
+optional cross-encoder rerank spike (VS-19, --rerank).
 
 Pure vector retrieval (cosine, top 10) over the two seeded personas, so the
 numbers isolate the embedder. Each model is scored in two document modes:
@@ -19,10 +20,16 @@ scores against the positive median. Each model runs in its own subprocess so
 its peak RSS is its own. Timings are on the host CPU through PyTorch and are
 only comparable with each other, not with the app's ONNX Runtime path.
 
+--rerank (VS-19) rescores each embedder's top 30 chunk-mode candidates with
+cross-encoder/ms-marco-MiniLM-L-6-v2 on (query, the memory's best chunk) and
+reports MRR@10 and Recall@5 before and after, milliseconds per query, and the
+keep rule's verdict (rejected, or needs-M1 when only latency is left to check).
+
 Usage:
   python3 scripts/audit/embedding_bakeoff.py --models all --personas all \
       --out-json report.json --out-md report.md
   python3 scripts/audit/embedding_bakeoff.py --models minilm,bge-small
+  python3 scripts/audit/embedding_bakeoff.py --models all --rerank --out-md rerank.md
 
 Install: pip install -r scripts/audit/requirements-bakeoff.txt
 Tests:   python3 -m unittest scripts/audit/test_embedding_bakeoff.py
@@ -58,6 +65,14 @@ BASELINE_MODEL = "minilm"
 TOP_K = 10
 # Candidates kept per query in the worker output (the VS-19 rerank depth).
 CANDIDATE_DEPTH = 30
+# VS-19 (--rerank): a cross-encoder rescores the top 30 chunk-mode candidates,
+# each on (query, the memory's best chunk for that query). Keep it only if
+# MRR@10 improves by at least 0.03 and it adds under 150 ms at p95; latency is
+# decided on the M1, so a cloud run can only reject or defer.
+RERANK_MODEL = ("cross-encoder/ms-marco-MiniLM-L-6-v2", "233902d25c440f23af6f7d6e94d2946bac0bee0a")
+RERANK_MODE = "chunks"
+RERANK_MIN_MRR_GAIN = 0.03
+RERANK_MAX_P95_MS = 150.0
 # Chunking: about 300 tokens with overlap, using the app's 4 chars per token
 # estimate (DEFAULT_CHARS_PER_TOKEN in src-tauri/src/config.rs).
 CHUNK_MAX_TOKENS = 300
@@ -530,6 +545,39 @@ def compare_to_baseline(mine: list[dict], base: list[dict]) -> dict:
     }
 
 
+def rerank_candidates(case: dict, depth: int = CANDIDATE_DEPTH) -> list[list[str]]:
+    """[memory id, best chunk text] for the vector top `depth` of one case."""
+    return [[memory_id, case["best_chunk"][memory_id]] for memory_id, _ in case["ranked"][:depth]]
+
+
+def apply_rerank(ranked: list, rerank_scores: dict[str, float]) -> list[list]:
+    """Reranked candidates first (by cross-encoder score, ties by id), then the
+    rest of the vector ranking unchanged."""
+    head = sorted(
+        ([memory_id, float(rerank_scores[memory_id])] for memory_id, _ in ranked if memory_id in rerank_scores),
+        key=lambda item: (-item[1], item[0]),
+    )
+    tail = [[memory_id, score] for memory_id, score in ranked if memory_id not in rerank_scores]
+    return head + tail
+
+
+def rerank_verdict(mrr_before: float, mrr_after: float, p95_ms: float | None) -> tuple[str, str]:
+    """VS-19 rule applied to a cloud run: rejected, or needs-M1 when quality passes.
+
+    The latency half of the rule is decided on the M1, so this never returns kept.
+    """
+    gain = mrr_after - mrr_before
+    if gain < RERANK_MIN_MRR_GAIN - 1e-9:
+        return "rejected", f"MRR@10 gain {gain:+.3f} is under +{RERANK_MIN_MRR_GAIN:.2f}"
+    where = "under" if p95_ms is not None and p95_ms < RERANK_MAX_P95_MS else "over"
+    p95_label = "n/a" if p95_ms is None else f"{p95_ms:.1f} ms"
+    return (
+        "needs-M1",
+        f"MRR@10 gain {gain:+.3f} meets +{RERANK_MIN_MRR_GAIN:.2f}; p95 {p95_label} is {where} "
+        f"{RERANK_MAX_P95_MS:.0f} ms on this host; confirm latency on the M1",
+    )
+
+
 # --------------------------------------------------------------------------
 # Worker: one model per process
 
@@ -719,6 +767,61 @@ def embed_worker(
     }
 
 
+def rerank_worker(input_path: Path, device: str, timing_repeats: int = TIMING_REPEATS) -> dict:
+    """Score every group's (query, candidate text) pairs with the cross-encoder.
+
+    Each query is one predict call over all of its candidates (up to 30 pairs),
+    timed `timing_repeats` times.
+    """
+    import sentence_transformers
+    from sentence_transformers import CrossEncoder
+
+    _seed_everything()
+    repo, revision = RERANK_MODEL
+    rss_after_imports = peak_rss_mb()
+    started = time.perf_counter()
+    model = CrossEncoder(repo, revision=revision, device=device)
+    load_seconds = time.perf_counter() - started
+    model.predict([("warm up", "warm up")], show_progress_bar=False)
+
+    groups = json.loads(Path(input_path).read_text())
+    out = {}
+    for name, queries in groups.items():
+        scored = []
+        for query in queries:
+            pairs = [(query["query"], text) for _, text in query["candidates"]]
+            samples = []
+            for _ in range(timing_repeats):
+                started = time.perf_counter()
+                scores = model.predict(pairs, batch_size=max(len(pairs), 1), show_progress_bar=False)
+                samples.append((time.perf_counter() - started) * 1000.0)
+            scored.append(
+                {
+                    "scores": {
+                        memory_id: round(float(score), 6)
+                        for (memory_id, _), score in zip(query["candidates"], scores)
+                    },
+                    "pairs": len(pairs),
+                    "ms": samples,
+                }
+            )
+        out[name] = scored
+    activation = getattr(model, "activation_fn", None) or getattr(model, "default_activation_function", None)
+    return {
+        "model": repo,
+        "revision": revision,
+        "activation": type(activation).__name__ if activation is not None else "unknown",
+        "max_length": getattr(model, "max_length", None),
+        "load_seconds": load_seconds,
+        "rss_after_imports_mb": rss_after_imports,
+        "peak_rss_mb": peak_rss_mb(),
+        "download_bytes": snapshot_bytes(repo, revision),
+        "timing_repeats": timing_repeats,
+        "sentence_transformers": sentence_transformers.__version__,
+        "groups": out,
+    }
+
+
 def run_worker(argv: list[str], label: str) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "worker.json"
@@ -862,6 +965,134 @@ def build_report(args, workers: dict[str, dict], personas: list[str]) -> dict:
         "results": results,
         "comparisons": comparisons,
     }
+
+
+def rerank_groups(workers: dict[str, dict], personas: list[str]) -> dict:
+    """Rerank input: per embedder and persona, each query's chunk-mode top 30."""
+    return {
+        f"{key}|{persona}": [
+            {"query": case["query"], "candidates": rerank_candidates(case)}
+            for case in worker["personas"][persona][RERANK_MODE]["cases"]
+        ]
+        for key, worker in workers.items()
+        if "error" not in worker
+        for persona in personas
+    }
+
+
+def build_rerank_section(workers: dict[str, dict], personas: list[str], reranked: dict) -> dict:
+    if "error" in reranked:
+        return {"error": reranked["error"]}
+    scopes = [*personas, POOLED] if len(personas) > 1 else list(personas)
+    rows, latency, verdicts = [], [], []
+    for key, worker in workers.items():
+        if "error" in worker:
+            continue
+        before_cases, after_cases, pairs = {}, {}, {}
+        samples_full, samples_all = [], []
+        for persona in personas:
+            cases = worker["personas"][persona][RERANK_MODE]["cases"]
+            scored = reranked["groups"][f"{key}|{persona}"]
+            before_cases[persona] = cases
+            after_cases[persona] = [
+                dict(case, ranked=apply_rerank(case["ranked"], result["scores"]))
+                for case, result in zip(cases, scored)
+            ]
+            pairs[persona] = [result["pairs"] for result in scored]
+            # A query's latency is its fastest timing (least disturbed by other load).
+            for result in scored:
+                samples_all.append(min(result["ms"]))
+                if result["pairs"] == CANDIDATE_DEPTH:
+                    samples_full.append(min(result["ms"]))
+        scope_rows = {}
+        for scope in scopes:
+            members = personas if scope == POOLED else [scope]
+            before, before_queries = evaluate([case for p in members for case in before_cases[p]])
+            after, after_queries = evaluate([case for p in members for case in after_cases[p]])
+            scope_pairs = [count for p in members for count in pairs[p]]
+            scope_rows[scope] = {
+                "model": key,
+                "persona": scope,
+                "pairs_min": min(scope_pairs),
+                "pairs_max": max(scope_pairs),
+                "before": before,
+                "after": after,
+                "mrr_gain": after["mrr_at_10"] - before["mrr_at_10"],
+                **compare_to_baseline(after_queries, before_queries),
+            }
+            rows.append(scope_rows[scope])
+        p95_full = percentile(samples_full, 95.0) if samples_full else None
+        latency.append(
+            {
+                "model": key,
+                "queries_at_full_depth": len(samples_full),
+                "p50_ms_full_depth": percentile(samples_full, 50.0) if samples_full else None,
+                "p95_ms_full_depth": p95_full,
+                "p95_ms_all": percentile(samples_all, 95.0),
+            }
+        )
+        headline = scope_rows[scopes[-1]]
+        verdict, reason = rerank_verdict(
+            headline["before"]["mrr_at_10"],
+            headline["after"]["mrr_at_10"],
+            p95_full if p95_full is not None else percentile(samples_all, 95.0),
+        )
+        verdicts.append({"model": key, "scope": scopes[-1], "verdict": verdict, "reason": reason})
+    meta = {name: value for name, value in reranked.items() if name != "groups"}
+    return {"reranker": meta, "mode": RERANK_MODE, "depth": CANDIDATE_DEPTH, "rows": rows, "latency": latency, "verdicts": verdicts}
+
+
+def render_rerank_markdown(section: dict, personas: list[str]) -> list[str]:
+    lines = ["", "## Cross-encoder rerank of the top 30 (VS-19)", ""]
+    if "error" in section:
+        return lines + [f"Rerank failed: {_cell(section['error'][:400])}"]
+    meta = section["reranker"]
+    lines += [
+        f"Reranker {meta['model']}@{meta['revision'][:7]} (activation {meta['activation']}, max length "
+        f"{meta['max_length']}) rescores each query's top {section['depth']} {section['mode']}-mode vector candidates "
+        "on (query, the memory's best chunk text); fewer than 30 when the persona has fewer memories. "
+        "Reranked order by cross-encoder score, ties by id; the vector order is kept below the reranked head. "
+        f"Rule: keep only if MRR@10 gains at least {RERANK_MIN_MRR_GAIN} and the rerank adds under "
+        f"{RERANK_MAX_P95_MS:.0f} ms at p95 (latency to be confirmed on the M1).",
+        "",
+        "| Persona | Embedder | Pairs per query | MRR@10 vector | MRR@10 reranked | Gain | Recall@5 vector "
+        "| Recall@5 reranked | Gains | Losses | RR better | RR worse | p (RR) | AUC reranked |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    order = {key: index for index, key in enumerate(MODELS)}
+    scope_order = {scope: index for index, scope in enumerate([*personas, POOLED])}
+    for row in sorted(section["rows"], key=lambda r: (scope_order[r["persona"]], order[r["model"]])):
+        before, after = row["before"], row["after"]
+        pairs = str(row["pairs_min"]) if row["pairs_min"] == row["pairs_max"] else f"{row['pairs_min']}-{row['pairs_max']}"
+        lines.append(
+            f"| {row['persona']} | {row['model']} | {pairs} | {_fmt(before['mrr_at_10'])} | {_fmt(after['mrr_at_10'])} "
+            f"| {row['mrr_gain']:+.3f} | {_fmt(before['recall_at_5'])} ({before['core_hits_at_5']}/{before['core_cases']}) "
+            f"| {_fmt(after['recall_at_5'])} ({after['core_hits_at_5']}/{after['core_cases']}) "
+            f"| {row['gains']} | {row['losses']} | {row['rr_better']} | {row['rr_worse']} | {_fmt(row['rr_sign_p'])} "
+            f"| {_fmt((after['no_match'] or {}).get('separation_auc'))} |"
+        )
+    download = meta.get("download_bytes")
+    lines += [
+        "",
+        "Gains / losses and RR better / worse compare the reranked list with the same embedder's vector list.",
+        "",
+        f"Reranker cost on this host (relative only): load {meta['load_seconds']:.1f} s, peak RSS "
+        f"{meta['peak_rss_mb']:.0f} MB (after imports {meta['rss_after_imports_mb']:.0f} MB), download "
+        f"{_fmt(download / 1e6 if download else None, 0)} MB; each query is one predict call over all its pairs, "
+        f"timed {meta['timing_repeats']} times; a query's latency is its fastest timing.",
+        "",
+        "| Embedder | Queries at 30 pairs | ms p50 (30 pairs) | ms p95 (30 pairs) | ms p95 (all queries) |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for item in sorted(section["latency"], key=lambda r: order[r["model"]]):
+        lines.append(
+            f"| {item['model']} | {item['queries_at_full_depth']} | {_fmt(item['p50_ms_full_depth'], 1)} "
+            f"| {_fmt(item['p95_ms_full_depth'], 1)} | {_fmt(item['p95_ms_all'], 1)} |"
+        )
+    lines += ["", "| Embedder | Scope | Verdict | Why |", "|---|---|---|---|"]
+    for item in sorted(section["verdicts"], key=lambda r: order[r["model"]]):
+        lines.append(f"| {item['model']} | {item['scope']} | {item['verdict']} | {item['reason']} |")
+    return lines
 
 
 def _fmt(value, digits: int = 3) -> str:
@@ -1059,6 +1290,8 @@ def render_markdown(report: dict) -> str:
             )
             + " |"
         )
+    if "rerank" in report:
+        lines += render_rerank_markdown(report["rerank"], personas)
     return "\n".join(lines) + "\n"
 
 
@@ -1086,10 +1319,21 @@ def main(argv=None) -> int:
     parser.add_argument("--chunk-tokens", type=int, default=CHUNK_MAX_TOKENS)
     parser.add_argument("--chunk-overlap", type=int, default=CHUNK_OVERLAP_TOKENS)
     parser.add_argument("--timing-repeats", type=int, default=TIMING_REPEATS)
+    parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help=f"VS-19: rerank each embedder's top {CANDIDATE_DEPTH} chunk-mode candidates with {RERANK_MODEL[0]}",
+    )
     parser.add_argument("--worker-embed", help=argparse.SUPPRESS)
+    parser.add_argument("--worker-rerank", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--worker-out", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     personas = parse_selection(args.personas, PERSONAS, "persona")
+
+    if args.worker_rerank:
+        result = rerank_worker(args.worker_rerank, args.device, args.timing_repeats)
+        args.worker_out.write_text(json.dumps(result))
+        return 0
 
     if args.worker_embed:
         result = embed_worker(
@@ -1113,6 +1357,20 @@ def main(argv=None) -> int:
     ]
     workers = {key: run_worker(["--worker-embed", key, *common], f"embed {key}") for key in models}
     report = build_report(args, workers, personas)
+    reranked = None
+    if args.rerank:
+        with tempfile.TemporaryDirectory() as tmp:
+            groups_path = Path(tmp) / "rerank-input.json"
+            groups_path.write_text(json.dumps(rerank_groups(workers, personas)))
+            reranked = run_worker(
+                [
+                    "--worker-rerank", str(groups_path),
+                    "--device", args.device,
+                    "--timing-repeats", str(args.timing_repeats),
+                ],
+                "rerank",
+            )
+        report["rerank"] = build_rerank_section(workers, personas, reranked)
     markdown = render_markdown(report)
     if args.out_json:
         args.out_json.parent.mkdir(parents=True, exist_ok=True)
@@ -1121,7 +1379,8 @@ def main(argv=None) -> int:
         args.out_md.parent.mkdir(parents=True, exist_ok=True)
         args.out_md.write_text(markdown)
     print(markdown, end="")
-    return 0 if all("error" not in worker for worker in workers.values()) else 1
+    failed = any("error" in worker for worker in workers.values()) or (reranked is not None and "error" in reranked)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
