@@ -11,17 +11,6 @@ pub struct QueryContext {
     pub ngram_variants: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
-pub struct QueryExpansionDebug {
-    pub original_query: String,
-    pub expanded_terms: Vec<String>,
-    pub entity_candidates: Vec<String>,
-    pub graph_expansions: Vec<String>,
-    pub fuzzy_variants: Vec<String>,
-    pub prefix_variants: Vec<String>,
-    pub retrieval_plan: Vec<String>,
-}
-
 impl QueryContext {
     pub fn from_query(query: &str) -> Self {
         let normalized_query = normalize_text(query);
@@ -75,25 +64,6 @@ impl QueryContext {
             prefix_variants,
             fuzzy_variants,
             ngram_variants,
-        }
-    }
-
-    pub fn debug_plan(&self) -> QueryExpansionDebug {
-        QueryExpansionDebug {
-            original_query: self.raw_query.clone(),
-            expanded_terms: self.expanded_terms.clone(),
-            entity_candidates: self.anchor_terms.clone(),
-            graph_expansions: Vec::new(),
-            fuzzy_variants: self.fuzzy_variants.clone(),
-            prefix_variants: self.prefix_variants.clone(),
-            retrieval_plan: vec![
-                "semantic".to_string(),
-                "keyword".to_string(),
-                "prefix".to_string(),
-                "fuzzy".to_string(),
-                "ngram".to_string(),
-                "graph".to_string(),
-            ],
         }
     }
 }

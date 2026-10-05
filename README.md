@@ -26,7 +26,7 @@ Every search surface ranks through one function, `context_runtime::retrieve` (`s
 
 FNDR also supports retrieval-grounded answering (`fndr_answer`) through a context runtime that plans retrieval routes, composes evidence, and returns cited answers. The same local memory can be exposed to external tools through an MCP server with explicit local/tunnel/public deployment modes.
 
-Knowledge graph support exists in two forms: a legacy graph and an insight graph persisted in LanceDB (`graph_nodes`, `graph_edges`) for typed entities and relations. Retrieval does not use the graph yet: the graph route runs over an empty in-memory graph until the typed graph is loaded into it (`retrieve_fused` in `src-tauri/src/context_runtime/mod.rs`).
+Knowledge graph support exists in two forms: a legacy graph and an insight graph persisted in LanceDB (`graph_nodes`, `graph_edges`) for typed entities and relations. Retrieval does not use either graph yet. `retrieve_fused` (`src-tauri/src/context_runtime/mod.rs`) does not load the insight graph, so it plans no graph route (VS-33), and the entity route, which reads graph nodes, finds nothing.
 
 Privacy is a first-class system constraint: data stays local by default, capture can be paused, blocklists are enforced, and destructive deletion operations are implemented in source.
 

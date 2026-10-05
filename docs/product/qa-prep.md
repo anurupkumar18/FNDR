@@ -41,7 +41,7 @@ Beats from month plan section 9. Rule from section 10: a beat we cannot demo end
 | 3:10 | "Save that as my Monday setup," then run it by name | None | Missing | SK-01, SK-02, SK-03 |
 | 3:40 | A blocklisted site is absent everywhere | `docs/evidence/W03/privacy-activity-native.md` is a runbook; no recorded run | Missing | Run the runbook; VS-37 |
 | 3:40 | Privacy Activity shows what Claude read and any cloud requests | `src-tauri/src/privacy_proof.rs` counts requests and hosts only, in memory; MCP reads and the opt-in cloud paths are not counted (ADR-018 draft) | Missing | VS-37, ADR-018 follow-ups |
-| 4:10 | Recall@5 before and after | Before: Search 0.955, Ask 1.000 on 22 seeded queries (`VS-01-baseline.md`). After: none yet | Half | VS-04, PD-05 |
+| 4:10 | Recall@5 before and after | Synthetic personas, `docs/evidence/W03/beta-demo-recall-cloud.md` and `beta-demo-recall.csv`: office-PM Search 0.700 to 0.900 (14 to 18 of 20), knowledge-worker Search 0.955 to 1.000; Ask unchanged at 0.900 and 1.000; Search and Ask agree on every top result | Proven on synthetic data | Third persona; real-vault spot check (VS-01) |
 | 4:10 | Voice latency | Partial baseline only (`voice-baseline.md`) | Half | VO-11 |
 | 4:10 | Reopen rate | 10.3% exact reopen on the owner vault (`docs/evidence/W02/vault-health-owner.md`) | Before only | RE-13, RE-14 |
 | 4:10 | Time to recover work with and without FNDR | None | Missing | PD-13 |

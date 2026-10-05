@@ -1,6 +1,5 @@
 use crate::context_runtime::graph_plan::GraphPlan;
 use crate::graph::schema::{GraphEdgeType, GraphNodeType};
-use crate::inference::InferenceEngine;
 use crate::search::{QueryIntent, QueryProfile};
 use crate::telemetry::runtime_metrics;
 use once_cell::sync::Lazy;
@@ -167,7 +166,6 @@ pub fn plan(query: &str, hints: &PlanHints) -> QueryPlan {
     }
 
     let retrieval_routes = route_selection(
-        intent,
         target_project.is_some(),
         !target_entities.is_empty(),
         time_window.is_some() || profile.wants_recency() || contains_temporal_word(normalized),
@@ -190,21 +188,6 @@ pub fn plan(query: &str, hints: &PlanHints) -> QueryPlan {
         started.elapsed().as_millis() as u64,
     );
     plan
-}
-
-pub async fn refine_plan_with_llm(plan: &mut QueryPlan, engine: &InferenceEngine) -> bool {
-    let current_plan_json = match serde_json::to_string(plan) {
-        Ok(json) => json,
-        Err(_) => "{}".to_string(),
-    };
-    let Some(refinement_json) = engine
-        .refine_query_plan(&plan.raw, &current_plan_json, 400)
-        .await
-    else {
-        return false;
-    };
-
-    apply_refinement_json(plan, &refinement_json)
 }
 
 pub fn apply_refinement_json(plan: &mut QueryPlan, refinement_json: &str) -> bool {
@@ -279,12 +262,7 @@ fn planner_intent(profile: &QueryProfile) -> PlannerIntent {
     PlannerIntent::Lookup
 }
 
-fn route_selection(
-    intent: PlannerIntent,
-    has_project: bool,
-    has_entities: bool,
-    needs_temporal: bool,
-) -> Vec<Route> {
+fn route_selection(has_project: bool, has_entities: bool, needs_temporal: bool) -> Vec<Route> {
     let mut routes = vec![Route::Chunk, Route::Vector, Route::Keyword];
     if has_entities || has_project {
         routes.push(Route::Entity);
@@ -292,18 +270,9 @@ fn route_selection(
     if needs_temporal {
         routes.push(Route::Temporal);
     }
-    if matches!(
-        intent,
-        PlannerIntent::ResumeWork
-            | PlannerIntent::Debug
-            | PlannerIntent::Definition
-            | PlannerIntent::RelatedTo
-            | PlannerIntent::Lookup
-            | PlannerIntent::HowTo
-            | PlannerIntent::Timeline
-    ) {
-        routes.push(Route::Graph);
-    }
+    // No graph route until `retrieve` loads the insight graph (VS-33). It
+    // used to run over an empty in-memory graph and never found anything.
+    // `GraphRoute` stays tested (tests/retrieval_routes.rs) for when it does.
     routes
 }
 

@@ -13,7 +13,7 @@ pub use memory_cards::{
     parse_continuation_of, parse_reopen_target, MemoryCard, MemoryCardSynthesizer,
 };
 pub use query_processor::{
-    normalize_text, QueryContext, QueryExpansionDebug, QueryIntent, QueryProfile,
+    normalize_text, QueryContext, QueryIntent, QueryProfile,
 };
 pub(crate) use hybrid::llm_query_expansion;
 pub use reranker::anchor_coverage_score;
