@@ -22,6 +22,9 @@ pub const QWEN3_VL_2B_MAIN_GGUF_MIN_BYTES: u64 = 900_000_000;
 pub enum EmbeddingContractVersion {
     V4MiniLm384,
     V5Bge1024,
+    /// EmbeddingGemma (VS-47). Defined so the embedder can be checked against
+    /// the reference implementation; not the active contract (VS-49 migrates).
+    V6EmbeddingGemma,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +66,17 @@ pub const BGE_V5_DIMENSIONS_I32: i32 = BGE_V5_DIMENSIONS as i32;
 pub const BGE_V5_MAX_SEQ_LEN: usize = 512;
 /// Keep explicit BGE reindex batches small on the default 8GB-safe profile.
 pub const BGE_V5_MAX_BATCH_SIZE: usize = 4;
+
+pub const EMBEDDING_GEMMA_MODEL_ID: &str = "google/embeddinggemma-300m";
+/// The onnx-community export (revision 5090578d9565bb06545b4552f76e6bc2c93e4a66).
+/// Its `sentence_embedding` output applies the model's mean pooling, its two
+/// dense layers, and normalization; `model.onnx_data` must sit beside it.
+pub const EMBEDDING_GEMMA_MODEL_FILENAME: &str = "model.onnx";
+pub const EMBEDDING_GEMMA_TOKENIZER_FILENAME: &str = "tokenizer.json";
+/// The model's full size; 512, 256, and 128 are Matryoshka truncations.
+pub const EMBEDDING_GEMMA_FULL_DIMENSIONS: usize = 768;
+pub const EMBEDDING_GEMMA_MAX_SEQ_LEN: usize = 2048;
+pub const EMBEDDING_GEMMA_MAX_BATCH_SIZE: usize = 4;
 
 pub const MAX_CONCURRENT_MULTIMODAL_JOBS: usize = 1;
 pub const QWEN_IDLE_UNLOAD_SECONDS: u64 = 90;
@@ -115,6 +129,34 @@ pub const fn embedding_v5_contract() -> TextEmbeddingContract {
         max_sequence_length: BGE_V5_MAX_SEQ_LEN,
         max_batch_size: BGE_V5_MAX_BATCH_SIZE,
         table_name: MEMORIES_V5_TABLE,
+    }
+}
+
+/// EmbeddingGemma at `dimensions`: 768 (full) or a Matryoshka truncation
+/// (512, 256, 128), which the embedder cuts and renormalizes (VS-47).
+pub const fn embedding_v6_contract(dimensions: usize) -> TextEmbeddingContract {
+    TextEmbeddingContract {
+        version: EmbeddingContractVersion::V6EmbeddingGemma,
+        model_id: EMBEDDING_GEMMA_MODEL_ID,
+        model_filename: EMBEDDING_GEMMA_MODEL_FILENAME,
+        tokenizer_filename: EMBEDDING_GEMMA_TOKENIZER_FILENAME,
+        dimensions,
+        max_sequence_length: EMBEDDING_GEMMA_MAX_SEQ_LEN,
+        max_batch_size: EMBEDDING_GEMMA_MAX_BATCH_SIZE,
+        table_name: match dimensions {
+            768 => "memories_v6_embeddinggemma_768",
+            512 => "memories_v6_embeddinggemma_512",
+            256 => "memories_v6_embeddinggemma_256",
+            _ => "memories_v6_embeddinggemma_128",
+        },
+    }
+}
+
+impl TextEmbeddingContract {
+    /// Whether the model was trained so that its vectors can be cut to fewer
+    /// dimensions and renormalized (Matryoshka Representation Learning).
+    pub const fn supports_truncation(&self) -> bool {
+        matches!(self.version, EmbeddingContractVersion::V6EmbeddingGemma)
     }
 }
 

@@ -603,10 +603,19 @@ impl RealEmbedder {
                 ));
             }
         }
+        // A model that exports its own sentence vector (EmbeddingGemma's applies
+        // pooling, two dense layers, and normalization) must be read there;
+        // mean-pooling its hidden states would skip the dense layers (VS-47).
         let output_name = session
             .outputs()
             .iter()
-            .find(|output| output.name() == "last_hidden_state")
+            .find(|output| output.name() == "sentence_embedding")
+            .or_else(|| {
+                session
+                    .outputs()
+                    .iter()
+                    .find(|output| output.name() == "last_hidden_state")
+            })
             .or_else(|| {
                 session
                     .outputs()
@@ -755,21 +764,29 @@ impl RealEmbedder {
             [_, _, dim] => *dim,
             _ => 0,
         };
-        if actual_dim != self.contract.dimensions {
+        let truncating =
+            self.contract.supports_truncation() && actual_dim > self.contract.dimensions;
+        if actual_dim != self.contract.dimensions && !truncating {
             return Err(format!(
                 "Unexpected hidden state dim {actual_dim}, expected {} for {}",
                 self.contract.dimensions, self.contract.model_id
             ));
         }
+        if self.contract.supports_truncation() && shape_dims.len() == 3 {
+            return Err(format!(
+                "{} needs the model's sentence_embedding output; mean-pooling its hidden \
+                 states would skip its dense layers",
+                self.contract.model_id
+            ));
+        }
 
         let mut embeddings = Vec::with_capacity(batch_size);
         match shape_dims.as_slice() {
-            [actual_batch, actual_dim] if *actual_dim == self.contract.dimensions => {
+            [actual_batch, output_dim] => {
                 for i in 0..batch_size.min(*actual_batch) {
-                    let offset = i * self.contract.dimensions;
-                    let mut embedding = data[offset..offset + self.contract.dimensions].to_vec();
-                    normalize(&mut embedding);
-                    embeddings.push(embedding);
+                    let offset = i * output_dim;
+                    let embedding = data[offset..offset + output_dim].to_vec();
+                    embeddings.push(truncate_and_normalize(embedding, self.contract.dimensions));
                 }
             }
             [actual_batch, actual_seq, actual_dim] if *actual_dim == self.contract.dimensions => {
@@ -1104,6 +1121,15 @@ fn stable_hash_bytes(input: &[u8]) -> usize {
     hash as usize
 }
 
+/// Keeps the first `dimensions` values and renormalizes: how a Matryoshka
+/// model's vector is shortened (EmbeddingGemma's 768 to 256, VS-47). A vector
+/// already `dimensions` long is only normalized.
+fn truncate_and_normalize(mut embedding: Vec<f32>, dimensions: usize) -> Vec<f32> {
+    embedding.truncate(dimensions);
+    normalize(&mut embedding);
+    embedding
+}
+
 fn mean_pool(vectors: &[Vec<f32>], dimensions: usize) -> Vec<f32> {
     if vectors.is_empty() {
         return vec![0.0; dimensions];
@@ -1138,6 +1164,31 @@ fn normalize(vec: &mut [f32]) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn a_matryoshka_vector_is_cut_then_renormalized() {
+        let full = vec![3.0, 4.0, 12.0];
+        let cut = truncate_and_normalize(full.clone(), 2);
+        assert_eq!(cut.len(), 2);
+        assert!((cut[0] - 0.6).abs() < 1e-6 && (cut[1] - 0.8).abs() < 1e-6);
+        let same = truncate_and_normalize(full, 3);
+        assert_eq!(same.len(), 3);
+        assert!((same.iter().map(|v| v * v).sum::<f32>() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn only_embeddinggemma_may_be_truncated() {
+        use crate::inference::model_config::{
+            embedding_v4_contract, embedding_v5_contract, embedding_v6_contract,
+        };
+        let short = embedding_v6_contract(256);
+        assert!(short.supports_truncation());
+        assert_eq!(short.dimensions, 256);
+        assert_eq!(short.table_name, "memories_v6_embeddinggemma_256");
+        assert_eq!(embedding_v6_contract(768).dimensions, 768);
+        assert!(!embedding_v4_contract().supports_truncation());
+        assert!(!embedding_v5_contract().supports_truncation());
+    }
 
     fn cosine(a: &[f32], b: &[f32]) -> f32 {
         a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
