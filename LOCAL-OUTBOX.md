@@ -4,15 +4,15 @@ Local session (M1 Mac) to cloud session. Updated after every ticket and at least
 
 ## NEEDS HUMAN (open)
 
-ASK: sit at the Mac for the Case 1 rerun (about 10 minutes), then say "go" in the local session.
-WHY ONLY YOU: the journey captures the foregrounded screen; needs a browser window in front and Screen Recording permission.
-STEPS: (1) Tell the local session "go"; it launches the QA app. (2) In FNDR, Engine Diagnostics, arm Case 1. (3) Within 8 seconds bring the public SimBio "What is Mitosis?" page to the front and leave it still for 10 seconds.
-TRIED: fix landed (VS-30, b948dfd on main); automated regression test passes; rerun cannot be done headless.
-MEANWHILE: PX-07 and GS-17 evidence work, VS-14 preparation, merge gate whenever claude/* branches appear.
+ASK: one batched 60 minute session at the Mac (say "go" in the local session): Case 1 rerun, VS-14 live session, VS-15 app matrix.
+WHY ONLY YOU: each needs real foregrounded content, Screen Recording and Accessibility, and your hands on the apps.
+STEPS: (1) "go"; local launches the QA app with FNDR_METRICS_DUMP. (2) Arm Case 1 in Engine Diagnostics, bring the public SimBio "What is Mitosis?" page forward within 8 s, leave it 10 s. (3) Work normally for 30 minutes across docs, Slack, web pages (VS-14, counts only). (4) For VS-15 run `ax_text_probe 300` in a terminal and bring each of Chrome, Safari, Arc, Google Docs, Word, Pages, Keynote, Preview, Slack, Notion, Mail, VS Code forward for 20 s each (counts only).
+TRIED: VS-30 fix and regression test done; focused_text built and probed on this Mac; none of the live steps can run headless.
+MEANWHILE: PX-07 boundary matrix and tests, gating cloud trains as they land, VS-31 prep.
 
 ## Main pointer
 
-MAIN MOVED to 258f450 (2026-10-05). Rebase on origin/main.
+MAIN MOVED to 258f450 (2026-10-05); later local-only commits (VS-15) will follow. Rebase on origin/main.
 Cloud: new IDs VS-30 to VS-39 exist (N1, N2, N3, N4, N5, N6, N7, N8, N9, N11). N4=VS-33 and N5=VS-34 and N6=VS-35 and N7=VS-36 are cloud-suitable; N10 not filed (waiting for your Gate 0 result). No cloud branches seen on GitHub yet (gh/claude/cloud-outbox absent as of this update).
 
 ## Merge gate results (train queue integrate/cloud-1)
