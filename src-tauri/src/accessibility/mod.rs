@@ -4,6 +4,8 @@
 //! 1. Identify the currently focused input field's label in any app
 //! 2. Inject text directly into that field without requiring keyboard focus
 
+mod text_tree;
+
 use crate::ocr::{OcrConfig, OcrEngine};
 use objc2_app_kit::NSWorkspace;
 use once_cell::sync::Lazy;
@@ -651,6 +653,144 @@ pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<Focu
 
         Some(snapshot)
     }
+}
+
+// ── Focused window text (VS-15) ───────────────────────────────────────────────
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, seconds: f32) -> AXError;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
+    fn CFArrayGetCount(array: CFTypeRef) -> CFIndex;
+    fn CFArrayGetValueAtIndex(array: CFTypeRef, idx: CFIndex) -> CFTypeRef;
+    fn CFArrayGetTypeID() -> usize;
+    static kCFBooleanTrue: CFTypeRef;
+}
+
+/// Chromium and Electron apps build their Accessibility tree only after a
+/// client asks for it. AXManualAccessibility is the documented opt-in that
+/// does not change what the person sees (unlike AXEnhancedUserInterface).
+unsafe fn enable_manual_accessibility(application: AXUIElementRef) {
+    for name in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
+        let attr = str_to_cfstring(name);
+        if !attr.is_null() {
+            let _ = AXUIElementSetAttributeValue(application, attr, kCFBooleanTrue);
+            CFRelease(attr);
+        }
+    }
+}
+
+/// An owned AXUIElement reference, released on drop.
+struct AxElement(AXUIElementRef);
+
+impl Drop for AxElement {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { CFRelease(self.0) };
+        }
+    }
+}
+
+struct AxTextTree;
+
+impl text_tree::TextTree for AxTextTree {
+    type Node = AxElement;
+
+    fn role(&self, node: &AxElement) -> Option<String> {
+        unsafe { ax_string_attr(node.0, "AXRole") }
+    }
+
+    fn subrole(&self, node: &AxElement) -> Option<String> {
+        unsafe { ax_string_attr(node.0, "AXSubrole") }
+    }
+
+    fn text(&self, node: &AxElement) -> Option<String> {
+        unsafe {
+            ax_string_attr(node.0, "AXValue")
+                .filter(|text| !text.trim().is_empty())
+                .or_else(|| ax_string_attr(node.0, "AXTitle"))
+        }
+    }
+
+    fn children(&self, node: &AxElement) -> Vec<AxElement> {
+        unsafe {
+            let Ok(array) = ax_copy_attr_value(node.0, "AXChildren") else {
+                return Vec::new();
+            };
+            if array.is_null() {
+                return Vec::new();
+            }
+            let mut children = Vec::new();
+            if CFGetTypeID(array) == CFArrayGetTypeID() {
+                for index in 0..CFArrayGetCount(array) {
+                    let child = CFArrayGetValueAtIndex(array, index);
+                    if !child.is_null() {
+                        children.push(AxElement(CFRetain(child)));
+                    }
+                }
+            }
+            CFRelease(array);
+            children
+        }
+    }
+}
+
+/// Text read from the focused window's Accessibility tree, counts included so
+/// callers can log without keeping content.
+#[derive(Debug, Clone)]
+pub struct FocusedText {
+    pub text: String,
+    pub nodes_visited: usize,
+    pub secure_fields_skipped: usize,
+    pub from_web_area: bool,
+    pub role_counts: std::collections::BTreeMap<String, usize>,
+    pub truncated: bool,
+    pub elapsed_ms: u64,
+}
+
+/// Read the focused window's on-screen text for process `pid` (reading order,
+/// at most `max_chars`, at most 50 ms or 4,000 nodes). Returns `None` without
+/// permission, when `pid` is not the frontmost process before and after the
+/// read, or when the window exposes no text. Secure text fields are never read.
+/// Callers run the capture privacy gates before calling this.
+pub fn focused_text(pid: i32, max_chars: usize) -> Option<FocusedText> {
+    if pid <= 0 || !has_accessibility_permission() || workspace_frontmost_pid() != Some(pid) {
+        return None;
+    }
+    let started = std::time::Instant::now();
+    let outcome = unsafe {
+        let application = AxElement(AXUIElementCreateApplication(pid));
+        if application.0.is_null() {
+            return None;
+        }
+        AXUIElementSetMessagingTimeout(application.0, 0.05);
+        enable_manual_accessibility(application.0);
+        let window = AxElement(ax_copy_attr_value(application.0, "AXFocusedWindow").ok()?);
+        if window.0.is_null() {
+            return None;
+        }
+        AXUIElementSetMessagingTimeout(window.0, 0.05);
+        text_tree::collect_text(&AxTextTree, &window, text_tree::Budget::new(max_chars))
+    };
+    if !expected_pid_remained_frontmost(pid, Some(pid), workspace_frontmost_pid()) {
+        return None;
+    }
+    if outcome.text.trim().is_empty() && outcome.nodes_visited == 0 {
+        return None;
+    }
+    Some(FocusedText {
+        role_counts: outcome.role_counts,
+        truncated: outcome.stop != text_tree::StopReason::Complete,
+        text: outcome.text,
+        nodes_visited: outcome.nodes_visited,
+        secure_fields_skipped: outcome.secure_fields_skipped,
+        from_web_area: outcome.from_web_area,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    })
 }
 
 /// Capture the focused input field's context from the currently frontmost application.
