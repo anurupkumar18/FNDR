@@ -109,10 +109,6 @@ impl RetrievalRoute for TemporalRoute {
     }
 }
 
-pub fn apply_recency_decay(now_ms: i64, event_ms: i64) -> f32 {
-    recency_decay(now_ms, event_ms, 24.0 * HOUR_MS)
-}
-
 fn temporal_score_for_query(raw: &str, now_ms: i64, event_ms: i64) -> f32 {
     let half_life_ms = temporal_half_life_ms(raw, now_ms, event_ms);
     recency_decay(now_ms, event_ms, half_life_ms)
@@ -162,6 +158,9 @@ mod tests {
     use crate::embedding::EMBEDDING_DIM;
     use crate::storage::{MemoryRecord, Store};
 
+    /// A one-day half-life, as the route uses for older events.
+    const DAY_HALF_LIFE: f32 = 24.0 * HOUR_MS;
+
     fn record(id: &str, timestamp: i64) -> MemoryRecord {
         MemoryRecord {
             id: id.to_string(),
@@ -185,7 +184,10 @@ mod tests {
     #[test]
     fn recency_decay_scores_recent_events_higher() {
         let now = 1_000_000;
-        assert!(apply_recency_decay(now, now) > apply_recency_decay(now, now - 86_400_000));
+        assert!(
+            recency_decay(now, now, DAY_HALF_LIFE)
+                > recency_decay(now, now - 86_400_000, DAY_HALF_LIFE)
+        );
     }
 
     #[test]
@@ -193,10 +195,13 @@ mod tests {
         // Two searches a moment apart must score identically (VS-10).
         let event = 1_000_000;
         assert_eq!(
-            apply_recency_decay(event + 90_000, event),
-            apply_recency_decay(event + 90_900, event)
+            recency_decay(event + 90_000, event, DAY_HALF_LIFE),
+            recency_decay(event + 90_900, event, DAY_HALF_LIFE)
         );
-        assert!(apply_recency_decay(event + 60_000, event) < apply_recency_decay(event, event));
+        assert!(
+            recency_decay(event + 60_000, event, DAY_HALF_LIFE)
+                < recency_decay(event, event, DAY_HALF_LIFE)
+        );
     }
 
     #[tokio::test]

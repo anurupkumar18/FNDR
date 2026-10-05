@@ -37,7 +37,6 @@ pub use retrieve::{
     retrieve, retrieve_search_results, RetrieveHit, RetrieveRequest, RetrieveResult, RetrieveWhy,
     STRONG_MATCH_SCORE, STRONG_MATCH_SCORE_WITH_CHUNKS,
 };
-mod wiki_policy;
 
 static URL_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"https?://[^\s)>"]+"#).expect("valid URL regex"));
@@ -842,17 +841,6 @@ pub async fn list_recent_context_packs(
     state
         .store
         .list_context_packs(limit.max(1), None)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-pub async fn get_context_pack_detail(
-    state: &AppState,
-    pack_id: &str,
-) -> Result<Option<ContextPack>, String> {
-    state
-        .store
-        .get_context_pack_by_id(pack_id)
         .await
         .map_err(|e| e.to_string())
 }

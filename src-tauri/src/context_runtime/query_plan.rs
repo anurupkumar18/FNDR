@@ -1,6 +1,5 @@
 use crate::context_runtime::graph_plan::GraphPlan;
 use crate::graph::schema::{GraphEdgeType, GraphNodeType};
-use crate::inference::InferenceEngine;
 use crate::search::{QueryIntent, QueryProfile};
 use crate::telemetry::runtime_metrics;
 use once_cell::sync::Lazy;
@@ -189,21 +188,6 @@ pub fn plan(query: &str, hints: &PlanHints) -> QueryPlan {
         started.elapsed().as_millis() as u64,
     );
     plan
-}
-
-pub async fn refine_plan_with_llm(plan: &mut QueryPlan, engine: &InferenceEngine) -> bool {
-    let current_plan_json = match serde_json::to_string(plan) {
-        Ok(json) => json,
-        Err(_) => "{}".to_string(),
-    };
-    let Some(refinement_json) = engine
-        .refine_query_plan(&plan.raw, &current_plan_json, 400)
-        .await
-    else {
-        return false;
-    };
-
-    apply_refinement_json(plan, &refinement_json)
 }
 
 pub fn apply_refinement_json(plan: &mut QueryPlan, refinement_json: &str) -> bool {
