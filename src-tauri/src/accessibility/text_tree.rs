@@ -53,6 +53,7 @@ pub struct TextOutcome {
     pub text: String,
     pub nodes_visited: usize,
     pub secure_fields_skipped: usize,
+    /// A web area was visited, even if it exposed no readable page text.
     pub from_web_area: bool,
     /// Visited-node count per AX role, for diagnosing apps that expose little.
     pub role_counts: std::collections::BTreeMap<String, usize>,
@@ -137,7 +138,7 @@ pub fn collect_text<T: TextTree>(tree: &T, root: &T::Node, budget: Budget) -> Te
             stack.push((child, in_web));
         }
     }
-    let from_web_area = !collector.web.is_empty();
+    let from_web_area = role_counts.contains_key(WEB_AREA);
     let parts = if from_web_area {
         collector.web
     } else {
@@ -261,6 +262,49 @@ mod tests {
         let out = run(&root, Budget::new(1_000));
         assert!(out.from_web_area);
         assert_eq!(out.text, "What is Mitosis?\nCells divide.");
+    }
+
+    #[test]
+    fn empty_web_area_never_substitutes_browser_chrome_for_page_text() {
+        let chrome = concat!(
+            "Browser tab and toolbar labels. Browser tab and toolbar labels. ",
+            "Browser tab and toolbar labels. Browser tab and toolbar labels. ",
+            "Browser tab and toolbar labels. Browser tab and toolbar labels. ",
+            "Browser tab and toolbar labels. Browser tab and toolbar labels. ",
+        );
+        assert!(chrome.chars().count() >= 200);
+        let root = n(
+            "AXWindow",
+            "",
+            vec![
+                n("AXStaticText", chrome, vec![]),
+                n("AXWebArea", "", vec![]),
+            ],
+        );
+        let out = run(&root, Budget::new(1_000));
+        assert!(out.text.is_empty(), "empty page must fall back to OCR");
+        assert!(out.from_web_area);
+        assert_eq!(out.stop, StopReason::Complete);
+    }
+
+    #[test]
+    fn secure_only_web_area_never_substitutes_browser_chrome() {
+        let root = n(
+            "AXWindow",
+            "",
+            vec![
+                n("AXStaticText", "Toolbar text", vec![]),
+                n(
+                    "AXWebArea",
+                    "",
+                    vec![n("AXSecureTextField", "private secret", vec![])],
+                ),
+            ],
+        );
+        let out = run(&root, Budget::new(1_000));
+        assert!(out.text.is_empty());
+        assert!(out.from_web_area);
+        assert_eq!(out.secure_fields_skipped, 1);
     }
 
     #[test]
