@@ -26,7 +26,7 @@ Part 9 stretch item. Scope: `src-tauri/src/search/` (5 files) and `src-tauri/src
 | Item | Why it stays |
 |---|---|
 | `RouteCtx::with_graph`, `RouteCtx::allowing_mock_vectors` | test-only builders; the entity and graph route tests and the mock-vector fixtures need them |
-| `GraphRoute`, `Route::Graph`, graph fields in fusion, the verifier, and the context pack | VS-33: serialized contract fields in MCP and Ask JSON; the persisted graph may feed them (proposal VS-42) |
+| `GraphRoute`, `Route::Graph`, graph fields in fusion, the verifier, and the context pack | VS-33: serialized contract fields in MCP and Ask JSON; the persisted graph may feed them (proposal VS-69) |
 | `apply_refinement_json` | parses a refinement; `tests/query_plan_rules.rs` covers it. With `refine_plan_with_llm` gone it has no production caller. Its producer, `InferenceEngine::refine_query_plan`, is in `inference/`, outside this lane. Both can go together when the inference owner agrees. |
 | `Store::get_context_pack_by_id` | now has no production caller; it is in the shared storage layer, so it is listed for its owner rather than deleted here |
 | `search/hybrid.rs` (2,486 lines) | `HybridSearcher` still serves five callers outside this lane (VS-25 table: companion search, the legacy graph builder, MCP `memory.search_raw`, `search_relevance_eval`, `fndr_diagnostic`). Moving those to `retrieve` lets most of the file go. This is the largest remaining reduction. |

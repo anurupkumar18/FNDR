@@ -43,4 +43,4 @@ The first run is the reference: `scripts/demo/retrieval-reference/software-engin
 
 - `make qa-retrieval-check PERSONA=software-engineer` runs it locally.
 - The VS-34 workflow now runs it as a third step.
-- Out of sample, it contradicted one finding from the two original personas (`retrieval-ablation-cloud.md`). Without BM25 its paraphrases rank lower, not higher, so the proposed keyword-weight change (VS-43) was withdrawn.
+- Out of sample, it contradicted one finding from the two original personas (`retrieval-ablation-cloud.md`). Without BM25 its paraphrases rank lower, not higher, so the proposed keyword-weight change was withdrawn before filing.

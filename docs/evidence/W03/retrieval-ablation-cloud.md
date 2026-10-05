@@ -65,7 +65,7 @@ So "BM25 hurts paraphrases" is a property of three office-PM queries, not of par
 ## What it suggests
 
 - **Keep the fused default.** It has the best MRR@10 on all three personas.
-- **Do not lower the keyword weight for paraphrase-like queries.** I drafted that as a proposal (VS-43) from the two original personas. The third persona, run afterwards, contradicts it, so it is withdrawn from `docs/team/tickets/proposed/cloud-proposals.md`. This is the overfitting a third persona exists to catch.
+- **Do not lower the keyword weight for paraphrase-like queries.** I drafted that as a proposal from the two original personas. The third persona, run afterwards, contradicts it, so it was withdrawn before filing. This is the overfitting a third persona exists to catch.
 - **Chunks remain the measured way to lift paraphrase** (finding 4).
 
 ## Caveats
