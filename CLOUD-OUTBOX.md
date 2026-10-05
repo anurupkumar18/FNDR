@@ -2,7 +2,7 @@
 
 Cloud session (Linux container, GitHub only) to local session. Updated after every ticket and at least every two hours. Newest entries first under each heading.
 
-Last update: 2026-10-05 19:00 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf and main at c124957 (Oct 5 status report, VS-42 to VS-68 filed).
+Last update: 2026-10-05 19:25 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf and main at c124957 (Oct 5 status report, VS-42 to VS-68 filed).
 
 ## NEEDS HUMAN (open)
 
@@ -10,6 +10,12 @@ None.
 
 ## Read first (local)
 
+0. **VS-68 `fndr.remember` is on train I (#35), stacked on train G (#33): merge #33 first.**
+   - It is off by default (`agent_notes_enabled = true` in `config.toml` turns it on) and needs the token.
+   - The 30-case injected-note corpus passes over real HTTP, and a real-MiniLM run log is in the evidence.
+   - Two things are yours:
+     - **Contract note:** capture's merge candidates should skip `source_type == "agent"` explicitly (`capture/mod.rs`). Today only the app name "Agent note" keeps notes apart.
+     - **The Claude Code demo** on the M1.
 1. **Main can fail its own Rust tests under load.** This is a VS-07 bug of mine: the first keyword search built seven BM25 indexes inside a 320 ms per-variant budget. On a busy runner the phrase variant timed out on the first search only.
    - It turned PR #31 red in your `memory_journey` six-journeys test: 0.1901673 versus 0.22735563. The replay gives 0.1901673 to the last digit.
    - Users hit it too: the first search after rows are added could lose its phrase match.
@@ -36,9 +42,10 @@ None.
 
 | # | Branch | Draft PR | Head | Tickets | Rust CI | Notes |
 |---|---|---|---|---|---|---|
-| 1 | `claude/train-g-security` | #33 | 90bb70b | VS-61 | green | On main c124957; independent; p0. |
-| 2 | `claude/train-f-retrieval` | #31 | b95bcb9 | VS-33, VS-36, VS-34 (2), VS-63, VS-66, VS-07 fix, VS-13 follow-ups (3: deadlines, evidence fix, crash and speed); stretch: ablation, demo numbers, third persona, anti-bloat, property tests; proposals VS-69, VS-70 | rerunning on b95bcb9 (81666e1 was red from the VS-07 race; see Read first 1) | Merged with main c124957 (782c05d). `.github/workflows/retrieval-gate.yml` is new and yours to merge. |
+| 1 | `claude/train-g-security` | #33 | 90bb70b | VS-61 | green | On main c124957; independent; p0; #35 builds on it. |
+| 2 | `claude/train-f-retrieval` | #31 | b95bcb9 | VS-33, VS-36, VS-34 (2), VS-63, VS-66, VS-07 fix, VS-13 follow-ups (3: deadlines, evidence fix, crash and speed); stretch: ablation, demo numbers, third persona, anti-bloat, property tests; proposals VS-69, VS-70 | green on b95bcb9, including the retrieval gate (81666e1 was red from the VS-07 race; see Read first 1) | Merged with main c124957 (782c05d). `.github/workflows/retrieval-gate.yml` is new and yours to merge. |
 | 3 | `claude/train-h-embeddings` | #34 | 1242b8b | VS-47 | green | On main c124957; independent. The v6 contract is not active (VS-48, VS-49). |
+| 4 | `claude/train-i-remember` | #35 | 3a41b4e | VS-68 | running | Stacked on #33. `cloud-session-log.md` conflicts with #31 at the end of the file: keep both lines. |
 
 ## Gate 0 capability probe (2026-10-04)
 
@@ -63,6 +70,16 @@ None.
 4. Branch policy: I only rebase (with `--force-with-lease`) commits that local has not merged. If you are mid-gate on a branch, say so in LOCAL-OUTBOX and I will stack on it instead.
 
 ## Tickets
+
+### VS-68 safe slice of agent write-back: delivered (Claude Code demo is local's)
+
+- `claude/train-i-remember`, 3a41b4e, PR #35. Evidence `docs/evidence/W03/VS-68-cloud.md`; `docs/mcp.md` has a new section.
+- Comment to post:
+  > Done in cloud: fndr.remember with token-only writes (auth off refuses writes), the kill switch, and an agent_notes_enabled setting (default off) gated before dispatch.
+  > Then: per-client and global rate limits; unknown-argument, kind, character, and length checks; the capture secret detector; the blocklist; and the real embedder (fails closed).
+  > Each note is one leaf row: source_type agent, app "Agent note", client from the initialize session, provenance in raw_evidence, its own card, no reopen target, never compacted. Memory review skips it.
+  > The 30-case injected-note corpus passes over real HTTP with every invariant held. A real-MiniLM run log shows store, refuse, rate-limit, find, and fail-closed.
+  > Open: the Claude Code demo on the M1, the capture merge filter (local-owned), the Settings toggle, the badge and Vault filter, source_type on read results, and Privacy Activity lines.
 
 ### VS-47 EmbeddingGemma vectors match the reference: delivered
 
@@ -336,9 +353,7 @@ None.
 
 ## In progress (cloud)
 
-- **VS-68, the safe slice of `fndr.remember`, on a new train I stacked on train G.** It needs VS-61's auth changes.
-  - Defaults follow VS-35's recommended answers: notes are off by default, writes need a token, notes stay out of Resume, and the limits are as written.
-  - Change any of those in LOCAL-OUTBOX and I will follow.
-- **Then the stretch items:** the test-suite honesty audit and the README truth pass.
+- **Stretch now:** the test-suite honesty audit (started: on main, six tests assert nothing), then the README truth pass.
+- **VS-68 next slice, if wanted:** the Settings toggle, the badge, the Vault filter, and `source_type` on read results. Say so in LOCAL-OUTBOX.
 - **VS-54, VS-55 and VS-56 wait on VS-52's go or no-go.** VS-64 waits on VS-40, whose files are local-owned.
 - **Disk note:** the BGE-large model for chunk runs lives outside the repo, at `/root/fndr-models/bge` in the cloud container. It comes from the pinned URL in `scripts/bootstrap/download-embedding-model.sh`. That script writes `tokenizer.json` into the same folder as MiniLM's, which would overwrite it, so the M1 needs a separate folder too.
