@@ -1,11 +1,12 @@
 //! Search-related Tauri commands and helpers.
 
 use super::common::{shared_embedder, strip_internal_fndr_results, truncate_chars};
+use crate::context_runtime::{retrieve_search_results, RetrieveRequest};
 use crate::graph::graph_store::GraphStore;
 use crate::memory_quality::{partition_surfaceable, LowSignalReason};
 use crate::privacy::Blocklist;
 use crate::search::{
-    rerank_results, HybridSearcher, MemoryCard, MemoryCardSynthesizer, QueryContext,
+    anchor_coverage_score, HybridSearcher, MemoryCard, MemoryCardSynthesizer, QueryContext,
 };
 use crate::storage::SearchResult;
 use crate::AppState;
@@ -141,9 +142,10 @@ async fn run_search_query_internal(
     Ok((strip_internal_fndr_results(results), explanation))
 }
 
-/// The ranked retrieval stage Search uses before card synthesis: hybrid
-/// retrieval, low-signal removal, then the anchor-coverage rerank. Public so
-/// `examples/retrieval_qa.rs` can baseline that boundary without duplicating it.
+/// The ranked retrieval stage Search uses before card synthesis: the one
+/// retrieval function (`context_runtime::retrieve`, VS-10), so Search ranks
+/// exactly what Ask and agents rank. Public so `examples/retrieval_qa.rs`
+/// measures what users see.
 pub async fn search_ranked_results(
     state: &AppState,
     query: &str,
@@ -171,71 +173,29 @@ async fn search_ranked_results_internal(
     raw_limit: usize,
     explain: bool,
 ) -> Result<(Vec<SearchResult>, Option<serde_json::Value>), String> {
-    let (raw_results, production_retrieval) = run_search_query_internal(
-        state,
-        query,
-        time_filter,
-        app_filter,
-        raw_limit,
-        explain,
-    )
-    .await?;
-
-    let (results, mut explanation) = rank_search_results(raw_results, query, raw_limit, explain);
-    if let (Some(details), Some(production_retrieval)) =
-        (explanation.as_mut(), production_retrieval)
-    {
-        details["production_retrieval"] = production_retrieval;
-    }
-    Ok((results, explanation))
-}
-
-fn rank_search_results(
-    mut raw_results: Vec<SearchResult>,
-    query: &str,
-    raw_limit: usize,
-    explain: bool,
-) -> (Vec<SearchResult>, Option<serde_json::Value>) {
-    raw_results.truncate(raw_limit);
-    let route_candidates = explain.then(|| {
-        raw_results
-            .iter()
-            .map(|result| {
-                serde_json::json!({
-                    "memory_id": result.id,
-                    "score_before_rerank": result.score,
-                    "matched_routes": result.matched_routes,
-                    "matched_chunk_ids": result.matched_chunk_ids,
-                    "embedding_reasons": result.embedding_reason_labels,
-                })
-            })
-            .collect::<Vec<_>>()
-    });
-    let (raw_results, low_signal) = partition_surfaceable(raw_results);
-    let low_signal_ids = explain.then(|| {
-        low_signal
-            .iter()
-            .map(|(result, reason)| serde_json::json!({
-                "memory_id": result.id,
-                "reason": reason.code(),
-            }))
-            .collect::<Vec<_>>()
-    });
-    if !low_signal.is_empty() {
-        tracing::info!(
-            hidden = low_signal.len(),
-            "search_memory_cards:low_signal_hidden"
-        );
-    }
+    let started = Instant::now();
+    let request = RetrieveRequest {
+        query: query.to_string(),
+        time: time_filter.map(str::to_string),
+        app: app_filter.map(str::to_string),
+        limit: raw_limit.clamp(1, 50),
+    };
+    let (retrieved, mut results) = retrieve_search_results(state, &request).await?;
+    // Card grouping reads how many query words each row covers; this no
+    // longer reorders anything.
     let query_context = QueryContext::from_query(query);
-    let mut reranked = rerank_results(&query_context, raw_results);
-    reranked.truncate(raw_limit);
+    for result in &mut results {
+        result.anchor_coverage_score = anchor_coverage_score(&query_context, result);
+    }
     let explanation = explain.then(|| {
         serde_json::json!({
-            "query_plan": query_context.debug_plan(),
-            "route_candidates": route_candidates.unwrap_or_default(),
-            "low_signal_exclusions": low_signal_ids.unwrap_or_default(),
-            "final_ranks": reranked.iter().enumerate().map(|(index, result)| serde_json::json!({
+            "production_retrieval": {
+                "path": "retrieve",
+                "filters": retrieved.filters,
+                "hits": retrieved.hits,
+                "latency_ms": started.elapsed().as_millis() as u64,
+            },
+            "final_ranks": results.iter().enumerate().map(|(index, result)| serde_json::json!({
                 "rank": index + 1,
                 "memory_id": result.id,
                 "score": result.score,
@@ -245,7 +205,7 @@ fn rank_search_results(
             })).collect::<Vec<_>>(),
         })
     });
-    (reranked, explanation)
+    Ok((results, explanation))
 }
 
 #[cfg(debug_assertions)]
@@ -266,47 +226,6 @@ pub async fn search_ranked_results_explained(
     )
     .await?;
     Ok((results, explanation.unwrap_or_default()))
-}
-
-#[cfg(test)]
-mod explanation_tests {
-    use super::*;
-
-    fn result(id: &str, title: &str, score: f32) -> SearchResult {
-        SearchResult {
-            id: id.to_string(),
-            window_title: title.to_string(),
-            display_summary: title.to_string(),
-            snippet: title.to_string(),
-            clean_text: title.to_string(),
-            score,
-            matched_routes: vec!["Vector".to_string()],
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn explained_and_normal_ranking_outputs_are_identical() {
-        let input = vec![
-            result("a", "Memory Journey retrieval", 0.8),
-            result("b", "Unrelated weather", 0.95),
-        ];
-        let (normal, no_explanation) =
-            rank_search_results(input.clone(), "memory journey", 10, false);
-        let (explained, explanation) = rank_search_results(input, "memory journey", 10, true);
-        assert!(no_explanation.is_none());
-        assert!(explanation.is_some());
-        assert_eq!(
-            normal
-                .iter()
-                .map(|result| (&result.id, result.score, result.anchor_coverage_score))
-                .collect::<Vec<_>>(),
-            explained
-                .iter()
-                .map(|result| (&result.id, result.score, result.anchor_coverage_score))
-                .collect::<Vec<_>>()
-        );
-    }
 }
 
 pub(super) fn cache_is_fresh(computed_at_ms: i64) -> bool {

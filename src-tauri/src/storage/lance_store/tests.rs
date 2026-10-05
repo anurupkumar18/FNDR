@@ -1159,3 +1159,14 @@ async fn keyword_search_accepts_an_explicit_time_range() {
 
     assert_eq!(hit_ids(&hits), vec!["new"]);
 }
+
+#[test]
+fn keyword_recency_is_the_same_within_a_minute() {
+    // Two searches a moment apart must score identically (VS-10).
+    let stored = 1_000_000;
+    assert_eq!(
+        recency_score(stored + 90_000, stored),
+        recency_score(stored + 90_900, stored)
+    );
+    assert!(recency_score(stored + 3_600_000, stored) < recency_score(stored + 60_000, stored));
+}

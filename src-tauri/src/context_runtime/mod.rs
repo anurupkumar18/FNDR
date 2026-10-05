@@ -1,4 +1,4 @@
-use crate::embedding::Embedder;
+use crate::embedding::{Embedder, EmbeddingBackend};
 use crate::mcp;
 use crate::search::HybridSearcher;
 use crate::storage::{
@@ -34,7 +34,9 @@ pub mod temporal_route;
 pub mod vector_route;
 pub mod verifier;
 
-pub use retrieve::{retrieve, RetrieveHit, RetrieveRequest, RetrieveResult, RetrieveWhy};
+pub use retrieve::{
+    retrieve, retrieve_search_results, RetrieveHit, RetrieveRequest, RetrieveResult, RetrieveWhy,
+};
 mod wiki_policy;
 
 static URL_RE: Lazy<Regex> =
@@ -3038,10 +3040,12 @@ pub enum ComposeMode {
 
 /// Ask FNDR must never cite captures the read-side policy keeps out of search.
 /// Unknown ids are kept; downstream evidence collection already tolerates them.
-pub(crate) async fn drop_low_signal_hits(
+/// Drop hits no surface may show: low-signal captures and FNDR's own
+/// windows. Returns the kept hits and the stored rows it looked up.
+pub(crate) async fn drop_hidden_hits(
     fused: Vec<context_pack::FusedHit>,
     store: &crate::storage::Store,
-) -> Vec<context_pack::FusedHit> {
+) -> (Vec<context_pack::FusedHit>, HashMap<String, MemoryRecord>) {
     // One batched lookup: per-hit lookups were most of a query's time (VS-09).
     let ids = fused
         .iter()
@@ -3051,35 +3055,38 @@ pub(crate) async fn drop_low_signal_hits(
         Ok(records) => records,
         Err(error) => {
             tracing::warn!(%error, "context_runtime:low_signal_lookup_failed");
-            return fused;
+            return (fused, HashMap::new());
         }
     };
-    fused
+    let kept = fused
         .into_iter()
         .filter(|hit| {
-            let low_signal = records.get(&hit.memory_id).is_some_and(|record| {
+            let hidden = records.get(&hit.memory_id).is_some_and(|record| {
                 crate::memory_quality::record_low_signal_reason(record).is_some()
+                    || crate::privacy::Blocklist::is_internal_app(
+                        &record.app_name,
+                        record.bundle_id.as_deref(),
+                    )
             });
-            if low_signal {
-                tracing::debug!(memory_id = %hit.memory_id, "context_runtime:drop_low_signal_hit");
+            if hidden {
+                tracing::debug!(memory_id = %hit.memory_id, "context_runtime:drop_hidden_hit");
             }
-            !low_signal
+            !hidden
         })
-        .collect()
+        .collect();
+    (kept, records)
 }
 
-/// Single-call entry point that drives the full Phase 3 pipeline:
-/// plan → RouteRunner::dispatch (5 routes) → fuse → collect_evidence → verify
-/// → compose. Returns the bundled [`ComposedAnswer`] (always carrying cards +
-/// evidence + verify_outcome regardless of mode).
 /// The shared front half of every retrieval (VS-09): plan, route dispatch,
-/// fusion, and the low-signal drop. `retrieve` and `run_query` both start
+/// fusion, and the hidden-memory drop. `retrieve` and `run_query` both start
 /// here, so Search, Ask, and agents rank memories the same way.
 pub(crate) struct FusedRetrieval {
     pub plan: query_plan::QueryPlan,
     pub weights: context_pack::FusionWeights,
     pub route_hits: Vec<retrieval_routes::RouteHits>,
     pub fused: Vec<context_pack::FusedHit>,
+    /// Stored rows of the fused hits, from the lookup the drop already made.
+    pub records: HashMap<String, MemoryRecord>,
     pub inference: Option<std::sync::Arc<crate::inference::InferenceEngine>>,
 }
 
@@ -3093,7 +3100,17 @@ pub(crate) async fn retrieve_fused(
     let plan = query_plan::plan(query, &query_plan::PlanHints::default());
     let weights = context_pack::FusionWeights::for_intent(plan.intent);
 
-    let embedder = Embedder::new().ok();
+    // Reuse the process's loaded model: loading it took about 175 ms per
+    // query (VS-10). Without a real model loaded, build one per query as
+    // before, so a model downloaded mid-session is still picked up.
+    let shared_embedder = crate::ipc::commands::common::shared_embedder()
+        .ok()
+        .filter(|embedder| matches!(embedder.backend(), EmbeddingBackend::Real));
+    let fresh_embedder = match shared_embedder {
+        Some(_) => None,
+        None => Embedder::new().ok(),
+    };
+    let embedder = shared_embedder.or(fresh_embedder.as_ref());
     // The typed insight graph (`graph::schema`) is not yet persisted; until the
     // typed-graph storage table lands, the graph route runs against an empty
     // in-memory index built fresh per query. The other four routes still hit
@@ -3111,7 +3128,7 @@ pub(crate) async fn retrieve_fused(
         .with_graph(&graph_index, &nodes, &edges)
         .with_limits(limit.max(1), time_filter, app_filter, &[])
         .with_now_ms(chrono::Utc::now().timestamp_millis());
-    if let Some(emb) = embedder.as_ref() {
+    if let Some(emb) = embedder {
         ctx = ctx.with_embedder(emb);
     }
     if let Some(eng) = inference.as_deref() {
@@ -3120,16 +3137,21 @@ pub(crate) async fn retrieve_fused(
 
     let route_hits = retrieval_routes::RouteRunner::dispatch(&plan, &ctx).await;
     let fused = fusion::fuse(&plan, route_hits.clone(), &weights);
-    let fused = drop_low_signal_hits(fused, &state.store).await;
+    let (fused, records) = drop_hidden_hits(fused, &state.store).await;
     FusedRetrieval {
         plan,
         weights,
         route_hits,
         fused,
+        records,
         inference,
     }
 }
 
+/// Single-call entry point that drives the full Phase 3 pipeline:
+/// plan, RouteRunner::dispatch (5 routes), fuse, collect_evidence, verify,
+/// compose. Returns the bundled [`ComposedAnswer`] (always carrying cards,
+/// evidence, and verify_outcome regardless of mode).
 pub async fn run_query(
     state: &AppState,
     query: &str,
@@ -3142,6 +3164,7 @@ pub async fn run_query(
         route_hits,
         fused,
         inference,
+        ..
     } = retrieve_fused(state, query, limit, None, None).await;
     let debug_trace = search_debug_trace(&plan, &route_hits, &fused, &weights);
     let evidence = evidence_pack::collect_evidence(&fused, &state.store).await;
@@ -3424,7 +3447,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_low_signal_hits_removes_visual_fallback_memories() {
+    fn drop_hidden_hits_removes_visual_fallback_memories() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = crate::storage::Store::new(dir.path()).expect("store");
         let now = chrono::Utc::now().timestamp_millis();
@@ -3469,10 +3492,11 @@ mod tests {
             surfacing_reason: Default::default(),
             contributing_routes: Vec::new(),
         };
-        let kept = rt.block_on(drop_low_signal_hits(
+        let (kept, records) = rt.block_on(drop_hidden_hits(
             vec![hit("good"), hit("junk"), hit("missing")],
             &store,
         ));
+        assert!(records.contains_key("good") && records.contains_key("junk"));
         let ids: Vec<&str> = kept.iter().map(|h| h.memory_id.as_str()).collect();
         assert_eq!(ids, vec!["good", "missing"]);
     }

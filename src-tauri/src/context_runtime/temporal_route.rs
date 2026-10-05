@@ -132,7 +132,8 @@ fn temporal_half_life_ms(raw: &str, now_ms: i64, event_ms: i64) -> f32 {
 }
 
 fn recency_decay(now_ms: i64, event_ms: i64, half_life_ms: f32) -> f32 {
-    let age_ms = (now_ms - event_ms).max(0) as f32;
+    // Whole minutes, so two searches a moment apart score identically.
+    let age_ms = ((now_ms - event_ms).max(0) / 60_000 * 60_000) as f32;
     2.0_f32
         .powf(-(age_ms / half_life_ms.max(1.0)))
         .clamp(0.0, 1.0)
@@ -187,6 +188,17 @@ mod tests {
     fn recency_decay_scores_recent_events_higher() {
         let now = 1_000_000;
         assert!(apply_recency_decay(now, now) > apply_recency_decay(now, now - 86_400_000));
+    }
+
+    #[test]
+    fn recency_decay_is_the_same_within_a_minute() {
+        // Two searches a moment apart must score identically (VS-10).
+        let event = 1_000_000;
+        assert_eq!(
+            apply_recency_decay(event + 90_000, event),
+            apply_recency_decay(event + 90_900, event)
+        );
+        assert!(apply_recency_decay(event + 60_000, event) < apply_recency_decay(event, event));
     }
 
     #[tokio::test]

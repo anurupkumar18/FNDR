@@ -5,7 +5,8 @@
 
 use crate::context_runtime::query_filters::parse_query_filters;
 use crate::context_runtime::query_plan::Route;
-use crate::context_runtime::retrieve_fused;
+use crate::context_runtime::retrieval_routes::memory_record_to_search_result;
+use crate::context_runtime::{retrieve_fused, FusedRetrieval};
 use crate::search::{normalize_text, QueryContext};
 use crate::storage::SearchResult;
 use crate::AppState;
@@ -67,6 +68,53 @@ pub async fn retrieve(
     state: &AppState,
     request: &RetrieveRequest,
 ) -> Result<RetrieveResult, String> {
+    Ok(retrieve_inner(state, request).await.0)
+}
+
+/// `retrieve` plus each hit's stored row as a `SearchResult`, in hit order,
+/// for surfaces that render rows (Search's cards, VS-10). The rows come from
+/// the lookup the hidden-memory drop already made; a hit whose row is gone is
+/// left out.
+pub async fn retrieve_search_results(
+    state: &AppState,
+    request: &RetrieveRequest,
+) -> Result<(RetrieveResult, Vec<SearchResult>), String> {
+    let (result, retrieval) = retrieve_inner(state, request).await;
+    let embedding_labels = retrieval
+        .fused
+        .iter()
+        .map(|hit| {
+            let labels = hit
+                .surfacing_reason
+                .routes
+                .iter()
+                .filter(|label| label.starts_with("embedding:"))
+                .cloned()
+                .collect::<Vec<_>>();
+            (hit.memory_id.as_str(), labels)
+        })
+        .collect::<HashMap<_, _>>();
+    let rows = result
+        .hits
+        .iter()
+        .filter_map(|hit| {
+            let record = retrieval.records.get(&hit.memory_id)?;
+            let mut row = memory_record_to_search_result(record, hit.score);
+            row.matched_routes = hit.why.routes.clone();
+            row.embedding_reason_labels = embedding_labels
+                .get(hit.memory_id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            Some(row)
+        })
+        .collect();
+    Ok((result, rows))
+}
+
+async fn retrieve_inner(
+    state: &AppState,
+    request: &RetrieveRequest,
+) -> (RetrieveResult, FusedRetrieval) {
     let limit = request.limit.max(1);
     let (filters, words_without_phrases) = read_filters(state, request).await;
     let mut retrieval = retrieve_fused(
@@ -134,7 +182,7 @@ pub async fn retrieve(
             },
         })
         .collect();
-    Ok(RetrieveResult { hits, filters })
+    (RetrieveResult { hits, filters }, retrieval)
 }
 
 /// Read time and app phrases out of the query (VS-13). Returns the filters

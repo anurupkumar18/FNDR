@@ -53,7 +53,9 @@ use super::{
 use crate::inference::model_config::{BGE_V5_DIMENSIONS, MEMORIES_V5_TABLE};
 
 pub(super) fn recency_score(now_ms: i64, timestamp_ms: i64) -> f32 {
-    let age_hours = ((now_ms - timestamp_ms).max(0) as f32 / 3_600_000.0).min(24.0 * 30.0);
+    // Whole minutes, so two searches a moment apart score identically.
+    let age_minutes = (now_ms - timestamp_ms).max(0) / 60_000;
+    let age_hours = (age_minutes as f32 / 60.0).min(24.0 * 30.0);
     (1.0 / (1.0 + age_hours * 0.03)).clamp(0.0, 1.0)
 }
 

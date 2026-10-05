@@ -1,6 +1,6 @@
 //! Tauri command handlers
 
-mod common;
+pub(crate) mod common;
 pub mod search;
 
 pub use search::{

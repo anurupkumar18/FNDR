@@ -4,6 +4,7 @@ use fndr_lib::config::{Config, DEFAULT_IMAGE_EMBEDDING_DIM};
 use fndr_lib::context_runtime::{retrieve, run_query, ComposeMode, RetrieveRequest};
 use fndr_lib::embedding::{Embedder, EMBEDDING_DIM};
 use fndr_lib::graph::GraphStore;
+use fndr_lib::ipc::commands::search::search_ranked_results;
 use fndr_lib::storage::{MemoryRecord, StateStore, Store};
 use fndr_lib::AppState;
 use std::collections::HashSet;
@@ -386,4 +387,101 @@ fn explicit_request_filters_win_over_phrases() {
         .hits
         .iter()
         .all(|hit| hit.memory_id.starts_with("standup")));
+}
+
+#[test]
+fn search_lists_what_retrieve_found_in_the_same_order() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (_dir, state) = seeded_state(&runtime);
+
+    for query in [
+        "zephyr contract",
+        "staging database",
+        "team lunch",
+        "budget",
+    ] {
+        let hits = runtime
+            .block_on(retrieve(&state, &request(query)))
+            .expect("retrieve")
+            .hits;
+        let results = runtime
+            .block_on(search_ranked_results(&state, query, None, None, 10))
+            .expect("search");
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.id.as_str())
+                .collect::<Vec<_>>(),
+            hits.iter()
+                .map(|hit| hit.memory_id.as_str())
+                .collect::<Vec<_>>(),
+            "{query}"
+        );
+        // Same evidence strength; recency moves it by the time between calls.
+        for (result, hit) in results.iter().zip(&hits) {
+            assert!((result.score - hit.score).abs() < 1e-5, "{query}");
+        }
+    }
+
+    // Cards read the routes and the share of query words each row covers.
+    let results = runtime
+        .block_on(search_ranked_results(
+            &state,
+            "zephyr contract",
+            None,
+            None,
+            10,
+        ))
+        .expect("search");
+    let top = results.first().expect("a result");
+    assert_eq!(top.id, "vendor");
+    assert!(top.matched_routes.iter().any(|route| route == "keyword"));
+    // Two of three anchors ("zephyr", "contract", not the phrase): computed
+    // for this query, not the stored value.
+    assert!(top.anchor_coverage_score > 0.5);
+}
+
+#[test]
+fn retrieve_never_returns_fndr_own_windows() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (_dir, state) = seeded_state(&runtime);
+    let text = "Search results for the Zephyr vendor contract";
+    let embedding = Embedder::new()
+        .expect("embedder")
+        .embed_batch(&[text.to_string()])
+        .expect("embedding")
+        .remove(0);
+    let mut own = record(
+        "own-window",
+        "FNDR",
+        "Search: zephyr contract",
+        text,
+        30_000,
+        embedding,
+    );
+    own.bundle_id = Some("com.fndr.app".to_string());
+    runtime
+        .block_on(state.store.add_batch(&[own]))
+        .expect("add own window");
+    let stored = runtime
+        .block_on(state.store.keyword_search("zephyr", 10, None, None))
+        .expect("keyword search");
+    assert!(stored.iter().any(|result| result.id == "own-window"));
+
+    let hits = runtime
+        .block_on(retrieve(&state, &request("zephyr contract")))
+        .expect("retrieve")
+        .hits;
+    assert!(hits.iter().any(|hit| hit.memory_id == "vendor"));
+    assert!(hits.iter().all(|hit| hit.memory_id != "own-window"));
+    let results = runtime
+        .block_on(search_ranked_results(
+            &state,
+            "zephyr contract",
+            None,
+            None,
+            10,
+        ))
+        .expect("search");
+    assert!(results.iter().all(|result| result.id != "own-window"));
 }

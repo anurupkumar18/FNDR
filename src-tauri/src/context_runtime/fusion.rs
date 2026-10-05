@@ -1,5 +1,5 @@
 //! Phase 3 fusion stage: combine per-route hits into a single ranked list with
-//! `FusionSignals` + `SurfacingReason` attached. Pure function — no I/O.
+//! `FusionSignals` + `SurfacingReason` attached. Pure function, no I/O.
 
 use crate::context_runtime::context_pack::{
     FusedHit, FusionSignals, FusionWeights, SurfacingReason,
@@ -67,10 +67,13 @@ pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> 
         })
         .collect();
 
+    // Ties by id: `agg` is a HashMap, so without this equal scores came out
+    // in a different order on every call.
     fused.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.memory_id.cmp(&b.memory_id))
     });
     fused.truncate(MAX_FUSED_HITS);
 
@@ -300,6 +303,28 @@ mod tests {
             .surfacing_reason
             .routes
             .contains(&"keyword".to_string()));
+    }
+
+    #[test]
+    fn fuse_orders_equal_scores_by_memory_id() {
+        let plan = dummy_plan();
+        let ids = ["e", "c", "a", "d", "b", "f", "h", "g"];
+        let hits = vec![RouteHits {
+            route: Route::Vector,
+            hits: ids
+                .iter()
+                .map(|id| hit(id, 0.5, RouteBranch::Semantic))
+                .collect(),
+            elapsed_ms: 1,
+        }];
+        let fused = fuse(&plan, hits, &FusionWeights::default());
+        assert_eq!(
+            fused
+                .iter()
+                .map(|hit| hit.memory_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b", "c", "d", "e", "f", "g", "h"]
+        );
     }
 
     #[test]
