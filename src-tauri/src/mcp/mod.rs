@@ -5711,19 +5711,21 @@ mod tests {
                     ]),
                 ),
             ];
-            for (label, payload) in refused_payloads {
-                let response = client
-                    .post(&status.endpoint)
-                    .header("Content-Type", "application/json")
-                    .json(&payload)
-                    .send()
-                    .await
-                    .expect(label);
-                assert_eq!(
-                    response.status(),
-                    reqwest::StatusCode::UNAUTHORIZED,
-                    "{label}"
-                );
+            for path in ["mcp", "mcp/messages"] {
+                for (label, payload) in &refused_payloads {
+                    let response = client
+                        .post(format!("{base_url}{path}"))
+                        .header("Content-Type", "application/json")
+                        .json(payload)
+                        .send()
+                        .await
+                        .expect(label);
+                    assert_eq!(
+                        response.status(),
+                        reqwest::StatusCode::UNAUTHORIZED,
+                        "{path}: {label}"
+                    );
+                }
             }
             for (label, authorization) in [
                 ("wrong token", "Bearer not-the-token".to_string()),

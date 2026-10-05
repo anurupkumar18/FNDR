@@ -5,7 +5,7 @@
 //! The token is used to authenticate all MCP HTTP requests.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -31,12 +31,17 @@ pub fn load_or_create() -> String {
 /// memory over MCP.
 fn load_or_create_at(path: &Path) -> String {
     // Try to load existing token
-    if let Ok(existing) = fs::read_to_string(path) {
-        let token = existing.trim().to_string();
-        if !token.is_empty() {
-            restrict_to_owner(path);
-            tracing::debug!("Loaded existing MCP token from {:?}", path);
-            return token;
+    if let Ok(mut file) = fs::File::open(path) {
+        let mut existing = String::new();
+        match restrict_to_owner(&file).and_then(|_| file.read_to_string(&mut existing)) {
+            Ok(_) => {
+                let token = existing.trim().to_string();
+                if !token.is_empty() {
+                    tracing::debug!("Loaded existing MCP token from {:?}", path);
+                    return token;
+                }
+            }
+            Err(e) => tracing::warn!("Failed to securely load MCP token: {}", e),
         }
     }
 
@@ -59,35 +64,38 @@ fn load_or_create_at(path: &Path) -> String {
 }
 
 fn write_owner_only(path: &Path, token: &str) -> std::io::Result<()> {
+    let mut file = open_owner_only(path)?;
+    file.set_len(0)?;
+    file.write_all(token.as_bytes())
+}
+
+fn open_owner_only(path: &Path) -> std::io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(path)?.write_all(token.as_bytes())?;
-    // `mode` applies only when the file is created; an existing file keeps
-    // its permissions until this.
-    restrict_to_owner(path);
-    Ok(())
+    let file = options.open(path)?;
+    // Creation mode does not change existing files. Restrict the same open
+    // descriptor before truncating or writing any secret bytes.
+    restrict_to_owner(&file)?;
+    Ok(file)
 }
 
-fn restrict_to_owner(path: &Path) {
+fn restrict_to_owner(file: &fs::File) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let too_open = fs::metadata(path)
-            .map(|meta| meta.permissions().mode() & 0o077 != 0)
-            .unwrap_or(false);
+        let too_open = file.metadata()?.permissions().mode() & 0o077 != 0;
         if too_open {
-            if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
-                tracing::warn!("Failed to restrict MCP token permissions: {}", e);
-            }
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
         }
     }
     #[cfg(not(unix))]
-    let _ = path;
+    let _ = file;
+    Ok(())
 }
 
 #[cfg(all(test, unix))]
@@ -131,5 +139,20 @@ mod tests {
         assert!(!token.trim().is_empty());
         assert_eq!(fs::read_to_string(&path).unwrap(), token);
         assert_eq!(mode(&path), 0o600);
+    }
+
+    #[test]
+    fn an_existing_token_file_is_private_before_secret_bytes_are_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_token");
+        fs::write(&path, "  \n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let mut file = open_owner_only(&path).unwrap();
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        assert!(fs::read_to_string(&path).unwrap().trim().is_empty());
+        file.set_len(0).unwrap();
+        file.write_all(b"new-secret-token").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new-secret-token");
     }
 }
