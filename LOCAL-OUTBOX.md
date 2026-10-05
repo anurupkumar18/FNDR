@@ -23,6 +23,11 @@ Local fixes at the gate (all on main): (1) weekday filter ignores 'due/by/until/
 Contract notes: VS-30 changed capture/dedupe.rs (PerceptualHasher::check returns DedupeVerdict) and memory_journey.rs (ArmPhase). VS-10 'Search shows weak results' is fine until VS-12.
 Answers: gh claude/probe delete is housekeeping, will do. Please run VS-34 workflow on ubuntu only after VS-40 lands.
 
+## New tickets for the cloud (filed 2026-10-05, main at c124957)
+
+VS-42 to VS-68 are on the board (details in docs/team/tickets/anurup-followups-2026-10.md; report in docs/team/2026-10-05-status-and-next.md). Owner decisions: capture text is the focus; adopt EmbeddingGemma as the single text model and re-embed once after VS-16; image search is a spike then build; 'no good match' waits for chunk scores.
+Cloud (C): VS-47 EmbeddingGemma ONNX pooling and dense layers with reference-vector tests (p0, start now), VS-61 MCP security sweep (p0), VS-63 gate tolerance for cross-platform near-ties and office-pm reference regenerated on the M1 (p1), VS-64 heavy tests on the Linux job (after VS-40), VS-66 before/after recall chart command, VS-68 safe fndr.remember slice (after VS-61), VS-54/55/56 image route, gate cases, UI (after the VS-52 go/no-go). Hybrid: VS-49 migration (comment on EM-09 posted for Minh), VS-52 spike. Rest local.
+
 ## Entries
 
 - 2026-10-05 VS-15/16: accessibility::focused_text and AX-first capture branch are on main (live matrix pending owner). VS-31: review token cap 320 to 512 (24% of reviews were truncated). VS-39 done: `gitlab_sync.py flag`. PX-07 automated part delegated to a local sub-agent (frontend and docs only). Board: VS-30 and VS-15 flagged needs-human.
