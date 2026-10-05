@@ -3,9 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { MemoryCardsPanel } from "./MemoryCardsPanel";
 import {
     findVisuallySimilarMemories,
+    getFullGraph,
     getMemoryDebugInspector,
     listMemoryCards,
     listNeedsSignalMemoryCards,
+    reopenMemory,
 } from "@/shared/ipc/tauri";
 import type { MemoryCard, SearchResult } from "@/shared/ipc/tauri";
 
@@ -22,6 +24,7 @@ vi.mock("@/shared/ipc/tauri", () => ({
     getMemoryDebugInspector: vi.fn().mockResolvedValue({}),
     listMemoryCards: vi.fn(),
     listNeedsSignalMemoryCards: vi.fn().mockResolvedValue([]),
+    reopenMemory: vi.fn().mockResolvedValue(true),
     getFullGraph: vi.fn().mockResolvedValue({
         nodes: [],
         edges: [],
@@ -68,7 +71,18 @@ function card(index: number): MemoryCard {
 afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.useRealTimers();
 });
+
+/** Local 3 pm on Sep 22 2026, so Today and Yesterday never straddle midnight mid-test. */
+const VAULT_NOW = new Date(2026, 8, 22, 15, 0).getTime();
+const HOUR = 60 * 60 * 1000;
+
+function renderVault() {
+    return render(
+        <MemoryCardsPanel isVisible onClose={() => {}} appNames={["VS Code"]} feature="vault" />,
+    );
+}
 
 describe("MemoryCardsPanel", () => {
     it("shows an evidence-backed trace when the vault index finishes loading", async () => {
@@ -250,5 +264,87 @@ describe("MemoryCardsPanel", () => {
         expect(
             await screen.findByRole("dialog", { name: "Expanded memory: Memory 2" }),
         ).toBeInTheDocument();
+    });
+
+    it("groups memories by day, then by project or app thread, with a source icon per row", async () => {
+        vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
+        vi.mocked(listMemoryCards).mockResolvedValue([
+            { ...card(1), title: "Read the essay rubric", project: "HIST 2100 essay", app_name: "Google Chrome", url: "https://canvas.example.edu/a/7", timestamp: VAULT_NOW - HOUR },
+            { ...card(2), title: "Read chapter 4", project: "HIST 2100 essay", app_name: "Preview", reopen_target: "file:///tmp/fixtures/reader.pdf", timestamp: VAULT_NOW - 2 * HOUR },
+            { ...card(3), title: "Ran the test suite", app_name: "Terminal", timestamp: VAULT_NOW - 24 * HOUR },
+        ]);
+
+        renderVault();
+
+        const today = await screen.findByRole("region", { name: "Today" });
+        expect(within(today).getByRole("heading", { name: /HIST 2100 essay/ })).toBeInTheDocument();
+        expect(within(today).getByRole("img", { name: "Web page" })).toBeInTheDocument();
+        expect(within(today).getByRole("img", { name: "Document" })).toBeInTheDocument();
+        const yesterday = screen.getByRole("region", { name: "Yesterday" });
+        expect(within(yesterday).getByRole("heading", { name: /Terminal/ })).toBeInTheDocument();
+        expect(within(yesterday).getByRole("button", { name: "Open memory: Ran the test suite" })).toBeInTheDocument();
+        expect(within(yesterday).getByRole("img", { name: "Screen capture" })).toBeInTheDocument();
+    });
+
+    it("folds near-duplicates behind an N similar toggle that expands them in place", async () => {
+        vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
+        vi.mocked(listMemoryCards).mockResolvedValue(
+            [1, 2, 3].map((index) => ({
+                ...card(index),
+                title: "Drafted the demo script",
+                app_name: "Notes",
+                project: "Beta demo",
+                timestamp: VAULT_NOW - index * 10 * 60 * 1000,
+            })),
+        );
+
+        renderVault();
+
+        const toggle = await screen.findByRole("button", { name: /^2 similar/ });
+        expect(screen.getAllByRole("button", { name: "Open memory: Drafted the demo script" })).toHaveLength(1);
+        expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+        fireEvent.click(toggle);
+
+        expect(toggle).toHaveAttribute("aria-expanded", "true");
+        expect(screen.getAllByRole("button", { name: "Open memory: Drafted the demo script" })).toHaveLength(3);
+    });
+
+    it("reopens a row's source in one click and a folded duplicate's source in two", async () => {
+        vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
+        vi.mocked(listMemoryCards).mockResolvedValue([
+            { ...card(1), title: "Read the rubric", app_name: "Google Chrome", reopen_target: "https://canvas.example.edu/a/7", timestamp: VAULT_NOW - HOUR },
+            { ...card(2), title: "Read the rubric", app_name: "Google Chrome", reopen_target: "https://canvas.example.edu/a/8", timestamp: VAULT_NOW - 2 * HOUR },
+        ]);
+
+        renderVault();
+
+        fireEvent.click(await screen.findByRole("button", { name: "Open source: Read the rubric" }));
+        expect(reopenMemory).toHaveBeenLastCalledWith("memory-1");
+
+        fireEvent.click(screen.getByRole("button", { name: /^1 similar/ }));
+        fireEvent.click(screen.getAllByRole("button", { name: "Open source: Read the rubric" })[1]);
+        expect(reopenMemory).toHaveBeenLastCalledWith("memory-2");
+    });
+
+    it("keeps the graph strip behind a Connections toggle", async () => {
+        vi.mocked(listMemoryCards).mockResolvedValue([card(1)]);
+
+        renderVault();
+
+        const toggle = await screen.findByRole("button", { name: "Connections" });
+        expect(toggle).toHaveAttribute("aria-pressed", "false");
+        expect(screen.queryByRole("region", { name: "Connections" })).toBeNull();
+        expect(getFullGraph).not.toHaveBeenCalled();
+
+        fireEvent.click(toggle);
+
+        expect(toggle).toHaveAttribute("aria-pressed", "true");
+        const strip = screen.getByRole("region", { name: "Connections" });
+        await waitFor(() => expect(getFullGraph).toHaveBeenCalledTimes(1));
+        expect(await within(strip).findByText("No connections to show yet.")).toBeInTheDocument();
+
+        fireEvent.click(toggle);
+        expect(screen.queryByRole("region", { name: "Connections" })).toBeNull();
     });
 });

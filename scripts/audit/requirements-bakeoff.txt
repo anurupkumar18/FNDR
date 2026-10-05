@@ -1,0 +1,14 @@
+# VS-17 / VS-19 embedding bake-off: scripts/audit/embedding_bakeoff.py (Python 3.11 or newer)
+# Install into a throwaway virtualenv outside the repo, for example:
+#   python3 -m venv /tmp/fndr-bakeoff && /tmp/fndr-bakeoff/bin/pip install -r scripts/audit/requirements-bakeoff.txt
+# The extra index serves CPU-only torch wheels on Linux (PyPI's Linux wheel pulls
+# several GB of CUDA libraries); on macOS the same pins resolve to the normal wheels.
+# Model weights download into the Hugging Face cache (HF_HOME), never into the repo.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.8.0
+transformers==4.57.6
+sentence-transformers==5.1.2
+huggingface_hub==0.36.2
+tokenizers==0.22.2
+safetensors==0.8.0
+numpy==2.4.6

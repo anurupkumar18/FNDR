@@ -52,88 +52,10 @@ use super::{
 };
 use crate::inference::model_config::{BGE_V5_DIMENSIONS, MEMORIES_V5_TABLE};
 
-pub(super) fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
-    if terms.is_empty() {
-        return 0.0;
-    }
-
-    let title = normalize_keyword_text(&result.window_title);
-    let snippet = normalize_keyword_text(&result.snippet);
-    let memory_context = normalize_keyword_text(&result.memory_context);
-    let lexical_shadow = normalize_keyword_text(&result.lexical_shadow);
-    let alias_blob = normalize_keyword_text(&result.search_aliases.join(" "));
-    let clean = normalize_keyword_text(if !result.clean_text.trim().is_empty() {
-        &result.clean_text
-    } else {
-        &result.text
-    });
-    let app = normalize_keyword_text(&result.app_name);
-    let url = result
-        .url
-        .as_ref()
-        .map(|value| normalize_keyword_text(value))
-        .unwrap_or_default();
-    let merged = format!(
-        "{} {} {} {} {} {} {}",
-        title, snippet, memory_context, clean, lexical_shadow, alias_blob, url
-    );
-
-    let mut matched_terms = 0usize;
-    let mut weighted = 0.0f32;
-
-    for (idx, term) in terms.iter().enumerate() {
-        let mut matched = false;
-        if title.contains(term) {
-            weighted += 1.8;
-            matched = true;
-        }
-        if snippet.contains(term) {
-            weighted += 1.35;
-            matched = true;
-        }
-        if clean.contains(term) {
-            weighted += 1.1;
-            matched = true;
-        }
-        if memory_context.contains(term) {
-            weighted += 1.25;
-            matched = true;
-        }
-        if lexical_shadow.contains(term) {
-            weighted += 1.05;
-            matched = true;
-        }
-        if alias_blob.contains(term) {
-            weighted += 1.0;
-            matched = true;
-        }
-        if app.contains(term) {
-            weighted += 0.75;
-            matched = true;
-        }
-        if !url.is_empty() && url.contains(term) {
-            weighted += 0.95;
-            matched = true;
-        }
-
-        // Reward full sentence/phrase hits for sentence queries.
-        if idx == 0 && term.split_whitespace().count() >= 2 && merged.contains(term) {
-            weighted += 1.1;
-            matched = true;
-        }
-
-        if matched {
-            matched_terms += 1;
-        }
-    }
-
-    let coverage = matched_terms as f32 / terms.len() as f32;
-    let normalized = (weighted / (terms.len() as f32 * 2.8)).min(1.0);
-    (normalized * 0.7 + coverage * 0.3).clamp(0.0, 1.0)
-}
-
 pub(super) fn recency_score(now_ms: i64, timestamp_ms: i64) -> f32 {
-    let age_hours = ((now_ms - timestamp_ms).max(0) as f32 / 3_600_000.0).min(24.0 * 30.0);
+    // Whole minutes, so two searches a moment apart score identically.
+    let age_minutes = (now_ms - timestamp_ms).max(0) / 60_000;
+    let age_hours = (age_minutes as f32 / 60.0).min(24.0 * 30.0);
     (1.0 / (1.0 + age_hours * 0.03)).clamp(0.0, 1.0)
 }
 
@@ -879,7 +801,7 @@ pub(super) fn generate_search_aliases(record: &MemoryRecord) -> Vec<String> {
         // `|` only appears when a structured field leaked an entire enum
         // vocabulary into a label (e.g. "coding|debugging|..."). Acronymizing
         // those produces opaque garbage like "tsapoeacdraorpws", so drop the
-        // phrase outright. Structural rule — no allow/deny lists.
+        // phrase outright. Structural rule: no allow/deny lists.
         if phrase.contains('|') {
             continue;
         }
@@ -906,7 +828,7 @@ pub(super) fn generate_search_aliases(record: &MemoryRecord) -> Vec<String> {
         }
     }
 
-    // Explicit names — entities, files, tags, related tools — surface as-is
+    // Explicit names (entities, files, tags, related tools) surface as-is
     // but never get acronymized, which is the source of the historical
     // `df`/`lco`/`mce` noise.
     for value in record
@@ -1143,7 +1065,7 @@ pub(super) fn estimate_importance_score(record: &MemoryRecord) -> f32 {
 }
 
 /// Top-k span concentration on `clean_text`. Higher means a few dense spans
-/// carry the document's signal — a strong indicator that retrieval against
+/// carry the document's signal, a strong indicator that retrieval against
 /// this record will surface meaningful matches.
 pub(super) fn estimate_salience_concentration(record: &MemoryRecord) -> f32 {
     crate::capture::text_cleanup::salience_concentration(&record.clean_text, &record.app_name)
@@ -1819,7 +1741,7 @@ pub(super) async fn ensure_memory_schema_columns(table: &Table) -> Result<(), la
         transforms.push(("lexical_shadow".to_string(), "''".to_string()));
     }
     if !existing.contains("snippet_embedding") {
-        // Placeholder zeros — will be computed properly for new captures.
+        // Placeholder zeros; will be computed properly for new captures.
         transforms.push(("snippet_embedding".to_string(), "embedding".to_string()));
     }
     if !existing.contains("support_embedding") {

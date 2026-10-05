@@ -1,0 +1,457 @@
+{
+  "schema_version": 2,
+  "case_set": "office-pm",
+  "case_count": 37,
+  "case_count_by_kind": {
+    "app": 5,
+    "keyword": 11,
+    "negative": 4,
+    "paraphrase": 9,
+    "time": 8
+  },
+  "paths": {
+    "search": {
+      "recall_at_5": 0.9,
+      "mrr_at_10": 0.6613888888888889,
+      "latency_ms": {
+        "p50": 216,
+        "p95": 372
+      },
+      "recall_at_5_by_kind": {
+        "app": 1.0,
+        "keyword": 1.0,
+        "paraphrase": 0.7777777777777778,
+        "time": 1.0
+      },
+      "no_match": {
+        "cases": 4,
+        "returned_nothing": 0,
+        "no_strong_match": 1,
+        "positive_without_strong_match": 0,
+        "top_score_median": 0.2993117570877075,
+        "positive_top_score_median": 0.4663139581680298
+      }
+    },
+    "ask": {
+      "recall_at_5": 0.9,
+      "mrr_at_10": 0.6613888888888889,
+      "latency_ms": {
+        "p50": 1303,
+        "p95": 1390
+      },
+      "recall_at_5_by_kind": {
+        "app": 1.0,
+        "keyword": 1.0,
+        "paraphrase": 0.7777777777777778,
+        "time": 1.0
+      },
+      "no_match": {
+        "cases": 4,
+        "returned_nothing": 0,
+        "no_strong_match": 1,
+        "positive_without_strong_match": 0,
+        "top_score_median": 0.2993117570877075,
+        "positive_top_score_median": 0.4663139581680298
+      }
+    },
+    "retrieve": {
+      "recall_at_5": 0.9,
+      "mrr_at_10": 0.6613888888888889,
+      "latency_ms": {
+        "p50": 205,
+        "p95": 334
+      },
+      "recall_at_5_by_kind": {
+        "app": 1.0,
+        "keyword": 1.0,
+        "paraphrase": 0.7777777777777778,
+        "time": 1.0
+      },
+      "no_match": {
+        "cases": 4,
+        "returned_nothing": 0,
+        "no_strong_match": 1,
+        "positive_without_strong_match": 0,
+        "top_score_median": 0.2993117570877075,
+        "positive_top_score_median": 0.4663139581680298
+      }
+    }
+  },
+  "top1_agreement": {
+    "count": 37,
+    "total": 37,
+    "rate": 1.0
+  },
+  "queries": [
+    {
+      "query": "how much money are we losing to customers leaving",
+      "kind": "paraphrase",
+      "search_rank_at_10": 5,
+      "ask_rank_at_10": 5,
+      "retrieve_rank_at_10": 5,
+      "search_top_score": 0.3296162486076355,
+      "ask_top_score": 0.3296162486076355,
+      "retrieve_top_score": 0.3296162486076355
+    },
+    {
+      "query": "why were our payment nudges ending up in junk mail",
+      "kind": "paraphrase",
+      "search_rank_at_10": 6,
+      "ask_rank_at_10": 6,
+      "retrieve_rank_at_10": 6,
+      "search_top_score": 0.438755065202713,
+      "ask_top_score": 0.438755065202713,
+      "retrieve_top_score": 0.438755065202713
+    },
+    {
+      "query": "what pay range did leadership sign off on for the design hire",
+      "kind": "paraphrase",
+      "search_rank_at_10": 4,
+      "ask_rank_at_10": 4,
+      "retrieve_rank_at_10": 4,
+      "search_top_score": 0.42626696825027466,
+      "ask_top_score": 0.42626696825027466,
+      "retrieve_top_score": 0.42626696825027466
+    },
+    {
+      "query": "which applicant came out on top for the design role",
+      "kind": "paraphrase",
+      "search_rank_at_10": 3,
+      "ask_rank_at_10": 3,
+      "retrieve_rank_at_10": 3,
+      "search_top_score": 0.45522770285606384,
+      "ask_top_score": 0.45522770285606384,
+      "retrieve_top_score": 0.45522770285606384
+    },
+    {
+      "query": "what share of new accounts got up and running quickly last quarter",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.40702003240585327,
+      "ask_top_score": 0.40702003240585327,
+      "retrieve_top_score": 0.40702003240585327
+    },
+    {
+      "query": "would clients recommend us, and did that improve",
+      "kind": "paraphrase",
+      "search_rank_at_10": 9,
+      "ask_rank_at_10": 9,
+      "retrieve_rank_at_10": 9,
+      "search_top_score": 0.355194091796875,
+      "ask_top_score": 0.355194091796875,
+      "retrieve_top_score": 0.355194091796875
+    },
+    {
+      "query": "the applicant's past project about getting tradespeople paid on time",
+      "kind": "paraphrase",
+      "search_rank_at_10": 3,
+      "ask_rank_at_10": 3,
+      "retrieve_rank_at_10": 3,
+      "search_top_score": 0.40594252943992615,
+      "ask_top_score": 0.40594252943992615,
+      "retrieve_top_score": 0.40594252943992615
+    },
+    {
+      "query": "is there a way to stop the nudges for just one bill",
+      "kind": "paraphrase",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 2,
+      "retrieve_rank_at_10": 2,
+      "search_top_score": 0.40975892543792725,
+      "ask_top_score": 0.40975892543792725,
+      "retrieve_top_score": 0.40975892543792725
+    },
+    {
+      "query": "who is filling in during my end-of-year vacation",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.35942307114601135,
+      "ask_top_score": 0.35942307114601135,
+      "retrieve_top_score": 0.35942307114601135
+    },
+    {
+      "query": "SMB churn 3.9% by segment",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.6088078022003174,
+      "ask_top_score": 0.6088078022003174,
+      "retrieve_top_score": 0.6088078022003174
+    },
+    {
+      "query": "LL-1482 spam placement 1.8%",
+      "kind": "keyword",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 2,
+      "retrieve_rank_at_10": 2,
+      "search_top_score": 0.4663139581680298,
+      "ask_top_score": 0.4663139581680298,
+      "retrieve_top_score": 0.4663139581680298
+    },
+    {
+      "query": "Rafael O. staging retest 2.1%",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.36233338713645935,
+      "ask_top_score": 0.36233338713645935,
+      "retrieve_top_score": 0.36233338713645935
+    },
+    {
+      "query": "Tobias W. interview feedback",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5385891795158386,
+      "ask_top_score": 0.5385891795158386,
+      "retrieve_top_score": 0.5385891795158386
+    },
+    {
+      "query": "net new ARR $1.24M",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.44806137681007385,
+      "ask_top_score": 0.44806137681007385,
+      "retrieve_top_score": 0.44806137681007385
+    },
+    {
+      "query": "REQ-2207 pipeline stages",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.4844893217086792,
+      "ask_top_score": 0.4844893217086792,
+      "retrieve_top_score": 0.4844893217086792
+    },
+    {
+      "query": "Smart Reminders launch checklist",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5510907173156738,
+      "ask_top_score": 0.5510907173156738,
+      "retrieve_top_score": 0.5510907173156738
+    },
+    {
+      "query": "launch checklist with the go/no-go meeting checked off",
+      "kind": "keyword",
+      "search_rank_at_10": 3,
+      "ask_rank_at_10": 3,
+      "retrieve_rank_at_10": 3,
+      "search_top_score": 0.4882948398590088,
+      "ask_top_score": 0.4882948398590088,
+      "retrieve_top_score": 0.4882948398590088
+    },
+    {
+      "query": "Hannah K. customer announcement email",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5614223480224609,
+      "ask_top_score": 0.5614223480224609,
+      "retrieve_top_score": 0.5614223480224609
+    },
+    {
+      "query": "Owen P. churn excluding trial cancels",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5458410382270813,
+      "ask_top_score": 0.5458410382270813,
+      "retrieve_top_score": 0.5458410382270813
+    },
+    {
+      "query": "Victor S. Q3 metrics summary email",
+      "kind": "keyword",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 2,
+      "retrieve_rank_at_10": 2,
+      "search_top_score": 0.5988172292709351,
+      "ask_top_score": 0.5988172292709351,
+      "retrieve_top_score": 0.5988172292709351
+    },
+    {
+      "query": "the hiring debrief from yesterday",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.508903980255127,
+      "ask_top_score": 0.508903980255127,
+      "retrieve_top_score": 0.508903980255127
+    },
+    {
+      "query": "the Q3 numbers email I sent this morning",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.47000551223754883,
+      "ask_top_score": 0.47000551223754883,
+      "retrieve_top_score": 0.47000551223754883
+    },
+    {
+      "query": "the launch checklist I updated yesterday",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.4909813404083252,
+      "ask_top_score": 0.4909813404083252,
+      "retrieve_top_score": 0.4909813404083252
+    },
+    {
+      "query": "the launch review deck from two days ago",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.4130711853504181,
+      "ask_top_score": 0.4130711853504181,
+      "retrieve_top_score": 0.4130711853504181
+    },
+    {
+      "query": "the product requirements doc I drafted last week",
+      "kind": "time",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 2,
+      "retrieve_rank_at_10": 2,
+      "search_top_score": 0.48278000950813293,
+      "ask_top_score": 0.48278000950813293,
+      "retrieve_top_score": 0.48278000950813293
+    },
+    {
+      "query": "what Rafael said about the spam fix earlier today",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5374194979667664,
+      "ask_top_score": 0.5374194979667664,
+      "retrieve_top_score": 0.5374194979667664
+    },
+    {
+      "query": "the LL-1482 thread in Slack",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.429521381855011,
+      "ask_top_score": 0.429521381855011,
+      "retrieve_top_score": 0.429521381855011
+    },
+    {
+      "query": "the candidate's portfolio case study in the PDF",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.4581400752067566,
+      "ask_top_score": 0.4581400752067566,
+      "retrieve_top_score": 0.4581400752067566
+    },
+    {
+      "query": "Q3 churn numbers in Sheets",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5586675405502319,
+      "ask_top_score": 0.5586675405502319,
+      "retrieve_top_score": 0.5586675405502319
+    },
+    {
+      "query": "the offsite venue vote on Zoom",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.4710237979888916,
+      "ask_top_score": 0.4710237979888916,
+      "retrieve_top_score": 0.4710237979888916
+    },
+    {
+      "query": "the launch checklist from three days ago",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.4433978796005249,
+      "ask_top_score": 0.4433978796005249,
+      "retrieve_top_score": 0.4433978796005249
+    },
+    {
+      "query": "the LL-1482 spam discussion from four days ago",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.43213894963264465,
+      "ask_top_score": 0.43213894963264465,
+      "retrieve_top_score": 0.43213894963264465
+    },
+    {
+      "query": "the churn breakdown in Excel",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.4998410940170288,
+      "ask_top_score": 0.4998410940170288,
+      "retrieve_top_score": 0.4998410940170288
+    },
+    {
+      "query": "rental car reservation",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "retrieve_rank_at_10": null,
+      "search_top_score": 0.16245515644550323,
+      "ask_top_score": 0.16245515644550323,
+      "retrieve_top_score": 0.16245515644550323
+    },
+    {
+      "query": "SOC 2 audit evidence request",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "retrieve_rank_at_10": null,
+      "search_top_score": 0.31456220149993896,
+      "ask_top_score": 0.31456220149993896,
+      "retrieve_top_score": 0.31456220149993896
+    },
+    {
+      "query": "Android app crash report",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "retrieve_rank_at_10": null,
+      "search_top_score": 0.2840613126754761,
+      "ask_top_score": 0.2840613126754761,
+      "retrieve_top_score": 0.2840613126754761
+    },
+    {
+      "query": "GDPR data deletion request from a European customer",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "retrieve_rank_at_10": null,
+      "search_top_score": 0.3337744474411011,
+      "ask_top_score": 0.3337744474411011,
+      "retrieve_top_score": 0.3337744474411011
+    }
+  ]
+}

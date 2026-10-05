@@ -358,6 +358,25 @@ fn push_unique(values: &mut Vec<String>, value: String) {
     }
 }
 
+/// Highest score first; ties go to the newer memory, then the smaller id, so
+/// the same query keeps the same hits in the same order every time (VS-21).
+/// Routes sort with this before they truncate.
+pub fn sort_route_hits(hits: &mut [RouteHit]) {
+    let timestamp = |hit: &RouteHit| {
+        hit.signals
+            .search_result
+            .as_ref()
+            .map_or(i64::MIN, |result| result.timestamp)
+    };
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| timestamp(b).cmp(&timestamp(a)))
+            .then_with(|| a.memory_id.cmp(&b.memory_id))
+    });
+}
+
 pub fn finish_route(route: Route, started: Instant, hits: Vec<RouteHit>) -> RouteHits {
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let route_name = route_name(route);

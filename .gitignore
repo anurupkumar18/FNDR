@@ -29,7 +29,12 @@ src-tauri/models/*.gguf
 !docs/team/*.json
 !scripts/demo/knowledge-worker-week.json
 !scripts/demo/knowledge-worker-queries.json
+!scripts/demo/office-pm-week.json
+!scripts/demo/office-pm-queries.json
 !docs/evidence/W02/retrieval-baseline-seeded.json
+!scripts/demo/retrieval-reference/*.json
+!docs/evidence/W03/retrieval-baseline-*.json
+!docs/evidence/W03/VS-17-bakeoff-cloud.json
 *.lancedb/
 *.db/
 *.lance/

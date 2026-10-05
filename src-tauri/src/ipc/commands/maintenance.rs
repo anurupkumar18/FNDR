@@ -156,7 +156,10 @@ pub async fn reindex_memories_v5(
     reindex_memories_v5_for_state(state.inner().clone()).await
 }
 
-async fn reindex_memories_v5_for_state(
+/// Write BGE parent rows and chunk rows for every memory that lacks them.
+/// Public so `examples/retrieval_qa.rs --chunks` can index an evaluation
+/// copy before measuring the chunk route (VS-18).
+pub async fn reindex_memories_v5_for_state(
     state: Arc<AppState>,
 ) -> Result<ReindexMemoriesV5Summary, String> {
     if V5_REINDEX_RUNNING.swap(true, Ordering::AcqRel) {
