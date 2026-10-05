@@ -22,7 +22,7 @@ class RecallChartTests(unittest.TestCase):
         # The chart data in the repo must be what the command produces now,
         # so a stale CSV fails here instead of reaching a slide.
         expected = io.StringIO()
-        writer = csv.DictWriter(expected, fieldnames=chart.CSV_FIELDS, lineterminator="\r\n")
+        writer = csv.DictWriter(expected, fieldnames=chart.CSV_FIELDS, lineterminator="\n")
         writer.writeheader()
         writer.writerows(chart.rows(chart.default_sources()))
         committed = (chart.ROOT / "docs/evidence/W03/beta-demo-recall.csv").read_bytes().decode()

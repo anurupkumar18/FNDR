@@ -74,7 +74,7 @@ def rows(sources: dict[str, tuple[Path, Path]]) -> list[dict]:
 
 def write_csv(data: list[dict], path: Path) -> None:
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, lineterminator="\n")
         writer.writeheader()
         writer.writerows(data)
 
