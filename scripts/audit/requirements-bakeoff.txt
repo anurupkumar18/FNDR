@@ -5,8 +5,8 @@
 # several GB of CUDA libraries); on macOS the same pins resolve to the normal wheels.
 # Model weights download into the Hugging Face cache (HF_HOME), never into the repo.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.8.0
-transformers==4.57.6
+torch==2.12.1+cpu
+transformers==5.10.1
 sentence-transformers==5.1.2
 huggingface_hub==0.36.2
 tokenizers==0.22.2
