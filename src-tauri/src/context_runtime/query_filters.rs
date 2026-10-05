@@ -7,6 +7,7 @@
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, TimeZone, Weekday};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::collections::HashMap;
 
 /// A half-open local time window, `[start_ms, end_ms)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,11 +33,20 @@ pub fn parse_query_filters(
 ) -> ParsedQuery {
     let mut spans: Vec<(usize, usize)> = Vec::new();
 
-    let app = find_app(query, known_apps).map(|(span, app)| {
-        spans.push(span);
-        app
-    });
-    let time = find_time(query, now).map(|(span, range)| {
+    let time_found = find_time(query, now);
+    // "notes on Monday" with the monday.com app stored: the same words read
+    // as a day and an app. Read them as the day, and never cut them twice.
+    let app = find_app(query, known_apps)
+        .filter(|((start, end), _)| {
+            time_found
+                .as_ref()
+                .is_none_or(|((time_start, time_end), _)| end <= time_start || time_end <= start)
+        })
+        .map(|(span, app)| {
+            spans.push(span);
+            app
+        });
+    let time = time_found.map(|(span, range)| {
         spans.push(span);
         range
     });
@@ -208,8 +218,7 @@ fn find_app(query: &str, known_apps: &[String]) -> Option<((usize, usize), Strin
     // Longest alias first, so "VS Code" wins over a shorter overlapping name.
     aliases.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
     for (alias, app) in aliases {
-        let pattern = format!(r"(?i)\b(?:in|on|from|using)\s+{}\b", regex::escape(&alias));
-        let Ok(pattern) = Regex::new(&pattern) else {
+        let Some(pattern) = app_phrase_pattern(&alias) else {
             continue;
         };
         if let Some(found) = pattern.find(query) {
@@ -219,6 +228,25 @@ fn find_app(query: &str, known_apps: &[String]) -> Option<((usize, usize), Strin
         }
     }
     None
+}
+
+/// "in Slack", "using VS Code": the pattern for one app alias. Every Search
+/// and Ask parses its query against every stored app, so each pattern is
+/// compiled once per process instead of once per query.
+fn app_phrase_pattern(alias: &str) -> Option<Regex> {
+    static PATTERNS: Lazy<parking_lot::Mutex<HashMap<String, Option<Regex>>>> =
+        Lazy::new(Default::default);
+    PATTERNS
+        .lock()
+        .entry(alias.to_string())
+        .or_insert_with(|| {
+            Regex::new(&format!(
+                r"(?i)\b(?:in|on|from|using)\s+{}\b",
+                regex::escape(alias)
+            ))
+            .ok()
+        })
+        .clone()
 }
 
 /// Names a person types for a stored app: the full name, the name without a
@@ -528,5 +556,149 @@ mod tests {
         let parsed = parse("yesterday");
         assert_eq!(parsed.text, "yesterday");
         assert_eq!(parsed.time, Some(day_range(10, 2)));
+    }
+
+    /// Small seeded generator, so the property tests need no extra crate
+    /// and every failure reproduces from its case number.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    /// Words that start or end filter phrases, plus look-alikes, numbers,
+    /// punctuation, and non-ASCII text.
+    const VOCABULARY: [&str; 44] = [
+        "notes",
+        "the",
+        "report",
+        "a",
+        "due",
+        "by",
+        "until",
+        "before",
+        "next",
+        "on",
+        "from",
+        "in",
+        "using",
+        "since",
+        "last",
+        "this",
+        "morning",
+        "week",
+        "two",
+        "days",
+        "ago",
+        "Monday",
+        "thursday",
+        "Friday",
+        "today",
+        "yesterday",
+        "October",
+        "9",
+        "Sep",
+        "30th",
+        "Slack",
+        "Chrome",
+        "VS",
+        "Code",
+        "Monday.com",
+        "monday",
+        "Notion",
+        "1.8%",
+        "LL-1482",
+        ".",
+        "naïve",
+        "日本語",
+        "🙂",
+        "earlier",
+    ];
+
+    /// Stored app names, including ones whose short names are time words.
+    fn tricky_apps() -> Vec<String> {
+        let mut apps = apps();
+        apps.push("monday.com".to_string());
+        apps.push("Day One".to_string());
+        apps
+    }
+
+    #[test]
+    fn parsing_holds_its_invariants_on_random_queries() {
+        let apps = tricky_apps();
+        for case in 0..3000u64 {
+            let mut rng = Lcg(case);
+            let words = 1 + rng.below(7) as usize;
+            let query = (0..words)
+                .map(|_| VOCABULARY[rng.below(VOCABULARY.len() as u64) as usize])
+                .collect::<Vec<_>>()
+                .join(" ");
+            let parsed = parse_query_filters(&query, now(), &apps);
+            let normalized = query.split_whitespace().collect::<Vec<_>>().join(" ");
+
+            if parsed.time.is_none() && parsed.app.is_none() {
+                assert_eq!(parsed.text, normalized, "case {case}: {query}");
+            }
+            // The text only ever loses words.
+            for word in parsed.text.split_whitespace() {
+                assert!(
+                    query.contains(word),
+                    "case {case}: {query} -> {}",
+                    parsed.text
+                );
+            }
+            if let Some(range) = parsed.time {
+                assert!(range.start_ms < range.end_ms, "case {case}: {query}");
+                assert!(
+                    range.end_ms - range.start_ms <= 7 * 86_400_000 + 3_600_000,
+                    "case {case}: {query}"
+                );
+                assert!(
+                    range.start_ms <= now().timestamp_millis(),
+                    "case {case}: {query}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_time_phrase_after_a_deadline_word_is_a_filter() {
+        let phrases = [
+            "Monday",
+            "on Thursday",
+            "friday",
+            "today",
+            "yesterday",
+            "October 9",
+            "Sep 30",
+            "two days ago",
+            "last week",
+            "this morning",
+        ];
+        for word in ["due", "by", "until", "before", "till", "next", "Due", "BY"] {
+            for phrase in phrases {
+                let query = format!("the report {word} {phrase}");
+                let parsed = parse(&query);
+                assert_eq!(parsed.time, None, "{query}");
+                assert_eq!(parsed.text, query, "{query}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_app_whose_name_is_a_time_word_does_not_break_parsing() {
+        let parsed = parse_query_filters("notes on Monday", now(), &tricky_apps());
+        assert!(parsed.time.is_some() || parsed.app.is_some());
+        assert!(!parsed.text.is_empty());
     }
 }
