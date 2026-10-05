@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-10-04 (VS-17). Cloud quality numbers are in. Milliseconds per chunk and peak memory on the reference M1 8 GB are to be measured by local before this is accepted; the license question for EmbeddingGemma needs the owner's call. Implementation (contract, table, reindex) belongs to Minh's embedding tickets.
+Proposed, updated 2026-10-05 (VS-17 / VS-48). Initial M1 8 GB ONNX measurements and fp32 reference parity are now recorded below. They favor fp32 over q8 for process memory on this workload; they do not yet establish long-chunk, interactive-query or concurrent capture budgets. Distribution terms remain an owner decision. Versioned migration remains coordinated with Minh's embedding tickets.
 
 ## Context
 
@@ -42,8 +42,8 @@ Both personas pooled (42 headline queries). Per-persona rows, per-query ranks, a
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
 | minilm | 384 | 0.929 (39/42) | 0.771 | 0.952 (40/42) | 0.751 | 0.969 / 0.991 | 8.7 / 636 | 92 | to be measured by local | to be measured by local |
 | bge-small | 384 | 0.929 (39/42) | 0.807 | 0.929 (39/42) | 0.795 | 0.952 / 0.943 | 15.8 / 678 | 135 | to be measured by local | to be measured by local |
-| embeddinggemma | 768 | 0.976 (41/42) | 0.913 | 1.000 (42/42) | 0.889 | 0.982 / 0.993 | 73.9 / 1517 | 1270 | to be measured by local | to be measured by local |
-| embeddinggemma-256 | 256 | 0.976 (41/42) | 0.907 | 0.976 (41/42) | 0.875 | 0.991 / 0.991 | 76.5 / 1521 | 1270 | to be measured by local | to be measured by local |
+| embeddinggemma | 768 | 0.976 (41/42) | 0.913 | 1.000 (42/42) | 0.889 | 0.982 / 0.993 | 73.9 / 1517 | 1270 | ONNX check below | ONNX check below |
+| embeddinggemma-256 | 256 | 0.976 (41/42) | 0.907 | 0.976 (41/42) | 0.875 | 0.991 / 0.991 | 76.5 / 1521 | 1270 | ONNX check below | ONNX check below |
 | qwen3 | 1024 | 0.881 (37/42) | 0.789 | 0.952 (40/42) | 0.744 | 0.950 / 0.954 | 1086.7 / 4629 (noisy) | 1207 | to be measured by local | to be measured by local |
 
 Download MB is the Hugging Face snapshot the harness fetched (PyTorch weights plus tokenizer), not the ONNX file the app would ship; see the candidates table for those.
@@ -65,14 +65,35 @@ The cloud cost column is PyTorch fp32 on a shared 4-vCPU Linux container (fastes
 
 ## Provisional recommendation
 
-1. **EmbeddingGemma-300m at 256 dimensions**, as a q8 ONNX build, if the M1 numbers fit and the owner accepts the Gemma terms. It is the only candidate that beats MiniLM with any support (MRR@10 +0.12 to +0.14 against MiniLM in both modes, sign test p 0.013 to 0.064), and the 256-dimension cut gives up almost none of that while storing fewer numbers per vector than MiniLM's 384. The cost is a model about 13 times MiniLM's size: a 309 MB q8 download plus a 33 MB tokenizer instead of 90 MB, and about 8.5 times MiniLM's milliseconds per chunk and about 880 MB more peak memory under PyTorch fp32 on this CPU.
+1. **EmbeddingGemma-300m at 256 dimensions using fp32 ONNX for the next isolated migration prototype.** The October 5 M1 check below supersedes the original q8 preference: q8's smaller download used more process memory in this runtime. The 256-dimension cut retains most of the measured quality while storing fewer numbers per vector than MiniLM's 384. Activation still requires representative long-chunk and interactive-query measurements, a concurrent capture budget, and a distribution-term/notice decision. Keep 768 as the quality comparator.
 2. **If the M1 cost or the license rules it out, keep MiniLM.** bge-small is not measurably better on these sets (no Recall@5 change, MRR differences inside noise), so switching to it would cost a reindex and a pooling change for no demonstrated gain. A reranker does not close the gap either: in the VS-19 spike a cross-encoder over MiniLM's top 30 lifts chunk-mode MRR@10 to 0.831, still below EmbeddingGemma alone at 0.889, at several hundred milliseconds per query on this host (`docs/evidence/W03/VS-19-spike-cloud.md`).
 3. **Reject Qwen3-Embedding-0.6B for the 8 GB target.** It does not beat MiniLM here, it lost 2 headline cases in record mode, and it peaked at 4629 MB of process memory at fp32 on this host.
 
-Before accepting: rerun the harness on the M1 (instructions in the evidence file) and fill the two M1 columns; confirm the q8 ONNX build reproduces the PyTorch rankings (quantization can move near ties); and rerun with a larger labeled set if one exists by then, since 42 queries are too few to settle a close call.
+Before accepting: extend the initial M1 results below to representative long chunks and interactive/concurrent workloads, and rerun with a larger labeled set if available. The 42 headline queries remain too few to settle close quality differences. Numerical parity and quantized retrieval acceptance are separate checks.
+
+## M1 ONNX check, October 5
+
+The inactive v6 contract now reads the export's `sentence_embedding` output and uses the model-card prefixes in the reference/measurement harness. The explicit fp32 reference test passed at both dimensions on the M1: lowest cosine 0.999978 at 768 and 0.999980 at 256. This does not yet activate v6 for production records or chunks.
+
+`embedding_measure` uses the real Rust `Embedder`, disabled mock fallback, one fresh process and one uncached corpus pass. The existing bake-off helpers supplied 76 queries and 116 record/chunk document inputs from the same two personas (192 distinct inputs, all one chunk). Each run includes preprocessing, batches of four and mean/normalization behavior of the production wrapper. Download assets were checksum-verified at ONNX revision `5090578d9565bb06545b4552f76e6bc2c93e4a66`.
+
+| Export / dimension | Load plus probe ms | Corpus ms per input | Peak RSS MB | Record Recall@5 / MRR@10 | Chunk Recall@5 / MRR@10 |
+|---|---:|---:|---:|---:|---:|
+| fp32 / 256 | 3,213 | 95.37 | 866 | 0.976 / 0.907 | 0.976 / 0.875 |
+| fp32 / 768 | 3,850 | 92.77 | 808 | 0.976 / 0.913 | 1.000 / 0.889 |
+| q8 / 256 | 3,256 | 100.07 | 1,574 | 0.976 / 0.908 | 1.000 / 0.876 |
+| q8 / 768 | 3,115 | 100.22 | 1,596 | 0.976 / 0.913 | 1.000 / 0.887 |
+
+MB is decimal process RSS from `/usr/bin/time -l` around the built executable, excluding compilation. These are one-pass observations in a development build, not p95 service latency or 300-token chunk throughput. Query and document timings were not separated. The 256/768 memory difference is run variation, not evidence that vector truncation halves model memory.
+
+The fp32 headline rankings match the prior Python bake-off metrics. q8 changed four per-query ranks across the two dimension/mode comparisons: two record improvements at 256, one chunk improvement at 256, and one chunk regression (rank 3 to 4) at 768. Neither q8 dimension lost a previously found top-ten result. Nevertheless q8 does not meet the fp32 numerical-parity threshold: lowest cosine 0.992135 at 768 and 0.992948 at 256. Keep fp32 parity and quantized retrieval acceptance as separate checks.
+
+**Updated technical recommendation:** use fp32 at 256 dimensions for the next isolated migration prototype, keeping 768 as the quality comparator. Do not activate or ship q8 based on its smaller download alone: it used substantially more resident memory in this runtime on this workload. Repeat with representative long capture chunks, single interactive queries and capture/model concurrency before accepting the resource budget. The exact verified downloads total 1,255,324,332 bytes for fp32 and 329,781,810 bytes for q8, including the shared tokenizer. No owner-profile model assets or vectors were changed.
+
+Evidence and limitations: `docs/evidence/W04/2026-10-05-cloud-integration-local.md`. Production role-prefix placement on long chunks, shared retrieval migration and term/notice flow remain outstanding.
 
 ## Consequences if accepted
 
 - A new embedding contract per ADR 002 (model id, ONNX file and sha256 pins, dimension, table name), a reindex of parents and chunks, and an amendment to ADRs 002 and 008. ADR 008's choice of BGE-large for the chunk table would be superseded.
-- The embedder must apply the model's prompts ("task: search result | query: " for queries, "title: none | text: " for documents) and read the ONNX graph's pooled `sentence_embedding` output, then cut to 256 dimensions and re-normalize. Today `embedding/onnx.rs` prefers a `last_hidden_state` output and mean-pools it (right for MiniLM, wrong for bge-small's CLS token and Qwen3's last token), passing a 2-D output through only when no hidden state is exposed, and adds no prompts. The EmbeddingGemma graph exposes both outputs, so as written the app would mean-pool the hidden state and silently skip the model's two dense layers.
+- The embedder must apply the model's prompts ("task: search result | query: " for queries, "title: none | text: " for documents) and read the ONNX graph's pooled `sentence_embedding` output, then cut to 256 dimensions and re-normalize. Before VS-47, `embedding/onnx.rs` preferred a `last_hidden_state` output and mean-pools it (right for MiniLM, wrong for bge-small's CLS token and Qwen3's last token), passing a 2-D output through only when no hidden state is exposed, and adds no prompts. The EmbeddingGemma graph exposes both outputs. VS-47 corrected the inactive v6 path to select its pooled output; production migration must now use that contract and its role prefixes consistently.
 - Two findings regardless of the choice: the app's BGE prefixes in `embedding/prefixes.rs` ("Represent this sentence: " for documents, "Represent this question for searching relevant passages: " for queries) do not match the BGE v1.5 model card (no document prefix; "Represent this sentence for searching relevant passages: " for queries), which affects the v5 BGE-large path; and on number-dense OCR a 4-characters-per-token estimate undercounts real tokens by up to 1.78 times, so a "300-token" VS-18 chunk can reach about 530 real tokens, past MiniLM's 256-token training length. VS-18 should size chunks with the model's tokenizer.
