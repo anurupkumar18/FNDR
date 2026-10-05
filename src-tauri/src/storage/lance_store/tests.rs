@@ -1075,6 +1075,51 @@ async fn keyword_search_finds_rows_added_after_the_first_search() {
     assert_eq!(ids, vec!["first", "later"]);
 }
 
+async fn fts_indexed_columns(store: &Store) -> HashSet<String> {
+    store
+        .table
+        .list_indices()
+        .await
+        .expect("list indices")
+        .into_iter()
+        .filter(|index| index.index_type == IndexType::FTS)
+        .flat_map(|index| index.columns)
+        .collect()
+}
+
+#[tokio::test]
+async fn writes_build_the_keyword_indexes_so_no_search_pays_for_them() {
+    // Built lazily, the indexes cost the first search 94 to 228 ms of its
+    // 320 ms per-variant budget; on a loaded macOS runner that dropped the
+    // phrase variant from the first search only (PR #31 CI).
+    let all = FTS_COLUMNS
+        .map(str::to_string)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let (_dir, store) = keyword_store(vec![keyword_row(
+        "first",
+        1_000,
+        "Mail",
+        "Billing",
+        "Sent the overdue invoice to the client",
+    )])
+    .await;
+    assert_eq!(fts_indexed_columns(&store).await, all, "after add_batch");
+
+    // An overwrite drops the indexes; the write puts them back.
+    store
+        .replace_all_memories_preserving_ids(&[keyword_row(
+            "replaced",
+            2_000,
+            "Mail",
+            "Vendor payment",
+            "Paid the invoice from the vendor",
+        )])
+        .await
+        .expect("replace all");
+    assert_eq!(fts_indexed_columns(&store).await, all, "after an overwrite");
+}
+
 #[tokio::test]
 async fn keyword_search_keeps_the_app_filter() {
     let (_dir, store) = keyword_store(vec![

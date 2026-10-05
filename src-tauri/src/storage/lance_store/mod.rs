@@ -1544,6 +1544,7 @@ impl Store {
             .execute()
             .await
             .map_err(|e| e.to_string())?;
+        self.build_fts_indexes_after_write().await;
         Ok(())
     }
 
@@ -1704,6 +1705,7 @@ impl Store {
             .await?;
         self.rows_since_fts_optimize
             .fetch_add(records.len(), AtomicOrdering::Relaxed);
+        self.build_fts_indexes_after_write().await;
         Ok(())
     }
 
@@ -1862,6 +1864,16 @@ impl Store {
                 .then_with(|| a.id.cmp(&b.id))
         });
         Ok(dedup_search_results(results, limit))
+    }
+
+    /// Build missing BM25 indexes when rows are written, so no search pays for
+    /// it: built lazily, they cost the first search 94 to 228 ms of a 320 ms
+    /// per-variant budget, and an overrun dropped that variant. A failure
+    /// leaves the write intact; `keyword_search` tries again.
+    async fn build_fts_indexes_after_write(&self) {
+        if let Err(error) = self.ensure_fts_indexes().await {
+            tracing::warn!(%error, "lancedb:fts_index_build_failed");
+        }
     }
 
     /// Create the BM25 index on each `FTS_COLUMNS` column that lacks one.
