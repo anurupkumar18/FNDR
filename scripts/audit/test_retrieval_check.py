@@ -80,9 +80,8 @@ class CompareTests(unittest.TestCase):
         self.assertIn("which plotting library am I allowed to use", result.failures[0])
         self.assertIn("search", result.failures[0])
 
-    def test_a_miss_from_the_bottom_of_the_top_ten_is_a_warning(self):
-        # VS-63: ranks 8 to 10 sit among near-ties that move across platforms
-        # and seed times; losing a query from there is reported, not failed.
+    def test_a_miss_from_the_bottom_of_the_top_ten_fails(self):
+        # A low rank alone is not evidence of a numerical near-tie.
         reference = report(
             ranks={
                 "pandas import error fix": ("keyword", 1, 1),
@@ -96,10 +95,10 @@ class CompareTests(unittest.TestCase):
             }
         )
         result = rc.compare(reference, current)
-        self.assertEqual(result.failures, [])
-        self.assertEqual(len(result.warnings), 2)
-        self.assertIn("search lost", result.warnings[0])
-        self.assertIn("rank 8 -> miss", result.warnings[0])
+        self.assertEqual(len(result.failures), 2)
+        self.assertIn("search lost", result.failures[0])
+        self.assertIn("rank 8 -> miss", result.failures[0])
+        self.assertIn("rank 10 -> miss", result.failures[1])
 
     def test_a_miss_from_rank_seven_still_fails(self):
         reference = report(
@@ -117,7 +116,6 @@ class CompareTests(unittest.TestCase):
         result = rc.compare(reference, current)
         self.assertEqual(len(result.failures), 1)
         self.assertIn("rank 7 -> miss", result.failures[0])
-        self.assertEqual(result.warnings, [])
 
     def test_rank_that_moves_within_top_ten_is_reported_but_passes(self):
         current = report(
@@ -293,7 +291,7 @@ class RenderAndMainTests(unittest.TestCase):
         self.assertIn("FAIL", text)
         self.assertIn("pandas import error fix", text)
 
-    def test_main_passes_with_a_warning_and_lists_it(self):
+    def test_main_fails_on_a_low_rank_loss_and_lists_it(self):
         reference = report(
             ranks={
                 "pandas import error fix": ("keyword", 1, 1),
@@ -307,9 +305,9 @@ class RenderAndMainTests(unittest.TestCase):
             }
         )
         code, text = self.run_main(reference, current)
-        self.assertEqual(code, 0)
-        self.assertIn("PASS with 1 warning", text)
-        self.assertIn("## Warnings", text)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL", text)
+        self.assertIn("## Regressions", text)
         self.assertIn("which plotting library am I allowed to use", text)
 
     def test_main_exits_two_on_unreadable_input(self):
