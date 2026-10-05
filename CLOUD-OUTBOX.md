@@ -2,7 +2,7 @@
 
 Cloud session (Linux container, GitHub only) to local session. Updated after every ticket and at least every two hours. Newest entries first under each heading.
 
-Last update: 2026-10-05 17:00 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf and main at 342e5a2 (integrate/cloud-1).
+Last update: 2026-10-05 17:55 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf and main at c124957 (Oct 5 status report, VS-42 to VS-68 filed).
 
 ## NEEDS HUMAN (open)
 
@@ -10,19 +10,30 @@ None.
 
 ## Read first (local)
 
-1. **Trains A to F are on main (342e5a2), and PRs #21 to #27 show merged.** Thank you for the gate fixes. I stopped watching those PRs. New work stacks on main as `claude/train-f-retrieval`, one commit per ticket.
-2. **The weekday bug you fixed at the gate (b1a1776) also broke the gate itself.** The knowledge-worker memory for "churn drivers due Thursday" is seeded three days before the run day, so before your fix the query passed only on Sundays (the reference was recorded on Sunday 2026-10-04). Cloud hit the same failure on train D's head this morning. With b1a1776 the query no longer depends on the run day. One gap remains in the same rule: dates and day phrases after a deadline word still become capture-time filters ("the grant report due October 9" filters to October 9; "the invoice due today" to today). Proposed as a small VS-13 follow-up on train F (test-first, both personas gated), unless you prefer to take it.
-3. **VS-33's premise was partly wrong, recorded in the evidence.** The insight graph is persisted (`graph_nodes`, `graph_edges` in LanceDB, written by the capture flush and idle `commit_graph_updates`). `retrieve` simply never loads it, so the graph route ran over an empty list, and the entity route (which also reads graph nodes) finds nothing on every real query. VS-33 stops planning the graph route and deletes the dead empty-graph wiring and the no-op `graph_rerank.rs`. It keeps `GraphRoute` and the `Route::Graph` contract fields (20 files, including MCP and Ask JSON). Proposal to file: load the persisted graph for the entity and graph routes behind a flag, measured on a seeded graph, or delete both routes.
-4. **The retrieval gate now runs in CI (VS-34, PR #31), and macOS agrees with Linux query by query.** On the negative control (#32, drops the vector route) every office-PM rank in the CI log equals the cloud's Linux run, so the references are platform-independent. A gate change that only keeps BM25 out passes the gate (it lowers MRR, not top-ten recall); worth knowing when reading a green gate.
-5. **Ablation and a third persona (stretch).** Fused stays the best default on all three personas. A finding from the first two personas ("BM25 hurts paraphrases") did not hold on the third, so the keyword-weight proposal (VS-43) was withdrawn before filing. Chunks remain the only change that gains without a trade. `docs/evidence/W03/retrieval-ablation-cloud.md`.
+1. **Security, merge early: train G, PR #33 (VS-61).** Three MCP auth gaps fixed, on main c124957 and independent of train F:
+   - `FNDR_MCP_REQUIRE_AUTH=0` disabled auth in every mode, including Public, which binds to the network.
+   - `FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS=1` worked in Tunnel mode, where tunnel traffic arrives from loopback.
+   - The token check stopped at the first wrong byte and accepted an empty token.
+   - `~/.fndr/mcp_token` was briefly world-readable.
+
+   There is a route-by-route table and 13 new refused requests over real HTTP.
+2. **A crash in every Search and Ask, fixed on train F (3fe3659).** With an app whose short name is a time word installed (the monday.com app), "notes on Monday" panicked in `parse_query_filters`. The property tests found it. They also found that the parser compiled a regex per app alias per query: 56 ms per parse in debug, now 1.2 ms, and `retrieve` p50 on the seeded profiles fell by 31 to 47 ms.
+3. **For VS-63 (office-PM near-tie on the M1).** GitHub's Apple-silicon `macos-26` runner reproduced every Linux-recorded rank, on both #31 and the negative control, so "M1 versus Linux numerics" may not be the cause. Two things to check before loosening the gate:
+   - The office-PM corpus mixes clock-time and minutes-ago entries, so ranks of near-ties move with the hour the seed runs (logged 2026-10-05 00:10).
+   - Did the M1 run use the same MiniLM (sha256 `759c3cd2...`) and the lifted route budgets that `retrieval_qa` applies?
+
+   I can take VS-63 if you want; the comparator change is small either way.
+4. **Fusion counts the vector route twice** when both of its branches (full text and snippet) find a memory. Counting it once was measured and not shipped: it lost Recall@5 on two of three personas, and it moves every fused score down by about a quarter, which breaks the VS-12 bars and Ask's 0.3 verifier floor. Pinned by a test; proposal VS-70 does it properly.
+5. **Train F (#31) is up to date with main** through a merge commit (782c05d). Proposals renumbered: VS-69 (entity route on the persisted graph) and VS-70. The withdrawn keyword-weight idea never got an ID that survived.
 6. **`release.yml` still uses `macos-14`** and will hit the Swift SDK error that #24 fixed for `test.yml`.
-7. **Branch deletion is still refused here (HTTP 403):** `claude/probe` and the merged `claude/train-*` branches stay until you delete them.
+7. **Branch deletion is still refused here (HTTP 403):** `claude/probe`, the merged `claude/train-*` branches, and `claude/vs34-negative-control` stay until you delete them.
 
 ## Merge queue for local (in this order)
 
 | # | Branch | Draft PR | Head | Tickets | Rust CI | Notes |
 |---|---|---|---|---|---|---|
-| 1 | `claude/train-f-retrieval` | #31 | 33d4814 | VS-33, VS-36, VS-34 (2 commits), VS-13 follow-up (2 commits); stretch: ablation, Beta demo numbers, third persona; proposals VS-42 | green on ba06763 (Rust tests, retrieval gate, frontend); 33d4814 running | On main 342e5a2. `.github/workflows/retrieval-gate.yml` is new and yours to merge; it runs the gate on three personas in about 15 minutes. #32 was a throwaway negative control (closed). |
+| 1 | `claude/train-g-security` | #33 | 90bb70b | VS-61 | running | On main c124957; independent; p0. |
+| 2 | `claude/train-f-retrieval` | #31 | 81666e1 | VS-33, VS-36, VS-34 (2), VS-13 follow-ups (3: deadlines, evidence fix, crash and speed); stretch: ablation, demo numbers, third persona, anti-bloat, property tests; proposals VS-69, VS-70 | retrieval gate green on 81666e1 (three personas, 6.5 min); Rust tests running | Merged with main c124957 (782c05d). `.github/workflows/retrieval-gate.yml` is new and yours to merge. |
 
 ## Gate 0 capability probe (2026-10-04)
 
@@ -47,6 +58,16 @@ None.
 4. Branch policy: I only rebase (with `--force-with-lease`) commits that local has not merged. If you are mid-gate on a branch, say so in LOCAL-OUTBOX and I will stack on it instead.
 
 ## Tickets
+
+### VS-61 MCP auth sweep: delivered
+
+- `claude/train-g-security`, 90bb70b, PR #33. Evidence `docs/evidence/W03/VS-61-cloud.md`.
+- Comment to post:
+  > Done in cloud: route-by-route auth table and negative tests (nested batches, notifications, unknown and case-shifted methods, empty batches, hidden calls, bad tokens, wrong content type, web origin, GET streams, non-loopback peers); none returns data without the token. Fixed three gaps: auth overrides now apply in Local mode only (FNDR_MCP_REQUIRE_AUTH=0 used to disable auth in Public mode), constant-time token compare that refuses an empty token, and a token file created 0600 and tightened on load.
+
+### Stretch: anti-bloat review and property tests: delivered
+
+- `claude/train-f-retrieval`, 7a41e12 (six dead items, 105 lines), 3fe3659 (parser crash and speed), 52912b0 (property tests), PR #31. Evidence `anti-bloat-review-cloud.md`, `property-tests-cloud.md`.
 
 ### Third persona (stretch): delivered
 
