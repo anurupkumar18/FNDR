@@ -9,7 +9,7 @@ use crate::context_runtime::retrieval_routes::memory_record_to_search_result;
 use crate::context_runtime::{retrieve_fused, FusedRetrieval};
 use crate::search::memory_cards::{build_fallback_card, MemoryCard};
 use crate::search::{normalize_text, QueryContext};
-use crate::storage::{MemoryRecord, SearchResult};
+use crate::storage::{MemoryRecord, SearchResult, Store};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -92,7 +92,7 @@ pub async fn retrieve(
     Ok(retrieve_with_fused(state, request).await.0)
 }
 
-pub(super) fn memory_is_visible(record: &MemoryRecord, blocklist: &[String]) -> bool {
+pub(crate) fn memory_is_visible(record: &MemoryRecord, blocklist: &[String]) -> bool {
     // Notes are admitted against title, body and project; later rules must
     // apply to those same retained fields when following their links.
     let context = if record.is_agent_note() {
@@ -145,7 +145,6 @@ pub async fn related_memories(
     limit: usize,
 ) -> Result<Vec<MemoryCard>, String> {
     const MAX_RELATED_CARDS: usize = 12;
-    const MAX_LINK_LOOKUPS: usize = 64;
     let limit = limit.min(MAX_RELATED_CARDS);
     if limit == 0 {
         return Ok(Vec::new());
@@ -164,15 +163,7 @@ pub async fn related_memories(
     }
 
     if !seed.related_memory_ids.is_empty() {
-        let mut seen = HashSet::new();
-        let ids = seed
-            .related_memory_ids
-            .iter()
-            .map(|id| id.trim())
-            .filter(|id| !id.is_empty() && seen.insert((*id).to_string()))
-            .take(MAX_LINK_LOOKUPS)
-            .map(str::to_string)
-            .collect::<Vec<_>>();
+        let ids = related_lookup_ids(&seed.related_memory_ids);
         let mut found = state
             .store
             .get_memories_by_ids(&ids)
@@ -293,7 +284,7 @@ pub async fn retrieve_search_results(
                 .map(|result| (hit.memory_id.as_str(), result))
         })
         .collect::<HashMap<_, _>>();
-    let rows = result
+    let mut rows: Vec<SearchResult> = result
         .hits
         .iter()
         .filter_map(|hit| {
@@ -311,7 +302,81 @@ pub async fn retrieve_search_results(
             Some(row)
         })
         .collect();
+    let blocklist = state.config.read().blocklist.clone();
+    authorize_related_memory_ids(&mut rows, &state.store, &blocklist).await;
     Ok((result, rows))
+}
+
+const MAX_LINK_LOOKUPS: usize = 64;
+
+fn related_lookup_ids(ids: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    ids.iter()
+        .map(|id| id.trim())
+        .filter(|id| !id.is_empty() && seen.insert((*id).to_string()))
+        .take(MAX_LINK_LOOKUPS)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Linked targets need their own authorization: they need not be ranked hits.
+/// Batch current IDs and bound merged-ID fallback work across the whole page.
+async fn authorize_related_memory_ids(
+    rows: &mut [SearchResult],
+    store: &Store,
+    blocklist: &[String],
+) {
+    let row_links = rows
+        .iter()
+        .map(|row| related_lookup_ids(&row.related_memory_ids))
+        .collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    let ids = row_links
+        .iter()
+        .flatten()
+        .filter(|id| seen.insert((*id).clone()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        for row in rows {
+            row.related_memory_ids.clear();
+        }
+        return;
+    }
+    let mut found = match store.get_memories_by_ids(&ids).await {
+        Ok(records) => records,
+        Err(_) => {
+            tracing::warn!("retrieval:related_link_visibility_lookup_failed");
+            for row in rows {
+                row.related_memory_ids.clear();
+            }
+            return;
+        }
+    };
+    let mut canonical_by_id = HashMap::new();
+    let mut alias_lookups = 0;
+    for id in ids {
+        let record = match found.remove(&id) {
+            Some(record) => Some(record),
+            None if alias_lookups < MAX_LINK_LOOKUPS => {
+                alias_lookups += 1;
+                store.get_memory_by_id(&id).await.ok().flatten()
+            }
+            None => None,
+        };
+        if let Some(record) = record.filter(|record| memory_is_visible(record, blocklist)) {
+            canonical_by_id.insert(id, record.id);
+        }
+    }
+    for (row, links) in rows.iter_mut().zip(row_links) {
+        let mut seen = HashSet::from([row.id.clone()]);
+        row.related_memory_ids = links
+            .iter()
+            .filter_map(|id| canonical_by_id.get(id))
+            .filter(|canonical| seen.insert((*canonical).clone()))
+            .cloned()
+            .collect();
+    }
 }
 
 /// `retrieve` plus the fused retrieval behind it, for Ask (`run_query`),
@@ -526,6 +591,122 @@ mod tests {
             }).to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn search_rows_authorize_nested_links_without_changing_rank_or_storage() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = source_statement_test_state(dir.path());
+        let visible_a = source_statement_record("visible-a");
+        let mut visible_b = source_statement_record("visible-b");
+        visible_b.consolidated_from = vec!["earlier-b".into()];
+        let mut deleted = source_statement_record("deleted-target");
+        deleted.is_soft_deleted = true;
+        let mut blocked = source_statement_record("blocked-target");
+        blocked.app_name = "PrivateWorkspace".into();
+        blocked.consolidated_from = vec!["earlier-blocked".into()];
+        let mut seed = source_statement_record("seed");
+        seed.consolidated_from = vec!["earlier-seed".into()];
+        seed.related_memory_ids = [
+            " visible-b ",
+            "deleted-target",
+            "missing-target",
+            "earlier-b",
+            "visible-a",
+            "earlier-seed",
+            "visible-a",
+            "blocked-target",
+            "earlier-blocked",
+            "",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&[
+                seed.clone(),
+                visible_a.clone(),
+                visible_b,
+                deleted,
+                blocked,
+            ]))
+            .unwrap();
+        let before = runtime
+            .block_on(state.store.get_memory_by_id("seed"))
+            .unwrap()
+            .unwrap();
+        let mut second = visible_a;
+        second.related_memory_ids = vec!["earlier-b".into(), "seed".into()];
+        let mut rows = vec![
+            memory_record_to_search_result(&seed, 0.73),
+            memory_record_to_search_result(&second, 0.42),
+        ];
+        runtime.block_on(authorize_related_memory_ids(
+            &mut rows,
+            &state.store,
+            &["privateworkspace".into()],
+        ));
+        assert_eq!(rows[0].related_memory_ids, ["visible-b", "visible-a"]);
+        assert_eq!(rows[1].related_memory_ids, ["visible-b", "seed"]);
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["seed", "visible-a"]
+        );
+        assert_eq!(rows[0].score, 0.73);
+        assert_eq!(rows[1].score, 0.42);
+        let payload = serde_json::to_string(&rows).unwrap();
+        for hidden in [
+            "deleted-target",
+            "blocked-target",
+            "missing-target",
+            "earlier-b",
+            "earlier-seed",
+            "earlier-blocked",
+        ] {
+            assert!(!payload.contains(hidden), "nested link leaked: {hidden}");
+        }
+        let stored = runtime
+            .block_on(state.store.get_memory_by_id("seed"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.related_memory_ids, before.related_memory_ids);
+    }
+
+    #[test]
+    fn search_rows_bound_alias_resolution_but_keep_direct_links_after_the_cap() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = source_statement_test_state(dir.path());
+        let mut survivor = source_statement_record("survivor");
+        survivor.consolidated_from = vec!["late-alias".into()];
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&[survivor]))
+            .unwrap();
+        let mut first = source_statement_record("first");
+        first.related_memory_ids = (0..64).map(|i| format!("missing-{i}")).collect();
+        let mut second = source_statement_record("second");
+        second.related_memory_ids = vec!["late-alias".into()];
+        let mut third = source_statement_record("third");
+        third.related_memory_ids = vec!["survivor".into()];
+        let mut rows = vec![
+            memory_record_to_search_result(&first, 0.9),
+            memory_record_to_search_result(&second, 0.8),
+            memory_record_to_search_result(&third, 0.7),
+        ];
+        runtime.block_on(authorize_related_memory_ids(&mut rows, &state.store, &[]));
+        assert!(rows[0].related_memory_ids.is_empty());
+        assert!(rows[1].related_memory_ids.is_empty());
+        assert_eq!(rows[2].related_memory_ids, ["survivor"]);
+        // The late alias really exists; omission is the bounded fallback policy.
+        assert_eq!(
+            runtime
+                .block_on(state.store.get_memory_by_id("late-alias"))
+                .unwrap()
+                .unwrap()
+                .id,
+            "survivor"
+        );
     }
 
     #[test]

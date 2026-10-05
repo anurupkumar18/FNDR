@@ -3036,54 +3036,49 @@ pub enum ComposeMode {
     Answer,
 }
 
-/// Ask FNDR must never cite captures the read-side policy keeps out of search.
-/// Unknown ids are kept; downstream evidence collection already tolerates them.
-/// Drop hits no surface may show: low-signal captures and FNDR's own
-/// windows. Returns the kept hits and the stored rows it looked up.
-pub(crate) async fn drop_hidden_hits(
-    fused: Vec<context_pack::FusedHit>,
+/// Authorize route candidates before fusion's result cap and debug projection.
+/// Routes name current rows; absent/stale ids and failed lookups fail closed.
+async fn retain_visible_route_hits(
+    mut routes: Vec<retrieval_routes::RouteHits>,
     store: &crate::storage::Store,
-) -> (Vec<context_pack::FusedHit>, HashMap<String, MemoryRecord>) {
-    // One batched lookup: per-hit lookups were most of a query's time (VS-09).
-    let ids = fused
+    blocklist: &[String],
+) -> (
+    Vec<retrieval_routes::RouteHits>,
+    HashMap<String, MemoryRecord>,
+) {
+    // One batched lookup across the bounded route pools (VS-09). Do not follow
+    // aliases here: stale route evidence must not be attributed to a survivor.
+    let ids = routes
         .iter()
-        .map(|hit| hit.memory_id.clone())
+        .flat_map(|route| route.hits.iter().map(|hit| hit.memory_id.clone()))
+        .collect::<HashSet<_>>()
+        .into_iter()
         .collect::<Vec<_>>();
-    let records = match store.get_memories_by_ids(&ids).await {
+    let mut records = match store.get_memories_by_ids(&ids).await {
         Ok(records) => records,
         Err(error) => {
-            tracing::warn!(%error, "context_runtime:low_signal_lookup_failed");
-            return (fused, HashMap::new());
+            tracing::warn!(%error, "context_runtime:visibility_lookup_failed");
+            HashMap::new()
         }
     };
-    let kept = fused
-        .into_iter()
-        .filter(|hit| {
-            let hidden = records.get(&hit.memory_id).is_some_and(|record| {
-                crate::memory_quality::record_low_signal_reason(record).is_some()
-                    || crate::privacy::Blocklist::is_internal_app(
-                        &record.app_name,
-                        record.bundle_id.as_deref(),
-                    )
-            });
-            if hidden {
-                tracing::debug!(memory_id = %hit.memory_id, "context_runtime:drop_hidden_hit");
-            }
-            !hidden
-        })
-        .collect();
-    (kept, records)
+    records.retain(|_, record| retrieve::memory_is_visible(record, blocklist));
+    for route in &mut routes {
+        route
+            .hits
+            .retain(|hit| records.contains_key(&hit.memory_id));
+    }
+    (routes, records)
 }
 
 /// The shared front half of every retrieval (VS-09): plan, route dispatch,
-/// fusion, and the hidden-memory drop. `retrieve` and `run_query` both start
+/// visibility filtering, and fusion. `retrieve` and `run_query` both start
 /// here, so Search, Ask, and agents rank memories the same way.
 pub(crate) struct FusedRetrieval {
     pub plan: query_plan::QueryPlan,
     pub weights: context_pack::FusionWeights,
     pub route_hits: Vec<retrieval_routes::RouteHits>,
     pub fused: Vec<context_pack::FusedHit>,
-    /// Stored rows of the fused hits, from the lookup the drop already made.
+    /// Visible candidate rows from the shared authorization lookup.
     pub records: HashMap<String, MemoryRecord>,
     pub inference: Option<std::sync::Arc<crate::inference::InferenceEngine>>,
 }
@@ -3143,8 +3138,10 @@ pub(crate) async fn retrieve_fused(
     }
 
     let route_hits = retrieval_routes::RouteRunner::dispatch(&plan, &ctx).await;
+    let blocklist = state.config.read().blocklist.clone();
+    let (route_hits, records) =
+        retain_visible_route_hits(route_hits, &state.store, &blocklist).await;
     let fused = fusion::fuse(&plan, route_hits.clone(), &weights);
-    let (fused, records) = drop_hidden_hits(fused, &state.store).await;
     FusedRetrieval {
         plan,
         weights,
@@ -3550,7 +3547,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_hidden_hits_removes_visual_fallback_memories() {
+    fn route_visibility_removes_hidden_missing_and_stale_candidates() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = crate::storage::Store::new(dir.path()).expect("store");
         let now = chrono::Utc::now().timestamp_millis();
@@ -3585,22 +3582,142 @@ mod tests {
         junk.enrichment_status = "visual_metadata_fallback".into();
         junk.synthesis_branch = "visual_metadata_fallback".into();
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        rt.block_on(store.add_batch_preserving_ids(&[good, junk]))
+        let mut records = vec![good.clone(), junk];
+        for kind in [
+            "blocked-app",
+            "blocked-title",
+            "blocked-url",
+            "deleted",
+            "internal",
+        ] {
+            let mut record = good.clone();
+            record.id = kind.into();
+            match kind {
+                "blocked-app" => record.app_name = "PrivateWorkspace".into(),
+                "blocked-title" => record.window_title = "PrivateWorkspace draft".into(),
+                "blocked-url" => record.url = Some("https://privateworkspace.test".into()),
+                "deleted" => record.is_soft_deleted = true,
+                "internal" => record.app_name = "FNDR".into(),
+                _ => unreachable!(),
+            }
+            records.push(record);
+        }
+        records[0].consolidated_from = vec!["stale-frame".into()];
+        rt.block_on(store.add_batch_preserving_ids(&records))
             .expect("insert");
 
-        let hit = |id: &str| context_pack::FusedHit {
-            memory_id: id.to_string(),
-            score: 0.9,
-            signals: Default::default(),
-            surfacing_reason: Default::default(),
-            contributing_routes: Vec::new(),
-        };
-        let (kept, records) = rt.block_on(drop_hidden_hits(
-            vec![hit("good"), hit("junk"), hit("missing")],
+        let routes = vec![retrieval_routes::RouteHits {
+            route: query_plan::Route::Keyword,
+            hits: [
+                "good",
+                "junk",
+                "missing",
+                "blocked-app",
+                "blocked-title",
+                "blocked-url",
+                "deleted",
+                "internal",
+                "stale-frame",
+            ]
+            .iter()
+            .map(|id| visibility_test_hit(id, 0.9))
+            .collect(),
+            elapsed_ms: 7,
+        }];
+        let (kept, records) = rt.block_on(retain_visible_route_hits(
+            routes,
             &store,
+            &["privateworkspace".into()],
         ));
-        assert!(records.contains_key("good") && records.contains_key("junk"));
-        let ids: Vec<&str> = kept.iter().map(|h| h.memory_id.as_str()).collect();
-        assert_eq!(ids, vec!["good", "missing"]);
+        assert_eq!(records.len(), 1);
+        assert!(records.contains_key("good"));
+        let ids: Vec<&str> = kept[0].hits.iter().map(|h| h.memory_id.as_str()).collect();
+        assert_eq!(ids, vec!["good"]);
+        assert_eq!(kept[0].elapsed_ms, 7);
+        let plan = query_plan::plan("borrow error", &Default::default());
+        let weights = context_pack::FusionWeights::default();
+        let fused = fusion::fuse(&plan, kept.clone(), &weights);
+        let trace = search_debug_trace(&plan, &kept, &fused, &weights);
+        assert_eq!(trace["routes"][0]["candidate_count"], 1);
+        for excluded in [
+            "junk",
+            "missing",
+            "blocked-app",
+            "blocked-title",
+            "blocked-url",
+            "deleted",
+            "internal",
+            "stale-frame",
+        ] {
+            assert!(
+                !trace.to_string().contains(excluded),
+                "trace leaked {excluded}"
+            );
+        }
+    }
+
+    fn visibility_test_hit(id: &str, score: f32) -> retrieval_routes::RouteHit {
+        retrieval_routes::RouteHit {
+            memory_id: id.into(),
+            score,
+            signals: retrieval_routes::RouteSignals {
+                branch: retrieval_routes::RouteBranch::Keyword,
+                confidence: 1.0,
+                search_result: None,
+            },
+            graph_path: None,
+        }
+    }
+
+    #[test]
+    fn route_visibility_precedes_fusion_cap_and_preserves_visible_ranking() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::storage::Store::new(dir.path()).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let records = (0..60)
+            .map(|i| MemoryRecord {
+                id: format!("visible-{i:02}"),
+                app_name: "Editor".into(),
+                window_title: "Release checklist".into(),
+                clean_text:
+                    "Reviewed deployment checklist and recorded release verification evidence."
+                        .into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        runtime
+            .block_on(store.add_batch_preserving_ids(&records))
+            .unwrap();
+        let visible = records
+            .iter()
+            .enumerate()
+            .map(|(i, r)| visibility_test_hit(&r.id, 0.5 - i as f32 * 0.001))
+            .collect::<Vec<_>>();
+        let mut candidates = (0..60)
+            .map(|i| visibility_test_hit(&format!("PRIVATE-missing-{i}"), 1.0))
+            .collect::<Vec<_>>();
+        candidates.extend(visible.clone());
+        let route = |hits| retrieval_routes::RouteHits {
+            route: query_plan::Route::Keyword,
+            hits,
+            elapsed_ms: 0,
+        };
+        let plan = query_plan::plan("release checklist", &Default::default());
+        let weights = context_pack::FusionWeights::default();
+        let expected = fusion::fuse(&plan, vec![route(visible)], &weights);
+        let (routes, rows) = runtime.block_on(retain_visible_route_hits(
+            vec![route(candidates)],
+            &store,
+            &[],
+        ));
+        let actual = fusion::fuse(&plan, routes.clone(), &weights);
+        assert_eq!(rows.len(), 60);
+        assert_eq!(actual.len(), 50);
+        assert_eq!(
+            serde_json::to_value(&actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        let trace = search_debug_trace(&plan, &routes, &actual, &weights);
+        assert!(!trace.to_string().contains("PRIVATE"));
     }
 }

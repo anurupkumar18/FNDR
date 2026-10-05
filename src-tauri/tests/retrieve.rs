@@ -2,7 +2,7 @@
 
 use fndr_lib::config::{Config, DEFAULT_IMAGE_EMBEDDING_DIM};
 use fndr_lib::context_runtime::{
-    retrieve, run_query, ComposeMode, RetrieveRequest, STRONG_MATCH_SCORE,
+    retrieve, retrieve_search_results, run_query, ComposeMode, RetrieveRequest, STRONG_MATCH_SCORE,
 };
 use fndr_lib::embedding::{Embedder, EMBEDDING_DIM};
 use fndr_lib::graph::GraphStore;
@@ -116,6 +116,90 @@ fn request(query: &str) -> RetrieveRequest {
         limit: 10,
         ..Default::default()
     }
+}
+
+#[test]
+fn public_retrieval_excludes_hidden_hits_and_nested_links_from_serialized_payloads() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (_dir, state) = seeded_state(&runtime);
+    let embedding = runtime
+        .block_on(state.store.get_memory_by_id("vendor"))
+        .unwrap()
+        .unwrap()
+        .embedding;
+    let make_record = |id: &str| {
+        record(
+            id,
+            "Editor",
+            "Cobalt release provenance",
+            "Reviewed the Cobalt release provenance and recorded deployment verification evidence.",
+            1_000,
+            embedding.clone(),
+        )
+    };
+    let mut seed = make_record("cobalt-source");
+    seed.related_memory_ids = vec![
+        "PRIVATE_BLOCKED_TARGET".into(),
+        "PRIVATE_DELETED_TARGET".into(),
+        "PRIVATE_MISSING_TARGET".into(),
+        "earlier-cobalt-link".into(),
+    ];
+    seed.files_touched = vec!["/synthetic/visible-release.md".into()];
+    let original_links = seed.related_memory_ids.clone();
+    let mut linked = make_record("cobalt-visible-link");
+    linked.consolidated_from = vec!["earlier-cobalt-link".into()];
+    let mut blocked = make_record("PRIVATE_BLOCKED_TARGET");
+    blocked.app_name = "PrivateWorkspace".into();
+    blocked.files_touched = vec!["/synthetic/PRIVATE_BLOCKED_PATH.md".into()];
+    blocked.decisions = vec!["PRIVATE_BLOCKED_DECISION".into()];
+    let mut deleted = make_record("PRIVATE_DELETED_TARGET");
+    deleted.is_soft_deleted = true;
+    deleted.files_touched = vec!["/synthetic/PRIVATE_DELETED_PATH.md".into()];
+    deleted.decisions = vec!["PRIVATE_DELETED_DECISION".into()];
+    runtime
+        .block_on(
+            state
+                .store
+                .add_batch_preserving_ids(&[seed, linked, blocked, deleted]),
+        )
+        .unwrap();
+    // A rule added after capture must apply to the next read.
+    state.config.write().blocklist = vec!["privateworkspace".into()];
+
+    let (retrieved, rows) = runtime
+        .block_on(retrieve_search_results(&state, &request("cobalt release")))
+        .expect("public search results");
+    let source = rows
+        .iter()
+        .find(|row| row.id == "cobalt-source")
+        .expect("visible source");
+    assert_eq!(source.related_memory_ids, ["cobalt-visible-link"]);
+    assert!(retrieved.hits.iter().any(|hit| hit.memory_id == source.id));
+    let search_payload = serde_json::to_string(&(retrieved, rows)).unwrap();
+    assert!(!search_payload.contains("PRIVATE_"), "{search_payload}");
+    assert!(!search_payload.contains("earlier-cobalt-link"));
+
+    let answer = runtime
+        .block_on(run_query(&state, "cobalt release", 10, ComposeMode::Cards))
+        .expect("public Cards response");
+    assert!(answer.cards.iter().any(|card| card.id == "cobalt-source"));
+    assert!(answer.evidence.files.iter().any(|file| {
+        file.path == "/synthetic/visible-release.md"
+            && file.memory_ids.iter().any(|id| id == "cobalt-source")
+    }));
+    assert!(
+        answer.debug_trace.is_some(),
+        "debug trace must be exercised"
+    );
+    let cards_payload = serde_json::to_string(&answer).unwrap();
+    assert!(!cards_payload.contains("PRIVATE_"), "{cards_payload}");
+    assert!(!cards_payload.contains("earlier-cobalt-link"));
+
+    let stored = runtime
+        .block_on(state.store.get_memory_by_id("cobalt-source"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.related_memory_ids, original_links);
 }
 
 #[test]

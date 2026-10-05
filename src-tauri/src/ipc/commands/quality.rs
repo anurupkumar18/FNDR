@@ -2,6 +2,7 @@
 
 use super::common::truncate_chars;
 use crate::context_runtime;
+use crate::context_runtime::retrieve::memory_is_visible;
 use crate::memory_embedding_document::compose_memory_embedding_document;
 use crate::memory_quality::{
     classify_storage_outcome, is_low_evidence_visual_fallback_record,
@@ -508,9 +509,91 @@ fn build_query_match_reasons(memory: &MemoryRecord, query: &str) -> Vec<String> 
     reasons
 }
 
+// Legacy graph rows without typed memory provenance cannot establish that their
+// generated labels are safe to show. Keep them stored, but omit them here.
+fn graph_backing_ids(node_id: Option<&str>, metadata: &Value) -> Option<Vec<String>> {
+    metadata.as_object()?;
+    let mut ids = Vec::new();
+    if let Some(id) = node_id.and_then(|id| id.strip_prefix("memory:")) {
+        if id.is_empty() {
+            return None;
+        }
+        ids.push(id.to_string());
+    }
+    for key in ["memory_id", "source_memory_id"] {
+        if let Some(value) = metadata.get(key) {
+            let id = value.as_str().filter(|id| !id.trim().is_empty())?;
+            ids.push(id.to_string());
+        }
+    }
+    for key in ["memory_ids", "source_memory_ids", "supporting_memory_ids"] {
+        if let Some(value) = metadata.get(key) {
+            for value in value.as_array()? {
+                ids.push(
+                    value
+                        .as_str()
+                        .filter(|id| !id.trim().is_empty())?
+                        .to_string(),
+                );
+            }
+        }
+    }
+    if metadata.get("source_type").and_then(Value::as_str) == Some("memory") {
+        ids.push(
+            metadata
+                .get("source_id")?
+                .as_str()
+                .filter(|id| !id.trim().is_empty())?
+                .to_string(),
+        );
+    }
+    ids.sort();
+    ids.dedup();
+    Some(ids)
+}
+
+async fn visible_backing_ids(
+    state: &AppState,
+    mut ids: Vec<String>,
+    blocklist: &[String],
+) -> Result<HashSet<String>, String> {
+    ids.sort();
+    ids.dedup();
+    let rows = state
+        .store
+        .get_memories_by_ids(&ids)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut visible = HashSet::new();
+    let mut alias_lookups = 0;
+    for id in ids {
+        if let Some(record) = rows.get(&id) {
+            if memory_is_visible(record, blocklist) {
+                visible.insert(id);
+            }
+        } else if alias_lookups < 64 {
+            alias_lookups += 1;
+            // Retain old citations only when the canonical survivor is visible.
+            // Stale references beyond the lookup budget remain excluded.
+            if let Some(record) = state
+                .store
+                .get_memory_by_id(&id)
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                if memory_is_visible(&record, blocklist) {
+                    visible.insert(id);
+                }
+            }
+        }
+    }
+    Ok(visible)
+}
+
 async fn build_memory_graph_snapshot(
     state: &AppState,
     memory: &MemoryRecord,
+    blocklist: &[String],
 ) -> Result<MemoryGraphSnapshot, String> {
     let nodes = state
         .store
@@ -523,48 +606,61 @@ async fn build_memory_graph_snapshot(
         .await
         .map_err(|e| e.to_string())?;
     let memory_node_id = format!("memory:{}", memory.id);
-
-    let selected_nodes = nodes
+    let candidates = nodes
         .iter()
         .filter(|node| {
             node.id == memory_node_id
                 || memory.graph_node_ids.iter().any(|id| id == &node.id)
-                || node
-                    .metadata
-                    .get("memory_id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|value| value == memory.id)
-                    .unwrap_or(false)
+                || node.metadata.get("memory_id").and_then(Value::as_str)
+                    == Some(memory.id.as_str())
         })
-        .map(|node| {
-            serde_json::json!({
-                "id": node.id,
-                "type": format!("{:?}", node.node_type),
-                "label": node.label,
-                "created_at": node.created_at
-            })
+        .filter_map(|node| {
+            let ids = graph_backing_ids(Some(&node.id), &node.metadata)?;
+            (!ids.is_empty()).then_some((node, ids))
         })
         .collect::<Vec<_>>();
-
-    let selected_edges = edges
+    let edge_candidates = edges
         .iter()
         .filter(|edge| {
             edge.source == memory_node_id
                 || edge.target == memory_node_id
                 || memory.graph_edge_ids.iter().any(|id| id == &edge.id)
         })
-        .map(|edge| {
+        .filter_map(|edge| graph_backing_ids(None, &edge.metadata).map(|ids| (edge, ids)))
+        .collect::<Vec<_>>();
+    let backing_ids = candidates
+        .iter()
+        .flat_map(|(_, ids)| ids.iter().cloned())
+        .chain(
+            edge_candidates
+                .iter()
+                .flat_map(|(_, ids)| ids.iter().cloned()),
+        )
+        .collect();
+    let visible = visible_backing_ids(state, backing_ids, blocklist).await?;
+    let safe_nodes = candidates
+        .into_iter()
+        .filter(|(_, ids)| ids.iter().all(|id| visible.contains(id)))
+        .map(|(node, _)| node)
+        .collect::<Vec<_>>();
+    let safe_node_ids: HashSet<&str> = safe_nodes.iter().map(|node| node.id.as_str()).collect();
+    let selected_nodes = safe_nodes.iter().map(|node| serde_json::json!({
+        "id":node.id, "type":format!("{:?}", node.node_type), "label":node.label, "created_at":node.created_at
+    })).collect();
+    let selected_edges: Vec<Value> = edge_candidates
+        .into_iter()
+        .filter(|(edge, ids)| {
+            safe_node_ids.contains(edge.source.as_str())
+                && safe_node_ids.contains(edge.target.as_str())
+                && ids.iter().all(|id| visible.contains(id))
+        })
+        .map(|(edge, _)| {
             serde_json::json!({
-                "id": edge.id,
-                "type": format!("{:?}", edge.edge_type),
-                "source": edge.source,
-                "target": edge.target,
-                "timestamp": edge.timestamp,
-                "metadata": edge.metadata
+                "id":edge.id, "type":format!("{:?}", edge.edge_type), "source":edge.source,
+                "target":edge.target, "timestamp":edge.timestamp, "metadata":edge.metadata
             })
         })
-        .collect::<Vec<_>>();
-
+        .collect();
     let weak_evidence = selected_edges
         .iter()
         .filter_map(|edge| {
@@ -594,14 +690,25 @@ pub async fn get_memory_debug_inspector(
     memory_id: String,
     query: Option<String>,
 ) -> Result<MemoryDebugInspector, String> {
+    memory_debug_inspector(state.inner().as_ref(), &memory_id, query.as_deref()).await
+}
+
+async fn memory_debug_inspector(
+    state: &AppState,
+    memory_id: &str,
+    query: Option<&str>,
+) -> Result<MemoryDebugInspector, String> {
     let memory = state
-        .inner()
         .store
-        .get_memory_by_id(&memory_id)
+        .get_memory_by_id(memory_id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Memory not found: {memory_id}"))?;
-    let graph = build_memory_graph_snapshot(state.inner().as_ref(), &memory).await?;
+    let blocklist = state.config.read().blocklist.clone();
+    if !memory_is_visible(&memory, &blocklist) {
+        return Err(format!("Memory not found: {memory_id}"));
+    }
+    let graph = build_memory_graph_snapshot(state, &memory, &blocklist).await?;
 
     let actions = dedupe_trimmed_strings(
         memory
@@ -628,25 +735,38 @@ pub async fn get_memory_debug_inspector(
             .collect::<Vec<_>>(),
         20,
     );
-    let related_knowledge_pages = state
-        .inner()
+    let pages = state
         .store
         .list_knowledge_pages(80, None, None)
         .await
         .map_err(|e| e.to_string())?
         .into_iter()
         .filter(|page| page.supporting_memory_ids.iter().any(|id| id == &memory.id))
+        .collect::<Vec<_>>();
+    let visible = visible_backing_ids(
+        state,
+        pages
+            .iter()
+            .flat_map(|page| page.supporting_memory_ids.iter().cloned())
+            .collect(),
+        &blocklist,
+    )
+    .await?;
+    let related_knowledge_pages = pages
+        .into_iter()
+        .filter(|page| {
+            page.supporting_memory_ids
+                .iter()
+                .all(|id| visible.contains(id))
+        })
         .take(12)
         .map(|page| {
             serde_json::json!({
-                "page_id": page.page_id,
-                "page_type": page.page_type,
-                "title": page.title,
-                "stability": page.stability,
-                "confidence_score": page.confidence_score
+                "page_id":page.page_id, "page_type":page.page_type, "title":page.title,
+                "stability":page.stability, "confidence_score":page.confidence_score
             })
         })
-        .collect::<Vec<_>>();
+        .collect();
     let evidence = raw_evidence_json(&memory.raw_evidence);
     let grounding_confidence = derive_grounding_confidence(&memory, evidence.as_ref());
     let extraction_issues = derive_extraction_issues(evidence.as_ref());
@@ -694,7 +814,6 @@ pub async fn get_memory_debug_inspector(
         storage_outcome: inspected_storage_outcome,
         quality_gate_reason: inspected_quality_gate_reason,
         query_match_reasons: query
-            .as_deref()
             .map(|q| build_query_match_reasons(&memory, q))
             .unwrap_or_default(),
         related_knowledge_pages,
@@ -732,7 +851,8 @@ pub async fn evaluate_recent_memory_quality(
             continue;
         };
 
-        let graph = build_memory_graph_snapshot(state.inner().as_ref(), &memory).await?;
+        let blocklist = state.inner().config.read().blocklist.clone();
+        let graph = build_memory_graph_snapshot(state.inner().as_ref(), &memory, &blocklist).await?;
         let mut issues = Vec::new();
         if is_vague_memory_context(&memory.memory_context) {
             issues.push("vague_memory_context".to_string());
@@ -1086,4 +1206,282 @@ pub async fn backfill_insight_layers_for_range(
             .await?;
     }
     Ok(InsightBackfillReport { changed, dry_run })
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{
+        EdgeType, GraphEdge, GraphNode, KnowledgePage, NodeType, StateStore, Store,
+    };
+
+    fn inspector_state(path: &std::path::Path) -> AppState {
+        let store = Arc::new(Store::new(path).unwrap());
+        let state_store = Arc::new(StateStore::new(path).unwrap());
+        let graph = crate::graph::GraphStore::new(store.clone());
+        AppState::new(
+            path.to_path_buf(),
+            crate::config::Config::default(),
+            store,
+            state_store,
+            graph,
+            None,
+            None,
+        )
+    }
+
+    fn inspector_memory(id: &str) -> MemoryRecord {
+        MemoryRecord {
+            id: id.into(),
+            app_name: "Editor".into(),
+            window_title: "Release verification".into(),
+            snippet: "Reviewed release verification evidence and discussed a conditional rollout."
+                .into(),
+            clean_text:
+                "Reviewed release verification evidence and discussed a conditional rollout.".into(),
+            memory_context: "Release verification discussion.".into(),
+            raw_evidence: serde_json::json!({"debug_marker":format!("RAW_{id}")}).to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn debug_inspector_rejects_excluded_and_unknown_seeds_before_raw_details() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = inspector_state(dir.path());
+        let kinds = [
+            "blocked-app",
+            "blocked-title",
+            "blocked-url",
+            "deleted",
+            "internal",
+            "low-signal",
+        ];
+        let mut rows = vec![inspector_memory("visible")];
+        for kind in kinds {
+            let mut row = inspector_memory(kind);
+            match kind {
+                "blocked-app" => row.app_name = "PrivateWorkspace".into(),
+                "blocked-title" => row.window_title = "PrivateWorkspace notes".into(),
+                "blocked-url" => row.url = Some("https://privateworkspace.example/notes".into()),
+                "deleted" => row.is_soft_deleted = true,
+                "internal" => row.bundle_id = Some("com.fndr.app".into()),
+                "low-signal" => row.storage_outcome = "visual_semantics_failed".into(),
+                _ => unreachable!(),
+            }
+            rows.push(row);
+        }
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&rows))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+        let visible = runtime
+            .block_on(memory_debug_inspector(&state, "visible", None))
+            .unwrap();
+        assert_eq!(visible.memory_id, "visible");
+        assert!(visible.raw_ocr_evidence.to_string().contains("RAW_visible"));
+        for id in kinds.into_iter().chain(["missing"]) {
+            let result = runtime.block_on(memory_debug_inspector(&state, id, None));
+            assert!(
+                result.is_err(),
+                "excluded seed {id} exposed inspector: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn debug_inspector_filters_graph_and_knowledge_by_all_backing_memories() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = inspector_state(dir.path());
+        let mut seed = inspector_memory("visible");
+        seed.graph_node_ids = vec![
+            "memory:blocked".into(),
+            "memory:deleted".into(),
+            "memory:missing".into(),
+            "activity:visible".into(),
+            "activity:blocked".into(),
+            "entity:unprovenanced".into(),
+            "entity:mixed".into(),
+            "entity:malformed".into(),
+        ];
+        seed.graph_edge_ids = vec!["edge:metadata-blocked".into()];
+        let mut blocked = inspector_memory("blocked");
+        blocked.app_name = "PrivateWorkspace".into();
+        let mut deleted = inspector_memory("deleted");
+        deleted.is_soft_deleted = true;
+        runtime
+            .block_on(
+                state
+                    .store
+                    .add_batch_preserving_ids(&[seed, blocked, deleted]),
+            )
+            .unwrap();
+        let node = |id: &str, label: &str, metadata: Value| GraphNode {
+            id: id.into(),
+            node_type: NodeType::Entity,
+            label: label.into(),
+            created_at: 1,
+            metadata,
+        };
+        runtime
+            .block_on(state.store.upsert_nodes(&[
+                node("memory:visible", "Visible memory", serde_json::json!({})),
+                node(
+                    "activity:visible",
+                    "Visible activity",
+                    serde_json::json!({"memory_id":"visible"}),
+                ),
+                node(
+                    "memory:blocked",
+                    "PRIVATE_BLOCKED_LABEL",
+                    serde_json::json!({}),
+                ),
+                node(
+                    "memory:deleted",
+                    "PRIVATE_DELETED_LABEL",
+                    serde_json::json!({}),
+                ),
+                node(
+                    "memory:missing",
+                    "PRIVATE_MISSING_LABEL",
+                    serde_json::json!({}),
+                ),
+                node(
+                    "activity:blocked",
+                    "PRIVATE_ACTIVITY_LABEL",
+                    serde_json::json!({"memory_id":"blocked"}),
+                ),
+                node(
+                    "entity:unprovenanced",
+                    "PRIVATE_UNKNOWN_SOURCE_LABEL",
+                    serde_json::json!({}),
+                ),
+                node(
+                    "entity:mixed",
+                    "PRIVATE_MIXED_BACKING",
+                    serde_json::json!({"memory_ids":["visible", "blocked"]}),
+                ),
+                node(
+                    "entity:malformed",
+                    "PRIVATE_MALFORMED_BACKING",
+                    serde_json::json!({"memory_id":42}),
+                ),
+            ]))
+            .unwrap();
+        let edge = |id: &str, source: &str, target: &str, metadata: Value| GraphEdge {
+            id: id.into(),
+            source: source.into(),
+            target: target.into(),
+            edge_type: EdgeType::InformedBy,
+            timestamp: 1,
+            metadata,
+        };
+        runtime
+            .block_on(state.store.upsert_edges(&[
+                edge(
+                    "edge:visible",
+                    "activity:visible",
+                    "memory:visible",
+                    serde_json::json!({"reason":"visible source"}),
+                ),
+                edge(
+                    "edge:blocked",
+                    "memory:visible",
+                    "memory:blocked",
+                    serde_json::json!({"summary":"PRIVATE_EDGE_METADATA"}),
+                ),
+                edge(
+                    "edge:metadata-blocked",
+                    "memory:visible",
+                    "activity:visible",
+                    serde_json::json!({"memory_id":"blocked", "summary":"PRIVATE_METADATA_ONLY"}),
+                ),
+            ]))
+            .unwrap();
+        let page = |id: &str, title: &str, ids: &[&str]| KnowledgePage {
+            page_id: id.into(),
+            title: title.into(),
+            supporting_memory_ids: ids.iter().map(|id| (*id).into()).collect(),
+            ..Default::default()
+        };
+        runtime
+            .block_on(state.store.upsert_knowledge_pages(&[
+                page("page-visible", "Visible knowledge", &["visible"]),
+                page(
+                    "page-blocked",
+                    "PRIVATE_KNOWLEDGE_BLOCKED",
+                    &["visible", "blocked"],
+                ),
+                page(
+                    "page-deleted",
+                    "PRIVATE_KNOWLEDGE_DELETED",
+                    &["visible", "deleted"],
+                ),
+                page(
+                    "page-missing",
+                    "PRIVATE_KNOWLEDGE_MISSING",
+                    &["visible", "missing"],
+                ),
+            ]))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+        let inspected = runtime
+            .block_on(memory_debug_inspector(&state, "visible", None))
+            .unwrap();
+        let encoded = serde_json::to_string(&inspected).unwrap();
+        assert!(
+            !encoded.contains("PRIVATE_"),
+            "excluded backing content leaked: {encoded}"
+        );
+        assert_eq!(inspected.graph.nodes.len(), 2);
+        assert_eq!(inspected.graph.edges.len(), 1);
+        assert_eq!(inspected.graph.edges[0]["id"], "edge:visible");
+        assert_eq!(inspected.related_knowledge_pages.len(), 1);
+        assert_eq!(
+            inspected.related_knowledge_pages[0]["page_id"],
+            "page-visible"
+        );
+    }
+
+    #[test]
+    fn debug_inspector_backing_alias_resolution_is_visible_and_bounded() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = inspector_state(dir.path());
+        let aliases: Vec<String> = (0..65).map(|i| format!("old-{i:03}")).collect();
+        let mut visible = inspector_memory("visible");
+        visible.consolidated_from = aliases.clone();
+        let mut blocked = inspector_memory("blocked");
+        blocked.app_name = "PrivateWorkspace".into();
+        blocked.consolidated_from = vec!["blocked-old".into()];
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&[visible, blocked]))
+            .unwrap();
+        let blocklist = vec!["privateworkspace".into()];
+        let resolved = runtime
+            .block_on(visible_backing_ids(
+                &state,
+                vec![aliases[0].clone(), "blocked-old".into()],
+                &blocklist,
+            ))
+            .unwrap();
+        assert_eq!(resolved, HashSet::from([aliases[0].clone()]));
+        let ids = aliases.iter().cloned().chain(["visible".into()]).collect();
+        let bounded = runtime
+            .block_on(visible_backing_ids(&state, ids, &blocklist))
+            .unwrap();
+        assert_eq!(
+            bounded.len(),
+            65,
+            "64 alias resolutions plus the directly found canonical row"
+        );
+        assert!(bounded.contains("visible") && bounded.contains("old-063"));
+        assert!(
+            !bounded.contains("old-064"),
+            "unresolved aliases fail closed after the cap"
+        );
+    }
 }
