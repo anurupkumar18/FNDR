@@ -167,7 +167,6 @@ pub fn plan(query: &str, hints: &PlanHints) -> QueryPlan {
     }
 
     let retrieval_routes = route_selection(
-        intent,
         target_project.is_some(),
         !target_entities.is_empty(),
         time_window.is_some() || profile.wants_recency() || contains_temporal_word(normalized),
@@ -279,12 +278,7 @@ fn planner_intent(profile: &QueryProfile) -> PlannerIntent {
     PlannerIntent::Lookup
 }
 
-fn route_selection(
-    intent: PlannerIntent,
-    has_project: bool,
-    has_entities: bool,
-    needs_temporal: bool,
-) -> Vec<Route> {
+fn route_selection(has_project: bool, has_entities: bool, needs_temporal: bool) -> Vec<Route> {
     let mut routes = vec![Route::Chunk, Route::Vector, Route::Keyword];
     if has_entities || has_project {
         routes.push(Route::Entity);
@@ -292,18 +286,9 @@ fn route_selection(
     if needs_temporal {
         routes.push(Route::Temporal);
     }
-    if matches!(
-        intent,
-        PlannerIntent::ResumeWork
-            | PlannerIntent::Debug
-            | PlannerIntent::Definition
-            | PlannerIntent::RelatedTo
-            | PlannerIntent::Lookup
-            | PlannerIntent::HowTo
-            | PlannerIntent::Timeline
-    ) {
-        routes.push(Route::Graph);
-    }
+    // No graph route until `retrieve` loads the insight graph (VS-33). It
+    // used to run over an empty in-memory graph and never found anything.
+    // `GraphRoute` stays tested (tests/retrieval_routes.rs) for when it does.
     routes
 }
 

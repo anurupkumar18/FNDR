@@ -789,3 +789,33 @@ fn retrieve_names_the_chunk_that_matched() {
         assert_eq!(rows[0].matched_chunk_ids, vec!["vendor-1"]);
     }
 }
+
+#[test]
+fn retrieval_runs_no_graph_route_until_it_loads_the_graph() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (_dir, state) = seeded_state(&runtime);
+
+    // A lookup query: the planner used to add the graph route for it, and
+    // that route searched an empty in-memory graph (VS-33).
+    let trace = runtime
+        .block_on(run_query(&state, "zephyr contract", 10, ComposeMode::Cards))
+        .expect("run_query")
+        .debug_trace
+        .expect("trace");
+    let routes = trace["routes"]
+        .as_array()
+        .expect("routes")
+        .iter()
+        .map(|route| {
+            (
+                route["route"].as_str().unwrap_or_default().to_string(),
+                route["top_candidates"].as_array().map_or(0, Vec::len),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        routes.iter().any(|(name, _)| name == "Keyword"),
+        "{routes:?}"
+    );
+    assert!(routes.iter().all(|(name, _)| name != "Graph"), "{routes:?}");
+}

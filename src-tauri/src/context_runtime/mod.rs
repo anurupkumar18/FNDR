@@ -3117,13 +3117,6 @@ pub(crate) async fn retrieve_fused(
         None => Embedder::new().ok(),
     };
     let embedder = shared_embedder.or(fresh_embedder.as_ref());
-    // The typed insight graph (`graph::schema`) is not yet persisted; until the
-    // typed-graph storage table lands, the graph route runs against an empty
-    // in-memory index built fresh per query. The other four routes still hit
-    // real data, so the pipeline gracefully degrades without graph hops.
-    let nodes: Vec<crate::graph::schema::GraphNode> = Vec::new();
-    let edges: Vec<crate::graph::schema::GraphEdge> = Vec::new();
-    let graph_index = crate::graph::graph_index::GraphIndex::build(&nodes, &edges);
     let inference = {
         let guard = state.inference.read();
         guard.as_ref().map(std::sync::Arc::clone)
@@ -3134,7 +3127,6 @@ pub(crate) async fn retrieve_fused(
     // embedded, as Search did before it moved onto `retrieve` (VS-25).
     let expansion = crate::search::llm_query_expansion(inference.as_deref(), query).await;
     let mut ctx = retrieval_routes::RouteCtx::new(&state.store, &search_config)
-        .with_graph(&graph_index, &nodes, &edges)
         .with_limits(
             limit.max(ROUTE_CANDIDATE_POOL),
             time_filter,
