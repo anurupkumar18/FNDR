@@ -30,6 +30,7 @@ pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> 
                 }
             }
             if let Some(result) = hit.signals.search_result.as_ref() {
+                entry.timestamp = entry.timestamp.max(result.timestamp);
                 for label in &result.embedding_reason_labels {
                     if !entry.embedding_reason_labels.contains(label) {
                         entry.embedding_reason_labels.push(label.clone());
@@ -42,7 +43,7 @@ pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> 
 
     let anchor_terms = plan_anchor_terms(plan);
 
-    let mut fused: Vec<FusedHit> = agg
+    let mut fused: Vec<(FusedHit, i64)> = agg
         .into_iter()
         .map(|(memory_id, entry)| {
             let recency_boost = entry.signals.temporal * weights.recency;
@@ -53,7 +54,7 @@ pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> 
                 recency_boost,
                 &entry.embedding_reason_labels,
             );
-            FusedHit {
+            let hit = FusedHit {
                 memory_id,
                 score: entry.score,
                 signals: FusionSignals {
@@ -63,19 +64,22 @@ pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> 
                 },
                 surfacing_reason,
                 contributing_routes: entry.contributing_routes.clone(),
-            }
+            };
+            (hit, entry.timestamp)
         })
         .collect();
 
-    // Ties by id: `agg` is a HashMap, so without this equal scores came out
-    // in a different order on every call.
-    fused.sort_by(|a, b| {
+    // `agg` is a HashMap, so equal scores need a fixed order: the newer
+    // memory, then the smaller id (VS-21).
+    fused.sort_by(|(a, a_time), (b, b_time)| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b_time.cmp(a_time))
             .then_with(|| a.memory_id.cmp(&b.memory_id))
     });
     fused.truncate(MAX_FUSED_HITS);
+    let fused = fused.into_iter().map(|(hit, _)| hit).collect::<Vec<_>>();
 
     runtime_metrics::record_ms(
         "fndr.retrieval.fusion.ms",
@@ -84,14 +88,29 @@ pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> 
     fused
 }
 
-#[derive(Default)]
 struct Agg {
     signals: FusionSignals,
     score: f32,
+    /// Newest timestamp any route reported, for breaking score ties.
+    timestamp: i64,
     coverage: f32,
     graph_path: Option<Vec<PathStep>>,
     contributing_routes: Vec<Route>,
     embedding_reason_labels: Vec<String>,
+}
+
+impl Default for Agg {
+    fn default() -> Self {
+        Self {
+            signals: FusionSignals::default(),
+            score: 0.0,
+            timestamp: i64::MIN,
+            coverage: 0.0,
+            graph_path: None,
+            contributing_routes: Vec::new(),
+            embedding_reason_labels: Vec::new(),
+        }
+    }
 }
 
 impl Agg {
@@ -324,6 +343,31 @@ mod tests {
                 .map(|hit| hit.memory_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["a", "b", "c", "d", "e", "f", "g", "h"]
+        );
+    }
+
+    #[test]
+    fn fuse_orders_equal_scores_newest_first_then_by_id() {
+        let plan = dummy_plan();
+        let dated = |id: &str, timestamp: i64| {
+            let mut hit = hit_with_embedding_reason(id, 0.5, RouteBranch::Semantic, "x");
+            if let Some(result) = hit.signals.search_result.as_mut() {
+                result.timestamp = timestamp;
+            }
+            hit
+        };
+        let hits = vec![RouteHits {
+            route: Route::Vector,
+            hits: vec![dated("b", 100), dated("c", 300), dated("a", 100)],
+            elapsed_ms: 1,
+        }];
+        let fused = fuse(&plan, hits, &FusionWeights::default());
+        assert_eq!(
+            fused
+                .iter()
+                .map(|hit| hit.memory_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c", "a", "b"]
         );
     }
 

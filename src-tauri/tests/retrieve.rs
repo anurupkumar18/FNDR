@@ -485,3 +485,144 @@ fn retrieve_never_returns_fndr_own_windows() {
         .expect("search");
     assert!(results.iter().all(|result| result.id != "own-window"));
 }
+
+/// Fourteen similar notes from the last six days: more memories fall in a
+/// "recent" window than any route keeps, so ties decide what is shown.
+fn busy_week_state(runtime: &tokio::runtime::Runtime) -> (tempfile::TempDir, AppState) {
+    std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Arc::new(Store::new(dir.path()).expect("store"));
+    let state_store = Arc::new(StateStore::new(dir.path()).expect("state store"));
+    let embedder = Embedder::new().expect("embedder");
+    let topics = [
+        "pricing page copy",
+        "beta signup form",
+        "release notes draft",
+        "support macros",
+        "onboarding email",
+        "press kit",
+        "partner webinar",
+        "status page",
+        "billing migration",
+        "app store screenshots",
+        "help center articles",
+        "referral program",
+        "launch retro agenda",
+        "social posts",
+    ];
+    let texts = topics
+        .iter()
+        .map(|topic| format!("Launch notes: reviewed the {topic} for the spring launch"))
+        .collect::<Vec<_>>();
+    let embeddings = embedder.embed_batch(&texts).expect("embeddings");
+    let records = topics
+        .iter()
+        .zip(texts.iter().zip(embeddings))
+        .enumerate()
+        .map(|(index, (topic, (text, embedding)))| {
+            record(
+                &format!("note-{index:02}"),
+                "Notion",
+                &format!("Launch notes: {topic}"),
+                text,
+                (index as i64 * 10 + 1) * 60 * 60 * 1000,
+                embedding,
+            )
+        })
+        .collect::<Vec<_>>();
+    runtime
+        .block_on(store.add_batch(&records))
+        .expect("add records");
+    let graph = GraphStore::new(store.clone());
+    let state = AppState::new(
+        dir.path().to_path_buf(),
+        Config::default(),
+        store,
+        state_store,
+        graph,
+        None,
+        None,
+    );
+    (dir, state)
+}
+
+#[test]
+fn the_same_query_returns_the_same_ids_every_time() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (_dir, state) = busy_week_state(&runtime);
+    let query = "recent launch notes";
+    let run = || {
+        let retrieved = runtime
+            .block_on(retrieve(
+                &state,
+                &RetrieveRequest {
+                    query: query.to_string(),
+                    limit: 5,
+                    ..Default::default()
+                },
+            ))
+            .expect("retrieve")
+            .hits
+            .into_iter()
+            .map(|hit| hit.memory_id)
+            .collect::<Vec<_>>();
+        let searched = runtime
+            .block_on(search_ranked_results(&state, query, None, None, 5))
+            .expect("search")
+            .into_iter()
+            .map(|result| result.id)
+            .collect::<Vec<_>>();
+        let asked = runtime
+            .block_on(run_query(&state, query, 5, ComposeMode::Cards))
+            .expect("run_query")
+            .cards
+            .into_iter()
+            .map(|card| card.id)
+            .collect::<Vec<_>>();
+        (retrieved, searched, asked)
+    };
+
+    let first = run();
+    assert_eq!(first.0.len(), 5);
+    for attempt in 1..5 {
+        assert_eq!(run(), first, "run {attempt}");
+    }
+}
+
+#[test]
+fn a_short_page_is_the_start_of_a_long_page() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let ids = |state: &AppState, query: &str, limit: usize| {
+        runtime
+            .block_on(retrieve(
+                state,
+                &RetrieveRequest {
+                    query: query.to_string(),
+                    limit,
+                    ..Default::default()
+                },
+            ))
+            .expect("retrieve")
+            .hits
+            .into_iter()
+            .map(|hit| hit.memory_id)
+            .collect::<Vec<_>>()
+    };
+
+    let (_week_dir, week) = busy_week_state(&runtime);
+    let (_dir, seeded) = seeded_state(&runtime);
+    for (state, query) in [
+        (&week, "recent launch notes"),
+        (&week, "launch notes from last week"),
+        (&week, "the billing migration"),
+        (&seeded, "zephyr contract"),
+        (&seeded, "team lunch"),
+    ] {
+        let long = ids(state, query, 20);
+        for limit in 1..=5 {
+            let short = ids(state, query, limit);
+            let expected = long.iter().take(limit).cloned().collect::<Vec<_>>();
+            assert_eq!(short, expected, "{query}, limit {limit}");
+        }
+    }
+}

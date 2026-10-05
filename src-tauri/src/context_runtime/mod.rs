@@ -3089,6 +3089,12 @@ pub(crate) struct FusedRetrieval {
     pub inference: Option<std::sync::Arc<crate::inference::InferenceEngine>>,
 }
 
+/// How many candidates each route gathers, whatever page size the caller
+/// asked for, so a short page is the start of a long one (VS-21). Routes
+/// sized their pools from the page size, so Ask (10) and Search (20) gave
+/// different memories the temporal bonus. Equal to fusion's own cap.
+const ROUTE_CANDIDATE_POOL: usize = 50;
+
 pub(crate) async fn retrieve_fused(
     state: &AppState,
     query: &str,
@@ -3125,7 +3131,12 @@ pub(crate) async fn retrieve_fused(
     let search_config = state.config.read().search.clone().normalized();
     let mut ctx = retrieval_routes::RouteCtx::new(&state.store, &search_config)
         .with_graph(&graph_index, &nodes, &edges)
-        .with_limits(limit.max(1), time_filter, app_filter, &[])
+        .with_limits(
+            limit.max(ROUTE_CANDIDATE_POOL),
+            time_filter,
+            app_filter,
+            &[],
+        )
         .with_now_ms(chrono::Utc::now().timestamp_millis());
     if let Some(emb) = embedder {
         ctx = ctx.with_embedder(emb);

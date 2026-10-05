@@ -7,7 +7,7 @@ use crate::context_runtime::retrieval_routes::{RouteBranch, RouteCtx, RouteRunne
 use crate::embedding::Embedder;
 use crate::storage::{SearchResult, Store};
 use crate::telemetry::runtime_metrics;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use tokio::time::{timeout, Duration, Instant};
 
 /// Hybrid searcher combining semantic + lexical retrieval and sentence-aware reranking.
@@ -29,7 +29,8 @@ pub struct QueryProfile {
     wants_recency: bool,
     primary_terms: Vec<String>,
     expanded_terms: Vec<String>,
-    number_terms: HashSet<String>,
+    /// Sorted, so the text the vector route embeds is the same every call.
+    number_terms: BTreeSet<String>,
     phrase: Option<String>,
 }
 
@@ -57,12 +58,12 @@ impl QueryProfile {
                 wants_recency: false,
                 primary_terms: Vec::new(),
                 expanded_terms: Vec::new(),
-                number_terms: HashSet::new(),
+                number_terms: BTreeSet::new(),
                 phrase: None,
             };
         }
 
-        let mut number_terms = HashSet::new();
+        let mut number_terms = BTreeSet::new();
         for token in &tokens {
             if token.chars().any(|ch| ch.is_ascii_digit()) {
                 number_terms.insert(token.clone());
@@ -231,7 +232,7 @@ impl QueryProfile {
             parts.push(with_numbers);
         }
 
-        // Append expanded concept terms — these widen semantic coverage
+        // Append expanded concept terms: these widen semantic coverage
         // (e.g., adding "sports, athletics, match" when the original query
         // is "sport") without polluting the keyword branch.
         let extras_join = extras
@@ -1730,7 +1731,7 @@ fn fusion_weights(
     if profile.is_short_intent_query() {
         // Short queries: lexical evidence dominates. For abstract concept queries,
         // semantic recall is improved instead by enriching the embedding query
-        // with LLM-expanded terms (see `embedding_query_with_extras`) — keeping
+        // with LLM-expanded terms (see `embedding_query_with_extras`), keeping
         // the fusion weights conservative so we don't regress precision on
         // single-token exact-match cases like "cricket", "canva", "rust".
         (0.24, 0.14, 0.62)
@@ -2124,6 +2125,17 @@ fn is_code_query(query: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_embedding_text_lists_numbers_in_a_fixed_order() {
+        // Each profile's HashSet used its own random order, so a query with
+        // two or more numbers embedded different text on each call (VS-21).
+        let texts = (0..20)
+            .map(|_| QueryProfile::from_query("LL-1482 spam placement 1.8% and 42 units"))
+            .map(|profile| profile.embedding_query_with_extras(&[]))
+            .collect::<HashSet<_>>();
+        assert_eq!(texts.len(), 1, "{texts:?}");
+    }
 
     fn sr(id: &str, title: &str, text: &str, score: f32) -> SearchResult {
         SearchResult {
