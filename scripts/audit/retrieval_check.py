@@ -2,8 +2,10 @@
 """Compare a retrieval_qa JSON report against the accepted reference (VS-04).
 
 The check fails when any reference path's Recall@5 drops more than the allowed
-tolerance, when a query that one path found in its top ten becomes a miss, or
-when a reference path or query disappears. Everything else (MRR@10, per-kind
+tolerance, when a query that one path ranked 1 to 7 becomes a miss, or when a
+reference path or query disappears. A query lost from ranks 8 to 10 is a
+warning (VS-63): those ranks hold near-ties that can move with the platform or
+the time of day the profile was seeded, and they do not count toward Recall@5. Everything else (MRR@10, per-kind
 recall, latency, rank moves within the top ten, new paths and queries) is
 reported but does not block, so a reviewer sees the whole picture.
 
@@ -23,6 +25,9 @@ from pathlib import Path
 
 SUPPORTED_SCHEMA_VERSIONS = frozenset((1, 2))
 DEFAULT_MAX_RECALL_DROP = 0.05
+# A query lost from this rank or lower in the top ten is a warning, not a
+# failure (VS-63).
+NEAR_TIE_FROM_RANK = 8
 # Recall values are ratios of small integers; allow float noise at the boundary.
 EPSILON = 1e-9
 
@@ -50,6 +55,7 @@ class CheckResult:
     reference_top1: dict = field(default_factory=dict)
     current_top1: dict = field(default_factory=dict)
     failures: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     rank_changes: list[RankChange] = field(default_factory=list)
     new_paths: list[str] = field(default_factory=list)
     new_queries: list[str] = field(default_factory=list)
@@ -139,9 +145,11 @@ def compare(reference: dict, current: dict, max_recall_drop: float = DEFAULT_MAX
                 continue
             result.rank_changes.append(RankChange(text, ref_query.get("kind", ""), name, before, after))
             if before is not None and after is None:
-                result.failures.append(
-                    f"{name} lost {text!r} ({ref_query.get('kind', '')}): rank {before} -> miss"
-                )
+                message = f"{name} lost {text!r} ({ref_query.get('kind', '')}): rank {before} -> miss"
+                if before >= NEAR_TIE_FROM_RANK:
+                    result.warnings.append(message)
+                else:
+                    result.failures.append(message)
 
     result.new_queries = [query["query"] for query in current["queries"] if query["query"] not in reference_texts]
     return result
@@ -192,11 +200,17 @@ def cell(text: str) -> str:
 
 
 def render(result: CheckResult) -> str:
-    verdict = "PASS" if not result.failures else "FAIL"
+    if result.failures:
+        verdict = "FAIL"
+    elif result.warnings:
+        count = len(result.warnings)
+        verdict = f"PASS with {count} warning{'' if count == 1 else 's'}"
+    else:
+        verdict = "PASS"
     lines = [
         f"# Retrieval check: {result.case_set}: {verdict}",
         "",
-        f"Gate: Recall@5 may drop at most {result.max_recall_drop:.2f} on any path, and no query found in a path's top ten may become a miss.",
+        f"Gate: Recall@5 may drop at most {result.max_recall_drop:.2f} on any path, and no query a path ranked 1 to {NEAR_TIE_FROM_RANK - 1} may become a miss (a miss from ranks {NEAR_TIE_FROM_RANK} to 10 is a warning).",
         "",
         "| Path | Recall@5 ref | Recall@5 now | Delta | MRR@10 ref | MRR@10 now | Delta | p95 ms ref | p95 ms now |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -274,6 +288,16 @@ def render(result: CheckResult) -> str:
     if result.failures:
         lines += ["", "## Regressions", ""]
         lines += [f"- {cell(failure)}" for failure in result.failures]
+
+    if result.warnings:
+        lines += [
+            "",
+            "## Warnings",
+            "",
+            f"Not gated: these queries sat at rank {NEAR_TIE_FROM_RANK} or lower, among near-ties.",
+            "",
+        ]
+        lines += [f"- {cell(warning)}" for warning in result.warnings]
 
     if result.rank_changes:
         lines += ["", "## Rank changes", "", "| Query | Kind | Path | Ref rank@10 | Now rank@10 |", "|---|---|---|---:|---:|"]

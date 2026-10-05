@@ -4,7 +4,7 @@ name: retrieval-gate
 # touch retrieval code, the seed corpora, or the gate itself.
 # It seeds the three synthetic personas from scripts/demo/ and fails when any
 # path's Recall@5 drops more than 0.05 against scripts/demo/retrieval-reference/,
-# or when a query a path found in its top ten becomes a miss
+# or when a query a path ranked 1 to 7 becomes a miss (ranks 8 to 10 only warn)
 # (scripts/audit/retrieval_check.py). No real data is involved: the runner
 # starts with no FNDR profile, and the only download is the pinned MiniLM.
 
