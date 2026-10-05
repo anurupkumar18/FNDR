@@ -26,6 +26,11 @@ Part 9 stretch item. Four configurations of the same code, on one seed per perso
 | office-pm | chunks | 0.950 | 0.699 | 1.000 | 0.889 | 1.000 | 1.000 | 1 / 4 | 0 | 347 | 496 |
 | office-pm | no keyword | 0.950 | 0.648 | 1.000 | 0.889 | 0.875 | 1.000 | 4 / 4 | 18 | 136 | 229 |
 | office-pm | no vector | 0.750 | 0.604 | 1.000 | 0.444 | 1.000 | 1.000 | 4 / 4 | 27 | 153 | 329 |
+| software-engineer | fused | 1.000 | 0.831 | 1.000 | 1.000 | 1.000 | 1.000 | 3 / 4 | 0 | 183 | 306 |
+| software-engineer | no keyword | 0.952 | 0.814 | 1.000 | 0.889 | 1.000 | 1.000 | 4 / 4 | 19 | 122 | 223 |
+| software-engineer | no vector | 0.905 | 0.756 | 1.000 | 0.778 | 1.000 | 1.000 | 4 / 4 | 25 | 169 | 294 |
+
+The software-engineer rows come from the third persona (`persona-software-engineer-cloud.md`). Its queries were written before any run. It ran after the other two, on its own seed, and had no chunks run.
 
 ## What it shows
 
@@ -46,12 +51,22 @@ Part 9 stretch item. Four configurations of the same code, on one seed per perso
 4. **Chunks are the only configuration that gains without a trade.** Office-PM Recall@5 rises to 0.950 and MRR@10 to 0.699; knowledge-worker MRR@10 rises to 0.970; no query ranks lower. The cost is about 130 ms at p50 for the BGE-large query embedding (CPU, debug build). These are VS-18's numbers again, from an independent seed.
 5. **The keyword route costs about 70 ms at p50** in this build (201 against 129 ms).
 
-## What it suggests (a proposal, not done here)
+## Out of sample: the third persona does not repeat finding 2
 
-- Lower the keyword weight for queries that look like paraphrases: no digits, no capitalized names, no quoted phrase, no identifier shapes (`LL-1482`, `test_*`, paths).
-- That would aim at the three office-PM paraphrases without touching identifier queries.
-- With only 17 paraphrase queries over two personas, any weight found here is likely overfit. It should be chosen on these two personas and accepted only if the third persona (`software-engineer`, whose queries were written before any run) does not get worse.
-- Filed as a proposal in `docs/team/tickets/proposed/cloud-proposals.md`.
+On the software-engineer persona, removing BM25 makes nothing better and four queries worse:
+
+- two paraphrases: "the fix for dropped database connections" 2 to 5, and "what broke in the build for the labels change" 5 to 7;
+- one time query and one app query, each 1 to 2.
+
+Its Recall@5 falls 1.000 to 0.952. Here the paraphrases share words with their memories ("database", "build", "labels"), so BM25 helps them.
+
+So "BM25 hurts paraphrases" is a property of three office-PM queries, not of paraphrase queries. Removing the vector route still hurts paraphrase on all three personas (finding 1 holds out of sample).
+
+## What it suggests
+
+- **Keep the fused default.** It has the best MRR@10 on all three personas.
+- **Do not lower the keyword weight for paraphrase-like queries.** I drafted that as a proposal (VS-43) from the two original personas. The third persona, run afterwards, contradicts it, so it is withdrawn from `docs/team/tickets/proposed/cloud-proposals.md`. This is the overfitting a third persona exists to catch.
+- **Chunks remain the measured way to lift paraphrase** (finding 4).
 
 ## Caveats
 
