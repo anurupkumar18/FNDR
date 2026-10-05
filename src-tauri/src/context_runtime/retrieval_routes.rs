@@ -255,6 +255,8 @@ pub fn memory_record_to_search_result(record: &MemoryRecord, score: f32) -> Sear
         id: record.id.clone(),
         timestamp: record.timestamp,
         app_name: record.app_name.clone(),
+        source_type: record.source_type.clone(),
+        added_by: record.added_by(),
         text_source: crate::memory_quality::text_source_from_raw_evidence(&record.raw_evidence)
             .to_string(),
         bundle_id: record.bundle_id.clone(),

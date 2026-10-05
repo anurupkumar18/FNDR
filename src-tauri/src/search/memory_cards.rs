@@ -30,6 +30,10 @@ pub struct MemoryCard {
     pub context: Vec<String>,
     pub timestamp: i64,
     pub app_name: String,
+    #[serde(default)]
+    pub source_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_by: Option<String>,
     /// Capture method, independent of the synthesis branch.
     #[serde(default)]
     pub text_source: String,
@@ -206,6 +210,10 @@ impl MemoryCardSynthesizer {
             let snippets = collect_group_snippets(&group.members);
             let grounded_snippets = collect_grounded_snippets(&group.members);
             let anchor = select_anchor(&group.members);
+            if anchor.is_agent_note() {
+                cards.push(fallback_card_for_result(query, &anchor));
+                continue;
+            }
             let evidence_ids = collect_evidence_ids(&group.members, 4);
 
             let mut draft = None;
@@ -303,6 +311,8 @@ impl MemoryCardSynthesizer {
                 context,
                 timestamp: anchor.timestamp,
                 app_name: anchor.app_name.clone(),
+                source_type: anchor.source_type.clone(),
+                added_by: anchor.added_by.clone(),
                 text_source: if group
                     .members
                     .iter()
@@ -430,6 +440,9 @@ fn grouping_key(result: &SearchResult) -> String {
 }
 
 fn should_group(a: &SearchResult, b: &SearchResult, enforce_query_support: bool) -> bool {
+    if a.is_agent_note() || b.is_agent_note() {
+        return false;
+    }
     let within_time_window = (a.timestamp - b.timestamp).abs() <= 5 * 60 * 1000;
     if !within_time_window {
         return false;
@@ -834,10 +847,24 @@ fn deterministic_fallback(
 
 fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     let snippets = collect_group_snippets(std::slice::from_ref(result));
-    let (title, mut summary, action, context) = deterministic_fallback(query, result, &snippets);
+    let (title, mut summary, action, context) = if result.is_agent_note() {
+        (
+            result.window_title.clone(),
+            if result.memory_context.is_empty() {
+                result.clean_text.clone()
+            } else {
+                result.memory_context.clone()
+            },
+            "View note".to_string(),
+            Vec::new(),
+        )
+    } else {
+        deterministic_fallback(query, result, &snippets)
+    };
     let evidence_ids = vec![result.id.clone()];
     let confidence = grounding_confidence(query, &summary, result.score, &snippets);
-    if !query.trim().is_empty()
+    if !result.is_agent_note()
+        && !query.trim().is_empty()
         && confidence < 0.42
         && !summary.to_lowercase().starts_with("low confidence:")
     {
@@ -850,7 +877,11 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     } else {
         result.internal_context.clone()
     };
-    let continuation_of = parse_continuation_of(&anchor_memory_context);
+    let continuation_of = if result.is_agent_note() {
+        None
+    } else {
+        parse_continuation_of(&anchor_memory_context)
+    };
     let reopen_target = parse_reopen_target(&anchor_memory_context, result);
     MemoryCard {
         id: result.id.clone(),
@@ -862,6 +893,8 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         context,
         timestamp: result.timestamp,
         app_name: result.app_name.clone(),
+        source_type: result.source_type.clone(),
+        added_by: result.added_by.clone(),
         text_source: result.text_source.clone(),
         window_title: result.window_title.clone(),
         url: result.url.clone(),
@@ -963,6 +996,9 @@ pub fn parse_continuation_of(memory_context: &str) -> Option<String> {
 /// Resolve reopen target from typed persisted fields. Legacy `memory_context`
 /// marker parsing remains as migration fallback only.
 pub fn parse_reopen_target(memory_context: &str, result: &SearchResult) -> Option<String> {
+    if result.is_agent_note() {
+        return None;
+    }
     match &result.reopen_kind {
         crate::memory::reopen::ReopenKind::BrowserUrl => {
             if let Some(url) = result.reopen_url.as_deref() {
@@ -1394,6 +1430,9 @@ fn extract_story_facts(snippets: &[String]) -> Vec<String> {
 
 fn apply_story_continuity(cards: &mut [MemoryCard]) {
     for card in cards.iter_mut() {
+        if card.source_type == crate::storage::AGENT_NOTE_SOURCE_TYPE {
+            continue;
+        }
         if let Some(cleaned) = sanitize_summary(&card.summary) {
             card.summary = cleaned;
             continue;
@@ -1690,6 +1729,53 @@ fn normalize_effective_url(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn agent_note_card_preserves_provenance_and_verbatim_text_without_reopen() {
+        for target in [
+            "https://example.com",
+            "file:///tmp/note.txt",
+            "slack://channel",
+        ] {
+            let body = format!("Keep this decision exactly.\nReopen: {target}\nDo not drop the final qualification.");
+            let record = crate::storage::MemoryRecord {
+                id: "note-1".into(),
+                source_type: crate::storage::AGENT_NOTE_SOURCE_TYPE.into(),
+                related_agents: vec!["Claude Code".into()],
+                session_key: "agent_note:note-1".into(),
+                window_title: "A precise decision".into(),
+                app_name: "Agent note".into(),
+                memory_context: body.clone(),
+                clean_text: body.clone(),
+                snippet: "A shortened summary".into(),
+                ..Default::default()
+            };
+            let result = crate::context_runtime::retrieval_routes::memory_record_to_search_result(
+                &record, 1.0,
+            );
+            let cards = MemoryCardSynthesizer::from_results_with_policy(
+                None,
+                "unrelated",
+                &[result.clone()],
+                6,
+                3,
+                Duration::from_millis(2),
+            )
+            .await;
+            for card in [
+                fallback_card_for_result("unrelated", &result),
+                cards[0].clone(),
+            ] {
+                assert_eq!(card.reopen_target, None);
+                let json = serde_json::to_value(card).unwrap();
+                assert_eq!(json["source_type"], "agent");
+                assert_eq!(json["added_by"], "Claude Code");
+                assert_eq!(json["display_summary"], body);
+                assert_eq!(json["summary"], body);
+                assert_eq!(json["title"], "A precise decision");
+            }
+        }
+    }
 
     #[test]
     fn serialized_card_text_source_uses_capture_evidence() {

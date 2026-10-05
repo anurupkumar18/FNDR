@@ -4698,7 +4698,10 @@ async fn merge_or_append_memory_record(
 
     if let Some(anchor) = incoming_anchor.as_ref() {
         if let Some(anchor_id) = continuity_index.get(anchor).cloned() {
-            if let Some(batch_idx) = batch.iter().position(|record| record.id == anchor_id) {
+            if let Some(batch_idx) = batch
+                .iter()
+                .position(|record| record.id == anchor_id && !record.is_agent_note())
+            {
                 let merge_write_started = Instant::now();
                 let merged = merge_memory_records(
                     batch[batch_idx].clone(),
@@ -4730,7 +4733,7 @@ async fn merge_or_append_memory_record(
                 .await
                 .map_err(|e| e.to_string())?;
             runtime_metrics::since_ms("mem.merge_search_ms", merge_search_started);
-            if let Some(existing) = existing {
+            if let Some(existing) = existing.filter(|record| !record.is_agent_note()) {
                 let merge_write_started = Instant::now();
                 let merged =
                     merge_memory_records(existing.clone(), incoming.clone(), text_embedder, engine)
@@ -4949,12 +4952,16 @@ pub async fn replay_memory_records(
 }
 
 pub(crate) fn eligible_for_story_merge(record: &MemoryRecord) -> bool {
-    record.clean_text.trim().len() >= 36 || record.snippet.trim().len() >= 18
+    !record.is_agent_note()
+        && (record.clean_text.trim().len() >= 36 || record.snippet.trim().len() >= 18)
 }
 
 fn best_batch_merge_target(batch: &[MemoryRecord], incoming: &MemoryRecord) -> Option<usize> {
     let mut best: Option<(usize, MergeScore)> = None;
     for (index, candidate) in batch.iter().enumerate() {
+        if candidate.is_agent_note() {
+            continue;
+        }
         let scored = score_memory_candidate(incoming, candidate);
         if incoming.app_name != candidate.app_name
             && !allows_cross_app_merge_from_memory(incoming, candidate, scored)
@@ -4982,6 +4989,9 @@ fn best_batch_lexical_merge_target(
 ) -> Option<usize> {
     let mut best: Option<(usize, MergeScore)> = None;
     for (index, candidate) in batch.iter().enumerate() {
+        if candidate.is_agent_note() {
+            continue;
+        }
         if incoming.app_name != candidate.app_name {
             continue;
         }
@@ -5021,6 +5031,7 @@ async fn best_persisted_merge_target(
 
     let best_same_app = same_app_candidates
         .iter()
+        .filter(|candidate| !candidate.is_agent_note())
         .filter(|candidate| candidate.id != incoming.id)
         .filter_map(|candidate| {
             let scored = score_search_candidate(incoming, candidate);
@@ -5047,6 +5058,7 @@ async fn best_persisted_merge_target(
 
     let best_cross_app = cross_app_candidates
         .iter()
+        .filter(|candidate| !candidate.is_agent_note())
         .filter(|candidate| candidate.id != incoming.id)
         .filter(|candidate| candidate.app_name != incoming.app_name)
         .filter_map(|candidate| {
@@ -5088,6 +5100,7 @@ async fn best_persisted_lexical_merge_target(
 
     let best = candidates
         .iter()
+        .filter(|candidate| !candidate.is_agent_note())
         .filter(|candidate| candidate.id != incoming.id)
         .filter_map(|candidate| {
             let scored = score_search_candidate_lexical(incoming, candidate);
@@ -6001,6 +6014,9 @@ fn same_domain(left: Option<&str>, right: Option<&str>) -> bool {
 }
 
 pub(crate) fn continuity_anchor_for_memory(record: &MemoryRecord) -> Option<String> {
+    if record.is_agent_note() {
+        return None;
+    }
     continuity_anchor(
         &record.app_name,
         record.url.as_deref(),
@@ -6712,6 +6728,114 @@ mod tests {
                     before + 1
                 );
             });
+    }
+
+    fn assert_capture_keeps_agent_note_separate(persisted: bool, seed_anchor: bool) {
+        let dir = tempfile::tempdir().expect("temporary store");
+        let store = Arc::new(crate::storage::Store::new(dir.path()).expect("store"));
+        let state_store = Arc::new(crate::storage::StateStore::new(dir.path()).expect("state store"));
+        let graph = crate::graph::GraphStore::new(store.clone());
+        let state = AppState::new(
+            dir.path().to_path_buf(),
+            crate::config::Config::default(),
+            store.clone(),
+            state_store,
+            graph,
+            None,
+            None,
+        );
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(async {
+                let mut note = merge_test_record("agent-note");
+                note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string();
+                note.timestamp = chrono::Utc::now().timestamp_millis();
+                note.raw_evidence = r#"{"added_by":"test-agent","source_kind":"unknown"}"#.into();
+                let mut incoming = merge_test_record("screen-capture");
+                incoming.timestamp = note.timestamp + 1;
+                incoming.raw_evidence = r#"{"source_kind":"ax"}"#.into();
+                let mut batch = Vec::new();
+                if persisted {
+                    store.add_batch(&[note.clone()]).await.expect("seed note");
+                    note = store.get_memory_by_id(&note.id).await.unwrap().unwrap();
+                } else {
+                    batch.push(note.clone());
+                }
+                let note_before = serde_json::to_value(&note).unwrap();
+                let mut continuity_index = HashMap::new();
+                if seed_anchor {
+                    // Exercise stale or externally seeded indexes, independently
+                    // of whether agent notes now generate anchors themselves.
+                    let anchor = continuity_anchor_for_memory(&incoming).expect("screen anchor");
+                    continuity_index.insert(anchor, note.id.clone());
+                } else if persisted {
+                    assert!(best_persisted_merge_target(&state, &incoming)
+                        .await
+                        .unwrap()
+                        .is_none());
+                    assert!(best_persisted_lexical_merge_target(&state, &incoming)
+                        .await
+                        .unwrap()
+                        .is_none());
+                } else {
+                    assert_eq!(best_batch_merge_target(&batch, &incoming), None);
+                    assert_eq!(best_batch_lexical_merge_target(&batch, &incoming), None);
+                }
+                let result = merge_or_append_memory_record(
+                    &state,
+                    &mut batch,
+                    &mut continuity_index,
+                    incoming.clone(),
+                    None,
+                    None,
+                )
+                .await
+                .expect("capture decision");
+                assert_eq!(
+                    result.id, incoming.id,
+                    "screen must stay separate from agent note"
+                );
+                assert!(!result.is_agent_note());
+                if !persisted {
+                    assert_eq!(serde_json::to_value(&batch[0]).unwrap(), note_before);
+                }
+                store
+                    .add_batch(&batch)
+                    .await
+                    .expect("persist separate screen");
+                let preserved = store.get_memory_by_id(&note.id).await.unwrap().unwrap();
+                if persisted {
+                    assert_eq!(serde_json::to_value(&preserved).unwrap(), note_before);
+                }
+                assert!(preserved.is_agent_note());
+                assert!(store
+                    .get_memory_by_id(&incoming.id)
+                    .await
+                    .unwrap()
+                    .is_some());
+            });
+    }
+
+    #[test]
+    fn capture_keeps_agent_notes_out_of_batch_merge_candidates() {
+        assert_capture_keeps_agent_note_separate(false, false);
+    }
+
+    #[test]
+    fn capture_keeps_agent_notes_out_of_persisted_merge_candidates() {
+        assert_capture_keeps_agent_note_separate(true, false);
+    }
+
+    #[test]
+    fn capture_keeps_agent_notes_separate_from_batch_continuity_anchor() {
+        assert_capture_keeps_agent_note_separate(false, true);
+    }
+
+    #[test]
+    fn capture_keeps_agent_notes_separate_from_persisted_continuity_anchor() {
+        assert_capture_keeps_agent_note_separate(true, true);
     }
 
     #[test]

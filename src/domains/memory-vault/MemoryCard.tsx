@@ -43,6 +43,7 @@ interface MemoryCardProps {
 
 /** Post-capture lifecycle states surfaced on the card. */
 export type LifecycleStatus =
+    | "ADDED"
     | "DEVELOPED"
     | "PENDING"
     | "RAW"
@@ -81,15 +82,20 @@ export function MemoryCard({
         "idle" | "confirming" | "deleting" | "error"
     >("idle");
     const previewText = pickPreviewText(card);
+    const isAgentNote = card.source_type === "agent";
+    const sourceLabel = isAgentNote
+        ? `Agent note${card.added_by ? ` · Added by ${card.added_by}` : ""}`
+        : card.app_name;
     const threads = deriveThreads(card);
     const timeLabel = formatTime(card.timestamp);
     const dayLabel = formatDay(card.timestamp);
-    const status: LifecycleStatus = lifecycleStatus ?? deriveLifecycleStatus(card);
+    const status: LifecycleStatus = isAgentNote ? "ADDED" : lifecycleStatus ?? deriveLifecycleStatus(card);
     const stampMeta = STAMP_META[status];
 
     const cls = [
         "fndr-mc",
         `fndr-mc--${variant}`,
+        isAgentNote ? "fndr-mc--agent-note" : "",
         className ?? "",
     ]
         .filter(Boolean)
@@ -127,9 +133,9 @@ export function MemoryCard({
                 </div>
                 {/* source area: app name + activity/files chips */}
                 <div className="fndr-mc-c-source" aria-label="Source and activity">
-                    {sourceIcon}
+                    {!isAgentNote && sourceIcon}
                     <em className="fndr-mc-c-source-app">
-                        {card.app_name}
+                        {sourceLabel}
                         {card.reopen_page ? ` · page ${card.reopen_page}` : null}
                     </em>
                     {card.activity_type && card.activity_type !== "other" && (
@@ -209,7 +215,7 @@ export function MemoryCard({
             )}
 
             <div className="fndr-mc-source">
-                {card.app_name}
+                {sourceLabel}
                 {card.window_title && variant === "expanded" ? ` · ${card.window_title}` : null}
                 {card.reopen_page ? ` · page ${card.reopen_page}` : null}
             </div>
@@ -271,7 +277,7 @@ export function MemoryCard({
                                 See in graph
                             </Button>
                         )}
-                        {onReopen && card.reopen_target && (
+                        {!isAgentNote && onReopen && card.reopen_target && (
                             <Button mono variant="secondary" onClick={() => onReopen(card)}>
                                 {reopenButtonLabel(card)}
                             </Button>
@@ -352,6 +358,7 @@ export function MemoryCard({
 
 /** Lifecycle stamp metadata: tone + label keyed by status. */
 const STAMP_META: Record<LifecycleStatus, { tone: "developed" | "muted" | "amber" | "alarm"; label: string }> = {
+    ADDED: { tone: "muted", label: "ADDED" },
     DEVELOPED: { tone: "developed", label: "DEVELOPED" },
     PENDING: { tone: "amber", label: "PENDING" },
     RAW: { tone: "muted", label: "RAW" },
@@ -363,6 +370,7 @@ const STAMP_META: Record<LifecycleStatus, { tone: "developed" | "muted" | "amber
  *  `visual_semantics_failed` always wins so the UI doesn't dress a failed
  *  ingest up as a real memory. */
 export function deriveLifecycleStatus(card: MemoryCardData): LifecycleStatus {
+    if (card.source_type === "agent") return "ADDED";
     if (card.storage_outcome === "visual_semantics_failed") {
         return "VISUAL_FAILED";
     }
@@ -420,6 +428,9 @@ function isReviewed(card: MemoryCardData): boolean {
 }
 
 function pickPreviewText(card: MemoryCardData): string {
+    if (card.source_type === "agent") {
+        return card.display_summary || card.internal_context || card.summary;
+    }
     // 1. insight_what_happened wins; it's the synthesized, reviewer-grade summary.
     const insight = safeText(card.insight_what_happened);
     if (insight) return insight;

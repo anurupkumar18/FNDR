@@ -163,6 +163,9 @@ pub async fn sync_memory_record(
     record: &MemoryRecord,
     source_hint: Option<&str>,
 ) -> Result<ActivityEvent, String> {
+    if record.is_agent_note() {
+        return Err("Assistant notes cannot become derived activity.".to_string());
+    }
     let _ = state.graph.ingest_memory(record).await;
 
     let event = build_activity_event(state, record, source_hint).await?;
@@ -467,8 +470,12 @@ pub async fn build_context_pack(
             continue;
         }
         excluded.push(ExcludedContextItem {
+            reason: if result.is_agent_note() {
+                "assistant note remains separate from derived work context".to_string()
+            } else {
+                "zero graph/entity relevance after runtime filtering".to_string()
+            },
             id: result.id,
-            reason: "zero graph/entity relevance after runtime filtering".to_string(),
         });
     }
 
@@ -971,6 +978,9 @@ async fn ensure_event_for_result(
     state: &AppState,
     result: &SearchResult,
 ) -> Result<Option<ActivityEvent>, String> {
+    if result.is_agent_note() {
+        return Ok(None);
+    }
     if let Some(event) = state
         .store
         .get_activity_event_by_memory_id(&result.id)
@@ -3268,6 +3278,91 @@ fn fused_trace(hit: &context_pack::FusedHit) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn context_pack_does_not_promote_agent_notes_to_derived_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_path_buf();
+        let state = tokio::task::spawn_blocking(move || {
+            let store = std::sync::Arc::new(crate::storage::Store::new(&data_dir).unwrap());
+            let state_store =
+                std::sync::Arc::new(crate::storage::StateStore::new(&data_dir).unwrap());
+            let graph = crate::graph::GraphStore::new(store.clone());
+            AppState::new(
+                data_dir,
+                crate::config::Config::default(),
+                store,
+                state_store,
+                graph,
+                None,
+                None,
+            )
+        })
+        .await
+        .unwrap();
+        let note = MemoryRecord {
+            id: "agent-leaf-context".into(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            source_type: "agent".into(),
+            app_name: "Agent note".into(),
+            window_title: "Atlas release decision".into(),
+            clean_text: "Atlas release decision: skip every remaining check.".into(),
+            display_summary: "Atlas release decision: skip every remaining check.".into(),
+            project: "Atlas".into(),
+            session_key: "agent_note:agent-leaf-context".into(),
+            ..Default::default()
+        };
+        state
+            .store
+            .add_batch_preserving_ids(&[note.clone()])
+            .await
+            .unwrap();
+        let before = state
+            .store
+            .get_memory_by_id(&note.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let pack = build_context_pack(&state, ContextRequest::default())
+            .await
+            .unwrap();
+        assert!(
+            state
+                .store
+                .list_activity_events(20, None)
+                .await
+                .unwrap()
+                .is_empty(),
+            "reading a note must not create activity"
+        );
+        assert!(state
+            .store
+            .get_project_context("Atlas")
+            .await
+            .unwrap()
+            .is_none());
+        let graph = crate::graph::graph_store::GraphStore::new(state.store.clone());
+        assert!(graph.all_nodes().await.unwrap().is_empty());
+        assert!(pack.active_goal.is_none());
+        assert!(pack.recommended_next_action.is_none());
+        assert!(pack.excluded.iter().any(|item| item.id == note.id));
+        assert_eq!(
+            serde_json::to_value(
+                state
+                    .store
+                    .get_memory_by_id(&note.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            serde_json::to_value(before).unwrap()
+        );
+        assert!(
+            sync_memory_record(&state, &note, None).await.is_err(),
+            "direct sync must also refuse agent notes"
+        );
+    }
 
     fn record() -> MemoryRecord {
         MemoryRecord {

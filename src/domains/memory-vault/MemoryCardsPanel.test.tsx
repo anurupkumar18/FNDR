@@ -266,6 +266,15 @@ describe("MemoryCardsPanel", () => {
         ).toBeInTheDocument();
     });
 
+    it("does not offer screen similarity for an agent note", async () => {
+        vi.mocked(listMemoryCards).mockResolvedValue([{ ...card(1), source_type: "agent", added_by: "Claude Code" }]);
+        render(<MemoryCardsPanel isVisible={true} onClose={() => {}} appNames={["Agent note"]} feature="vault" />);
+        fireEvent.click(await screen.findByRole("button", { name: "Open memory: Memory 1" }));
+        expect(await screen.findByRole("dialog", { name: "Expanded memory: Memory 1" })).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Find similar screens" })).toBeNull();
+        expect(findVisuallySimilarMemories).not.toHaveBeenCalled();
+    });
+
     it("groups memories by day, then by project or app thread, with a source icon per row", async () => {
         vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
         vi.mocked(listMemoryCards).mockResolvedValue([

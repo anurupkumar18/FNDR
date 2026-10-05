@@ -274,7 +274,16 @@ impl NoteEmbedder {
             NoteEmbedder::Shared => crate::ipc::commands::common::shared_embedder()
                 .ok()
                 .filter(|embedder| matches!(embedder.backend(), EmbeddingBackend::Real))
-                .and_then(f),
+                .and_then(|embedder| {
+                    let result = f(embedder);
+                    // Even with development mock fallback enabled, a failed
+                    // real inference must not admit a mock-vector note.
+                    if matches!(embedder.backend(), EmbeddingBackend::Real) {
+                        result
+                    } else {
+                        None
+                    }
+                }),
             #[cfg(test)]
             NoteEmbedder::Given(embedder) => embedder.as_deref().and_then(f),
         }
@@ -323,7 +332,9 @@ async fn remember(
     let args = parse_arguments(arguments)?;
     check_related_ids(app_state, &args.related_memory_ids).await?;
 
-    let combined = format!("{}\n{}", args.title, args.text);
+    // Every caller-supplied text field that is persisted and embedded must
+    // pass the same secret and blocklist checks, including the project label.
+    let combined = format!("{}\n{}\n{}", args.title, args.text, args.project);
     if safety_gate::evaluate(None, None, None, None, Some(&combined), &[]) != SafetyDecision::Allow
     {
         return Err(Refusal::new(

@@ -574,6 +574,27 @@ fn normalize_record_for_index_strips_low_confidence_markers() {
 }
 
 #[test]
+fn normalize_agent_note_preserves_literal_text_and_formatting() {
+    let body = "Keep this code exactly:\n```python\nif ready:\n    print(\"[LOW_CONF]\")\n```\n\nKeep the final qualification.";
+    let mut note = record(None, "Code note", body);
+    note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.into();
+    note.memory_context = body.into();
+    note.internal_context = body.into();
+    note.display_summary = body.into();
+    let normalized = normalize_record_for_index(&note);
+    for text in [
+        &normalized.text,
+        &normalized.clean_text,
+        &normalized.snippet,
+        &normalized.display_summary,
+        &normalized.memory_context,
+        &normalized.internal_context,
+    ] {
+        assert_eq!(text, body);
+    }
+}
+
+#[test]
 fn normalize_record_for_index_preserves_existing_embedding_text_and_flags_mismatch() {
     let mut source = record(
         Some("https://docs.example.com/fndr/search"),
@@ -1125,8 +1146,11 @@ async fn remember_keeps_full_note_text() {
     // VS-68: an agent note is stored whole, is its own card, and has no
     // reopen target; capture rows are compacted (text emptied, clean_text
     // cut to a few hundred characters).
+    let beginning = "Keep this code exactly:\n```python\nif ready:\n    print(\"[LOW_CONF]\")\n```\n\n";
     let ending = " The last words mention zephyrquartz.";
-    let body = "a".repeat(4000 - ending.chars().count()) + ending;
+    let body = beginning.to_string()
+        + &"a".repeat(4000 - beginning.chars().count() - ending.chars().count())
+        + ending;
     assert_eq!(body.chars().count(), 4000);
     let mut note = keyword_row(
         "note-1",
@@ -1138,6 +1162,8 @@ async fn remember_keeps_full_note_text() {
     note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string();
     note.session_key = format!("{}note-1", crate::storage::AGENT_NOTE_SESSION_PREFIX);
     note.snippet = "A decision.".to_string();
+    note.memory_context = body.clone();
+    note.internal_context = body.clone();
     let (_dir, store) = keyword_store(Vec::new()).await;
     store
         .add_batch_preserving_ids(std::slice::from_ref(&note))
@@ -1156,6 +1182,8 @@ async fn remember_keeps_full_note_text() {
         "clean_text: {}",
         kept(&stored.clean_text)
     );
+    assert_eq!(stored.memory_context, body);
+    assert_eq!(stored.internal_context, body);
     assert_eq!(stored.session_key, "agent_note:note-1");
     assert_eq!(
         stored.reopen_kind,
@@ -1167,6 +1195,54 @@ async fn remember_keeps_full_note_text() {
         .await
         .expect("keyword search");
     assert_eq!(hit_ids(&hits), vec!["note-1"]);
+}
+
+#[tokio::test]
+async fn agent_note_search_projection_preserves_provenance_from_storage() {
+    let mut note = keyword_row(
+        "note-provenance",
+        5_000,
+        "Agent note",
+        "Decision",
+        "zephyrquartz decision",
+    );
+    note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.into();
+    note.related_agents = vec!["Claude Code".into()];
+    note.session_key = "agent_note:note-provenance".into();
+    let (_dir, store) = keyword_store(vec![note]).await;
+    let hits = store
+        .keyword_search("zephyrquartz", 5, None, None)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    let json = serde_json::to_value(&hits[0]).unwrap();
+    assert_eq!(json["source_type"], "agent");
+    assert_eq!(json["added_by"], "Claude Code");
+}
+
+#[tokio::test]
+async fn keyword_search_keeps_agent_notes_separate_from_identical_capture_content() {
+    let mut rows = Vec::new();
+    for (id, source_type) in [
+        ("note-a", "agent"),
+        ("note-b", "agent"),
+        ("screen", "screen"),
+    ] {
+        let mut row = keyword_row(id, 5_000, "Editor", "Decision", "zephyrquartz decision");
+        row.source_type = source_type.into();
+        row.content_hash = "same-content-hash".into();
+        rows.push(row);
+    }
+    let (_dir, store) = keyword_store(Vec::new()).await;
+    store.add_batch_preserving_ids(&rows).await.unwrap();
+    let hits = store
+        .keyword_search("zephyrquartz", 10, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        hit_ids(&hits).into_iter().collect::<HashSet<_>>(),
+        HashSet::from(["note-a", "note-b", "screen"])
+    );
 }
 
 #[tokio::test]

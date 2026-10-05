@@ -67,6 +67,10 @@ impl MemoryRecord {
     pub fn is_agent_note(&self) -> bool {
         self.source_type == AGENT_NOTE_SOURCE_TYPE
     }
+
+    pub fn added_by(&self) -> Option<String> {
+        self.is_agent_note().then(|| self.related_agents.first().cloned()).flatten()
+    }
 }
 
 fn default_unknown() -> String {
@@ -629,6 +633,10 @@ pub struct SearchResult {
     pub id: String,
     pub timestamp: i64,
     pub app_name: String,
+    #[serde(default = "default_source_type")]
+    pub source_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_by: Option<String>,
     /// Capture text method derived from existing raw evidence; never persisted separately.
     #[serde(default = "default_unknown")]
     pub text_source: String,
@@ -798,12 +806,20 @@ pub struct SearchResult {
     pub storage_outcome: String,
 }
 
+impl SearchResult {
+    pub fn is_agent_note(&self) -> bool {
+        self.source_type == AGENT_NOTE_SOURCE_TYPE
+    }
+}
+
 impl Default for SearchResult {
     fn default() -> Self {
         Self {
             id: String::new(),
             timestamp: 0,
             app_name: String::new(),
+            source_type: default_source_type(),
+            added_by: None,
             text_source: default_unknown(),
             bundle_id: None,
             window_title: String::new(),

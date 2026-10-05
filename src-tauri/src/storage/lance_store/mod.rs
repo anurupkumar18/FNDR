@@ -76,6 +76,8 @@ pub const KNOWLEDGE_PAGES_TABLE: &str = "knowledge_pages";
 pub const GRAPH_NODES_TABLE: &str = "graph_nodes";
 pub const GRAPH_EDGES_TABLE: &str = "graph_edges";
 const SEARCH_RESULT_COLUMNS: &[&str] = &[
+    "source_type",
+    "related_agents",
     "id",
     "timestamp",
     "app_name",

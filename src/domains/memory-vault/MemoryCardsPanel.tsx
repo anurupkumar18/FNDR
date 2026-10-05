@@ -1120,7 +1120,7 @@ export function MemoryCardsPanel({
                         insightsSlot={
                             <>
                                 <InsightLayers card={expandedCard} evalUi={false} />
-                                <div className="fndr-emc-extra-actions">
+                                {expandedCard.source_type !== "agent" && <div className="fndr-emc-extra-actions">
                                     <button
                                         type="button"
                                         className="ui-action-btn"
@@ -1140,10 +1140,10 @@ export function MemoryCardsPanel({
                                             ? "Hide similar"
                                             : "Find similar screens"}
                                     </button>
-                                </div>
+                                </div>}
                             </>
                         }
-                        similarSlot={similarSlot}
+                        similarSlot={expandedCard.source_type === "agent" ? undefined : similarSlot}
                         onClose={() => setOpenExpandedId(null)}
                         onDelete={async (id) => {
                             const deleted = await handleDeleteCard(id);

@@ -155,12 +155,16 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     if normalized.internal_context.trim().is_empty() {
         normalized.internal_context = normalized.clean_text.clone();
     }
-    normalized.clean_text = strip_low_conf_markers(&normalized.clean_text);
-    normalized.snippet = strip_low_conf_markers(&normalized.snippet);
-    normalized.display_summary = strip_low_conf_markers(&normalized.display_summary);
-    normalized.internal_context = strip_low_conf_markers(&normalized.internal_context);
-    normalized.memory_context = strip_low_conf_markers(&normalized.memory_context);
-    normalized.embedding_text = strip_low_conf_markers(&normalized.embedding_text);
+    // Assistant notes are authored text, so capture cleanup must not change
+    // their indentation, paragraph boundaries, or literal marker strings.
+    if !normalized.is_agent_note() {
+        normalized.clean_text = strip_low_conf_markers(&normalized.clean_text);
+        normalized.snippet = strip_low_conf_markers(&normalized.snippet);
+        normalized.display_summary = strip_low_conf_markers(&normalized.display_summary);
+        normalized.internal_context = strip_low_conf_markers(&normalized.internal_context);
+        normalized.memory_context = strip_low_conf_markers(&normalized.memory_context);
+        normalized.embedding_text = strip_low_conf_markers(&normalized.embedding_text);
+    }
     if normalized.timestamp_start <= 0 {
         normalized.timestamp_start = normalized.timestamp;
     }
@@ -1396,6 +1400,9 @@ pub(super) fn dedup_search_results(
 }
 
 pub(super) fn record_insert_dedup_key(record: &MemoryRecord) -> String {
+    if record.is_agent_note() {
+        return format!("{}{}", crate::storage::AGENT_NOTE_SESSION_PREFIX, record.id);
+    }
     if !record.content_hash.trim().is_empty() {
         return record.content_hash.trim().to_string();
     }
@@ -1407,6 +1414,9 @@ pub(super) fn record_insert_dedup_key(record: &MemoryRecord) -> String {
 }
 
 pub(super) fn search_result_dedup_key(result: &SearchResult) -> String {
+    if result.is_agent_note() {
+        return format!("{}{}", crate::storage::AGENT_NOTE_SESSION_PREFIX, result.id);
+    }
     if !result.content_hash.trim().is_empty() {
         return result.content_hash.trim().to_string();
     }

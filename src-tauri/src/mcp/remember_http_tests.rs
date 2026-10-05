@@ -292,6 +292,43 @@ async fn remember_fails_closed_when_embedder_unavailable() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remember_refuses_sensitive_project_without_storing_or_echoing_it() {
+    let server = serve(app_state_with(notes_on()).await, true, mock_embedder()).await;
+    let project = "password: synthetic-project-secret";
+    let (status, body) = server
+        .remember(
+            Some(TOKEN),
+            None,
+            json!({"kind":"note", "text":"Reviewed the parser tests.", "project":project}),
+        )
+        .await;
+    assert_eq!(outcome(status, &body), Err("sensitive_content".to_string()));
+    assert!(server.rows().await.is_empty());
+    assert!(!body.to_string().contains(project));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remember_refuses_blocklisted_project_without_storing_or_echoing_it() {
+    let mut config = notes_on();
+    config.blocklist = vec!["blocked-project.example".to_string()];
+    let server = serve(app_state_with(config).await, true, mock_embedder()).await;
+    let project = "Work on blocked-project.example";
+    let (status, body) = server
+        .remember(
+            Some(TOKEN),
+            None,
+            json!({"kind":"note", "text":"Reviewed the parser tests.", "project":project}),
+        )
+        .await;
+    assert_eq!(
+        outcome(status, &body),
+        Err("blocklisted_content".to_string())
+    );
+    assert!(server.rows().await.is_empty());
+    assert!(!body.to_string().contains(project));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remember_stores_agent_provenance_and_the_note_is_findable() {
     // Route budgets lifted: under the parallel lib tests a production
     // keyword budget can drop a hit (see build_seeded_search_state).

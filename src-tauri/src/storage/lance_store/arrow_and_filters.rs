@@ -849,6 +849,8 @@ pub(super) fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> 
 
 pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
     let n = batch.num_rows();
+    let source_types = str_col(batch, "source_type");
+    let related_agents = list_str_col(batch, "related_agents");
     let ids = str_col(batch, "id");
     let timestamps = i64_col(batch, "timestamp");
     let app_names = str_col(batch, "app_name");
@@ -938,6 +940,12 @@ pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> 
                 id: get_str(&ids, i),
                 timestamp: timestamps.as_ref().map(|c| c.value(i)).unwrap_or(0),
                 app_name: get_str(&app_names, i),
+                source_type: get_str(&source_types, i),
+                added_by: if get_str(&source_types, i) == crate::storage::AGENT_NOTE_SOURCE_TYPE {
+                    extract_str_list(&related_agents, i).into_iter().next()
+                } else {
+                    None
+                },
                 text_source: crate::memory_quality::text_source_from_raw_evidence(&get_str(
                     &raw_evidences,
                     i,

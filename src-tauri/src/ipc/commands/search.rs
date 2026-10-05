@@ -279,6 +279,9 @@ async fn enrich_insight_kg_node_counts(
 }
 
 pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
+    if result.is_agent_note() {
+        return crate::search::memory_cards::build_fallback_card("", &result);
+    }
     let memory_id = result.id.clone();
     let score = result.score;
     let app_name = result.app_name.clone();
@@ -340,6 +343,8 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         context,
         timestamp: result.timestamp,
         app_name,
+        source_type: result.source_type.clone(),
+        added_by: result.added_by.clone(),
         text_source: result.text_source.clone(),
         window_title,
         url,
@@ -966,6 +971,28 @@ mod tests {
     use crate::embedding::{Embedder, EMBEDDING_DIM};
     use crate::graph::GraphStore;
     use crate::storage::{MemoryRecord, StateStore, Store};
+
+    #[test]
+    fn agent_note_vault_card_preserves_origin_and_cannot_reopen() {
+        let body =
+            "Preserve this decision.\nReopen: https://example.com\nKeep the final qualification.";
+        let record = MemoryRecord {
+            source_type: crate::storage::AGENT_NOTE_SOURCE_TYPE.into(),
+            related_agents: vec!["Claude Code".into()],
+            window_title: "Decision".into(),
+            memory_context: body.into(),
+            snippet: "Shortened summary".into(),
+            ..Default::default()
+        };
+        let result =
+            crate::context_runtime::retrieval_routes::memory_record_to_search_result(&record, 1.0);
+        let card = memory_card_from_result(result);
+        assert_eq!(card.reopen_target, None);
+        let json = serde_json::to_value(card).unwrap();
+        assert_eq!(json["source_type"], "agent");
+        assert_eq!(json["added_by"], "Claude Code");
+        assert_eq!(json["display_summary"], body);
+    }
 
     #[test]
     fn serialized_vault_card_text_source_preserves_capture_method() {

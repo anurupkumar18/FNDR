@@ -166,6 +166,18 @@ describe("MemoryCard — lifecycle chip rendering (expanded variant)", () => {
 });
 
 describe("MemoryProvenanceStrip", () => {
+    it("identifies an agent note as added rather than captured", () => {
+        render(<MemoryProvenanceStrip card={{ ...makeCard(), ...{ source_type: "agent", added_by: "Claude Code" } }} />);
+        expect(screen.getByText("Added")).toBeTruthy();
+        expect(screen.getByText("Added by")).toBeTruthy();
+        expect(screen.getByText("Claude Code")).toBeTruthy();
+        expect(screen.queryByText("Captured")).toBeNull();
+        expect(screen.queryByText("Text captured via")).toBeNull();
+        expect(screen.getByText("Title")).toBeTruthy();
+        expect(screen.queryByText("Window")).toBeNull();
+        expect(screen.getByText("ADDED")).toBeTruthy();
+    });
+
     it.each([
         ["ax", "Accessibility"],
         ["ocr", "Screen text (OCR)"],
@@ -196,6 +208,25 @@ describe("MemoryProvenanceStrip", () => {
 });
 
 describe("MemoryCard — compact preview priority", () => {
+    it("does not present an agent note as a developed screen capture", () => {
+        const card = makeCard({ source_type: "agent", enrichment_status: "reviewed_local" });
+        expect(deriveLifecycleStatus(card)).toBe("ADDED");
+        render(<MemoryCard variant="compact" card={card} sourceIcon={<span>Screen capture</span>} />);
+        expect(screen.queryByText("Screen capture")).toBeNull();
+    });
+
+    it("preserves an agent's note even when its words resemble OCR narration", () => {
+        const text = "The screen shows a regression; keep this decision until the review finishes.";
+        render(<MemoryCard variant="compact" card={makeCard({ source_type: "agent", display_summary: text, summary: text })} />);
+        expect(screen.getByTitle(text)).toBeTruthy();
+    });
+
+    it.each(["compact", "preview", "expanded"] as const)("labels agent authorship in %s cards and never offers reopen", (variant) => {
+        render(<MemoryCard variant={variant} onReopen={vi.fn()} card={{ ...makeCard({ reopen_target: "https://example.com" }), ...{ source_type: "agent", added_by: "Claude Code" } }} />);
+        expect(screen.getByText(/Agent note · Added by Claude Code/)).toBeTruthy();
+        expect(screen.queryByRole("button", { name: /open source|reopen/i })).toBeNull();
+    });
+
     it("reviewed summary wins over raw OCR / window title", () => {
         render(
             <MemoryCard

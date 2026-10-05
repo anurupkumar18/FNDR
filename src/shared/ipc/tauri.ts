@@ -8,6 +8,8 @@ export interface SearchResult {
     timestamp: number;
     app_name: string;
     text_source?: CaptureTextSource;
+    source_type?: string;
+    added_by?: string;
     bundle_id?: string;
     window_title: string;
     session_id: string;
@@ -61,6 +63,8 @@ export interface MemoryCard {
     timestamp: number;
     app_name: string;
     text_source?: CaptureTextSource;
+    source_type?: string;
+    added_by?: string;
     window_title: string;
     url?: string;
     score: number;

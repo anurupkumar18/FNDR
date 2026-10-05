@@ -4854,7 +4854,8 @@ fn build_memory_rows(memories: &[crate::storage::MemoryRecord], include_raw: boo
                 "errors": memory.errors,
                 "decisions": memory.decisions,
                 "next_steps": memory.next_steps,
-                "source_type": infer_source_type(memory.url.as_deref(), &memory.app_name),
+                "source_type": if memory.is_agent_note() { crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string() } else { infer_source_type(memory.url.as_deref(), &memory.app_name) },
+                "added_by": memory.added_by(),
                 "confidence": memory.extraction_confidence
             });
             if include_raw {
@@ -4896,7 +4897,8 @@ fn result_row_to_json(
         "errors": memory.map(|m| m.errors.clone()).unwrap_or_default(),
         "decisions": memory.map(|m| m.decisions.clone()).unwrap_or_default(),
         "next_steps": memory.map(|m| m.next_steps.clone()).unwrap_or_default(),
-        "source_type": infer_source_type(row.url.as_deref(), &row.app_name),
+        "source_type": if row.is_agent_note() { crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string() } else { infer_source_type(row.url.as_deref(), &row.app_name) },
+        "added_by": row.added_by,
     });
     if include_raw {
         base["raw"] = json!({
@@ -5249,6 +5251,23 @@ mod tests {
     use crate::graph::GraphStore;
     use crate::storage::{MemoryRecord, StateStore, Store};
     use tempfile::tempdir;
+
+    #[test]
+    fn agent_note_mcp_rows_preserve_origin_and_client() {
+        let memory = MemoryRecord {
+            source_type: crate::storage::AGENT_NOTE_SOURCE_TYPE.into(),
+            related_agents: vec!["Claude Code".into()],
+            app_name: "Agent note".into(),
+            ..Default::default()
+        };
+        let result = memory_to_search_result(&memory);
+        let mut rows = build_memory_rows(&[memory], false);
+        rows.push(result_row_to_json(&result, None, false));
+        for row in rows {
+            assert_eq!(row["source_type"], "agent");
+            assert_eq!(row["added_by"], "Claude Code");
+        }
+    }
 
     #[test]
     fn serialized_mcp_rows_include_text_source_without_raw_evidence() {

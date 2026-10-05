@@ -17,10 +17,11 @@ const TEXT_SOURCE_LABELS = {
 export function MemoryProvenanceStrip({ card }: Props) {
     const d = new Date(card.timestamp);
     const stamp = provenanceStatusLabel(card);
+    const isAgentNote = card.source_type === "agent";
     return (
         <dl className="fndr-mc-provenance">
             <div>
-                <dt>Captured</dt>
+                <dt>{isAgentNote ? "Added" : "Captured"}</dt>
                 <dd>
                     {d.toLocaleDateString(undefined, {
                         month: "short",
@@ -33,15 +34,22 @@ export function MemoryProvenanceStrip({ card }: Props) {
             </div>
             <div>
                 <dt>Source</dt>
-                <dd>{card.app_name}</dd>
+                <dd>{isAgentNote ? "Agent note" : card.app_name}</dd>
             </div>
-            <div>
-                <dt>Text captured via</dt>
-                <dd>{TEXT_SOURCE_LABELS[card.text_source ?? "unknown"] ?? "Unknown"}</dd>
-            </div>
+            {isAgentNote ? (
+                <div>
+                    <dt>Added by</dt>
+                    <dd>{card.added_by || "Unknown client"}</dd>
+                </div>
+            ) : (
+                <div>
+                    <dt>Text captured via</dt>
+                    <dd>{TEXT_SOURCE_LABELS[card.text_source ?? "unknown"] ?? "Unknown"}</dd>
+                </div>
+            )}
             {card.window_title && (
                 <div>
-                    <dt>Window</dt>
+                    <dt>{isAgentNote ? "Title" : "Window"}</dt>
                     <dd>{card.window_title}</dd>
                 </div>
             )}
@@ -72,6 +80,7 @@ export function MemoryProvenanceStrip({ card }: Props) {
 }
 
 function provenanceStatusLabel(card: MemoryCardData): string {
+    if (card.source_type === "agent") return "ADDED";
     if (card.storage_outcome === "visual_semantics_failed") return "VISUAL FAILED";
     switch (card.enrichment_status) {
         case "reviewed_local":
