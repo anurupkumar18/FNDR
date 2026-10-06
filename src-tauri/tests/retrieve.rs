@@ -127,17 +127,21 @@ fn public_retrieval_excludes_hidden_hits_and_nested_links_from_serialized_payloa
         .unwrap()
         .unwrap()
         .embedding;
-    let make_record = |id: &str| {
+    // Distinct ages: keyword search treats rows with the same title, URL, and
+    // timestamp as one capture, and keeps only one of them. Without a text
+    // model (CI) keyword search is the only route, so a shared timestamp let
+    // a hidden row stand in for the visible source.
+    let make_record = |id: &str, age_ms: i64| {
         record(
             id,
             "Editor",
             "Cobalt release provenance",
             "Reviewed the Cobalt release provenance and recorded deployment verification evidence.",
-            1_000,
+            age_ms,
             embedding.clone(),
         )
     };
-    let mut seed = make_record("cobalt-source");
+    let mut seed = make_record("cobalt-source", 1_000);
     seed.related_memory_ids = vec![
         "PRIVATE_BLOCKED_TARGET".into(),
         "PRIVATE_DELETED_TARGET".into(),
@@ -146,13 +150,13 @@ fn public_retrieval_excludes_hidden_hits_and_nested_links_from_serialized_payloa
     ];
     seed.files_touched = vec!["/synthetic/visible-release.md".into()];
     let original_links = seed.related_memory_ids.clone();
-    let mut linked = make_record("cobalt-visible-link");
+    let mut linked = make_record("cobalt-visible-link", 2_000);
     linked.consolidated_from = vec!["earlier-cobalt-link".into()];
-    let mut blocked = make_record("PRIVATE_BLOCKED_TARGET");
+    let mut blocked = make_record("PRIVATE_BLOCKED_TARGET", 3_000);
     blocked.app_name = "PrivateWorkspace".into();
     blocked.files_touched = vec!["/synthetic/PRIVATE_BLOCKED_PATH.md".into()];
     blocked.decisions = vec!["PRIVATE_BLOCKED_DECISION".into()];
-    let mut deleted = make_record("PRIVATE_DELETED_TARGET");
+    let mut deleted = make_record("PRIVATE_DELETED_TARGET", 4_000);
     deleted.is_soft_deleted = true;
     deleted.files_touched = vec!["/synthetic/PRIVATE_DELETED_PATH.md".into()];
     deleted.decisions = vec!["PRIVATE_DELETED_DECISION".into()];
