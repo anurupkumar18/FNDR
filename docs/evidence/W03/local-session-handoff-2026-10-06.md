@@ -8,6 +8,12 @@ conserve credits; resume with the owner tomorrow. No automation was scheduled.
 
 ## Current state
 
+Resumed October 6: three persona gates completed (knowledge-worker PASS,
+software-engineer PASS, office-pm FAIL with installed tokenizer). A separate
+pinned-tokenizer office-PM run passed with every reference rank restored.
+Real-vault read-only health audit completed. Exact manual checklist is still
+missing; native QA remains pending. See the updated report below.
+
 Steps 1–4 are committed on `main`: `f9caa25`, `09e7748`, `a1eee41`, `802dcf3`.
 PR #36 was merged after CI passed; baseline `1b3638c` was synced to GitLab.
 See [verification and manual QA status](manual-qa-2026-10-06.md) for exact
@@ -38,7 +44,8 @@ capture merge logic, cloud outbox, and seed/retrieval scripts.
 
 Baseline full test and all focused checks passed. Final full test: 545 frontend
 and 1,160 Rust tests passed, 15 Rust tests ignored; typecheck/build passed.
-Persona commands have **not** run yet. The temporary Vite server and browser
+Persona commands were pending at the initial stop; the resume results are
+recorded under Current state and in the linked report. The temporary Vite server and browser
 tab were closed at the checkpoint; no native FNDR process was launched.
 
 ## Tests / verification
@@ -55,13 +62,14 @@ restore only this generated diff after checking that no user edits preceded it.
 
 ## Next steps
 
-1. Check clean state/remotes and fetch both `origin` and `gh`; preserve any new work.
-2. Run `TZ=America/Denver make qa-retrieval-check PERSONA=knowledge-worker`,
-   then `office-pm`, then `software-engineer` from repo root. Preserve failures
-   and model/tokenizer identity; do not loosen reference gates.
-3. Obtain the exact ten-step cloud checklist, launch the updated native app,
-   run the authorized real-vault checks, and update `manual-qa-2026-10-06.md`.
-4. Commit evidence and push to the explicit GitLab URL after verification.
+1. Check clean state/remotes; preserve any new work. GitLab fetch succeeded
+   on retry during the resumed session; GitHub outbox remains `6f871ea`.
+2. Obtain the exact ten-step cloud checklist from the owner. Launch the
+   updated native app, run the authorized real-vault checks, and update the
+   manual QA report. No app or dev server was started by the resume session.
+3. Keep the installed-tokenizer office-PM failure visible. Pinned comparison
+   passes, but owner assets/vectors have not been changed. Do not loosen gates.
+4. Commit remaining native evidence and push to the explicit GitLab URL.
 
 ## Risks / do not do
 
