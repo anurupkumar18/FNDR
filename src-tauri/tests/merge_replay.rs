@@ -160,6 +160,44 @@ fn replays_synthetic_sessions_and_emits_gold_scoring_input() {
 }
 
 #[test]
+fn replayed_capture_never_merges_into_an_agent_note_with_identical_text() {
+    let fixture = load_session(&fixture_paths()[0]);
+    let frame = &fixture.frames[0];
+    let temp_dir = tempfile::tempdir().expect("temporary replay store");
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+    // Match app, title, URL, and text as well as the capture's continuity key:
+    // source_type must protect the note independently of its display name.
+    let mut note = record(frame, &fixture.session_id, 0);
+    note.id = "agent-note".to_string();
+    note.source_type = fndr_lib::storage::AGENT_NOTE_SOURCE_TYPE.to_string();
+    let mut capture = record(frame, &fixture.session_id, 1);
+    capture.id = "screen-capture".to_string();
+    let mut repeated_capture = record(frame, &fixture.session_id, 2);
+    repeated_capture.id = "repeated-screen-capture".to_string();
+
+    let outcomes = runtime
+        .block_on(replay_memory_records(
+            &state(temp_dir.path()),
+            &[note.clone(), capture.clone(), repeated_capture],
+        ))
+        .expect("replay note followed by matching captures");
+
+    assert_eq!(outcomes.len(), 3);
+    assert_eq!(
+        serde_json::to_value(&outcomes[0]).unwrap(),
+        serde_json::to_value(&note).unwrap()
+    );
+    assert_eq!(outcomes[1].id, capture.id);
+    assert!(!outcomes[1].is_agent_note());
+    assert_eq!(
+        outcomes[2].id, capture.id,
+        "ordinary duplicate captures still merge"
+    );
+    assert!(!outcomes[2].is_agent_note());
+}
+
+#[test]
 fn reprocessing_the_same_frame_twice_does_not_create_a_second_memory() {
     // MEM-07 invariant 9: replaying the exact same frame content twice in a
     // row (same app, url, window title, and evidence) must land in one
