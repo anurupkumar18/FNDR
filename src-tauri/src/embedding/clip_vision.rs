@@ -234,7 +234,7 @@ mod tests {
     /// run locally with:
     ///     `cargo test -p fndr embedding::clip_vision -- --ignored`.
     #[test]
-    #[ignore]
+    #[ignore = "Requires local CLIP ONNX weights; run: cargo test --lib embed_imported_image_produces_unit_norm_512d -- --ignored --nocapture"]
     fn embed_imported_image_produces_unit_norm_512d() {
         let Some(models_dir) = try_resolve_clip_for_test() else {
             eprintln!("CLIP weights not present; skipping");

@@ -299,7 +299,7 @@ fn varied_text(i: usize) -> String {
 /// rows into the index. Ignored by default (machine-dependent timing); run
 /// with `cargo test --test storage_scale -- --ignored --nocapture`.
 #[test]
-#[ignore]
+#[ignore = "Machine-dependent 10k-row latency benchmark; run: cargo test --test storage_scale keyword_search_latency_at_10k_rows -- --ignored --nocapture"]
 fn keyword_search_latency_at_10k_rows() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = Store::new(dir.path()).expect("store");
@@ -402,7 +402,7 @@ fn keyword_search_latency_at_10k_rows() {
 /// Set FNDR_EMBED_MODEL_DIR to a folder with the BGE model to include chunk
 /// vectors; without it the chunk route runs BM25 only.
 #[test]
-#[ignore]
+#[ignore = "Machine-dependent 10k-memory/60k-chunk benchmark; optional BGE via FNDR_EMBED_MODEL_DIR; run: cargo test --test storage_scale retrieve_latency_at_10k_memories_and_60k_chunks -- --ignored --nocapture"]
 fn retrieve_latency_at_10k_memories_and_60k_chunks() {
     // Debug-build retrieval futures are deep; give them a large stack.
     std::thread::Builder::new()

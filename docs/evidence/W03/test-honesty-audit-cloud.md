@@ -37,3 +37,15 @@ The scanners, run from the repository root on `git archive` of main:
 - frontend `it` and `test` calls with `skip`, `todo`, or `only`, or with no `expect`, `assert`, or `waitFor`.
 
 Every hit was read by hand before it went into this file.
+
+## Local follow-up (2026-10-05 America/Denver; 2026-10-06 UTC)
+
+- Deleted `_suppress_unused_warning`; the remaining attribution test still
+  uses the existing test imports.
+- Added explicit `#[ignore = "reason; run command"]` to the three live Codex
+  tests, the CLIP model test, and the two storage latency benchmarks. Commands
+  run from `src-tauri/`; the reasons identify live-service/model prerequisites
+  or machine-dependent scale measurements.
+- The conditional model smoke tests and conservative command substring rule
+  remain as recorded above. This cleanup does not claim they provide CI model
+  coverage or change command authorization.

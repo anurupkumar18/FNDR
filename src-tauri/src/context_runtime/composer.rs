@@ -304,15 +304,4 @@ mod tests {
         let evidence = evidence_with_file("src/plan.ts");
         assert!(citations_valid("update src/plan.ts now", &evidence));
     }
-
-    #[test]
-    fn _suppress_unused_warning() {
-        let _ = FusedHit {
-            memory_id: "x".to_string(),
-            score: 0.0,
-            signals: FusionSignals::default(),
-            surfacing_reason: SurfacingReason::default(),
-            contributing_routes: Vec::new(),
-        };
-    }
 }
