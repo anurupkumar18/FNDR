@@ -62,7 +62,7 @@ FNDR addresses this by building a local, inspectable memory layer:
 | Retrieval-grounded Q&A | `fndr_answer` / context runtime pipeline (`src-tauri/src/context_runtime/`) | Stable |
 | Screen Guide | Hold-to-talk, on-device screen guidance and scoped filename lookup, with local speech, a click-through answer overlay, and fixed-state notch/menu-bar feedback | Experimental |
 | Local vector store | LanceDB-backed memory + graph tables | Stable |
-| Visual similarity retrieval | CLIP `image_embedding` (512-d) is stored, and `find_visually_similar_memories` exists as a command, but no screen calls it and Search never uses image vectors (go or no-go in VS-52) | Experimental |
+| Visual similarity retrieval | CLIP `image_embedding` (512-d) + `find_visually_similar_memories`, reached from a Memory Vault card's visually-similar button; Search and Ask never use image vectors (go or no-go in VS-52) | Experimental |
 | Insight knowledge graph | Typed node/edge tables + graph UI hooks; not used for ranking yet | Stable |
 | MCP server for agents | `src-tauri/src/mcp/`, MCP deployment modes + auth/tls controls | Stable |
 | Agent-oriented tools/prompts | `agent.*`, `memory.*`, prompt/resources in MCP | Stable |
@@ -110,7 +110,7 @@ flowchart LR
 
 - Default text embedding contract in current code: `384` dimensions (`all-MiniLM-L6-v2`).
 - Image embedding contract: `512` dimensions (CLIP column for visual similarity retrieval).
-- Ranking: each route scores its hits, fusion adds the scores with per-intent weights, and every route sizes its candidate pool from a fixed 50 (`ROUTE_CANDIDATE_POOL`), not from the page size asked for, so a short page is the start of a long one. Keyword scores are 0.86 × bm25 / (bm25 + 2) plus 0.14 × recency, with recency counted in whole minutes. The BM25 indexes are built when rows are written, so the first search does not pay for them.
+- Ranking: each route scores its hits, fusion adds the scores with per-intent weights, and every route draws at least 50 candidates (`ROUTE_CANDIDATE_POOL`), more only for a page larger than 50, so a short page is the start of a long one. Keyword scores are 0.86 × bm25 / (bm25 + 2) plus 0.14 × recency, with recency counted in whole minutes. The memory table's BM25 indexes are built when rows are written; a vault upgraded without new writes, and the chunk index, still build theirs on the first search.
 - Insight fields (for example `memory_context`, `insight_what_happened`, `insight_why_mattered`) are persisted and reused during retrieval/composition.
 
 ---
@@ -179,8 +179,8 @@ Implemented controls include:
 - App/site blocklist management (`get_blocklist`, `set_blocklist`, `add_to_blocklist`)
 - Retention and deletion (`delete_older_than`, `delete_all_data`)
 - Sensitive-context safety checks and private/incognito title heuristics (`src-tauri/src/privacy/`)
-- MCP bearer auth in every mode and origin policies; in `tunnel` and `public` mode the auth opt-outs are ignored (VS-61)
-- Assistant notes (`fndr.remember`) stay off until `agent_notes_enabled` is set, and never accept text the capture secret detector flags
+- MCP bearer auth for every tool call by default (only the loopback `initialize`/`tools/list` handshake is exempt) and origin policies; in `tunnel` and `public` mode the auth opt-outs are ignored (VS-61)
+- Assistant notes (`fndr.remember`) stay off until `agent_notes_enabled` is set, and never accept text the capture secret detector flags. `fndr_remember_decision` is still an ungated assistant write to the decision ledger (VS-35 open question 3)
 
 FNDR is local-first by default. Optional environment variables can enable external integrations; review `.env.example` before enabling them.
 
@@ -202,7 +202,7 @@ FNDR includes an MCP server with:
 - Deployment modes: `local`, `tunnel`, `public`
 - Optional TLS, plus bearer auth (required by default in every mode, including `local`, per ADR-017) and allowed-origin controls
 - Memory + agent tool surfaces (`memory.*`, `fndr.*`, `agent.*`)
-- One write tool for assistants, `fndr.remember`, off by default (see `docs/mcp.md`)
+- Assistant writes: `fndr.remember`, off by default (see `docs/mcp.md`), and the older, ungated `fndr_remember_decision`
 
 Key environment variables:
 
@@ -245,6 +245,8 @@ Runs:
 
 ### Retrieval quality gate
 
+macOS only (it seeds a profile under `~/Library/Application Support` and builds the app's helpers):
+
 ```bash
 make qa-retrieval-check                          # knowledge-worker persona
 make qa-retrieval-check PERSONA=office-pm
@@ -252,7 +254,7 @@ make qa-retrieval-check PERSONA=software-engineer
 make recall-chart                                # rebuild the Beta recall chart
 ```
 
-Seeds a synthetic profile, runs every query through Search, Ask, and `retrieve`, and fails if Recall@5 drops more than 0.05 on any path or a query ranked 1 to 7 becomes a miss (a miss from ranks 8 to 10 is a warning). CI runs the same gate on `macos-26` (`.github/workflows/retrieval-gate.yml`).
+Seeds a synthetic profile, runs every query through Search, Ask, and `retrieve`, and fails if Recall@5 drops more than 0.05 on any path or any query a path found in its top ten becomes a miss. CI runs the same gate on `macos-26` (`.github/workflows/retrieval-gate.yml`).
 
 ### Useful maintenance commands
 
