@@ -41,6 +41,28 @@ fn is_blocked(cmd: &str, args: &[&str]) -> Option<String> {
                     return Some(format!("git subcommand not allowed: {}", sub));
                 }
             }
+            // `--output=<file>` makes diff, log, and show write a file.
+            if args.iter().any(|arg| arg.starts_with("--output")) {
+                return Some("git --output writes a file".to_string());
+            }
+            // `git branch` only lists: a name creates a branch, and -d, -m,
+            // -c, and -f delete, rename, copy, or move one.
+            const BRANCH_LIST_FLAGS: [&str; 9] = [
+                "-a",
+                "--all",
+                "-r",
+                "--remotes",
+                "-v",
+                "-vv",
+                "--verbose",
+                "--list",
+                "--show-current",
+            ];
+            if args.first() == Some(&"branch")
+                && args[1..].iter().any(|arg| !BRANCH_LIST_FLAGS.contains(arg))
+            {
+                return Some("git branch may only list branches".to_string());
+            }
         }
         "cargo" => {
             let allowed = ["check", "test"];
