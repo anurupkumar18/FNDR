@@ -244,9 +244,36 @@ pub async fn insight_graph_context_mcp(
     let gs = GraphStore::new(state.store.clone());
     let nodes = gs.all_nodes().await.ok()?;
     let edges = gs.all_edges().await.ok()?;
+    let backed_edges = edges
+        .iter()
+        .filter_map(|edge| {
+            let ids = if edge.metadata.is_null() { Some(Vec::new()) }
+                else { graph_memory_references(&edge.metadata) }?;
+            Some((edge,ids))
+        })
+        .collect::<Vec<_>>();
+    let mut source_ids = nodes
+        .iter()
+        .flat_map(|node| node.source_memory_ids.iter().cloned())
+        .chain(backed_edges.iter().flat_map(|(_, ids)| ids.iter().cloned()))
+        .collect::<Vec<_>>();
+    source_ids.sort();
+    source_ids.dedup();
+    let source_memories = context_source_memories(state, &source_ids).await.ok()?;
+    let authorized_nodes: HashSet<_> = nodes
+        .iter()
+        .filter(|node| {
+            !node.source_memory_ids.is_empty()
+                && node
+                    .source_memory_ids
+                    .iter()
+                    .all(|id| source_memories.contains_key(id))
+        })
+        .map(|node| node.id)
+        .collect();
     let mut pr_nodes: Vec<_> = nodes
         .iter()
-        .filter(|n| n.node_type == GraphNodeType::Project)
+        .filter(|n| n.node_type == GraphNodeType::Project && authorized_nodes.contains(&n.id))
         .cloned()
         .collect();
     if let Some(p) = project {
@@ -260,7 +287,20 @@ pub async fn insight_graph_context_mcp(
     }
     pr_nodes.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
     pr_nodes.truncate(5);
-    let mut e_sorted = edges.clone();
+    let project_scoped = project.is_some_and(|p| !p.trim().is_empty());
+    let selected_projects: HashSet<_> = pr_nodes.iter().map(|node| node.id).collect();
+    let mut e_sorted = backed_edges
+        .into_iter()
+        .filter(|(edge, ids)| {
+            authorized_nodes.contains(&edge.source_id)
+                && authorized_nodes.contains(&edge.target_id)
+                && ids.iter().all(|id| source_memories.contains_key(id))
+                && (!project_scoped
+                    || selected_projects.contains(&edge.source_id)
+                    || selected_projects.contains(&edge.target_id))
+        })
+        .map(|(edge, _)| edge)
+        .collect::<Vec<_>>();
     e_sorted.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
     let top_edges: Vec<serde_json::Value> = e_sorted
         .iter()
@@ -275,7 +315,7 @@ pub async fn insight_graph_context_mcp(
             })
         })
         .collect();
-    let conflicts: Vec<serde_json::Value> = edges
+    let conflicts: Vec<serde_json::Value> = e_sorted
         .iter()
         .filter(|e| e.conflict_flag || e.edge_type == GraphEdgeType::Contradicts)
         .take(8)
@@ -320,6 +360,128 @@ pub async fn insight_graph_context_mcp(
     }
 }
 
+/// Parse explicit graph memory provenance; malformed declarations fail closed.
+pub(crate) fn graph_memory_references(metadata: &serde_json::Value) -> Option<Vec<String>> {
+    metadata.as_object()?;
+    let mut ids = Vec::new();
+    for key in ["memory_id", "source_memory_id"] {
+        if let Some(value) = metadata.get(key) {
+            let id = value.as_str().filter(|id| !id.trim().is_empty())?;
+            ids.push(id.to_string());
+        }
+    }
+    for key in ["memory_ids", "source_memory_ids", "supporting_memory_ids"] {
+        if let Some(value) = metadata.get(key) {
+            for value in value.as_array()? {
+                ids.push(
+                    value
+                        .as_str()
+                        .filter(|id| !id.trim().is_empty())?
+                        .to_string(),
+                );
+            }
+        }
+    }
+    if metadata
+        .get("source_type")
+        .and_then(serde_json::Value::as_str)
+        == Some("memory")
+    {
+        ids.push(
+            metadata
+                .get("source_id")?
+                .as_str()
+                .filter(|id| !id.trim().is_empty())?
+                .to_string(),
+        );
+    }
+    ids.sort();
+    ids.dedup();
+    Some(ids)
+}
+
+/// Eligibility for derived/agent context is stricter than a local search card.
+pub(crate) fn context_memory_is_visible(record: &MemoryRecord, blocklist: &[String]) -> bool {
+    retrieve::memory_is_visible(record, blocklist)
+        && !record.is_agent_note()
+        && !crate::privacy::Blocklist::is_sensitive_context(
+            record.url.as_deref(),
+            Some(&record.window_title),
+        )
+}
+
+pub(crate) fn context_privacy_is_visible(class: &PrivacyClass) -> bool {
+    matches!(
+        class,
+        PrivacyClass::Public | PrivacyClass::Project | PrivacyClass::Personal
+    )
+}
+
+/// Authorize source references, preserving reference keys for old citations.
+/// Unknown sources fail closed; at most 64 absent IDs receive alias lookups.
+pub(crate) async fn context_source_memories(
+    state: &AppState,
+    ids: &[String],
+) -> Result<HashMap<String, MemoryRecord>, String> {
+    let mut ids = ids.to_vec();
+    ids.sort();
+    ids.dedup();
+    let mut found = state
+        .store
+        .get_memories_by_ids(&ids)
+        .await
+        .map_err(|e| e.to_string())?;
+    let blocklist = state.config.read().blocklist.clone();
+    let mut visible = HashMap::new();
+    let mut alias_lookups = 0;
+    for id in ids {
+        if id.trim().is_empty() {
+            continue;
+        }
+        let record = match found.remove(&id) {
+            Some(record) => Some(record),
+            None if alias_lookups < 64 => {
+                alias_lookups += 1;
+                state
+                    .store
+                    .get_memory_by_id(&id)
+                    .await
+                    .map_err(|e| e.to_string())?
+            }
+            None => None,
+        };
+        if let Some(record) = record.filter(|r| context_memory_is_visible(r, &blocklist)) {
+            visible.insert(id, record);
+        }
+    }
+    Ok(visible)
+}
+
+async fn retain_context_events(
+    state: &AppState,
+    events: Vec<ActivityEvent>,
+) -> Result<Vec<ActivityEvent>, String> {
+    let source_ids = |event: &ActivityEvent| {
+        std::iter::once(event.memory_id.clone())
+            .chain(event.source_memory_ids.iter().cloned())
+            .chain(event.evidence.iter().map(|e| e.source_id.clone()))
+            .collect::<Vec<_>>()
+    };
+    let ids = events.iter().flat_map(&source_ids).collect::<Vec<_>>();
+    let visible = context_source_memories(state, &ids).await?;
+    Ok(events
+        .into_iter()
+        .filter(|event| {
+            context_privacy_is_visible(&event.privacy_class)
+                && event
+                    .evidence
+                    .iter()
+                    .all(|e| context_privacy_is_visible(&e.privacy_class))
+                && source_ids(event).iter().all(|id| visible.contains_key(id))
+        })
+        .collect())
+}
+
 pub async fn build_context_pack(
     state: &AppState,
     request: ContextRequest,
@@ -346,19 +508,43 @@ pub async fn build_context_pack(
         .1
     };
 
+    // Authorize before ensure_event_for_result can create derived artifacts.
+    let ids = candidates
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    let records = state
+        .store
+        .get_memories_by_ids(&ids)
+        .await
+        .map_err(|e| e.to_string())?;
+    let blocklist = state.config.read().blocklist.clone();
+    candidates.retain(|row| {
+        records.get(&row.id).is_some_and(|record| {
+            // Visible notes retain their existing explicit exclusion reason.
+            retrieve::memory_is_visible(record, &blocklist)
+                && !crate::privacy::Blocklist::is_sensitive_context(
+                    record.url.as_deref(),
+                    Some(&record.window_title),
+                )
+        })
+    });
+    let mut candidate_events = Vec::new();
+    for result in &candidates {
+        if let Some(event) = ensure_event_for_result(state, result).await? {
+            candidate_events.push(event);
+        }
+    }
     let mut events = Vec::new();
     let mut seen_event_ids = HashSet::new();
-    for result in &candidates {
-        let Some(event) = ensure_event_for_result(state, result).await? else {
-            continue;
-        };
+    for event in retain_context_events(state, candidate_events).await? {
         if let Some(request_project) = request.project.as_deref() {
             if event.project.as_deref() != Some(request_project) {
                 excluded.push(ExcludedContextItem {
-                    id: result.id.clone(),
+                    id: event.memory_id.clone(),
                     reason: format!(
                         "project mismatch ({})",
-                        event.project.clone().unwrap_or_else(|| "none".to_string())
+                        event.project.clone().unwrap_or_else(|| "none".into())
                     ),
                 });
                 continue;
@@ -377,13 +563,13 @@ pub async fn build_context_pack(
             .map_err(|e| e.to_string())?;
     }
 
-    let fallback_project = latest_active_project(state).await;
+    events = retain_context_events(state, events).await?;
+    seen_event_ids.extend(events.iter().map(|event| event.id.clone()));
     let active_project = request
         .project
         .clone()
         .or_else(|| infer_project_from_files(&request.active_files))
-        .or_else(|| events.iter().find_map(|event| event.project.clone()))
-        .or(fallback_project);
+        .or_else(|| events.iter().find_map(|event| event.project.clone()));
 
     if let Some(project) = active_project.as_deref() {
         let recent_project_events = state
@@ -391,7 +577,7 @@ pub async fn build_context_pack(
             .list_activity_events(8, Some(project))
             .await
             .map_err(|e| e.to_string())?;
-        for event in recent_project_events {
+        for event in retain_context_events(state, recent_project_events).await? {
             if seen_event_ids.insert(event.id.clone()) {
                 events.push(event);
             }
@@ -403,16 +589,10 @@ pub async fn build_context_pack(
         events.truncate(12);
     }
 
+    // Cached project summaries lack complete provenance. Recompute the read
+    // projection from eligible sources without rewriting saved history.
     let project_context = if let Some(project) = active_project.as_deref() {
-        let stored_context = state
-            .store
-            .get_project_context(project)
-            .await
-            .map_err(|e| e.to_string())?;
-        match stored_context {
-            Some(context) => Some(context),
-            None => Some(rebuild_project_context(state, project).await?),
-        }
+        Some(rebuild_project_context(state, project).await?)
     } else {
         None
     };
@@ -531,6 +711,7 @@ pub async fn build_context_pack(
 
     Ok(pack)
 }
+
 
 pub async fn build_code_context(
     state: &AppState,
@@ -1009,6 +1190,7 @@ async fn rebuild_project_context(
         .list_activity_events(18, Some(project))
         .await
         .map_err(|e| e.to_string())?;
+    let events = retain_context_events(state, events).await?;
     let decisions = collect_recent_decisions(&events, None);
     let failures = collect_failures(&events, None);
     let open_tasks = collect_open_tasks(state, Some(project)).await?;
@@ -1506,59 +1688,80 @@ async fn collect_open_tasks(
     project: Option<&str>,
 ) -> Result<Vec<ContextTask>, String> {
     let tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
-    let mut open = Vec::new();
-    for task in tasks
+    let tasks = tasks
         .into_iter()
         .filter(|task| !task.is_completed && !task.is_dismissed)
-    {
-        if let Some(project) = project {
-            let mut matches_project = false;
-            if let Some(source_memory_id) = task.source_memory_id.as_deref() {
+        .collect::<Vec<_>>();
+    let references = |task: &crate::storage::Task| {
+        task.source_memory_id
+            .iter()
+            .cloned()
+            .chain(task.linked_memory_ids.iter().cloned())
+            .collect::<Vec<_>>()
+    };
+    let ids = tasks.iter().flat_map(&references).collect::<Vec<_>>();
+    let sources = context_source_memories(state, &ids).await?;
+    let blocklist = state.config.read().blocklist.clone();
+    let mut open = Vec::new();
+    for task in tasks {
+        let refs = references(&task);
+        let manual = refs.is_empty() && task.source_app.eq_ignore_ascii_case("manual");
+        if (!manual && refs.is_empty())
+            || refs.iter().any(|id| !sources.contains_key(id))
+            || crate::privacy::Blocklist::is_blocked(&task.source_app, &blocklist)
+            || task.linked_urls.iter().any(|url| {
+                crate::privacy::Blocklist::is_context_blocked(Some(url), None, &blocklist)
+                    || crate::privacy::Blocklist::is_sensitive_context(Some(url), None)
+            })
+        {
+            continue;
+        }
+        // Tasks may retain private historical text even when their current
+        // source row is visible. Apply event checks with or without a project.
+        let mut source_events = Vec::new();
+        let mut event_ids = HashSet::new();
+        for id in &refs {
+            for source_id in [id, &sources[id].id] {
+                if !event_ids.insert(source_id.clone()) {
+                    continue;
+                }
                 if let Some(event) = state
                     .store
-                    .get_activity_event_by_memory_id(source_memory_id)
+                    .get_activity_event_by_memory_id(source_id)
                     .await
                     .map_err(|e| e.to_string())?
                 {
-                    matches_project = event.project.as_deref() == Some(project);
+                    source_events.push(event);
                 }
             }
-            if !matches_project && !task.linked_memory_ids.is_empty() {
-                for memory_id in &task.linked_memory_ids {
-                    if let Some(event) = state
-                        .store
-                        .get_activity_event_by_memory_id(memory_id)
-                        .await
-                        .map_err(|e| e.to_string())?
-                    {
-                        if event.project.as_deref() == Some(project) {
-                            matches_project = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if !matches_project {
+        }
+        let expected_events = source_events.len();
+        let source_events = retain_context_events(state, source_events).await?;
+        if source_events.len() != expected_events {
+            continue;
+        }
+        if let Some(project) = project {
+            if !source_events
+                .iter()
+                .any(|event| event.project.as_deref() == Some(project))
+            {
                 continue;
             }
         }
-
         open.push(ContextTask {
             id: task.id,
             title: task.title,
             status: match task.task_type {
-                crate::storage::TaskType::Todo => "todo".to_string(),
-                crate::storage::TaskType::Reminder => "reminder".to_string(),
-                crate::storage::TaskType::Followup => "followup".to_string(),
+                crate::storage::TaskType::Todo => "todo".into(),
+                crate::storage::TaskType::Reminder => "reminder".into(),
+                crate::storage::TaskType::Followup => "followup".into(),
             },
             source: task.source_app,
             due_at: task.due_date,
         });
     }
-    open.sort_by(|left, right| left.title.cmp(&right.title));
-    if open.len() > 8 {
-        open.truncate(8);
-    }
+    open.sort_by(|a, b| a.title.cmp(&b.title));
+    open.truncate(8);
     Ok(open)
 }
 
@@ -2981,12 +3184,12 @@ fn normalize_budget(value: u32) -> u32 {
 }
 
 async fn latest_active_project(state: &AppState) -> Option<String> {
-    state
-        .store
-        .list_activity_events(1, None)
+    let events = state.store.list_activity_events(18, None).await.ok()?;
+    retain_context_events(state, events)
         .await
-        .ok()
-        .and_then(|events| events.into_iter().find_map(|event| event.project))
+        .ok()?
+        .into_iter()
+        .find_map(|event| event.project)
 }
 
 fn save_session_state(
@@ -3279,6 +3482,387 @@ fn fused_trace(hit: &context_pack::FusedHit) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn context_visibility_state(path: &std::path::Path) -> AppState {
+        let store = std::sync::Arc::new(crate::storage::Store::new(path).unwrap());
+        let state_store = std::sync::Arc::new(crate::storage::StateStore::new(path).unwrap());
+        let graph = crate::graph::GraphStore::new(store.clone());
+        AppState::new(
+            path.to_path_buf(),
+            crate::config::Config::default(),
+            store,
+            state_store,
+            graph,
+            None,
+            None,
+        )
+    }
+
+    fn context_visibility_record(id: &str) -> MemoryRecord {
+        MemoryRecord {
+            id: id.into(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            app_name: "Editor".into(),
+            window_title: "Atlas deployment review".into(),
+            clean_text: "Reviewed Atlas deployment evidence and recorded the release checklist."
+                .into(),
+            snippet: "Reviewed Atlas deployment evidence.".into(),
+            project: "Atlas".into(),
+            ..Default::default()
+        }
+    }
+
+    fn context_visibility_event(id: &str, memory_id: &str, summary: &str) -> ActivityEvent {
+        ActivityEvent {
+            id: id.into(),
+            memory_id: memory_id.into(),
+            source_memory_ids: vec![memory_id.into()],
+            project: Some("Atlas".into()),
+            summary: summary.into(),
+            title: summary.into(),
+            end_time: chrono::Utc::now().timestamp_millis(),
+            active_files: vec![format!("/synthetic/{summary}.rs")],
+            evidence: vec![EvidenceRef {
+                source_id: memory_id.into(),
+                summary: summary.into(),
+                ..Default::default()
+            }],
+            decisions: vec![summary.into()],
+            next_steps: vec![summary.into()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn context_visibility_authorizes_fallback_project_tasks_and_every_event_source() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = context_visibility_state(dir.path());
+        rt.block_on(async {
+            let mut good = context_visibility_record("visible");
+            good.consolidated_from = vec!["old-visible".into()];
+            let mut blocked = context_visibility_record("PRIVATE_BLOCKED");
+            blocked.app_name = "PrivateWorkspace".into();
+            let mut deleted = context_visibility_record("PRIVATE_DELETED");
+            deleted.is_soft_deleted = true;
+            state
+                .store
+                .add_batch_preserving_ids(&[
+                    good,
+                    blocked,
+                    deleted,
+                    context_visibility_record("mixed-source"),
+                    context_visibility_record("mixed-evidence-source"),
+                ])
+                .await
+                .unwrap();
+            let mut mixed = context_visibility_event("mixed", "mixed-source", "PRIVATE_MIXED");
+            mixed.source_memory_ids.push("PRIVATE_BLOCKED".into());
+            let mut mixed_evidence = context_visibility_event(
+                "mixed-evidence",
+                "mixed-evidence-source",
+                "PRIVATE_EVIDENCE",
+            );
+            mixed_evidence.evidence.push(EvidenceRef {
+                source_id: "PRIVATE_DELETED".into(),
+                ..Default::default()
+            });
+            state
+                .store
+                .upsert_activity_events(&[
+                    context_visibility_event("event:visible", "visible", "Visible release review"),
+                    context_visibility_event("event:old", "old-visible", "Visible older review"),
+                    context_visibility_event("blocked", "PRIVATE_BLOCKED", "PRIVATE_EVENT"),
+                    context_visibility_event("deleted", "PRIVATE_DELETED", "PRIVATE_DELETED_EVENT"),
+                    context_visibility_event("missing", "PRIVATE_MISSING", "PRIVATE_MISSING_EVENT"),
+                    mixed,
+                    mixed_evidence,
+                ])
+                .await
+                .unwrap();
+            state
+                .store
+                .upsert_project_contexts(&[ProjectContext {
+                    id: "project:atlas".into(),
+                    project: "Atlas".into(),
+                    active_goal: "PRIVATE_CACHED_GOAL".into(),
+                    summary: "PRIVATE_CACHED_SUMMARY".into(),
+                    relevant_files: vec![RelevantFile {
+                        path: "/PRIVATE_CACHED.rs".into(),
+                        why: "cached".into(),
+                    }],
+                    ..Default::default()
+                }])
+                .await
+                .unwrap();
+            let task = |id: &str, source: &str, links: Vec<String>| crate::storage::Task {
+                id: id.into(),
+                title: id.into(),
+                description: String::new(),
+                source_app: "Editor".into(),
+                source_memory_id: Some(source.into()),
+                created_at: 1,
+                due_date: None,
+                is_completed: false,
+                is_dismissed: false,
+                task_type: crate::storage::TaskType::Todo,
+                linked_urls: vec![],
+                linked_memory_ids: links,
+            };
+            state
+                .store
+                .upsert_tasks(&[
+                    task("Visible task", "visible", vec![]),
+                    task("Visible alias task", "old-visible", vec![]),
+                    task("PRIVATE_TASK", "PRIVATE_BLOCKED", vec![]),
+                    task(
+                        "PRIVATE_MIXED_TASK",
+                        "visible",
+                        vec!["PRIVATE_BLOCKED".into()],
+                    ),
+                    task("PRIVATE_MISSING_TASK", "PRIVATE_MISSING", vec![]),
+                ])
+                .await
+                .unwrap();
+            state.config.write().blocklist = vec!["privateworkspace".into()];
+            let pack = build_context_pack(
+                &state,
+                ContextRequest {
+                    project: Some("Atlas".into()),
+                    budget_tokens: 12000,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let json = serde_json::to_string(&pack).unwrap();
+            assert!(!json.contains("PRIVATE_"), "excluded source leaked: {json}");
+            assert!(pack.evidence.iter().any(|e| e.source_id == "visible"));
+            assert!(pack.open_tasks.iter().any(|t| t.id == "Visible task"));
+            assert!(pack.open_tasks.iter().any(|t| t.id == "Visible alias task"));
+            assert!(pack
+                .relevant_files
+                .iter()
+                .any(|f| f.path.contains("Visible")));
+            let stored = state
+                .store
+                .get_project_context("Atlas")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                stored.active_goal, "PRIVATE_CACHED_GOAL",
+                "read must not rewrite historical context"
+            );
+        });
+    }
+
+    #[test]
+    fn context_visibility_hidden_only_fallback_does_not_infer_a_project() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = context_visibility_state(dir.path());
+        rt.block_on(async {
+            let mut blocked = context_visibility_record("PRIVATE_ONLY");
+            blocked.app_name = "PrivateWorkspace".into();
+            state
+                .store
+                .add_batch_preserving_ids(&[blocked])
+                .await
+                .unwrap();
+            let mut event =
+                context_visibility_event("PRIVATE_EVENT", "PRIVATE_ONLY", "PRIVATE_SUMMARY");
+            event.project = Some("PRIVATE_PROJECT".into());
+            state.store.upsert_activity_events(&[event]).await.unwrap();
+            state.config.write().blocklist = vec!["privateworkspace".into()];
+            let pack = build_context_pack(&state, ContextRequest::default())
+                .await
+                .unwrap();
+            assert!(pack.project.is_none());
+            assert!(pack.evidence.is_empty());
+            assert!(!serde_json::to_string(&pack).unwrap().contains("PRIVATE_"));
+        });
+    }
+
+    #[test]
+    fn context_visibility_preserves_manual_tasks_and_rejects_private_historical_evidence() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = context_visibility_state(dir.path());
+        rt.block_on(async {
+            let row = context_visibility_record("visible");
+            state.store.add_batch_preserving_ids(&[row]).await.unwrap();
+            let mut events = vec![context_visibility_event(
+                "good",
+                "visible",
+                "Visible review",
+            )];
+            for class in [
+                PrivacyClass::Sensitive,
+                PrivacyClass::Secret,
+                PrivacyClass::Blocked,
+                PrivacyClass::Ephemeral,
+            ] {
+                let mut event = context_visibility_event(
+                    &format!("private-{class:?}"),
+                    "visible",
+                    "PRIVATE_EVENT",
+                );
+                event.privacy_class = class.clone();
+                events.push(event);
+                let mut evidence = context_visibility_event(
+                    &format!("evidence-{class:?}"),
+                    "visible",
+                    "PRIVATE_EVIDENCE",
+                );
+                evidence.evidence[0].privacy_class = class;
+                events.push(evidence);
+            }
+            let kept = retain_context_events(&state, events).await.unwrap();
+            assert_eq!(kept.len(), 1);
+            assert_eq!(kept[0].id, "good");
+            let task = |id: &str, app: &str| crate::storage::Task {
+                id: id.into(),
+                title: id.into(),
+                description: String::new(),
+                source_app: app.into(),
+                source_memory_id: None,
+                created_at: 1,
+                due_date: None,
+                is_completed: false,
+                is_dismissed: false,
+                task_type: crate::storage::TaskType::Todo,
+                linked_urls: vec![],
+                linked_memory_ids: vec![],
+            };
+            let mut private_event =
+                context_visibility_event("private-task-source", "visible", "PRIVATE_TASK_SOURCE");
+            private_event.privacy_class = PrivacyClass::Sensitive;
+            state
+                .store
+                .upsert_activity_events(&[private_event])
+                .await
+                .unwrap();
+            let mut derived = task("PRIVATE_DERIVED_TASK", "Editor");
+            derived.source_memory_id = Some("visible".into());
+            state
+                .store
+                .upsert_tasks(&[
+                    task("Visible manual task", "Manual"),
+                    task("PRIVATE_MEETING", "Meeting:old"),
+                    task("PRIVATE_ORPHAN", "Editor"),
+                    derived,
+                ])
+                .await
+                .unwrap();
+            let tasks = collect_open_tasks(&state, None).await.unwrap();
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0].id, "Visible manual task");
+            assert!(collect_open_tasks(&state, Some("Atlas"))
+                .await
+                .unwrap()
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn context_visibility_does_not_create_derived_rows_for_excluded_candidates() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = context_visibility_state(dir.path());
+        rt.block_on(async {
+            let mut blocked = context_visibility_record("PRIVATE_BLOCKED");
+            blocked.app_name = "PrivateWorkspace".into();
+            let mut sensitive = context_visibility_record("PRIVATE_SENSITIVE");
+            sensitive.url = Some("https://chase.com/account".into());
+            state
+                .store
+                .add_batch_preserving_ids(&[blocked, sensitive])
+                .await
+                .unwrap();
+            state.config.write().blocklist = vec!["privateworkspace".into()];
+            let pack = build_context_pack(&state, ContextRequest::default())
+                .await
+                .unwrap();
+            assert!(!serde_json::to_string(&pack).unwrap().contains("PRIVATE_"));
+            assert!(state
+                .store
+                .list_activity_events(20, None)
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(state
+                .store
+                .get_project_context("Atlas")
+                .await
+                .unwrap()
+                .is_none());
+            assert!(state.store.get_all_nodes().await.unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn context_visibility_bounds_aliases_and_preserves_direct_sources() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = context_visibility_state(dir.path());
+        rt.block_on(async {
+            let mut row = context_visibility_record("visible");
+            row.consolidated_from = (0..65).map(|i| format!("old-{i:03}")).collect();
+            let mut ids = row.consolidated_from.clone();
+            ids.push(row.id.clone());
+            state.store.add_batch_preserving_ids(&[row]).await.unwrap();
+            let sources = context_source_memories(&state, &ids).await.unwrap();
+            assert_eq!(sources.len(), 65);
+            assert!(sources.contains_key("visible"));
+            assert_eq!(sources["old-063"].id, "visible");
+            assert!(!sources.contains_key("old-064"));
+        });
+    }
+
+    #[test]
+    fn context_visibility_deduplicates_fallback_and_project_expansion() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = context_visibility_state(dir.path());
+        rt.block_on(async {
+            let mut row = context_visibility_record("visible");
+            row.timestamp = 1;
+            let mut records = vec![row];
+            for i in 0..13 {
+                let mut note = context_visibility_record(&format!("note-{i}"));
+                note.source_type = "agent".into();
+                records.push(note);
+            }
+            state
+                .store
+                .add_batch_preserving_ids(&records)
+                .await
+                .unwrap();
+            state
+                .store
+                .upsert_activity_events(&[context_visibility_event(
+                    "good",
+                    "visible",
+                    "Visible review",
+                )])
+                .await
+                .unwrap();
+            let pack = build_context_pack(
+                &state,
+                ContextRequest {
+                    budget_tokens: 12000,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                pack.summary,
+                "Recent Atlas working state compiled from 1 activity event(s)."
+            );
+        });
+    }
 
     #[tokio::test]
     async fn context_pack_does_not_promote_agent_notes_to_derived_artifacts() {

@@ -316,3 +316,174 @@ fn auto_link_to_task_joins_existing_task_without_duplicates() {
             .any(|edge| edge.target == "memory:mem-2"));
     });
 }
+
+#[test]
+fn insight_graph_context_requires_authorized_backing_and_project_scoped_edges() {
+    use fndr_lib::graph::graph_store::GraphStore as InsightStore;
+    use fndr_lib::graph::schema::{
+        GraphEdge as InsightEdge, GraphEdgeType, GraphNode as InsightNode, GraphNodeType,
+    };
+    use fndr_lib::storage::StateStore;
+    use fndr_lib::AppState;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(dir.path()).unwrap());
+    let state_store = Arc::new(StateStore::new(dir.path()).unwrap());
+    let state = AppState::new(
+        dir.path().to_path_buf(),
+        fndr_lib::config::Config::default(),
+        store.clone(),
+        state_store,
+        GraphStore::new(store.clone()),
+        None,
+        None,
+    );
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let text = "Reviewed release verification evidence and discussed a conditional rollout.";
+        let visible = record("visible", text, 1.0);
+        let other = record("other", text, 1.0);
+        let mut blocked = record("blocked", text, 1.0);
+        blocked.app_name = "PrivateWorkspace".into();
+        let mut deleted = record("deleted", text, 1.0);
+        deleted.is_soft_deleted = true;
+        let mut note = record("note", text, 1.0);
+        note.source_type = "agent".into();
+        store
+            .add_batch_preserving_ids(&[visible, other, blocked, deleted, note])
+            .await
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+        let graph = InsightStore::new(store.clone());
+        let node = |id: u128, label: &str, node_type: GraphNodeType, ids: &[&str]| InsightNode {
+            id: Uuid::from_u128(id),
+            node_type,
+            label: label.into(),
+            confidence: 0.9,
+            source_memory_ids: ids.iter().map(|id| (*id).into()).collect(),
+            embedding: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            stale: false,
+            metadata: json!({}),
+        };
+        for n in [
+            node(1, "Visible project", GraphNodeType::Project, &["visible"]),
+            node(2, "Other project", GraphNodeType::Project, &["other"]),
+            node(3, "Visible evidence", GraphNodeType::Concept, &["visible"]),
+            node(4, "Other evidence", GraphNodeType::Concept, &["other"]),
+            node(
+                5,
+                "PRIVATE_MIXED_PROJECT",
+                GraphNodeType::Project,
+                &["visible", "blocked"],
+            ),
+            node(6, "PRIVATE_UNBACKED_PROJECT", GraphNodeType::Project, &[]),
+            node(
+                7,
+                "PRIVATE_MISSING_PROJECT",
+                GraphNodeType::Project,
+                &["missing"],
+            ),
+            node(8, "PRIVATE_NOTE_PROJECT", GraphNodeType::Project, &["note"]),
+            node(
+                9,
+                "PRIVATE_DELETED_PROJECT",
+                GraphNodeType::Project,
+                &["deleted"],
+            ),
+        ] {
+            graph.upsert_node(&n).await.unwrap();
+        }
+        let edge = |id: u128,
+                    source: u128,
+                    target: u128,
+                    edge_type: GraphEdgeType,
+                    confidence: f32,
+                    metadata| InsightEdge {
+            id: Uuid::from_u128(id),
+            source_id: Uuid::from_u128(source),
+            target_id: Uuid::from_u128(target),
+            edge_type,
+            confidence,
+            conflict_flag: edge_type == GraphEdgeType::Contradicts,
+            created_at: chrono::Utc::now(),
+            metadata,
+        };
+        for e in [
+            edge(101, 1, 3, GraphEdgeType::Supports, 0.5, json!({})),
+            edge(102, 2, 4, GraphEdgeType::Contradicts, 0.99, json!({})),
+            edge(103, 1, 5, GraphEdgeType::Contradicts, 0.98, json!({})),
+            edge(
+                104,
+                1,
+                3,
+                GraphEdgeType::Refines,
+                0.97,
+                json!({"memory_id":"blocked"}),
+            ),
+            edge(
+                105,
+                1,
+                3,
+                GraphEdgeType::Questions,
+                0.96,
+                json!({"source_memory_ids":["visible", "missing"]}),
+            ),
+            edge(
+                106,
+                1,
+                3,
+                GraphEdgeType::DependsOn,
+                0.95,
+                json!({"memory_id":42}),
+            ),
+        ] {
+            graph.upsert_edge(&e).await.unwrap();
+        }
+
+        let all = fndr_lib::context_runtime::insight_graph_context_mcp(&state, None)
+            .await
+            .unwrap();
+        assert!(
+            !all.to_string().contains("PRIVATE_"),
+            "excluded graph labels leaked: {all}"
+        );
+        assert_eq!(all["top_project_nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            all["top_edges"].as_array().unwrap().len(),
+            2,
+            "only endpoint- and provenance-authorized edges"
+        );
+        assert_eq!(all["conflicts"].as_array().unwrap().len(), 1);
+
+        let scoped =
+            fndr_lib::context_runtime::insight_graph_context_mcp(&state, Some("Visible project"))
+                .await
+                .unwrap();
+        assert_eq!(scoped["top_project_nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            scoped["top_edges"].as_array().unwrap().len(),
+            1,
+            "project view must not emit unrelated global edges"
+        );
+        assert_eq!(
+            scoped["top_edges"][0]["source"],
+            Uuid::from_u128(1).to_string()
+        );
+        assert_eq!(
+            scoped["top_edges"][0]["target"],
+            Uuid::from_u128(3).to_string()
+        );
+        assert!(scoped["conflicts"].as_array().unwrap().is_empty());
+        let absent =
+            fndr_lib::context_runtime::insight_graph_context_mcp(&state, Some("Absent project"))
+                .await
+                .unwrap();
+        assert!(absent["top_project_nodes"].as_array().unwrap().is_empty());
+        assert!(absent["top_edges"].as_array().unwrap().is_empty());
+        assert!(absent["conflicts"].as_array().unwrap().is_empty());
+    });
+}

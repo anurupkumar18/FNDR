@@ -512,40 +512,12 @@ fn build_query_match_reasons(memory: &MemoryRecord, query: &str) -> Vec<String> 
 // Legacy graph rows without typed memory provenance cannot establish that their
 // generated labels are safe to show. Keep them stored, but omit them here.
 fn graph_backing_ids(node_id: Option<&str>, metadata: &Value) -> Option<Vec<String>> {
-    metadata.as_object()?;
-    let mut ids = Vec::new();
+    let mut ids = context_runtime::graph_memory_references(metadata)?;
     if let Some(id) = node_id.and_then(|id| id.strip_prefix("memory:")) {
         if id.is_empty() {
             return None;
         }
         ids.push(id.to_string());
-    }
-    for key in ["memory_id", "source_memory_id"] {
-        if let Some(value) = metadata.get(key) {
-            let id = value.as_str().filter(|id| !id.trim().is_empty())?;
-            ids.push(id.to_string());
-        }
-    }
-    for key in ["memory_ids", "source_memory_ids", "supporting_memory_ids"] {
-        if let Some(value) = metadata.get(key) {
-            for value in value.as_array()? {
-                ids.push(
-                    value
-                        .as_str()
-                        .filter(|id| !id.trim().is_empty())?
-                        .to_string(),
-                );
-            }
-        }
-    }
-    if metadata.get("source_type").and_then(Value::as_str) == Some("memory") {
-        ids.push(
-            metadata
-                .get("source_id")?
-                .as_str()
-                .filter(|id| !id.trim().is_empty())?
-                .to_string(),
-        );
     }
     ids.sort();
     ids.dedup();
