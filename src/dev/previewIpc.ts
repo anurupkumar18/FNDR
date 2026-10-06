@@ -771,6 +771,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         display_name: "Anurup",
     };
     let previewBlocklist = ["1Password", "bank.example"];
+    let previewAgentNotesEnabled = false;
     let previewPrivacyAlerts: PrivacyAlert[] = [];
     let codexSignedIn = false;
     let agentChats: Array<{ id: string; title: string; createdAt: number; updatedAt: number; messages: Array<{ role: string; content: string; at: number; memories: Array<{ id: string; title: string; appName: string; timestamp: number }> }> }> = [];
@@ -811,6 +812,18 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return previewPrivacyAlerts.map((alert) => ({ ...alert }));
             case "get_blocklist":
                 return [...previewBlocklist];
+            case "get_agent_notes_enabled":
+                return previewAgentNotesEnabled;
+            case "set_agent_notes_enabled": {
+                const enabled = typeof payload === "object" && payload !== null && "enabled" in payload
+                    ? (payload as { enabled?: unknown }).enabled
+                    : null;
+                if (typeof enabled !== "boolean") {
+                    throw new Error("Preview set_agent_notes_enabled requires a boolean.");
+                }
+                previewAgentNotesEnabled = enabled;
+                return undefined;
+            }
             case "set_blocklist": {
                 const apps =
                     typeof payload === "object" && payload !== null && "apps" in payload

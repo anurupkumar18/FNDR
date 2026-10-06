@@ -71,7 +71,7 @@ Set `FNDR_MCP_REQUIRE_AUTH=0` to opt back into the old no-auth-on-localhost beha
 
 An assistant can save a short note, decision, summary, or to-do into memory. The contract is `docs/product/fndr-remember-spec.md`; this is its smallest safe slice.
 
-- **Off by default.** Set `agent_notes_enabled = true` in FNDR's `config.toml` to turn it on. Until then every call answers `notes_disabled`. The actions kill switch answers `actions_off`.
+- **Off by default.** In Settings → Trust, turn on **Let assistants add notes**. The switch saves `agent_notes_enabled` in FNDR's `config.toml`; turning it off keeps existing notes. Until enabled every call answers `notes_disabled`. The actions kill switch answers `actions_off`.
 - **Token required.** A note needs the bearer token. With `FNDR_MCP_REQUIRE_AUTH=0`, every call answers `auth_required_for_writes`, even one that carries the token.
 - **Who wrote it.** The client name comes from `clientInfo.name` at `initialize`. The response carries an `Mcp-Session-Id` header, and later calls send it back. A missing name, or one that starts with "FNDR", is stored as "Unknown client". The name is self-reported, because the token is shared.
 - **Limits.**
@@ -93,7 +93,7 @@ An assistant can save a short note, decision, summary, or to-do into memory. The
   - Search/Vault cards and MCP search rows preserve `source_type = "agent"` and `added_by`. Cards say "Added" and preserve note text. Other MCP row source categories retain their existing behavior.
   - Ask labels note evidence with its client, time and memory ID. Client names are self-reported, not verified identities.
 - **Not in this slice:**
-  - the Settings toggle and the Vault filter;
+  - the Vault filter;
   - adding notes to derived work-context packs;
   - Privacy Activity lines;
   - gating `fndr_remember_decision` the same way.

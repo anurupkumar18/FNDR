@@ -1516,6 +1516,14 @@ export async function resumeCapture(): Promise<void> {
 }
 
 // Privacy
+export async function getAgentNotesEnabled(): Promise<boolean> {
+    return invoke<boolean>("get_agent_notes_enabled");
+}
+
+export async function setAgentNotesEnabled(enabled: boolean): Promise<void> {
+    return invoke("set_agent_notes_enabled", { enabled });
+}
+
 export async function getBlocklist(): Promise<string[]> {
     return invoke<string[]>("get_blocklist");
 }

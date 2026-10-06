@@ -178,6 +178,59 @@
     font-weight: 500;
 }
 
+.settings-switch-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 44px;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.settings-switch {
+    appearance: none;
+    flex: 0 0 40px;
+    width: 40px;
+    height: 24px;
+    margin: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--surface-elevated);
+    cursor: pointer;
+}
+
+.settings-switch::before {
+    content: "";
+    display: block;
+    width: 16px;
+    height: 16px;
+    margin: 3px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+}
+
+.settings-switch:checked {
+    background: var(--accent);
+}
+
+.settings-switch:checked::before {
+    transform: translateX(16px);
+    background: var(--bg-primary);
+}
+
+.settings-switch:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+
+.settings-switch:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
 /* Paused is the state worth noticing, so it gets the accent; capturing is
    the quiet default. */
 .capture-toggle.is-paused {

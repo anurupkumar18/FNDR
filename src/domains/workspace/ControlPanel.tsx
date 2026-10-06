@@ -5,10 +5,12 @@ import {
     PRIVACY_ALERTS_EVENT,
     type PrivacyAlert,
     fndrQualityStatus,
+    getAgentNotesEnabled,
     getBlocklist,
     getPrivacyAlerts,
     pauseCapture,
     resumeCapture,
+    setAgentNotesEnabled,
     setBlocklist,
 } from "@/shared/ipc/tauri";
 import {
@@ -170,6 +172,10 @@ export function ControlPanel({
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [qualityStatus, setQualityStatus] = useState<QualityStatus | null>(null);
     const [settingsError, setSettingsError] = useState<string | null>(null);
+    const [agentNotesEnabled, setAgentNotesEnabledState] = useState<boolean | null>(null);
+    const [agentNotesBusy, setAgentNotesBusy] = useState(false);
+    const [agentNotesError, setAgentNotesError] = useState<string | null>(null);
+    const settingsLoadVersion = useRef(0);
     const [capturePaused, setCapturePaused] = useState(status?.is_paused ?? false);
     const [captureBusy, setCaptureBusy] = useState(false);
     const [captureMessage, setCaptureMessage] = useState<string | null>(null);
@@ -181,14 +187,19 @@ export function ControlPanel({
     const settingsWasOpen = useRef(false);
 
     const loadSettings = useCallback(async () => {
+        const version = ++settingsLoadVersion.current;
         setSettingsError(null);
+        setAgentNotesEnabledState(null);
+        setAgentNotesError(null);
         const results = await Promise.allSettled([
             getBlocklist(),
             getOnboardingState(),
             listAvailableModels(),
             fndrQualityStatus(),
+            getAgentNotesEnabled(),
         ] as const);
-        const [blocklistResult, onboardingResult, modelsResult, qualityResult] = results;
+        if (version !== settingsLoadVersion.current) return;
+        const [blocklistResult, onboardingResult, modelsResult, qualityResult, agentNotesResult] = results;
         const unavailable: string[] = [];
 
         if (blocklistResult.status === "fulfilled") {
@@ -213,6 +224,11 @@ export function ControlPanel({
         } else {
             unavailable.push("capture totals");
         }
+        if (agentNotesResult.status === "fulfilled") {
+            setAgentNotesEnabledState(agentNotesResult.value);
+        } else {
+            unavailable.push("assistant notes");
+        }
 
         if (unavailable.length > 0) {
             setSettingsError(`Some settings could not be loaded: ${unavailable.join(", ")}.`);
@@ -220,7 +236,9 @@ export function ControlPanel({
     }, []);
 
     useEffect(() => {
-        if (isOpen) void loadSettings();
+        if (!isOpen) return;
+        void loadSettings();
+        return () => { settingsLoadVersion.current += 1; };
     }, [isOpen, loadSettings]);
 
     useEffect(() => {
@@ -346,6 +364,23 @@ export function ControlPanel({
             setCaptureMessage(`Capture action failed: ${String(error)}`);
         } finally {
             setCaptureBusy(false);
+        }
+    };
+
+    const handleToggleAgentNotes = async () => {
+        if (agentNotesEnabled === null || agentNotesBusy) return;
+        const enabled = !agentNotesEnabled;
+        setAgentNotesBusy(true);
+        setAgentNotesError(null);
+        try {
+            await setAgentNotesEnabled(enabled);
+            // A load started before this save may contain the previous consent.
+            settingsLoadVersion.current += 1;
+            setAgentNotesEnabledState(enabled);
+        } catch (error) {
+            setAgentNotesError(`Assistant notes update failed: ${String(error)}`);
+        } finally {
+            setAgentNotesBusy(false);
         }
     };
 
@@ -616,6 +651,35 @@ export function ControlPanel({
                                         trace={captureTrace}
                                         className="capture-activity-trace"
                                     />
+                                )}
+                            </section>
+
+                            <section className="panel-section" aria-labelledby="settings-trust-title">
+                                <h3 id="settings-trust-title">Trust</h3>
+                                <label className="settings-switch-row">
+                                    <span>Let assistants add notes</span>
+                                    <input
+                                        type="checkbox"
+                                        role="switch"
+                                        className="settings-switch"
+                                        aria-describedby="settings-agent-notes-hint"
+                                        checked={agentNotesEnabled === true}
+                                        disabled={agentNotesEnabled === null || agentNotesBusy}
+                                        onChange={() => void handleToggleAgentNotes()}
+                                    />
+                                </label>
+                                <p className="section-hint" id="settings-agent-notes-hint">
+                                    Connected assistants can save labeled notes in your local memory.
+                                    Turning this off keeps existing notes.
+                                </p>
+                                {agentNotesError && (
+                                    <p
+                                        className="settings-message settings-message--error"
+                                        role="alert"
+                                        aria-label="Assistant notes update failed"
+                                    >
+                                        {agentNotesError}
+                                    </p>
                                 )}
                             </section>
 

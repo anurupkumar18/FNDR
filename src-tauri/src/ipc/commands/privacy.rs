@@ -6,6 +6,35 @@ use crate::AppState;
 use std::sync::Arc;
 use tauri::State;
 
+#[tauri::command]
+pub async fn get_agent_notes_enabled(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    Ok(state.config.read().agent_notes_enabled)
+}
+
+#[tauri::command]
+pub async fn set_agent_notes_enabled(
+    state: State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<(), String> {
+    update_agent_notes_enabled(&state.config, enabled, |config| {
+        config.save().map_err(|error| error.to_string())
+    })
+}
+
+fn update_agent_notes_enabled(
+    config: &parking_lot::RwLock<crate::config::Config>,
+    enabled: bool,
+    save: impl FnOnce(&crate::config::Config) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut current = config.write();
+    let mut next = current.clone();
+    next.agent_notes_enabled = enabled;
+    // A failed save must not enable assistant writes for the current session.
+    save(&next)?;
+    *current = next;
+    Ok(())
+}
+
 /// Get blocklist
 #[tauri::command]
 pub async fn get_blocklist(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
@@ -208,4 +237,49 @@ fn privacy_site_matches(value: &str, site_key: &str) -> bool {
     let value_values = vec![value.to_string()];
     Blocklist::is_context_blocked(Some(value), Some(value), &site_values)
         || Blocklist::is_context_blocked(Some(site_key), Some(site_key), &value_values)
+}
+
+#[cfg(test)]
+mod agent_notes_settings_tests {
+    use super::*;
+    use crate::config::Config;
+    use parking_lot::RwLock;
+
+    #[test]
+    fn agent_notes_setting_persists_both_values_without_changing_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = RwLock::new(Config::default());
+        let initial_blocklist = config.read().blocklist.clone();
+        assert!(!config.read().agent_notes_enabled);
+
+        for enabled in [true, false] {
+            update_agent_notes_enabled(&config, enabled, |next| {
+                let contents = toml::to_string_pretty(next).map_err(|error| error.to_string())?;
+                std::fs::write(&path, contents).map_err(|error| error.to_string())
+            })
+            .unwrap();
+
+            let saved: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(saved.agent_notes_enabled, enabled);
+            assert_eq!(config.read().agent_notes_enabled, enabled);
+            assert_eq!(saved.blocklist, initial_blocklist);
+        }
+    }
+
+    #[test]
+    fn agent_notes_setting_save_failure_preserves_previous_consent() {
+        for previous in [false, true] {
+            let mut initial = Config::default();
+            initial.agent_notes_enabled = previous;
+            let config = RwLock::new(initial);
+
+            let result = update_agent_notes_enabled(&config, !previous, |_| {
+                Err("config is read-only".to_string())
+            });
+
+            assert_eq!(result.unwrap_err(), "config is read-only");
+            assert_eq!(config.read().agent_notes_enabled, previous);
+        }
+    }
 }

@@ -17,6 +17,16 @@ afterEach(() => {
 });
 
 describe("development UI preview IPC", () => {
+    it("keeps assistant note consent off until explicitly enabled", async () => {
+        const invoke = createPreviewIpcHandler();
+        await expect(invoke("get_agent_notes_enabled")).resolves.toBe(false);
+        await expect(invoke("set_agent_notes_enabled", { enabled: true })).resolves.toBeUndefined();
+        await expect(invoke("get_agent_notes_enabled")).resolves.toBe(true);
+        await expect(invoke("set_agent_notes_enabled", { enabled: false })).resolves.toBeUndefined();
+        await expect(invoke("get_agent_notes_enabled")).resolves.toBe(false);
+        await expect(invoke("set_agent_notes_enabled", { enabled: "true" })).rejects.toThrow(/boolean/);
+    });
+
     it("defaults visual QA to a stable Film dark scene", () => {
         expect(resolvePreviewConfig("")).toEqual({
             theme: "dark",

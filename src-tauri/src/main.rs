@@ -741,6 +741,8 @@ fn main() {
             ipc::commands::pause_capture,
             ipc::commands::resume_capture,
             // Privacy & data
+            ipc::commands::get_agent_notes_enabled,
+            ipc::commands::set_agent_notes_enabled,
             ipc::commands::get_blocklist,
             ipc::commands::set_blocklist,
             ipc::commands::delete_all_data,
