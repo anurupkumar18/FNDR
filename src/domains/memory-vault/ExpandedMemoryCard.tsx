@@ -21,6 +21,7 @@ interface Props {
     onOpenRelated?: (id: string) => void;
     onOpenInGraph?: (card: MemoryCardData) => void;
     onReopen?: (card: MemoryCardData) => void;
+    reopenStatus?: string | null;
     onResearch?: (card: MemoryCardData) => void;
 }
 
@@ -42,6 +43,7 @@ export function ExpandedMemoryCard({
     onOpenRelated,
     onOpenInGraph,
     onReopen,
+    reopenStatus,
     onResearch,
 }: Props) {
     const [related, setRelated] = useState<MemoryCardData[]>([]);
@@ -246,6 +248,7 @@ export function ExpandedMemoryCard({
                     onDelete={onDelete}
                     onOpenInGraph={onOpenInGraph}
                     onReopen={onReopen}
+                    reopenStatus={reopenStatus}
                     onResearch={onResearch}
                 />
             </div>

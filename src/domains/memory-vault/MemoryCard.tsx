@@ -17,6 +17,8 @@ interface MemoryCardProps {
     onOpenInGraph?: (card: MemoryCardData) => void;
     /** Reopen the captured source target (file/URL). */
     onReopen?: (card: MemoryCardData) => void;
+    /** One-line result from the last reopen attempt for this card. */
+    reopenStatus?: string | null;
     /** Slot for InsightLayers in expanded variant. */
     insightsSlot?: ReactNode;
     /** Slot for evidence pack in expanded variant. */
@@ -63,6 +65,7 @@ export function MemoryCard({
     onResearch,
     onOpenInGraph,
     onReopen,
+    reopenStatus,
     insightsSlot,
     evidenceSlot,
     relatedSlot,
@@ -268,9 +271,16 @@ export function MemoryCard({
                             </Button>
                         )}
                         {onReopen && card.reopen_target && (
-                            <Button mono variant="secondary" onClick={() => onReopen(card)}>
-                                {reopenButtonLabel(card)}
-                            </Button>
+                            <div className="fndr-mc-reopen">
+                                <Button mono variant="secondary" onClick={() => onReopen(card)}>
+                                    {reopenButtonLabel(card)}
+                                </Button>
+                                {reopenStatus ? (
+                                    <p className="fndr-mc-reopen-status" role="status">
+                                        {reopenStatus}
+                                    </p>
+                                ) : null}
+                            </div>
                         )}
                         {onResearch && (
                             <Button mono variant="ghost" onClick={() => onResearch(card)}>

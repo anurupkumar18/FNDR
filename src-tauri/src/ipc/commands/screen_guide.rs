@@ -25,7 +25,6 @@ use std::time::{Duration, Instant};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-use tokio::io::AsyncReadExt;
 
 pub const SCREEN_GUIDE_OVERLAY_LABEL: &str = "screen-guide-overlay";
 const SCREEN_GUIDE_SHORTCUT_EVENT: &str = "screen-guide://shortcut";
@@ -747,82 +746,12 @@ fn screen_guide_file_roots_from_candidates(
         .collect()
 }
 
-async fn read_bounded_mdfind_output(
-    mut stdout: tokio::process::ChildStdout,
-    byte_budget: usize,
-) -> Result<(Vec<u8>, bool), String> {
-    let mut stored = Vec::with_capacity(byte_budget.min(8 * 1024));
-    let mut chunk = [0_u8; 8 * 1024];
-    loop {
-        let read = stdout.read(&mut chunk).await.map_err(|_| {
-            "FNDR's local file search could not read Spotlight results.".to_string()
-        })?;
-        if read == 0 {
-            break;
-        }
-        let remaining = byte_budget.saturating_sub(stored.len());
-        stored.extend_from_slice(&chunk[..read.min(remaining)]);
-        if read > remaining {
-            return Ok((stored, true));
-        }
-    }
-    Ok((stored, false))
-}
-
 async fn run_mdfind_for_screen_guide(
     root: &ScreenGuideFileRoot,
     name_terms: &str,
     byte_budget: usize,
 ) -> Result<Vec<u8>, String> {
-    let mut command = tokio::process::Command::new("/usr/bin/mdfind");
-    command
-        .arg("-0")
-        .arg("-onlyin")
-        .arg(&root.path)
-        .arg("-name")
-        .arg(name_terms)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    let mut child = command
-        .spawn()
-        .map_err(|_| "FNDR's local file search is unavailable on this Mac.".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "FNDR's local file search could not start.".to_string())?;
-    let mut output_future = Box::pin(read_bounded_mdfind_output(stdout, byte_budget));
-    enum FirstCompletion {
-        Output(Result<(Vec<u8>, bool), String>),
-        Process(std::io::Result<std::process::ExitStatus>),
-    }
-    let first = {
-        let mut wait_future = Box::pin(child.wait());
-        tokio::select! {
-            output = &mut output_future => FirstCompletion::Output(output),
-            status = &mut wait_future => FirstCompletion::Process(status),
-        }
-    };
-    let (output, status, limit_reached) = match first {
-        FirstCompletion::Output(output) => {
-            let (output, limit_reached) = output?;
-            if limit_reached {
-                let _ = child.start_kill();
-            }
-            (output, child.wait().await, limit_reached)
-        }
-        FirstCompletion::Process(status) => {
-            let (output, limit_reached) = output_future.await?;
-            (output, status, limit_reached)
-        }
-    };
-    let status =
-        status.map_err(|_| "FNDR's local file search stopped unexpectedly.".to_string())?;
-    if !status.success() && !limit_reached {
-        return Err("FNDR's local file search could not query Spotlight.".to_string());
-    }
-    Ok(output)
+    crate::spotlight::run_mdfind_name(name_terms, Some(&root.path), byte_budget).await
 }
 
 async fn collect_screen_guide_file_candidates(

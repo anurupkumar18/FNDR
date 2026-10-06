@@ -1117,8 +1117,18 @@ export async function listNeedsSignalMemoryCards(limit = 200): Promise<NeedsSign
     return invoke<NeedsSignalCard[]>("list_needs_signal_memory_cards", { limit });
 }
 
-export async function reopenMemory(memoryId: string): Promise<boolean> {
-    return invoke<boolean>("reopen_memory", {
+export type ReopenOutcome =
+    | { kind: "opened" }
+    | { kind: "opened_moved"; new_path: string }
+    | { kind: "missing"; path: string }
+    | { kind: "drive_not_connected"; volume: string; path: string }
+    | { kind: "app_missing"; bundle_id: string; app_name?: string | null }
+    | { kind: "app_only"; app_name?: string | null }
+    | { kind: "blocked"; target: string }
+    | { kind: "no_target" };
+
+export async function reopenMemory(memoryId: string): Promise<ReopenOutcome> {
+    return invoke<ReopenOutcome>("reopen_memory", {
         memoryId,
     });
 }

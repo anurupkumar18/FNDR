@@ -96,4 +96,27 @@ describe("ExpandedMemoryCard", () => {
         expect(screen.getByText(/Preview · doc\.pdf – Page 112 of 150 · page 112/)).toBeTruthy();
         expect(screen.getByRole("button", { name: "Open source (page 112)" })).toBeTruthy();
     });
+
+    it("shows a one-line reopen status under Open source", async () => {
+        vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
+        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({
+            seed_ids: [card.id],
+            node_count: 0,
+            edge_count: 0,
+        });
+        render(
+            <ExpandedMemoryCard
+                card={{
+                    ...card,
+                    reopen_target: "file:///Users/qa/doc.pdf",
+                }}
+                onClose={() => {}}
+                onReopen={() => {}}
+                reopenStatus="File was moved. Opened it from /Users/qa/Documents/doc.pdf."
+            />,
+        );
+        expect(screen.getByRole("status").textContent).toBe(
+            "File was moved. Opened it from /Users/qa/Documents/doc.pdf.",
+        );
+    });
 });

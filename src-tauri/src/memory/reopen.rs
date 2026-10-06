@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[derive(Default)]
@@ -493,6 +495,111 @@ pub fn url_with_text_anchor(url: &str, anchor: &str) -> String {
         return url.to_string();
     }
     format!("{url}#:~:text={}", encode_text_fragment(anchor))
+}
+
+/// What happened when FNDR tried to reopen a memory. Shared by IPC, MCP, and
+/// the Vault one-line status so every surface can say the same thing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReopenOutcome {
+    Opened,
+    OpenedMoved { new_path: String },
+    Missing { path: String },
+    DriveNotConnected { volume: String, path: String },
+    AppMissing {
+        bundle_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_name: Option<String>,
+    },
+    AppOnly {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_name: Option<String>,
+    },
+    Blocked { target: String },
+    NoTarget,
+}
+
+/// External-drive root (`/Volumes/<name>`) when `path` lives on one.
+pub fn volume_root(path: &Path) -> Option<PathBuf> {
+    let mut comps = path.components();
+    match (comps.next(), comps.next(), comps.next()) {
+        (
+            Some(Component::RootDir),
+            Some(Component::Normal(volumes)),
+            Some(Component::Normal(name)),
+        ) if volumes == "Volumes" && !name.is_empty() => {
+            Some(PathBuf::from("/Volumes").join(name))
+        }
+        _ => None,
+    }
+}
+
+pub fn volume_is_disconnected(path: &Path) -> bool {
+    volume_root(path).is_some_and(|root| !root.exists())
+}
+
+fn is_trash_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some(".Trash" | ".Trashes")
+        )
+    })
+}
+
+fn shared_component_prefix_len(left: &Path, right: &Path) -> usize {
+    left.components()
+        .zip(right.components())
+        .take_while(|(a, b)| a == b)
+        .count()
+}
+
+/// Exact file-name match, skipping Trash and the original path. Ties go to
+/// the folder that shares the longest prefix with the original parent, then
+/// to the newest modified time.
+pub fn pick_moved_file(original: &Path, candidates: &[PathBuf]) -> Option<PathBuf> {
+    let original_name = original.file_name()?;
+    let original_parent = original.parent().unwrap_or(original);
+    let mut best: Option<(usize, SystemTime, PathBuf)> = None;
+    for candidate in candidates {
+        if candidate == original || is_trash_path(candidate) {
+            continue;
+        }
+        if candidate.file_name() != Some(original_name) || !candidate.is_file() {
+            continue;
+        }
+        let prefix = shared_component_prefix_len(
+            original_parent,
+            candidate.parent().unwrap_or(candidate.as_path()),
+        );
+        let modified = std::fs::metadata(candidate)
+            .and_then(|meta| meta.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let better = match &best {
+            None => true,
+            Some((best_prefix, best_mtime, _)) => {
+                prefix > *best_prefix || (prefix == *best_prefix && modified > *best_mtime)
+            }
+        };
+        if better {
+            best = Some((prefix, modified, candidate.clone()));
+        }
+    }
+    best.map(|(_, _, path)| path)
+}
+
+/// Schemes FNDR must never hand to `open`.
+pub fn is_blocked_scheme(target: &str) -> bool {
+    let scheme = target
+        .trim()
+        .split_once(':')
+        .map(|(head, _)| head)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        scheme.as_str(),
+        "javascript" | "data" | "file" | "about" | "chrome" | "edge" | "brave"
+    )
 }
 
 pub fn serialize_reopen_target(target: &ReopenTarget) -> String {
@@ -1071,5 +1178,164 @@ mod tests {
         target.text_anchor = Some("Nitrogen is a chemical element with the symbol".into());
         let restored = deserialize_reopen_target(&serialize_reopen_target(&target)).expect("json");
         assert_eq!(restored.text_anchor, target.text_anchor);
+    }
+
+    #[test]
+    fn reopen_outcome_serde_shape_is_pinned() {
+        let cases: &[(&str, ReopenOutcome)] = &[
+            (r#"{"kind":"opened"}"#, ReopenOutcome::Opened),
+            (
+                r#"{"kind":"opened_moved","new_path":"/Users/qa/moved.pdf"}"#,
+                ReopenOutcome::OpenedMoved {
+                    new_path: "/Users/qa/moved.pdf".into(),
+                },
+            ),
+            (
+                r#"{"kind":"missing","path":"/Users/qa/gone.pdf"}"#,
+                ReopenOutcome::Missing {
+                    path: "/Users/qa/gone.pdf".into(),
+                },
+            ),
+            (
+                r#"{"kind":"drive_not_connected","volume":"RE07USB","path":"/Volumes/RE07USB/doc.pdf"}"#,
+                ReopenOutcome::DriveNotConnected {
+                    volume: "RE07USB".into(),
+                    path: "/Volumes/RE07USB/doc.pdf".into(),
+                },
+            ),
+            (
+                r#"{"kind":"app_missing","bundle_id":"com.example.Gone"}"#,
+                ReopenOutcome::AppMissing {
+                    bundle_id: "com.example.Gone".into(),
+                    app_name: None,
+                },
+            ),
+            (
+                r#"{"kind":"app_only","app_name":"Preview"}"#,
+                ReopenOutcome::AppOnly {
+                    app_name: Some("Preview".into()),
+                },
+            ),
+            (
+                r#"{"kind":"blocked","target":"chrome://settings"}"#,
+                ReopenOutcome::Blocked {
+                    target: "chrome://settings".into(),
+                },
+            ),
+            (r#"{"kind":"no_target"}"#, ReopenOutcome::NoTarget),
+        ];
+        for (json, value) in cases {
+            assert_eq!(serde_json::to_string(value).expect("ser"), *json, "{json}");
+            assert_eq!(
+                serde_json::from_str::<ReopenOutcome>(json).expect("de"),
+                *value,
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn volume_root_only_matches_external_volumes() {
+        let cases: &[(&str, Option<&str>)] = &[
+            ("/Volumes/RE07USB/docs/a.pdf", Some("/Volumes/RE07USB")),
+            ("/Volumes/RE07USB", Some("/Volumes/RE07USB")),
+            ("/Users/qa/a.pdf", None),
+            ("/Volumes", None),
+            ("report.pdf", None),
+            ("", None),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                volume_root(Path::new(path)).as_deref(),
+                expected.map(Path::new),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_blocked_scheme_rejects_browser_internal_and_script_urls() {
+        let blocked = [
+            "javascript:alert(1)",
+            "DATA:text/html,hi",
+            "file:///Users/qa/page.html",
+            "about:blank",
+            "chrome://settings",
+            " edge://flags ",
+            "brave://settings",
+        ];
+        for target in blocked {
+            assert!(is_blocked_scheme(target), "{target}");
+        }
+        for target in ["https://example.com", "http://example.com", "notion://page/abc"] {
+            assert!(!is_blocked_scheme(target), "{target}");
+        }
+    }
+
+    #[test]
+    fn pick_moved_file_skips_trash_and_original_and_ranks_by_folder_then_mtime() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let original = root.path().join("original").join("report.pdf");
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::write(&original, b"orig").unwrap();
+
+        let trash = root.path().join(".Trash").join("report.pdf");
+        std::fs::create_dir_all(trash.parent().unwrap()).unwrap();
+        std::fs::write(&trash, b"trash").unwrap();
+
+        let similar = root.path().join("elsewhere").join("report (1).pdf");
+        std::fs::create_dir_all(similar.parent().unwrap()).unwrap();
+        std::fs::write(&similar, b"similar").unwrap();
+
+        let closer = root.path().join("original").join("moved").join("report.pdf");
+        std::fs::create_dir_all(closer.parent().unwrap()).unwrap();
+        std::fs::write(&closer, b"closer").unwrap();
+
+        let farther = root.path().join("elsewhere").join("report.pdf");
+        std::fs::create_dir_all(farther.parent().unwrap()).unwrap();
+        std::fs::write(&farther, b"farther").unwrap();
+
+        let picked = pick_moved_file(
+            &original,
+            &[
+                original.clone(),
+                trash,
+                similar,
+                farther.clone(),
+                closer.clone(),
+            ],
+        );
+        assert_eq!(picked.as_deref(), Some(closer.as_path()));
+
+        let older = root.path().join("tie-a").join("report.pdf");
+        let newer = root.path().join("tie-b").join("report.pdf");
+        std::fs::create_dir_all(older.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(newer.parent().unwrap()).unwrap();
+        std::fs::write(&older, b"older").unwrap();
+        std::fs::write(&newer, b"newer").unwrap();
+        let old_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let new_time = old_time + std::time::Duration::from_secs(60);
+        std::fs::File::open(&older)
+            .unwrap()
+            .set_modified(old_time)
+            .unwrap();
+        std::fs::File::open(&newer)
+            .unwrap()
+            .set_modified(new_time)
+            .unwrap();
+        let original_gone = root.path().join("missing-folder").join("report.pdf");
+        let picked = pick_moved_file(&original_gone, &[older, newer.clone()]);
+        assert_eq!(picked.as_deref(), Some(newer.as_path()));
+    }
+
+    #[test]
+    fn pick_moved_file_returns_none_when_nothing_usable() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let original = root.path().join("gone.pdf");
+        let trash = root.path().join(".Trashes").join("gone.pdf");
+        std::fs::create_dir_all(trash.parent().unwrap()).unwrap();
+        std::fs::write(&trash, b"trash").unwrap();
+        assert_eq!(pick_moved_file(&original, &[trash, original.clone()]), None);
+        assert_eq!(pick_moved_file(&original, &[]), None);
     }
 }
