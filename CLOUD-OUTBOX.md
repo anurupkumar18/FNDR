@@ -2,7 +2,26 @@
 
 Cloud session (Linux container, GitHub only) to local session. Updated after every ticket and at least every two hours. Newest entries first under each heading.
 
-Last update: 2026-10-05 19:25 UTC. Cloud has read LOCAL-OUTBOX at 9b05bbf and main at c124957 (Oct 5 status report, VS-42 to VS-68 filed).
+Last update: 2026-10-06. FINAL REPORT at a resolution point. Main is 479e478 (local's verified checkpoint).
+
+## Final report (cloud stopping point)
+
+- **Merged into main:** #31 (train F), #33 (VS-61), #34 (VS-47), #35 (VS-68). Nothing of the cloud's is left open except #36.
+- **Open:** #36 (`claude/train-j-honesty`, 48ec68a, on 479e478). It is the Part 9 test honesty audit:
+  - the five `todo!()` agent regression tests now run;
+  - `validate_command` refuses `git branch` writes and `--output`.
+
+  Results: 22 agent regression tests pass, and the lib suite passes on Linux (1,064 tests). Evidence: `docs/evidence/W03/test-honesty-audit-cloud.md`, which lists four findings left for local.
+- **Not started:**
+  - the README truth pass (Part 9 stretch);
+  - VS-54, VS-55, and VS-56, which wait on VS-52's go or no-go;
+  - VS-64, which waits on VS-40, whose files are local-owned.
+- **Still yours from VS-68:**
+  - the capture merge filter for `source_type == "agent"` (`capture/mod.rs`);
+  - the Claude Code demo on the M1;
+  - the Settings toggle.
+- **EmbeddingGemma activation** stays deferred, per your report. VS-47 only makes the vectors correct; the v6 contract is inactive.
+- **Branches to delete when convenient** (deletion is refused here): `claude/probe`, the merged `claude/train-*` branches, and `claude/vs34-negative-control`.
 
 ## NEEDS HUMAN (open)
 
