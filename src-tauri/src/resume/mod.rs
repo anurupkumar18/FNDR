@@ -142,6 +142,7 @@ pub async fn build_resume_threads(
     store: &Store,
     hours: u32,
     budget_tokens: usize,
+    blocklist: &[String],
 ) -> Result<Vec<ResumeThread>, String> {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let window_ms = i64::from(hours) * 60 * 60 * 1000;
@@ -157,11 +158,7 @@ pub async fn build_resume_threads(
         // Match existing read-side admission before a row can influence
         // thread state, suggestions or citations. Agent notes are not
         // observed work and remain excluded by the remember contract.
-        if crate::memory_quality::record_low_signal_reason(&record).is_some()
-            || crate::privacy::Blocklist::is_internal_app(
-                &record.app_name,
-                record.bundle_id.as_deref(),
-            )
+        if !crate::context_runtime::retrieve::memory_is_visible(&record, blocklist)
             || record.source_type.trim().eq_ignore_ascii_case("agent")
         {
             continue;
@@ -183,7 +180,8 @@ pub async fn resume_work(
     hours: u32,
     budget_tokens: usize,
 ) -> Result<Vec<ResumeThread>, String> {
-    build_resume_threads(&state.inner().store, hours, budget_tokens).await
+    let blocklist = state.inner().config.read().blocklist.clone();
+    build_resume_threads(&state.inner().store, hours, budget_tokens, &blocklist).await
 }
 
 #[cfg(test)]
@@ -360,7 +358,7 @@ mod tests {
             .await
             .expect("insert");
 
-        let threads = build_resume_threads(&store, 24, 2000)
+        let threads = build_resume_threads(&store, 24, 2000, &[])
             .await
             .expect("resume");
         assert_eq!(threads.len(), 1, "hidden-only projects must not appear");
@@ -391,7 +389,7 @@ mod tests {
             .add_batch_preserving_ids(&[reviewed.clone(), deleted])
             .await
             .expect("insert");
-        let before = build_resume_threads(&store, 24, 2000)
+        let before = build_resume_threads(&store, 24, 2000, &[])
             .await
             .expect("initial resume");
         assert_eq!(before[0].evidence, vec!["reviewed", "deleted"]);
@@ -406,7 +404,7 @@ mod tests {
             .await
             .expect("delete memory");
 
-        let after = build_resume_threads(&store, 24, 2000)
+        let after = build_resume_threads(&store, 24, 2000, &[])
             .await
             .expect("refresh resume");
         assert!(

@@ -3053,6 +3053,9 @@ async fn run_fndr_namespace_timeline(
         .list_activity_events(args.limit.unwrap_or(20), args.project.as_deref())
         .await
         .map_err(internal_tool_error)?;
+    let events = context_runtime::retain_context_events(&app_state, events)
+        .await
+        .map_err(internal_tool_error)?;
     let entries: Vec<_> = events
         .into_iter()
         .map(|e| {
@@ -3154,14 +3157,14 @@ async fn run_memory_search_full_context(
     )
     .await
     .map_err(internal_tool_error)?;
-    let semantic_matches = filter_results_by_window(retrieved, &time_window);
-    let keyword_matches = semantic_matches
+    let mut semantic_matches = filter_results_by_window(retrieved, &time_window);
+    let mut keyword_matches = semantic_matches
         .iter()
         .filter(|result| result.matched_routes.iter().any(|route| route == "keyword"))
         .cloned()
         .collect::<Vec<_>>();
 
-    let merged = dedupe_results_by_id(
+    let mut merged = dedupe_results_by_id(
         semantic_matches
             .iter()
             .cloned()
@@ -3170,6 +3173,9 @@ async fn run_memory_search_full_context(
     );
 
     let memory_map = load_memories_for_results(&app_state, &merged).await?;
+    semantic_matches.retain(|row| memory_map.contains_key(&row.id));
+    keyword_matches.retain(|row| memory_map.contains_key(&row.id));
+    merged.retain(|row| memory_map.contains_key(&row.id));
     let related_memories = fetch_related_memories(
         &app_state,
         &memory_map.values().cloned().collect::<Vec<_>>(),
@@ -3285,14 +3291,11 @@ async fn run_memory_get_context_pack(
         .await
         .map_err(internal_tool_error)?;
 
-    let relevant_results = filter_results_by_window(
-        app_state
-            .store
-            .list_recent_results(80, None)
-            .await
-            .map_err(internal_tool_error)?,
+    let mut relevant_results = filter_results_by_window(
+        fetch_results_in_range(&app_state, None, None, 80).await?,
         &time_window,
     );
+    relevant_results.reverse();
     let memory_map = load_memories_for_results(&app_state, &relevant_results).await?;
 
     let files_touched = aggregate_files(&relevant_results, &memory_map);
@@ -3349,9 +3352,11 @@ async fn run_memory_resume_work(
 ) -> Result<Value, JsonRpcError> {
     let hours = args.hours.clamp(1, 168);
     let budget_tokens = args.budget_tokens.clamp(256, 4000);
-    let threads = crate::resume::build_resume_threads(&app_state.store, hours, budget_tokens)
-        .await
-        .map_err(internal_tool_error)?;
+    let blocklist = app_state.config.read().blocklist.clone();
+    let threads =
+        crate::resume::build_resume_threads(&app_state.store, hours, budget_tokens, &blocklist)
+            .await
+            .map_err(internal_tool_error)?;
 
     Ok(tool_success(json!({
         "hours": hours,
@@ -3384,11 +3389,9 @@ async fn run_memory_agent_brief(
     .await
     .map_err(internal_tool_error)?;
 
-    let results = app_state
-        .store
-        .list_recent_results(max_items.saturating_mul(3).max(12), None)
-        .await
-        .map_err(internal_tool_error)?;
+    let mut results =
+        fetch_results_in_range(&app_state, None, None, max_items.saturating_mul(3).max(12)).await?;
+    results.reverse();
     let timeline = build_timeline_buckets(results.clone(), "session");
     let memory_map = load_memories_for_results(&app_state, &results).await?;
     let files = aggregate_files(&results, &memory_map)
@@ -3642,19 +3645,7 @@ async fn run_memory_active_focus(
     let start = now - chrono::Duration::minutes(lookback_minutes as i64).num_milliseconds();
     let frontmost_app =
         crate::capture::macos_frontmost_app_name().unwrap_or_else(|| "Unknown".to_string());
-    let recent = app_state
-        .store
-        .get_search_results_in_range(start, now)
-        .await
-        .map_err(internal_tool_error)?;
-    let recent = recent
-        .into_iter()
-        .rev()
-        .take(30)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
+    let recent = fetch_results_in_range(&app_state, Some(start), Some(now), 30).await?;
     let working_state = context_runtime::get_recent_working_state(&app_state, None)
         .await
         .map_err(internal_tool_error)?;
@@ -3927,6 +3918,7 @@ async fn run_memory_source_evidence(
     app_state: Arc<AppState>,
     args: SourceEvidenceArgs,
 ) -> Result<Value, JsonRpcError> {
+    let blocklist = app_state.config.read().blocklist.clone();
     let mut memory_ids = Vec::new();
     if let Some(memory_id) = args.memory_id.as_deref() {
         memory_ids.push(memory_id.to_string());
@@ -3938,47 +3930,77 @@ async fn run_memory_source_evidence(
             .await
             .map_err(internal_tool_error)?
         {
-            memory_ids.extend(page.supporting_memory_ids);
+            let sources =
+                context_runtime::context_source_memories(&app_state, &page.supporting_memory_ids)
+                    .await
+                    .map_err(internal_tool_error)?;
+            if !page.supporting_memory_ids.is_empty()
+                && page
+                    .supporting_memory_ids
+                    .iter()
+                    .all(|id| sources.contains_key(id))
+            {
+                memory_ids.extend(page.supporting_memory_ids);
+            }
         }
     }
     memory_ids = dedupe_strings_preserve_order(memory_ids);
     let limit = args.limit.clamp(1, 100);
     memory_ids.truncate(limit);
+    let rows = memory_ids
+        .iter()
+        .map(|id| crate::storage::SearchResult {
+            id: id.clone(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let mut authorized = load_memories_for_results(&app_state, &rows).await?;
+    let mut seen = HashSet::new();
+    let records = memory_ids
+        .iter()
+        .filter_map(|id| authorized.remove(id))
+        .filter(|memory| seen.insert(memory.id.clone()))
+        .collect::<Vec<_>>();
+    let mut projected = records
+        .iter()
+        .map(memory_to_search_result)
+        .collect::<Vec<_>>();
+    context_runtime::retrieve::authorize_related_memory_ids(
+        &mut projected,
+        &app_state.store,
+        &blocklist,
+    )
+    .await;
     let mut memories = Vec::new();
-    for memory_id in &memory_ids {
-        if let Some(memory) = app_state
-            .store
-            .get_memory_by_id(memory_id)
-            .await
-            .map_err(internal_tool_error)?
-        {
-            let mut row = json!({
-                "memory_id": memory.id,
-                "timestamp": memory.timestamp,
-                "memory_context": memory.memory_context,
-                "project": memory.project,
-                "topic": memory.topic,
-                "workflow": memory.workflow,
-                "intent": memory.user_intent,
-                "decisions": memory.decisions,
-                "errors": memory.errors,
-                "blockers": memory.blockers,
-                "todos": memory.todos,
-                "results": memory.results,
-                "entities": memory.entities,
-                "files": memory.files_touched,
-                "url": memory.url,
-                "graph_neighbors": memory.related_memory_ids,
+    for (memory, projection) in records.iter().zip(projected) {
+        let mut row = json!({
+            "memory_id": memory.id,
+            "timestamp": memory.timestamp,
+            "memory_context": memory.memory_context,
+            "project": memory.project,
+            "topic": memory.topic,
+            "workflow": memory.workflow,
+            "intent": memory.user_intent,
+            "decisions": memory.decisions,
+            "errors": memory.errors,
+            "blockers": memory.blockers,
+            "todos": memory.todos,
+            "results": memory.results,
+            "entities": memory.entities,
+            "files": memory.files_touched,
+            "url": memory.url,
+            "graph_neighbors": projection.related_memory_ids,
+            "source_type": memory.source_type,
+            "added_by": memory.added_by(),
+        });
+        if args.include_raw {
+            row["raw"] = json!({
+                "text": trim_chars(&memory.text, 1200),
+                "clean_text": trim_chars(&memory.clean_text, 1200),
+                "raw_evidence": trim_chars(&memory.raw_evidence, 1500),
             });
-            if args.include_raw {
-                row["raw"] = json!({
-                    "text": trim_chars(&memory.text, 1200),
-                    "clean_text": trim_chars(&memory.clean_text, 1200),
-                    "raw_evidence": trim_chars(&memory.raw_evidence, 1500),
-                });
-            }
-            memories.push(row);
         }
+        memories.push(row);
     }
 
     Ok(tool_success(json!({
@@ -4724,6 +4746,8 @@ async fn fetch_results_in_range(
         if rows.len() > max_rows {
             rows = rows[rows.len() - max_rows..].to_vec();
         }
+        let authorized = load_memories_for_results(app_state, &rows).await?;
+        rows.retain(|row| authorized.contains_key(&row.id));
         return Ok(rows);
     }
     let mut rows = app_state
@@ -4731,6 +4755,8 @@ async fn fetch_results_in_range(
         .list_recent_results(max_rows.max(1), None)
         .await
         .map_err(internal_tool_error)?;
+    let authorized = load_memories_for_results(app_state, &rows).await?;
+    rows.retain(|row| authorized.contains_key(&row.id));
     rows.sort_by_key(|row| row.timestamp);
     Ok(rows)
 }
@@ -4752,18 +4778,34 @@ async fn load_memories_for_results(
     app_state: &Arc<AppState>,
     rows: &[crate::storage::SearchResult],
 ) -> Result<HashMap<String, crate::storage::MemoryRecord>, JsonRpcError> {
+    let blocklist = app_state.config.read().blocklist.clone();
+    let mut ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    let mut found = app_state
+        .store
+        .get_memories_by_ids(&ids)
+        .await
+        .map_err(internal_tool_error)?;
     let mut map = HashMap::new();
-    for row in rows {
-        if map.contains_key(&row.id) {
-            continue;
-        }
-        if let Some(memory) = app_state
-            .store
-            .get_memory_by_id(&row.id)
-            .await
-            .map_err(internal_tool_error)?
+    let mut alias_lookups = 0;
+    for id in ids {
+        let memory = match found.remove(&id) {
+            Some(memory) => Some(memory),
+            None if alias_lookups < 64 => {
+                alias_lookups += 1;
+                app_state
+                    .store
+                    .get_memory_by_id(&id)
+                    .await
+                    .map_err(internal_tool_error)?
+            }
+            None => None,
+        };
+        if let Some(memory) =
+            memory.filter(|memory| context_runtime::retrieve::memory_is_visible(memory, &blocklist))
         {
-            map.insert(row.id.clone(), memory);
+            map.insert(id, memory);
         }
     }
     Ok(map)
@@ -4774,8 +4816,13 @@ async fn fetch_related_memories(
     memories: &[crate::storage::MemoryRecord],
     limit: usize,
 ) -> Result<Vec<crate::storage::MemoryRecord>, JsonRpcError> {
+    let seed_rows = memories
+        .iter()
+        .map(memory_to_search_result)
+        .collect::<Vec<_>>();
+    let seeds = load_memories_for_results(app_state, &seed_rows).await?;
     let mut ids = HashSet::new();
-    for memory in memories {
+    for memory in seeds.values() {
         if let Some(parent) = memory.parent_id.as_deref() {
             ids.insert(parent.to_string());
         }
@@ -4786,17 +4833,22 @@ async fn fetch_related_memories(
             ids.insert(related.clone());
         }
     }
-    let mut results = Vec::new();
-    for memory_id in ids.into_iter().take(limit.max(1)) {
-        if let Some(memory) = app_state
-            .store
-            .get_memory_by_id(&memory_id)
-            .await
-            .map_err(internal_tool_error)?
-        {
-            results.push(memory);
-        }
-    }
+    let mut ids = ids.into_iter().collect::<Vec<_>>();
+    ids.sort();
+    let target_rows = ids
+        .into_iter()
+        .take(limit.max(1))
+        .map(|id| crate::storage::SearchResult {
+            id,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let targets = load_memories_for_results(app_state, &target_rows).await?;
+    let mut seen = HashSet::new();
+    let mut results = targets
+        .into_values()
+        .filter(|memory| seen.insert(memory.id.clone()))
+        .collect::<Vec<_>>();
     results.sort_by_key(|memory| std::cmp::Reverse(memory.timestamp));
     results.truncate(limit.max(1));
     Ok(results)
@@ -4821,7 +4873,13 @@ fn build_result_rows(
     include_raw: bool,
 ) -> Vec<Value> {
     rows.iter()
-        .map(|row| result_row_to_json(row, memory_map.get(&row.id), include_raw))
+        .filter_map(|row| {
+            let memory = memory_map.get(&row.id)?;
+            let mut current = memory_to_search_result(memory);
+            current.score = row.score;
+            current.embedding_reason_labels = row.embedding_reason_labels.clone();
+            Some(result_row_to_json(&current, Some(memory), include_raw))
+        })
         .collect()
 }
 
@@ -4908,18 +4966,9 @@ fn aggregate_urls(
     memory_map: &HashMap<String, crate::storage::MemoryRecord>,
 ) -> Vec<Value> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for row in rows {
-        if let Some(url) = row.url.as_deref() {
-            if !url.trim().is_empty() {
-                *counts.entry(url.to_string()).or_default() += 1;
-            }
-        }
-        if let Some(memory) = memory_map.get(&row.id) {
-            if let Some(url) = memory.url.as_deref() {
-                if !url.trim().is_empty() {
-                    *counts.entry(url.to_string()).or_default() += 1;
-                }
-            }
+    for memory in rows.iter().filter_map(|row| memory_map.get(&row.id)) {
+        if let Some(url) = memory.url.as_deref().filter(|url| !url.trim().is_empty()) {
+            *counts.entry(url.to_string()).or_default() += 1;
         }
     }
     let mut urls = counts
@@ -4941,17 +4990,10 @@ fn aggregate_files(
     memory_map: &HashMap<String, crate::storage::MemoryRecord>,
 ) -> Vec<Value> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for row in rows {
-        for file in &row.files_touched {
+    for memory in rows.iter().filter_map(|row| memory_map.get(&row.id)) {
+        for file in &memory.files_touched {
             if !file.trim().is_empty() {
                 *counts.entry(file.clone()).or_default() += 1;
-            }
-        }
-        if let Some(memory) = memory_map.get(&row.id) {
-            for file in &memory.files_touched {
-                if !file.trim().is_empty() {
-                    *counts.entry(file.clone()).or_default() += 1;
-                }
             }
         }
     }
@@ -5329,6 +5371,380 @@ mod tests {
         }
     }
 
+    #[test]
+    fn mcp_visibility_source_evidence_checks_records_and_all_page_supports() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let mut visible = related_test_record("visible");
+        visible.related_memory_ids = vec!["blocked".into(), "missing".into(), "note-alias".into()];
+        let mut blocked = related_test_record("blocked");
+        blocked.app_name = "PrivateWorkspace".into();
+        let mut deleted = related_test_record("deleted");
+        deleted.is_soft_deleted = true;
+        let mut note = related_test_record("note");
+        note.source_type = "agent".into();
+        note.consolidated_from = vec!["note-alias".into()];
+        runtime
+            .block_on(
+                state
+                    .store
+                    .add_batch_preserving_ids(&[visible, blocked, deleted, note]),
+            )
+            .unwrap();
+        runtime
+            .block_on(state.store.upsert_knowledge_pages(&[
+                crate::storage::KnowledgePage {
+                    page_id: "mixed-page".into(),
+                    title: "PRIVATE_DERIVED_TITLE".into(),
+                    supporting_memory_ids: vec!["visible".into(), "blocked".into()],
+                    ..Default::default()
+                },
+                crate::storage::KnowledgePage {
+                    page_id: "visible-page".into(),
+                    supporting_memory_ids: vec!["visible".into()],
+                    ..Default::default()
+                },
+                crate::storage::KnowledgePage {
+                    page_id: "note-page".into(),
+                    supporting_memory_ids: vec!["note".into()],
+                    ..Default::default()
+                },
+            ]))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+        for id in ["blocked", "deleted", "missing"] {
+            let response = runtime
+                .block_on(run_memory_source_evidence(
+                    state.clone(),
+                    SourceEvidenceArgs {
+                        memory_id: Some(id.into()),
+                        page_id: None,
+                        limit: 12,
+                        include_raw: true,
+                    },
+                ))
+                .unwrap();
+            assert!(
+                response["structuredContent"]["evidence"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+                "{id}: {response}"
+            );
+        }
+        for page in ["mixed-page", "note-page"] {
+            let response = runtime
+                .block_on(run_memory_source_evidence(
+                    state.clone(),
+                    SourceEvidenceArgs {
+                        memory_id: None,
+                        page_id: Some(page.into()),
+                        limit: 1,
+                        include_raw: true,
+                    },
+                ))
+                .unwrap();
+            assert!(
+                response["structuredContent"]["evidence"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+                "all page supports checked before limit: {response}"
+            );
+        }
+        for (id, page, expected) in [
+            (Some("note-alias"), None, "note"),
+            (None, Some("visible-page"), "visible"),
+        ] {
+            let response = runtime
+                .block_on(run_memory_source_evidence(
+                    state.clone(),
+                    SourceEvidenceArgs {
+                        memory_id: id.map(str::to_string),
+                        page_id: page.map(str::to_string),
+                        limit: 12,
+                        include_raw: true,
+                    },
+                ))
+                .unwrap();
+            let rows = response["structuredContent"]["evidence"]
+                .as_array()
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0]["memory_id"], expected);
+            if expected == "visible" {
+                assert_eq!(rows[0]["graph_neighbors"], json!(["note"]));
+            }
+            assert!(rows[0]["raw"]["clean_text"]
+                .as_str()
+                .unwrap()
+                .contains("deployment checklist"));
+        }
+    }
+
+    #[test]
+    fn mcp_visibility_full_context_helpers_authorize_actual_records_and_keep_notes() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let mut visible = related_test_record("visible");
+        visible.parent_id = Some("blocked".into());
+        visible.related_ids = vec!["note-alias".into(), "deleted".into(), "missing".into()];
+        let mut blocked = related_test_record("blocked");
+        blocked.app_name = "PrivateWorkspace".into();
+        blocked.url = Some("https://PRIVATE.example/private".into());
+        blocked.files_touched = vec!["PRIVATE_FILE.rs".into()];
+        blocked.related_ids = vec!["visible".into()];
+        let mut deleted = related_test_record("deleted");
+        deleted.is_soft_deleted = true;
+        let mut note = related_test_record("note");
+        note.source_type = "agent".into();
+        note.consolidated_from = vec!["note-alias".into()];
+        let records = vec![visible.clone(), blocked.clone(), deleted, note];
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&records))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+        let mut rows = records
+            .iter()
+            .map(memory_to_search_result)
+            .collect::<Vec<_>>();
+        rows.push(memory_to_search_result(&related_test_record("missing")));
+        let map = runtime
+            .block_on(load_memories_for_results(&state, &rows))
+            .unwrap();
+        assert_eq!(
+            map.len(),
+            2,
+            "hidden and missing records cannot authorize raw fallback"
+        );
+        let mut stale = memory_to_search_result(&related_test_record("visible"));
+        stale.window_title = "PRIVATE_STALE_TITLE".into();
+        stale.snippet = "PRIVATE_STALE_SNIPPET".into();
+        stale.url = Some("https://PRIVATE_STALE.example".into());
+        stale.files_touched = vec!["PRIVATE_STALE_FILE.rs".into()];
+        stale.score = 0.875;
+        let current = build_result_rows(&[stale.clone()], &map, true);
+        assert!(
+            !serde_json::to_string(&current)
+                .unwrap()
+                .contains("PRIVATE_STALE"),
+            "current stored fields must replace stale index fields"
+        );
+        assert_eq!(current[0]["score"], 0.875);
+        assert!(
+            !serde_json::to_string(&aggregate_urls(&[stale.clone()], &map))
+                .unwrap()
+                .contains("PRIVATE_STALE")
+        );
+        assert!(!serde_json::to_string(&aggregate_files(&[stale], &map))
+            .unwrap()
+            .contains("PRIVATE_STALE"));
+
+        assert!(!serde_json::to_string(&aggregate_urls(&rows, &map))
+            .unwrap()
+            .contains("PRIVATE"));
+        assert!(!serde_json::to_string(&aggregate_files(&rows, &map))
+            .unwrap()
+            .contains("PRIVATE"));
+        let built = build_result_rows(&rows, &map, true);
+        assert_eq!(built.len(), 2);
+        assert!(built
+            .iter()
+            .all(|row| matches!(row["memory_id"].as_str(), Some("visible" | "note"))));
+        let related = runtime
+            .block_on(fetch_related_memories(&state, &[visible], 12))
+            .unwrap();
+        assert_eq!(
+            related.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["note"]
+        );
+        // A stale supplied seed cannot override the current stored visibility.
+        blocked.app_name = "Editor".into();
+        assert!(runtime
+            .block_on(fetch_related_memories(&state, &[blocked], 12))
+            .unwrap()
+            .is_empty());
+        let timeline = runtime
+            .block_on(fetch_results_in_range(
+                &state,
+                Some(0),
+                Some(1_900_000_000_000),
+                100,
+            ))
+            .unwrap();
+        assert_eq!(timeline.len(), 2);
+        assert!(timeline
+            .iter()
+            .all(|row| matches!(row.id.as_str(), "visible" | "note")));
+    }
+
+    #[test]
+    fn mcp_visibility_namespace_timeline_checks_all_derived_event_sources() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let visible = related_test_record("visible");
+        let mut blocked = related_test_record("blocked");
+        blocked.app_name = "PrivateWorkspace".into();
+        let mut note = related_test_record("note");
+        note.source_type = "agent".into();
+        runtime
+            .block_on(
+                state
+                    .store
+                    .add_batch_preserving_ids(&[visible, blocked, note]),
+            )
+            .unwrap();
+        let event = |id: &str, source: &str| crate::storage::ActivityEvent {
+            id: id.into(),
+            memory_id: source.into(),
+            title: id.into(),
+            end_time: 1_800_000_000_000,
+            source_memory_ids: vec![source.into()],
+            ..Default::default()
+        };
+        let mut mixed = event("PRIVATE_MIXED", "visible");
+        mixed.source_memory_ids.push("blocked".into());
+        let mut secret = event("PRIVATE_SECRET", "visible");
+        secret.privacy_class = crate::storage::PrivacyClass::Secret;
+        runtime
+            .block_on(state.store.upsert_activity_events(&[
+                event("Visible event", "visible"),
+                event("PRIVATE_BLOCKED", "blocked"),
+                event("PRIVATE_NOTE", "note"),
+                event("PRIVATE_MISSING", "missing"),
+                mixed,
+                secret,
+            ]))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+        let response = runtime
+            .block_on(run_fndr_namespace_timeline(state, json!({"limit":20})))
+            .unwrap();
+        assert_eq!(
+            response["structuredContent"]["entries"],
+            json!([{
+                "memory_id":"visible", "timestamp":1_800_000_000_000_i64, "title":"Visible event"
+            }])
+        );
+    }
+
+    #[test]
+    fn mcp_visibility_recent_context_wrappers_preserve_newest_first() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let now = chrono::Utc::now().timestamp_millis();
+        let rows = ["oldest", "middle", "newest"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let mut row = related_test_record(id);
+                row.timestamp = now - 3000 + i as i64 * 1000;
+                row
+            })
+            .collect::<Vec<_>>();
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&rows))
+            .unwrap();
+        let brief = runtime
+            .block_on(run_memory_agent_brief(
+                state.clone(),
+                AgentBriefArgs {
+                    topic: String::new(),
+                    token_budget: 1800,
+                    include_raw_evidence: false,
+                },
+            ))
+            .unwrap();
+        let pack = runtime
+            .block_on(run_memory_get_context_pack(
+                state,
+                GetContextPackArgs {
+                    topic: String::new(),
+                    time_window: None,
+                    depth: "shallow".into(),
+                },
+            ))
+            .unwrap();
+        for rows in [
+            &brief["structuredContent"]["facts"],
+            &pack["structuredContent"]["relevant_memories"],
+        ] {
+            assert_eq!(
+                rows.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["memory_id"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["newest", "middle", "oldest"]
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_visibility_source_neighbors_share_alias_budget_and_dedup_canonical_rows() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let aliases = (0..65)
+            .map(|i| format!("target-old-{i:03}"))
+            .collect::<Vec<_>>();
+        let mut target = related_test_record("target");
+        target.consolidated_from = aliases.clone();
+        let mut first = related_test_record("first");
+        first.consolidated_from = vec!["first-alias".into()];
+        first.related_memory_ids = aliases[..64].to_vec();
+        let mut second = related_test_record("second");
+        second.related_memory_ids = vec![aliases[64].clone()];
+        runtime
+            .block_on(
+                state
+                    .store
+                    .add_batch_preserving_ids(&[first, second, target]),
+            )
+            .unwrap();
+        runtime
+            .block_on(
+                state
+                    .store
+                    .upsert_knowledge_pages(&[crate::storage::KnowledgePage {
+                        page_id: "page".into(),
+                        supporting_memory_ids: vec!["first".into(), "second".into()],
+                        ..Default::default()
+                    }]),
+            )
+            .unwrap();
+        let response = runtime
+            .block_on(run_memory_source_evidence(
+                state,
+                SourceEvidenceArgs {
+                    memory_id: Some("first-alias".into()),
+                    page_id: Some("page".into()),
+                    limit: 100,
+                    include_raw: false,
+                },
+            ))
+            .unwrap();
+        let rows = response["structuredContent"]["evidence"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "direct alias and page source share one canonical row"
+        );
+        assert_eq!(rows[0]["memory_id"], "first");
+        assert_eq!(rows[0]["graph_neighbors"], json!(["target"]));
+        assert_eq!(rows[1]["memory_id"], "second");
+        assert_eq!(
+            rows[1]["graph_neighbors"],
+            json!([]),
+            "response-wide64 alias budget is not reset per source"
+        );
+    }
     #[test]
     fn related_memories_hide_notes_when_later_blocklist_matches_body_or_project() {
         let runtime = tokio::runtime::Runtime::new().unwrap();

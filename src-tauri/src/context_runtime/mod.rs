@@ -457,7 +457,7 @@ pub(crate) async fn context_source_memories(
     Ok(visible)
 }
 
-async fn retain_context_events(
+pub(crate) async fn retain_context_events(
     state: &AppState,
     events: Vec<ActivityEvent>,
 ) -> Result<Vec<ActivityEvent>, String> {
@@ -741,6 +741,7 @@ pub async fn build_code_context(
         .list_activity_events(10, pack.project.as_deref())
         .await
         .map_err(|e| e.to_string())?;
+    let events = retain_context_events(state, events).await?;
     let recent_commands = collect_command_events(&events);
     let recent_errors = collect_error_events(&events);
 
@@ -774,6 +775,7 @@ pub async fn build_context_delta(
         .into_iter()
         .filter(|event| event.end_time > baseline)
         .collect::<Vec<_>>();
+    let new_events = retain_context_events(state, new_events).await?;
     let changed_entities = dedupe_entities(
         new_events
             .iter()
@@ -829,6 +831,7 @@ pub async fn get_recent_working_state(
         .list_activity_events(8, project.as_deref())
         .await
         .map_err(|e| e.to_string())?;
+    let recent_events = retain_context_events(state, recent_events).await?;
     let relevant_files = collect_relevant_files(&[], &recent_events, None);
     let known_failures = collect_failures(&recent_events, None);
     let open_tasks = collect_open_tasks(state, project.as_deref()).await?;
@@ -3653,6 +3656,111 @@ mod tests {
             assert_eq!(
                 stored.active_goal, "PRIVATE_CACHED_GOAL",
                 "read must not rewrite historical context"
+            );
+        });
+    }
+
+    #[test]
+    fn direct_context_reads_authorize_activity_before_projection() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = context_visibility_state(dir.path());
+        rt.block_on(async {
+            let mut good = context_visibility_record("visible");
+            good.consolidated_from = vec!["old-visible".into()];
+            let mut blocked = context_visibility_record("PRIVATE_SOURCE");
+            blocked.app_name = "PrivateWorkspace".into();
+            state
+                .store
+                .add_batch_preserving_ids(&[good, blocked])
+                .await
+                .unwrap();
+            let mut visible = context_visibility_event(
+                "visible-event",
+                "old-visible",
+                "Visible deployment review",
+            );
+            // Keep alias-backed evidence while reusing the existing canonical event.
+            visible.memory_id = "visible".into();
+            visible.commands = vec!["cargo test visible".into()];
+            visible.errors = vec!["Visible test failure".into()];
+            let mut hidden =
+                context_visibility_event("PRIVATE_EVENT", "PRIVATE_SOURCE", "PRIVATE_SUMMARY");
+            hidden.commands = vec!["PRIVATE_COMMAND".into()];
+            hidden.errors = vec!["PRIVATE_ERROR".into()];
+            hidden.entities = vec![EntityRef {
+                canonical_id: "PRIVATE_ENTITY".into(),
+                canonical_name: "PRIVATE_ENTITY".into(),
+                ..Default::default()
+            }];
+            let mut hidden_project = hidden.clone();
+            hidden_project.id = "PRIVATE_PROJECT_EVENT".into();
+            hidden_project.project = Some("PRIVATE_PROJECT".into());
+            hidden_project.end_time += 1;
+            state
+                .store
+                .upsert_activity_events(&[visible, hidden, hidden_project])
+                .await
+                .unwrap();
+            state.config.write().blocklist = vec!["privateworkspace".into()];
+            let code = build_code_context(
+                &state,
+                CodeContextRequest {
+                    repo: Some("Atlas".into()),
+                    files: vec!["/synthetic/request.rs".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let working = get_recent_working_state(&state, None).await.unwrap();
+            let delta = build_context_delta(&state, "visibility-session", Some(0))
+                .await
+                .unwrap();
+            let saved = state
+                .store
+                .list_context_deltas(1, Some("visibility-session"))
+                .await
+                .unwrap();
+            let payloads = [
+                ("code", serde_json::to_string(&code).unwrap()),
+                ("working", serde_json::to_string(&working).unwrap()),
+                ("delta", serde_json::to_string(&delta).unwrap()),
+                ("persisted delta", serde_json::to_string(&saved).unwrap()),
+            ];
+            let leaks = payloads
+                .iter()
+                .filter(|(_, body)| body.contains("PRIVATE_"))
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>();
+            assert!(
+                leaks.is_empty(),
+                "excluded activity leaked through: {leaks:?}"
+            );
+            assert!(code
+                .recent_commands
+                .iter()
+                .any(|c| c.command == "cargo test visible"));
+            assert_eq!(code.active_files, ["/synthetic/request.rs"]);
+            assert_eq!(working.project.as_deref(), Some("Atlas"));
+            assert!(working
+                .recent_errors
+                .iter()
+                .any(|e| e == "Visible test failure"));
+            assert!(delta.new_events.iter().any(|e| e.id == "visible-event"));
+            let later = build_context_delta(&state, "later-session", Some(i64::MAX))
+                .await
+                .unwrap();
+            assert!(later.new_events.is_empty());
+            // Stored activity remains intact; only authorized projections change.
+            assert_eq!(
+                state
+                    .store
+                    .list_activity_events(20, None)
+                    .await
+                    .unwrap()
+                    .len(),
+                3
             );
         });
     }

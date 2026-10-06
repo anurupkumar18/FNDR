@@ -1,7 +1,10 @@
 //! Search-related Tauri commands and helpers.
 
-use super::common::{strip_internal_fndr_results, truncate_chars};
+use super::common::truncate_chars;
 use crate::context_runtime::{retrieve_search_results, RetrieveRequest};
+use crate::context_runtime::retrieve::{
+    authorize_related_memory_ids, memory_is_permitted, memory_is_visible,
+};
 use crate::graph::graph_store::GraphStore;
 use crate::memory_quality::{partition_surfaceable, LowSignalReason};
 use crate::privacy::Blocklist;
@@ -643,6 +646,31 @@ pub(super) async fn synthesize_memory_cards_from_ranked(
     cards
 }
 
+/// Authorize projections against current durable records, preserving rank/order.
+async fn authorize_direct_results(
+    state: &AppState,
+    mut rows: Vec<SearchResult>,
+    include_low_signal: bool,
+) -> Result<Vec<SearchResult>, String> {
+    let ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+    let records = state
+        .store
+        .get_memories_by_ids(&ids)
+        .await
+        .map_err(|e| e.to_string())?;
+    let blocklist = state.config.read().blocklist.clone();
+    rows.retain(|row| {
+        records.get(&row.id).is_some_and(|record| {
+            if include_low_signal {
+                memory_is_permitted(record, &blocklist)
+            } else {
+                memory_is_visible(record, &blocklist)
+            }
+        })
+    });
+    Ok(rows)
+}
+
 /// List memory cards in newest→oldest order for browsing.
 #[tauri::command]
 pub async fn list_memory_cards(
@@ -650,16 +678,23 @@ pub async fn list_memory_cards(
     app_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<MemoryCard>, String> {
+    list_memory_cards_for_state(&state, app_filter.as_deref(), limit).await
+}
+
+async fn list_memory_cards_for_state(
+    state: &AppState,
+    app_filter: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<MemoryCard>, String> {
     let limit = limit.unwrap_or(MEMORY_GRAPH_LIMIT).clamp(1, 2_000);
     let results = state
-        .inner()
         .store
-        .list_recent_results(limit, app_filter.as_deref())
+        .list_recent_results(limit, app_filter)
         .await
         .map_err(|e| e.to_string())?;
 
-    let (surfaced, _low_signal) = partition_surfaceable(strip_internal_fndr_results(results));
-    let mut cards: Vec<MemoryCard> = surfaced.into_iter().map(memory_card_from_result).collect();
+    let results = authorize_direct_results(state, results, false).await?;
+    let mut cards: Vec<MemoryCard> = results.into_iter().map(memory_card_from_result).collect();
     refine_memory_card_titles(&mut cards);
     enrich_insight_kg_node_counts(state.store.clone(), &mut cards).await;
     Ok(cards)
@@ -680,14 +715,21 @@ pub async fn list_needs_signal_memory_cards(
     state: State<'_, Arc<AppState>>,
     limit: Option<usize>,
 ) -> Result<Vec<NeedsSignalCard>, String> {
+    list_needs_signal_cards_for_state(&state, limit).await
+}
+
+async fn list_needs_signal_cards_for_state(
+    state: &AppState,
+    limit: Option<usize>,
+) -> Result<Vec<NeedsSignalCard>, String> {
     let limit = limit.unwrap_or(200).clamp(1, 1_000);
     let results = state
-        .inner()
         .store
         .list_recent_results(MEMORY_GRAPH_LIMIT.max(limit), None)
         .await
         .map_err(|e| e.to_string())?;
-    let (_surfaced, low_signal) = partition_surfaceable(strip_internal_fndr_results(results));
+    let results = authorize_direct_results(state, results, true).await?;
+    let (_surfaced, low_signal) = partition_surfaceable(results);
     Ok(low_signal
         .into_iter()
         .take(limit)
@@ -727,17 +769,45 @@ pub async fn find_visually_similar_memories(
     time_filter: Option<String>,
     app_filter: Option<String>,
 ) -> Result<Vec<SearchResult>, String> {
+    visually_similar_for_state(
+        &state,
+        &seed_memory_id,
+        limit,
+        time_filter.as_deref(),
+        app_filter.as_deref(),
+    )
+    .await
+}
+
+async fn visually_similar_for_state(
+    state: &AppState,
+    seed_memory_id: &str,
+    limit: Option<usize>,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+) -> Result<Vec<SearchResult>, String> {
     let clamped = limit.unwrap_or(8).clamp(1, 50);
-    state
+    let Some(seed) = state
         .store
-        .similar_by_image_embedding(
-            &seed_memory_id,
-            clamped,
-            time_filter.as_deref(),
-            app_filter.as_deref(),
-        )
+        .get_memory_by_id(seed_memory_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(Vec::new());
+    };
+    let blocklist = state.config.read().blocklist.clone();
+    if !memory_is_visible(&seed, &blocklist) {
+        return Ok(Vec::new());
+    }
+    let results = state
+        .store
+        .similar_by_image_embedding(&seed.id, clamped, time_filter, app_filter)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut results = authorize_direct_results(state, results, false).await?;
+    let blocklist = state.config.read().blocklist.clone();
+    authorize_related_memory_ids(&mut results, &state.store, &blocklist).await;
+    Ok(results)
 }
 
 /// Summarize search results using AI
@@ -971,6 +1041,205 @@ mod tests {
     use crate::embedding::{Embedder, EMBEDDING_DIM};
     use crate::graph::GraphStore;
     use crate::storage::{MemoryRecord, StateStore, Store};
+
+    fn direct_read_state(path: &std::path::Path) -> AppState {
+        let store = Arc::new(Store::new(path).unwrap());
+        let state_store = Arc::new(StateStore::new(path).unwrap());
+        let graph = GraphStore::new(store.clone());
+        AppState::new(
+            path.to_path_buf(),
+            Config::default(),
+            store,
+            state_store,
+            graph,
+            None,
+            None,
+        )
+    }
+
+    fn direct_read_record(id: &str, timestamp: i64) -> MemoryRecord {
+        let mut image_embedding = vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM];
+        image_embedding[0] = 1.0;
+        MemoryRecord {
+            id: id.into(),
+            timestamp,
+            app_name: "Editor".into(),
+            window_title: "Atlas release checklist".into(),
+            clean_text:
+                "Reviewed the Atlas release checklist and deployment verification evidence.".into(),
+            snippet: "Reviewed Atlas deployment evidence.".into(),
+            image_embedding,
+            ..Default::default()
+        }
+    }
+
+    fn direct_read_low_signal(id: &str, timestamp: i64) -> MemoryRecord {
+        MemoryRecord {
+            clean_text: String::new(),
+            snippet: "Screen capture (visual)".into(),
+            display_summary: "Screen capture (visual)".into(),
+            synthesis_branch: "visual_metadata_fallback".into(),
+            enrichment_status: "visual_metadata_fallback".into(),
+            ..direct_read_record(id, timestamp)
+        }
+    }
+
+    #[test]
+    fn direct_vault_reads_authorize_current_records_preserving_order_and_filter() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = direct_read_state(dir.path());
+        rt.block_on(async {
+            let mut app = direct_read_record("PRIVATE_APP", 8);
+            app.app_name = "PrivateWorkspace".into();
+            let mut url = direct_read_record("PRIVATE_URL", 7);
+            url.url = Some("https://private.example/docs".into());
+            let mut title = direct_read_record("PRIVATE_TITLE", 6);
+            title.window_title = "ConfidentialRoadmap".into();
+            let mut deleted = direct_read_record("PRIVATE_DELETED", 5);
+            deleted.is_soft_deleted = true;
+            let mut internal = direct_read_record("PRIVATE_INTERNAL", 4);
+            internal.bundle_id = Some("com.fndr.app".into());
+            internal.app_name = "FNDR".into();
+            let mut other = direct_read_record("other", 1);
+            other.app_name = "Browser".into();
+            state
+                .store
+                .add_batch_preserving_ids(&[
+                    app,
+                    url,
+                    title,
+                    deleted,
+                    internal,
+                    direct_read_record("newer", 3),
+                    direct_read_record("older", 2),
+                    other,
+                ])
+                .await
+                .unwrap();
+            state.config.write().blocklist = vec![
+                "PrivateWorkspace".into(),
+                "private.example".into(),
+                "ConfidentialRoadmap".into(),
+            ];
+            let cards = list_memory_cards_for_state(&state, None, Some(20))
+                .await
+                .unwrap();
+            assert_eq!(
+                cards.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+                ["newer", "older", "other"]
+            );
+            let filtered = list_memory_cards_for_state(&state, Some("Editor"), Some(20))
+                .await
+                .unwrap();
+            assert_eq!(
+                filtered.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+                ["newer", "older"]
+            );
+        });
+    }
+
+    #[test]
+    fn direct_needs_signal_reads_keep_diagnostics_but_hide_private_records() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = direct_read_state(dir.path());
+        rt.block_on(async {
+            let mut blocked = direct_read_low_signal("PRIVATE_BLOCKED", 4);
+            blocked.url = Some("https://private.example/docs".into());
+            let mut deleted = direct_read_low_signal("PRIVATE_DELETED", 3);
+            deleted.is_soft_deleted = true;
+            let mut internal = direct_read_low_signal("PRIVATE_INTERNAL", 2);
+            internal.app_name = "FNDR".into();
+            state
+                .store
+                .add_batch_preserving_ids(&[
+                    blocked,
+                    deleted,
+                    internal,
+                    direct_read_low_signal("diagnostic", 1),
+                    direct_read_record("normal", 0),
+                ])
+                .await
+                .unwrap();
+            state.config.write().blocklist = vec!["private.example".into()];
+            let cards = list_needs_signal_cards_for_state(&state, Some(20))
+                .await
+                .unwrap();
+            assert_eq!(
+                cards.iter().map(|c| c.card.id.as_str()).collect::<Vec<_>>(),
+                ["diagnostic"]
+            );
+            assert!(!cards[0].reason_code.is_empty());
+            assert!(!cards[0].reason.is_empty());
+            assert!(list_memory_cards_for_state(&state, None, Some(20))
+                .await
+                .unwrap()
+                .iter()
+                .all(|c| c.id != "diagnostic"));
+        });
+    }
+
+    #[test]
+    fn direct_visual_neighbors_authorize_seed_and_targets() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = direct_read_state(dir.path());
+        rt.block_on(async {
+            let mut seed = direct_read_record("seed", 1);
+            seed.consolidated_from = vec!["old-seed".into()];
+            let mut blocked = direct_read_record("PRIVATE_BLOCKED", 2);
+            blocked.app_name = "PrivateWorkspace".into();
+            let mut deleted = direct_read_record("PRIVATE_DELETED", 3);
+            deleted.is_soft_deleted = true;
+            let mut internal = direct_read_record("PRIVATE_INTERNAL", 4);
+            internal.app_name = "FNDR".into();
+            let mut visible = direct_read_record("visible", 6);
+            visible.related_memory_ids = vec![
+                "PRIVATE_BLOCKED".into(),
+                "old-seed".into(),
+                "missing".into(),
+            ];
+            state
+                .store
+                .add_batch_preserving_ids(&[
+                    seed,
+                    blocked,
+                    deleted,
+                    internal,
+                    direct_read_low_signal("low-signal", 5),
+                    visible,
+                ])
+                .await
+                .unwrap();
+            state.config.write().blocklist = vec!["PrivateWorkspace".into()];
+            for seed_id in [
+                "PRIVATE_BLOCKED",
+                "PRIVATE_DELETED",
+                "PRIVATE_INTERNAL",
+                "low-signal",
+                "missing",
+            ] {
+                assert!(
+                    visually_similar_for_state(&state, seed_id, Some(20), None, None)
+                        .await
+                        .unwrap()
+                        .is_empty(),
+                    "excluded seed {seed_id} returned neighbors"
+                );
+            }
+            for seed_id in ["seed", "old-seed"] {
+                let rows = visually_similar_for_state(&state, seed_id, Some(20), None, None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+                    ["visible"]
+                );
+                assert_eq!(rows[0].related_memory_ids, ["seed"]);
+            }
+        });
+    }
 
     #[test]
     fn agent_note_vault_card_preserves_origin_and_cannot_reopen() {

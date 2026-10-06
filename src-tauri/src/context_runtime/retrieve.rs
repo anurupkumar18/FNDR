@@ -93,6 +93,12 @@ pub async fn retrieve(
 }
 
 pub(crate) fn memory_is_visible(record: &MemoryRecord, blocklist: &[String]) -> bool {
+    memory_is_permitted(record, blocklist)
+        && crate::memory_quality::record_low_signal_reason(record).is_none()
+}
+
+/// Current access policy, without quality gating, for explicit diagnostics.
+pub(crate) fn memory_is_permitted(record: &MemoryRecord, blocklist: &[String]) -> bool {
     // Notes are admitted against title, body and project; later rules must
     // apply to those same retained fields when following their links.
     let context = if record.is_agent_note() {
@@ -104,7 +110,6 @@ pub(crate) fn memory_is_visible(record: &MemoryRecord, blocklist: &[String]) -> 
         record.window_title.clone()
     };
     !record.is_soft_deleted
-        && crate::memory_quality::record_low_signal_reason(record).is_none()
         && !crate::privacy::Blocklist::is_internal_app(
             &record.app_name,
             record.bundle_id.as_deref(),
@@ -321,7 +326,7 @@ fn related_lookup_ids(ids: &[String]) -> Vec<String> {
 
 /// Linked targets need their own authorization: they need not be ranked hits.
 /// Batch current IDs and bound merged-ID fallback work across the whole page.
-async fn authorize_related_memory_ids(
+pub(crate) async fn authorize_related_memory_ids(
     rows: &mut [SearchResult],
     store: &Store,
     blocklist: &[String],
