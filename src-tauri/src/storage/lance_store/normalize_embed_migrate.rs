@@ -1870,6 +1870,9 @@ pub(super) async fn ensure_memory_schema_columns(table: &Table) -> Result<(), la
     if !existing.contains("reopen_page") {
         transforms.push(("reopen_page".to_string(), "CAST(NULL AS bigint)".to_string()));
     }
+    if !existing.contains("reopen_text_anchor") {
+        transforms.push(("reopen_text_anchor".to_string(), null_string_sql()));
+    }
     if !existing.contains("search_aliases") {
         transforms.push(("search_aliases".to_string(), empty_string_list_sql()));
     }

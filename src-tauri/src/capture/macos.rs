@@ -32,6 +32,8 @@ pub struct BrowserSemanticContent {
     pub meta_description: String,
     pub h1: String,
     pub article_excerpt: String,
+    /// Text of the block under the middle of the viewport, when the browser script provides it.
+    pub visible_passage: String,
     pub nav_ratio: f32,
     pub content_signal_score: f32,
 }
@@ -47,6 +49,10 @@ impl BrowserSemanticContent {
         }
         if !self.article_excerpt.trim().is_empty() {
             parts.push(self.article_excerpt.trim().to_string());
+        }
+        let passage = self.visible_passage.trim();
+        if !passage.is_empty() && !self.article_excerpt.trim().contains(passage) {
+            parts.push(passage.to_string());
         }
         if parts.is_empty() {
             self.title.trim().to_string()
@@ -405,7 +411,24 @@ fn browser_semantic_javascript() -> &'static str {
             const navRatio=bodyWords>0 ? Math.min(1, (navWords/Math.max(1, bodyWords))*1.8) : 0;\
             const contentSignal=Math.max(0, Math.min(1, primaryWords/120))*(1-navRatio);\
             const articleOut=article.slice(0, 2800);\
-            return [title,desc,h1,articleOut,navRatio.toFixed(3),contentSignal.toFixed(3)].join('|||FNDR|||');\
+            const blockSel='p,li,blockquote,h1,h2,h3,h4,h5,h6,td,dd';\
+            const allowed={p:1,li:1,blockquote:1,h1:1,h2:1,h3:1,h4:1,h5:1,h6:1,td:1,dd:1};\
+            const passageAt=(y)=>{\
+                let el=document.elementFromPoint(Math.round((window.innerWidth||0)*0.5), y);\
+                if(!el) return '';\
+                const block=el.closest ? el.closest(blockSel) : null;\
+                const node=block||el;\
+                const tag=String(node.tagName||'').toLowerCase();\
+                if(!allowed[tag]) return '';\
+                return norm(node.innerText||node.textContent||'');\
+            };\
+            let visible='';\
+            const samples=[0.35,0.50,0.65];\
+            for (let s=0;s<samples.length && !visible;s++){\
+                const raw=passageAt(Math.round((window.innerHeight||0)*samples[s]));\
+                if(w(raw)>=8) visible=raw.slice(0,600);\
+            }\
+            return [title,desc,h1,articleOut,navRatio.toFixed(3),contentSignal.toFixed(3),visible].join('|||FNDR|||');\
         } catch (e) {\
             return '';\
         }\
@@ -444,6 +467,10 @@ fn parse_browser_semantic_payload(payload: &str) -> Option<BrowserSemanticConten
             .get(3)
             .map(|v| v.trim().to_string())
             .unwrap_or_default(),
+        visible_passage: parts
+            .get(6)
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default(),
         nav_ratio,
         content_signal_score,
     };
@@ -451,6 +478,7 @@ fn parse_browser_semantic_payload(payload: &str) -> Option<BrowserSemanticConten
         && content.meta_description.is_empty()
         && content.h1.is_empty()
         && content.article_excerpt.is_empty()
+        && content.visible_passage.is_empty()
     {
         None
     } else {
@@ -729,8 +757,19 @@ mod tests {
         let payload = "Screenpipe Docs|||FNDR|||Memory indexing guide|||FNDR|||Memory indexing|||FNDR|||This page explains capture and retrieval details.|||FNDR|||0.120|||FNDR|||0.740";
         let parsed = parse_browser_semantic_payload(payload).expect("payload parse");
         assert_eq!(parsed.title, "Screenpipe Docs");
+        assert!(parsed.visible_passage.is_empty());
         assert!(parsed.content_signal_score > 0.7);
         assert!(parsed.has_signal());
+    }
+
+    #[test]
+    fn parses_browser_semantic_payload_keeps_visible_passage() {
+        let payload = "Title|||FNDR|||Desc|||FNDR|||Heading|||FNDR|||Article start.|||FNDR|||0.100|||FNDR|||0.800|||FNDR|||The visible sentence sits in the middle of the viewport today.";
+        let parsed = parse_browser_semantic_payload(payload).expect("payload parse");
+        assert_eq!(
+            parsed.visible_passage,
+            "The visible sentence sits in the middle of the viewport today."
+        );
     }
 
     #[test]
@@ -744,5 +783,25 @@ mod tests {
         let text = semantic.content_text();
         assert!(text.contains("Screenpipe indexing"));
         assert!(text.contains("Detailed walkthrough"));
+    }
+
+    #[test]
+    fn content_text_appends_visible_passage_only_when_missing_from_excerpt() {
+        let already = BrowserSemanticContent {
+            article_excerpt: "The visible sentence sits in the middle of the viewport today.".into(),
+            visible_passage: "The visible sentence sits in the middle of the viewport today.".into(),
+            ..Default::default()
+        };
+        let once = already.content_text();
+        assert_eq!(once.matches("visible sentence").count(), 1);
+
+        let extra = BrowserSemanticContent {
+            article_excerpt: "Opening paragraphs only.".into(),
+            visible_passage: "The visible sentence sits in the middle of the viewport today.".into(),
+            ..Default::default()
+        };
+        let text = extra.content_text();
+        assert!(text.contains("Opening paragraphs only."));
+        assert!(text.contains("middle of the viewport"));
     }
 }

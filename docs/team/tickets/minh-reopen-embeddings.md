@@ -291,6 +291,26 @@ How to work this lane: test first, then fix, then rerun the matrix. The two matr
 
 **Evidence.** The matrix and vault health.
 
+## RE-15 Store the browser URL when Accessibility has no http document
+- assignee: minhpro001
+- labels: area::reopen, type::bug, prio::p0
+- milestone: W03-Build
+- estimate: 3h
+- depends: RE-05
+
+**Why.** A text anchor cannot scroll a page that was never stored. On 2026-10-05, Chrome stored `https://en.wikipedia.org/wiki/Nitrogen` as `browser_url`. Safari stored the Helium article as `app_bundle` with an empty `reopen_url` (window title `Helium - Wikipedia` only).
+
+**Today.** `capture/macos.rs` `read_frontmost_app_info` sets `browser_url` only from `normalize_browser_document_url`, which keeps an Accessibility `AXDocument` when it is already `http://` or `https://`. Safari's focused window did not yield one, so `build_reopen_target` fell through to the app.
+
+**Do.**
+1. When the frontmost app is a browser and `AXDocument` is not an http(s) URL, read the active tab URL the same way `get_browser_semantic_content` already talks to Safari, Chrome, Arc, Brave, and Edge.
+2. Run that URL through `strip_url_credentials` before it is stored.
+3. Tests: Safari-style missing `AXDocument` still stores the tab URL; `javascript:`, `data:`, and `chrome:` stay rejected.
+
+**Done when.** R02 stores an https URL. R01 stays a stored URL. R03 passes or stays "Arc not installed."
+
+**Evidence.** Matrix rows R01 to R03.
+
 ## EM-01 Map every way a memory is written and the vectors each writes
 - assignee: minhpro001
 - labels: area::embeddings, type::spike, prio::p0
