@@ -65,10 +65,8 @@ pub fn decide_for_tool(
 }
 
 /// MCP tools with side effects that are not command-bar registry tools. Each
-/// goes through `decide` before its handler runs. Tools in neither this list
-/// nor `MCP_WRITE_TOOLS` are read-only (`docs/product/mcp-tool-audit.md`),
-/// except `fndr_remember_decision`, which still appends to the decision
-/// ledger ungated (VS-35 open question 3).
+/// goes through `decide` before its handler runs. Assistant note and decision
+/// writes are listed separately in `MCP_WRITE_TOOLS`.
 const MCP_SIDE_EFFECT_TOOLS: [&str; 4] = [
     "agent.run",
     "start_meeting",
@@ -80,10 +78,10 @@ pub fn mcp_side_effect_tools() -> &'static [&'static str] {
     &MCP_SIDE_EFFECT_TOOLS
 }
 
-/// MCP tools whose only effect is one new, labeled, deletable memory row
-/// (VS-68). `decide` would confirm every MCP call, and no approval card
-/// exists, so these go through `decide_mcp_write` instead.
-const MCP_WRITE_TOOLS: [&str; 1] = ["fndr.remember"];
+/// Assistant note and decision writes (VS-68, VS-35). `decide` would confirm
+/// every MCP call, so these use the person's explicit notes setting through
+/// `decide_mcp_write` instead.
+const MCP_WRITE_TOOLS: [&str; 2] = ["fndr.remember", "fndr_remember_decision"];
 
 pub fn mcp_write_tools() -> &'static [&'static str] {
     &MCP_WRITE_TOOLS
@@ -227,7 +225,7 @@ mod tests {
             Decision::Refuse(RefuseReason::AgentNotesOff)
         );
         assert_eq!(decide_mcp_write(false, true), Decision::Run);
-        assert_eq!(mcp_write_tools(), ["fndr.remember"]);
+        assert_eq!(mcp_write_tools(), ["fndr.remember", "fndr_remember_decision"]);
         for name in mcp_write_tools() {
             assert_eq!(mcp_tool_risk(name), None, "{name} is gated once, not twice");
         }

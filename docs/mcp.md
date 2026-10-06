@@ -95,8 +95,13 @@ An assistant can save a short note, decision, summary, or to-do into memory. The
 - **Not in this slice:**
   - the Vault filter;
   - adding notes to derived work-context packs;
-  - Privacy Activity lines;
-  - gating `fndr_remember_decision` the same way.
+  - Privacy Activity lines.
+
+### Legacy decision writes: `fndr_remember_decision`
+
+The older decision-ledger tool uses the same permission gates: MCP token checks must be on, the request must carry a valid token, actions must be enabled, and **Let assistants add notes** must be on. The gates run before argument parsing and return the same refusal codes as `fndr.remember`. Turning the setting off keeps existing notes and decision records.
+
+The tool still writes to the separate decision ledger and rebuilds project context when a project is supplied. It retains its existing content rules: it does not inherit `fndr.remember`'s size and rate limits, secret checks, client provenance, or leaf-record isolation.
 
 ## Example Tool Calls
 

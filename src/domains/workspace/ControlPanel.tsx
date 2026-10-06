@@ -669,8 +669,8 @@ export function ControlPanel({
                                     />
                                 </label>
                                 <p className="section-hint" id="settings-agent-notes-hint">
-                                    Connected assistants can save labeled notes in your local memory.
-                                    Turning this off keeps existing notes.
+                                    Connected assistants can save labeled notes and decision records locally.
+                                    Turning this off keeps existing records.
                                 </p>
                                 {agentNotesError && (
                                     <p

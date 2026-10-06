@@ -180,7 +180,7 @@ Implemented controls include:
 - Retention and deletion (`delete_older_than`, `delete_all_data`)
 - Sensitive-context safety checks and private/incognito title heuristics (`src-tauri/src/privacy/`)
 - MCP bearer auth for every tool call by default (only the loopback `initialize`/`tools/list` handshake is exempt) and origin policies; in `tunnel` and `public` mode the auth opt-outs are ignored (VS-61)
-- Assistant notes (`fndr.remember`) stay off until `agent_notes_enabled` is set, and never accept text the capture secret detector flags. `fndr_remember_decision` is still an ungated assistant write to the decision ledger (VS-35 open question 3)
+- Assistant notes (`fndr.remember`) and decision-ledger writes (`fndr_remember_decision`) require enabled MCP token checks, a valid token, **Let assistants add notes** enabled in Settings → Trust, and actions enabled. `fndr.remember` also refuses text the capture secret detector flags; the older decision-ledger tool retains its existing content rules (see `docs/mcp.md`).
 
 FNDR is local-first by default. Optional environment variables can enable external integrations; review `.env.example` before enabling them.
 
@@ -202,7 +202,7 @@ FNDR includes an MCP server with:
 - Deployment modes: `local`, `tunnel`, `public`
 - Optional TLS, plus bearer auth (required by default in every mode, including `local`, per ADR-017) and allowed-origin controls
 - Memory + agent tool surfaces (`memory.*`, `fndr.*`, `agent.*`)
-- Assistant writes: `fndr.remember`, off by default (see `docs/mcp.md`), and the older, ungated `fndr_remember_decision`
+- Assistant writes: `fndr.remember` and the older `fndr_remember_decision`, both off by default behind the same token and Settings gates (see `docs/mcp.md`)
 
 Key environment variables:
 

@@ -168,8 +168,8 @@ impl ClientSessions {
 /// JSON-RPC item in it.
 #[derive(Clone)]
 struct McpRequest {
-    /// Who may write through `fndr.remember`: a caller when auth is on and a
-    /// valid token came with the request, else the refusal to answer with.
+    /// Who may make an assistant write: a caller when auth is on and a valid
+    /// token came with the request, else the refusal to answer with.
     writer: Result<remember::WriteCaller, remember::Refusal>,
 }
 
@@ -2123,7 +2123,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "fndr_remember_decision",
-                "description": "Append a proposed project decision to FNDR's decision ledger.",
+                "description": "Append a proposed project decision to FNDR's decision ledger. Requires the MCP token, enabled token checks, and the person's Let assistants add notes setting; refused while actions are turned off.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -2281,7 +2281,7 @@ async fn call_tool(
         }
     }
 
-    // MCP writes (VS-68): a valid token, then the kill switch, then the
+    // Assistant writes (VS-68, VS-35): a valid token, then the kill switch, then the
     // notes setting, all before the handler reads any argument.
     if crate::agent::risk_policy::mcp_write_tools().contains(&params.name.as_str()) {
         if let Err(refusal) = &request.writer {

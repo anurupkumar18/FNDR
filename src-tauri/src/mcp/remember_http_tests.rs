@@ -10,7 +10,7 @@ use super::*;
 use crate::config::Config;
 use crate::graph::GraphStore;
 use crate::privacy::safety_gate::{self, SafetyDecision};
-use crate::storage::{MemoryRecord, StateStore, Store};
+use crate::storage::{DecisionLedgerEntry, MemoryRecord, StateStore, Store};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 const TOKEN: &str = "vs68-test-token-0123456789";
@@ -163,6 +163,14 @@ impl Server {
         rows.sort_by(|a, b| a.id.cmp(&b.id));
         rows
     }
+
+    async fn decisions(&self) -> Vec<DecisionLedgerEntry> {
+        self.app_state
+            .store
+            .list_decision_ledger_entries(100, None)
+            .await
+            .expect("decision ledger")
+    }
 }
 
 fn remember_call(id: i64, args: Value) -> Value {
@@ -171,6 +179,15 @@ fn remember_call(id: i64, args: Value) -> Value {
         "id": id,
         "method": "tools/call",
         "params": { "name": "fndr.remember", "arguments": args }
+    })
+}
+
+fn decision_call(id: i64, args: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": { "name": "fndr_remember_decision", "arguments": args }
     })
 }
 
@@ -265,6 +282,107 @@ async fn remember_refused_when_notes_disabled_or_kill_switch_on() {
     server.app_state.config.write().agent_notes_enabled = true;
     let (status, body) = server.remember(Some(TOKEN), Some(&session), args).await;
     assert_eq!(outcome(status, &body), Err("actions_off".to_string()));
+    assert!(server.rows().await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remember_decision_rejects_missing_or_wrong_token() {
+    let server = serve(app_state_with(notes_on()).await, true, mock_embedder()).await;
+    let session = server.initialize(Some("Claude Code")).await;
+    for token in [None, Some("wrong-token-wrong-token")] {
+        let (status, body, _) = server
+            .post(
+                token,
+                Some(&session),
+                decision_call(2, json!({ "title": "Keep the parser local" })),
+            )
+            .await;
+        assert_eq!(outcome(status, &body), Err("unauthorized".to_string()));
+        assert!(server.decisions().await.is_empty());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remember_decision_in_batch_after_handshake_requires_token() {
+    let server = serve(app_state_with(notes_on()).await, true, mock_embedder()).await;
+    let batch = json!([
+        { "jsonrpc": "2.0", "id": 1, "method": "initialize",
+          "params": { "protocolVersion": "2025-03-26", "clientInfo": { "name": "Claude Code" } } },
+        decision_call(2, json!({ "title": "Keep the parser local" }))
+    ]);
+    let (status, body, _) = server.post(None, None, batch).await;
+    assert_eq!(outcome(status, &body), Err("unauthorized".to_string()));
+    assert!(server.decisions().await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remember_decision_refused_when_auth_disabled() {
+    let server = serve(app_state_with(notes_on()).await, false, mock_embedder()).await;
+    for token in [None, Some("wrong-token-wrong-token"), Some(TOKEN)] {
+        let (status, body, _) = server
+            .post(
+                token,
+                None,
+                decision_call(2, json!({ "title": "Keep the parser local" })),
+            )
+            .await;
+        assert_eq!(
+            outcome(status, &body),
+            Err("auth_required_for_writes".to_string())
+        );
+        assert!(server.decisions().await.is_empty());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remember_decision_checks_settings_before_parsing_arguments() {
+    let server = serve(app_state_with(notes_on()).await, true, mock_embedder()).await;
+    for (kill_switch, notes_enabled, expected) in [
+        (false, false, "notes_disabled"),
+        (true, false, "actions_off"),
+        (true, true, "actions_off"),
+    ] {
+        {
+            let mut config = server.app_state.config.write();
+            config.actions_kill_switch = kill_switch;
+            config.agent_notes_enabled = notes_enabled;
+        }
+        for args in [json!({ "title": "Keep the parser local" }), Value::Null] {
+            let (status, body, _) = server
+                .post(Some(TOKEN), None, decision_call(2, args))
+                .await;
+            assert_eq!(outcome(status, &body), Err(expected.to_string()));
+            assert!(server.decisions().await.is_empty());
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remember_decision_with_token_and_notes_enabled_persists_to_ledger() {
+    let server = serve(app_state_with(notes_on()).await, true, mock_embedder()).await;
+    let (status, body, _) = server
+        .post(
+            Some(TOKEN),
+            None,
+            decision_call(
+                2,
+                json!({
+                    "title": "Keep the parser local",
+                    "summary": "Use local parsing for predictable offline behavior."
+                }),
+            ),
+        )
+        .await;
+    let result = outcome(status, &body).expect("decision stored");
+    let decisions = server.decisions().await;
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(result["decision"]["id"], decisions[0].id);
+    assert_eq!(decisions[0].title, "Keep the parser local");
+    assert_eq!(
+        decisions[0].summary,
+        "Use local parsing for predictable offline behavior."
+    );
+    assert_eq!(decisions[0].status, "proposed");
     assert!(server.rows().await.is_empty());
 }
 
