@@ -55,17 +55,18 @@ FNDR addresses this by building a local, inspectable memory layer:
 | OCR and context extraction | Apple Vision OCR + structured memory synthesis | Stable |
 | Metadata extraction | App name, window title, URL/domain, session/event fields in `MemoryRecord` | Stable |
 | Memory cards / Memory Vault | UI surfaces under `src/domains/memory-vault/` | Stable |
-| Semantic embeddings | Local ONNX embedder (`all-MiniLM-L6-v2`, 384-d), one resident ONNX session per asset directory and contract; ADR 019 (Proposed) recommends EmbeddingGemma | Stable |
+| Semantic embeddings | Local ONNX embedder (`all-MiniLM-L6-v2`, 384-d), one resident ONNX session per asset directory and contract. ADR 019 (Proposed) recommends EmbeddingGemma: its vectors match the reference implementation (VS-47), but its contract is not active, so every search still uses MiniLM | Stable |
 | One retrieval path | `retrieve`: vector + BM25 keyword routes, weighted fusion, time and app phrase filters (`src-tauri/src/context_runtime/retrieve.rs`, `retrieval_routes.rs`, `fusion.rs`) | Stable |
 | Chunk retrieval | BM25 over chunk text plus BGE-large (1024-d) chunk vectors, rolled up to their memory; behind `search.use_chunk_first_retrieval`, off by default until chunks are written at capture (`context_runtime/chunk_route.rs`) | Experimental |
 | "No strong matches" | `retrieve` reports `strong_match`; Search folds weak results behind a button (`retrieve.rs`, `src/domains/timeline/Timeline.tsx`) | Experimental |
 | Retrieval-grounded Q&A | `fndr_answer` / context runtime pipeline (`src-tauri/src/context_runtime/`) | Stable |
 | Screen Guide | Hold-to-talk, on-device screen guidance and scoped filename lookup, with local speech, a click-through answer overlay, and fixed-state notch/menu-bar feedback | Experimental |
 | Local vector store | LanceDB-backed memory + graph tables | Stable |
-| Visual similarity retrieval | CLIP-based `image_embedding` + `find_visually_similar_memories` | Stable |
+| Visual similarity retrieval | CLIP `image_embedding` (512-d) is stored, and `find_visually_similar_memories` exists as a command, but no screen calls it and Search never uses image vectors (go or no-go in VS-52) | Experimental |
 | Insight knowledge graph | Typed node/edge tables + graph UI hooks; not used for ranking yet | Stable |
 | MCP server for agents | `src-tauri/src/mcp/`, MCP deployment modes + auth/tls controls | Stable |
 | Agent-oriented tools/prompts | `agent.*`, `memory.*`, prompt/resources in MCP | Stable |
+| Agent notes (`fndr.remember`) | An assistant saves a note over MCP as its own labeled memory (`source_type = agent`): token required, off by default (`agent_notes_enabled`), rate-limited, secrets refused, never merged or reviewed (`src-tauri/src/mcp/remember.rs`, `docs/mcp.md`) | Experimental |
 | Manual photo import (Meta glasses flow) | `import_meta_glasses_photo` pipeline | Experimental |
 | Some graph-RAG subgraph APIs | `fndr_get_memory_subgraph` currently returns bounded empty descriptor | Experimental |
 
@@ -109,7 +110,7 @@ flowchart LR
 
 - Default text embedding contract in current code: `384` dimensions (`all-MiniLM-L6-v2`).
 - Image embedding contract: `512` dimensions (CLIP column for visual similarity retrieval).
-- Ranking: each route scores its hits, fusion adds the scores with per-intent weights, and every route sizes its candidate pool from a fixed 50, not from the page size asked for, so a short page is the start of a long one. Keyword scores are bm25 / (bm25 + 2) blended with recency counted in whole minutes.
+- Ranking: each route scores its hits, fusion adds the scores with per-intent weights, and every route sizes its candidate pool from a fixed 50 (`ROUTE_CANDIDATE_POOL`), not from the page size asked for, so a short page is the start of a long one. Keyword scores are 0.86 × bm25 / (bm25 + 2) plus 0.14 × recency, with recency counted in whole minutes. The BM25 indexes are built when rows are written, so the first search does not pay for them.
 - Insight fields (for example `memory_context`, `insight_what_happened`, `insight_why_mattered`) are persisted and reused during retrieval/composition.
 
 ---
@@ -178,7 +179,8 @@ Implemented controls include:
 - App/site blocklist management (`get_blocklist`, `set_blocklist`, `add_to_blocklist`)
 - Retention and deletion (`delete_older_than`, `delete_all_data`)
 - Sensitive-context safety checks and private/incognito title heuristics (`src-tauri/src/privacy/`)
-- MCP auth/origin policies for non-local deployment modes
+- MCP bearer auth in every mode and origin policies; in `tunnel` and `public` mode the auth opt-outs are ignored (VS-61)
+- Assistant notes (`fndr.remember`) stay off until `agent_notes_enabled` is set, and never accept text the capture secret detector flags
 
 FNDR is local-first by default. Optional environment variables can enable external integrations; review `.env.example` before enabling them.
 
@@ -200,12 +202,13 @@ FNDR includes an MCP server with:
 - Deployment modes: `local`, `tunnel`, `public`
 - Optional TLS, plus bearer auth (required by default in every mode, including `local`, per ADR-017) and allowed-origin controls
 - Memory + agent tool surfaces (`memory.*`, `fndr.*`, `agent.*`)
+- One write tool for assistants, `fndr.remember`, off by default (see `docs/mcp.md`)
 
 Key environment variables:
 
 - `FNDR_MCP_MODE`
-- `FNDR_MCP_REQUIRE_AUTH`
-- `FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS`
+- `FNDR_MCP_REQUIRE_AUTH` (`local` mode only; writes are refused while it is off)
+- `FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS` (`local` mode only)
 - `FNDR_MCP_ENABLE_TLS`
 - `FNDR_MCP_ALLOWED_ORIGINS`
 - `FNDR_MCP_PUBLIC_BASE_URL`
@@ -237,7 +240,19 @@ Runs:
 
 - `npm run typecheck`
 - `npm test`
+- `npm run build`
 - `cd src-tauri && cargo test`
+
+### Retrieval quality gate
+
+```bash
+make qa-retrieval-check                          # knowledge-worker persona
+make qa-retrieval-check PERSONA=office-pm
+make qa-retrieval-check PERSONA=software-engineer
+make recall-chart                                # rebuild the Beta recall chart
+```
+
+Seeds a synthetic profile, runs every query through Search, Ask, and `retrieve`, and fails if Recall@5 drops more than 0.05 on any path or a query ranked 1 to 7 becomes a miss (a miss from ranks 8 to 10 is a warning). CI runs the same gate on `macos-26` (`.github/workflows/retrieval-gate.yml`).
 
 ### Useful maintenance commands
 
@@ -253,7 +268,9 @@ make clean-all-generated
 ## 11. Known Limitations / Experimental Surfaces
 
 - Quality still depends on OCR fidelity and capture signal quality.
-- Some graph-oriented retrieval interfaces are still partial (for example bounded subgraph descriptor paths).
+- Some graph-oriented retrieval interfaces are still partial (for example bounded subgraph descriptor paths), and ranking uses no graph route yet.
+- Chunk retrieval is off by default, and image vectors are not searched.
+- The retrieval gate's personas are small and synthetic; real-vault quality is measured in manual QA.
 - Manual photo import and some multimodal paths are still evolving and should be treated as experimental.
 - Meeting diarization and adjacent speech workflows are not fully hardened.
 
