@@ -87,13 +87,29 @@ A one-page Preview title (`x.pdf – 1 page`) still has no current page. Screens
 
 Unit tests: `cd src-tauri && cargo test --lib reopen` and `cargo test --lib memory_cards`; Vault `npm test -- MemoryCard`. Browser `#page=N` reopen is covered by `resolve_reopen_target_appends_pdf_page_to_browser_url`. Live Chrome PDF capture was not re-run in this session (still depends on storing the http URL, which RE-01 recorded as app-only).
 
+## RE-05 follow-up (2026-10-05)
+
+Capture stores `reopen_text_anchor`: 8 to 12 words from the sentence under the middle of the browser viewport, and only when that sentence is already in the stored text. Reopen of an http(s) memory with no fragment appends `#:~:text=<percent-encoded anchor>`. A stored PDF page still wins. Google Docs and `.pdf` URLs are left unchanged.
+
+Live check on the reopen QA profile, Accessibility granted:
+
+| App | Page | Stored `reopen_kind` | Stored `reopen_url` | `reopen_text_anchor` |
+|---|---|---|---|---|
+| Chrome | Nitrogen, scrolled to the isotopes section | `browser_url` | `https://en.wikipedia.org/wiki/Nitrogen` | `of this, access to the primary coolant piping in a pressurised water` |
+| Safari | Helium | `app_bundle` | empty | none (no URL to attach it to) |
+| Arc | | | | not installed |
+
+Opening that Chrome URL with `#:~:text=` scrolls and highlights the passage in Chrome and in Safari. Recording: [re05-chrome-text-fragment.mp4](re05-chrome-text-fragment.mp4). Stills: [re05-chrome-text-fragment.png](re05-chrome-text-fragment.png), [re05-safari-text-fragment.png](re05-safari-text-fragment.png). The Safari still is the fragment URL opened directly. FNDR's Safari memory is still app only, so FNDR cannot build that URL yet (RE-15).
+
+Unit tests: `cd src-tauri && cargo test --lib reopen` and `cargo test --lib semantic`.
+
 ## Matrix
 
 | Row | Scenario | Expected target | Expected reopen | Stored target | Reopen result | Build | Date | Notes |
 |---|---|---|---|---|---|---|---|---|
-| R01 | Chrome tab, public article | https URL | Same page | `app_bundle` `com.google.Chrome`; `reopen_url` empty; title is bundle id | app only | `123cd75` | 2026-09-28 | `macos.rs` `normalize_browser_document_url` never saw http `AXDocument`. `build_reopen_target` (`reopen.rs:83`) fell through to app. `capture/mod.rs` ~3180. |
-| R02 | Safari tab | https URL | Same page | `app_bundle` `com.apple.Safari`; `reopen_url` empty | app only | `123cd75` | 2026-09-28 | Same path as R01. Safari AppleScript semantic content exists (`macos.rs` `get_browser_semantic_content`) but reopen still uses AX http URL, which was missing. |
-| R03 | Arc tab | https URL | Same page | | not available | `123cd75` | 2026-09-28 | Arc not installed |
+| R01 | Chrome tab, public article | https URL | Same page | `browser_url` `https://en.wikipedia.org/wiki/Nitrogen` plus `reopen_text_anchor` (12 words from the isotopes section) | exact: Chrome scrolls to and highlights the passage | RE-05 | 2026-10-05 | AX http URL is stored. Reopen appends `#:~:text=`. See RE-05 section. |
+| R02 | Safari tab | https URL | Same page | `app_bundle`; title `Helium - Wikipedia`; `reopen_url` empty | blocked: no URL stored, so no passage | RE-05 | 2026-10-05 | Safari still has no http `AXDocument`. Fragment works when the URL is opened directly (still in RE-05 section). Follow-up: RE-15. |
+| R03 | Arc tab | https URL | Same page | | not available | RE-05 | 2026-10-05 | Arc not installed |
 | R04 | Edge or Brave tab | https URL | Same page | `app_bundle` `com.brave.Browser`; `reopen_url` empty | app only | `123cd75` | 2026-09-28 | Brave. Same AX URL miss as R01. |
 | R05 | Firefox tab | URL, or app only if Firefox exposes no URL | Same page or honest app only | | not available | `123cd75` | 2026-09-28 | Firefox not installed |
 | R06 | Chrome incognito or Safari private window | Nothing stored | Not applicable | No Helium / incognito row | n/a | `123cd75` | 2026-09-28 | Count bump during this wait was a late Brave flush, not an incognito row. Matches `privacy/safety_gate.rs` skip on title containing `incognito`. |

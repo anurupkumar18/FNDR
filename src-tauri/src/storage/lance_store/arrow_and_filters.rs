@@ -181,6 +181,10 @@ pub(super) fn records_to_batch_with_text_dim(
         .iter()
         .map(|r| r.reopen_page.map(|page| page as i64))
         .collect();
+    let reopen_text_anchors: Vec<Option<&str>> = records
+        .iter()
+        .map(|r| r.reopen_text_anchor.as_deref())
+        .collect();
     let project_confidences: Vec<f32> = records.iter().map(|r| r.project_confidence).collect();
     let topic_confidences: Vec<f32> = records.iter().map(|r| r.topic_confidence).collect();
     let workflow_confidences: Vec<f32> = records.iter().map(|r| r.workflow_confidence).collect();
@@ -382,6 +386,7 @@ pub(super) fn records_to_batch_with_text_dim(
             Arc::new(Float32Array::from(reopen_confidences)),
             Arc::new(StringArray::from(reopen_validation_statuses)),
             Arc::new(Int64Array::from(reopen_pages)),
+            Arc::new(StringArray::from(reopen_text_anchors)),
             Arc::new(search_aliases_array),
             Arc::new(related_memory_ids_array),
             Arc::new(graph_node_ids_array),
@@ -614,6 +619,7 @@ pub(super) fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> 
     let reopen_confidences = f32_col(batch, "reopen_confidence");
     let reopen_validation_statuses = str_col(batch, "reopen_validation_status");
     let reopen_pages = i64_col(batch, "reopen_page");
+    let reopen_text_anchors = str_col(batch, "reopen_text_anchor");
     let search_aliases = list_str_col(batch, "search_aliases");
     let related_memory_ids = list_str_col(batch, "related_memory_ids");
     let graph_node_ids = list_str_col(batch, "graph_node_ids");
@@ -765,6 +771,9 @@ pub(super) fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> 
                 reopen_page: get_opt_i64(&reopen_pages, i)
                     .and_then(|page| u32::try_from(page).ok())
                     .filter(|page| *page >= 1),
+                reopen_text_anchor: get_opt_str(&reopen_text_anchors, i)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty()),
                 search_aliases: extract_str_list(&search_aliases, i),
                 related_memory_ids: extract_str_list(&related_memory_ids, i),
                 graph_node_ids: extract_str_list(&graph_node_ids, i),

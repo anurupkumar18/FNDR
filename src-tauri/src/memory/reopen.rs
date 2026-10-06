@@ -75,6 +75,8 @@ pub struct ReopenTarget {
     pub validation_status: ReopenValidationStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_anchor: Option<String>,
 }
 
 fn is_http_url(value: &str) -> bool {
@@ -293,6 +295,29 @@ fn fragment_has_page_key(fragment: &str) -> bool {
     })
 }
 
+fn nonempty_ref(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|v| !v.is_empty())
+}
+
+/// Same URL or same file path. A page or passage from one document must not
+/// land on another.
+fn same_reopen_document(
+    incoming_url: Option<&str>,
+    incoming_path: Option<&str>,
+    existing_url: Option<&str>,
+    existing_path: Option<&str>,
+) -> bool {
+    let same_url = match (nonempty_ref(incoming_url), nonempty_ref(existing_url)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    };
+    let same_path = match (nonempty_ref(incoming_path), nonempty_ref(existing_path)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    };
+    same_url || same_path
+}
+
 /// Keep a page across a merge only when both records name the same URL or the
 /// same file. Otherwise the incoming page wins so a page from one document
 /// cannot land on another.
@@ -304,21 +329,136 @@ pub fn merge_reopen_page(
     existing_path: Option<&str>,
     existing_page: Option<u32>,
 ) -> Option<u32> {
-    let same_url = match (incoming_url.map(str::trim).filter(|v| !v.is_empty()), existing_url.map(str::trim).filter(|v| !v.is_empty())) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
-    };
-    let same_path = match (
-        incoming_path.map(str::trim).filter(|v| !v.is_empty()),
-        existing_path.map(str::trim).filter(|v| !v.is_empty()),
-    ) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
-    };
-    if same_url || same_path {
+    if same_reopen_document(incoming_url, incoming_path, existing_url, existing_path) {
         incoming_page.or(existing_page)
     } else {
         incoming_page
+    }
+}
+
+const MIN_ANCHOR_WORDS: usize = 8;
+const MAX_ANCHOR_WORDS: usize = 12;
+
+fn normalize_ws(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A passage the browser can scroll to. Taken from `preferred_passage` only
+/// when that passage is already inside `stored_text` (the privacy gate has
+/// already accepted whatever was stored). Otherwise the first usable window
+/// from the stored text's salient spans.
+pub fn text_anchor_from(
+    stored_text: &str,
+    preferred_passage: Option<&str>,
+    app_name: &str,
+) -> Option<String> {
+    let stored = normalize_ws(stored_text);
+    if stored.is_empty() {
+        return None;
+    }
+    if let Some(preferred) = preferred_passage.map(str::trim).filter(|value| !value.is_empty()) {
+        let preferred_norm = normalize_ws(preferred);
+        if !preferred_norm.is_empty() && stored.contains(&preferred_norm) {
+            if let Some(anchor) = first_anchor_window(preferred) {
+                if stored.contains(&normalize_ws(&anchor)) {
+                    return Some(anchor);
+                }
+            }
+        }
+    }
+    for span in crate::capture::text_cleanup::rank_salient_spans(stored_text, app_name) {
+        if let Some(anchor) = first_anchor_window(&span.text) {
+            if stored.contains(&normalize_ws(&anchor)) {
+                return Some(anchor);
+            }
+        }
+    }
+    None
+}
+
+fn first_anchor_window(candidate: &str) -> Option<String> {
+    let words: Vec<&str> = candidate.split_whitespace().collect();
+    if words.len() < MIN_ANCHOR_WORDS {
+        return None;
+    }
+    let take = words.len().min(MAX_ANCHOR_WORDS);
+    let phrase = words[..take].join(" ");
+    let trimmed = phrase.trim_matches(|c: char| !c.is_alphanumeric());
+    let trimmed_words: Vec<&str> = trimmed.split_whitespace().collect();
+    if trimmed_words.len() < MIN_ANCHOR_WORDS || window_rejected(&trimmed_words) {
+        return None;
+    }
+    Some(trimmed_words.join(" "))
+}
+
+fn window_rejected(words: &[&str]) -> bool {
+    let joined = words.join(" ");
+    if joined.contains("://") || joined.contains('@') {
+        return true;
+    }
+    words.iter().any(|word| token_mostly_non_letter(word))
+}
+
+fn token_mostly_non_letter(word: &str) -> bool {
+    let core = word.trim_matches(|c: char| !c.is_alphanumeric());
+    if core.is_empty() {
+        return true;
+    }
+    let letters = core.chars().filter(|c| c.is_alphabetic()).count();
+    letters * 2 < core.chars().count()
+}
+
+/// Percent-encode every byte except ASCII letters, digits, and `_.~`.
+/// Hyphen, comma, and ampersand are always encoded because they are syntax
+/// inside a text fragment directive.
+pub fn encode_text_fragment(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn host_of_url(url: &str) -> &str {
+    let rest = url.split_once("://").map(|(_, tail)| tail).unwrap_or(url);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit('@').next().unwrap_or(host);
+    host.split(':').next().unwrap_or(host)
+}
+
+fn skips_text_fragment(url: &str) -> bool {
+    host_of_url(url).eq_ignore_ascii_case("docs.google.com") || url_path_ends_with_pdf(url)
+}
+
+/// Appends `#:~:text=` when the URL has no fragment and the site can scroll
+/// to a passage. Google Docs and PDF URLs are left unchanged.
+pub fn url_with_text_anchor(url: &str, anchor: &str) -> String {
+    let anchor = anchor.trim();
+    if anchor.is_empty() || url.contains('#') || skips_text_fragment(url) {
+        return url.to_string();
+    }
+    format!("{url}#:~:text={}", encode_text_fragment(anchor))
+}
+
+/// Incoming passage wins. The existing one is kept only for the same URL or file.
+pub fn merge_reopen_text_anchor(
+    incoming_url: Option<&str>,
+    incoming_path: Option<&str>,
+    incoming_anchor: Option<&str>,
+    existing_url: Option<&str>,
+    existing_path: Option<&str>,
+    existing_anchor: Option<&str>,
+) -> Option<String> {
+    let incoming = nonempty_ref(incoming_anchor).map(str::to_string);
+    let existing = nonempty_ref(existing_anchor).map(str::to_string);
+    if same_reopen_document(incoming_url, incoming_path, existing_url, existing_path) {
+        incoming.or(existing)
+    } else {
+        incoming
     }
 }
 
@@ -684,5 +824,152 @@ mod tests {
         let without_page = deserialize_reopen_target(r#"{"kind":"BrowserUrl","captured_at_ms":1,"confidence":0.0,"validation_status":"Unchecked"}"#)
             .expect("legacy json");
         assert_eq!(without_page.page, None);
+        assert_eq!(without_page.text_anchor, None);
+    }
+
+    #[test]
+    fn text_anchor_from_uses_eight_to_twelve_words_of_a_stored_passage() {
+        let stored = "Nitrogen is a chemical element with the symbol N and atomic number seven in the periodic table.";
+        let anchor = text_anchor_from(stored, Some(stored), "Chrome").expect("anchor");
+        let words = anchor.split_whitespace().count();
+        assert!((8..=12).contains(&words), "{anchor}");
+        assert_eq!(
+            anchor,
+            "Nitrogen is a chemical element with the symbol N and atomic number"
+        );
+        assert!(normalize_ws(stored).contains(&normalize_ws(&anchor)));
+    }
+
+    #[test]
+    fn text_anchor_from_ignores_a_passage_that_was_not_stored() {
+        let stored = "Nitrogen is a chemical element with the symbol N and atomic number seven in the periodic table.";
+        let secret = "the password is hunter2 and this phrase was never written onto the stored page at all";
+        let anchor = text_anchor_from(stored, Some(secret), "Chrome").expect("fallback");
+        assert!(!anchor.to_ascii_lowercase().contains("hunter2"));
+        assert!(!anchor.contains('@'));
+        assert!(normalize_ws(stored).contains(&normalize_ws(&anchor)));
+
+        let short = "Too short.";
+        assert_eq!(text_anchor_from(short, Some(secret), "Chrome"), None);
+    }
+
+    #[test]
+    fn text_anchor_from_rejects_windows_with_urls_emails_or_symbol_tokens() {
+        let stored = "Contact user@example.com or open https://secret.example/token immediately before reading the public article body.";
+        assert_eq!(text_anchor_from(stored, Some(stored), "Chrome"), None);
+    }
+
+    #[test]
+    fn encode_text_fragment_encodes_punctuation_dashes_quotes_and_unicode() {
+        assert_eq!(encode_text_fragment("one, two"), "one%2C%20two");
+        assert_eq!(encode_text_fragment("well-known"), "well%2Dknown");
+        assert_eq!(encode_text_fragment("a & b"), "a%20%26%20b");
+        assert_eq!(encode_text_fragment("say \"hi\""), "say%20%22hi%22");
+        assert_eq!(encode_text_fragment("it's"), "it%27s");
+        assert_eq!(
+            encode_text_fragment("en\u{2013}dash em\u{2014}dash \u{201C}quote\u{201D}"),
+            "en%E2%80%93dash%20em%E2%80%94dash%20%E2%80%9Cquote%E2%80%9D"
+        );
+        assert_eq!(encode_text_fragment("caf\u{e9}"), "caf%C3%A9");
+        assert_eq!(encode_text_fragment("keep_._~"), "keep_._~");
+    }
+
+    #[test]
+    fn url_with_text_anchor_skips_fragments_google_docs_and_pdfs() {
+        assert_eq!(
+            url_with_text_anchor("https://example.com/article", "one, two words here"),
+            "https://example.com/article#:~:text=one%2C%20two%20words%20here"
+        );
+        assert_eq!(
+            url_with_text_anchor("https://example.com/article#section", "one two three"),
+            "https://example.com/article#section"
+        );
+        assert_eq!(
+            url_with_text_anchor(
+                "https://docs.google.com/document/d/abc",
+                "one two three"
+            ),
+            "https://docs.google.com/document/d/abc"
+        );
+        assert_eq!(
+            url_with_text_anchor(
+                "https://docs.google.com/spreadsheets/d/abc",
+                "one two three"
+            ),
+            "https://docs.google.com/spreadsheets/d/abc"
+        );
+        assert_eq!(
+            url_with_text_anchor("https://example.com/report.pdf?x=1", "one two three"),
+            "https://example.com/report.pdf?x=1"
+        );
+        assert_eq!(
+            url_with_text_anchor("https://example.com/article", "  "),
+            "https://example.com/article"
+        );
+    }
+
+    #[test]
+    fn merge_reopen_text_anchor_keeps_passage_only_on_the_same_document() {
+        assert_eq!(
+            merge_reopen_text_anchor(
+                Some("https://example.com/a"),
+                None,
+                Some("incoming passage wins here"),
+                Some("https://example.com/a"),
+                None,
+                Some("existing passage stays"),
+            )
+            .as_deref(),
+            Some("incoming passage wins here")
+        );
+        assert_eq!(
+            merge_reopen_text_anchor(
+                Some("https://example.com/a"),
+                None,
+                None,
+                Some("https://example.com/a"),
+                None,
+                Some("existing passage stays"),
+            )
+            .as_deref(),
+            Some("existing passage stays")
+        );
+        assert_eq!(
+            merge_reopen_text_anchor(
+                Some("https://example.com/b"),
+                None,
+                Some("incoming only"),
+                Some("https://example.com/a"),
+                None,
+                Some("existing passage stays"),
+            )
+            .as_deref(),
+            Some("incoming only")
+        );
+        assert_eq!(
+            merge_reopen_text_anchor(
+                Some("https://example.com/b"),
+                None,
+                None,
+                Some("https://example.com/a"),
+                None,
+                Some("existing passage stays"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn reopen_target_text_anchor_round_trips() {
+        let mut target = build_reopen_target(
+            Some("https://example.com/article"),
+            None,
+            None,
+            "Chrome",
+            AT,
+        );
+        target.text_anchor = Some("Nitrogen is a chemical element with the symbol".into());
+        let restored = deserialize_reopen_target(&serialize_reopen_target(&target)).expect("json");
+        assert_eq!(restored.text_anchor, target.text_anchor);
     }
 }
