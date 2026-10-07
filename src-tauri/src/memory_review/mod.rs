@@ -45,7 +45,7 @@ pub use pipeline::{
 };
 pub use queue::{MemoryReviewJob, MemoryReviewQueue};
 pub use repair_truncated::{
-    repair_record, repair_truncated_summaries, RepairExample, RepairSummary,
+    repair_record, repair_truncated_summaries, reword_narration, RepairExample, RepairSummary,
 };
 pub use worker::{
     spawn as spawn_worker, status as worker_status, tick_once, DeferReason,

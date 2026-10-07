@@ -1,4 +1,5 @@
-//! One-time repair for summaries that were cut inside a token.
+//! One-time repair for summaries that were cut inside a token, and for
+//! stored summaries that narrate the person (see `reword_narration`).
 //!
 //! Until 2026-10-06 several call sites ended a sentence at the first period
 //! anywhere, so "Reviewed search/hybrid.rs and the reranker" was stored as
@@ -15,7 +16,9 @@
 use crate::embedding::Embedder;
 use crate::memory_embedding_document::refresh_text_vectors;
 use crate::storage::{MemoryRecord, Store};
-use crate::summariser::narration_filter::clean_or_fallback_display_summary;
+use crate::summariser::narration_filter::{
+    clean_or_fallback_display_summary, is_placeholder_summary, narration_filter_hits, neutral_voice,
+};
 use crate::summariser::sentences::first_sentence;
 use serde::Serialize;
 
@@ -32,8 +35,10 @@ pub struct RepairExample {
 pub struct RepairSummary {
     pub dry_run: bool,
     pub scanned: usize,
-    /// Rows with at least one field cut inside a token.
+    /// Rows with at least one field cut inside a token or narrated.
     pub repairable: usize,
+    /// Of those, rows whose narrated summary was reworded.
+    pub reworded: usize,
     /// Rows rewritten (always 0 in a dry run).
     pub repaired: usize,
     /// Repaired rows whose vectors were refreshed from the new text.
@@ -153,8 +158,46 @@ pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
     })
 }
 
-/// Scan every memory and repair summaries cut inside a token. With `dry_run`
-/// nothing is written and the summary reports what would change.
+const MIN_REWORDED_WORDS: usize = 3;
+
+fn narrates(text: &str) -> bool {
+    let lower = text.trim().to_lowercase();
+    narration_filter_hits(text) || lower.starts_with("the user") || lower.starts_with("you ")
+}
+
+/// Rewords a stored summary that narrates the person ("The user is viewing
+/// ...") with the cleanup the display path already applies. Cards showed the
+/// cleaned line while the stored text, and so its vector, kept the narration.
+/// Returns the before and after when the summary changed.
+pub fn reword_narration(record: &mut MemoryRecord) -> Option<RepairExample> {
+    if record.is_agent_note() || !narrates(&record.display_summary) {
+        return None;
+    }
+    let before = record.display_summary.clone();
+    let after = neutral_voice(&before).trim().to_string();
+    if after == before.trim()
+        || after.split_whitespace().count() < MIN_REWORDED_WORDS
+        || narrates(&after)
+        || is_placeholder_summary(&after)
+    {
+        return None;
+    }
+    for field in [&mut record.snippet, &mut record.insight_what_happened] {
+        if field.trim() == before.trim() {
+            *field = after.clone();
+        }
+    }
+    record.display_summary = after.clone();
+    Some(RepairExample {
+        memory_id: record.id.clone(),
+        before,
+        after,
+    })
+}
+
+/// Scan every memory, reword stored narration and repair summaries cut inside
+/// a token. With `dry_run` nothing is written and the summary reports what
+/// would change.
 pub async fn repair_truncated_summaries(
     store: &Store,
     embedder: Option<&Embedder>,
@@ -170,7 +213,9 @@ pub async fn repair_truncated_summaries(
         ..Default::default()
     };
     for mut record in records {
-        let Some(example) = repair_record(&mut record) else {
+        let reworded = reword_narration(&mut record);
+        summary.reworded += usize::from(reworded.is_some());
+        let Some(example) = repair_record(&mut record).or(reworded) else {
             continue;
         };
         summary.repairable += 1;
@@ -212,6 +257,60 @@ mod tests {
             insight_what_happened: cut,
             ..Default::default()
         }
+    }
+
+    fn narrated_row(summary: &str) -> MemoryRecord {
+        MemoryRecord {
+            id: "n1".into(),
+            timestamp: 1_790_000_000_000,
+            app_name: "Numbers".into(),
+            window_title: "Q3 forecast".into(),
+            snippet: summary.into(),
+            display_summary: summary.into(),
+            insight_what_happened: summary.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rewords_a_stored_summary_that_narrates_the_person() {
+        let mut row = narrated_row("The user is viewing the Q3 forecast with margins by region.");
+        let change = reword_narration(&mut row).expect("reworded");
+        assert_eq!(
+            change.before,
+            "The user is viewing the Q3 forecast with margins by region."
+        );
+        assert!(
+            !row.display_summary.to_lowercase().contains("the user"),
+            "{}",
+            row.display_summary
+        );
+        assert!(row
+            .display_summary
+            .contains("Q3 forecast with margins by region"));
+        assert_eq!(row.snippet, row.display_summary);
+        assert_eq!(row.insight_what_happened, row.display_summary);
+        assert!(
+            reword_narration(&mut row).is_none(),
+            "second pass changes nothing"
+        );
+    }
+
+    #[test]
+    fn rewording_leaves_neutral_rows_and_assistant_notes_alone() {
+        let mut neutral = narrated_row("Reviewed the Q3 forecast with margins by region.");
+        assert!(reword_narration(&mut neutral).is_none());
+
+        let mut note = narrated_row("The user is viewing the Q3 forecast with margins by region.");
+        note.source_type = crate::storage::schema::AGENT_NOTE_SOURCE_TYPE.into();
+        assert!(reword_narration(&mut note).is_none());
+    }
+
+    #[test]
+    fn rewording_never_leaves_a_summary_too_short_to_mean_anything() {
+        let mut row = narrated_row("The user is viewing.");
+        assert!(reword_narration(&mut row).is_none());
+        assert_eq!(row.display_summary, "The user is viewing.");
     }
 
     #[test]

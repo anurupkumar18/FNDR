@@ -7656,7 +7656,9 @@ Activity patterns and insights dashboard
             "cargo test --lib capture",
         );
         assert_eq!(extraction.commands, vec!["cargo test --lib capture"]);
-        assert!(issues.iter().any(|issue| issue == "commands_not_command_like"));
+        assert!(issues
+            .iter()
+            .any(|issue| issue == "commands_not_command_like"));
     }
 
     #[test]

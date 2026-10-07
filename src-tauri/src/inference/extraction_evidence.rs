@@ -67,7 +67,11 @@ pub fn is_command_like(value: &str) -> bool {
     if ends_a_sentence {
         return false;
     }
-    let shell_shaped = |word: &&str| word.contains(['-', '/', '.', '_', '=', ':', '|', '$', '"', '\'', '`', '<', '>', '~', '&']);
+    let shell_shaped = |word: &&str| {
+        word.contains([
+            '-', '/', '.', '_', '=', ':', '|', '$', '"', '\'', '`', '<', '>', '~', '&',
+        ])
+    };
     words.len() < PROSE_WORDS || words.iter().any(shell_shaped)
 }
 

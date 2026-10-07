@@ -109,6 +109,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tally(&mut by_activity, &row.activity_type);
         }
 
+        // Why is each weak summary still weak? Counts only, no memory text.
+        let mut weak_summaries: BTreeMap<String, usize> = BTreeMap::new();
+        for row in &rows {
+            let lower = row.display_summary.trim().to_lowercase();
+            let kind = if is_placeholder_summary(&row.display_summary) {
+                "placeholder"
+            } else if narration_filter_hits(&row.display_summary)
+                || lower.starts_with("the user")
+                || lower.starts_with("you ")
+            {
+                "narrated"
+            } else {
+                continue;
+            };
+            let text = match row.clean_text.trim().chars().count() {
+                0 => "none",
+                1..=199 => "under 200 chars",
+                _ => "200 chars or more",
+            };
+            let review = fndr_lib::memory_review::review_skip_reason(row).unwrap_or("reviewable");
+            // Would the wording cleanup alone fix it, with no model run?
+            let reworded = fndr_lib::summariser::narration_filter::neutral_voice(&row.display_summary);
+            let reworded_lower = reworded.trim().to_lowercase();
+            let fixed = kind == "narrated"
+                && !narration_filter_hits(&reworded)
+                && !reworded_lower.starts_with("the user")
+                && !reworded_lower.starts_with("you ");
+            if fixed {
+                tally(&mut weak_summaries, "narrated, fixed by rewording alone");
+            }
+            tally(
+                &mut weak_summaries,
+                &format!("{kind} | review: {review} | text: {text} | status: {} | source: {}", row.enrichment_status, row.summary_source),
+            );
+        }
+
         // Search keeps one result per content hash. Memories sharing a hash
         // can never appear together, whatever they say.
         let mut by_hash: BTreeMap<String, usize> = BTreeMap::new();
@@ -319,6 +355,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "memories": rows.len(),
             "summary_quality": { "placeholder": pct(placeholder), "narrated": pct(narrated), "cut_inside_token": pct(cut), "no_why_it_mattered": pct(no_why) },
             "vector_health": { "zero_primary_vector": pct(zero_vec), "primary_equals_snippet_vector": pct(same_vec), "embedding_text_carries_session_id": pct(session_noise), "model_and_dim": by_model },
+            "weak_summaries": weak_summaries,
             "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity },
             "search_dedup": dedup,
             "vector_freshness": freshness,
