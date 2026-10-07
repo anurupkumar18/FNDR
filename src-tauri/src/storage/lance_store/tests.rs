@@ -1444,3 +1444,55 @@ async fn chunk_keyword_search_finds_the_chunk_that_holds_the_words() {
         .expect("no match")
         .is_empty());
 }
+
+#[tokio::test]
+async fn replacing_a_memory_updates_it_in_place_and_inserts_an_unknown_id() {
+    let mut first = record(None, "Notes", "First version of the note.");
+    first.embedding = vec![0.1; DEFAULT_TEXT_EMBEDDING_DIM];
+    let (_dir, store) = keyword_store(vec![first.clone()]).await;
+
+    let mut second = first.clone();
+    second.display_summary = "Second version of the note.".to_string();
+    for _ in 0..3 {
+        store.replace_memory_preserving_chunks(&second).await.unwrap();
+    }
+    let rows = store.list_all_memories().await.unwrap();
+    assert_eq!(rows.len(), 1, "a replace must never add a second row");
+    assert_eq!(rows[0].display_summary, "Second version of the note.");
+
+    let mut other = first.clone();
+    other.id = "memory-2".to_string();
+    other.window_title = "Other notes".to_string();
+    store.replace_memory_preserving_chunks(&other).await.unwrap();
+    assert_eq!(store.list_all_memories().await.unwrap().len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_memory_is_never_missing_while_it_is_being_replaced() {
+    // VS-90: the replace used to be a delete followed by an insert. A reader
+    // (or a crash) between the two saw no row. A merge-insert is one version.
+    let first = record(None, "Notes", "A note that is rewritten many times.");
+    let (_dir, store) = keyword_store(vec![first.clone()]).await;
+    let store = Arc::new(store);
+
+    let reader_store = store.clone();
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader_done = done.clone();
+    let reader = tokio::spawn(async move {
+        let mut reads = 0usize;
+        while !reader_done.load(std::sync::atomic::Ordering::SeqCst) {
+            let rows = reader_store.list_all_memories().await.unwrap();
+            assert_eq!(rows.len(), 1, "the memory vanished during a replace");
+            reads += 1;
+        }
+        reads
+    });
+
+    for round in 0..25 {
+        let mut next = first.clone();
+        next.display_summary = format!("Version {round}.");
+        store.replace_memory_preserving_chunks(&next).await.unwrap();
+    }
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(reader.await.unwrap() > 0);
+}

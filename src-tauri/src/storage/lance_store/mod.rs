@@ -1107,10 +1107,13 @@ impl Store {
     }
 
     /// Replace a single memory row in the v4 parent table, preserving its id
-    /// and any linked memory chunks. Used by the memory_review worker after
-    /// validation succeeds; callers must not pass partial records; the full
-    /// `MemoryRecord` is required because the underlying table replace pattern
-    /// is delete-then-insert.
+    /// and any linked memory chunks. Used by review, repair and re-embedding;
+    /// callers must pass the full `MemoryRecord`.
+    ///
+    /// This is one merge-insert keyed on `id`, so it lands as a single table
+    /// version. It used to be a delete followed by an insert, and a crash
+    /// between the two lost the memory (VS-90). A row with a new id is
+    /// inserted.
     pub async fn replace_memory_preserving_chunks(
         &self,
         record: &MemoryRecord,
@@ -1118,12 +1121,23 @@ impl Store {
         if record.id.trim().is_empty() {
             return Err("Refusing to replace a memory with empty id".into());
         }
-        let id = sql_escape(&record.id);
-        self.table.delete(&format!("id = '{id}'")).await?;
-        // Note: deliberately not calling delete_chunks_for_memory: children
-        // outlive a parent review pass.
+        // Note: deliberately not touching memory chunks: children outlive a
+        // parent review pass.
         let normalized = normalize_record_for_index(record);
-        self.insert_memory_batch(&[normalized]).await
+        let batch = records_to_batch(&[normalized])?;
+        let schema = Arc::new(memory_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        let mut merge = self.table.merge_insert(&["id"]);
+        merge
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all();
+        merge
+            .execute(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .await?;
+        self.rows_since_fts_optimize
+            .fetch_add(1, AtomicOrdering::Relaxed);
+        self.build_fts_indexes_after_write().await;
+        Ok(())
     }
 
     pub async fn add_v5_batch_preserving_ids(
