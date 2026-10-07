@@ -945,6 +945,7 @@ async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStat
     let runtime_source = runtime.runtime_source.clone();
     let version = runtime.version.clone();
 
+    let (gateway_state, gateway_restarts, reconnect_chatgpt) = gateway_snapshot();
     Ok(HermesBridgeStatus {
         installed: runtime.installed,
         configured,
@@ -991,9 +992,9 @@ async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStat
         recent_memories,
         last_error,
         install_command: "FNDR installs a pinned Hermes into its own app data.".to_string(),
-        gateway_state: supervisor().lock().state.to_string(),
-        gateway_restarts: supervisor().lock().restarts,
-        reconnect_chatgpt: supervisor().lock().reconnect_chatgpt,
+        gateway_state,
+        gateway_restarts,
+        reconnect_chatgpt,
     })
 }
 
@@ -1130,6 +1131,16 @@ struct Supervisor {
     stop_requested: bool,
     running: bool,
     reconnect_chatgpt: bool,
+}
+
+/// `(state, restarts, reconnect_chatgpt)` under one lock.
+fn gateway_snapshot() -> (String, u32, bool) {
+    let supervisor = supervisor().lock();
+    (
+        supervisor.state.to_string(),
+        supervisor.restarts,
+        supervisor.reconnect_chatgpt,
+    )
 }
 
 fn supervisor() -> &'static AgentMutex<Supervisor> {
@@ -2009,6 +2020,22 @@ pub async fn quick_setup_ollama(
 
 #[cfg(test)]
 mod tests {
+
+    /// Regression: status read the supervisor three times in one struct
+    /// literal; the first guard was still held, so the second lock deadlocked
+    /// and the Agent tab never left "Not set up".
+    #[test]
+    fn gateway_snapshot_reads_the_supervisor_without_deadlocking() {
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            done.send(gateway_snapshot()).unwrap();
+        });
+        let (state, restarts, reconnect) = finished
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("status must not deadlock on the supervisor lock");
+        assert_eq!((state.as_str(), restarts, reconnect), ("stopped", 0, false));
+    }
+
     use super::*;
 
     fn record(provider: &str, model: &str, base_url: Option<&str>) -> HermesSetupRecord {

@@ -1548,6 +1548,11 @@ fn reset_screen_guide_state_after_terminal<R: tauri::Runtime>(
     }
 }
 
+/// The ⌘ mark, black on transparency, 22 pt at 2x: raw RGBA of
+/// `icons/tray-template.png` (regenerate both together).
+const MENU_BAR_TEMPLATE_RGBA: &[u8] = include_bytes!("../../../icons/tray-template.rgba");
+const MENU_BAR_ICON_SIZE: u32 = 44;
+
 /// Create the passive OS-managed companion beside the Mac notch. The icon is
 /// always present while FNDR runs; only bounded state glyphs and fixed copy are
 /// shown so questions, answers, file names, and errors never enter menu-bar UI.
@@ -1559,11 +1564,15 @@ pub fn create_screen_guide_notch_companion<R: tauri::Runtime>(app: &AppHandle<R>
     let mut builder = TrayIconBuilder::with_id(SCREEN_GUIDE_NOTCH_ID)
         .tooltip("FNDR — Screen Guide is off")
         .show_menu_on_left_click(false);
-    if let Some(icon) = app.default_window_icon().cloned() {
-        builder = builder.icon(icon).icon_as_template(true);
-    } else {
-        builder = builder.title("FNDR");
-    }
+    // A template image is drawn from its alpha alone, so it must be the
+    // glyph on transparency. The app icon's opaque background showed as a
+    // white square in the menu bar.
+    let icon = tauri::image::Image::new(
+        MENU_BAR_TEMPLATE_RGBA,
+        MENU_BAR_ICON_SIZE,
+        MENU_BAR_ICON_SIZE,
+    );
+    builder = builder.icon(icon).icon_as_template(true);
 
     match builder.build(app) {
         Ok(_) => {
@@ -5036,6 +5045,19 @@ fn cancel_screen_guide_for_privacy_reason<R: tauri::Runtime>(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn menu_bar_icon_is_a_glyph_on_transparency() {
+        let size = MENU_BAR_ICON_SIZE as usize;
+        assert_eq!(MENU_BAR_TEMPLATE_RGBA.len(), size * size * 4);
+        let alpha = |x: usize, y: usize| MENU_BAR_TEMPLATE_RGBA[(y * size + x) * 4 + 3];
+        assert_eq!(alpha(0, 0), 0, "corners are transparent, not a square");
+        assert!(
+            MENU_BAR_TEMPLATE_RGBA.chunks(4).any(|px| px[3] > 200),
+            "the glyph is drawn"
+        );
+    }
+
     use super::*;
 
     #[cfg(target_os = "macos")]
