@@ -553,7 +553,6 @@ fn measure_retrieve_at_scale() {
             state_store.clone(),
             GraphStore::new(store.clone()),
             None,
-            None,
         );
 
         // The first query builds the memory and chunk full-text indexes.

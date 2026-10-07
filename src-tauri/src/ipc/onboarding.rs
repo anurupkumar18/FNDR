@@ -196,9 +196,7 @@ pub async fn set_preferred_inference_model(
     let config = state.inner().config.read().clone();
     if models::resolve_model(Some(trimmed.as_str()), Some(app_data_dir.as_path())).is_some() {
         let loaded = load_ai_engines(app_data_dir.as_path(), &config).await;
-        state
-            .inner()
-            .replace_ai_engines(loaded.inference, loaded.vlm);
+        state.inner().replace_ai_engines(loaded.inference);
         Ok(true)
     } else {
         tracing::info!(
@@ -724,7 +722,7 @@ pub async fn refresh_ai_models(
         .as_ref()
         .map(|engine| engine.model_path().display().to_string());
     let ai_model_loaded = loaded_ai.inference.is_some();
-    let vlm_loaded = loaded_ai.vlm.is_some();
+    let vlm_loaded = crate::inference::pixel_vlm_loaded();
 
     let model_mode = if !config.use_vlm {
         "disabled".to_string()
@@ -744,9 +742,7 @@ pub async fn refresh_ai_models(
 
     let vlm_model_id: Option<String> = None;
 
-    state
-        .inner()
-        .replace_ai_engines(loaded_ai.inference, loaded_ai.vlm);
+    state.inner().replace_ai_engines(loaded_ai.inference);
 
     Ok(AiRuntimeStatus {
         ai_model_available,
@@ -1012,7 +1008,7 @@ pub async fn delete_ai_model(
         .map(|engine| engine.model_path() == final_path.as_path())
         .unwrap_or(false);
     if should_unload {
-        state.inner().replace_ai_engines(None, None);
+        state.inner().replace_ai_engines(None);
     }
 
     if final_path.exists() {

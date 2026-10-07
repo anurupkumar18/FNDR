@@ -60,7 +60,6 @@ mod agent_regression {
             state_store,
             graph,
             None,
-            None,
         ));
         (dir, state)
     }

@@ -569,7 +569,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state_store,
         graph,
         None,
-        None,
     ));
     let runtime = tokio::runtime::Runtime::new()?;
     let chunk_route = if with_chunks {

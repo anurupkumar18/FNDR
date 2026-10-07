@@ -316,7 +316,7 @@ pub fn model_memory_entries(state: &crate::AppState) -> Vec<ModelMemoryEntry> {
     }
 
     // VLM (Qwen3-VL).
-    let vlm_loaded = state.vlm.read().is_some();
+    let vlm_loaded = crate::inference::pixel_vlm_loaded();
     if let Some(def) = crate::models::model_by_id("qwen3-vl-2b") {
         out.push(ModelMemoryEntry {
             id: def.id.to_string(),

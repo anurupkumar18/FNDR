@@ -45,7 +45,6 @@ async fn app_state_with(config: Config) -> Arc<AppState> {
         state_store,
         graph,
         None,
-        None,
     ))
 }
 

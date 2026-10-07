@@ -1053,7 +1053,6 @@ mod tests {
             state_store,
             graph,
             None,
-            None,
         )
     }
 
@@ -1323,7 +1322,6 @@ mod tests {
             store,
             state_store,
             graph,
-            None,
             None,
         );
         let cards = |query: &str| {

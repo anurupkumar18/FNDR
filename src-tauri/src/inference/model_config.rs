@@ -78,11 +78,6 @@ pub const EMBEDDING_GEMMA_FULL_DIMENSIONS: usize = 768;
 pub const EMBEDDING_GEMMA_MAX_SEQ_LEN: usize = 2048;
 pub const EMBEDDING_GEMMA_MAX_BATCH_SIZE: usize = 4;
 
-pub const MAX_CONCURRENT_MULTIMODAL_JOBS: usize = 1;
-pub const QWEN_IDLE_UNLOAD_SECONDS: u64 = 90;
-pub const MAX_IMAGE_LONG_EDGE: u32 = 1024;
-pub const MAX_MEMORY_PROMPT_TOKENS: usize = 3500;
-pub const MAX_MEMORY_OUTPUT_TOKENS: usize = 900;
 pub const QWEN_CONTEXT_SIZE: u32 = 4096;
 
 /// Default context window (prompt plus output) of the text engine; `FNDR_INFERENCE_N_CTX` overrides it.
@@ -91,8 +86,6 @@ pub const TEXT_ENGINE_DEFAULT_N_CTX: u32 = 4096;
 /// Generation cap for `extract_structured_memory` and its repair pass. Complete answers measured 316 to 573
 /// tokens; a cut-off answer has no closing brace and is discarded.
 pub const EXTRACTION_MAX_OUTPUT_TOKENS: i32 = 640;
-pub const QWEN_TEMPERATURE: f32 = 0.1;
-pub const QWEN_TOP_P: f32 = 0.8;
 
 /// LanceDB table name for memories using all-MiniLM-L6-v2 384-dim vectors.
 /// This is the **current durable write path** for memories. Search, capture,

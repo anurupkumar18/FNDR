@@ -1919,7 +1919,6 @@ mod tests {
             state_store,
             GraphStore::new(store.clone()),
             None,
-            None,
         );
         let cases = [
             ("research", "The distinctive Zephyr fact is forty two."),

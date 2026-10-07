@@ -105,7 +105,6 @@ fn seeded_state(runtime: &tokio::runtime::Runtime) -> (tempfile::TempDir, AppSta
         state_store,
         graph,
         None,
-        None,
     );
     (dir, state)
 }
@@ -456,7 +455,6 @@ fn day_state(runtime: &tokio::runtime::Runtime) -> (tempfile::TempDir, AppState)
         state_store,
         graph,
         None,
-        None,
     );
     (dir, state)
 }
@@ -706,7 +704,6 @@ fn busy_week_state(runtime: &tokio::runtime::Runtime) -> (tempfile::TempDir, App
         state_store,
         graph,
         None,
-        None,
     );
     (dir, state)
 }
@@ -879,7 +876,6 @@ fn retrieve_names_the_chunk_that_matched() {
         state.store.clone(),
         state.state_store.clone(),
         GraphStore::new(state.store.clone()),
-        None,
         None,
     );
 

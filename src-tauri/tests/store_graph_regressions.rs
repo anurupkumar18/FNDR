@@ -338,7 +338,6 @@ fn insight_graph_context_requires_authorized_backing_and_project_scoped_edges() 
         state_store,
         GraphStore::new(store.clone()),
         None,
-        None,
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {

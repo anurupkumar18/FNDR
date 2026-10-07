@@ -98,7 +98,6 @@ fn state(temp_dir: &Path) -> AppState {
         state_store,
         graph,
         None,
-        None,
     )
 }
 

@@ -23,6 +23,13 @@ static BANNED_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     .collect()
 });
 
+static INSTRUCTION_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    [r"(?i)^(?:extract|analy[sz]e|identify|summari[sz]e|describe|provide|generate)\b.{0,200}\b(?:ocr text|ocr content|key themes|narrative elements|video summary|content from the screen)\b"]
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("valid summary instruction regex"))
+        .collect()
+});
+
 static SCRUB_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     [
         r"(?i)^you reviewed\s+",
@@ -42,6 +49,39 @@ static SCRUB_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     .collect()
 });
 
+static LEADING_PERSON: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)^\s*(?:the\s+user|you)\s+(?:(?:is|was|are|were|has been|have been|had been)\s+)?",
+    )
+    .expect("valid leading person regex")
+});
+
+// A bare "user" is a narrator only before a verb ("User opened VS Code",
+// "User is debugging"), never before a noun ("User guide", "User testing").
+static LEADING_BARE_USER: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)^\s*user\s+(?:(?:is|was|has been|had been)\s+([a-z]+)|([a-z]+ed)\b)")
+        .expect("valid bare user regex")
+});
+
+/// FNDR's display voice has no narrator and no reader. Remove a leading "You",
+/// "The user" or narrating "User" so stored text written under older prompts
+/// reads the same as new text: "You reviewed the PR" becomes "Reviewed the PR".
+pub fn neutral_voice(text: &str) -> String {
+    let rest = if let Some(found) = LEADING_PERSON.find(text) {
+        &text[found.end()..]
+    } else if let Some(captures) = LEADING_BARE_USER.captures(text) {
+        let verb = captures.get(1).or_else(|| captures.get(2));
+        &text[verb.map_or(0, |verb| verb.start())..]
+    } else {
+        return text.to_string();
+    };
+    let mut chars = rest.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => text.to_string(),
+    }
+}
+
 pub fn narration_filter_hits(summary: &str) -> bool {
     let value = summary.trim();
     if value.is_empty() {
@@ -50,6 +90,19 @@ pub fn narration_filter_hits(summary: &str) -> bool {
     BANNED_PATTERNS
         .iter()
         .any(|pattern| pattern.is_match(value))
+        || INSTRUCTION_PATTERNS
+            .iter()
+            .any(|pattern| pattern.is_match(value))
+}
+
+/// Returns true when a value reads like instructions to a summarizer rather
+/// than a description of the captured memory.
+pub fn is_summary_instruction(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && INSTRUCTION_PATTERNS
+            .iter()
+            .any(|pattern| pattern.is_match(value))
 }
 
 pub fn clean_or_fallback_display_summary(
@@ -58,7 +111,8 @@ pub fn clean_or_fallback_display_summary(
     url: Option<&str>,
     timestamp_ms: i64,
 ) -> (String, bool) {
-    let generated = build_display_summary(page_title, url, candidate, timestamp_ms);
+    let generated =
+        build_display_summary(page_title, url, &neutral_voice(candidate), timestamp_ms);
     if !narration_filter_hits(&generated) {
         return (generated, false);
     }
@@ -97,6 +151,49 @@ mod tests {
         ));
         assert!(narration_filter_hits("Screen capture shows a browser page"));
         assert!(!narration_filter_hits("Watched IPL highlights on YouTube."));
+    }
+
+    #[test]
+    fn detects_summary_instructions_mistaken_for_memory_insights() {
+        assert!(narration_filter_hits(
+            "extract and analyze the content from the OCR text; identify key themes and narrative elements in the video summary"
+        ));
+        assert!(is_summary_instruction(
+            "extract and analyze the content from the OCR text; identify key themes and narrative elements in the video summary"
+        ));
+        assert!(!narration_filter_hits(
+            "Watched a James Blake live performance on YouTube."
+        ));
+        assert!(!is_summary_instruction(
+            "Watched a James Blake live performance on YouTube."
+        ));
+    }
+
+    #[test]
+    fn neutral_voice_removes_narrator_and_reader() {
+        assert_eq!(neutral_voice("The user reviewed the PR"), "Reviewed the PR");
+        assert_eq!(neutral_voice("user opened VS Code"), "Opened VS Code");
+        assert_eq!(
+            neutral_voice("You were listening to James Blake"),
+            "Listening to James Blake"
+        );
+        assert_eq!(
+            neutral_voice("User is debugging a borrow error"),
+            "Debugging a borrow error"
+        );
+    }
+
+    #[test]
+    fn neutral_voice_keeps_user_as_a_noun_and_inner_words() {
+        for kept in [
+            "User guide for React hooks",
+            "User testing session notes",
+            "username field was edited",
+            "Your invoice is ready",
+            "Reviewed what you sent on Friday",
+        ] {
+            assert_eq!(neutral_voice(kept), kept);
+        }
     }
 
     #[test]

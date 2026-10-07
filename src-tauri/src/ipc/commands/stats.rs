@@ -298,7 +298,6 @@ mod capture_pause_persistence_tests {
                 self.state_store.clone(),
                 GraphStore::new(self.store.clone()),
                 None,
-                None,
             )
         }
     }

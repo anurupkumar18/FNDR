@@ -46,7 +46,7 @@ pub mod wiki;
 
 use config::Config;
 use graph::GraphStore;
-use inference::{InferenceEngine, VlmEngine};
+use inference::InferenceEngine;
 use parking_lot::{Mutex, RwLock};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -67,7 +67,6 @@ pub struct PendingGraphUpdate {
 
 pub struct LoadedAiEngines {
     pub inference: Option<Arc<InferenceEngine>>,
-    pub vlm: Option<Arc<VlmEngine>>,
 }
 
 /// A proactive suggestion surfaced when the current screen matches a past memory.
@@ -401,8 +400,6 @@ pub struct AppState {
     /// compatibility but only reflect a subset of paths.
     pub capture_stats: CapturePipelineStats,
     pub inference: RwLock<Option<Arc<InferenceEngine>>>,
-    /// Vision Language Model for intelligent screen analysis (optional)
-    pub vlm: RwLock<Option<Arc<VlmEngine>>>,
     inference_init: AsyncMutex<()>,
     /// One-frame-at-a-time gate. Any code path that drives the LLM, VLM,
     /// MTMD, BGE batch embedding, or CLIP batch embedding must hold this
@@ -462,7 +459,6 @@ impl AppState {
         state_store: Arc<StateStore>,
         graph: GraphStore,
         inference: Option<Arc<InferenceEngine>>,
-        vlm: Option<Arc<VlmEngine>>,
     ) -> Self {
         let (proactive_tx, proactive_rx) = tokio::sync::watch::channel(None);
         #[cfg(debug_assertions)]
@@ -498,7 +494,6 @@ impl AppState {
             last_capture_time: AtomicU64::new(0),
             capture_stats: CapturePipelineStats::default(),
             inference: RwLock::new(inference),
-            vlm: RwLock::new(vlm),
             inference_init: AsyncMutex::new(()),
             model_pipeline_lock: AsyncMutex::new(()),
             stats_cache: RwLock::new(None),
@@ -658,10 +653,6 @@ impl AppState {
         self.inference.read().clone()
     }
 
-    pub fn vlm_engine(&self) -> Option<Arc<VlmEngine>> {
-        self.vlm.read().clone()
-    }
-
     pub fn ai_model_loaded(&self) -> bool {
         self.inference.read().is_some()
     }
@@ -693,13 +684,8 @@ impl AppState {
             .map(|engine| engine.model_id().to_string())
     }
 
-    pub fn replace_ai_engines(
-        &self,
-        inference: Option<Arc<InferenceEngine>>,
-        vlm: Option<Arc<VlmEngine>>,
-    ) {
+    pub fn replace_ai_engines(&self, inference: Option<Arc<InferenceEngine>>) {
         *self.inference.write() = inference;
-        *self.vlm.write() = vlm;
     }
 
     pub fn invalidate_memory_derived_caches(&self) {
@@ -754,10 +740,8 @@ pub async fn load_ai_engines(app_data_dir: &Path, config: &Config) -> LoadedAiEn
             }
         };
 
-    tracing::info!("Skipping eager VLM warm-up; VLM loads on demand.");
-    let vlm = None;
-
-    LoadedAiEngines { inference, vlm }
+    // The pixel runtime in `inference::image_semantics` loads on first use.
+    LoadedAiEngines { inference }
 }
 
 #[cfg(test)]

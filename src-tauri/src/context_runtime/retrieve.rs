@@ -581,7 +581,6 @@ mod tests {
             state_store,
             graph,
             None,
-            None,
         )
     }
 
