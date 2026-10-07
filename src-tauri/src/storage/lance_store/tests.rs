@@ -1476,7 +1476,10 @@ async fn replacing_a_memory_updates_it_in_place_and_inserts_an_unknown_id() {
     let mut second = first.clone();
     second.display_summary = "Second version of the note.".to_string();
     for _ in 0..3 {
-        store.replace_memory_preserving_chunks(&second).await.unwrap();
+        store
+            .replace_memory_preserving_chunks(&second)
+            .await
+            .unwrap();
     }
     let rows = store.list_all_memories().await.unwrap();
     assert_eq!(rows.len(), 1, "a replace must never add a second row");
@@ -1485,7 +1488,10 @@ async fn replacing_a_memory_updates_it_in_place_and_inserts_an_unknown_id() {
     let mut other = first.clone();
     other.id = "memory-2".to_string();
     other.window_title = "Other notes".to_string();
-    store.replace_memory_preserving_chunks(&other).await.unwrap();
+    store
+        .replace_memory_preserving_chunks(&other)
+        .await
+        .unwrap();
     assert_eq!(store.list_all_memories().await.unwrap().len(), 2);
 }
 

@@ -26,10 +26,14 @@ fn arg(name: &str) -> Option<String> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = PathBuf::from(arg("--data-dir").ok_or("--data-dir required")?).canonicalize()?;
-    let limit: usize = arg("--limit").and_then(|value| value.parse().ok()).unwrap_or(12);
+    let limit: usize = arg("--limit")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(12);
     let real = dirs::data_dir().ok_or("no data dir")?.join("com.fndr.app");
     let quiet = std::env::args().any(|current| current == "--quiet");
-    if real.canonicalize().is_ok_and(|real| data_dir.starts_with(&real))
+    if real
+        .canonicalize()
+        .is_ok_and(|real| data_dir.starts_with(&real))
         && !std::env::args().any(|current| current == "--allow-real-profile")
     {
         return Err("refusing the real FNDR profile without --allow-real-profile".into());
@@ -39,7 +43,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let embedder = Embedder::new().ok();
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
-        let engine = Arc::new(InferenceEngine::new(Some(real), None).await.map_err(|e| e.to_string())?);
+        let engine = Arc::new(
+            InferenceEngine::new(Some(real), None)
+                .await
+                .map_err(|e| e.to_string())?,
+        );
         let provider = InferenceReviewProvider::new(engine);
         let mut rows = store.list_all_memories().await.map_err(|e| e.to_string())?;
         rows.sort_by_key(|row| std::cmp::Reverse(row.timestamp));
@@ -62,11 +70,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 day_bucket: row.day_bucket.clone(),
                 enqueued_at_ms: now,
             };
-            let outcome = review_one_memory(&store, &provider, embedder.as_ref(), &job, now).await?;
-            let after = store.get_memory_by_id(&row.id).await.map_err(|e| e.to_string())?;
+            let outcome =
+                review_one_memory(&store, &provider, embedder.as_ref(), &job, now).await?;
+            let after = store
+                .get_memory_by_id(&row.id)
+                .await
+                .map_err(|e| e.to_string())?;
             let label = match &outcome {
                 MemoryReviewOutcome::Reviewed { .. } => "reviewed".to_string(),
-                MemoryReviewOutcome::Failed { .. } => format!("{outcome:?}").chars().take(90).collect(),
+                MemoryReviewOutcome::Failed { .. } => {
+                    format!("{outcome:?}").chars().take(90).collect()
+                }
                 MemoryReviewOutcome::Skipped { reason, .. } => format!("skipped: {reason}"),
             };
             match &outcome {
@@ -77,12 +91,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if quiet {
                 continue;
             }
-            println!("--- {} | {} | {label}", row.app_name, row.window_title.chars().take(60).collect::<String>());
+            println!(
+                "--- {} | {} | {label}",
+                row.app_name,
+                row.window_title.chars().take(60).collect::<String>()
+            );
             println!("  BEFORE {}", row.display_summary);
             if let Some(after) = after {
                 println!("  AFTER  {}", after.display_summary);
                 println!("  WHAT   {}", after.insight_what_happened);
-                println!("  META   topic={:?} activity={:?}", after.topic, after.activity_type);
+                println!(
+                    "  META   topic={:?} activity={:?}",
+                    after.topic, after.activity_type
+                );
             }
         }
         println!("reviewed={reviewed} refused_by_guards={refused} skipped={skipped}");

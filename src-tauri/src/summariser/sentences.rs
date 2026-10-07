@@ -87,7 +87,10 @@ mod tests {
             split_sentences("Read about SELECT ... FOR UPDATE SKIP LOCKED. Tried it."),
             vec!["Read about SELECT ... FOR UPDATE SKIP LOCKED.", "Tried it."]
         );
-        assert_eq!(split_sentences("It trailed off..."), vec!["It trailed off..."]);
+        assert_eq!(
+            split_sentences("It trailed off..."),
+            vec!["It trailed off..."]
+        );
     }
 
     #[test]

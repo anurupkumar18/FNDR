@@ -5,7 +5,9 @@
 //! Usage: cargo run --example reembed_memories -- --data-dir <profile> [--apply]
 
 use fndr_lib::embedding::Embedder;
-use fndr_lib::memory_embedding_document::{compose_memory_embedding_document, refresh_text_vectors};
+use fndr_lib::memory_embedding_document::{
+    compose_memory_embedding_document, refresh_text_vectors,
+};
 use fndr_lib::storage::Store;
 use std::path::PathBuf;
 
@@ -23,7 +25,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = PathBuf::from(arg("--data-dir").ok_or("--data-dir required")?).canonicalize()?;
     let apply = std::env::args().any(|current| current == "--apply");
     let real = dirs::data_dir().ok_or("no data dir")?.join("com.fndr.app");
-    let is_real = real.canonicalize().is_ok_and(|real| data_dir.starts_with(&real));
+    let is_real = real
+        .canonicalize()
+        .is_ok_and(|real| data_dir.starts_with(&real));
     if is_real && !std::env::args().any(|current| current == "--allow-real-profile") {
         return Err("refusing the real FNDR profile without --allow-real-profile".into());
     }

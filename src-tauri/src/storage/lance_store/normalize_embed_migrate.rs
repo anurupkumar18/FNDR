@@ -2337,7 +2337,10 @@ mod tests {
             .map(|_| super::infer_intent_analysis(&record).intent_label)
             .collect();
         assert_eq!(labels.len(), 1, "{labels:?}");
-        assert_eq!(super::infer_workflow(&record), super::infer_intent_analysis(&record).intent_label);
+        assert_eq!(
+            super::infer_workflow(&record),
+            super::infer_intent_analysis(&record).intent_label
+        );
     }
 
     use super::*;

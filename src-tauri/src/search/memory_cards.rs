@@ -1323,7 +1323,10 @@ fn build_story_summary(anchor: &SearchResult, snippets: &[String]) -> String {
     if facts.is_empty() {
         let domain = extract_domain(anchor.url.as_deref());
         // Nothing is known beyond where the capture was; say only that.
-        let title = truncate_words(&without_app_suffix(&anchor.window_title, &anchor.app_name), 8);
+        let title = truncate_words(
+            &without_app_suffix(&anchor.window_title, &anchor.app_name),
+            8,
+        );
         return match domain {
             Some(dom) if !title.is_empty() => format!("{title} on {dom}."),
             Some(dom) => format!("A page on {dom}."),
@@ -1956,7 +1959,10 @@ mod tests {
 
     #[test]
     fn prefix_check_survives_text_that_starts_with_multi_byte_characters() {
-        assert!(!starts_with_ascii_case_insensitive("doc.pdf – Page 112", "then also"));
+        assert!(!starts_with_ascii_case_insensitive(
+            "doc.pdf – Page 112",
+            "then also"
+        ));
         assert!(!starts_with_ascii_case_insensitive("日本語のメモ", "also"));
         assert!(starts_with_ascii_case_insensitive("Also, the é", "also"));
     }

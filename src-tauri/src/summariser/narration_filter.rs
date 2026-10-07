@@ -106,7 +106,10 @@ pub fn neutral_voice(text: &str) -> String {
     let rest = if let Some(found) = LEADING_PERSON.find(text) {
         &text[found.end()..]
     } else if let Some(captures) = LEADING_BARE_USER.captures(text) {
-        let verb = captures.get(1).or_else(|| captures.get(2)).or_else(|| captures.get(3));
+        let verb = captures
+            .get(1)
+            .or_else(|| captures.get(2))
+            .or_else(|| captures.get(3));
         &text[verb.map_or(0, |verb| verb.start())..]
     } else {
         text
@@ -251,8 +254,14 @@ mod tests {
             neutral_voice("User is debugging a borrow error"),
             "Debugging a borrow error"
         );
-        assert_eq!(neutral_voice("User checks FNDR logs and trust settings."), "Checks FNDR logs and trust settings.");
-        assert_eq!(neutral_voice("User managing demo prep"), "Managing demo prep");
+        assert_eq!(
+            neutral_voice("User checks FNDR logs and trust settings."),
+            "Checks FNDR logs and trust settings."
+        );
+        assert_eq!(
+            neutral_voice("User managing demo prep"),
+            "Managing demo prep"
+        );
     }
 
     #[test]

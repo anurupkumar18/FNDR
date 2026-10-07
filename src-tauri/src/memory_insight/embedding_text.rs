@@ -28,8 +28,7 @@ pub fn compose_insight_embedding_text(record: &MemoryRecord) -> String {
     // The line a person reads on the card goes first, so the vector answers
     // a search for what they remember reading. Placeholders say nothing.
     let summary = record.display_summary.trim();
-    let has_summary =
-        !crate::summariser::narration_filter::is_placeholder_summary(summary);
+    let has_summary = !crate::summariser::narration_filter::is_placeholder_summary(summary);
     if has_summary {
         push_segment(&mut segments, summary, "summary");
     }
@@ -124,7 +123,10 @@ mod tests {
         r.insight_what_happened = r.display_summary.clone();
         r.topic = "retrieval".to_string();
         let out = compose_insight_embedding_text(&r);
-        assert!(out.starts_with("summary: Reviewed the retrieval gate results."), "{out}");
+        assert!(
+            out.starts_with("summary: Reviewed the retrieval gate results."),
+            "{out}"
+        );
         assert!(!out.contains("what_happened"), "{out}");
 
         r.app_name = "Google Chrome".to_string();
