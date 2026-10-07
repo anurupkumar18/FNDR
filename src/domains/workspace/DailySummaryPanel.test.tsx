@@ -59,7 +59,7 @@ describe("DailySummaryPanel", () => {
 
         fireEvent.click(screen.getByRole("button", { name: /generate summary/i }));
 
-        expect(await screen.findByText(/no open follow-ups right now/i)).toBeInTheDocument();
+        expect(await screen.findByText(/no open tasks right now/i)).toBeInTheDocument();
         expect(screen.queryByText(/no open follow-ups for this day/i)).toBeNull();
     });
 

@@ -113,7 +113,8 @@ fn a_reminder_needs_a_date_and_a_follow_up_needs_a_name() {
 
 #[test]
 fn at_most_two_suggestions_and_never_the_same_quote_twice() {
-    let screen = "Notes\nI need to call the bank. I need to renew the lease. I need to pay the invoice.";
+    let screen =
+        "Notes\nI need to call the bank. I need to renew the lease. I need to pay the invoice.";
     let raw = "TODO | Call the bank | I need to call the bank\n\
                TODO | Phone the bank today | I need to call the bank\n\
                TODO | Renew the lease | I need to renew the lease\n\
@@ -394,4 +395,42 @@ fn a_deadline_needs_a_date_and_the_window_title_states_nothing() {
         Surface::Public,
     );
     assert_eq!(kept.len(), 1, "{kept:?}");
+}
+
+#[test]
+fn only_the_persons_own_open_tasks_are_carried_into_the_daily_summary() {
+    let quote = "please send the report";
+    let mut done = stored("done", "manual", "", 60_000);
+    done.is_completed = true;
+    let mut accepted = stored("accepted", "Memory:Mail", quote, 120_000);
+    accept(&mut accepted);
+    let carried = fndr_lib::tasks::suggest::open_commitments(vec![
+        stored("suggested", "Memory:Mail", quote, 60_000),
+        stored("legacy", "Memory:ChatGPT", "", 60_000),
+        stored("older", "manual", "", 600_000),
+        accepted,
+        stored("meeting", "Meeting:Standup", "", 300_000),
+        done,
+    ]);
+    let ids: Vec<&str> = carried.iter().map(|task| task.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["accepted", "meeting", "older"],
+        "newest first, no suggestions"
+    );
+}
+
+#[test]
+fn system_processes_are_not_apps_a_person_used() {
+    for app in [
+        "UserNotificationCenter",
+        "coreautha",
+        "loginwindow",
+        "Control Center",
+    ] {
+        assert!(fndr_lib::tasks::suggest::is_system_surface(app), "{app}");
+    }
+    for app in ["Claude", "Mail", "Google Chrome", "Finder"] {
+        assert!(!fndr_lib::tasks::suggest::is_system_surface(app), "{app}");
+    }
 }

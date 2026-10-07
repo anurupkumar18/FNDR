@@ -57,6 +57,11 @@ const SYSTEM_SURFACES: &[&str] = &[
     "system preferences",
 ];
 
+/// A system process, not an app a person chose to use.
+pub fn is_system_surface(app_name: &str) -> bool {
+    SYSTEM_SURFACES.contains(&app_name.trim().to_lowercase().as_str())
+}
+
 /// Whether captures from this app or page may be asked for tasks at all.
 pub fn is_task_source(app_name: &str, url: Option<&str>) -> bool {
     let app = app_name.trim().to_lowercase();
@@ -514,4 +519,16 @@ pub fn retire_unoffered(tasks: &mut [Task], now_ms: i64) -> usize {
         retired += 1;
     }
     retired
+}
+
+/// The open tasks that are the person's own: added by them, from a meeting,
+/// or accepted. Newest first. Suggestions are never counted as work a person
+/// is carrying.
+pub fn open_commitments(tasks: Vec<Task>) -> Vec<Task> {
+    let mut own: Vec<Task> = tasks
+        .into_iter()
+        .filter(|task| !task.is_completed && !task.is_dismissed && !is_suggestion(task))
+        .collect();
+    own.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    own
 }

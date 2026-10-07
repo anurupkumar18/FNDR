@@ -5,6 +5,7 @@
 
 pub mod accessibility;
 pub mod agent;
+pub mod briefing;
 pub mod capture;
 pub mod companion;
 pub mod config;

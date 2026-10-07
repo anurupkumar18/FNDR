@@ -1881,40 +1881,46 @@ pub async fn generate_daily_briefing(
     state: State<'_, Arc<AppState>>,
     mode: Option<String>,
 ) -> Result<String, String> {
-    // Detect mode from local hour if not specified
-    let resolved_mode = mode.unwrap_or_else(|| {
-        let hour = chrono::Local::now().hour();
-        if hour >= 17 {
-            "evening".to_string()
-        } else {
-            "morning".to_string()
-        }
-    });
+    // The part of the day decides the briefing, unless the caller names one.
+    let now = chrono::Local::now();
+    let resolved_mode =
+        mode.unwrap_or_else(|| crate::briefing::mode_for_hour(now.hour()).to_string());
 
-    // Fetch the most recent cards (today + a few recent ones for context)
-    let limit = 10usize;
+    // Activity from that window only: today for a recap, since yesterday
+    // for a morning briefing. Never simply the last few captures.
     let results = state
         .store
-        .list_recent_results(limit, None)
+        .get_search_results_in_range(
+            crate::briefing::window_start_ms(&resolved_mode, now),
+            now.timestamp_millis(),
+        )
         .await
         .map_err(|e| e.to_string())?;
+    let mut results = super::stats::surfaceable_daily_records(results);
+    results.sort_by_key(|result| std::cmp::Reverse(result.timestamp));
 
-    let mut cards: Vec<MemoryCard> = strip_internal_fndr_results(results)
+    let mut cards: Vec<MemoryCard> = results
         .into_iter()
+        .take(10)
         .map(memory_card_from_result)
         .collect();
     refine_memory_card_titles(&mut cards);
-
-    if cards.is_empty() {
-        return Ok(String::new());
-    }
-
-    // Build compact per-card lines for the LLM context
-    let card_lines: Vec<String> = cards
-        .iter()
-        .take(8)
-        .map(|c| format!("- [{}] {}: {}", c.app_name, c.title, c.summary))
+    let activity: Vec<(String, String, String)> = cards
+        .into_iter()
+        .map(|card| (card.app_name, card.title, card.summary))
         .collect();
+
+    // What the person has open, so the briefing can name it.
+    let open_tasks: Vec<String> =
+        crate::tasks::suggest::open_commitments(state.store.list_tasks().await.unwrap_or_default())
+            .into_iter()
+            .map(|task| task.title)
+            .collect();
+
+    // Too little to say means no briefing, not a restated capture.
+    let Some(card_lines) = crate::briefing::briefing_lines(&activity, &open_tasks) else {
+        return Ok(String::new());
+    };
 
     // Grab inference engine
     let engine = {

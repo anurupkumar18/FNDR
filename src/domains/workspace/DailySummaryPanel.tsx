@@ -517,15 +517,15 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                                 <div className="daily-followups-header">
                                     <div>
                                         <p className="daily-followups-eyebrow">Across your task list</p>
-                                        <h3 id="daily-followups-heading">Current open follow-ups</h3>
+                                        <h3 id="daily-followups-heading">Your open tasks</h3>
                                     </div>
                                     <span className="daily-followups-count">{openFollowupCount}</span>
                                 </div>
                                 {followupError && <p className="daily-followups-error" role="alert">{followupError}</p>}
                                 {followupsLoading ? (
-                                    <p className="daily-followups-empty" role="status">Loading current follow-ups…</p>
+                                    <p className="daily-followups-empty" role="status">Loading your open tasks…</p>
                                 ) : followups.length === 0 ? (
-                                    <p className="daily-followups-empty">No open follow-ups right now.</p>
+                                    <p className="daily-followups-empty">No open tasks right now.</p>
                                 ) : (
                                     <div className="daily-followups-list">
                                         {followups.map((followup) => {
