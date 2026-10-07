@@ -5,6 +5,7 @@ These files are the source of truth for the October board. `scripts/team/gitlab_
 | File | Owner | Focus |
 |---|---|---|
 | `anurup-vault-search.md` | Anurup | Vault and search: one retrieval path, real text, keyword plus meaning, evaluation |
+| `quality-lab-2026-10.md` | Anurup | Native Quality Lab review, memory/search/Ask quality, isolated capture replay, and per-case comparison |
 | `minh-reopen-embeddings.md` | Minh | Reopen exactly, and vectors plus chunks on every memory without a manual step |
 | `kunj-command-skills-models.md` | Kunj | Screen Guide rebuilt as a command surface, skills from what worked, more and better local model use |
 | `felipe-voice-onboarding-tests.md` | Felipe | One voice pipeline for every feature, production-ready onboarding and polish, product-oriented tests |
