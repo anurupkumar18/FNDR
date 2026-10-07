@@ -69,11 +69,7 @@ pub fn is_task_source(app_name: &str, url: Option<&str>) -> bool {
     {
         return false;
     }
-    let host = url
-        .map(|url| url.split("://").nth(1).unwrap_or(url))
-        .and_then(|rest| rest.split('/').next())
-        .map(|host| host.trim_start_matches("www.").to_lowercase())
-        .unwrap_or_default();
+    let host = host_of(url);
     !AI_CHAT_HOSTS
         .iter()
         .any(|known| host == *known || host.ends_with(&format!(".{known}")))
@@ -97,8 +93,74 @@ fn plain(text: &str) -> String {
     )
 }
 
-/// Words that make a line a commitment or a request rather than a description.
-const COMMITMENT_CUES: &[&str] = &[
+/// Where the words were seen decides what they can mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    /// Mail, chat and notes: someone is talking to this person, or they are
+    /// writing to themselves. A request or an instruction there is theirs.
+    Personal,
+    /// Any other page, document or window. "You need to" and "make sure"
+    /// there are addressed to any reader.
+    Public,
+}
+
+const PERSONAL_APPS: &[&str] = &[
+    "mail",
+    "messages",
+    "slack",
+    "microsoft teams",
+    "teams",
+    "discord",
+    "microsoft outlook",
+    "outlook",
+    "whatsapp",
+    "telegram",
+    "signal",
+    "notes",
+    "notion",
+    "obsidian",
+    "reminders",
+    "things",
+    "todoist",
+    "bear",
+    "textedit",
+    "calendar",
+];
+const PERSONAL_HOSTS: &[&str] = &[
+    "mail.google.com",
+    "outlook.live.com",
+    "outlook.office.com",
+    "app.slack.com",
+    "teams.microsoft.com",
+    "discord.com",
+    "web.whatsapp.com",
+    "web.telegram.org",
+    "notion.so",
+];
+
+fn host_of(url: Option<&str>) -> String {
+    url.map(|url| url.split("://").nth(1).unwrap_or(url))
+        .and_then(|rest| rest.split('/').next())
+        .map(|host| host.trim_start_matches("www.").to_lowercase())
+        .unwrap_or_default()
+}
+
+pub fn surface_of(app_name: &str, url: Option<&str>) -> Surface {
+    let app = app_name.trim().to_lowercase();
+    let host = host_of(url);
+    if PERSONAL_APPS.contains(&app.as_str())
+        || PERSONAL_HOSTS
+            .iter()
+            .any(|known| host == *known || host.ends_with(&format!(".{known}")))
+    {
+        Surface::Personal
+    } else {
+        Surface::Public
+    }
+}
+
+/// A commitment in the first person. It is this person's wherever it is.
+const OWN_COMMITMENT_CUES: &[&str] = &[
     "i need to",
     "i have to",
     "i should",
@@ -109,27 +171,27 @@ const COMMITMENT_CUES: &[&str] = &[
     "we need to",
     "we have to",
     "we should",
-    "need to",
-    "have to",
-    "remember to",
-    "don't forget",
-    "do not forget",
     "remind me",
-    "todo",
-    "to do",
-    "action item",
-    "follow up",
-    "due",
-    "deadline",
+];
+/// A stated deadline counts anywhere too.
+const DEADLINE_CUES: &[&str] = &["due", "deadline", "submit by", "send by", "reply by"];
+/// A request or an instruction. This person's only on a personal surface.
+const REQUEST_CUES: &[&str] = &[
     "please",
     "can you",
     "could you",
     "would you",
     "make sure",
+    "need to",
+    "have to",
+    "remember to",
+    "don't forget",
+    "do not forget",
+    "todo",
+    "to do",
+    "action item",
+    "follow up",
     "assigned to",
-    "submit by",
-    "send by",
-    "reply by",
 ];
 
 const DATE_CUES: &[&str] = &[
@@ -169,6 +231,18 @@ const DATE_CUES: &[&str] = &[
 fn has_cue(plain_text: &str, cues: &[&str]) -> bool {
     cues.iter()
         .any(|cue| plain_text.contains(&format!(" {cue} ")))
+}
+
+/// A day, date or clock time, not merely the word "deadline" or "due".
+fn names_a_day_or_time(text: &str) -> bool {
+    let plain_text = plain(text);
+    DATE_CUES
+        .iter()
+        .filter(|cue| !DEADLINE_CUES.contains(cue))
+        .any(|cue| plain_text.contains(&format!(" {cue} ")))
+        || text
+            .split_whitespace()
+            .any(|word| word.chars().any(|c| c.is_ascii_digit()))
 }
 
 fn has_date(quote: &str) -> bool {
@@ -265,9 +339,13 @@ fn content_words(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn states_a_task(passage: &str) -> bool {
+fn states_a_task(passage: &str, surface: Surface) -> bool {
+    let plain_passage = plain(passage);
     passage.split_whitespace().count() >= MIN_QUOTE_WORDS
-        && has_cue(&plain(passage), COMMITMENT_CUES)
+        && (has_cue(&plain_passage, OWN_COMMITMENT_CUES)
+            // "The deadline effect" is a topic. A deadline has a date.
+            || (has_cue(&plain_passage, DEADLINE_CUES) && names_a_day_or_time(passage))
+            || (surface == Surface::Personal && has_cue(&plain_passage, REQUEST_CUES)))
 }
 
 /// The words on the screen that state `title`. The model's own copy is used
@@ -279,28 +357,30 @@ fn supporting_quote(
     model_quote: &str,
     evidence: &str,
     plain_evidence: &str,
+    surface: Surface,
 ) -> Option<String> {
-    let chosen =
-        if states_a_task(model_quote) && plain_evidence.contains(plain(model_quote).trim_end()) {
-            model_quote.to_string()
-        } else {
-            let wanted = content_words(title);
-            if wanted.len() < 2 {
-                return None;
-            }
-            passages(evidence)
-                .into_iter()
-                .filter(|passage| states_a_task(passage))
-                .filter(|passage| {
-                    let held = content_words(passage);
-                    let found = wanted.iter().filter(|word| held.contains(word)).count();
-                    found as f32 / wanted.len() as f32 >= MIN_TITLE_SHARE
-                })
-                .min_by_key(|passage| passage.len())?
-                .chars()
-                .take(MAX_QUOTE_CHARS)
-                .collect()
-        };
+    let chosen = if states_a_task(model_quote, surface)
+        && plain_evidence.contains(plain(model_quote).trim_end())
+    {
+        model_quote.to_string()
+    } else {
+        let wanted = content_words(title);
+        if wanted.len() < 2 {
+            return None;
+        }
+        passages(evidence)
+            .into_iter()
+            .filter(|passage| states_a_task(passage, surface))
+            .filter(|passage| {
+                let held = content_words(passage);
+                let found = wanted.iter().filter(|word| held.contains(word)).count();
+                found as f32 / wanted.len() as f32 >= MIN_TITLE_SHARE
+            })
+            .min_by_key(|passage| passage.len())?
+            .chars()
+            .take(MAX_QUOTE_CHARS)
+            .collect()
+    };
     // Judge the whole line the words sit on, not only the words chosen.
     let plain_chosen = plain(&chosen);
     let steered = evidence
@@ -312,7 +392,10 @@ fn supporting_quote(
 
 /// Keep the model's lines that the capture supports. `evidence` is the
 /// screen text the model was shown, never a model-written summary.
-pub fn parse_suggestions(raw: &str, evidence: &str) -> Vec<Suggestion> {
+pub fn parse_suggestions(raw: &str, evidence: &str, surface: Surface) -> Vec<Suggestion> {
+    // The first line is the window title. It names the screen; it does not
+    // state anything a person committed to.
+    let evidence = evidence.split_once('\n').map_or("", |(_, body)| body);
     let plain_evidence = plain(evidence);
     let mut kept: Vec<Suggestion> = Vec::new();
     for line in raw.lines() {
@@ -336,7 +419,8 @@ pub fn parse_suggestions(raw: &str, evidence: &str) -> Vec<Suggestion> {
         if !is_actionable_task_title(title) || echoes_the_format(title) {
             continue;
         }
-        let Some(quote) = supporting_quote(title, model_quote, evidence, &plain_evidence) else {
+        let Some(quote) = supporting_quote(title, model_quote, evidence, &plain_evidence, surface)
+        else {
             continue;
         };
         // A reminder with no date and a follow-up with no one to follow up

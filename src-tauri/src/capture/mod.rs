@@ -6423,7 +6423,7 @@ async fn maybe_create_tasks_from_memory(
     engine: Option<&Arc<crate::inference::InferenceEngine>>,
     is_new_memory: bool,
 ) -> Result<(), String> {
-    use crate::tasks::suggest::{is_task_source, parse_suggestions};
+    use crate::tasks::suggest::{is_task_source, parse_suggestions, surface_of};
 
     let Some(engine) = engine else {
         return Ok(());
@@ -6455,7 +6455,8 @@ async fn maybe_create_tasks_from_memory(
             .collect::<String>()
     );
     let raw = engine.suggest_tasks(&evidence).await;
-    let suggestions = parse_suggestions(&raw, &evidence);
+    let surface = surface_of(&record.app_name, record.url.as_deref());
+    let suggestions = parse_suggestions(&raw, &evidence, surface);
     if suggestions.is_empty() {
         return Ok(());
     }
