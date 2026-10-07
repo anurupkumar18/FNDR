@@ -1,8 +1,9 @@
 # MCP tool surface audit (RET-02)
 
-51 tools registered as of this audit (verified 2026-09-23 with the extraction
-script below; matches the count the WS5 plan expected on 2026-09-21, so the
-surface has not grown since planning). No code change in this ticket.
+50 statically declared tools plus the dynamically registered `fndr.remember`
+(51 total) after migration steps 1 and 2 (verified 2026-10-07 with the
+extraction script below). The 2026-09-23 surface had 52 statically declared
+tools plus `fndr.remember`; the two removed duplicates account for the change.
 
 ```bash
 python3 - <<'PY'
@@ -29,7 +30,7 @@ module doc comment), **verdict**.
 | `memory.get_context_pack` | read | no (composed) | none | `agent.build_context_pack`, `fndr.build_context_pack` | `fndr.context_pack` | merge |
 | `memory.agent_brief` | read | no | none | `memory.warm_start`, `memory.agent_onboarding` | none | merge |
 | `agent.build_context_pack` | read | no | none | `memory.get_context_pack`, `fndr.build_context_pack` | `fndr.context_pack` | merge |
-| `agent.run` | execute | no | runs an agent action | none | none (v1-only, post-dates v2) | gate behind approval |
+| `agent.run` | execute | no | runs an agent action | none | none (v1-only, post-dates v2) | requires approval; MCP fails closed |
 | `agent.privacy_status` | read | no | none | `fndr.privacy_status` | `fndr.privacy_status` | merge |
 | `agent.explain_retrieval` | read | no | none | none | `fndr.explain_retrieval` | keep |
 | `agent.rate_result` | write | no | appends to `RetrievalFeedbackRating` | none | `fndr.feedback` | keep |
@@ -42,7 +43,7 @@ module doc comment), **verdict**.
 | `memory.project_wiki` | read | no | none | none | none | keep |
 | `memory.claims` | read | partial | none | none | none | keep |
 | `memory.breakthroughs` | read | partial | none | none | none | keep |
-| `memory.source_evidence` | read | **yes** | none | none | `fndr.source_evidence` (gated by `include_raw`, default closed) | keep, add the same default-closed gate |
+| `memory.source_evidence` | read | **yes** | none | none | `fndr.source_evidence` (gated by `include_raw`, default closed) | keep; raw text defaults off |
 | `memory.search_raw` | read | **yes** | none | `memory.search_full_context` | none | remove (redundant with the gated `source_evidence`) |
 | `memory.projects` | read | no | none | none | none | keep |
 | `memory.project_context` | read | no | none | `memory.project_wiki` | none | merge |
@@ -56,8 +57,8 @@ module doc comment), **verdict**.
 | `search_memories` | read | yes | none | `memory.search_full_context`, `fndr.search` | `fndr.search` | remove |
 | `ask_fndr` | read | no (composed) | none | `fndr.answer` | none | merge |
 | `get_fndr_stats` | read | no | none | `fndr.quality_status` | none | merge |
-| `start_meeting` | execute | no | starts audio capture | none | none | keep, requires approval |
-| `stop_meeting` | execute | no | stops audio capture | none | none | keep, requires approval |
+| `start_meeting` | execute | no | starts audio capture | none | none | requires approval; MCP fails closed |
+| `stop_meeting` | execute | no | stops audio capture | none | none | requires approval; MCP fails closed |
 | `get_meeting_transcript` | read | yes | none | none | none | keep |
 | `search_meeting_transcripts` | read | yes | none | none | none | keep |
 | `get_ambient_context` | read | yes | none | `fndr_context` | none | merge |
@@ -75,14 +76,14 @@ module doc comment), **verdict**.
 | `fndr.timeline` | read | no | none | `memory.timeline` | `fndr.timeline` | **keep as the canonical timeline tool** |
 | `fndr.quality_status` | read | no | none | `get_fndr_stats` | none | merge |
 | `fndr.privacy_status` | read | no | none | `agent.privacy_status` | `fndr.privacy_status` | **keep as the canonical privacy-status tool** |
-| `fndr.open_target` | execute | no | opens a URL/app/file | none | `fndr.open_target` (sanitized, else explicit unavailable) | keep, requires approval |
+| `fndr.open_target` | execute | no | opens a URL/app/file | none | `fndr.open_target` (sanitized, else explicit unavailable) | requires approval; MCP fails closed |
 
 ## Summary
 
-- **3 remove** (`memory.search_raw`, `search_memories`, plus folding `get_ambient_context`/`fndr_context` into one): pure duplicates of an already-kept tool with no distinct behavior.
+- **2 removed** (`memory.search_raw`, `search_memories`): pure duplicates of an already-kept tool with no distinct behavior. The `get_ambient_context`/`fndr_context` merge remains a later migration step.
 - **~18 merge**: same information under a second name, usually from the `memory.*` namespace duplicating a newer `fndr.*` one. The `fndr.*` namespace should become canonical; `memory.*`/bare-name equivalents are the legacy surface to fold in.
-- **4 execute-class tools carry real side effects with no approval gate today**: `agent.run`, `start_meeting`, `stop_meeting`, `fndr.open_target`. This is the same gap WS3's `policy_for_action` work is closing for the in-app agent (see today's fix requiring approval before `OpenUrl`/`OpenFile`) — these MCP-exposed equivalents should go through the same approval path, not a separate one.
-- **2 tools release raw captured text without a gate**: `memory.search_raw` and `memory.source_evidence`. v2's equivalent gates this behind an explicit `include_raw` parameter that defaults closed. `memory.search_raw` should simply be removed (redundant); `source_evidence` should get the same default-closed gate.
+- **4 execute-class tools require approval**: `agent.run`, `start_meeting`, `stop_meeting`, and `fndr.open_target` now consult `policy_for_action` and refuse before dispatch because MCP does not yet have an approval-card bridge. The default remains closed; no action is run on an MCP call.
+- **Raw captured text is opt-in**: `memory.source_evidence` has `include_raw`, which defaults to false. `memory.search_raw` was removed.
 
 ## Proposed target surface
 
@@ -103,10 +104,10 @@ move behind approval before anything else changes about them.
 
 ## Migration order
 
-1. Gate `agent.run`, `start_meeting`, `stop_meeting`, `fndr.open_target`, and
-   `memory.source_evidence` (raw-text default-closed) — safety first, no
-   removals yet.
-2. Remove `memory.search_raw` and `search_memories` (pure duplicates).
+1. Gate `agent.run`, `start_meeting`, `stop_meeting`, and `fndr.open_target`
+   through `policy_for_action`; MCP calls remain closed until approval can be
+   shown and recorded. Make `memory.source_evidence` raw-text default-closed.
+2. Remove `memory.search_raw` and `search_memories` (pure duplicates). Done.
 3. Point every merge candidate's callers at its `fndr.*` equivalent, then
    remove the old name once nothing calls it.
 4. Rename `agent.rate_result` to `fndr.rate_result` for naming consistency.

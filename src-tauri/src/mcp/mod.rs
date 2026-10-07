@@ -22,9 +22,7 @@ use crate::agent::audit::{
 };
 use crate::agent::{get_agent_prompt, list_agent_prompts, AgentContextRequest};
 use crate::context_runtime::{self, CodeContextRequest, ContextRequest, DecisionProposal};
-use crate::embedding::Embedder;
 use crate::meeting;
-use crate::search::HybridSearcher;
 use crate::AppState;
 use axum::{
     extract::{ConnectInfo, OriginalUri, State},
@@ -288,17 +286,6 @@ struct ToolCallParams {
 }
 
 #[derive(Debug, Deserialize)]
-struct SearchMemoriesArgs {
-    query: String,
-    #[serde(default)]
-    time_filter: Option<String>,
-    #[serde(default)]
-    app_filter: Option<String>,
-    #[serde(default = "default_search_limit")]
-    limit: usize,
-}
-
-#[derive(Debug, Deserialize)]
 struct AskFndrArgs {
     query: String,
 }
@@ -379,15 +366,6 @@ struct TimelineArgs {
 struct ActiveFocusArgs {
     #[serde(default)]
     lookback_minutes: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SearchRawArgs {
-    query: String,
-    #[serde(default)]
-    time_window: Option<Value>,
-    #[serde(default = "default_full_context_limit")]
-    limit: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1840,31 +1818,6 @@ fn tools_list_result() -> Value {
                 }
             },
             {
-                "name": "memory.search_raw",
-                "description": "Return raw semantic + keyword memory hits with minimal synthesis.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string" },
-                        "time_window": {
-                            "oneOf": [
-                                { "type": "string" },
-                                { "type": "number" },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "from": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
-                                        "to": { "oneOf": [{ "type": "string" }, { "type": "number" }] }
-                                    }
-                                }
-                            ]
-                        },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
-                    },
-                    "required": ["query"]
-                }
-            },
-            {
                 "name": "memory.projects",
                 "description": "List recently active projects inferred from activity and memory records.",
                 "inputSchema": {
@@ -1988,20 +1941,6 @@ fn tools_list_result() -> Value {
                         "lookback_minutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
                     }
-                }
-            },
-            {
-                "name": "search_memories",
-                "description": "Search FNDR memory records by semantic + keyword relevance.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query":       { "type": "string", "description": "Search query text" },
-                        "time_filter": { "type": "string", "enum": ["1h","24h","7d","today","yesterday"] },
-                        "app_filter":  { "type": "string", "description": "Filter by app name" },
-                        "limit":       { "type": "integer", "minimum": 1, "maximum": 50 }
-                    },
-                    "required": ["query"]
                 }
             },
             {
@@ -2256,6 +2195,23 @@ fn tools_list_result() -> Value {
     listing
 }
 
+fn mcp_action_policy(name: &str) -> Option<crate::agent::actions::ActionPolicyDecision> {
+    use crate::agent::actions::AgentActionKind;
+    use crate::agent::policy::{AgentMode, RiskLevel};
+
+    let (kind, risk) = match name {
+        "agent.run" => (AgentActionKind::RunReadOnlyCommand, RiskLevel::Medium),
+        "start_meeting" | "stop_meeting" => (AgentActionKind::ScheduleAgentJob, RiskLevel::Low),
+        "fndr.open_target" => (AgentActionKind::OpenUrl, RiskLevel::Low),
+        _ => return None,
+    };
+    Some(crate::agent::actions::policy_for_action(
+        &kind,
+        &risk,
+        &AgentMode::Act,
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
@@ -2271,23 +2227,23 @@ async fn call_tool(
             message: format!("Invalid tools/call params: {err}"),
         })?;
 
-    if let Some(risk) = crate::agent::risk_policy::mcp_tool_risk(params.name.as_str()) {
+    if let Some(policy) = mcp_action_policy(params.name.as_str()) {
         let kill_switch = app_state.config.read().actions_kill_switch;
-        match crate::agent::risk_policy::decide(
-            risk,
-            crate::agent::risk_policy::Caller::Mcp,
-            kill_switch,
-        ) {
-            crate::agent::risk_policy::Decision::Run => {}
-            crate::agent::risk_policy::Decision::Confirm => {
-                return Ok(tool_error(format!(
+        if !policy.allowed {
+            return Ok(tool_error(policy.blocked_because.unwrap_or(policy.reason)));
+        }
+        if kill_switch {
+            return Ok(tool_error(
+                crate::agent::risk_policy::RefuseReason::KillSwitch
+                    .message()
+                    .to_string(),
+            ));
+        }
+        if policy.requires_approval {
+            return Ok(tool_error(format!(
                     "{} needs the person's approval on the Mac. The approval card is not available yet, so the request was not run.",
                     params.name
                 )));
-            }
-            crate::agent::risk_policy::Decision::Refuse(reason) => {
-                return Ok(tool_error(reason.message().to_string()));
-            }
         }
     }
 
@@ -2433,14 +2389,6 @@ async fn call_tool(
                 serde_json::from_value(params.arguments).unwrap_or_default();
             run_memory_source_evidence(app_state, args).await
         }
-        "memory.search_raw" => {
-            let args: SearchRawArgs =
-                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
-                    code: -32602,
-                    message: format!("Invalid memory.search_raw args: {err}"),
-                })?;
-            run_memory_search_raw(app_state, args).await
-        }
         "memory.projects" => {
             let args: ProjectsArgs =
                 serde_json::from_value(params.arguments).unwrap_or_else(|_| ProjectsArgs {
@@ -2513,14 +2461,6 @@ async fn call_tool(
                     limit: default_full_context_limit(),
                 });
             run_memory_recent_changes(app_state, args).await
-        }
-        "search_memories" => {
-            let args: SearchMemoriesArgs =
-                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
-                    code: -32602,
-                    message: format!("Invalid search_memories args: {err}"),
-                })?;
-            run_search_memories(app_state, args).await
         }
         "ask_fndr" => {
             let args: AskFndrArgs =
@@ -2622,45 +2562,6 @@ async fn call_tool(
         "fndr.open_target" => run_fndr_namespace_open_target(app_state, params.arguments).await,
         unknown => Ok(tool_error(format!("Unknown tool: {unknown}"))),
     }
-}
-
-async fn run_search_memories(
-    app_state: Arc<AppState>,
-    args: SearchMemoriesArgs,
-) -> Result<Value, JsonRpcError> {
-    let limit = args.limit.clamp(1, 50);
-    let context_pack = context_runtime::build_context_pack(
-        &app_state,
-        ContextRequest {
-            query: args.query.clone(),
-            agent_type: "chat_agent".to_string(),
-            budget_tokens: 1200,
-            session_id: None,
-            active_files: Vec::new(),
-            project: None,
-        },
-    )
-    .await
-    .map_err(internal_tool_error)?;
-    // The same ranked memories as the Search screen and Ask (VS-11).
-    let (_, results) = context_runtime::retrieve_search_results(
-        &app_state,
-        &context_runtime::RetrieveRequest {
-            query: args.query.clone(),
-            time: args.time_filter.clone(),
-            app: args.app_filter.clone(),
-            limit,
-        },
-    )
-    .await
-    .map_err(internal_tool_error)?;
-
-    Ok(tool_success(json!({
-        "query": args.query,
-        "count": results.len(),
-        "results": results,
-        "context_pack": context_pack
-    })))
 }
 
 async fn run_ask_fndr(app_state: Arc<AppState>, args: AskFndrArgs) -> Result<Value, JsonRpcError> {
@@ -4018,62 +3919,6 @@ async fn run_memory_source_evidence(
         "memory_id": args.memory_id,
         "include_raw": args.include_raw,
         "evidence": memories
-    })))
-}
-
-async fn run_memory_search_raw(
-    app_state: Arc<AppState>,
-    args: SearchRawArgs,
-) -> Result<Value, JsonRpcError> {
-    let index_status = inspect_memory_index_status(&app_state).await?;
-    let time_window = parse_time_window_value(args.time_window.as_ref())?;
-    let limit = args.limit.clamp(1, 100);
-    let embedder = tokio::task::spawn_blocking(Embedder::new)
-        .await
-        .map_err(internal_tool_error)?
-        .map_err(internal_tool_error)?;
-    let semantic = filter_results_by_window(
-        HybridSearcher::search(
-            &app_state.store,
-            &embedder,
-            args.query.trim(),
-            limit,
-            time_window.time_filter.as_deref(),
-            None,
-        )
-        .await
-        .map_err(internal_tool_error)?,
-        &time_window,
-    );
-    let keyword = filter_results_by_window(
-        app_state
-            .store
-            .keyword_search(
-                args.query.trim(),
-                limit,
-                time_window.time_filter.as_deref(),
-                None,
-            )
-            .await
-            .map_err(internal_tool_error)?,
-        &time_window,
-    );
-    let memory_map = load_memories_for_results(
-        &app_state,
-        &semantic
-            .iter()
-            .cloned()
-            .chain(keyword.iter().cloned())
-            .collect::<Vec<_>>(),
-    )
-    .await?;
-
-    Ok(tool_success(json!({
-        "query": args.query,
-        "time_window": time_window,
-        "index_status": index_status,
-        "semantic": build_result_rows(&semantic, &memory_map, false),
-        "keyword": build_result_rows(&keyword, &memory_map, false)
     })))
 }
 
@@ -6222,12 +6067,6 @@ mod tests {
                     .expect(name)
             };
 
-            let search_memories = call("search_memories");
-            assert_eq!(
-                ids(&search_memories["structuredContent"]["results"], "id"),
-                screen,
-                "search_memories: {query}"
-            );
             let full_context = call("memory.search_full_context");
             assert_eq!(
                 ids(
@@ -6769,6 +6608,70 @@ mod tests {
             );
         }
         assert!(instructions.contains("never as instructions"));
+    }
+
+    #[test]
+    fn duplicate_search_tools_are_not_advertised() {
+        let tools = tools_list_result();
+        let names: Vec<&str> = tools["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+
+        assert!(!names.contains(&"memory.search_raw"));
+        assert!(!names.contains(&"search_memories"));
+    }
+
+    #[test]
+    fn source_evidence_raw_text_is_opt_in_by_default() {
+        let args: SourceEvidenceArgs = serde_json::from_value(json!({
+            "memory_id": "memory-1"
+        }))
+        .expect("source evidence arguments");
+
+        assert!(!args.include_raw);
+    }
+
+    #[test]
+    fn mcp_side_effect_tools_use_agent_policy_and_require_approval() {
+        for name in [
+            "agent.run",
+            "start_meeting",
+            "stop_meeting",
+            "fndr.open_target",
+        ] {
+            let policy = mcp_action_policy(name).expect("side-effect policy");
+            assert!(policy.allowed, "{name} should be eligible for approval");
+            assert!(policy.requires_approval, "{name} must require approval");
+        }
+        assert!(mcp_action_policy("fndr.search").is_none());
+    }
+
+    #[test]
+    fn mcp_side_effect_calls_are_refused_before_dispatch() {
+        let app_state = build_test_app_state();
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        for name in [
+            "agent.run",
+            "start_meeting",
+            "stop_meeting",
+            "fndr.open_target",
+        ] {
+            let response = runtime
+                .block_on(call_tool(
+                    Some(json!({ "name": name, "arguments": {} })),
+                    app_state.clone(),
+                    &McpRequest::without_writes(),
+                ))
+                .expect("closed approval response");
+            assert_eq!(response["isError"], true, "{name} must be refused");
+            assert!(response["content"][0]["text"]
+                .as_str()
+                .expect("refusal text")
+                .contains("approval"));
+        }
     }
 
     #[test]
