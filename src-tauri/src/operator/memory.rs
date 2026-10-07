@@ -18,6 +18,8 @@ pub struct MemorySnippet {
     pub title: String,
     /// Local time, `YYYY-MM-DD HH:MM`.
     pub when: String,
+    /// Capture time in milliseconds, for showing the memory in a chat.
+    pub timestamp: i64,
     pub text: String,
 }
 
@@ -48,6 +50,7 @@ pub fn snippet_from(result: &SearchResult) -> MemorySnippet {
         app: result.app_name.clone(),
         title: clip(&result.window_title, 120),
         when,
+        timestamp: result.timestamp,
         text: clip(&body, SNIPPET_CHARS),
     }
 }
@@ -103,6 +106,7 @@ mod tests {
             app: "Spotify".into(),
             title: "Blinding Lights".into(),
             when: "2026-10-05 21:14".into(),
+            timestamp: 1_790_000_000_000,
             text: text.into(),
         }
     }

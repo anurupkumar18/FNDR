@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed, 2026-10-04.** Option B accepted on 2026-10-06 by Kunj **for Notch Do and Hermes only** (see the amendment at the end). Every other task stays local until this ADR is accepted as a whole.
+**Accepted in part, 2026-10-07, by the owner:** option B for **Notch Do, Hermes and Screen Guide's ChatGPT answers only**, under the rules in [ADR 024](024-agent-surfaces-egress-and-action-policy.md). (Kunj accepted it for Notch Do and Hermes on 2026-10-06; see the amendment at the end.) Every other task stays local until this ADR is accepted as a whole.
 
 Until this is accepted:
 
@@ -111,3 +111,11 @@ Option B, scoped to two features. The "your own key" condition is met by the per
 - **Memories:** sent only when the request refers to the past (decided locally before any request, `operator::plan::refers_to_past`). Bounded to 5 snippets from `context_runtime::retrieve`.
 - **Logging:** every Codex and Hermes model request is recorded in Privacy Activity with feature, host and bytes FNDR sent. No content.
 - **Hermes** answers with the same ChatGPT sign-in, imported by Hermes itself from `~/.codex`; the Codex app-server is the only refresher.
+
+## Amendment 2026-10-07: owner ratification and Screen Guide
+
+The owner ratified the amendment above and extended it to Screen Guide's ChatGPT answer path, which shipped on 2026-09-23 without a decision. ADR 024 replaces two lines of the amendment above:
+
+- **Memories in Hermes:** FNDR adds related memories, and gives Hermes memory search, only for a provider on this Mac or when the person turns it on for a cloud provider. Attached memories are always sent.
+- **Logging:** Screen Guide's ChatGPT requests are logged too, the log survives a restart, and each row says when memories, on-screen text or a screenshot went along.
+

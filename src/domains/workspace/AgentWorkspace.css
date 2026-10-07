@@ -608,3 +608,29 @@
     font-size: 12px;
     color: var(--danger);
 }
+
+.aw-disclosure {
+    margin: 4px 0 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--hairline-2);
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.aw-disclosure p {
+    margin: 0;
+}
+
+.aw-check {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin-top: 8px;
+}
+
+.aw-auto-label {
+    font-size: 12px;
+    opacity: 0.7;
+    margin-right: 6px;
+}

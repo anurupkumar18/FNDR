@@ -122,9 +122,8 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                 case "stop":
                     void stopRun();
                     return;
-                case "approve":
                 case "decline":
-                    void respond(intent.kind === "approve");
+                    void respond(false);
                     return;
                 case "go":
                     if (current.redirect) void plan(current.redirect);
@@ -207,10 +206,10 @@ export function NotchOperator({ active }: NotchOperatorProps) {
 
     // The plan card starts the run by itself unless stopped or redirected.
     useEffect(() => {
-        if (state.phase !== "plan" || state.redirect) return;
+        if (state.phase !== "plan" || state.redirect || !state.autoStart) return;
         const timer = window.setTimeout(() => void startRun(), AUTO_START_MS);
         return () => window.clearTimeout(timer);
-    }, [state.phase, state.redirect, state.runId, startRun]);
+    }, [state.phase, state.redirect, state.runId, state.autoStart, startRun]);
 
     // Leaving Do mode ends any run.
     useEffect(
@@ -258,7 +257,8 @@ export function NotchOperator({ active }: NotchOperatorProps) {
             case "planning":
                 return state.usedMemories > 0 ? `Planning with ${state.usedMemories} memories…` : "Planning…";
             case "plan":
-                return state.redirect ? "Paused" : "Starting — say “stop” to cancel";
+                if (state.redirect) return "Paused";
+                return state.autoStart ? "Starting. Say “stop” to cancel" : "Ready. Tap Start or say “go”";
             case "running":
                 return state.partial || "Working — say “stop” anytime";
             case "finished":
@@ -297,7 +297,7 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                 </ol>
             ) : null}
 
-            {state.phase === "plan" && !state.redirect ? (
+            {state.phase === "plan" && !state.redirect && state.autoStart ? (
                 <div className="notch-operator-countdown" aria-hidden="true">
                     <span style={{ animationDuration: `${AUTO_START_MS}ms` }} />
                 </div>
@@ -357,7 +357,7 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                             Cancel
                         </button>
                         <button type="button" className="notch-operator-btn notch-operator-btn-primary" onClick={() => void startRun()}>
-                            Start now
+                            {state.autoStart ? "Start now" : "Start"}
                         </button>
                     </>
                 ) : null}

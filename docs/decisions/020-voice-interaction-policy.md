@@ -140,3 +140,10 @@ Decided by Kunj for the Notch Do surface only (branch `kunj-notch-computer-use`)
 - The final transcript and the planned steps appear on a plan card. The run starts by itself after 1.5 s unless the person says "stop" or taps Cancel; "go" or a tap starts it at once. The plan card is the review step this ADR requires.
 - While a run is in progress the notch keeps listening. "Stop" (as partial or final text) or the Stop button kills the run, including an action in flight. Any other new final transcript stops the run and plans the new request.
 - Microphone denied, no speech, and speech mid-run are explicit notch states.
+
+## Amendment 2026-10-07: Notch Do start and approval (ADR 024)
+
+Accepted by the owner. Two lines of the amendment above change:
+
+- The plan card starts the run by itself only when no step in it can need a yes (opening an app, a link the person's words account for, playback in a media app). Any other plan waits for a tap or "go".
+- Speech never approves an action. A pending approval is answered with a tap or a key; speech can decline it or stop the run. "Stop" is also heard behind a lead-in such as "please".

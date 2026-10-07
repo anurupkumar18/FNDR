@@ -60,6 +60,8 @@ export interface DoState {
     /** The ChatGPT sign-in has to be redone. */
     reconnect: boolean;
     usedMemories: number;
+    /** The plan on the card may start by itself; otherwise it waits for a tap or "go". */
+    autoStart: boolean;
 }
 
 export const initialDoState: DoState = {
@@ -68,6 +70,7 @@ export const initialDoState: DoState = {
     transcript: "",
     runId: null,
     steps: [],
+    autoStart: false,
     current: null,
     actions: [],
     approval: null,
@@ -110,6 +113,7 @@ function applyEvent(state: DoState, event: ComputerUseEvent): DoState {
             return {
                 ...state,
                 phase: "plan",
+                autoStart: event.autoStart === true,
                 steps: event.steps.map((step) => ({ ...step, status: "pending", attempt: 0 })),
             };
         case "stepStarted":
@@ -193,7 +197,6 @@ export function doRunReducer(state: DoState, input: DoInput): DoState {
 export type UtteranceIntent =
     | { kind: "stop" }
     | { kind: "go" }
-    | { kind: "approve" }
     | { kind: "decline" }
     | { kind: "request"; text: string };
 
@@ -240,7 +243,8 @@ export function classifyUtterance(
     if (saysStop(normalized)) return { kind: "stop" };
     if (context.awaitingApproval) {
         if (matchesShortPhrase(normalized, NO_PHRASES)) return { kind: "decline" };
-        if (matchesShortPhrase(normalized, YES_PHRASES)) return { kind: "approve" };
+        // A yes must be a tap: the microphone hears music, video and other people too.
+        if (matchesShortPhrase(normalized, YES_PHRASES)) return null;
     }
     if (context.awaitingStart && matchesShortPhrase(normalized, GO_PHRASES)) return { kind: "go" };
     return { kind: "request", text: text.trim() };

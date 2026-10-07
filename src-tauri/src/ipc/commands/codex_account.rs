@@ -674,12 +674,10 @@ pub(crate) async fn answer_screen_guide_with_codex(
         );
     }
 
-    let scratch = ScratchDir(
-        std::env::temp_dir().join(format!(
-            "{SCREEN_GUIDE_SCRATCH_PREFIX}{}",
-            uuid::Uuid::new_v4()
-        )),
-    );
+    let scratch = ScratchDir(std::env::temp_dir().join(format!(
+        "{SCREEN_GUIDE_SCRATCH_PREFIX}{}",
+        uuid::Uuid::new_v4()
+    )));
     std::fs::create_dir_all(&scratch.0)
         .map_err(|e| format!("Could not prepare Screen Guide: {e}"))?;
 
@@ -816,7 +814,9 @@ mod tests {
     fn a_staged_screenshot_is_private_and_a_leftover_one_is_swept() {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
-        let scratch = temp.path().join(format!("{SCREEN_GUIDE_SCRATCH_PREFIX}abc"));
+        let scratch = temp
+            .path()
+            .join(format!("{SCREEN_GUIDE_SCRATCH_PREFIX}abc"));
         std::fs::create_dir_all(&scratch).unwrap();
         let other = temp.path().join("someone-elses-folder");
         std::fs::create_dir_all(&other).unwrap();

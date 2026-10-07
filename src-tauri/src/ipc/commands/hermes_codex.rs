@@ -163,12 +163,33 @@ pub(crate) async fn sync_hermes_codex_login(hermes_home: &Path) -> LoginState {
 /// The `mcp_servers` block that lets Hermes query FNDR over its MCP server.
 pub(crate) fn hermes_mcp_yaml(endpoint: &str, token: &str) -> String {
     let quote = |value: &str| serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string());
+    let tools = HERMES_MCP_TOOLS
+        .iter()
+        .map(|tool| quote(tool))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
-        "mcp_servers:\n  fndr:\n    url: {}\n    headers:\n      Authorization: {}\n",
+        "mcp_servers:\n  fndr:\n    url: {}\n    headers:\n      Authorization: {}\n    tools:\n      include: [{}]\n",
         quote(endpoint),
         quote(&format!("Bearer {token}")),
+        tools,
     )
 }
+
+/// The only FNDR tools Hermes is given: ones that read memory. Hermes holds
+/// FNDR's own token, so without this list it could call every tool,
+/// including ones that write or act.
+pub(crate) const HERMES_MCP_TOOLS: &[&str] = &[
+    "memory.search_full_context",
+    "memory.get_context_pack",
+    "memory.timeline",
+    "memory.source_evidence",
+];
+
+/// Hermes's own tools for chats that arrive through FNDR. Without this block
+/// its API server enables a terminal, file writes, code execution, browser
+/// control and scheduled jobs. A planning list is all the Agent page needs.
+pub(crate) const HERMES_TOOLS_YAML: &str = "platform_toolsets:\n  api_server: [todo]\n";
 
 // MARK: - Supervision
 
@@ -191,27 +212,6 @@ pub(crate) fn on_crash(restarts_in_streak: u32, uptime: Duration) -> CrashRespon
     }
 }
 
-/// The newest `vYYYY.M.D[.N]` tag in `git ls-remote --tags` output.
-/// Pre-releases (anything with a suffix) are skipped.
-pub(crate) fn newest_release_tag(ls_remote: &str) -> Option<String> {
-    ls_remote
-        .lines()
-        .filter_map(|line| line.split("refs/tags/").nth(1))
-        .filter(|tag| !tag.ends_with("^{}"))
-        .filter_map(|tag| {
-            let parts: Option<Vec<u64>> = tag
-                .strip_prefix('v')?
-                .split('.')
-                .map(|p| p.parse().ok())
-                .collect();
-            parts
-                .filter(|parts| parts.len() >= 3)
-                .map(|parts| (parts, tag.to_string()))
-        })
-        .max_by(|a, b| a.0.cmp(&b.0))
-        .map(|(_, tag)| tag)
-}
-
 fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
     let output = std::process::Command::new("/usr/bin/git")
         .args(args)
@@ -225,47 +225,12 @@ fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// The newest Hermes release on GitHub.
-pub(crate) fn latest_hermes_release() -> Result<String, String> {
-    crate::privacy_proof::record_egress("github.com");
-    let output = std::process::Command::new("/usr/bin/git")
-        .args(["ls-remote", "--tags", HERMES_REPO_URL])
-        .output()
-        .map_err(|e| format!("Could not check for a Hermes update: {e}"))?;
-    if !output.status.success() {
-        return Err("Could not reach GitHub to check for a Hermes update.".to_string());
-    }
-    newest_release_tag(&String::from_utf8_lossy(&output.stdout))
-        .ok_or_else(|| "No Hermes release was found.".to_string())
-}
-
 /// The installed Hermes: its release tag when it sits on one, else the short commit.
 pub(crate) fn installed_hermes_version(runtime_root: &Path) -> Option<String> {
     let dir = pinned_hermes_dir(runtime_root);
     git_in(&dir, &["describe", "--tags", "--exact-match"])
         .or_else(|_| git_in(&dir, &["rev-parse", "--short", "HEAD"]))
         .ok()
-}
-
-/// Checks out `tag` in FNDR's Hermes copy. Returns the commit it replaced, so a
-/// failed reinstall can go back.
-pub(crate) fn checkout_hermes_release(runtime_root: &Path, tag: &str) -> Result<String, String> {
-    let dir = pinned_hermes_dir(runtime_root);
-    let previous = git_in(&dir, &["rev-parse", "HEAD"])?;
-    crate::privacy_proof::record_egress("github.com");
-    git_in(&dir, &["fetch", "-q", "--depth", "1", "origin", "tag", tag])
-        .map_err(|e| format!("Downloading Hermes {tag} failed: {e}"))?;
-    git_in(&dir, &["checkout", "-q", tag])
-        .map_err(|e| format!("Switching to Hermes {tag} failed: {e}"))?;
-    Ok(previous)
-}
-
-pub(crate) fn checkout_hermes_commit(runtime_root: &Path, commit: &str) -> Result<(), String> {
-    git_in(
-        &pinned_hermes_dir(runtime_root),
-        &["checkout", "-q", commit],
-    )
-    .map(|_| ())
 }
 
 pub(crate) fn pinned_hermes_dir(runtime_root: &Path) -> PathBuf {
@@ -379,13 +344,6 @@ mod tests {
     }
 
     #[test]
-    fn picks_the_newest_release_tag() {
-        let ls_remote = "a1\trefs/tags/v2026.7.7.2\nb2\trefs/tags/v2026.9.24\nb2\trefs/tags/v2026.9.24^{}\nc3\trefs/tags/v2026.9.7\nd4\trefs/tags/nightly\ne5\trefs/tags/v2026.10.1-rc1\n";
-        assert_eq!(newest_release_tag(ls_remote).as_deref(), Some("v2026.9.24"));
-        assert_eq!(newest_release_tag("").as_deref(), None);
-    }
-
-    #[test]
     fn restarts_once_per_crash_streak() {
         assert_eq!(
             on_crash(0, Duration::from_secs(3)),
@@ -407,6 +365,9 @@ mod tests {
         let yaml = hermes_mcp_yaml("http://127.0.0.1:5123/mcp", "t0k\"en");
         assert!(yaml.contains("url: \"http://127.0.0.1:5123/mcp\""));
         assert!(yaml.contains("Authorization: \"Bearer t0k\\\"en\""));
+        assert!(yaml.contains("include: [\"memory.search_full_context\""));
+        assert!(!yaml.contains("remember"));
+        assert!(!yaml.contains("agent.run"));
     }
 
     /// Runs Hermes on the person's real ChatGPT login the way FNDR does, makes

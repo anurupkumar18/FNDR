@@ -73,6 +73,27 @@ export function agentChipLabel(hermes: HermesBridgeStatus | null): string {
     return hermes?.codex_logged_in ? "Choose a model" : "Set up a model";
 }
 
+function isLoopback(url: string): boolean {
+    try {
+        return ["127.0.0.1", "localhost", "[::1]", "::1"].includes(new URL(url).hostname.toLowerCase());
+    } catch {
+        return false;
+    }
+}
+
+/** Where the chosen provider answers: `null` when it is on this Mac. */
+export function providerHost(provider: Provider, baseUrl: string, ollamaBaseUrl: string): string | null {
+    if (provider === "codex") return "chatgpt.com";
+    if (provider === "openrouter") return "openrouter.ai";
+    const url = baseUrl.trim() || (provider === "ollama" ? ollamaBaseUrl : "");
+    if (isLoopback(url)) return null;
+    try {
+        return new URL(url).hostname;
+    } catch {
+        return "the address you entered";
+    }
+}
+
 function relativeTime(ms: number): string {
     const minutes = Math.round((Date.now() - ms) / 60_000);
     if (minutes < 1) return "now";
@@ -242,7 +263,11 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
             if (!isCurrentRequest()) return;
             const finishedAt = Date.now();
             setMessages((current) => [
-                ...current,
+                ...current.map((message) =>
+                    message.role === "user" && message.at === sentAt
+                        ? { ...message, autoMemories: reply.auto_memories ?? [] }
+                        : message,
+                ),
                 { role: "assistant", content: reply.content, at: Date.now(), memories: [] },
             ]);
             setActivityTrace((current) => {
@@ -346,7 +371,11 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                 <PanelHeader
                     title="Agent"
                     titleId="aw-title"
-                    subtitle="Hermes, with FNDR memories you choose as context."
+                    subtitle={
+                        hermes?.related_memories
+                            ? "Hermes, with the FNDR memories you attach and related ones FNDR finds."
+                            : "Hermes, with the FNDR memories you attach."
+                    }
                     actions={
                         <button
                             type="button"
@@ -398,6 +427,16 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                                 {message.memories.length > 0 ? (
                                     <div className="aw-message-memories">
                                         {message.memories.map((memory) => (
+                                            <span key={memory.id} className="aw-memory-chip is-static" title={memory.appName}>
+                                                {memory.title}
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : null}
+                                {message.autoMemories && message.autoMemories.length > 0 ? (
+                                    <div className="aw-message-memories" aria-label="Memories FNDR added">
+                                        <span className="aw-auto-label">FNDR added</span>
+                                        {message.autoMemories.map((memory) => (
                                             <span key={memory.id} className="aw-memory-chip is-static" title={memory.appName}>
                                                 {memory.title}
                                             </span>
@@ -611,6 +650,10 @@ function AgentSetup({ hermes, onSaved, onInstalled }: AgentSetupProps) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [setupActivity, setSetupActivity] = useState<ActivityTraceSnapshot | null>(null);
+    const [relatedMemories, setRelatedMemories] = useState(
+        !!hermes.related_memories && !hermes.provider_is_local,
+    );
+    const sentTo = providerHost(provider, baseUrl, hermes.ollama_base_url);
 
     const chooseProvider = (next: Provider) => {
         setProvider(next);
@@ -775,6 +818,33 @@ function AgentSetup({ hermes, onSaved, onInstalled }: AgentSetupProps) {
                 </label>
             ) : null}
 
+            <div className="aw-disclosure" role="note" aria-label="What is sent">
+                {sentTo ? (
+                    <>
+                        <p>
+                            Sent to <strong>{sentTo}</strong>: your messages and the memories you attach. Each
+                            request is listed in Privacy.
+                        </p>
+                        <label className="aw-check">
+                            <input
+                                type="checkbox"
+                                checked={relatedMemories}
+                                onChange={(event) => setRelatedMemories(event.target.checked)}
+                            />
+                            <span>
+                                Also send up to five related memories FNDR finds for each message, and let Hermes
+                                search your memories.
+                            </span>
+                        </label>
+                    </>
+                ) : (
+                    <p>
+                        Runs on this Mac; nothing is sent elsewhere. FNDR adds up to five related memories to each
+                        message.
+                    </p>
+                )}
+            </div>
+
             {error ? <p className="aw-error" role="alert">{error}</p> : null}
             {setupActivity ? <ActivityTrace trace={setupActivity} /> : null}
             <div className="aw-setup-actions">
@@ -795,6 +865,7 @@ function AgentSetup({ hermes, onSaved, onInstalled }: AgentSetupProps) {
                                     model_name: model.trim(),
                                     api_key: provider === "openrouter" || provider === "custom" ? apiKey : null,
                                     base_url: provider === "custom" || provider === "ollama" ? baseUrl.trim() : null,
+                                    related_memories: sentTo !== null && relatedMemories,
                                 });
                                 setApiKey("");
                                 await onSaved();

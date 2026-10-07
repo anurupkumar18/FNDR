@@ -418,10 +418,11 @@ describe("NotchHud", () => {
             if (["final", "unavailable", "error"].includes(state.kind)) emit("voice://state", event({ kind: "idle" }));
         }
 
-        function planned() {
+        function planned(autoStart = true) {
             emit("computer-use://event", {
                 kind: "planned",
                 runId: "r1",
+                autoStart,
                 steps: [
                     { label: "Open Spotify", action: "open_app", app: "Spotify" },
                     { label: "Play Blinding Lights", action: "operate", app: "Spotify" },
@@ -503,6 +504,19 @@ describe("NotchHud", () => {
             expect(await screen.findByText("Playing Blinding Lights")).toBeInTheDocument();
             emit("computer-use://event", { kind: "finished", runId: "r1", ok: true, summary: "Done: Open Spotify, Play Blinding Lights, Search looped transformers." });
             expect(await screen.findByText(/^Done: Open Spotify/)).toBeInTheDocument();
+        });
+
+        it("waits for a tap when a step in the plan could need a yes", async () => {
+            await openDo();
+            voice({ kind: "final", text: REQUEST });
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
+            planned(false);
+            expect(await screen.findByText(/Ready\. Tap Start/)).toBeInTheDocument();
+            await new Promise((resolve) => setTimeout(resolve, 1800));
+            expect(ipcMocks.computerUseStart).not.toHaveBeenCalled();
+
+            fireEvent.click(screen.getByRole("button", { name: "Start" }));
+            await waitFor(() => expect(ipcMocks.computerUseStart).toHaveBeenCalledWith("r1"));
         });
 
         it("saying stop mid-run kills the run before the utterance ends", async () => {

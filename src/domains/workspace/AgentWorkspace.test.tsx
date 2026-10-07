@@ -79,6 +79,40 @@ describe("AgentWorkspace", () => {
         expect(screen.getByRole("button", { name: "Set up a model" })).toBeInTheDocument();
     });
 
+    it("says what a cloud provider is sent and keeps related memories off unless chosen", async () => {
+        ipc.getHermesBridgeStatus.mockResolvedValue(hermes(false));
+        ipc.saveHermesSetup.mockResolvedValue(hermes(true));
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+
+        const note = await screen.findByRole("note", { name: "What is sent" });
+        expect(note).toHaveTextContent("Sent to chatgpt.com: your messages and the memories you attach.");
+        const related = within(note).getByRole("checkbox");
+        expect(related).not.toBeChecked();
+
+        fireEvent.click(screen.getByRole("button", { name: "Ollama" }));
+        expect(screen.getByRole("note", { name: "What is sent" })).toHaveTextContent("Runs on this Mac");
+        expect(within(screen.getByRole("note", { name: "What is sent" })).queryByRole("checkbox")).toBeNull();
+    });
+
+    it("shows the memories FNDR added to a message", async () => {
+        ipc.getHermesBridgeStatus.mockResolvedValue({ ...hermes(true), related_memories: true });
+        ipc.sendHermesMessage.mockResolvedValue({
+            response_id: "r1",
+            conversation_id: "c",
+            content: "Here is the plan.",
+            auto_memories: [{ id: "m9", title: "Quarterly review deck", appName: "Keynote", timestamp: 1 }],
+        });
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+        expect(await screen.findByText(/related ones FNDR finds/)).toBeInTheDocument();
+        const input = await screen.findByLabelText("Message Hermes");
+        await waitFor(() => expect(input).toBeEnabled());
+        fireEvent.change(input, { target: { value: "What did I decide?" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        const added = await screen.findByLabelText("Memories FNDR added");
+        expect(added).toHaveTextContent("Quarterly review deck");
+    });
+
     it("names the one missing step in the header chip", async () => {
         ipc.getHermesBridgeStatus.mockResolvedValue({ ...hermes(false), codex_logged_in: true });
         const { unmount } = render(<AgentWorkspace isVisible onClose={vi.fn()} />);

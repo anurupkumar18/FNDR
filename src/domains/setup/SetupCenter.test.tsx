@@ -4,8 +4,6 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 const ipc = vi.hoisted(() => ({
     setupComponents: vi.fn(),
     installComponent: vi.fn(),
-    checkHermesUpdate: vi.fn(),
-    updateHermes: vi.fn(),
     codexLoginStart: vi.fn(),
 }));
 const updater = vi.hoisted(() => ({ check: vi.fn() }));
@@ -49,17 +47,13 @@ describe("SetupCenter", () => {
         await waitFor(() => expect(ipc.codexLoginStart).toHaveBeenCalled());
     });
 
-    it("checks for and installs a Hermes update", async () => {
+    it("offers no way to move Hermes off the version FNDR was checked against", async () => {
         ipc.setupComponents.mockResolvedValue(components);
-        ipc.checkHermesUpdate.mockResolvedValue({ installed: "v2026.7.7.2", latest: "v2026.9.24", update_available: true, error: null });
-        ipc.updateHermes.mockResolvedValue({});
         updater.check.mockResolvedValue(null);
         render(<SetupCenter />);
 
         const row = await screen.findByRole("listitem", { name: "Hermes agent" });
-        fireEvent.click(within(row).getByRole("button", { name: "Check for update" }));
-        fireEvent.click(await within(row).findByRole("button", { name: "Update to v2026.9.24" }));
-        await waitFor(() => expect(ipc.updateHermes).toHaveBeenCalled());
+        expect(within(row).queryByRole("button", { name: /update/i })).not.toBeInTheDocument();
     });
 
     it("offers an FNDR update when one is published", async () => {

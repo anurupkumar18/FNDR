@@ -72,6 +72,8 @@ pub enum ComputerUseEvent {
     Planned {
         run_id: String,
         steps: Vec<StepView>,
+        /// The plan may start by itself: no step in it can need a yes.
+        auto_start: bool,
     },
     StepStarted {
         run_id: String,
@@ -750,7 +752,14 @@ fn record_tool_result(
     if ok && matches!(tool, "click" | "set_value") {
         if let Some(index) = args.get("element_index").and_then(Value::as_str) {
             ctx.observed.note_target(app, index);
+        } else {
+            // A click by position lands on something FNDR did not identify.
+            ctx.observed.forget_focus(app);
         }
+    }
+    if ok && tool == "press_key" {
+        // A key can move focus (Tab, Return, a shortcut) without FNDR seeing where.
+        ctx.observed.forget_focus(app);
     }
     if result_text.contains("-1743") {
         BUNDLED_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -814,6 +823,61 @@ struct RunContext {
     emit: Arc<dyn Fn(ComputerUseEvent) + Send + Sync>,
     journal: Journal,
     guards: Guards,
+    /// The person's own words, to tell a link they asked for from one they did not.
+    request: String,
+}
+
+/// Whether every step is one that cannot need the person's yes: opening an
+/// app, opening a link their words account for, or playback in a media app.
+fn plan_starts_by_itself(plan: &Plan, request: &str, guards: &Guards) -> bool {
+    plan.steps.iter().all(|step| match step.action {
+        StepAction::OpenApp => {
+            !(guards.off_limits)(&step.app)
+                && classify(
+                    "open_app",
+                    &json!({ "name": step.app }),
+                    &Observed::default(),
+                )
+                .risk
+                    == Risk::Runs
+        }
+        StepAction::OpenUrl => plan::link_was_asked_for(&step.url, request),
+        StepAction::Operate => {
+            !(guards.off_limits)(&step.app) && crate::operator::policy::is_media_app(&step.app)
+        }
+    })
+}
+
+/// Asks the person about one action FNDR itself is about to take, and waits.
+async fn ask_person(
+    ctx: &RunContext,
+    commands: &mut mpsc::UnboundedReceiver<RunCommand>,
+    tool: &str,
+    summary: String,
+) -> Result<bool, RunError> {
+    let request_key = uuid::Uuid::new_v4().to_string();
+    (ctx.emit)(ComputerUseEvent::Approval {
+        run_id: ctx.run_id.clone(),
+        request_key: request_key.clone(),
+        tool: tool.to_string(),
+        summary,
+    });
+    loop {
+        match commands.recv().await {
+            Some(RunCommand::Respond {
+                request_key: answered,
+                approve,
+            }) if answered == request_key => {
+                (ctx.emit)(ComputerUseEvent::ApprovalResolved {
+                    run_id: ctx.run_id.clone(),
+                    request_key,
+                });
+                return Ok(approve);
+            }
+            Some(_) => {}
+            None => return Err(RunError::Stopped),
+        }
+    }
 }
 
 async fn wait_for_start(
@@ -892,6 +956,22 @@ async fn attempt_step(
         }
         StepAction::OpenUrl => {
             let args = json!({ "url": step.url });
+            if !plan::link_was_asked_for(&step.url, &ctx.request) {
+                let summary = format!("Open {}", truncate(&step.url, 120));
+                let approved = ask_person(ctx, commands, "open_url", summary).await?;
+                native_entry(
+                    "open_url",
+                    args.clone(),
+                    if approved { "approved" } else { "declined" },
+                    None,
+                );
+                if !approved {
+                    return Ok(plan::Verdict {
+                        ok: false,
+                        detail: "The link was not opened".to_string(),
+                    });
+                }
+            }
             if let Err(error) = native::open_url(&step.url) {
                 native_entry("open_url", args, "failed", Some(error.clone()));
                 return Ok(plan::Verdict {
@@ -1053,6 +1133,7 @@ async fn run_with_snippets(
     let plan = plan::parse_plan(&plan_text).map_err(RunError::Failed)?;
     (ctx.emit)(ComputerUseEvent::Planned {
         run_id: ctx.run_id.clone(),
+        auto_start: plan_starts_by_itself(&plan, &ctx.request, &ctx.guards),
         steps: plan
             .steps
             .iter()
@@ -1232,6 +1313,7 @@ pub async fn computer_use_plan(
                 .join("journal.jsonl"),
         ),
         guards,
+        request: transcript.clone(),
     };
     let task_state = state.inner().clone();
     let task_app = app.clone();
@@ -1531,6 +1613,7 @@ mod tests {
             app: "Spotify".into(),
             title: "Blinding Lights".into(),
             when: "2026-10-05 21:00".into(),
+            timestamp: 1_790_000_000_000,
             text: "played".into(),
         };
         let text = plan_request_text("play the song from yesterday", &[snippet]);
@@ -1747,6 +1830,43 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn a_plan_starts_by_itself_only_when_no_step_can_need_a_yes() {
+        let step = |action: &str, app: &str, url: &str| {
+            format!(
+                r#"{{"action":"{action}","label":"x","app":"{app}","url":"{url}","goal":"g","check":"none"}}"#
+            )
+        };
+        let plan_of = |steps: &[String]| {
+            plan::parse_plan(&format!(r#"{{"steps":[{}]}}"#, steps.join(","))).unwrap()
+        };
+        let request = "open Spotify, play Blinding Lights, then look up looped transformers";
+        let open = Guards::open();
+
+        let safe = plan_of(&[
+            step("open_app", "Spotify", ""),
+            step("operate", "Spotify", ""),
+            step(
+                "open_url",
+                "",
+                "https://www.google.com/search?q=looped+transformers",
+            ),
+        ]);
+        assert!(plan_starts_by_itself(&safe, request, &open));
+
+        let types_in_notes = plan_of(&[step("operate", "Notes", "")]);
+        assert!(!plan_starts_by_itself(&types_in_notes, request, &open));
+
+        let unasked_link = plan_of(&[step("open_url", "", "https://evil.example/?d=looped")]);
+        assert!(!plan_starts_by_itself(&unasked_link, request, &open));
+
+        let blocked = Guards {
+            halt: Arc::new(|| None),
+            off_limits: Arc::new(|app| app == "Spotify"),
+        };
+        assert!(!plan_starts_by_itself(&safe, request, &blocked));
+    }
+
     /// A planner that asks to read the screen is refused: nothing is read or
     /// done before the plan is shown and started.
     #[tokio::test]
@@ -1949,6 +2069,7 @@ mod tests {
             run_id: "live".to_string(),
             journal: Journal::new(journal_dir.join("journal.jsonl")),
             guards: Guards::open(),
+            request: transcript.clone(),
             emit: Arc::new(move |event| {
                 println!(
                     "[{:>5.1}s] {}",

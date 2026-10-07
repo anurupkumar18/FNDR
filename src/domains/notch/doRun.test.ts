@@ -43,8 +43,13 @@ describe("classifyUtterance", () => {
     it("reads go only while a plan or redirect waits, and yes or no only while an approval waits", () => {
         expect(classifyUtterance("go", { awaitingStart: true })).toEqual({ kind: "go" });
         expect(classifyUtterance("go", {})).toEqual({ kind: "request", text: "go" });
-        expect(classifyUtterance("okay do it", { awaitingApproval: true })).toEqual({ kind: "approve" });
         expect(classifyUtterance("nope", { awaitingApproval: true })).toEqual({ kind: "decline" });
+    });
+
+    it("never takes speech as approval of an action", () => {
+        for (const phrase of ["yes", "ok", "okay do it", "sure thing buddy", "allow", "confirm"]) {
+            expect(classifyUtterance(phrase, { awaitingApproval: true, running: true }), phrase).toBeNull();
+        }
     });
 
     it("ignores empty speech", () => {

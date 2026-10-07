@@ -60,3 +60,14 @@ Decided by Kunj for Notch Do. The "never" tier above is unchanged and applies to
 - **Never:** sending (Send labels, Return or Cmd+Return in a messaging app), deleting, purchases, typing into a secure text field, any password manager or app on the sensitive-app list, and unknown tools.
 
 The level is computed from the tool name, its arguments and FNDR's own view of the target element. Nothing the model says is an input, so model output cannot lower a level.
+
+## Amendment 2026-10-07: Notch Do tiers tightened (ADR 024)
+
+Accepted by the owner. The tiers above change as follows:
+
+- **Browsers ask by default.** Runs: following a link, switching a tab, clicking a search box, play and pause, scrolling, navigation keys, typing and Return in a search box FNDR knows has focus. Every other click and key waits for a tap. A label FNDR cannot read (none, or another script) counts as unknown.
+- **Links.** A planned link opens without asking only when the person's words account for it: a web search for words they said, or a site they named with nothing attached.
+- **Typing.** Runs only while FNDR knows the search box has focus; a key press, a click by position or a changed screen reading ends that.
+- **Never, added:** Terminal and other shells, Script Editor, Shortcuts, Automator, Wallet, Disk Utility, Activity Monitor, apps on the person's blocklist, and FNDR itself.
+- **Before the plan:** a planning turn cannot use any tool.
+- The actions kill switch and Private Mode refuse a plan and end a run in progress.

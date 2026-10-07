@@ -1869,6 +1869,10 @@ export interface HermesBridgeStatus {
     ollama_reachable: boolean;
     ollama_models: string[];
     ollama_base_url: string;
+    /** The saved provider answers on this Mac. */
+    provider_is_local?: boolean;
+    /** FNDR adds memories it finds itself to each message for this provider. */
+    related_memories?: boolean;
     codex_cli_installed: boolean;
     codex_logged_in: boolean;
     codex_auth_path: string;
@@ -1907,12 +1911,16 @@ export async function startAgentTask(
     contextUrls?: string[],
     contextNotes?: string[]
 ): Promise<AgentStatus> {
+    /** Also send memories FNDR finds on its own to a provider that is not on this Mac. */
+    related_memories?: boolean;
     return invoke<AgentStatus>("start_agent_task", { taskTitle, contextUrls, contextNotes });
 }
 
 export async function getAgentStatus(): Promise<AgentStatus> {
     return invoke<AgentStatus>("get_agent_status");
 }
+    /** Memories FNDR added on its own to the message this answers. */
+    auto_memories?: AttachedMemory[];
 
 export async function stopAgent(): Promise<AgentStatus> {
     return invoke<AgentStatus>("stop_agent");
@@ -1984,6 +1992,8 @@ export interface AgentChat {
 export interface AgentChatSummary {
     id: string;
     title: string;
+    /** Memories FNDR added on its own to this message. */
+    autoMemories?: AttachedMemory[];
     updatedAt: number;
     messageCount: number;
 }
@@ -2796,7 +2806,13 @@ export type ComputerUseRisk = "runs" | "confirm" | "never";
 
 export type ComputerUseEvent =
     | { kind: "planning"; runId: string; usedMemories: number }
-    | { kind: "planned"; runId: string; steps: { label: string; action: ComputerUseStepAction; app: string }[] }
+    | {
+          kind: "planned";
+          runId: string;
+          steps: { label: string; action: ComputerUseStepAction; app: string }[];
+          /** No step can need a yes, so the plan may start by itself. */
+          autoStart?: boolean;
+      }
     | { kind: "stepStarted"; runId: string; index: number; attempt: number }
     | { kind: "action"; runId: string; index: number; itemId: string; tool: string; summary: string; risk?: ComputerUseRisk }
     | { kind: "actionDone"; runId: string; itemId: string; ok: boolean }
@@ -2882,18 +2898,3 @@ export async function installComponent(id: string): Promise<void> {
     return invoke("install_component", { id });
 }
 
-export interface HermesUpdateStatus {
-    installed: string | null;
-    latest: string | null;
-    update_available: boolean;
-    error: string | null;
-}
-
-export async function checkHermesUpdate(): Promise<HermesUpdateStatus> {
-    return invoke<HermesUpdateStatus>("check_hermes_update");
-}
-
-/** Moves Hermes to its newest release; keeps the previous one if that fails. */
-export async function updateHermes(): Promise<HermesBridgeStatus> {
-    return invoke<HermesBridgeStatus>("update_hermes");
-}

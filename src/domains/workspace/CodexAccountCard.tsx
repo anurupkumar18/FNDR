@@ -419,6 +419,9 @@ export function CodexAccountCard({ onStatusChange, reconnect = false }: CodexAcc
                         Sign out
                     </button>
                 </div>
+                <p className="codex-card-muted">
+                    FNDR shares this sign-in with Codex. Signing out here signs Codex out on this Mac too.
+                </p>
             </div>
         );
     }

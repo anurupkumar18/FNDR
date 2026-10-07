@@ -30,8 +30,9 @@ pub struct Observed {
     elements: HashMap<String, HashMap<String, String>>,
     /// Every name an app was seen under (argument, bundle id, display name).
     aliases: HashMap<String, String>,
-    /// Description of the element last clicked or edited, per app key.
-    focus: HashMap<String, String>,
+    /// The element last clicked or edited, per app key: its index and the
+    /// description it had then.
+    focus: HashMap<String, (String, String)>,
 }
 
 impl Observed {
@@ -60,13 +61,36 @@ impl Observed {
             self.aliases.insert(name, key.clone());
         }
         self.elements.insert(key, elements);
+        // A fresh reading corrects what FNDR believes has focus: if that
+        // element is gone or is something else now, FNDR no longer knows.
+        let canonical = self.resolve(app);
+        let still_there = self
+            .focus
+            .get(&canonical)
+            .is_some_and(|(index, description)| {
+                self.elements
+                    .get(&canonical)
+                    .and_then(|elements| elements.get(index))
+                    == Some(description)
+            });
+        if !still_there {
+            self.focus.remove(&canonical);
+        }
+    }
+
+    /// Focus moved by something other than a click FNDR saw (a key press, a
+    /// page's own script), so the next typing is no longer aimed at a known field.
+    pub fn forget_focus(&mut self, app: &str) {
+        let key = self.resolve(app);
+        self.focus.remove(&key);
     }
 
     /// The element a click or edit just acted on, which now has focus.
     pub fn note_target(&mut self, app: &str, element_index: &str) {
         let key = self.resolve(app);
         if let Some(description) = self.element(app, element_index) {
-            self.focus.insert(key, description);
+            self.focus
+                .insert(key, (element_index.trim().to_string(), description));
         } else {
             self.focus.remove(&key);
         }
@@ -90,7 +114,9 @@ impl Observed {
     }
 
     fn focused(&self, app: &str) -> Option<&String> {
-        self.focus.get(&self.resolve(app))
+        self.focus
+            .get(&self.resolve(app))
+            .map(|(_, description)| description)
     }
 
     /// The display name an app argument refers to, when a tree named it.
@@ -129,6 +155,29 @@ const SENSITIVE_APPS: &[&str] = &[
     "system settings",
     "system preferences",
     "com.apple.systempreferences",
+    // Anything typed here runs as a command or a script.
+    "terminal",
+    "com.apple.terminal",
+    "iterm",
+    "iterm2",
+    "com.googlecode.iterm2",
+    "warp",
+    "kitty",
+    "alacritty",
+    "ghostty",
+    "hyper",
+    "script editor",
+    "com.apple.scripteditor2",
+    "shortcuts",
+    "com.apple.shortcuts",
+    "automator",
+    "com.apple.automator",
+    // Money, disks and force quit.
+    "wallet",
+    "disk utility",
+    "com.apple.diskutility",
+    "activity monitor",
+    "com.apple.activitymonitor",
 ];
 
 /// Apps where Return or a Send button delivers a message.
@@ -209,9 +258,102 @@ const NEVER_LABELS: &[&str] = &[
 
 /// Labels that submit or commit something on the person's behalf.
 const CONFIRM_LABELS: &[&str] = &[
-    "submit", "sign in", "log in", "login", "sign up", "post", "reply", "publish", "share", "save",
-    "confirm", "continue", "accept", "agree", "install", "allow", "upload", "download",
+    "submit",
+    "sign in",
+    "log in",
+    "login",
+    "sign up",
+    "sign out",
+    "log out",
+    "logout",
+    "post",
+    "reply",
+    "publish",
+    "share",
+    "save",
+    "confirm",
+    "continue",
+    "accept",
+    "agree",
+    "install",
+    "allow",
+    "upload",
+    "download",
+    "apply",
+    "add to cart",
+    "add to bag",
+    "book",
+    "reserve",
+    "donate",
+    "vote",
+    "follow",
+    "unfollow",
+    "block",
+    "report",
+    "archive",
+    "discard",
+    "clear",
+    "reset",
+    "cancel",
+    "deactivate",
+    "close account",
 ];
+
+/// Words in a tree line that name what an element is, not what it says.
+const ROLE_WORDS: &[&str] = &[
+    "button", "link", "text", "field", "area", "search", "secure", "row", "cell", "tab",
+    "checkbox", "radio", "menu", "item", "pop", "up", "image", "group", "standard", "window",
+    "combo", "box", "static", "heading", "list", "toolbar",
+];
+
+/// Playback controls a browser tab may show.
+const PLAYBACK_LABELS: &[&str] = &["play", "pause"];
+
+/// Keys that move around a browser without submitting, closing or deleting.
+const BROWSER_RUN_KEYS: &[&str] = &[
+    "up",
+    "down",
+    "left",
+    "right",
+    "pageup",
+    "pagedown",
+    "page+up",
+    "page+down",
+    "home",
+    "end",
+    "space",
+    "escape",
+    "esc",
+    "tab",
+    "shift+tab",
+    "cmd+l",
+    "cmd+t",
+    "cmd+r",
+    "cmd+f",
+    "cmd+[",
+    "cmd+]",
+    "cmd+left",
+    "cmd+right",
+    "ctrl+tab",
+    "ctrl+shift+tab",
+];
+
+/// Whether FNDR can read what an element says: it has words beyond its
+/// role, in a script the label lists above can be matched against.
+fn is_readable(description: &str) -> bool {
+    let says_something = description
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|word| !word.is_empty() && !ROLE_WORDS.contains(&word));
+    says_something
+        && description
+            .chars()
+            .all(|c| !c.is_alphabetic() || c.is_ascii())
+}
+
+fn is_link_or_tab(description: &str) -> bool {
+    let role = description.split_whitespace().next().unwrap_or_default();
+    role == "link" || role == "tab"
+}
 
 const SEARCH_WORDS: &[&str] = &["search", "address", "url", "location", "find"];
 
@@ -223,6 +365,11 @@ fn in_list(names: &[String], list: &[&str]) -> bool {
                 || (name.contains('.') && name.split('.').skip(1).any(|segment| segment == *entry))
         })
     })
+}
+
+/// Whether an app is one whose playback Notch Do may drive without asking.
+pub fn is_media_app(app: &str) -> bool {
+    in_list(&[app_key(app)], MEDIA_APPS)
 }
 
 fn has_word(text: &str, words: &[&str]) -> bool {
@@ -313,8 +460,23 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
                 Some(label) if has_word(label, CONFIRM_LABELS) => {
                     decision(Risk::Confirm, "submits something")
                 }
-                Some(_) if in_list(&names, MEDIA_APPS) || in_list(&names, BROWSERS) => {
-                    decision(Risk::Runs, "clicks in a media app or browser")
+                Some(_) if media => decision(Risk::Runs, "clicks in a media app"),
+                Some(label) if !is_readable(label) => {
+                    decision(Risk::Confirm, "the click target has no label FNDR can read")
+                }
+                Some(label)
+                    if in_list(&names, BROWSERS)
+                        && (is_link_or_tab(label)
+                            || is_search_field(label)
+                            || has_word(label, PLAYBACK_LABELS)) =>
+                {
+                    decision(
+                        Risk::Runs,
+                        "follows a link, a tab or a search box in a browser",
+                    )
+                }
+                Some(_) if in_list(&names, BROWSERS) => {
+                    decision(Risk::Confirm, "clicks a control on a web page")
                 }
                 Some(_) => decision(Risk::Confirm, "clicks outside media apps and browsers"),
                 None if media && args.get("element_index").is_none() => {
@@ -364,8 +526,12 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
                 } else {
                     decision(Risk::Confirm, "Return may submit a form")
                 }
-            } else if in_list(&names, MEDIA_APPS) || in_list(&names, BROWSERS) {
-                decision(Risk::Runs, "a playback or navigation key")
+            } else if media {
+                decision(Risk::Runs, "a playback key")
+            } else if in_list(&names, BROWSERS) && BROWSER_RUN_KEYS.contains(&key.as_str()) {
+                decision(Risk::Runs, "a navigation key")
+            } else if in_list(&names, BROWSERS) {
+                decision(Risk::Confirm, "a key that can close, save or change a page")
             } else {
                 decision(Risk::Confirm, "a key press outside media apps and browsers")
             }
@@ -404,6 +570,142 @@ Window: \"Spotify Premium\", App: Spotify.\n\
 
     fn risk(tool: &str, args: Value, observed: &Observed) -> Risk {
         classify(tool, &args, observed).risk
+    }
+
+    const SHOP_TREE: &str = "App=com.google.Chrome (pid 9)\n\
+Window: \"Shop\", App: Google Chrome.\n\
+0 standard window Shop\n\
+\t1 text field Address and search bar\n\
+\t2 button Add to cart\n\
+\t3 button Sign out\n\
+\t4 button\n\
+\t5 button Enviar\n\
+\t6 link Next page\n\
+\t7 link Log out\n\
+\t8 secure text field Password\n\
+\t9 button Play\n\
+\t10 button Details\n\
+\t11 link Delete account\n";
+
+    fn browsing() -> Observed {
+        let mut observed = Observed::default();
+        observed.observe_tree("Google Chrome", SHOP_TREE);
+        observed
+    }
+
+    fn chrome_click(index: &str, observed: &Observed) -> Risk {
+        risk(
+            "click",
+            json!({"app": "Google Chrome", "element_index": index}),
+            observed,
+        )
+    }
+
+    #[test]
+    fn a_browser_asks_before_clicking_anything_but_links_tabs_search_and_playback() {
+        let o = browsing();
+        for (index, what) in [("1", "search box"), ("6", "link"), ("9", "play")] {
+            assert_eq!(chrome_click(index, &o), Risk::Runs, "{what}");
+        }
+        for (index, what) in [
+            ("2", "add to cart"),
+            ("3", "sign out"),
+            ("7", "a link that logs out"),
+            ("8", "password field"),
+            ("10", "a button with an unlisted label"),
+        ] {
+            assert_eq!(chrome_click(index, &o), Risk::Confirm, "{what}");
+        }
+        assert_eq!(chrome_click("11", &o), Risk::Never);
+    }
+
+    #[test]
+    fn a_label_fndr_cannot_read_is_treated_as_unknown() {
+        let o = browsing();
+        assert_eq!(chrome_click("4", &o), Risk::Confirm, "no label");
+        assert_eq!(chrome_click("5", &o), Risk::Confirm, "another language");
+        assert!(is_readable("button add to cart"));
+        assert!(!is_readable("button"));
+        assert!(!is_readable("link 送信"));
+    }
+
+    #[test]
+    fn a_browser_runs_navigation_keys_and_asks_for_the_rest() {
+        let o = browsing();
+        let key = |key: &str| risk("press_key", json!({"app": "Google Chrome", "key": key}), &o);
+        for name in [
+            "down",
+            "Page Down",
+            "space",
+            "tab",
+            "cmd+l",
+            "cmd+r",
+            "escape",
+        ] {
+            assert_eq!(key(name), Risk::Runs, "{name}");
+        }
+        for name in [
+            "cmd+w",
+            "cmd+q",
+            "cmd+s",
+            "cmd+p",
+            "backspace",
+            "delete",
+            "return",
+            "a",
+        ] {
+            assert_eq!(key(name), Risk::Confirm, "{name}");
+        }
+    }
+
+    #[test]
+    fn typing_runs_only_while_fndr_knows_the_search_box_has_focus() {
+        let mut o = browsing();
+        let typing =
+            |o: &Observed| risk("type_text", json!({"app": "Google Chrome", "text": "x"}), o);
+        assert_eq!(typing(&o), Risk::Confirm, "nothing clicked yet");
+
+        o.note_target("Google Chrome", "1");
+        assert_eq!(typing(&o), Risk::Runs, "the search box was clicked");
+
+        // Tab moved focus somewhere FNDR did not see.
+        o.forget_focus("Google Chrome");
+        assert_eq!(typing(&o), Risk::Confirm);
+
+        // The page changed under the same index: it is a password field now.
+        o.note_target("Google Chrome", "1");
+        o.observe_tree(
+            "Google Chrome",
+            "App=com.google.Chrome (pid 9)\n0 standard window Bank\n\t1 secure text field Password\n",
+        );
+        assert_eq!(typing(&o), Risk::Confirm);
+
+        // An unchanged reading keeps what FNDR knows.
+        o.observe_tree("Google Chrome", SHOP_TREE);
+        o.note_target("Google Chrome", "1");
+        o.observe_tree("Google Chrome", SHOP_TREE);
+        assert_eq!(typing(&o), Risk::Runs);
+    }
+
+    #[test]
+    fn apps_that_run_commands_or_move_money_are_never_opened() {
+        let o = observed();
+        for name in [
+            "Terminal",
+            "iTerm",
+            "Script Editor",
+            "Shortcuts",
+            "Automator",
+            "Wallet",
+            "Disk Utility",
+        ] {
+            assert_eq!(
+                risk("open_app", json!({"name": name}), &o),
+                Risk::Never,
+                "{name}"
+            );
+        }
+        assert_eq!(risk("open_app", json!({"name": "Notes"}), &o), Risk::Runs);
     }
 
     #[test]

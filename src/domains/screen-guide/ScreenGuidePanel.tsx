@@ -684,7 +684,7 @@ export function ScreenGuidePanel({
                             <small>
                                 {computerUse && !computerUse.backend
                                     ? "Needs Computer Use: install the ChatGPT app with Computer Use, or run npm install -g open-computer-use."
-                                    : "Talk to the notch in Do mode and FNDR opens apps, clicks and types for you. Sent to ChatGPT on your plan: what you say, the on-screen text of the app being operated, and up to 5 memory snippets when you refer to the past. Sending, deleting, buying and passwords are always refused. Say “stop” anytime."}
+                                    : "Talk to the notch in Do mode and FNDR opens apps, clicks and types for you. Sent to ChatGPT on your plan: what you say, the on-screen text of the app being operated, and up to 5 memory snippets when you refer to the past. Opening apps, playing media, following links and searching run without asking; other clicks, typing and links you did not ask for wait for your tap. Sending, deleting, buying, passwords, Terminal and blocklisted apps are always refused. Say “stop” anytime."}
                             </small>
                         </span>
                         <input

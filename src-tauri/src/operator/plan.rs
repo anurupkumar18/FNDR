@@ -217,6 +217,45 @@ fn query_words(url: &str) -> Vec<String> {
         .collect()
 }
 
+const SEARCH_HOSTS: &[&str] = &["google.com", "bing.com", "duckduckgo.com"];
+
+/// Whether a planned link is one the person's own words account for: a web
+/// search for words they said, or a site they named with nothing attached.
+/// Any other link (an unnamed host, a query they did not say, a fragment)
+/// waits for a yes, because a link can carry text off the Mac or trigger an
+/// action just by being opened.
+pub fn link_was_asked_for(url: &str, request: &str) -> bool {
+    let request = request.to_lowercase();
+    let said: Vec<&str> = request
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let lower = url.trim().to_lowercase();
+    if lower.contains('#') || lower.contains('@') {
+        return false;
+    }
+    let host = host(&lower);
+    let site = host.strip_prefix("www.").unwrap_or(&host);
+    let after_host = lower
+        .split("://")
+        .nth(1)
+        .unwrap_or_default()
+        .get(host.len()..)
+        .unwrap_or_default();
+    let (path, query) = after_host.split_once('?').unwrap_or((after_host, ""));
+    if query.is_empty() {
+        let name = site.split('.').next().unwrap_or_default();
+        return name.len() > 2 && said.contains(&name);
+    }
+    let is_search = SEARCH_HOSTS.contains(&site) && matches!(path, "/search" | "/" | "");
+    let single_search_term = query.matches('=').count() == 1 && !query.contains('%');
+    let words = query_words(&lower);
+    is_search
+        && single_search_term
+        && !words.is_empty()
+        && words.iter().all(|word| said.contains(&word.as_str()))
+}
+
 fn host(url: &str) -> String {
     url.split("://")
         .nth(1)
@@ -320,6 +359,32 @@ pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_links_the_persons_words_account_for_open_without_asking() {
+        let request = "open YouTube, then look up looped transformers";
+        for url in [
+            "https://www.youtube.com",
+            "https://www.youtube.com/",
+            "https://www.google.com/search?q=looped+transformers",
+        ] {
+            assert!(link_was_asked_for(url, request), "{url}");
+        }
+        for url in [
+            "https://evil.example/c?d=looped+transformers",
+            "https://www.google.com/search?q=my+bank+balance+is+low",
+            "https://www.google.com/search?q=looped+transformers&next=https://evil.example",
+            "https://www.google.com/search?q=looped%2Btransformers",
+            "https://mail.example/unsubscribe?id=1",
+            "http://192.168.1.1/reboot?confirm=1",
+            "https://www.youtube.com/watch?v=abc",
+            "https://www.youtube.com/#looped",
+            "https://youtube@evil.example/",
+            "https://vimeo.com",
+        ] {
+            assert!(!link_was_asked_for(url, request), "{url}");
+        }
+    }
 
     const EXAMPLE: &str = r#"{"steps":[
         {"action":"open_app","label":"Open Spotify","app":"Spotify","url":"","goal":"","check":"frontmost"},

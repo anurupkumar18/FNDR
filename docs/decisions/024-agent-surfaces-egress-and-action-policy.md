@@ -1,7 +1,9 @@
 # ADR 024: One egress rule and one stop for the agent surfaces
 
-**Proposed, 2026-10-07. Not accepted.** The decision is the owner's. It closes
-the questions ADR-018's 2026-10-06 amendment and ADR-022's amendment left open.
+**Accepted, 2026-10-07, by the owner**, with every recommendation in the
+table at the end taken as proposed. The lane owner (Kunj) agreed with the
+findings the same day. It closes the questions ADR-018's 2026-10-06 amendment
+and ADR-022's amendment left open.
 
 - Requirements: [agent surfaces PRD](../superpowers/specs/2026-10-07-agent-surfaces-prd.md)
 - Evidence and work parts: [work breakdown](../superpowers/plans/2026-10-07-agent-surfaces-work-breakdown.md). Finding numbers N1 to N14 and part ids such as C6.3 refer to that file.
@@ -203,21 +205,28 @@ Phase 1 also showed three things that change the items above:
 Walk N1 to N14 with the lane owner (D7.2); some may be known or have context
 the code does not show.
 
-## Open for the owner
+## Decisions taken
 
-Ids match the breakdown's Track E.
+Ids match the breakdown's Track E. "Built" means the code is on `main` with
+tests; see the breakdown's progress tables.
 
-| Id | Question | Proposed |
+| Id | Decision | State |
 | --- | --- | --- |
-| E1 | Does the ADR-018 amendment stand, and does it cover Screen Guide? | Keep, add Screen Guide, ratify ADR-018 |
-| E2 | Item 1 default | Off |
-| E3 | Item 11 | Run-tier plans only |
-| E4 | Is Hermes an answering surface or an acting one? Item 12's allowlist follows | Answering for Beta |
-| E5 | Item 8 | Tap or key only |
-| E6 | May a transcript reach the cloud before the person sees it? | Show it for a beat first, or default the notch to Ask |
-| E7 | Item 10 | Confirm by default |
-| E8 | Item 13, shared Codex home | Share, with honest copy |
-| E12 | Where the three features sit for Beta | Agent and Notch Do in Labs until the release gate passes |
+| E1 | ADR-018's amendment stands and covers Screen Guide's ChatGPT answers; ADR-018 is accepted for these three features only | Recorded in ADR-018 |
+| E2 | Related memories go to a provider that is not on this Mac only when the person turns it on; Hermes gets memory search only then too | Built |
+| E3 | A plan starts by itself only when no step can need a yes | Built |
+| E4 | Hermes is an answering surface for Beta: a planning list and read-only memory search, no terminal, files, code, browser or schedules | Built against Hermes 0.13's config; to recheck at the pinned commit |
+| E5 | Approval is a tap or a key; speech can stop and decline | Built |
+| E6 | A transcript should not reach the cloud before the person sees it | Not built: the shortcut is designed to open Do and listen, so this needs a small design, not a one-line default |
+| E7 | Browsers confirm by default with a short run list; a link the person's words do not account for waits for a tap | Built |
+| E8 | FNDR keeps sharing the Codex sign-in and says so beside Sign out | Built |
+| E9 | No updating Hermes past the pin until a version is reviewed | Built: the control and its commands are removed |
+| E10 | OpenClicky bridge moves to Labs or goes | Not built |
+| E11 | Notch Do writes to the SK-01 journal | Waits for SK-01 |
+| E12 | Agent and Notch Do sit in Labs for Beta until the release gate passes | Not built |
+| E13 | Which account QA spends | Owner's account, when the live checks run |
+| E14 | Provider keys stay in a file readable by the owner only; Keychain later | Built |
 
-Accept items 1 to 13 together, or accept 6 to 10 and 13 now as safety fixes
-and hold the rest for the decisions above.
+One departure from item 10 as written: "next" is not on the browser run
+list, because a Next button on a web page often submits a step of a form. A
+link labelled "Next page" still runs, as a link.

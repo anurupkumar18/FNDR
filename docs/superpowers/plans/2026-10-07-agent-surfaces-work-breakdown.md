@@ -103,6 +103,34 @@ Known limits: the blocklist check matches the app name or bundle id the model pa
 
 The no-decision list is complete. What remains needs a live run (the six checks in the phase 1 evidence) or a decision (Track E).
 
+## Phase 4 progress (2026-10-07)
+
+The owner took every recommendation in Track E; ADR 024 is accepted. Built the same day:
+
+| Part | What changed | Check |
+| --- | --- | --- |
+| C9.2 (E5) | Speech never approves an action; it can decline or stop | `doRun.test.ts` |
+| C7.2 (E3) | The plan card counts down only when no step can need a yes; otherwise it waits for Start or "go" | `a_plan_starts_by_itself_only_when_no_step_can_need_a_yes`, `NotchHud.test.tsx` |
+| C8.3, C8.4, C8.7 (E7) | Browsers ask by default; run list is links, tabs, search boxes, play and pause, navigation keys; unreadable labels are unknown | Five new tests in `operator/policy.rs` |
+| C8.2 (E7) | A planned link opens unasked only when the person's words account for it; otherwise an approval card | `only_links_the_persons_words_account_for_open_without_asking` |
+| C8.6 | Focus is forgotten after a key press, a click by position, or a screen reading that no longer shows the same element | `typing_runs_only_while_fndr_knows_the_search_box_has_focus` |
+| C8.1 | Shells, Script Editor, Shortcuts, Automator, Wallet, Disk Utility and Activity Monitor are never opened or operated | `apps_that_run_commands_or_move_money_are_never_opened` |
+| C3.2 | The operate switch's copy and comment describe the tiers as they are | Read |
+| A6.2, A9.5 (E2) | Related memories and memory search for Hermes only for a provider on this Mac, or when turned on | `memories_fndr_finds_itself_go_to_a_cloud_provider_only_when_turned_on` |
+| A2.6, A6.3 | Agent setup says what is sent and where before Save; the page subtitle matches | `AgentWorkspace.test.tsx` |
+| A6.4 | Memories FNDR added are returned with the reply, shown on the message and kept in history | `AgentWorkspace.test.tsx` |
+| A9.3 (E4) | Hermes's API server is limited to a planning list | `hermes_is_given_a_planning_list_and_nothing_that_acts`; the effect on a running gateway needs a live check |
+| A9.4 | Hermes's MCP block lists four read-only memory tools | `hermes_codex` test; needs a live check that a write tool is refused |
+| A1.4 (P1) | Only the pinned Hermes runs; a Hermes elsewhere on the Mac is ignored | Compiles; on a Mac without the pinned copy the page now asks to install it |
+| A1.3 (E9) | The Hermes update control and its commands are removed | `SetupCenter.test.tsx` |
+| A3.6 (E8) | Sign out says it signs Codex out on this Mac too | Read |
+
+Results: 92 Rust tests pass for the touched modules (in a copy of `src-tauri`, for the same reason as before) and 229 front-end tests pass; typecheck is clean; the app and library compile in the shared tree.
+
+Decisions taken but not built yet: E6 (the transcript reaching the cloud before it is seen), E10 (OpenClicky bridge), E11 (SK-01 journal, waits for SK-01), E12 (Labs placement), plus C3.1 (moving the operate switch out of Screen Guide's config) and A6.7 and A6.8 (Hermes's instruction strings, which still mention a snapshot that no longer exists).
+
+To verify on a real run: that Hermes 0.18 at the pinned commit honors `platform_toolsets.api_server` and the MCP `tools.include` list the way 0.13 does (read from 0.13's source, the only complete copy on this Mac); that Notch Do still completes the Spotify and web-search example with the tighter browser rules.
+
 ## Findings added since the PRD
 
 The second pass found these. They are not in the PRD yet and several are more

@@ -45,6 +45,10 @@ pub struct AgentChatMessage {
     /// The send failed; Hermes never answered this message.
     #[serde(default)]
     pub failed: bool,
+    /// Memories FNDR added on its own to this message, so the chat shows
+    /// everything that went with it.
+    #[serde(default)]
+    pub auto_memories: Vec<AttachedMemory>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -81,7 +85,9 @@ fn read_chats(path: &Path) -> Vec<AgentChat> {
 static CHATS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn chats_lock() -> std::sync::MutexGuard<'static, ()> {
-    CHATS_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    CHATS_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn write_chats(path: &Path, chats: &[AgentChat]) -> Result<(), String> {
@@ -367,6 +373,7 @@ mod tests {
             at: 7,
             memories: Vec::new(),
             failed: true,
+            auto_memories: Vec::new(),
         };
 
         append_messages(&path, "c9", vec![failed.clone()]).unwrap();
@@ -407,6 +414,7 @@ mod tests {
             at,
             memories: Vec::new(),
             failed: false,
+            auto_memories: Vec::new(),
         };
 
         assert!(read_chats(&path).is_empty());

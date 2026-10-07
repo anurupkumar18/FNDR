@@ -621,8 +621,9 @@ pub struct ScreenGuideConfig {
     /// (127.0.0.1:32123) instead of FNDR's own overlay cursor.
     #[serde(default)]
     pub openclicky_bridge: bool,
-    /// Let FNDR click, type and press keys through open-computer-use when
-    /// asked in the notch. Every action still needs an explicit approval.
+    /// Let FNDR click, type and press keys through a computer-use helper when
+    /// asked in the notch. `operator::policy` decides per action whether it
+    /// runs, waits for a tap, or is refused (ADR-022 amendment, ADR 024).
     #[serde(default)]
     pub operate_computer: bool,
 }

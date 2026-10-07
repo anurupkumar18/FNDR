@@ -2,12 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
-    checkHermesUpdate,
     codexLoginStart,
     installComponent,
     setupComponents,
-    updateHermes,
-    type HermesUpdateStatus,
     type SetupComponent,
 } from "@/shared/ipc/tauri";
 import { openExternalUrl } from "@/shared/utils/openExternalUrl";
@@ -33,7 +30,6 @@ export function SetupCenter() {
     const [components, setComponents] = useState<SetupComponent[] | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [hermesUpdate, setHermesUpdate] = useState<HermesUpdateStatus | null>(null);
     const [appUpdate, setAppUpdate] = useState<Update | null>(null);
 
     const refresh = useCallback(async () => {
@@ -97,33 +93,6 @@ export function SetupCenter() {
         }
     };
 
-    const hermesControls = (item: SetupComponent) => {
-        if (item.id !== "hermes" || item.state !== "ready") return null;
-        if (hermesUpdate?.update_available && hermesUpdate.latest) {
-            return (
-                <button type="button" className="ui-action-btn" disabled={busy !== null} onClick={() => void act("hermes", updateHermes)}>
-                    {busy === "hermes" ? "Updating…" : `Update to ${hermesUpdate.latest}`}
-                </button>
-            );
-        }
-        return (
-            <button
-                type="button"
-                className="ui-action-btn"
-                disabled={busy !== null}
-                onClick={() =>
-                    void act("hermes-check", async () => {
-                        const status = await checkHermesUpdate();
-                        setHermesUpdate(status);
-                        if (status.error) throw new Error(status.error);
-                    })
-                }
-            >
-                {hermesUpdate && !hermesUpdate.update_available ? "Up to date" : "Check for update"}
-            </button>
-        );
-    };
-
     return (
         <section className="panel-section setup-center" aria-labelledby="setup-center-title">
             <h3 id="setup-center-title">Setup and updates</h3>
@@ -165,7 +134,6 @@ export function SetupCenter() {
                             <span className={`setup-center-state is-${item.state}`}>{STATE_LABEL[item.state]}</span>
                             {item.version ? <small>{item.version}</small> : null}
                             {actionButton(item)}
-                            {hermesControls(item)}
                         </span>
                     </li>
                 ))}

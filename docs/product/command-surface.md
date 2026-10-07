@@ -90,6 +90,7 @@ A kill switch in Settings (GS-11) makes every tool refuse.
 | Voice (GS-13) | Input | Transcript is reviewed first (ADR 020). Spoken approval is not accepted for OneTap tools. |
 | MCP (GS-11) | Typed tool call | Skips the router. The request is shown as the same approval card on the Mac. |
 | Skills (SK-05) | Typed tool call | A skill may call registry tools only, at the risk level the registry assigns. |
+| Notch Do | Its own plan and per-call policy | Not a registry caller. UI control is decided per call by `operator/policy.rs` (ADR-022 amendments, ADR 024). It shares this contract's invariants: screen text is data, the level is not model-selectable, privacy gates and the kill switch come first, and spoken approval is not accepted. |
 
 ## Undo
 
