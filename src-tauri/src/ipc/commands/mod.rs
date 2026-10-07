@@ -57,6 +57,7 @@ pub(crate) mod openclicky_bridge;
 pub use openclicky_bridge::*;
 
 mod computer_use;
+mod hermes_codex;
 pub use computer_use::*;
 
 mod agent;

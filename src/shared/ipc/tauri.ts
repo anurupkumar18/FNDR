@@ -1561,6 +1561,16 @@ export interface PrivacyProof {
     skipped_by_reason: Record<string, number>;
     egress_requests: number;
     egress_hosts: string[];
+    /** Cloud model requests this session: feature, host and bytes FNDR sent. No content. */
+    model_requests?: ModelRequest[];
+}
+
+export interface ModelRequest {
+    atMs: number;
+    /** `notch_do_plan`, `notch_do_step`, `notch_do_screen_text` or `hermes_chat`. */
+    feature: string;
+    host: string;
+    bytesSent: number;
 }
 
 export async function getPrivacyProof(): Promise<PrivacyProof> {
@@ -1864,6 +1874,11 @@ export interface HermesBridgeStatus {
     recent_memories: HermesMemoryDigest[];
     last_error: string | null;
     install_command: string;
+    /** `stopped`, `starting`, `running`, `restarting` or `crashed`. */
+    gateway_state: string;
+    gateway_restarts: number;
+    /** The ChatGPT sign-in could not be used or refreshed. */
+    reconnect_chatgpt: boolean;
 }
 
 export interface HermesSetupPayload {
@@ -2755,45 +2770,72 @@ export async function notchHudOpenMemory(memoryId: string): Promise<void> {
 }
 
 
-// Computer use: the notch operates the Mac through open-computer-use.
+// Notch Do: a spoken request is planned, shown, then run step by step.
 
 export const COMPUTER_USE_EVENT = "computer-use://event";
 
+export type ComputerUseStepAction = "open_app" | "open_url" | "operate";
+export type ComputerUseRisk = "runs" | "confirm" | "never";
+
 export type ComputerUseEvent =
-    | { kind: "ready" }
-    | { kind: "message"; text: string; final: boolean }
-    | { kind: "action"; itemId: string; tool: string; summary: string }
-    | { kind: "actionDone"; itemId: string; tool: string; ok: boolean }
-    | { kind: "approval"; requestKey: string; tool: string; summary: string }
-    | { kind: "approvalResolved"; requestKey: string }
-    | { kind: "turnDone"; status: string; error: string | null }
-    | { kind: "ended"; error: string | null };
+    | { kind: "planning"; runId: string; usedMemories: number }
+    | { kind: "planned"; runId: string; steps: { label: string; action: ComputerUseStepAction; app: string }[] }
+    | { kind: "stepStarted"; runId: string; index: number; attempt: number }
+    | { kind: "action"; runId: string; index: number; itemId: string; tool: string; summary: string; risk?: ComputerUseRisk }
+    | { kind: "actionDone"; runId: string; itemId: string; ok: boolean }
+    | { kind: "approval"; runId: string; requestKey: string; tool: string; summary: string }
+    | { kind: "approvalResolved"; runId: string; requestKey: string }
+    | { kind: "blocked"; runId: string; index: number; tool: string; summary: string; reason: string }
+    | { kind: "stepDone"; runId: string; index: number; ok: boolean; detail: string }
+    | { kind: "finished"; runId: string; ok: boolean; summary: string }
+    | { kind: "stopped"; runId: string }
+    | { kind: "failed"; runId: string; error: string; reconnect: boolean };
 
 export interface ComputerUseStatus {
-    /** Screen Guide's "Operate my Mac" setting. */
+    /** The "Operate my Mac" opt-in. */
     enabled: boolean;
     codexReady: boolean;
-    openComputerUsePath: string | null;
-    active: boolean;
+    /** `codex_computer_use` or `open_computer_use`; null when neither is installed. */
+    backend: string | null;
+    backendPath: string | null;
+    activeRun: string | null;
 }
 
 export async function computerUseStatus(): Promise<ComputerUseStatus> {
     return invoke<ComputerUseStatus>("computer_use_status");
 }
 
-/** Starts a conversation if needed; mid-task words redirect the current turn. */
-export async function computerUseSay(text: string): Promise<void> {
-    return invoke("computer_use_say", { text });
+/** Plans a request and returns the run id. Stops any run in progress first. */
+export async function computerUsePlan(text: string): Promise<string> {
+    return invoke<string>("computer_use_plan", { text });
 }
 
-export async function computerUseInterrupt(): Promise<void> {
-    return invoke("computer_use_interrupt");
+/** Starts a planned run (the plan card's countdown, "go", or a tap). */
+export async function computerUseStart(runId: string): Promise<void> {
+    return invoke("computer_use_start", { runId });
 }
 
 export async function computerUseRespond(requestKey: string, approve: boolean): Promise<void> {
     return invoke("computer_use_respond", { requestKey, approve });
 }
 
+export interface OperatorPermissions {
+    accessibility: boolean;
+    screenRecording: boolean;
+    /** Spotify or Music answered; null when neither is running. */
+    automationMedia: boolean | null;
+    backend: string | null;
+    /** The computer-use server answered; null until probed. */
+    backendReady: boolean | null;
+    backendDetail: string | null;
+}
+
+/** Live permission checks for Notch Do. `probe` starts Computer Use once. */
+export async function computerUsePermissions(probe: boolean): Promise<OperatorPermissions> {
+    return invoke<OperatorPermissions>("computer_use_permissions", { probe });
+}
+
+/** Kills the run at once, including an action in flight. */
 export async function computerUseStop(): Promise<void> {
     return invoke("computer_use_stop");
 }

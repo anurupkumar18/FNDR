@@ -58,6 +58,16 @@ const SEARCH_DEBOUNCE_MS = 200;
 /** No row highlighted — Enter asks FNDR instead of opening a memory. */
 const NO_SELECTION = -1;
 
+const NOTCH_MODE_KEY = "fndr.notch.mode";
+
+function readNotchMode(): "ask" | "do" {
+    try {
+        return window.localStorage.getItem(NOTCH_MODE_KEY) === "ask" ? "ask" : "do";
+    } catch {
+        return "do";
+    }
+}
+
 /**
  * FNDR in the notch: a panel that lives on the display's camera housing,
  * widens under the pointer, and opens into a place to ask FNDR things in plain
@@ -86,9 +96,8 @@ export function NotchHud() {
     const [voiceActivityTrace, setVoiceActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [notchActivityTrace, setNotchActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [contentHeight, setContentHeight] = useState<number>(notchMetrics.openHeaderHeight);
-    const [mode, setMode] = useState<"ask" | "do">("ask");
+    const [mode, setModeState] = useState<"ask" | "do">(readNotchMode);
     const [operateEnabled, setOperateEnabled] = useState(false);
-    const [operatorStream, setOperatorStream] = useState<MediaStream | null>(null);
 
     const inputRef = useRef<HTMLInputElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
@@ -113,7 +122,17 @@ export function NotchHud() {
             : current);
     }, []);
 
-    // "Do" appears only once the user has turned on Operate my Mac.
+    const setMode = useCallback((next: "ask" | "do") => {
+        setModeState(next);
+        try {
+            window.localStorage.setItem(NOTCH_MODE_KEY, next);
+        } catch {
+            // Storage can be unavailable; the mode just isn't remembered.
+        }
+    }, []);
+
+    // "Do" appears only once the user has turned on Operate my Mac, and is
+    // where the notch opens until the person picks Ask.
     useEffect(() => {
         if (stage !== "open") return;
         let live = true;
@@ -121,7 +140,7 @@ export function NotchHud() {
             .then((status) => {
                 if (!live) return;
                 setOperateEnabled(status.enabled);
-                if (!status.enabled) setMode("ask");
+                if (!status.enabled) setModeState("ask");
             })
             .catch(() => live && setOperateEnabled(false));
         return () => {
@@ -688,18 +707,8 @@ export function NotchHud() {
                                     ]}
                                 />
                             ) : null}
-                            {mode === "do" ? (
-                                <VoiceBeam
-                                    stream={operatorStream ?? undefined}
-                                    processing={false}
-                                    theme="dark"
-                                    active={stage === "open"}
-                                >
-                                    <NotchOperator
-                                        active={stage === "open"}
-                                        onStreamChange={setOperatorStream}
-                                    />
-                                </VoiceBeam>
+                            {mode === "do" && operateEnabled ? (
+                                <NotchOperator active={stage === "open"} />
                             ) : (
                             <>
                             <VoiceBeam

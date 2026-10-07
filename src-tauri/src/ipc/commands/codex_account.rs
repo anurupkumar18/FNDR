@@ -91,6 +91,17 @@ pub struct CodexLoginCompleted {
     pub error: Option<String>,
 }
 
+/// The Codex CLI's home: `$CODEX_HOME`, else `~/.codex`.
+pub(crate) fn codex_home_dir() -> PathBuf {
+    if let Some(value) = std::env::var_os("CODEX_HOME") {
+        return PathBuf::from(value);
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".codex")
+}
+
 /// One JSON-RPC connection to a `codex app-server` child over stdio (JSONL).
 pub(crate) struct AppServer {
     child: Child,
@@ -116,6 +127,9 @@ impl AppServer {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true)
+            // Its own process group, so stopping Notch Do can kill the MCP
+            // servers Codex started along with it.
+            .process_group(0)
             .spawn()
             .map_err(|e| format!("Could not start Codex ({}): {e}", executable.display()))?;
 
@@ -145,6 +159,11 @@ impl AppServer {
             .await?;
         server.notify("initialized", json!({})).await?;
         Ok(server)
+    }
+
+    /// Process id, which is also the process group id (see `spawn_with`).
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.child.id()
     }
 
     pub(crate) async fn write(&mut self, message: Value) -> Result<(), String> {

@@ -5,7 +5,7 @@ import {
     type ActivityTraceSnapshot,
 } from "@/shared/activity/activityTrace";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
-import { getPrivacyProof, type PrivacyProof as PrivacyProofData } from "@/shared/ipc/tauri";
+import { getPrivacyProof, type ModelRequest, type PrivacyProof as PrivacyProofData } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import "../workspace/PipelineInspectorPanel.css";
@@ -17,6 +17,18 @@ interface Proof {
     skipped_by_reason: Record<string, number>;
     egress_requests: number;
     egress_hosts: string[];
+    model_requests?: ModelRequest[];
+}
+
+const FEATURE_LABELS: Record<string, string> = {
+    notch_do_plan: "Notch Do planned a request",
+    notch_do_step: "Notch Do ran a step",
+    notch_do_screen_text: "Notch Do sent an app's on-screen text",
+    hermes_chat: "Hermes chat message",
+};
+
+function formatBytes(bytes: number): string {
+    return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
 }
 
 const REASON_LABELS: Record<string, string> = {
@@ -66,6 +78,26 @@ export function PrivacyProof({ proof }: { proof: Proof }) {
                                 <strong>{count}</strong>
                             </li>
                         ))}
+                    </ul>
+                </>
+            )}
+
+            {proof.model_requests && proof.model_requests.length > 0 && (
+                <>
+                    <h4>Sent to cloud models this app session</h4>
+                    <ul className="pipeline-skip-reasons" aria-label="Cloud model requests">
+                        {proof.model_requests
+                            .slice(-12)
+                            .reverse()
+                            .map((request, index) => (
+                                <li key={`${request.atMs}-${index}`}>
+                                    <span>
+                                        {FEATURE_LABELS[request.feature] ?? request.feature} · {request.host} ·{" "}
+                                        {new Date(request.atMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                                    </span>
+                                    <strong>{formatBytes(request.bytesSent)}</strong>
+                                </li>
+                            ))}
                     </ul>
                 </>
             )}

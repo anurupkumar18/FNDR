@@ -550,6 +550,25 @@ pub(crate) struct FocusedWindowSnapshot {
     pub document_url: Option<String>,
 }
 
+/// The focused app's pid and window, read through Accessibility. Unlike
+/// `NSWorkspace.frontmostApplication`, this does not depend on the main run
+/// loop having processed activation notifications.
+pub(crate) fn ax_frontmost() -> Option<(PidT, FocusedWindowSnapshot)> {
+    if !has_accessibility_permission() {
+        return None;
+    }
+    unsafe {
+        let pid = frontmost_pid()?;
+        let application = AXUIElementCreateApplication(pid);
+        if application.is_null() {
+            return None;
+        }
+        let snapshot = window_snapshot_for_application(application);
+        CFRelease(application);
+        Some((pid, snapshot))
+    }
+}
+
 fn workspace_frontmost_pid() -> Option<PidT> {
     unsafe {
         NSWorkspace::sharedWorkspace()
