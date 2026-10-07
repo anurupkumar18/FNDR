@@ -7,7 +7,7 @@
 //! updated in the same change.
 
 /// Stamped on every LLM trace except extraction. Bump when a prompt below changes.
-pub(crate) const LLM_PROMPT_VERSION: &str = "v3";
+pub(crate) const LLM_PROMPT_VERSION: &str = "v4";
 
 /// Extraction is measured on its own fixtures and carries its own tag.
 pub(crate) const EXTRACTION_PROMPT_VERSION: &str = "source_refs_v4";
@@ -21,9 +21,11 @@ const VOICE_RULES: &str = "\
 - Use concise, neutral wording. Start with the action or topic; omit narrator/reader labels and pronouns ('you', 'your', 'the user', 'I', 'we').\n\
 - No preambles like 'I see', 'The screen shows', 'Summary:'. No markdown unless explicitly requested.";
 
-/// Memory notes describe something that already happened.
+/// Memory notes describe something that already happened. No example sentence
+/// here: the 2B model copied an example's subject into unrelated memories
+/// (measured 2026-10-06). A verb list made it pick wrong verbs, so there is none.
 const PAST_TENSE_RULE: &str = "\
-- Prefer action-led past tense, e.g. 'Reviewed the authentication PR' or 'Watched the live match on Willow TV'.";
+- Write in the past tense. Use only names and details that appear in the supplied text.";
 
 /// Captured text is evidence. Every prompt that embeds it carries this rule.
 const EVIDENCE_RULES: &str = "\
@@ -338,14 +340,14 @@ mod tests {
         ]
     }
 
-    /// Recorded at `LLM_PROMPT_VERSION` v3 and `EXTRACTION_PROMPT_VERSION` source_refs_v4.
+    /// Recorded at `LLM_PROMPT_VERSION` v4 and `EXTRACTION_PROMPT_VERSION` source_refs_v4.
     const FINGERPRINTS: &[(&str, u64)] = &[
         ("memory_extraction", 0x2ba2266d06f4a45c),
-        ("memory_snippet", 0xa044d86ebb6e0502),
-        ("memory_review", 0x1d54b69937069a87),
-        ("vision_description", 0xe3ab90c92a346ae7),
+        ("memory_snippet", 0x3de252de547d2332),
+        ("memory_review", 0x59cb6f8e8ed54817),
+        ("vision_description", 0x8b6ebf297d754c23),
         ("vision_pixels", 0x519963112acddab7),
-        ("card_synthesis", 0xe91ebb174f5ad777),
+        ("card_synthesis", 0x96ae892fc3ec9063),
         ("answer", 0x29752c8079463ff0),
         ("query_expansion", 0xc043c170c9b89cd9),
         ("screen_guide", 0x531b24285eac5a35),
