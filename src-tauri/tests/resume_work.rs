@@ -207,7 +207,7 @@ fn resume_applies_current_blocklist_before_thread_state_suggestions_and_evidence
         .unwrap();
     assert_eq!(after.len(), 1, "excluded-only project must disappear");
     assert_eq!(after[0].evidence, ["visible"]);
-    assert_eq!(after[0].last_state, "working on Release in_progress");
+    assert_eq!(after[0].last_state, "Memory context for visible");
     assert_eq!(after[0].age_minutes, 20);
     assert!(after[0]
         .suggested_next_steps

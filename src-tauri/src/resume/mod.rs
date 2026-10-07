@@ -48,23 +48,80 @@ fn thread_key(record: &MemoryRecord) -> String {
     record.app_name.clone()
 }
 
+/// What a person sees as the thread's name. The grouping key is an internal
+/// identifier (`google_chrome:title:grades_for_...`) and is never shown.
+fn thread_title(record: &MemoryRecord) -> String {
+    let project = record.project.trim();
+    if !project.is_empty() {
+        return project.to_string();
+    }
+    let window = record.window_title.trim();
+    if !window.is_empty() && !window.eq_ignore_ascii_case(record.app_name.trim()) {
+        return window.chars().take(80).collect::<String>().trim().to_string();
+    }
+    record
+        .url
+        .as_deref()
+        .and_then(crate::capture::extract_domain)
+        .unwrap_or_else(|| record.app_name.trim().to_string())
+}
+
+const MAX_STATE_CHARS: usize = 160;
+
+/// One line saying where the thread stands. It must add something to the
+/// title: a line that only repeats the title or the app name is dropped, and
+/// a long line is cut at a word, never mid-word.
+fn thread_state(record: &MemoryRecord, title: &str) -> String {
+    let first_sentence = record
+        .memory_context
+        .split_terminator(['.', '!', '?'])
+        .next()
+        .unwrap_or("");
+    let topic = record.topic.trim();
+    let outcome = record.outcome.trim().replace('_', " ");
+    let topic_line = format!("{topic} {outcome}");
+    let repeats = |line: &str| {
+        let line = line.trim().trim_end_matches('.').to_lowercase();
+        line.is_empty()
+            || line == title.trim().to_lowercase()
+            || line == record.app_name.trim().to_lowercase()
+    };
+    // A descriptive sentence wins when it is a real sentence; a two-word
+    // summary says less than the topic and its outcome.
+    let state = [
+        (record.insight_what_happened.as_str(), 4),
+        (record.display_summary.as_str(), 4),
+        (first_sentence, 4),
+        (topic_line.as_str(), 1),
+    ]
+    .into_iter()
+    .filter(|(line, min_words)| line.split_whitespace().count() >= *min_words)
+    .map(|(line, _)| crate::summariser::narration_filter::neutral_voice(line))
+    .map(|line| line.trim().to_string())
+    .find(|line| !repeats(line))
+    .map(|line| clip_at_word(&line, MAX_STATE_CHARS))
+    .unwrap_or_default();
+    state
+}
+
+fn clip_at_word(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let clipped: String = text.chars().take(max_chars).collect();
+    let cut = clipped.rfind(' ').unwrap_or(clipped.len());
+    format!("{}…", clipped[..cut].trim_end_matches([',', ';', ':', ' ']))
+}
+
 fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize) -> ResumeThread {
     group.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
     let newest = group
         .last()
         .expect("build_thread requires a non-empty group");
 
-    let title = thread_key(newest);
+    let title = thread_title(newest);
     let age_minutes = (now_ms - newest.timestamp).max(0) / 60_000;
-    let last_state = {
-        let topic = newest.topic.trim();
-        let outcome = newest.outcome.trim();
-        if !outcome.is_empty() {
-            format!("{topic} {outcome}").trim().to_string()
-        } else {
-            topic.to_string()
-        }
-    };
+    let last_state = thread_state(newest, &title);
     let newest_source_backed = has_source_evidence(&newest.raw_evidence);
     let next_steps: Vec<String> = newest
         .next_steps
@@ -186,6 +243,58 @@ pub async fn resume_work(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn thread_state_adds_to_the_title_and_never_cuts_a_word() {
+        let empty = MemoryRecord {
+            app_name: "Claude".into(),
+            topic: "claude".into(),
+            ..Default::default()
+        };
+        assert_eq!(super::thread_state(&empty, "Claude"), "");
+
+        let described = MemoryRecord {
+            app_name: "Claude".into(),
+            topic: "claude".into(),
+            memory_context: "You reviewed the prompt catalog and removed dead model code. More.".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::thread_state(&described, "Claude"),
+            "Reviewed the prompt catalog and removed dead model code"
+        );
+
+        let long = MemoryRecord {
+            display_summary: "word ".repeat(60),
+            ..Default::default()
+        };
+        let state = super::thread_state(&long, "ChatGPT");
+        assert!(state.ends_with("word…"), "{state}");
+        assert!(state.chars().count() <= super::MAX_STATE_CHARS + 1);
+    }
+
+    #[test]
+    fn thread_title_is_readable_when_the_grouping_key_is_not() {
+        let record = MemoryRecord {
+            app_name: "Google Chrome".into(),
+            window_title: "Grades for Anurup Kumar: 4500-001 Fall 2026".into(),
+            session_key: "google_chrome:title:grades_for_anurup_kumar_4500_001_fall_2026".into(),
+            ..Default::default()
+        };
+        assert_eq!(super::thread_key(&record), record.session_key);
+        assert_eq!(
+            super::thread_title(&record),
+            "Grades for Anurup Kumar: 4500-001 Fall 2026"
+        );
+
+        let bare = MemoryRecord {
+            app_name: "Terminal".into(),
+            window_title: "Terminal".into(),
+            session_key: "terminal:title:terminal".into(),
+            ..Default::default()
+        };
+        assert_eq!(super::thread_title(&bare), "Terminal");
+    }
+
     use super::*;
 
     fn record(id: &str, project: &str, timestamp: i64) -> MemoryRecord {
@@ -282,7 +391,7 @@ mod tests {
         let thread = build_thread(vec![older, newer], now, 10_000);
 
         assert_eq!(thread.title, "FNDR");
-        assert_eq!(thread.last_state, "shipping the resume feature done");
+        assert_eq!(thread.last_state, "Looked at the merge decision path");
         assert_eq!(thread.age_minutes, 1);
         assert_eq!(thread.next_steps, vec!["Measure p95 latency".to_string()]);
         assert_eq!(thread.evidence, vec!["m-1".to_string(), "m-2".to_string()]);
@@ -365,7 +474,7 @@ mod tests {
         let thread = &threads[0];
         assert_eq!(thread.title, "Parser");
         assert_eq!(thread.age_minutes, 10);
-        assert_eq!(thread.last_state, "reviewing capture pipeline in_progress");
+        assert_eq!(thread.last_state, "Looked at the merge decision path");
         assert_eq!(thread.evidence, vec!["low-quality", "grounded", "eligible"]);
         let serialized = serde_json::to_string(&threads).expect("serialize threads");
         for id in excluded_ids {

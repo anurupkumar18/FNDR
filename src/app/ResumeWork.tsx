@@ -60,7 +60,7 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
                         const latestSource = thread.evidence[thread.evidence.length - 1];
                         const suggestion = thread.suggested_next_steps.find((step) => thread.evidence.includes(step.source_memory_id));
                         return (
-                            <li key={thread.title}>
+                            <li key={`${thread.title}:${thread.evidence[0] ?? ""}`}>
                                 <div className="resume-work-thread-heading">
                                     <h3>{thread.title || "Recent work"}</h3>
                                     <span>{activityAge(thread.age_minutes)}</span>
