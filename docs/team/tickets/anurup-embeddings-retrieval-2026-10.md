@@ -117,6 +117,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 **Found 2026-10-07.** Every skip comes from `review_skip_reason`: the row is a visual-only capture with no text for the review to check against. The counts line up with the placeholder rows (17 skips, 18 placeholders) and with the rows VS-90 reports as stuck in `pending_visual_semantics`; confirm row by row before relying on it. If it holds, the placeholder half of the target cannot move until the visual path is fixed.
 
+**Result on a copy, 2026-10-07.** See `docs/evidence/W04/vs-91-weak-summaries.md`. 23 of the 26 narrated rows only needed the wording cleanup the cards already apply; the repair scan now does that to the stored text and re-embeds. Narrated went 26 to 3, and search by the earlier sentences still finds 37 of 40. Of the remaining weak rows, 7 are shown to the person (6 percent of shown rows) and 14 are already hidden as low signal. Not yet applied to the real vault.
+
 **Done when.** The scorecard shows narrated and placeholder summaries under 10 percent combined and known-item search no worse.
 
 ## VS-92 Write one session memory from a session's moments
