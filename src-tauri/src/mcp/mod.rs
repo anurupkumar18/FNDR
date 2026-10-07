@@ -4247,6 +4247,9 @@ async fn run_memory_errors(
         .into_iter()
         .filter(|event| timestamp_in_window(event.end_time, &time_window))
         .collect::<Vec<_>>();
+    let events = context_runtime::retain_context_events(&app_state, events)
+        .await
+        .map_err(internal_tool_error)?;
     let mut rows = Vec::new();
     for event in events {
         for error in event.errors {
@@ -5653,7 +5656,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_projects_omit_activity_with_hidden_or_missing_sources() {
+    fn mcp_legacy_activity_reads_omit_hidden_or_missing_sources() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let dir = tempdir().unwrap();
         let state = related_test_state(dir.path());
@@ -5668,6 +5671,7 @@ mod tests {
             memory_id: source.into(),
             project: Some(id.into()),
             summary: id.into(),
+            errors: vec![id.into()],
             end_time: 1_800_000_000_000,
             source_memory_ids: vec![source.into()],
             ..Default::default()
@@ -5696,6 +5700,19 @@ mod tests {
                 "summary": "Visible project",
             }])
         );
+        let errors = runtime
+            .block_on(run_memory_errors(
+                state.clone(),
+                ErrorsArgs {
+                    project: None,
+                    time_window: Some(json!({"from": 0, "to": 1_900_000_000_000_i64})),
+                    limit: 20,
+                },
+            ))
+            .unwrap();
+        let error_rows = errors["structuredContent"]["errors"].as_array().unwrap();
+        assert_eq!(error_rows.len(), 1);
+        assert_eq!(error_rows[0]["error"], "Visible project");
         assert_eq!(
             runtime
                 .block_on(state.store.list_activity_events(20, None))

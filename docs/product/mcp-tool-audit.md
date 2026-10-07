@@ -49,7 +49,7 @@ module doc comment), **verdict**.
 | `memory.projects` | read | no | none | none | none | keep; authorize every activity source before grouping |
 | `memory.project_context` | read | no | none | `memory.project_wiki` | none | merge |
 | `memory.decisions` | read | no | none | none | `fndr.recall` (decisions only) | keep |
-| `memory.errors` | read | partial | none | none | none | keep |
+| `memory.errors` | read | partial | none | none | none | keep; authorize every activity source before returning errors |
 | `memory.blockers` | read | partial | none | none | none | keep |
 | `memory.todos` | read | no | none | none | none | keep |
 | `memory.graph_query` | read | no | none | `memory.graph_context` | none | merge |
