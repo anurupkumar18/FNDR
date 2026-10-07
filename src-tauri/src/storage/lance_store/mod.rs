@@ -23,15 +23,15 @@ use crate::memory_quality::{
     is_supported_dedup_fingerprint, quality_gate_reason as shared_quality_gate_reason,
 };
 use arrow_array::{
-    Array, Float32Array, Int64Array, RecordBatch,
-    RecordBatchIterator, RecordBatchReader, StringArray,
+    Array, Float32Array, Int64Array, RecordBatch, RecordBatchIterator, RecordBatchReader,
+    StringArray,
 };
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use futures::TryStreamExt;
 use lancedb::index::scalar::{BTreeIndexBuilder, FtsIndexBuilder, FullTextSearchQuery};
 use lancedb::index::Index;
-use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::index::IndexType;
+use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::table::{
     AddDataMode, CompactionOptions, OptimizeAction, OptimizeOptions, OptimizeStats,
 };
@@ -1252,9 +1252,7 @@ impl Store {
     /// ship an index nothing ever queries through; that rewrite is
     /// follow-up work, not this ticket's scope, since it changes live
     /// search behavior and needs its own dedicated verification.
-    pub async fn create_memories_scale_indexes(
-        &self,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn create_memories_scale_indexes(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.table
             .create_index(&["id"], Index::BTree(BTreeIndexBuilder::default()))
             .execute()
@@ -1291,9 +1289,7 @@ impl Store {
         let stats = self
             .table
             .optimize(OptimizeAction::Prune {
-                older_than: Some(
-                    chrono::Duration::try_days(older_than_days).unwrap_or_default(),
-                ),
+                older_than: Some(chrono::Duration::try_days(older_than_days).unwrap_or_default()),
                 delete_unverified: Some(true),
                 error_if_tagged_old_versions: Some(false),
             })

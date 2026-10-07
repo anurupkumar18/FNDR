@@ -126,10 +126,7 @@ pub fn parse_tasks_from_llm_response(response: &str, source_app: &str) -> Vec<Ta
         let stripped = strip_list_prefix(line);
         let (mut task_type, title, type_from_prefix) =
             if let Some((prefix, rest)) = stripped.split_once(':') {
-                let normalized_prefix = prefix
-                    .trim()
-                    .replace(['-', '_'], "")
-                    .to_ascii_uppercase();
+                let normalized_prefix = prefix.trim().replace(['-', '_'], "").to_ascii_uppercase();
                 let parsed_type = match normalized_prefix.as_str() {
                     "TODO" => Some(TaskType::Todo),
                     "REMINDER" => Some(TaskType::Reminder),

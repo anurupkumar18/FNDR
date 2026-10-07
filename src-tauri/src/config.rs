@@ -1302,7 +1302,10 @@ mod tests {
             ..ScreenGuideConfig::default()
         }
         .normalized();
-        assert!(!stale.send_screenshot_to_codex, "screenshot opt-in needs the ChatGPT model");
+        assert!(
+            !stale.send_screenshot_to_codex,
+            "screenshot opt-in needs the ChatGPT model"
+        );
 
         let legacy: ScreenGuideConfig =
             serde_json::from_str(r#"{"enabled":true,"shortcut":"Control+Alt+Space"}"#).unwrap();

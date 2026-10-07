@@ -35,7 +35,6 @@ pub enum AgentActionStatus {
     Cancelled,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionResult {
     pub success: bool,

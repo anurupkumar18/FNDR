@@ -1922,7 +1922,9 @@ fn prefer_ax_text(char_count: usize) -> bool {
 
 /// `FNDR_AX_TEXT=0` turns Accessibility-first capture off.
 fn ax_text_enabled() -> bool {
-    std::env::var("FNDR_AX_TEXT").map(|value| value != "0").unwrap_or(true)
+    std::env::var("FNDR_AX_TEXT")
+        .map(|value| value != "0")
+        .unwrap_or(true)
 }
 
 #[cfg(debug_assertions)]
@@ -2773,16 +2775,15 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         // VS-16: exact Accessibility text beats OCR when the window exposes
         // enough of it. Browser semantic content keeps priority (it already
         // gives page text); privacy gates above have run for this frame.
-        let ax_candidate = if semantic_page.as_ref().is_some_and(|page| page.has_signal())
-            || !ax_text_enabled()
-        {
-            None
-        } else {
-            let ax_started = Instant::now();
-            let found = crate::accessibility::frontmost_focused_text(AX_TEXT_MAX_CHARS);
-            runtime_metrics::since_ms("capture.ax_ms", ax_started);
-            found.filter(|ax| prefer_ax_text(ax.text.chars().count()))
-        };
+        let ax_candidate =
+            if semantic_page.as_ref().is_some_and(|page| page.has_signal()) || !ax_text_enabled() {
+                None
+            } else {
+                let ax_started = Instant::now();
+                let found = crate::accessibility::frontmost_focused_text(AX_TEXT_MAX_CHARS);
+                runtime_metrics::since_ms("capture.ax_ms", ax_started);
+                found.filter(|ax| prefer_ax_text(ax.text.chars().count()))
+            };
         let (text, qwen_cleaned_text, capture_quality, observed_confidence, observed_block_count) =
             if let Some(ax) = ax_candidate {
                 source_kind = "ax";
@@ -5519,9 +5520,7 @@ pub(crate) async fn merge_memory_records_with_policy(
         user_intent,
         intent_analysis: if source_backed {
             crate::storage::IntentAnalysis::default()
-        } else if incoming.intent_analysis.confidence
-            >= existing.intent_analysis.confidence
-        {
+        } else if incoming.intent_analysis.confidence >= existing.intent_analysis.confidence {
             incoming.intent_analysis.clone()
         } else {
             existing.intent_analysis.clone()
@@ -5733,12 +5732,15 @@ fn merge_text_source_evidence(existing: &str, incoming: &str) -> String {
     let existing_raw = serde_json::from_str::<serde_json::Value>(existing).unwrap_or_default();
     // Keep an unsupported current contract as current, rather than silently
     // substituting a parsed historical snapshot or reverting to legacy fields.
-    let current_marker = [&incoming_raw, &existing_raw].into_iter().find_map(|raw| {
-        raw.get("source_evidence").filter(|value| value.is_object())
-    });
+    let current_marker = [&incoming_raw, &existing_raw]
+        .into_iter()
+        .find_map(|raw| raw.get("source_evidence").filter(|value| value.is_object()));
     if let Some(current) = current_marker {
         evidence["source_evidence"] = current.clone();
-        if let Some(hash) = current.get("source_sha256").and_then(|value| value.as_str()) {
+        if let Some(hash) = current
+            .get("source_sha256")
+            .and_then(|value| value.as_str())
+        {
             snapshots.retain(|snapshot| snapshot.source_sha256 != hash);
         }
         snapshots.truncate(3);
@@ -6837,7 +6839,8 @@ mod tests {
     fn assert_capture_keeps_agent_note_separate(persisted: bool, seed_anchor: bool) {
         let dir = tempfile::tempdir().expect("temporary store");
         let store = Arc::new(crate::storage::Store::new(dir.path()).expect("store"));
-        let state_store = Arc::new(crate::storage::StateStore::new(dir.path()).expect("state store"));
+        let state_store =
+            Arc::new(crate::storage::StateStore::new(dir.path()).expect("state store"));
         let graph = crate::graph::GraphStore::new(store.clone());
         let state = AppState::new(
             dir.path().to_path_buf(),
@@ -6958,7 +6961,8 @@ mod tests {
         }
 
         let manifest = include_str!("../../tests/fixtures/screens/manifest.json");
-        let fixtures: Vec<Fixture> = serde_json::from_str(manifest).expect("fixture manifest parses");
+        let fixtures: Vec<Fixture> =
+            serde_json::from_str(manifest).expect("fixture manifest parses");
         let default_blocklist = crate::config::Config::default().blocklist;
         let mut checked = 0;
         println!("fixture | expected admission | actual admission");
@@ -6967,14 +6971,18 @@ mod tests {
             if fixture.app_class != "privacy_negative" && fixture.expected_outcome != "store" {
                 continue;
             }
-            let app_name = fixture.app_name.as_deref().unwrap_or_else(|| match fixture.bundle_id.as_deref() {
-                Some("com.microsoft.VSCode") => "Visual Studio Code",
-                Some("com.apple.Terminal") => "Terminal",
-                Some("com.google.Chrome") => "Google Chrome",
-                Some("com.tinyspeck.slackmacgap") => "Slack",
-                Some("com.apple.Preview") => "Preview",
-                _ => "Unknown",
-            });
+            let app_name =
+                fixture
+                    .app_name
+                    .as_deref()
+                    .unwrap_or_else(|| match fixture.bundle_id.as_deref() {
+                        Some("com.microsoft.VSCode") => "Visual Studio Code",
+                        Some("com.apple.Terminal") => "Terminal",
+                        Some("com.google.Chrome") => "Google Chrome",
+                        Some("com.tinyspeck.slackmacgap") => "Slack",
+                        Some("com.apple.Preview") => "Preview",
+                        _ => "Unknown",
+                    });
             let actual = super::capture_admission_skip_reason(
                 app_name,
                 fixture.bundle_id.as_deref(),
@@ -6995,7 +7003,10 @@ mod tests {
             checked += 1;
         }
 
-        assert_eq!(checked, 30, "all committed store and privacy fixtures are checked");
+        assert_eq!(
+            checked, 30,
+            "all committed store and privacy fixtures are checked"
+        );
     }
 
     #[test]
@@ -7307,7 +7318,8 @@ Activity patterns and insights dashboard
             sourced.raw_evidence = json!({
                 "source_kind": "ax",
                 "source_evidence": source_evidence_fixture(1),
-            }).to_string();
+            })
+            .to_string();
             sourced.user_intent.clear();
             sourced.todos.clear();
             sourced.next_steps.clear();
@@ -7370,14 +7382,18 @@ Activity patterns and insights dashboard
             legacy.raw_evidence = json!({"source_kind": "ocr"}).to_string();
             legacy.user_intent = "Invented intent".into();
             legacy.next_steps = vec!["Invented next step".into()];
-            let merged = merge_memory_records_with_policy(protected, legacy, None, None, false, false).await;
+            let merged =
+                merge_memory_records_with_policy(protected, legacy, None, None, false, false).await;
             assert!(has_source_evidence(&merged.raw_evidence));
             assert!(merged.user_intent.is_empty());
             assert!(merged.next_steps.is_empty());
             let raw: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
             assert_eq!(raw["source_evidence"], unsupported);
             if with_history {
-                assert_eq!(raw["source_evidence_history"], json!([source_evidence_fixture(1)]));
+                assert_eq!(
+                    raw["source_evidence_history"],
+                    json!([source_evidence_fixture(1)])
+                );
             }
         }
     }
@@ -7446,7 +7462,8 @@ Activity patterns and insights dashboard
             let mut incoming = merge_test_record("incoming");
             incoming.raw_evidence = r#"{"source_kind":"ocr"}"#.into();
             let merged =
-                merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+                merge_memory_records_with_policy(existing, incoming, None, None, false, false)
+                    .await;
             let evidence: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
             assert_eq!(evidence["source_kind"], "mixed", "{raw}");
             assert_eq!(
@@ -7619,7 +7636,12 @@ Activity patterns and insights dashboard
         assert!(extraction.user_intent.is_empty());
         assert!(extraction.todos.is_empty() && extraction.next_steps.is_empty());
         assert_eq!(
-            extraction.source_evidence.as_ref().unwrap().statements.len(),
+            extraction
+                .source_evidence
+                .as_ref()
+                .unwrap()
+                .statements
+                .len(),
             1
         );
         assert!(!issues

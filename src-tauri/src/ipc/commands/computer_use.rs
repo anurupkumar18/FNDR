@@ -51,22 +51,41 @@ submitting, stop and ask the user to confirm in words. If the user redirects you
 follow the new instruction. When finished, say what you did in one sentence.";
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum ComputerUseEvent {
     /// Session is ready for the first instruction.
     Ready,
     /// Something Codex said: `final` is true for the turn's answer.
     Message { text: String, r#final: bool },
     /// A tool call started.
-    Action { item_id: String, tool: String, summary: String },
+    Action {
+        item_id: String,
+        tool: String,
+        summary: String,
+    },
     /// A tool call finished.
-    ActionDone { item_id: String, tool: String, ok: bool },
+    ActionDone {
+        item_id: String,
+        tool: String,
+        ok: bool,
+    },
     /// An action needs the user's yes or no.
-    Approval { request_key: String, tool: String, summary: String },
+    Approval {
+        request_key: String,
+        tool: String,
+        summary: String,
+    },
     /// The approval was settled (answered, or cleared by an interrupt).
     ApprovalResolved { request_key: String },
     /// A turn ended: `completed`, `interrupted` or `failed`.
-    TurnDone { status: String, error: Option<String> },
+    TurnDone {
+        status: String,
+        error: Option<String>,
+    },
     /// The session ended; `error` is set when it failed.
     Ended { error: Option<String> },
 }
@@ -93,7 +112,9 @@ fn session() -> &'static Mutex<Option<mpsc::UnboundedSender<Command>>> {
 }
 
 fn send_command(command: Command) -> Result<(), String> {
-    let guard = session().lock().map_err(|_| "Computer use is unavailable.".to_string())?;
+    let guard = session()
+        .lock()
+        .map_err(|_| "Computer use is unavailable.".to_string())?;
     guard
         .as_ref()
         .ok_or_else(|| "Start a computer-use conversation first.".to_string())?
@@ -103,7 +124,11 @@ fn send_command(command: Command) -> Result<(), String> {
 
 pub(crate) fn detect_open_computer_use() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).map(|dir| dir.join("open-computer-use")).collect())
+        .map(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("open-computer-use"))
+                .collect()
+        })
         .unwrap_or_default();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         candidates.push(home.join(".npm-global/bin/open-computer-use"));
@@ -116,9 +141,18 @@ pub(crate) fn detect_open_computer_use() -> Option<PathBuf> {
 
 /// A spoken-length description of a tool call, e.g. `click "Send" in Mail`.
 fn describe_tool_call(tool: &str, params: &Value) -> String {
-    let text = |key: &str| params.get(key).and_then(Value::as_str).filter(|s| !s.is_empty());
-    let app = text("app").or_else(|| text("bundle_id")).or_else(|| text("app_name"));
-    let target = text("element").or_else(|| text("label")).or_else(|| text("title"));
+    let text = |key: &str| {
+        params
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+    };
+    let app = text("app")
+        .or_else(|| text("bundle_id"))
+        .or_else(|| text("app_name"));
+    let target = text("element")
+        .or_else(|| text("label"))
+        .or_else(|| text("title"));
     let in_app = app.map(|a| format!(" in {a}")).unwrap_or_default();
     match tool {
         "click" => match target {
@@ -134,7 +168,11 @@ fn describe_tool_call(tool: &str, params: &Value) -> String {
         "drag" => format!("drag{in_app}"),
         "set_value" => format!("change a value{in_app}"),
         "perform_secondary_action" => format!("use a menu action{in_app}"),
-        "get_app_state" => format!("look at{}", app.map(|a| format!(" {a}")).unwrap_or_else(|| " the app".into())),
+        "get_app_state" => format!(
+            "look at{}",
+            app.map(|a| format!(" {a}"))
+                .unwrap_or_else(|| " the app".into())
+        ),
         "list_apps" => "check which apps are open".to_string(),
         other => format!("run {other}{in_app}"),
     }
@@ -155,13 +193,19 @@ fn tool_from_approval_message(message: &str) -> Option<String> {
     Some(message[start..end].to_string())
 }
 
-fn session_args(user_mcp_servers: &[String], open_computer_use: &std::path::Path) -> Result<Vec<String>, String> {
+fn session_args(
+    user_mcp_servers: &[String],
+    open_computer_use: &std::path::Path,
+) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     for feature in READ_ONLY_DISABLED_FEATURES {
         args.push("--disable".to_string());
         args.push((*feature).to_string());
     }
-    for name in user_mcp_servers.iter().filter(|name| name.as_str() != COMPUTER_SERVER) {
+    for name in user_mcp_servers
+        .iter()
+        .filter(|name| name.as_str() != COMPUTER_SERVER)
+    {
         if !is_plain_config_key(name) {
             return Err(format!(
                 "FNDR can't isolate the Codex MCP server \"{name}\". Rename it in ~/.codex/config.toml to use computer use."
@@ -170,7 +214,8 @@ fn session_args(user_mcp_servers: &[String], open_computer_use: &std::path::Path
         args.push("-c".to_string());
         args.push(format!("mcp_servers.{name}.enabled=false"));
     }
-    let command = serde_json::to_string(&open_computer_use.display().to_string()).map_err(|e| e.to_string())?;
+    let command = serde_json::to_string(&open_computer_use.display().to_string())
+        .map_err(|e| e.to_string())?;
     args.extend([
         "-c".to_string(),
         format!("mcp_servers.{COMPUTER_SERVER}.command={command}"),
@@ -204,7 +249,9 @@ impl Session {
     async fn send_request(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;
         let id = self.next_id;
-        self.server.write(json!({ "method": method, "id": id, "params": params })).await?;
+        self.server
+            .write(json!({ "method": method, "id": id, "params": params }))
+            .await?;
         Ok(id)
     }
 
@@ -220,7 +267,10 @@ impl Session {
             }
             None => {
                 let id = self
-                    .send_request("turn/start", json!({ "threadId": self.thread_id, "input": input, "effort": "low" }))
+                    .send_request(
+                        "turn/start",
+                        json!({ "threadId": self.thread_id, "input": input, "effort": "low" }),
+                    )
                     .await?;
                 self.pending_turn_starts.push(id);
             }
@@ -230,8 +280,11 @@ impl Session {
 
     async fn interrupt(&mut self) -> Result<(), String> {
         if let Some(turn_id) = self.active_turn.clone() {
-            self.send_request("turn/interrupt", json!({ "threadId": self.thread_id, "turnId": turn_id }))
-                .await?;
+            self.send_request(
+                "turn/interrupt",
+                json!({ "threadId": self.thread_id, "turnId": turn_id }),
+            )
+            .await?;
         }
         for key in self.approvals.keys().cloned().collect::<Vec<_>>() {
             self.answer_approval(&key, false).await?;
@@ -248,15 +301,27 @@ impl Session {
         } else {
             json!({ "action": "decline", "content": null })
         };
-        self.server.write(json!({ "id": id, "result": result })).await?;
-        self.emit(ComputerUseEvent::ApprovalResolved { request_key: request_key.to_string() });
+        self.server
+            .write(json!({ "id": id, "result": result }))
+            .await?;
+        self.emit(ComputerUseEvent::ApprovalResolved {
+            request_key: request_key.to_string(),
+        });
         Ok(())
     }
 
-    async fn handle_server_request(&mut self, id: Value, method: &str, params: &Value) -> Result<(), String> {
+    async fn handle_server_request(
+        &mut self,
+        id: Value,
+        method: &str,
+        params: &Value,
+    ) -> Result<(), String> {
         let is_tool_approval = method == "mcpServer/elicitation/request"
             && params.get("serverName").and_then(Value::as_str) == Some(COMPUTER_SERVER)
-            && params.pointer("/_meta/codex_approval_kind").and_then(Value::as_str) == Some("mcp_tool_call");
+            && params
+                .pointer("/_meta/codex_approval_kind")
+                .and_then(Value::as_str)
+                == Some("mcp_tool_call");
         if !is_tool_approval {
             tracing::warn!(%method, "computer_use:declined_server_request");
             return self
@@ -270,7 +335,10 @@ impl Session {
             .and_then(Value::as_str)
             .and_then(tool_from_approval_message)
             .unwrap_or_else(|| "tool".to_string());
-        let tool_params = params.pointer("/_meta/tool_params").cloned().unwrap_or(Value::Null);
+        let tool_params = params
+            .pointer("/_meta/tool_params")
+            .cloned()
+            .unwrap_or(Value::Null);
         let request_key = uuid::Uuid::new_v4().to_string();
         self.approvals.insert(request_key.clone(), id);
 
@@ -286,14 +354,21 @@ impl Session {
     }
 
     fn handle_response(&mut self, id: u64, message: &Value) {
-        if let Some(position) = self.pending_turn_starts.iter().position(|pending| *pending == id) {
+        if let Some(position) = self
+            .pending_turn_starts
+            .iter()
+            .position(|pending| *pending == id)
+        {
             self.pending_turn_starts.remove(position);
             if let Some(turn_id) = message.pointer("/result/turn/id").and_then(Value::as_str) {
                 self.active_turn = Some(turn_id.to_string());
             }
         }
         if let Some(error) = message.get("error") {
-            let detail = error.get("message").and_then(Value::as_str).unwrap_or("Codex refused that request.");
+            let detail = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Codex refused that request.");
             tracing::warn!(detail, "computer_use:request_failed");
         }
     }
@@ -308,8 +383,16 @@ impl Session {
             "item/started" => {
                 let item = &params["item"];
                 if item.get("type").and_then(Value::as_str) == Some("mcpToolCall") {
-                    let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
-                    let tool = item.get("tool").and_then(Value::as_str).unwrap_or("tool").to_string();
+                    let item_id = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let tool = item
+                        .get("tool")
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool")
+                        .to_string();
                     let arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
                     self.emit(ComputerUseEvent::Action {
                         item_id: item_id.clone(),
@@ -323,14 +406,24 @@ impl Session {
                 let item = &params["item"];
                 match item.get("type").and_then(Value::as_str) {
                     Some("agentMessage") => {
-                        let text = item.get("text").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+                        let text = item
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string();
                         if !text.is_empty() {
-                            let r#final = item.get("phase").and_then(Value::as_str) == Some("final_answer");
+                            let r#final =
+                                item.get("phase").and_then(Value::as_str) == Some("final_answer");
                             self.emit(ComputerUseEvent::Message { text, r#final });
                         }
                     }
                     Some("mcpToolCall") => {
-                        let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+                        let item_id = item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
                         let (tool, _) = self.tool_calls.remove(&item_id).unwrap_or_default();
                         let ok = item.get("status").and_then(Value::as_str) == Some("completed")
                             && item.get("error").map_or(true, Value::is_null);
@@ -342,7 +435,11 @@ impl Session {
             "turn/completed" => {
                 self.active_turn = None;
                 self.tool_calls.clear();
-                let status = params.pointer("/turn/status").and_then(Value::as_str).unwrap_or("completed").to_string();
+                let status = params
+                    .pointer("/turn/status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("completed")
+                    .to_string();
                 let error = params
                     .pointer("/turn/error/message")
                     .and_then(Value::as_str)
@@ -414,10 +511,14 @@ async fn open_session(app: AppHandle) -> Result<Session, String> {
     let args = session_args(&user_servers, &computer)?;
     let mut server = AppServer::spawn_with(&codex, &args).await?;
 
-    let account = server.request("account/read", json!({ "refreshToken": false })).await?;
+    let account = server
+        .request("account/read", json!({ "refreshToken": false }))
+        .await?;
     if parse_account(&account).map(|a| a.kind) != Some("chatgpt".to_string()) {
         server.shutdown().await;
-        return Err("Sign in with ChatGPT in Hermes Agent settings to use computer use.".to_string());
+        return Err(
+            "Sign in with ChatGPT in Hermes Agent settings to use computer use.".to_string(),
+        );
     }
 
     let cwd = std::env::temp_dir().join("fndr-computer-use");
@@ -454,9 +555,14 @@ async fn open_session(app: AppHandle) -> Result<Session, String> {
 }
 
 #[tauri::command]
-pub async fn computer_use_status(state: State<'_, std::sync::Arc<AppState>>) -> Result<ComputerUseStatus, String> {
+pub async fn computer_use_status(
+    state: State<'_, std::sync::Arc<AppState>>,
+) -> Result<ComputerUseStatus, String> {
     let enabled = state.inner().config.read().screen_guide.operate_computer;
-    let active = session().lock().map(|guard| guard.is_some()).unwrap_or(false);
+    let active = session()
+        .lock()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false);
     Ok(ComputerUseStatus {
         enabled,
         codex_ready: ready_executable().is_ok(),
@@ -479,11 +585,18 @@ pub async fn computer_use_say(
     if !state.inner().config.read().screen_guide.operate_computer {
         return Err("Turn on \"Operate my Mac\" in Screen Guide settings first.".to_string());
     }
-    if state.inner().is_incognito.load(std::sync::atomic::Ordering::SeqCst) {
+    if state
+        .inner()
+        .is_incognito
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
         return Err("Computer use is paused while FNDR is private.".to_string());
     }
 
-    let has_session = session().lock().map(|guard| guard.is_some()).unwrap_or(false);
+    let has_session = session()
+        .lock()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false);
     if !has_session {
         let opened = open_session(app.clone()).await?;
         let (tx, rx) = mpsc::unbounded_channel();
@@ -497,7 +610,12 @@ pub async fn computer_use_say(
             if let Ok(mut guard) = session().lock() {
                 *guard = None;
             }
-            let _ = task_app.emit(COMPUTER_USE_EVENT, ComputerUseEvent::Ended { error: result.err() });
+            let _ = task_app.emit(
+                COMPUTER_USE_EVENT,
+                ComputerUseEvent::Ended {
+                    error: result.err(),
+                },
+            );
         });
     }
     send_command(Command::Say(text))
@@ -510,7 +628,10 @@ pub async fn computer_use_interrupt() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn computer_use_respond(request_key: String, approve: bool) -> Result<(), String> {
-    send_command(Command::Respond { request_key, approve })
+    send_command(Command::Respond {
+        request_key,
+        approve,
+    })
 }
 
 #[tauri::command]
@@ -532,10 +653,21 @@ mod tests {
             describe_tool_call("click", &json!({ "app": "Mail", "element": "Send" })),
             "click \"Send\" in Mail"
         );
-        assert_eq!(describe_tool_call("press_key", &json!({ "key": "cmd+s" })), "press cmd+s");
-        assert_eq!(describe_tool_call("list_apps", &json!({})), "check which apps are open");
+        assert_eq!(
+            describe_tool_call("press_key", &json!({ "key": "cmd+s" })),
+            "press cmd+s"
+        );
+        assert_eq!(
+            describe_tool_call("list_apps", &json!({})),
+            "check which apps are open"
+        );
         let long = "x".repeat(200);
-        assert!(describe_tool_call("type_text", &json!({ "text": long })).chars().count() < 80);
+        assert!(
+            describe_tool_call("type_text", &json!({ "text": long }))
+                .chars()
+                .count()
+                < 80
+        );
     }
 
     #[test]
@@ -555,11 +687,15 @@ mod tests {
         )
         .unwrap()
         .join(" ");
-        assert!(args.contains("--disable computer_use"), "Codex's own computer use stays off");
+        assert!(
+            args.contains("--disable computer_use"),
+            "Codex's own computer use stays off"
+        );
         assert!(args.contains("--disable shell_tool"));
         assert!(args.contains("mcp_servers.node_repl.enabled=false"));
         assert!(args.contains("mcp_servers.computer-use.enabled=false"));
-        assert!(args.contains("mcp_servers.fndr_computer.command=\"/opt/homebrew/bin/open-computer-use\""));
+        assert!(args
+            .contains("mcp_servers.fndr_computer.command=\"/opt/homebrew/bin/open-computer-use\""));
         assert!(args.contains("mcp_servers.fndr_computer.default_tools_approval_mode=\"prompt\""));
     }
 
@@ -571,14 +707,32 @@ mod tests {
             ok: true,
         })
         .unwrap();
-        assert_eq!(action, json!({ "kind": "actionDone", "itemId": "i1", "tool": "click", "ok": true }));
-        let message = serde_json::to_value(ComputerUseEvent::Message { text: "Done.".into(), r#final: true }).unwrap();
-        assert_eq!(message, json!({ "kind": "message", "text": "Done.", "final": true }));
+        assert_eq!(
+            action,
+            json!({ "kind": "actionDone", "itemId": "i1", "tool": "click", "ok": true })
+        );
+        let message = serde_json::to_value(ComputerUseEvent::Message {
+            text: "Done.".into(),
+            r#final: true,
+        })
+        .unwrap();
+        assert_eq!(
+            message,
+            json!({ "kind": "message", "text": "Done.", "final": true })
+        );
     }
 
     #[test]
     fn only_observation_tools_skip_the_approval_prompt() {
-        for tool in ["click", "type_text", "press_key", "scroll", "drag", "set_value", "perform_secondary_action"] {
+        for tool in [
+            "click",
+            "type_text",
+            "press_key",
+            "scroll",
+            "drag",
+            "set_value",
+            "perform_secondary_action",
+        ] {
             assert!(!READ_ONLY_TOOLS.contains(&tool), "{tool} must ask first");
         }
     }

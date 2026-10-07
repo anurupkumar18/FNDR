@@ -221,7 +221,8 @@ fn reprocessing_the_same_frame_twice_does_not_create_a_second_memory() {
 
     assert_eq!(outcomes.len(), 2);
     assert_eq!(
-        outcomes[0].id, outcomes[1].id,
+        outcomes[0].id,
+        outcomes[1].id,
         "reprocessing identical frame content should merge into one memory, got {:?}",
         outcomes.iter().map(|o| &o.id).collect::<Vec<_>>()
     );

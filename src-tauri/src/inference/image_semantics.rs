@@ -1029,9 +1029,7 @@ fn rank_salient_spans(text: &str, max_spans: usize) -> Vec<String> {
     }
     let mut spans: Vec<(usize, usize, String)> = Vec::new();
     for (idx, raw_line) in scrubbed.lines().enumerate() {
-        for chunk in raw_line
-            .split(['|', '\t', '·', '•', '◦', '↑', '↓', '→', '←'])
-        {
+        for chunk in raw_line.split(['|', '\t', '·', '•', '◦', '↑', '↓', '→', '←']) {
             let trimmed = chunk.trim();
             if trimmed.len() < 6 || trimmed.len() > 90 {
                 continue;
@@ -1167,10 +1165,9 @@ static IMPORT_VISION: OnceLock<Mutex<Option<Arc<MtmdVlmRuntime>>>> = OnceLock::n
 /// True when the pixel runtime (Qwen3-VL with its projector) is resident.
 /// A held lock means the runtime is loading or in use, which counts as loaded.
 pub fn pixel_vlm_loaded() -> bool {
-    IMPORT_VISION.get().is_some_and(|slot| {
-        slot.try_lock()
-            .map_or(true, |runtime| runtime.is_some())
-    })
+    IMPORT_VISION
+        .get()
+        .is_some_and(|slot| slot.try_lock().map_or(true, |runtime| runtime.is_some()))
 }
 
 impl MtmdVlmRuntime {

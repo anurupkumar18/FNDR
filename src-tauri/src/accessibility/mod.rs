@@ -573,9 +573,7 @@ fn expected_pid_remained_frontmost(
         && after_snapshot == Some(expected_pid)
 }
 
-unsafe fn window_snapshot_for_application(
-    application: AXUIElementRef,
-) -> FocusedWindowSnapshot {
+unsafe fn window_snapshot_for_application(application: AXUIElementRef) -> FocusedWindowSnapshot {
     let (window_title, window_document_url) = ax_copy_attr_value(application, "AXFocusedWindow")
         .ok()
         .map(|window| {
@@ -586,8 +584,7 @@ unsafe fn window_snapshot_for_application(
         })
         .unwrap_or_default();
     let title = window_title.or_else(|| ax_string_attr(application, "AXTitle"));
-    let document_url =
-        window_document_url.or_else(|| ax_string_attr(application, "AXDocument"));
+    let document_url = window_document_url.or_else(|| ax_string_attr(application, "AXDocument"));
 
     FocusedWindowSnapshot {
         title,
@@ -620,12 +617,8 @@ pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<Focu
             CFRelease(application);
 
             let after_snapshot = workspace_frontmost_pid();
-            return expected_pid_remained_frontmost(
-                expected_pid,
-                before_snapshot,
-                after_snapshot,
-            )
-            .then_some(snapshot);
+            return expected_pid_remained_frontmost(expected_pid, before_snapshot, after_snapshot)
+                .then_some(snapshot);
         }
 
         let system_el = AXUIElementCreateSystemWide();
@@ -645,8 +638,7 @@ pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<Focu
         }
 
         let mut pid: PidT = 0;
-        let pid_matches = AXUIElementGetPid(focused_app, &mut pid) == K_AX_ERROR_SUCCESS
-            && pid > 0;
+        let pid_matches = AXUIElementGetPid(focused_app, &mut pid) == K_AX_ERROR_SUCCESS && pid > 0;
         if !pid_matches {
             CFRelease(focused_app);
             return None;

@@ -2,8 +2,7 @@ use crate::storage::MemoryRecord;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ActivityType {
     Researching,
     Coding,
@@ -55,7 +54,6 @@ impl ActivityType {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OcrQualityStats {

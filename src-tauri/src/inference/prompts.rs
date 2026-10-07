@@ -190,7 +190,8 @@ pub(crate) fn answer_system() -> String {
 pub(crate) const QUERY_EXPANSION_SYSTEM: &str = "You expand short search queries into related concepts. Output only a JSON array of 5-8 lowercase terms (synonyms, broader categories, subfields). No prose, no markdown, no explanation.";
 
 /// `query_plan`: planner refinement. Test only; no production caller yet.
-pub(crate) const QUERY_PLAN_SYSTEM: &str = "You output a tiny JSON object with optional fields only.";
+pub(crate) const QUERY_PLAN_SYSTEM: &str =
+    "You output a tiny JSON object with optional fields only.";
 
 /// `screen_guide`: shared by the on-device model and the ChatGPT path.
 pub(crate) const SCREEN_GUIDE_SYSTEM_PROMPT: &str = "\
@@ -367,7 +368,8 @@ mod tests {
                     .iter()
                     .find(|(name, _)| *name == task)
                     .map(|(_, hash)| *hash);
-                (recorded != Some(actual)).then(|| format!("        (\"{task}\", 0x{actual:016x}),"))
+                (recorded != Some(actual))
+                    .then(|| format!("        (\"{task}\", 0x{actual:016x}),"))
             })
             .collect();
         assert!(

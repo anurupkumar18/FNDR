@@ -123,7 +123,11 @@ pub async fn export_weekly_wrapped_pdf(
     );
     doc.push(genpdf::elements::Break::new(1.5));
 
-    for line in recap_text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in recap_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         doc.push(genpdf::elements::Paragraph::new(line.to_string()));
         doc.push(genpdf::elements::Break::new(0.5));
     }

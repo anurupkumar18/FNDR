@@ -135,7 +135,11 @@ fn storage_indexes_measured_before_and_after_on_10k_rows() {
     let verdict = |label: &str, x: f64| {
         format!(
             "{label}: {x:.1}x ({})",
-            if x >= MIN_MARGIN { "keep" } else { "below the 3x margin, not proven to help yet" }
+            if x >= MIN_MARGIN {
+                "keep"
+            } else {
+                "below the 3x margin, not proven to help yet"
+            }
         )
     };
 

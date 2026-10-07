@@ -108,8 +108,7 @@ fn coherent_what_happened_from_metadata(record: &MemoryRecord) -> String {
         .map(|s| s.as_str())
         .collect();
 
-    let win_is_meaningful =
-        !win.is_empty() && !win.eq_ignore_ascii_case(app) && win.len() <= 120;
+    let win_is_meaningful = !win.is_empty() && !win.eq_ignore_ascii_case(app) && win.len() <= 120;
 
     // The app name is left out because the app chip already shows it.
     let subject = if win_is_meaningful {
@@ -450,7 +449,9 @@ mod tests {
             "Compared three embedding models on the seeded vault. MiniLM stayed active."
                 .to_string();
         derive_insight_for_record(&mut r);
-        assert!(r.insight_what_happened.starts_with("Compared three embedding"));
+        assert!(r
+            .insight_what_happened
+            .starts_with("Compared three embedding"));
         assert_eq!(r.insight_why_mattered, "");
     }
 

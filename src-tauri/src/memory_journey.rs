@@ -2004,7 +2004,10 @@ mod tests {
         for (index, (rank, result)) in final_ranks.iter().zip(&explained).enumerate() {
             assert_eq!(rank["rank"], index + 1);
             assert_eq!(rank["memory_id"], result.id);
-            assert_eq!(rank["score"].as_f64().map(|score| score as f32), Some(result.score));
+            assert_eq!(
+                rank["score"].as_f64().map(|score| score as f32),
+                Some(result.score)
+            );
         }
     }
 }

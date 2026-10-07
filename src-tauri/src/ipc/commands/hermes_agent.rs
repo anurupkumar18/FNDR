@@ -722,7 +722,11 @@ fn yaml_scalar(value: &str) -> String {
 /// Hermes's `config.yaml` model block for a saved provider choice.
 fn hermes_config_yaml(record: &HermesSetupRecord) -> Result<String, String> {
     let model = yaml_scalar(&record.model_name);
-    let base_url = record.base_url.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let base_url = record
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     Ok(match record.provider_kind.as_str() {
         "ollama" => format!(
             "model:\n  provider: custom\n  default: {model}\n  base_url: {}\n  context_length: 32768\n",
@@ -1476,7 +1480,11 @@ pub async fn send_hermes_message(
         return Err("Message cannot be empty.".to_string());
     }
     let sent_at = chrono::Utc::now().timestamp_millis();
-    let input = format!("{}{}", super::agent_chats::memory_context_block(&attached), user_text);
+    let input = format!(
+        "{}{}",
+        super::agent_chats::memory_context_block(&attached),
+        user_text
+    );
 
     let instructions = "You are the native FNDR agent experience, powered by Hermes under the hood. Use FNDR's context files and private snapshot to help with planning, recall, drafting, research, and safe computer-use support. Ask before destructive actions, external messages, purchases, or credential changes.";
     let request_body = serde_json::json!({
@@ -1542,7 +1550,10 @@ pub async fn send_hermes_message(
             "Hermes completed the turn, but no assistant text was returned.".to_string()
         });
 
-    let memories = attached.iter().map(super::agent_chats::attached_memory).collect();
+    let memories = attached
+        .iter()
+        .map(super::agent_chats::attached_memory)
+        .collect();
     let history = super::agent_chats::record_exchange(
         state.inner(),
         &conversation_id,
@@ -1792,13 +1803,15 @@ pub fn get_fun_greeting(name: Option<String>) -> Result<String, String> {
         "Good Night"
     };
 
-    let fun_suffixes = ["Ready to conquer the day?",
+    let fun_suffixes = [
+        "Ready to conquer the day?",
         "Let's dive into your memories.",
         "What are we exploring today?",
         "Time to make some magic happen.",
         "Welcome back to the matrix.",
         "Let's get productive.",
-        "System fully operational."];
+        "System fully operational.",
+    ];
 
     let mut rng = rand::rng();
     let random_suffix = fun_suffixes.choose(&mut rng).unwrap_or(&"");
@@ -1891,7 +1904,12 @@ mod tests {
         assert!(yaml.contains("default: \"llama3.2:latest\""));
         assert!(yaml.contains(&format!("base_url: \"{OLLAMA_BASE_URL}\"")));
 
-        let yaml = hermes_config_yaml(&record("custom", "my \"best\" model", Some(" http://localhost:8000/v1 "))).unwrap();
+        let yaml = hermes_config_yaml(&record(
+            "custom",
+            "my \"best\" model",
+            Some(" http://localhost:8000/v1 "),
+        ))
+        .unwrap();
         assert!(yaml.contains(r#"default: "my \"best\" model""#));
         assert!(yaml.contains("base_url: \"http://localhost:8000/v1\""));
     }
