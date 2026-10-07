@@ -160,6 +160,7 @@ export function MemoryCardsPanel({
     const [needsSignalCards, setNeedsSignalCards] = useState<NeedsSignalCard[]>([]);
     const [showNeedsSignal, setShowNeedsSignal] = useState(false);
     const [showConnections, setShowConnections] = useState(false);
+    const [showVaultMenu, setShowVaultMenu] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [vaultActivity, setVaultActivity] = useState<ActivityTraceSnapshot | null>(null);
@@ -612,25 +613,55 @@ export function MemoryCardsPanel({
                             )}
                         </div>
                     )}
-                    {isVaultFeature && needsSignalCards.length > 0 && (
-                        <button
-                            type="button"
-                            className={`ui-action-btn memory-cards-tab${showNeedsSignal ? " memory-cards-tab--active" : ""}`}
-                            aria-pressed={showNeedsSignal}
-                            onClick={() => setShowNeedsSignal((current) => !current)}
-                        >
-                            Excluded captures ({needsSignalCards.length})
-                        </button>
-                    )}
-                    {showListSurface && !showNeedsSignal && (
-                        <button
-                            type="button"
-                            className={`ui-action-btn memory-cards-tab${showConnections ? " memory-cards-tab--active" : ""}`}
-                            aria-pressed={showConnections}
-                            onClick={() => setShowConnections((current) => !current)}
-                        >
-                            Connections
-                        </button>
+                    {showListSurface && (
+                        <div className="memory-cards-overflow">
+                            <button
+                                type="button"
+                                className="ui-action-btn memory-cards-tab memory-cards-overflow-trigger"
+                                aria-label="Vault options"
+                                aria-haspopup="menu"
+                                aria-expanded={showVaultMenu}
+                                aria-controls="memory-vault-options"
+                                onClick={() => setShowVaultMenu((current) => !current)}
+                            >
+                                More
+                            </button>
+                            {showVaultMenu && (
+                                <div
+                                    id="memory-vault-options"
+                                    className="memory-cards-overflow-menu"
+                                    role="menu"
+                                    aria-label="Memory Vault options"
+                                >
+                                    {isVaultFeature && needsSignalCards.length > 0 && (
+                                        <button
+                                            type="button"
+                                            role="menuitem"
+                                            aria-pressed={showNeedsSignal}
+                                            onClick={() => {
+                                                setShowNeedsSignal((current) => !current);
+                                                setShowVaultMenu(false);
+                                            }}
+                                        >
+                                            Excluded captures ({needsSignalCards.length})
+                                        </button>
+                                    )}
+                                    {!showNeedsSignal && (
+                                        <button
+                                            type="button"
+                                            role="menuitem"
+                                            aria-pressed={showConnections}
+                                            onClick={() => {
+                                                setShowConnections((current) => !current);
+                                                setShowVaultMenu(false);
+                                            }}
+                                        >
+                                            Connections
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     )}
                     {showGraphSurface && (
                         <div className="memory-cards-count">

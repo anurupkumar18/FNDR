@@ -109,6 +109,11 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
                 threadCountHint={threadCountHint(card)}
             />
             <div className="vault-row-actions">
+                {row && row.similar.length > 0 && (
+                    <span className="vault-row-session-range" aria-label="Session time range">
+                        {sessionRange(row)}
+                    </span>
+                )}
                 {card.reopen_target ? (
                     <button
                         type="button"
@@ -125,7 +130,6 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
                         className="ui-action-btn vault-row-action vault-row-similar"
                         aria-expanded={similarOpen}
                         aria-label={`${row.similar.length} more ${row.similar.length === 1 ? "moment" : "moments"} from this session: ${card.title}`}
-                        title={sessionRange(row)}
                         onClick={() => toggleSimilar(card.id)}
                     >
                         {row.similar.length + 1} moments

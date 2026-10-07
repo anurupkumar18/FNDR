@@ -185,7 +185,8 @@ describe("MemoryCardsPanel", () => {
         expect(await screen.findByText("Memory 1")).toBeInTheDocument();
         expect(screen.queryByText("ChatGPT_178970.png")).toBeNull();
 
-        fireEvent.click(await screen.findByRole("button", { name: "Excluded captures (1)" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Vault options" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Excluded captures (1)" }));
 
         expect(await screen.findByText("Only a filename or app label was available.")).toBeInTheDocument();
         expect(
@@ -320,6 +321,19 @@ describe("MemoryCardsPanel", () => {
         expect(screen.getAllByRole("button", { name: "Open memory: Drafted the demo script" })).toHaveLength(3);
     });
 
+    it("prints the folded session time range on its row", async () => {
+        vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
+        vi.mocked(listMemoryCards).mockResolvedValue([
+            { ...card(1), title: "First moment", timestamp: VAULT_NOW - 60 * 60 * 1000 },
+            { ...card(2), title: "Second moment", timestamp: VAULT_NOW - 35 * 60 * 1000 },
+            { ...card(3), title: "Latest moment", timestamp: VAULT_NOW - 10 * 60 * 1000 },
+        ]);
+
+        renderVault();
+
+        expect(await screen.findByLabelText("Session time range")).toHaveTextContent(/to/);
+    });
+
     it("reopens a row's source in one click and a folded duplicate's source in two", async () => {
         vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
         vi.mocked(listMemoryCards).mockResolvedValue([
@@ -342,19 +356,37 @@ describe("MemoryCardsPanel", () => {
 
         renderVault();
 
-        const toggle = await screen.findByRole("button", { name: "Connections" });
+        fireEvent.click(await screen.findByRole("button", { name: "Vault options" }));
+        const toggle = screen.getByRole("menuitem", { name: "Connections" });
         expect(toggle).toHaveAttribute("aria-pressed", "false");
         expect(screen.queryByRole("region", { name: "Connections" })).toBeNull();
         expect(getFullGraph).not.toHaveBeenCalled();
 
         fireEvent.click(toggle);
 
-        expect(toggle).toHaveAttribute("aria-pressed", "true");
         const strip = screen.getByRole("region", { name: "Connections" });
         await waitFor(() => expect(getFullGraph).toHaveBeenCalledTimes(1));
         expect(await within(strip).findByText("No connections to show yet.")).toBeInTheDocument();
 
-        fireEvent.click(toggle);
+        fireEvent.click(screen.getByRole("button", { name: "Vault options" }));
+        const activeToggle = screen.getByRole("menuitem", { name: "Connections" });
+        expect(activeToggle).toHaveAttribute("aria-pressed", "true");
+        fireEvent.click(activeToggle);
         expect(screen.queryByRole("region", { name: "Connections" })).toBeNull();
+    });
+
+    it("puts Connections and Excluded captures in the same overflow menu", async () => {
+        vi.mocked(listMemoryCards).mockResolvedValue([card(1)]);
+        vi.mocked(listNeedsSignalMemoryCards).mockResolvedValue([
+            { card: card(2), reason_code: "low_signal", reason: "Not enough context." },
+        ]);
+
+        renderVault();
+
+        expect(screen.queryByRole("menu")).toBeNull();
+        fireEvent.click(await screen.findByRole("button", { name: "Vault options" }));
+        const menu = screen.getByRole("menu", { name: "Memory Vault options" });
+        expect(within(menu).getByRole("menuitem", { name: "Connections" })).toBeInTheDocument();
+        expect(within(menu).getByRole("menuitem", { name: "Excluded captures (1)" })).toBeInTheDocument();
     });
 });
