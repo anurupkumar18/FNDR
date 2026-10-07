@@ -47,6 +47,8 @@ const PLAN_TIMEOUT: Duration = Duration::from_secs(90);
 const STEP_TIMEOUT: Duration = Duration::from_secs(180);
 const FRONTMOST_TIMEOUT: Duration = Duration::from_secs(6);
 const PAGE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often a run in progress rechecks the kill switch and Private Mode.
+const HALT_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -359,9 +361,62 @@ fn looks_signed_out(message: &str) -> bool {
 
 // MARK: - One Codex session
 
+/// Limits on a whole run that do not depend on one action's risk.
+#[derive(Clone)]
+struct Guards {
+    /// Why nothing may run right now: actions are switched off, or FNDR is private.
+    halt: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    /// Whether an app may not be read or operated: the person's blocklist and FNDR itself.
+    off_limits: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+}
+
+const ACTIONS_OFF: &str = "Actions are turned off in Settings.";
+const PRIVATE_MODE: &str = "Notch Do is paused while FNDR is private.";
+const CODEX_UNREADABLE: &str = "Notch Do could not read an action from this version of Codex, so nothing was run. Update FNDR or Codex, then try again.";
+
+impl Guards {
+    fn for_state(state: &Arc<AppState>) -> Self {
+        let halt_state = state.clone();
+        let limits_state = state.clone();
+        Self {
+            halt: Arc::new(move || {
+                if halt_state.config.read().actions_kill_switch {
+                    Some(ACTIONS_OFF.to_string())
+                } else if halt_state
+                    .is_incognito
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    Some(PRIVATE_MODE.to_string())
+                } else {
+                    None
+                }
+            }),
+            off_limits: Arc::new(move |app| {
+                let app = app.trim();
+                // An empty name matches every blocklist entry.
+                !app.is_empty()
+                    && (crate::privacy::Blocklist::is_internal_app(app, Some(app))
+                        || crate::privacy::Blocklist::is_blocked(
+                            app,
+                            &limits_state.config.read().blocklist,
+                        ))
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    fn open() -> Self {
+        Self {
+            halt: Arc::new(|| None),
+            off_limits: Arc::new(|_| false),
+        }
+    }
+}
+
 struct TurnContext<'a> {
     run_id: &'a str,
     step: Option<usize>,
+    guards: &'a Guards,
     observed: &'a mut Observed,
     journal: &'a Journal,
     emit: &'a (dyn Fn(ComputerUseEvent) + Send + Sync),
@@ -514,6 +569,33 @@ impl Session {
                             }
                             let tool = params.get("message").and_then(Value::as_str).and_then(tool_from_approval_message).unwrap_or_default();
                             let args = params.pointer("/_meta/tool_params").cloned().unwrap_or(Value::Null);
+                            if let Some(reason) = (ctx.guards.halt)() {
+                                self.answer(request_id, false).await?;
+                                return Err(RunError::Failed(reason));
+                            }
+                            if tool.is_empty() {
+                                self.answer(request_id, false).await?;
+                                return Err(RunError::Failed(CODEX_UNREADABLE.to_string()));
+                            }
+                            let app = args.get("app").and_then(Value::as_str).unwrap_or_default();
+                            // A planning turn only plans: nothing is read or done before
+                            // the plan is on screen and started.
+                            let refusal = if ctx.step.is_none() {
+                                Some("planning does not act")
+                            } else if (ctx.guards.off_limits)(app) {
+                                Some("this app is off limits")
+                            } else {
+                                None
+                            };
+                            if let Some(reason) = refusal {
+                                self.answer(request_id, false).await?;
+                                journal(ctx, &tool, &args, Some(Risk::Never), "blocked", Some(reason.to_string()));
+                                if ctx.step.is_some() {
+                                    let summary = describe_tool_call(&tool, &args, ctx.observed);
+                                    (ctx.emit)(ComputerUseEvent::Blocked { run_id: ctx.run_id.to_string(), index, tool, summary, reason: reason.to_string() });
+                                }
+                                continue;
+                            }
                             let Decision { risk, reason } = classify(&tool, &args, ctx.observed);
                             let summary = describe_tool_call(&tool, &args, ctx.observed);
                             match risk {
@@ -674,10 +756,11 @@ fn record_tool_result(
         BUNDLED_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     if !result_text.is_empty() {
-        crate::privacy_proof::record_model_request(
-            "notch_do_screen_text",
+        crate::privacy_proof::record_model_request_including(
+            crate::privacy_proof::Feature::NotchDoScreenText,
             MODEL_HOST,
             result_text.len(),
+            &["screen_text"],
         );
     }
     let risk = classify(tool, args, ctx.observed).risk;
@@ -730,6 +813,7 @@ struct RunContext {
     run_id: String,
     emit: Arc<dyn Fn(ComputerUseEvent) + Send + Sync>,
     journal: Journal,
+    guards: Guards,
 }
 
 async fn wait_for_start(
@@ -767,6 +851,18 @@ async fn attempt_step(
             detail,
         });
     };
+    if step.action != StepAction::OpenUrl && (ctx.guards.off_limits)(&step.app) {
+        native_entry(
+            "open_app",
+            json!({ "name": step.app }),
+            "blocked",
+            Some("this app is off limits".to_string()),
+        );
+        return Ok(plan::Verdict {
+            ok: false,
+            detail: format!("{} is off limits", step.app),
+        });
+    }
     match step.action {
         StepAction::OpenApp => {
             let args = json!({ "name": step.app });
@@ -830,11 +926,16 @@ async fn attempt_step(
                 native::wait_until_frontmost(&step.app, FRONTMOST_TIMEOUT).await;
             }
             let text = step_request_text(index, plan.steps.len(), step, retry_note);
-            crate::privacy_proof::record_model_request("notch_do_step", MODEL_HOST, text.len());
+            crate::privacy_proof::record_model_request(
+                crate::privacy_proof::Feature::NotchDoStep,
+                MODEL_HOST,
+                text.len(),
+            );
             let operator_thread = session.operator_thread.clone();
             let mut turn = TurnContext {
                 run_id: &ctx.run_id,
                 step: Some(index),
+                guards: &ctx.guards,
                 observed,
                 journal: &ctx.journal,
                 emit: ctx.emit.as_ref(),
@@ -918,11 +1019,21 @@ async fn run_with_snippets(
     let mut observed = Observed::default();
 
     let request = plan_request_text(&transcript, &snippets);
-    crate::privacy_proof::record_model_request("notch_do_plan", MODEL_HOST, request.len());
+    crate::privacy_proof::record_model_request_including(
+        crate::privacy_proof::Feature::NotchDoPlan,
+        MODEL_HOST,
+        request.len(),
+        if snippets.is_empty() {
+            &[]
+        } else {
+            &["memories"]
+        },
+    );
     let planner_thread = session.planner_thread.clone();
     let mut turn = TurnContext {
         run_id: &ctx.run_id,
         step: None,
+        guards: &ctx.guards,
         observed: &mut observed,
         journal: &ctx.journal,
         emit: ctx.emit.as_ref(),
@@ -957,6 +1068,9 @@ async fn run_with_snippets(
 
     let mut done = Vec::new();
     for index in 0..plan.steps.len() {
+        if let Some(reason) = (ctx.guards.halt)() {
+            return Err(RunError::Failed(reason));
+        }
         let mut retry_note: Option<String> = None;
         let mut verdict = plan::Verdict {
             ok: false,
@@ -1037,6 +1151,17 @@ fn stop_active_run(app: &AppHandle) {
     }
 }
 
+/// Ends any run when FNDR quits, so no Codex or computer-use process outlives it.
+pub fn shutdown_computer_use() {
+    let handle = current_run().lock().ok().and_then(|mut slot| slot.take());
+    if let Some(handle) = handle {
+        handle.task.abort();
+        if let Some(pid) = handle.codex_pid.lock().ok().and_then(|slot| *slot) {
+            kill_process_group(pid);
+        }
+    }
+}
+
 fn send_to_run(command: RunCommand) -> Result<(), String> {
     let guard = current_run()
         .lock()
@@ -1084,12 +1209,9 @@ pub async fn computer_use_plan(
     if !state.inner().config.read().screen_guide.operate_computer {
         return Err("Turn on \"Operate my Mac\" first.".to_string());
     }
-    if state
-        .inner()
-        .is_incognito
-        .load(std::sync::atomic::Ordering::SeqCst)
-    {
-        return Err("Notch Do is paused while FNDR is private.".to_string());
+    let guards = Guards::for_state(state.inner());
+    if let Some(reason) = (guards.halt)() {
+        return Err(reason);
     }
     stop_active_run(&app);
 
@@ -1109,13 +1231,34 @@ pub async fn computer_use_plan(
                 .join("operator")
                 .join("journal.jsonl"),
         ),
+        guards,
     };
     let task_state = state.inner().clone();
     let task_app = app.clone();
     let task_run_id = run_id.clone();
     let task_pid = codex_pid.clone();
     let task = tauri::async_runtime::spawn(async move {
-        let result = run(task_state, ctx, transcript, receiver, task_pid).await;
+        // Actions switched off or Private Mode ends a run at once, even in
+        // the middle of an action; the guards inside the run cover the gaps.
+        let halt = ctx.guards.halt.clone();
+        let halted = async move {
+            loop {
+                tokio::time::sleep(HALT_CHECK_INTERVAL).await;
+                if let Some(reason) = halt() {
+                    return reason;
+                }
+            }
+        };
+        let result = tokio::select! {
+            result = run(task_state, ctx, transcript, receiver, task_pid.clone()) => result,
+            reason = halted => Err(RunError::Failed(reason)),
+        };
+        if result.is_err() {
+            // A run that ended early leaves nothing behind that could still act.
+            if let Some(pid) = task_pid.lock().ok().and_then(|slot| *slot) {
+                kill_process_group(pid);
+            }
+        }
         let failure = match result {
             Ok(()) | Err(RunError::Stopped) => None,
             Err(RunError::Failed(error)) => Some((error, false)),
@@ -1442,11 +1585,13 @@ mod tests {
         };
         let journal = Journal::new(dir.path().join("journal.jsonl"));
         let mut observed = Observed::default();
+        let guards = Guards::open();
 
         let planner = session.planner_thread.clone();
         let mut turn = TurnContext {
             run_id: "r1",
             step: None,
+            guards: &guards,
             observed: &mut observed,
             journal: &journal,
             emit: &emit,
@@ -1469,6 +1614,7 @@ mod tests {
         let mut turn = TurnContext {
             run_id: "r1",
             step: Some(1),
+            guards: &guards,
             observed: &mut observed,
             journal: &journal,
             emit: &emit,
@@ -1558,6 +1704,7 @@ mod tests {
         let (commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
         let journal = Journal::new(dir.path().join("journal.jsonl"));
         let mut observed = Observed::default();
+        let guards = Guards::open();
         // Dropping the sender is what aborting the run does to the turn.
         let sender = std::sync::Mutex::new(Some(commands));
         let emit = move |event: ComputerUseEvent| {
@@ -1569,6 +1716,7 @@ mod tests {
         let mut turn = TurnContext {
             run_id: "r2",
             step: Some(0),
+            guards: &guards,
             observed: &mut observed,
             journal: &journal,
             emit: &emit,
@@ -1583,6 +1731,201 @@ mod tests {
             )
             .await;
         assert_eq!(result, Err(RunError::Stopped));
+        session.server.shutdown().await;
+    }
+
+    fn fake_codex() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/operator/fake_codex_app_server.py")
+    }
+
+    fn journal_lines(path: &Path) -> Vec<Value> {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    /// A planner that asks to read the screen is refused: nothing is read or
+    /// done before the plan is shown and started.
+    #[tokio::test]
+    async fn a_planning_turn_cannot_use_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::open(&fake_codex(), &[]).await.unwrap();
+        let (_commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
+        let events: Arc<Mutex<Vec<ComputerUseEvent>>> = Arc::default();
+        let recorded = events.clone();
+        let emit = move |event: ComputerUseEvent| recorded.lock().unwrap().push(event);
+        let journal_path = dir.path().join("journal.jsonl");
+        let journal = Journal::new(journal_path.clone());
+        let mut observed = Observed::default();
+        let guards = Guards::open();
+        let planner = session.planner_thread.clone();
+        let mut turn = TurnContext {
+            run_id: "r4",
+            step: None,
+            guards: &guards,
+            observed: &mut observed,
+            journal: &journal,
+            emit: &emit,
+            commands: &mut receiver,
+        };
+        let plan_text = session
+            .run_turn(
+                &mut turn,
+                &planner,
+                "Request: PROBE open Spotify",
+                plan::plan_output_schema(),
+            )
+            .await
+            .unwrap();
+        assert!(plan::parse_plan(&plan_text).is_ok());
+        let lines = journal_lines(&journal_path);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0]["tool"], "get_app_state");
+        assert_eq!(lines[0]["outcome"], "blocked");
+        assert!(events.lock().unwrap().is_empty());
+        session.server.shutdown().await;
+    }
+
+    /// An app on the person's blocklist is never read or operated.
+    #[tokio::test]
+    async fn an_off_limits_app_is_never_read_or_operated() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::open(&fake_codex(), &[]).await.unwrap();
+        let (commands, mut receiver) = mpsc::unbounded_channel();
+        let events: Arc<Mutex<Vec<ComputerUseEvent>>> = Arc::default();
+        let recorded = events.clone();
+        let emit = move |event: ComputerUseEvent| {
+            if let ComputerUseEvent::Approval { request_key, .. } = &event {
+                commands
+                    .send(RunCommand::Respond {
+                        request_key: request_key.clone(),
+                        approve: true,
+                    })
+                    .unwrap();
+            }
+            recorded.lock().unwrap().push(event);
+        };
+        let journal_path = dir.path().join("journal.jsonl");
+        let journal = Journal::new(journal_path.clone());
+        let mut observed = Observed::default();
+        let guards = Guards {
+            halt: Arc::new(|| None),
+            off_limits: Arc::new(|app| app == "Spotify"),
+        };
+        let operator = session.operator_thread.clone();
+        let mut turn = TurnContext {
+            run_id: "r5",
+            step: Some(0),
+            guards: &guards,
+            observed: &mut observed,
+            journal: &journal,
+            emit: &emit,
+            commands: &mut receiver,
+        };
+        session
+            .run_turn(
+                &mut turn,
+                &operator,
+                "Step 1 of 1. App: Spotify. Goal: x.",
+                plan::step_report_schema(),
+            )
+            .await
+            .unwrap();
+        let spotify: Vec<(String, String)> = journal_lines(&journal_path)
+            .iter()
+            .filter(|line| line["args"]["app"] == "Spotify")
+            .map(|line| {
+                (
+                    line["tool"].as_str().unwrap().to_string(),
+                    line["outcome"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            spotify,
+            vec![
+                ("get_app_state".to_string(), "blocked".to_string()),
+                ("click".to_string(), "blocked".to_string()),
+            ]
+        );
+        assert!(!events.lock().unwrap().iter().any(|event| match event {
+            ComputerUseEvent::Action { tool, .. } | ComputerUseEvent::Approval { tool, .. } => {
+                tool != "type_text"
+            }
+            _ => false,
+        }));
+        session.server.shutdown().await;
+    }
+
+    /// Actions switched off, or Private Mode, ends the turn at the next action.
+    #[tokio::test]
+    async fn a_halted_run_refuses_the_next_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::open(&fake_codex(), &[]).await.unwrap();
+        let (_commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
+        let emit = |_event: ComputerUseEvent| {};
+        let journal_path = dir.path().join("journal.jsonl");
+        let journal = Journal::new(journal_path.clone());
+        let mut observed = Observed::default();
+        let guards = Guards {
+            halt: Arc::new(|| Some(ACTIONS_OFF.to_string())),
+            off_limits: Arc::new(|_| false),
+        };
+        let operator = session.operator_thread.clone();
+        let mut turn = TurnContext {
+            run_id: "r6",
+            step: Some(0),
+            guards: &guards,
+            observed: &mut observed,
+            journal: &journal,
+            emit: &emit,
+            commands: &mut receiver,
+        };
+        let result = session
+            .run_turn(
+                &mut turn,
+                &operator,
+                "Step 1 of 1. App: Spotify. Goal: x.",
+                plan::step_report_schema(),
+            )
+            .await;
+        assert_eq!(result, Err(RunError::Failed(ACTIONS_OFF.to_string())));
+        assert!(journal_lines(&journal_path).is_empty());
+        session.server.shutdown().await;
+    }
+
+    /// A Codex whose approval wording FNDR cannot read fails with the cause.
+    #[tokio::test]
+    async fn an_unreadable_action_ends_the_turn_with_the_cause() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::open(&fake_codex(), &[]).await.unwrap();
+        let (_commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
+        let emit = |_event: ComputerUseEvent| {};
+        let journal = Journal::new(dir.path().join("journal.jsonl"));
+        let mut observed = Observed::default();
+        let guards = Guards::open();
+        let operator = session.operator_thread.clone();
+        let mut turn = TurnContext {
+            run_id: "r7",
+            step: Some(0),
+            guards: &guards,
+            observed: &mut observed,
+            journal: &journal,
+            emit: &emit,
+            commands: &mut receiver,
+        };
+        let result = session
+            .run_turn(
+                &mut turn,
+                &operator,
+                "Step 1 of 1. App: Spotify. Goal: REWORDED_APPROVAL.",
+                plan::step_report_schema(),
+            )
+            .await;
+        assert_eq!(result, Err(RunError::Failed(CODEX_UNREADABLE.to_string())));
         session.server.shutdown().await;
     }
 
@@ -1605,6 +1948,7 @@ mod tests {
         let ctx = RunContext {
             run_id: "live".to_string(),
             journal: Journal::new(journal_dir.join("journal.jsonl")),
+            guards: Guards::open(),
             emit: Arc::new(move |event| {
                 println!(
                     "[{:>5.1}s] {}",
@@ -1646,11 +1990,13 @@ mod tests {
         let (_commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
         let journal = Journal::new(dir.path().join("journal.jsonl"));
         let mut observed = Observed::default();
+        let guards = Guards::open();
         let emit = |_event: ComputerUseEvent| {};
         let operator = session.operator_thread.clone();
         let mut turn = TurnContext {
             run_id: "r3",
             step: Some(1),
+            guards: &guards,
             observed: &mut observed,
             journal: &journal,
             emit: &emit,

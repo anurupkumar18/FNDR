@@ -332,7 +332,7 @@ fn parse_models(result: &Value) -> Vec<CodexModel> {
 
 pub(crate) fn ready_executable() -> Result<PathBuf, String> {
     detect_codex_executable().ok_or_else(|| {
-        "Codex isn't installed. Install it with `brew install codex` or `npm install -g @openai/codex`, then try again."
+        "Codex isn't installed. Install it with `brew install codex` or `npm install -g @openai/codex@0.151.0`, then try again."
             .to_string()
     })
 }
@@ -521,6 +521,45 @@ context only. Coordinates must still be copied from the LOC markers, never estim
 /// smaller than a Retina capture.
 const SCREEN_GUIDE_IMAGE_MAX_EDGE: u32 = 1600;
 
+const SCREEN_GUIDE_SCRATCH_PREFIX: &str = "fndr-screen-guide-";
+
+/// Removes screenshots a crashed or killed turn left in `dir`. Run at startup.
+fn sweep_screen_guide_scratch_in(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name
+            .to_string_lossy()
+            .starts_with(SCREEN_GUIDE_SCRATCH_PREFIX)
+            && entry.path().is_dir()
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+pub fn sweep_screen_guide_scratch() {
+    sweep_screen_guide_scratch_in(&std::env::temp_dir());
+}
+
+/// Stages the screenshot Codex attaches, readable by this account only.
+fn stage_private_screenshot(dir: &Path, jpeg: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    let path = dir.join("screen.jpg");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        options.mode(0o600);
+    }
+    options.open(&path)?.write_all(jpeg)?;
+    Ok(path)
+}
+
 /// Removes the per-turn scratch directory (and any screenshot) however the
 /// turn ends.
 struct ScratchDir(PathBuf);
@@ -636,7 +675,10 @@ pub(crate) async fn answer_screen_guide_with_codex(
     }
 
     let scratch = ScratchDir(
-        std::env::temp_dir().join(format!("fndr-screen-guide-{}", uuid::Uuid::new_v4())),
+        std::env::temp_dir().join(format!(
+            "{SCREEN_GUIDE_SCRATCH_PREFIX}{}",
+            uuid::Uuid::new_v4()
+        )),
     );
     std::fs::create_dir_all(&scratch.0)
         .map_err(|e| format!("Could not prepare Screen Guide: {e}"))?;
@@ -657,8 +699,8 @@ pub(crate) async fn answer_screen_guide_with_codex(
             server.shutdown().await;
             return Err(error);
         }
-        let path = scratch.0.join("screen.jpg");
-        std::fs::write(&path, jpeg).map_err(|e| format!("Could not stage the screenshot: {e}"))?;
+        let path = stage_private_screenshot(&scratch.0, &jpeg)
+            .map_err(|e| format!("Could not stage the screenshot: {e}"))?;
         if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
             server.shutdown().await;
             return Err(error);
@@ -768,6 +810,27 @@ pub(crate) async fn answer_screen_guide_with_codex(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_staged_screenshot_is_private_and_a_leftover_one_is_swept() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let scratch = temp.path().join(format!("{SCREEN_GUIDE_SCRATCH_PREFIX}abc"));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let other = temp.path().join("someone-elses-folder");
+        std::fs::create_dir_all(&other).unwrap();
+
+        let path = stage_private_screenshot(&scratch, b"jpeg").unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&scratch), 0o700);
+
+        // The turn was killed before its cleanup ran; the next start removes it.
+        sweep_screen_guide_scratch_in(temp.path());
+        assert!(!scratch.exists());
+        assert!(other.exists());
+    }
 
     #[test]
     fn parses_chatgpt_account() {

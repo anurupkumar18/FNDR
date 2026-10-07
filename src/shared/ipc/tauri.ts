@@ -1577,6 +1577,8 @@ export interface ModelRequest {
     feature: string;
     host: string;
     bytesSent: number;
+    /** Kinds of context sent along: `memories`, `screen_text`, `screenshot`. */
+    included?: string[];
 }
 
 export async function getPrivacyProof(): Promise<PrivacyProof> {
@@ -1950,6 +1952,11 @@ export async function sendHermesMessage(
     return invoke<HermesChatReply>("send_hermes_message", { conversationId, input, memoryIds });
 }
 
+/** Stops waiting for the reply to the message this chat has in flight. */
+export async function cancelHermesMessage(conversationId: string): Promise<void> {
+    return invoke<void>("cancel_hermes_message", { conversationId });
+}
+
 export interface AttachedMemory {
     id: string;
     title: string;
@@ -1962,6 +1969,8 @@ export interface AgentChatMessage {
     content: string;
     at: number;
     memories: AttachedMemory[];
+    /** The send failed; Hermes never answered this message. */
+    failed?: boolean;
 }
 
 export interface AgentChat {

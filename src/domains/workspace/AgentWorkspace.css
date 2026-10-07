@@ -602,3 +602,9 @@
         display: none;
     }
 }
+
+.aw-not-sent {
+    margin: 4px 0 0;
+    font-size: 12px;
+    color: var(--danger);
+}

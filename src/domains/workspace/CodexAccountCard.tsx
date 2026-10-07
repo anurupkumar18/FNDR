@@ -25,7 +25,7 @@ import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 import { openExternalUrl } from "@/shared/utils/openExternalUrl";
 import "./CodexAccountCard.css";
 
-const CODEX_INSTALL_COMMAND = "npm install -g @openai/codex";
+const CODEX_INSTALL_COMMAND = "npm install -g @openai/codex@0.151.0";
 const CODEX_PLAN_HELP_URL = "https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan";
 
 interface CodexAccountCardProps {
@@ -92,6 +92,7 @@ export function CodexAccountCard({ onStatusChange, reconnect = false }: CodexAcc
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [accountActivity, setAccountActivity] = useState<ActivityTraceSnapshot | null>(null);
+    const [checkedAt, setCheckedAt] = useState<number | null>(null);
     const { mode } = useActiveCinematicPalette();
     const reducedMotion = useReducedMotion() ?? false;
     const onStatusChangeRef = useRef(onStatusChange);
@@ -102,6 +103,7 @@ export function CodexAccountCard({ onStatusChange, reconnect = false }: CodexAcc
 
     const applyStatus = useCallback((next: CodexAccountStatus) => {
         setStatus(next);
+        setCheckedAt(Date.now());
         onStatusChangeRef.current(next);
     }, []);
 
@@ -390,7 +392,10 @@ export function CodexAccountCard({ onStatusChange, reconnect = false }: CodexAcc
                     </div>
                 )}
                 <p className="codex-card-muted">
-                    Hermes runs on your subscription and counts against these limits.
+                    These limits cover your whole ChatGPT account. Hermes and Notch Do count against them.
+                    {checkedAt
+                        ? ` Checked ${new Date(checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`
+                        : ""}
                 </p>
                 {accountActivity ? <ActivityTrace trace={accountActivity} /> : null}
                 {error && <p className="codex-card-error" role="alert">{error}</p>}

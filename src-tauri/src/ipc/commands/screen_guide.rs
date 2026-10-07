@@ -3150,6 +3150,16 @@ pub async fn ask_screen_guide(
             screenshot = codex_screenshot.is_some(),
             "screen_guide:codex_started"
         );
+        crate::privacy_proof::record_model_request_including(
+            crate::privacy_proof::Feature::ScreenGuideAnswer,
+            "chatgpt.com",
+            question.len() + screen_text.len() + history_text.len(),
+            if codex_screenshot.is_some() {
+                &["screen_text", "screenshot"]
+            } else {
+                &["screen_text"]
+            },
+        );
         let answer = crate::ipc::commands::codex_account::answer_screen_guide_with_codex(
             &question,
             &screen_text,

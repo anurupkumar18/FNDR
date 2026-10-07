@@ -77,6 +77,7 @@ describe("CodexAccountCard", () => {
         expect(screen.getByRole("meter", { name: "5-hour window usage" })).toHaveAttribute("aria-valuenow", "25");
         expect(screen.getByRole("meter", { name: "This week usage" })).toHaveAttribute("aria-valuenow", "60");
         expect(onStatusChange).toHaveBeenLastCalledWith(signedIn);
+        expect(screen.getByText(/whole ChatGPT account.*Notch Do count against them\. Checked /)).toBeInTheDocument();
     });
 
     it("cancels a pending sign-in and ignores its late completion event", async () => {
@@ -121,7 +122,7 @@ describe("CodexAccountCard", () => {
         render(<CodexAccountCard onStatusChange={vi.fn()} />);
 
         expect(await screen.findByText("Codex won't start")).toBeInTheDocument();
-        expect(screen.getByText("npm install -g @openai/codex")).toBeInTheDocument();
+        expect(screen.getByText("npm install -g @openai/codex@0.151.0")).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Sign in with ChatGPT" })).not.toBeInTheDocument();
     });
 

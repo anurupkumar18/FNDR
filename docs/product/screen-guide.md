@@ -109,7 +109,11 @@ get an optional visual point cue or learn where a matching local file lives.
 - FR6: Incognito, FNDR's own windows, and blocklisted contexts are rejected
   before a guide capture.
 - FR7: During a normal turn, screen pixels remain in memory and are dropped
-  after the turn. Only FR19's explicitly armed diagnostic may write them.
+  after the turn. Two things may write them: FR19's explicitly armed
+  diagnostic, and the ChatGPT answer path with the separate screenshot
+  consent on, which stages one downscaled image in a per-turn folder that
+  only this account can read (`0700`, file `0600`). That folder is removed
+  when the turn ends and any leftover is removed at the next start.
 - FR8: Voice transcription reuses FNDR's local speech path.
 - FR9: Answers use local inference when available and degrade to a bounded,
   grounded screen summary when it is not.

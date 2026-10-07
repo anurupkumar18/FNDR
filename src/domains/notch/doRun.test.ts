@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyUtterance, doRunReducer, initialDoState, type DoState } from "./doRun";
+import { classifyUtterance, doRunReducer, initialDoState, isStopPhrase, type DoState } from "./doRun";
 import type { ComputerUseEvent } from "@/shared/ipc/tauri";
 
 const PLANNED: ComputerUseEvent = {
@@ -22,6 +22,15 @@ describe("classifyUtterance", () => {
     it("treats short stop phrases as stop at any time", () => {
         expect(classifyUtterance("Stop!", {})).toEqual({ kind: "stop" });
         expect(classifyUtterance("never mind", { running: true })).toEqual({ kind: "stop" });
+    });
+
+    it("hears stop behind a polite or hurried lead-in", () => {
+        for (const phrase of ["please stop now", "ok stop", "no wait", "hey, cancel"]) {
+            expect(classifyUtterance(phrase, { running: true }), phrase).toEqual({ kind: "stop" });
+            expect(isStopPhrase(phrase), phrase).toBe(true);
+        }
+        expect(isStopPhrase("don't stop the music")).toBe(false);
+        expect(classifyUtterance("no", { awaitingApproval: true })).toEqual({ kind: "decline" });
     });
 
     it("keeps longer requests that merely contain stop words", () => {

@@ -65,7 +65,7 @@ fn detect_npm() -> Option<PathBuf> {
 fn npm_package(id: &str) -> Option<&'static str> {
     match id {
         "computer_use" => Some("open-computer-use@0.3.6"),
-        "codex_cli" => Some("@openai/codex"),
+        "codex_cli" => Some("@openai/codex@0.151.0"),
         _ => None,
     }
 }
@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn only_known_packages_are_installable() {
         assert_eq!(npm_package("computer_use"), Some("open-computer-use@0.3.6"));
-        assert_eq!(npm_package("codex_cli"), Some("@openai/codex"));
+        assert_eq!(npm_package("codex_cli"), Some("@openai/codex@0.151.0"));
         assert_eq!(npm_package("anything-else"), None);
     }
 

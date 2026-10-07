@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+    cancelHermesMessage,
     deleteAgentChat,
     getAgentChat,
     getHermesBridgeStatus,
@@ -61,6 +62,17 @@ function activityModelLabel(hermes: HermesBridgeStatus | null): string {
         : provider;
 }
 
+/** The header chip: the saved model, or the one thing still missing. */
+export function agentChipLabel(hermes: HermesBridgeStatus | null): string {
+    if (hermes?.installed && hermes.configured) {
+        if (hermes.provider_kind === "codex" && !hermes.codex_logged_in) return "Reconnect ChatGPT";
+        const provider = isProvider(hermes.provider_kind) ? PROVIDER_LABEL[hermes.provider_kind] : hermes.provider_kind;
+        return `${provider} · ${hermes.model_name ?? "default"}`;
+    }
+    if (hermes && !hermes.installed && !hermes.bundled_repo_available) return "Hermes not installed";
+    return hermes?.codex_logged_in ? "Choose a model" : "Set up a model";
+}
+
 function relativeTime(ms: number): string {
     const minutes = Math.round((Date.now() - ms) / 60_000);
     if (minutes < 1) return "now";
@@ -103,7 +115,13 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
     const closeButtonRef = useRef<HTMLButtonElement>(null);
     const threadEndRef = useRef<HTMLDivElement>(null);
     const requestGenerationRef = useRef(0);
-    const activeRequestRef = useRef<{ generation: number; conversationId: string } | null>(null);
+    const activeRequestRef = useRef<{
+        generation: number;
+        conversationId: string;
+        text: string;
+        memories: AttachedMemory[];
+        sentAt: number;
+    } | null>(null);
     useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
 
     const refreshHermes = useCallback(async () => {
@@ -135,9 +153,7 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
 
     const configured = !!hermes?.installed && !!hermes.configured;
     const showSetup = hermes !== null && (!configured || setupOpen);
-    const modelLabel = configured
-        ? `${isProvider(hermes.provider_kind) ? PROVIDER_LABEL[hermes.provider_kind] : hermes.provider_kind} · ${hermes.model_name ?? "default"}`
-        : "Not set up";
+    const modelLabel = agentChipLabel(hermes);
 
     const startNewChat = () => {
         activeRequestRef.current = null;
@@ -184,16 +200,20 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
         const memories = attached;
         const requestConversationId = conversationId;
         const requestGeneration = ++requestGenerationRef.current;
+        const sentAt = Date.now();
         activeRequestRef.current = {
             generation: requestGeneration,
             conversationId: requestConversationId,
+            text,
+            memories,
+            sentAt,
         };
         const isCurrentRequest = () => {
             const active = activeRequestRef.current;
             return active?.generation === requestGeneration
                 && active.conversationId === requestConversationId;
         };
-        setMessages((current) => [...current, { role: "user", content: text, at: Date.now(), memories }]);
+        setMessages((current) => [...current, { role: "user", content: text, at: sentAt, memories }]);
         setDraft("");
         setAttached([]);
         setPickerOpen(false);
@@ -242,6 +262,14 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
         } catch (reason) {
             if (!isCurrentRequest()) return;
             setError(reason instanceof Error ? reason.message : String(reason));
+            setMessages((current) =>
+                current.map((message) =>
+                    message.role === "user" && message.at === sentAt ? { ...message, failed: true } : message,
+                ),
+            );
+            // Nothing was sent: hand the words and memories back to try again.
+            setDraft((current) => current || text);
+            setAttached((current) => (current.length > 0 ? current : memories));
             const failedAt = Date.now();
             setActivityTrace((current) => {
                 if (!current || current.id !== `agent-request-${requestStartedAt}`) return current;
@@ -261,6 +289,22 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                 setSending(false);
             }
         }
+    };
+
+    /** Stops waiting for the reply and hands the message back, at once. */
+    const stop = () => {
+        const active = activeRequestRef.current;
+        if (!active) return;
+        activeRequestRef.current = null;
+        requestGenerationRef.current += 1;
+        setSending(false);
+        setActivityTrace(null);
+        setMessages((current) =>
+            current.filter((message) => !(message.role === "user" && message.at === active.sentAt)),
+        );
+        setDraft((current) => current || active.text);
+        setAttached((current) => (current.length > 0 ? current : active.memories));
+        void cancelHermesMessage(active.conversationId).catch(() => undefined);
     };
 
     if (!isVisible) return null;
@@ -361,6 +405,7 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                                     </div>
                                 ) : null}
                                 <p className="aw-bubble">{message.content}</p>
+                                {message.failed ? <p className="aw-not-sent">Not sent</p> : null}
                             </div>
                         ))}
                         {activityTrace ? (
@@ -435,17 +480,25 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                                     }
                                 }}
                             />
-                            <button
-                                type="button"
-                                className="aw-send"
-                                aria-label="Send"
-                                disabled={!configured || sending || !draft.trim()}
-                                onClick={() => void send()}
-                            >
-                                <svg viewBox="0 0 16 16" aria-hidden="true">
-                                    <path d="M8 13V3M3.5 7.5L8 3l4.5 4.5" />
-                                </svg>
-                            </button>
+                            {sending ? (
+                                <button type="button" className="aw-send" aria-label="Stop" onClick={stop}>
+                                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                                        <rect x="4.5" y="4.5" width="7" height="7" rx="1" />
+                                    </svg>
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    className="aw-send"
+                                    aria-label="Send"
+                                    disabled={!configured || !draft.trim()}
+                                    onClick={() => void send()}
+                                >
+                                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                                        <path d="M8 13V3M3.5 7.5L8 3l4.5 4.5" />
+                                    </svg>
+                                </button>
+                            )}
                         </div>
                     </div>
                 ) : null}

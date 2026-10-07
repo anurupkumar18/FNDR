@@ -9,6 +9,7 @@ const ipc = vi.hoisted(() => ({
     getAgentChat: vi.fn(),
     deleteAgentChat: vi.fn(),
     sendHermesMessage: vi.fn(),
+    cancelHermesMessage: vi.fn(),
     listMemoryCards: vi.fn(),
     searchMemoryCards: vi.fn(),
 }));
@@ -49,6 +50,7 @@ beforeEach(() => {
     ipc.searchMemoryCards.mockResolvedValue([card]);
     ipc.sendHermesMessage.mockResolvedValue({ response_id: "r1", conversation_id: "c", content: "Here is the plan." });
     ipc.deleteAgentChat.mockResolvedValue(undefined);
+    ipc.cancelHermesMessage.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -74,7 +76,53 @@ describe("AgentWorkspace", () => {
 
         expect(await screen.findByRole("heading", { name: "Choose a model" })).toBeInTheDocument();
         expect(screen.queryByLabelText("Message Hermes")).not.toBeInTheDocument();
-        expect(screen.getByRole("button", { name: /not set up/i })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Set up a model" })).toBeInTheDocument();
+    });
+
+    it("names the one missing step in the header chip", async () => {
+        ipc.getHermesBridgeStatus.mockResolvedValue({ ...hermes(false), codex_logged_in: true });
+        const { unmount } = render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+        expect(await screen.findByRole("button", { name: "Choose a model" })).toBeInTheDocument();
+        unmount();
+
+        ipc.getHermesBridgeStatus.mockResolvedValue({ ...hermes(true), codex_logged_in: false });
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+        expect(await screen.findByRole("button", { name: "Reconnect ChatGPT" })).toBeInTheDocument();
+    });
+
+    it("hands the message back when sending fails", async () => {
+        ipc.sendHermesMessage.mockRejectedValue(new Error("Hermes API request failed."));
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+        const input = await screen.findByLabelText("Message Hermes");
+        await waitFor(() => expect(input).toBeEnabled());
+
+        fireEvent.change(input, { target: { value: "Summarize what I read" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        expect(await screen.findByRole("alert")).toHaveTextContent("Hermes API request failed.");
+        expect(input).toHaveValue("Summarize what I read");
+        const sent = screen.getByText("Summarize what I read", { selector: ".aw-bubble" }).closest(".aw-message");
+        expect(within(sent as HTMLElement).getByText("Not sent")).toBeInTheDocument();
+    });
+
+    it("stops waiting for a reply, hands the message back, and ignores a late answer", async () => {
+        let answer: (reply: unknown) => void = () => undefined;
+        ipc.sendHermesMessage.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+        const input = await screen.findByLabelText("Message Hermes");
+        await waitFor(() => expect(input).toBeEnabled());
+
+        fireEvent.change(input, { target: { value: "Draft the email" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+
+        expect(ipc.cancelHermesMessage).toHaveBeenCalledWith(expect.stringMatching(/^fndr-/));
+        expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+        expect(input).toHaveValue("Draft the email");
+        expect(document.querySelector(".aw-bubble")).toBeNull();
+
+        await act(async () => answer({ response_id: "r", conversation_id: "c", content: "Late reply." }));
+        expect(screen.queryByText("Late reply.")).not.toBeInTheDocument();
     });
 
     it("traces the actual Hermes installation request without exposing backend errors", async () => {

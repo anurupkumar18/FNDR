@@ -217,9 +217,18 @@ function matchesShortPhrase(normalized: string, phrases: string[]): boolean {
     return phrases.some((phrase) => normalized === phrase || normalized.startsWith(`${phrase} `));
 }
 
+/** Words people put in front of "stop" without changing what they mean. */
+const STOP_LEAD_INS = ["please", "ok", "okay", "hey", "no", "just", "now"];
+
+function saysStop(normalized: string): boolean {
+    const words = normalized.split(" ");
+    while (words.length > 1 && STOP_LEAD_INS.includes(words[0])) words.shift();
+    return matchesShortPhrase(normalized, STOP_PHRASES) || matchesShortPhrase(words.join(" "), STOP_PHRASES);
+}
+
 /** Whether partial text already says stop, so a run can be killed before the utterance ends. */
 export function isStopPhrase(text: string): boolean {
-    return matchesShortPhrase(normalize(text), STOP_PHRASES);
+    return saysStop(normalize(text));
 }
 
 export function classifyUtterance(
@@ -228,7 +237,7 @@ export function classifyUtterance(
 ): UtteranceIntent | null {
     const normalized = normalize(text);
     if (!normalized) return null;
-    if (matchesShortPhrase(normalized, STOP_PHRASES)) return { kind: "stop" };
+    if (saysStop(normalized)) return { kind: "stop" };
     if (context.awaitingApproval) {
         if (matchesShortPhrase(normalized, NO_PHRASES)) return { kind: "decline" };
         if (matchesShortPhrase(normalized, YES_PHRASES)) return { kind: "approve" };

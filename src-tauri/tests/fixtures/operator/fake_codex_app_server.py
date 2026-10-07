@@ -2,7 +2,8 @@
 """A scripted stand-in for `codex app-server` (JSONL over stdio).
 
 The planner turn (input starting with "Request:") answers with a three-step
-plan. Any other turn asks for three computer-use approvals in order: reading
+plan; with "PROBE" in it, the planner first asks to read the screen. A turn
+containing "REWORDED_APPROVAL" asks with approval wording FNDR cannot parse. Any other turn asks for three computer-use approvals in order: reading
 Spotify, clicking its "Buy Premium" button, and typing into Notes, then
 reports done. Every approval answer is appended to the log file passed as
 FAKE_CODEX_LOG (one JSON line: request id and the answer).
@@ -52,6 +53,21 @@ def complete(thread, turn, text):
     send({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "completed", "error": None}}})
 
 
+def ask(approval_id, thread, turn, tool, args, message):
+    """One approval request; the tool runs only when FNDR accepts."""
+    send({"id": approval_id, "method": "mcpServer/elicitation/request", "params": {
+        "threadId": thread, "turnId": turn, "serverName": "fndr_computer", "mode": "form",
+        "_meta": {"codex_approval_kind": "mcp_tool_call", "tool_params": args},
+        "message": message,
+        "requestedSchema": {"type": "object", "properties": {}}}})
+    answer = wait_for_answer(approval_id)
+    if answer.get("result", {}).get("action") == "accept":
+        item = {"type": "mcpToolCall", "id": "call-%d" % approval_id, "server": "fndr_computer", "tool": tool, "arguments": args}
+        send({"method": "item/started", "params": {"threadId": thread, "item": dict(item, status="inProgress")}})
+        result = {"content": [{"type": "text", "text": TREE if tool == "get_app_state" else "ok"}], "isError": False}
+        send({"method": "item/completed", "params": {"threadId": thread, "item": dict(item, status="completed", result=result, error=None)}})
+
+
 threads = 0
 turns = 0
 while True:
@@ -72,7 +88,16 @@ while True:
         send({"id": request_id, "result": {"turn": {"id": turn, "status": "inProgress"}}})
         text = params["input"][0]["text"]
         if text.startswith("Request:"):
+            if "PROBE" in text:
+                # A planner that tries to look at the screen before planning.
+                ask(960, thread, turn, "get_app_state", {"app": "Spotify"},
+                    'Allow the fndr_computer MCP server to run tool "get_app_state"?')
             complete(thread, turn, json.dumps(PLAN))
+            continue
+        if "REWORDED_APPROVAL" in text:
+            # A Codex release whose approval wording FNDR does not know.
+            ask(970, thread, turn, "get_app_state", {"app": "Spotify"}, "May fndr_computer proceed?")
+            complete(thread, turn, json.dumps({"done": False, "detail": "refused"}))
             continue
         if "AUTOMATION_DENIED" in text:
             # The bundled Computer Use without Automation permission.

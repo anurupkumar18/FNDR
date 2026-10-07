@@ -42,6 +42,9 @@ pub struct AgentChatMessage {
     pub at: i64,
     #[serde(default)]
     pub memories: Vec<AttachedMemory>,
+    /// The send failed; Hermes never answered this message.
+    #[serde(default)]
+    pub failed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -74,10 +77,29 @@ fn read_chats(path: &Path) -> Vec<AgentChat> {
         .unwrap_or_default()
 }
 
+/// One writer at a time: every change reads the whole file and rewrites it.
+static CHATS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn chats_lock() -> std::sync::MutexGuard<'static, ()> {
+    CHATS_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn write_chats(path: &Path, chats: &[AgentChat]) -> Result<(), String> {
+    use std::io::Write;
     let raw = serde_json::to_string(chats).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, raw).map_err(|e| format!("Could not save chat history: {e}"))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Chats quote memories; only this account reads them.
+        options.mode(0o600);
+    }
+    options
+        .open(&tmp)
+        .and_then(|mut file| file.write_all(raw.as_bytes()))
+        .map_err(|e| format!("Could not save chat history: {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("Could not save chat history: {e}"))
 }
 
@@ -111,27 +133,48 @@ pub(crate) fn record_exchange(
     append_exchange(&chats_path(state), conversation_id, user, assistant)
 }
 
+/// Keeps a message whose send failed, so it is still there when the chat is reopened.
+pub(crate) fn record_failed_message(
+    state: &AppState,
+    conversation_id: &str,
+    user: AgentChatMessage,
+) -> Result<(), String> {
+    append_messages(&chats_path(state), conversation_id, vec![user])
+}
+
 fn append_exchange(
     path: &Path,
     conversation_id: &str,
     user: AgentChatMessage,
     assistant: AgentChatMessage,
 ) -> Result<(), String> {
+    append_messages(path, conversation_id, vec![user, assistant])
+}
+
+fn append_messages(
+    path: &Path,
+    conversation_id: &str,
+    messages: Vec<AgentChatMessage>,
+) -> Result<(), String> {
+    let (Some(first), Some(last)) = (messages.first(), messages.last()) else {
+        return Ok(());
+    };
+    let (first_text, first_at, last_at) = (first.content.clone(), first.at, last.at);
+    let _writer = chats_lock();
     let mut chats = read_chats(path);
     let position = chats.iter().position(|chat| chat.id == conversation_id);
     let mut chat = match position {
         Some(index) => chats.remove(index),
         None => AgentChat {
             id: conversation_id.to_string(),
-            title: chat_title(&user.content),
-            created_at: user.at,
-            updated_at: user.at,
+            title: chat_title(&first_text),
+            created_at: first_at,
+            updated_at: first_at,
             messages: Vec::new(),
         },
     };
-    chat.updated_at = assistant.at;
-    chat.messages.push(user);
-    chat.messages.push(assistant);
+    chat.updated_at = last_at;
+    chat.messages.extend(messages);
     chats.insert(0, chat);
     write_chats(path, &chats)
 }
@@ -263,6 +306,7 @@ pub async fn get_agent_chat(
 #[tauri::command]
 pub async fn delete_agent_chat(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
     let path = chats_path(state.inner());
+    let _writer = chats_lock();
     let mut chats = read_chats(&path);
     chats.retain(|chat| chat.id != id);
     write_chats(&path, &chats)
@@ -314,6 +358,45 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_send_is_kept_in_a_file_only_the_owner_can_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CHATS_FILE);
+        let failed = AgentChatMessage {
+            role: "user".into(),
+            content: "Summarize the paper".into(),
+            at: 7,
+            memories: Vec::new(),
+            failed: true,
+        };
+
+        append_messages(&path, "c9", vec![failed.clone()]).unwrap();
+
+        let chats = read_chats(&path);
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].title, "Summarize the paper");
+        assert_eq!(chats[0].messages, vec![failed]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn chats_saved_before_the_failed_flag_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CHATS_FILE);
+        std::fs::write(
+            &path,
+            r#"[{"id":"c","title":"t","createdAt":1,"updatedAt":2,"messages":[{"role":"user","content":"hi","at":1}]}]"#,
+        )
+        .unwrap();
+        let chats = read_chats(&path);
+        assert!(!chats[0].messages[0].failed);
+    }
+
+    #[test]
     fn exchanges_accumulate_newest_chat_first() {
         let dir = std::env::temp_dir().join(format!("fndr-chats-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -323,6 +406,7 @@ mod tests {
             content: content.into(),
             at,
             memories: Vec::new(),
+            failed: false,
         };
 
         assert!(read_chats(&path).is_empty());

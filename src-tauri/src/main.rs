@@ -170,6 +170,9 @@ fn main() {
                 None,
             ));
             state.set_app_handle(app.handle().clone());
+            fndr_lib::privacy_proof::init_model_request_log(&data_dir);
+            ipc::commands::sweep_screen_guide_scratch();
+            ipc::commands::reap_stale_hermes_gateway(&data_dir);
 
             // Restore last-session model: if onboarding is complete and the
             // preferred GGUF is on disk, load it eagerly. This means the
@@ -825,6 +828,7 @@ fn main() {
             ipc::commands::start_hermes_gateway,
             ipc::commands::stop_hermes_gateway,
             ipc::commands::send_hermes_message,
+            ipc::commands::cancel_hermes_message,
             ipc::commands::list_agent_chats,
             ipc::commands::get_agent_chat,
             ipc::commands::delete_agent_chat,
@@ -947,6 +951,8 @@ fn main() {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
             ipc::commands::shutdown_screen_guide(app_handle);
+            ipc::commands::shutdown_computer_use();
+            ipc::commands::shutdown_hermes_gateway();
             fndr_lib::voice::shutdown(app_handle);
             fndr_lib::speech::shutdown_speech();
         }

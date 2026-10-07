@@ -58,6 +58,13 @@ describe("PrivacyProof", () => {
                     model_requests: [
                         { atMs: Date.now(), feature: "notch_do_plan", host: "chatgpt.com", bytesSent: 1300 },
                         { atMs: Date.now(), feature: "hermes_chat", host: "chatgpt.com", bytesSent: 420 },
+                        {
+                            atMs: Date.now(),
+                            feature: "screen_guide_answer",
+                            host: "chatgpt.com",
+                            bytesSent: 900,
+                            included: ["screen_text", "screenshot"],
+                        },
                     ],
                 }}
             />,
@@ -67,6 +74,7 @@ describe("PrivacyProof", () => {
         expect(list).toHaveTextContent("1.3 KB");
         expect(list).toHaveTextContent("Hermes chat message");
         expect(list).toHaveTextContent("420 B");
+        expect(list).toHaveTextContent(/Screen Guide asked ChatGPT · chatgpt\.com · .* · with on-screen text and a screenshot/);
     });
 });
 

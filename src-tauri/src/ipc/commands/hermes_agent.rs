@@ -738,6 +738,35 @@ fn hermes_config_yaml(record: &HermesSetupRecord) -> Result<String, String> {
     })
 }
 
+fn restrict_to_owner(path: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
+}
+
+/// Writes a file only this account can read. These hold a provider API key,
+/// the gateway's key, or FNDR's MCP token.
+fn write_private(path: &Path, contents: &str) -> Result<(), String> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|e| e.to_string())?;
+    file.write_all(contents.as_bytes())
+        .map_err(|e| e.to_string())?;
+    // A file from an older build keeps its old mode unless it is reset.
+    restrict_to_owner(path, 0o600);
+    Ok(())
+}
+
 fn persist_hermes_setup_files(state: &AppState, setup: &HermesSetupPayload) -> Result<(), String> {
     let home_dir = hermes_home_dir(state);
     std::fs::create_dir_all(&home_dir).map_err(|e| e.to_string())?;
@@ -792,11 +821,11 @@ You are the native FNDR agent experience, powered by Hermes under the hood.
 "#;
 
     let record_json = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
-    std::fs::write(hermes_config_path(state), config_yaml).map_err(|e| e.to_string())?;
-    std::fs::write(hermes_env_path(state), env_lines.join("\n") + "\n")
-        .map_err(|e| e.to_string())?;
+    restrict_to_owner(&home_dir, 0o700);
+    write_private(&hermes_config_path(state), &config_yaml)?;
+    write_private(&hermes_env_path(state), &(env_lines.join("\n") + "\n"))?;
     std::fs::write(hermes_soul_path(state), soul_md).map_err(|e| e.to_string())?;
-    std::fs::write(hermes_setup_record_path(state), record_json).map_err(|e| e.to_string())?;
+    write_private(&hermes_setup_record_path(state), &record_json)?;
     Ok(())
 }
 
@@ -818,10 +847,11 @@ fn update_hermes_gateway_runtime() -> (bool, Option<String>) {
     if let Some(child) = process_guard.as_mut() {
         match child.try_wait() {
             Ok(Some(status)) => {
+                let last_output = gateway_stderr().lock().back().cloned();
                 let message = if status.success() {
                     "Hermes gateway exited.".to_string()
                 } else {
-                    format!("Hermes gateway exited with status {status}.")
+                    gateway_exit_message(&format!("with status {status}"), last_output.as_deref())
                 };
                 *get_hermes_gateway_error_store().lock() = Some(message.clone());
                 *process_guard = None;
@@ -1184,28 +1214,116 @@ fn write_hermes_mcp_config(state: &AppState) {
             &mcp.token,
         ));
     }
-    if let Err(error) = std::fs::write(hermes_config_path(state), config) {
+    if let Err(error) = write_private(&hermes_config_path(state), &config) {
         tracing::warn!(%error, "hermes:mcp_config_write_failed");
     }
+}
+
+const GATEWAY_STDERR_LINES: usize = 40;
+const GATEWAY_STDERR_LINE_CHARS: usize = 300;
+const GATEWAY_PID_FILE: &str = "gateway.pid";
+
+/// The gateway's last error output, held in memory only, so a start that
+/// fails can say why. Never written to disk or sent anywhere.
+fn gateway_stderr() -> &'static AgentMutex<std::collections::VecDeque<String>> {
+    static TAIL: AgentOnceLock<AgentMutex<std::collections::VecDeque<String>>> =
+        AgentOnceLock::new();
+    TAIL.get_or_init(|| AgentMutex::new(std::collections::VecDeque::new()))
+}
+
+fn remember_gateway_stderr(tail: &mut std::collections::VecDeque<String>, line: &str) {
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    tail.push_back(line.chars().take(GATEWAY_STDERR_LINE_CHARS).collect());
+    while tail.len() > GATEWAY_STDERR_LINES {
+        tail.pop_front();
+    }
+}
+
+fn gateway_exit_message(status: &str, last_output: Option<&str>) -> String {
+    match last_output {
+        Some(line) => format!("Hermes gateway exited {status}. Last output: {line}"),
+        None => format!("Hermes gateway exited {status}."),
+    }
+}
+
+/// Whether a running process's command line is a Hermes gateway.
+fn is_hermes_gateway_command(command: &str) -> bool {
+    command.to_lowercase().contains("hermes")
+        && command.split_whitespace().any(|word| word == "gateway")
+}
+
+/// Ends a gateway that an earlier FNDR left running (a crash or force quit).
+pub fn reap_stale_hermes_gateway(app_data_dir: &Path) {
+    let pid_path = app_data_dir.join("hermes-gateway").join(GATEWAY_PID_FILE);
+    let Some(pid) = std::fs::read_to_string(&pid_path)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i32>().ok())
+    else {
+        return;
+    };
+    let _ = std::fs::remove_file(&pid_path);
+    let command = Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
+        .unwrap_or_default();
+    // The pid may belong to something else by now.
+    if pid > 1 && is_hermes_gateway_command(&command) {
+        tracing::warn!(pid, "hermes:stale_gateway_stopped");
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+}
+
+fn spawn_gateway_child(
+    launcher: &HermesLauncher,
+    hermes_home: &Path,
+    gateway_dir: &Path,
+    uses_chatgpt: bool,
+) -> std::io::Result<Child> {
+    use std::io::BufRead;
+    let mut command = launcher.command();
+    command
+        .arg("gateway")
+        .env("HERMES_HOME", hermes_home)
+        .current_dir(gateway_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    if uses_chatgpt {
+        command.env("CODEX_HOME", codex_home_dir());
+    }
+    let mut child = command.spawn()?;
+    gateway_stderr().lock().clear();
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stderr)
+                .lines()
+                .map_while(Result::ok)
+            {
+                remember_gateway_stderr(&mut gateway_stderr().lock(), &line);
+            }
+        });
+    }
+    let _ = std::fs::write(gateway_dir.join(GATEWAY_PID_FILE), child.id().to_string());
+    Ok(child)
 }
 
 fn spawn_hermes_gateway(state: &AppState, uses_chatgpt: bool) -> Result<(), String> {
     let launcher = detect_hermes_runtime(state)
         .launcher
         .ok_or_else(|| "FNDR could not resolve a Hermes runtime to launch.".to_string())?;
-    let mut command = launcher.command();
-    command
-        .arg("gateway")
-        .env("HERMES_HOME", hermes_home_dir(state))
-        .current_dir(hermes_gateway_dir(state))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if uses_chatgpt {
-        command.env("CODEX_HOME", codex_home_dir());
-    }
-    let child = command
-        .spawn()
-        .map_err(|e| format!("Failed to start Hermes gateway: {e}"))?;
+    let child = spawn_gateway_child(
+        &launcher,
+        &hermes_home_dir(state),
+        &hermes_gateway_dir(state),
+        uses_chatgpt,
+    )
+    .map_err(|e| format!("Failed to start Hermes gateway: {e}"))?;
     *get_hermes_gateway_process().lock() = Some(child);
     *get_hermes_gateway_error_store().lock() = None;
     let mut supervisor = supervisor().lock();
@@ -1216,6 +1334,11 @@ fn spawn_hermes_gateway(state: &AppState, uses_chatgpt: bool) -> Result<(), Stri
 }
 
 /// Ends the gateway on purpose (Stop, or a provider change).
+/// Stops the gateway when FNDR quits, so it does not keep running without it.
+pub fn shutdown_hermes_gateway() {
+    stop_hermes_gateway_process();
+}
+
 fn stop_hermes_gateway_process() {
     supervisor().lock().stop_requested = true;
     let mut process_guard = get_hermes_gateway_process().lock();
@@ -1281,17 +1404,7 @@ fn start_hermes_supervisor(state: &AppState, uses_chatgpt: bool) {
                     let Some(launcher) = launcher.as_ref() else {
                         break;
                     };
-                    let mut command = launcher.command();
-                    command
-                        .arg("gateway")
-                        .env("HERMES_HOME", &hermes_home)
-                        .current_dir(&gateway_dir)
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null());
-                    if uses_chatgpt {
-                        command.env("CODEX_HOME", codex_home_dir());
-                    }
-                    match command.spawn() {
+                    match spawn_gateway_child(launcher, &hermes_home, &gateway_dir, uses_chatgpt) {
                         Ok(child) => {
                             *get_hermes_gateway_process().lock() = Some(child);
                             let mut supervisor = supervisor().lock();
@@ -1590,6 +1703,17 @@ fn memory_context(snippets: &[crate::operator::memory::MemorySnippet]) -> String
     )
 }
 
+const HERMES_STOPPED: &str = "Stopped.";
+
+/// One stop signal per chat with a message in flight.
+fn hermes_cancels() -> &'static AgentMutex<HashMap<String, Arc<tokio::sync::Notify>>> {
+    static CANCELS: AgentOnceLock<AgentMutex<HashMap<String, Arc<tokio::sync::Notify>>>> =
+        AgentOnceLock::new();
+    CANCELS.get_or_init(|| AgentMutex::new(HashMap::new()))
+}
+
+/// Sends one message. A send that fails is still kept in the chat, marked
+/// as not sent; a send the person stopped is dropped.
 #[tauri::command]
 pub async fn send_hermes_message(
     state: State<'_, Arc<AppState>>,
@@ -1598,17 +1722,77 @@ pub async fn send_hermes_message(
     memory_ids: Option<Vec<String>>,
 ) -> Result<HermesChatReply, String> {
     let memory_ids = memory_ids.unwrap_or_default();
-    let attached = super::agent_chats::load_attached_memories(state.inner(), &memory_ids).await?;
-    let status = ensure_hermes_gateway_ready(state.inner(), 12_000).await?;
+    let sent_at = chrono::Utc::now().timestamp_millis();
+    let cancel = Arc::new(tokio::sync::Notify::new());
+    hermes_cancels()
+        .lock()
+        .insert(conversation_id.clone(), cancel.clone());
+    let result = tokio::select! {
+        result = deliver_hermes_message(state.inner(), conversation_id.clone(), input.clone(), memory_ids.clone()) => result,
+        _ = cancel.notified() => Err(HERMES_STOPPED.to_string()),
+    };
+    {
+        let mut cancels = hermes_cancels().lock();
+        if cancels
+            .get(&conversation_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &cancel))
+        {
+            cancels.remove(&conversation_id);
+        }
+    }
+    if let Err(error) = &result {
+        if error != HERMES_STOPPED && !input.trim().is_empty() {
+            let memories = super::agent_chats::load_attached_memories(state.inner(), &memory_ids)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .map(super::agent_chats::attached_memory)
+                .collect();
+            let failed = super::agent_chats::record_failed_message(
+                state.inner(),
+                &conversation_id,
+                super::agent_chats::AgentChatMessage {
+                    role: "user".to_string(),
+                    content: input.trim().to_string(),
+                    at: sent_at,
+                    memories,
+                    failed: true,
+                },
+            );
+            if let Err(err) = failed {
+                tracing::warn!(%err, "agent_chats:record_failed");
+            }
+        }
+    }
+    result
+}
 
-    let api_key = read_hermes_api_key(state.inner())
+/// Stops waiting for the reply to a chat's message in flight.
+#[tauri::command]
+pub async fn cancel_hermes_message(conversation_id: String) -> Result<(), String> {
+    if let Some(cancel) = hermes_cancels().lock().get(&conversation_id) {
+        cancel.notify_one();
+    }
+    Ok(())
+}
+
+async fn deliver_hermes_message(
+    state: &Arc<AppState>,
+    conversation_id: String,
+    input: String,
+    memory_ids: Vec<String>,
+) -> Result<HermesChatReply, String> {
+    let attached = super::agent_chats::load_attached_memories(state, &memory_ids).await?;
+    let status = ensure_hermes_gateway_ready(state, 12_000).await?;
+
+    let api_key = read_hermes_api_key(state)
         .ok_or_else(|| "FNDR could not read the Hermes API server key.".to_string())?;
     let user_text = input.trim().to_string();
     if user_text.is_empty() {
         return Err("Message cannot be empty.".to_string());
     }
     let sent_at = chrono::Utc::now().timestamp_millis();
-    let snippets = crate::operator::memory::snippets(state.inner(), &user_text).await;
+    let snippets = crate::operator::memory::snippets(state, &user_text).await;
     let input = format!(
         "{}{}{}",
         memory_context(&snippets).trim_start(),
@@ -1635,10 +1819,15 @@ pub async fn send_hermes_message(
             .and_then(|url| url.host_str().map(str::to_string))
             .unwrap_or_else(|| "unknown".to_string()),
     };
-    crate::privacy_proof::record_model_request(
-        "hermes_chat",
+    crate::privacy_proof::record_model_request_including(
+        crate::privacy_proof::Feature::HermesChat,
         &model_host,
         input.len() + instructions.len(),
+        if snippets.is_empty() && attached.is_empty() {
+            &[]
+        } else {
+            &["memories"]
+        },
     );
 
     let client = llm_http_client().map_err(|e| format!("HTTP client: {e}"))?;
@@ -1701,19 +1890,21 @@ pub async fn send_hermes_message(
         .map(super::agent_chats::attached_memory)
         .collect();
     let history = super::agent_chats::record_exchange(
-        state.inner(),
+        state,
         &conversation_id,
         super::agent_chats::AgentChatMessage {
             role: "user".to_string(),
             content: user_text,
             at: sent_at,
             memories,
+            failed: false,
         },
         super::agent_chats::AgentChatMessage {
             role: "assistant".to_string(),
             content: content.clone(),
             at: chrono::Utc::now().timestamp_millis(),
             memories: Vec::new(),
+            failed: false,
         },
     );
     if let Err(err) = history {
@@ -2043,6 +2234,56 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_failed_gateway_start_reports_its_last_output_bounded() {
+        let mut tail = std::collections::VecDeque::new();
+        for n in 0..(GATEWAY_STDERR_LINES + 5) {
+            remember_gateway_stderr(&mut tail, &format!("line {n}"));
+        }
+        remember_gateway_stderr(&mut tail, "   ");
+        remember_gateway_stderr(&mut tail, &"x".repeat(GATEWAY_STDERR_LINE_CHARS * 2));
+        assert_eq!(tail.len(), GATEWAY_STDERR_LINES);
+        assert_eq!(tail.back().unwrap().chars().count(), GATEWAY_STDERR_LINE_CHARS);
+        assert_eq!(
+            gateway_exit_message("with status 1", Some("ModuleNotFoundError: yaml")),
+            "Hermes gateway exited with status 1. Last output: ModuleNotFoundError: yaml"
+        );
+        assert_eq!(
+            gateway_exit_message("with status 1", None),
+            "Hermes gateway exited with status 1."
+        );
+    }
+
+    #[test]
+    fn only_a_hermes_gateway_process_counts_as_a_stale_gateway() {
+        assert!(is_hermes_gateway_command(
+            "/Users/a/Library/Application Support/x/hermes-runtime/venv/bin/python /x/src/hermes gateway"
+        ));
+        assert!(is_hermes_gateway_command("/Users/a/.local/bin/hermes gateway"));
+        assert!(!is_hermes_gateway_command("/usr/bin/python3 server.py gateway"));
+        assert!(!is_hermes_gateway_command("/Users/a/.local/bin/hermes chat"));
+        assert!(!is_hermes_gateway_command(""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_files_are_readable_by_the_owner_only_even_when_they_already_exist() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "OLD=1\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_private(&path, "OPENROUTER_API_KEY=k\n").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "OPENROUTER_API_KEY=k\n"
+        );
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
 
     fn record(provider: &str, model: &str, base_url: Option<&str>) -> HermesSetupRecord {
         HermesSetupRecord {
