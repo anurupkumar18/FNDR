@@ -34,7 +34,7 @@ None of this has been compiled or run since the last edit. Next steps, in order:
 3. With FNDR closed, run `cargo test --lib briefing_reports_and_does_not_advise -- --ignored --nocapture` and read the CHECK line. The previous prompt (v7) gave no advice and did not name an app as the actor, but copied the notes back word for word in all three cases. If v8 still copies, the fallback covers it; consider making the plain briefing the default and dropping the model call.
 4. Commit by path (hunk-split `hermes_agent.rs`), update `docs/product/llm-task-catalog.md` and `CHANGELOG.md`, push.
 
-Note: the startup briefing notification in `src-tauri/src/main.rs` builds its own lines in the old `[App] title — snippet` format and does not use `briefing.rs`. It was left alone because the file holds the other session's edits. It should use `briefing::briefing_lines` and the fallback.
+Note: the startup briefing notification in `src-tauri/src/main.rs` builds its own lines in the old format (app in brackets, then title and snippet) and does not use `briefing.rs`. It was left alone because the file holds the other session's edits. It should use `briefing::briefing_lines` and the fallback.
 
 ## Shipped today, by area
 
