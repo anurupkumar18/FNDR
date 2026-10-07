@@ -168,7 +168,6 @@ fn main() {
                 state_store,
                 graph,
                 None,
-                None,
             ));
             state.set_app_handle(app.handle().clone());
 
@@ -207,7 +206,7 @@ fn main() {
                     );
                     let loaded =
                         fndr_lib::load_ai_engines(restore_data_dir.as_path(), &config).await;
-                    restore_state.replace_ai_engines(loaded.inference, loaded.vlm);
+                    restore_state.replace_ai_engines(loaded.inference);
                 });
             }
 
@@ -891,6 +890,12 @@ fn main() {
             ipc::commands::delete_memory_journey,
             #[cfg(debug_assertions)]
             ipc::commands::delete_all_memory_journeys,
+            // Synthetic image replay is debug-only and refuses any profile
+            // without the explicit Quality Lab marker.
+            #[cfg(debug_assertions)]
+            ipc::commands::get_quality_lab_fixtures,
+            #[cfg(debug_assertions)]
+            ipc::commands::replay_quality_lab_fixture,
             // Clipboard history
             ipc::commands::get_clipboard_history,
             ipc::commands::copy_clipboard_entry,

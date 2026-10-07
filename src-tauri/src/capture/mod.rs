@@ -6810,7 +6810,6 @@ mod tests {
             state_store,
             graph,
             None,
-            None,
         );
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -6859,7 +6858,6 @@ mod tests {
             store.clone(),
             state_store,
             graph,
-            None,
             None,
         );
         tokio::runtime::Builder::new_current_thread()
@@ -6954,6 +6952,63 @@ mod tests {
     #[test]
     fn capture_keeps_agent_notes_separate_from_persisted_continuity_anchor() {
         assert_capture_keeps_agent_note_separate(true, true);
+    }
+
+    #[test]
+    fn committed_capture_fixtures_match_the_pre_frame_privacy_gate() {
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            id: String,
+            app_class: String,
+            #[serde(default)]
+            app_name: Option<String>,
+            #[serde(default)]
+            bundle_id: Option<String>,
+            window_title: String,
+            #[serde(default)]
+            url: Option<String>,
+            expected_outcome: String,
+        }
+
+        let manifest = include_str!("../../tests/fixtures/screens/manifest.json");
+        let fixtures: Vec<Fixture> = serde_json::from_str(manifest).expect("fixture manifest parses");
+        let default_blocklist = crate::config::Config::default().blocklist;
+        let mut checked = 0;
+        println!("fixture | expected admission | actual admission");
+
+        for fixture in fixtures {
+            if fixture.app_class != "privacy_negative" && fixture.expected_outcome != "store" {
+                continue;
+            }
+            let app_name = fixture.app_name.as_deref().unwrap_or_else(|| match fixture.bundle_id.as_deref() {
+                Some("com.microsoft.VSCode") => "Visual Studio Code",
+                Some("com.apple.Terminal") => "Terminal",
+                Some("com.google.Chrome") => "Google Chrome",
+                Some("com.tinyspeck.slackmacgap") => "Slack",
+                Some("com.apple.Preview") => "Preview",
+                _ => "Unknown",
+            });
+            let actual = super::capture_admission_skip_reason(
+                app_name,
+                fixture.bundle_id.as_deref(),
+                &fixture.window_title,
+                fixture.url.as_deref(),
+                None,
+                &default_blocklist,
+            )
+            .map(|reason| format!("skip:{}", reason.as_str()))
+            .unwrap_or_else(|| "store".to_string());
+
+            println!("{} | {} | {}", fixture.id, fixture.expected_outcome, actual);
+            assert_eq!(
+                actual, fixture.expected_outcome,
+                "fixture {} must match the real pre-frame gate",
+                fixture.id
+            );
+            checked += 1;
+        }
+
+        assert_eq!(checked, 30, "all committed store and privacy fixtures are checked");
     }
 
     #[test]

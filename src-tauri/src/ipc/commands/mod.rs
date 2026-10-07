@@ -94,6 +94,11 @@ mod memory_journey;
 #[cfg(debug_assertions)]
 pub use memory_journey::*;
 
+#[cfg(debug_assertions)]
+mod quality_lab;
+#[cfg(debug_assertions)]
+pub use quality_lab::*;
+
 // Privacy proof IPC command
 pub use crate::privacy_proof::*;
 

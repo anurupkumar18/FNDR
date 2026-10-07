@@ -103,7 +103,7 @@ describe("MemoryJourneyInspector", () => {
         expect(screen.getByText("1 artifact")).toBeInTheDocument();
         expect(screen.getByText("artifacts/recognized.txt")).toBeInTheDocument();
         expect(screen.getByText(/24 B · sha256 aaaaaaaa/i)).toBeInTheDocument();
-        expect(screen.getByText(/not model chain-of-thought/i)).toBeInTheDocument();
+        expect(screen.getByText(/stages without durable run evidence stay marked unavailable/i)).toBeInTheDocument();
     });
 
     it("arms through IPC and advances only when an event-backed status arrives", async () => {
@@ -151,5 +151,243 @@ describe("MemoryJourneyInspector", () => {
             path: "search",
             queryKind: "exact",
         }));
+    });
+
+    it("imports a positive fixture and runs its exact, paraphrase, grounded, and unsupported cases serially", async () => {
+        const evaluation = {
+            fixture_id: "chat_mock-01",
+            required_facts: ["Priya finished the export bug fix and is opening a PR."],
+            exact_query: "export bug fix PR",
+            paraphrase_query: "what happened to the export issue",
+            grounded_question: "What did Priya finish?",
+            unsupported_question: "What file size caused the failure?",
+        };
+        const fixtureManifest = { ...manifest, journey_id: "fixture-journey", memory_id: "fixture-memory" };
+        const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+        mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+            calls.push({ command, args });
+            if (command === "get_quality_lab_fixtures") {
+                return Promise.resolve([{
+                    id: "chat_mock-01",
+                    app_class: "chat",
+                    file_name: "chat_mock-01.png",
+                    expected_text: "synthetic expected OCR",
+                    cer_budget: 0.05,
+                    evaluation,
+                }]);
+            }
+            if (command === "replay_quality_lab_fixture") {
+                return Promise.resolve({ fixture_id: "chat_mock-01", memory_id: "fixture-memory" });
+            }
+            if (command === "create_reconstructed_memory_journey") return Promise.resolve(fixtureManifest);
+            if (command === "run_memory_journey_query") {
+                const queryKind = args?.queryKind as string;
+                const queryRun = {
+                    id: `run-${queryKind}`,
+                    path: args?.path,
+                    kind: queryKind,
+                    query: args?.query,
+                    duration_ms: 12,
+                    result_ids: queryKind === "unsupported" ? [] : ["fixture-memory"],
+                    citation_ids: queryKind === "grounded" ? ["fixture-memory"] : [],
+                    refusal: queryKind === "unsupported",
+                };
+                return Promise.resolve({
+                    manifest: { ...fixtureManifest, query_runs: [queryRun] },
+                    cards: [],
+                    answer: queryKind === "unsupported" ? null : "Supported answer from the fixture.",
+                });
+            }
+            return Promise.resolve(status);
+        });
+        render(<MemoryJourneyInspector />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Import + run 4 checks" }));
+
+        await screen.findByText("unsupported · ask");
+        expect(screen.getByText(/Checks run 4\/4 · 4 passed · 0 not run/)).toBeInTheDocument();
+        expect(screen.getAllByText("Target memory rank 1 · Pass")).toHaveLength(2);
+        expect(screen.getByText("Target memory rank 1 · target cited · Pass")).toBeInTheDocument();
+        expect(screen.getByText("Target memory not returned · refused · Pass")).toBeInTheDocument();
+        const queryCalls = calls.filter((call) => call.command === "run_memory_journey_query");
+        expect(queryCalls.map((call) => [call.args?.queryKind, call.args?.path, call.args?.query])).toEqual([
+            ["exact", "search", evaluation.exact_query],
+            ["paraphrase", "search", evaluation.paraphrase_query],
+            ["grounded", "ask", evaluation.grounded_question],
+            ["unsupported", "ask", evaluation.unsupported_question],
+        ]);
+        expect(calls.findIndex((call) => call.command === "replay_quality_lab_fixture"))
+            .toBeLessThan(calls.findIndex((call) => call.command === "create_reconstructed_memory_journey"));
+    });
+
+    it("reports how many fixture checks were not run after an evaluation error", async () => {
+        const evaluation = {
+            fixture_id: "chat_mock-01",
+            required_facts: ["Priya finished the export bug fix and is opening a PR."],
+            exact_query: "export bug fix PR",
+            paraphrase_query: "what happened to the export issue",
+            grounded_question: "What did Priya finish?",
+            unsupported_question: "What file size caused the failure?",
+        };
+        const fixtureManifest = { ...manifest, journey_id: "fixture-journey", memory_id: "fixture-memory" };
+        mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+            if (command === "get_quality_lab_fixtures") {
+                return Promise.resolve([{
+                    id: "chat_mock-01",
+                    app_class: "chat",
+                    file_name: "chat_mock-01.png",
+                    expected_text: "synthetic expected OCR",
+                    cer_budget: 0.05,
+                    evaluation,
+                }]);
+            }
+            if (command === "replay_quality_lab_fixture") {
+                return Promise.resolve({ fixture_id: "chat_mock-01", memory_id: "fixture-memory" });
+            }
+            if (command === "create_reconstructed_memory_journey") return Promise.resolve(fixtureManifest);
+            if (command === "run_memory_journey_query") {
+                if (args?.queryKind === "grounded") return Promise.reject(new Error("Ask unavailable"));
+                const queryRun = {
+                    id: `run-${String(args?.queryKind)}`,
+                    path: args?.path,
+                    kind: args?.queryKind,
+                    query: args?.query,
+                    duration_ms: 12,
+                    result_ids: ["fixture-memory"],
+                    citation_ids: [],
+                    refusal: false,
+                };
+                return Promise.resolve({ manifest: { ...fixtureManifest, query_runs: [queryRun] }, cards: [], answer: null });
+            }
+            return Promise.resolve(status);
+        });
+        render(<MemoryJourneyInspector />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Import + run 4 checks" }));
+
+        const progress = await screen.findByText(/Exact\/paraphrase require target rank/);
+        expect(progress.closest("p")).toHaveTextContent("Checks run 2/4 · 2 passed · 2 not run.");
+        expect(screen.getByRole("alert")).toHaveTextContent("Ask unavailable");
+    });
+
+    it("runs all gold fixtures serially and reports per-fixture completion", async () => {
+        const makeFixture = (id: string) => ({
+            id,
+            app_class: "browser",
+            file_name: `${id}.png`,
+            expected_text: `Expected text for ${id}`,
+            cer_budget: 0.1,
+            evaluation: {
+                fixture_id: id,
+                required_facts: [`Fact for ${id}`],
+                exact_query: `exact ${id}`,
+                paraphrase_query: `paraphrase ${id}`,
+                grounded_question: `grounded ${id}`,
+                unsupported_question: `unsupported ${id}`,
+            },
+        });
+        const fixtures = [makeFixture("case-one"), makeFixture("case-two")];
+        const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+        let activeFixtureId = "";
+        mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+            calls.push({ command, args });
+            if (command === "get_quality_lab_fixtures") return Promise.resolve(fixtures);
+            if (command === "replay_quality_lab_fixture") {
+                activeFixtureId = String(args?.fixtureId);
+                return Promise.resolve({ fixture_id: activeFixtureId, memory_id: `memory-${activeFixtureId}` });
+            }
+            if (command === "create_reconstructed_memory_journey") {
+                return Promise.resolve({ ...manifest, journey_id: `journey-${activeFixtureId}`, memory_id: `memory-${activeFixtureId}` });
+            }
+            if (command === "run_memory_journey_query") {
+                const queryKind = String(args?.queryKind);
+                const memoryId = `memory-${activeFixtureId}`;
+                const queryRun = {
+                    id: `run-${activeFixtureId}-${queryKind}`,
+                    path: args?.path,
+                    kind: queryKind,
+                    query: args?.query,
+                    duration_ms: 12,
+                    result_ids: queryKind === "unsupported" ? [] : [memoryId],
+                    citation_ids: queryKind === "grounded" ? [memoryId] : [],
+                    refusal: queryKind === "unsupported",
+                };
+                return Promise.resolve({ manifest: { ...manifest, query_runs: [queryRun] }, cards: [], answer: "Supported answer" });
+            }
+            return Promise.resolve(status);
+        });
+        render(<MemoryJourneyInspector />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Run all 2 gold cases" }));
+
+        await screen.findByText(/Gold set 2\/2 fixtures finished/);
+        expect(screen.getByText("case-one: 4/4 checks passed")).toBeInTheDocument();
+        expect(screen.getByText("case-two: 4/4 checks passed")).toBeInTheDocument();
+        expect(screen.getByText(/8 checks passed; 0 checks need review; 0 checks not run; 0 fixture errors/)).toBeInTheDocument();
+        const fixtureStages = calls
+            .filter((call) => ["replay_quality_lab_fixture", "create_reconstructed_memory_journey", "run_memory_journey_query"].includes(call.command))
+            .map((call) => call.command === "run_memory_journey_query" ? `query:${call.args?.query}` : call.command);
+        expect(fixtureStages).toEqual([
+            "replay_quality_lab_fixture", "create_reconstructed_memory_journey",
+            "query:exact case-one", "query:paraphrase case-one", "query:grounded case-one", "query:unsupported case-one",
+            "replay_quality_lab_fixture", "create_reconstructed_memory_journey",
+            "query:exact case-two", "query:paraphrase case-two", "query:grounded case-two", "query:unsupported case-two",
+        ]);
+    });
+
+    it("continues the gold batch after a fixture query fails and counts its unrun checks", async () => {
+        const fixtures = ["case-one", "case-two"].map((id) => ({
+            id,
+            app_class: "browser",
+            file_name: `${id}.png`,
+            expected_text: `Expected text for ${id}`,
+            cer_budget: 0.1,
+            evaluation: {
+                fixture_id: id,
+                required_facts: [`Fact for ${id}`],
+                exact_query: `exact ${id}`,
+                paraphrase_query: `paraphrase ${id}`,
+                grounded_question: `grounded ${id}`,
+                unsupported_question: `unsupported ${id}`,
+            },
+        }));
+        let activeFixtureId = "";
+        mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+            if (command === "get_quality_lab_fixtures") return Promise.resolve(fixtures);
+            if (command === "replay_quality_lab_fixture") {
+                activeFixtureId = String(args?.fixtureId);
+                return Promise.resolve({ fixture_id: activeFixtureId, memory_id: `memory-${activeFixtureId}` });
+            }
+            if (command === "create_reconstructed_memory_journey") {
+                return Promise.resolve({ ...manifest, journey_id: `journey-${activeFixtureId}`, memory_id: `memory-${activeFixtureId}` });
+            }
+            if (command === "run_memory_journey_query") {
+                if (activeFixtureId === "case-one" && args?.queryKind === "grounded") {
+                    return Promise.reject(new Error("Ask failed"));
+                }
+                const queryKind = String(args?.queryKind);
+                const memoryId = `memory-${activeFixtureId}`;
+                const queryRun = {
+                    id: `run-${activeFixtureId}-${queryKind}`,
+                    path: args?.path,
+                    kind: queryKind,
+                    query: args?.query,
+                    duration_ms: 12,
+                    result_ids: queryKind === "unsupported" ? [] : [memoryId],
+                    citation_ids: queryKind === "grounded" ? [memoryId] : [],
+                    refusal: queryKind === "unsupported",
+                };
+                return Promise.resolve({ manifest: { ...manifest, query_runs: [queryRun] }, cards: [], answer: "Supported answer" });
+            }
+            return Promise.resolve(status);
+        });
+        render(<MemoryJourneyInspector />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Run all 2 gold cases" }));
+
+        await screen.findByText(/Gold set 2\/2 fixtures finished/);
+        expect(screen.getByText(/6 checks passed; 0 checks need review; 2 checks not run; 1 fixture errors/)).toBeInTheDocument();
+        expect(screen.getByText("case-one: failed · Error: Ask failed")).toBeInTheDocument();
+        expect(screen.getByText("case-two: 4/4 checks passed")).toBeInTheDocument();
     });
 });
