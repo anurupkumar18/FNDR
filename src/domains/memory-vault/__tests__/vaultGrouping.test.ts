@@ -107,13 +107,30 @@ describe("groupVaultMemories", () => {
                 day: "2026-09-22",
                 threads: [
                     { thread: "Beta", rows: ["c"] },
-                    { thread: "Alpha", rows: ["a", "b", "d"] },
+                    { thread: "Alpha", rows: ["a+b", "d"] },
                 ],
             },
         ];
 
         expect(shape(memories)).toEqual(expected);
         expect(shape([...memories].reverse())).toEqual(expected);
+    });
+
+    it("folds captures no more than 30 minutes apart into one session and starts a new one after a longer gap", () => {
+        expect(
+            shape([
+                memory("s1-c", { title: "Third", timestamp: at(9, 22, 10, 50) }),
+                memory("s1-b", { title: "Second", timestamp: at(9, 22, 10, 25) }),
+                memory("s1-a", { title: "First", timestamp: at(9, 22, 10, 0) }),
+                memory("s0", { title: "Earlier", timestamp: at(9, 22, 9, 29) }),
+                memory("note", { title: "Note", timestamp: at(9, 22, 10, 30), source_type: "agent" } as Partial<MemoryCard>),
+            ]),
+        ).toEqual([
+            {
+                day: "2026-09-22",
+                threads: [{ thread: "VS Code", rows: ["s1-c+s1-b,s1-a", "note", "s0"] }],
+            },
+        ]);
     });
 
     it("collapses near-duplicates by normalized title and app within one thread, keeping the newest as lead", () => {
@@ -130,7 +147,7 @@ describe("groupVaultMemories", () => {
             {
                 day: "2026-09-22",
                 threads: [
-                    { thread: "Beta", rows: ["draft-3+draft-2,draft-1", "other-app"] },
+                    { thread: "Beta", rows: ["draft-3+draft-2,other-app,draft-1"] },
                     { thread: "Capstone", rows: ["other-thread"] },
                 ],
             },

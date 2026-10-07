@@ -874,3 +874,58 @@
 [data-theme="light"] .memory-browse-url:hover {
     background: rgba(30, 100, 200, 0.1);
 }
+
+/* Compact Vault toolbar: search, filters, count and secondary views on one row. */
+.memory-cards-toolbar {
+    align-items: center;
+    flex-wrap: wrap;
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+
+.memory-cards-filters {
+    order: -1;
+    flex: 1 1 520px;
+    gap: 8px;
+    align-items: center;
+}
+
+.memory-cards-search {
+    flex: 1 1 200px;
+    min-width: 160px;
+    min-height: 36px;
+    border-radius: 10px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+    padding: 6px 12px;
+    font-family: var(--film-font-ui);
+    font-size: 14px;
+}
+
+.memory-cards-search:focus-visible {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+    outline: none;
+}
+
+.memory-cards-filter select {
+    min-width: 132px;
+    min-height: 36px;
+    border-radius: 999px;
+    padding: 6px 30px 6px 12px;
+    font-size: 13px;
+}
+
+.memory-cards-toolbar-top .memory-cards-tab {
+    min-height: 32px;
+    padding: 4px 12px;
+    font-size: 12px;
+}
+
+.memory-cards-activity-trace {
+    border-top: var(--header-border);
+    border-bottom: 0;
+    padding-top: 6px;
+    padding-bottom: 6px;
+}

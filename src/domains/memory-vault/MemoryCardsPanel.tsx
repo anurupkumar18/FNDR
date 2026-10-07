@@ -164,6 +164,7 @@ export function MemoryCardsPanel({
     const [error, setError] = useState<string | null>(null);
     const [vaultActivity, setVaultActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [appFilter, setAppFilter] = useState<string>(APP_FILTER_ALL);
+    const [vaultQuery, setVaultQuery] = useState("");
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(TIME_FILTER_ALL);
     const [perspectiveFilter, setPerspectiveFilter] = useState<PerspectiveFilter>(PERSPECTIVE_FILTER_ALL);
     const [renderedCardLimit, setRenderedCardLimit] = useState(MEMORY_RENDER_BATCH);
@@ -215,10 +216,17 @@ export function MemoryCardsPanel({
             .sort((a, b) => a.localeCompare(b));
     }, [appNames]);
 
-    const filteredCards = useMemo(
-        () => cards.filter((card) => matchesFilters(card, timeFilter, perspectiveFilter)),
-        [cards, timeFilter, perspectiveFilter]
-    );
+    const filteredCards = useMemo(() => {
+        const needle = vaultQuery.trim().toLowerCase();
+        return cards.filter(
+            (card) =>
+                matchesFilters(card, timeFilter, perspectiveFilter) &&
+                (!needle ||
+                    `${card.title} ${card.summary} ${card.display_summary ?? ""} ${card.app_name} ${card.window_title}`
+                        .toLowerCase()
+                        .includes(needle))
+        );
+    }, [cards, timeFilter, perspectiveFilter, vaultQuery]);
 
     const vaultDays = useMemo(
         () => groupVaultMemories(filteredCards.slice(0, renderedCardLimit), Date.now()),
@@ -633,8 +641,16 @@ export function MemoryCardsPanel({
 
                 {showListSurface && !showNeedsSignal && (
                 <div className="memory-cards-filters">
+                    <input
+                        type="search"
+                        className="memory-cards-search"
+                        aria-label="Filter memories by text"
+                        placeholder="Filter these memories"
+                        value={vaultQuery}
+                        onChange={(event) => setVaultQuery(event.target.value)}
+                    />
                     <label className="memory-cards-filter">
-                        App
+                        <span className="sr-only">App</span>
                         <div className="memory-cards-filter-control">
                             <select
                                 value={appFilter}
@@ -654,7 +670,7 @@ export function MemoryCardsPanel({
                     </label>
 
                     <label className="memory-cards-filter">
-                        When
+                        <span className="sr-only">When</span>
                         <div className="memory-cards-filter-control">
                             <select
                                 value={timeFilter}
@@ -673,7 +689,7 @@ export function MemoryCardsPanel({
                     </label>
 
                     <label className="memory-cards-filter">
-                        Activity
+                        <span className="sr-only">Activity</span>
                         <div className="memory-cards-filter-control">
                             <select
                                 value={perspectiveFilter}
@@ -698,12 +714,6 @@ export function MemoryCardsPanel({
                     </div>
                 )}
             </div>
-
-            {showListSurface && vaultActivity && (
-                <div className="memory-cards-activity-trace">
-                    <ActivityTrace trace={vaultActivity} />
-                </div>
-            )}
 
             <div
                 className={`memory-cards-body${
@@ -1100,6 +1110,11 @@ export function MemoryCardsPanel({
                     />
                 );
             })()}
+            {showListSurface && vaultActivity && (
+                <div className="memory-cards-activity-trace">
+                    <ActivityTrace trace={vaultActivity} />
+                </div>
+            )}
         </div>
     );
 }

@@ -3,7 +3,12 @@ import type { MemoryCard } from "@/shared/ipc/tauri";
 /** Where a memory came from, for the Vault row icon. */
 export type VaultSourceKind = "page" | "document" | "download" | "agent" | "screen";
 
-/** One visible Vault row: the newest memory plus older near-duplicates folded under it. */
+/** One work session never spans a gap longer than this between two captures. */
+export const SESSION_GAP_MS = 30 * 60 * 1000;
+
+/** One visible Vault row: the newest memory of a session, with the session's
+ *  older moments and near-duplicates folded under it. Display only; nothing
+ *  stored changes. */
 export interface VaultRow {
     lead: MemoryCard;
     similar: MemoryCard[];
@@ -65,14 +70,17 @@ function nearDuplicateKey(card: MemoryCard): string {
 }
 
 /**
- * Groups Vault memories by local day, then by thread, newest first, and folds
- * near-duplicates (same normalized title and app in the same thread) under the
- * newest one. `now` only decides the Today and Yesterday labels.
+ * Groups Vault memories by local day, then by thread, newest first. Within a
+ * thread, captures no more than `SESSION_GAP_MS` apart form one session and
+ * fold under its newest memory, as do near-duplicates (same normalized title
+ * and app). Agent notes always stand alone. `now` only decides the Today and
+ * Yesterday labels.
  */
 export function groupVaultMemories(memories: MemoryCard[], now: number): VaultDay[] {
     const days = new Map<string, VaultDay>();
     const threads = new Map<string, VaultThread>();
     const rows = new Map<string, VaultRow>();
+    const openSessions = new Map<string, { row: VaultRow; oldest: number }>();
     for (const card of [...memories].sort(newestFirst)) {
         const dayKey = localDayKey(new Date(card.timestamp));
         let day = days.get(dayKey);
@@ -89,13 +97,18 @@ export function groupVaultMemories(memories: MemoryCard[], now: number): VaultDa
             day.threads.push(thread);
         }
         const rowKey = `${threadKey}\n${nearDuplicateKey(card)}`;
-        const row = rows.get(rowKey);
+        const isNote = (card as MemoryCard & { source_type?: string }).source_type === "agent";
+        const session = isNote ? undefined : openSessions.get(threadKey);
+        const inSession = session !== undefined && session.oldest - card.timestamp <= SESSION_GAP_MS;
+        const row = rows.get(rowKey) ?? (inSession ? session.row : undefined);
         if (row) {
             row.similar.push(card);
+            if (inSession && row === session.row) session.oldest = card.timestamp;
         } else {
             const lead: VaultRow = { lead: card, similar: [] };
             rows.set(rowKey, lead);
             thread.rows.push(lead);
+            if (!isNote) openSessions.set(threadKey, { row: lead, oldest: card.timestamp });
         }
         thread.count += 1;
         day.count += 1;

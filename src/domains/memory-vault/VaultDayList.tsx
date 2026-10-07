@@ -61,6 +61,14 @@ function SourceIcon({ kind }: { kind: VaultSourceKind }) {
     );
 }
 
+/** "4:41 PM to 6:24 PM" for a session row. */
+function sessionRange(row: VaultRow): string {
+    const clock = (timestamp: number) =>
+        new Date(timestamp).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const oldest = Math.min(row.lead.timestamp, ...row.similar.map((card) => card.timestamp));
+    return oldest === row.lead.timestamp ? clock(oldest) : `${clock(oldest)} to ${clock(row.lead.timestamp)}`;
+}
+
 function threadCountHint(card: MemoryCard): number | undefined {
     return (
         card.topic_categories?.length ||
@@ -78,7 +86,7 @@ interface VaultDayListProps {
     onReopen: (card: MemoryCard) => void;
 }
 
-/** The Vault list: day sections, thread headings, and one row per near-duplicate group. */
+/** The Vault list: day sections, thread headings, and one row per session. */
 export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: VaultDayListProps) {
     const [openSimilarIds, setOpenSimilarIds] = useState<Set<string>>(new Set());
 
@@ -116,10 +124,11 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
                         type="button"
                         className="ui-action-btn vault-row-action vault-row-similar"
                         aria-expanded={similarOpen}
-                        aria-label={`${row.similar.length} similar to ${card.title}`}
+                        aria-label={`${row.similar.length} more ${row.similar.length === 1 ? "moment" : "moments"} from this session: ${card.title}`}
+                        title={sessionRange(row)}
                         onClick={() => toggleSimilar(card.id)}
                     >
-                        {row.similar.length} similar
+                        {row.similar.length + 1} moments
                     </button>
                 )}
             </div>

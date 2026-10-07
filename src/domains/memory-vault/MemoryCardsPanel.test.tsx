@@ -60,7 +60,7 @@ function card(index: number): MemoryCard {
         summary: `Worked through memory loading issue ${index}.`,
         action: "Reviewed memory loading",
         context: ["FNDR"],
-        timestamp: Date.now() - index,
+        timestamp: Date.now() - index * 31 * 60 * 1000,
         app_name: "VS Code",
         window_title: `Memory ${index}`,
         score: 1,
@@ -310,7 +310,7 @@ describe("MemoryCardsPanel", () => {
 
         renderVault();
 
-        const toggle = await screen.findByRole("button", { name: /^2 similar/ });
+        const toggle = await screen.findByRole("button", { name: /^2 more moments/ });
         expect(screen.getAllByRole("button", { name: "Open memory: Drafted the demo script" })).toHaveLength(1);
         expect(toggle).toHaveAttribute("aria-expanded", "false");
 
@@ -332,7 +332,7 @@ describe("MemoryCardsPanel", () => {
         fireEvent.click(await screen.findByRole("button", { name: "Open source: Read the rubric" }));
         expect(reopenMemory).toHaveBeenLastCalledWith("memory-1");
 
-        fireEvent.click(screen.getByRole("button", { name: /^1 similar/ }));
+        fireEvent.click(screen.getByRole("button", { name: /^1 more moment/ }));
         fireEvent.click(screen.getAllByRole("button", { name: "Open source: Read the rubric" })[1]);
         expect(reopenMemory).toHaveBeenLastCalledWith("memory-2");
     });
