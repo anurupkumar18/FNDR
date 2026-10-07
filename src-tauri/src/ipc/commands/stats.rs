@@ -204,10 +204,16 @@ pub async fn fndr_unsubscribe(
 /// Start MCP server (optional custom port)
 #[tauri::command]
 pub async fn start_mcp_server(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     port: Option<u16>,
 ) -> Result<McpServerStatus, String> {
-    mcp::start(state.inner().clone(), None, port).await
+    mcp::start(Some(app), state.inner().clone(), None, port).await
+}
+
+#[tauri::command]
+pub async fn resolve_mcp_approval(request_id: String, approved: bool) -> bool {
+    mcp::resolve_approval(&request_id, approved)
 }
 
 /// Stop MCP server

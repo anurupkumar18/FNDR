@@ -60,6 +60,8 @@ async fn serve(app_state: Arc<AppState>, require_auth: bool, embedder: NoteEmbed
     let limiter_clock = clock.clone();
     let state = Arc::new(HttpState {
         app_state: app_state.clone(),
+        app_handle: None,
+        approvals: Arc::new(McpApprovalBroker::default()),
         token: TOKEN.to_string(),
         mode: McpDeploymentMode::Local,
         require_auth,

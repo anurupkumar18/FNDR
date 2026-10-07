@@ -11,6 +11,7 @@ import { EngineMetricsPanel } from "@/domains/workspace/EngineMetricsPanel";
 import { PrivacyProofPanel } from "@/domains/privacy-proof/PrivacyProof";
 import { AgentWorkspace } from "@/domains/workspace/AgentWorkspace";
 import { AppToasts } from "./AppToasts";
+import { McpApprovalPrompt } from "./McpApprovalPrompt";
 import { PanelPresence } from "./PanelPresence";
 import { PanelErrorBoundary } from "./PanelErrorBoundary";
 import type { AppToast } from "./types";
@@ -169,6 +170,7 @@ export function AppPanels({
                 }}
             />
             <AppToasts toasts={appToasts} onAction={onToastAction} onDismiss={onDismissToast} />
+            <McpApprovalPrompt />
         </>
     );
 }

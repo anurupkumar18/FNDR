@@ -723,6 +723,7 @@ fn main() {
             ipc::commands::get_mcp_server_status,
             ipc::commands::start_mcp_server,
             ipc::commands::stop_mcp_server,
+            ipc::commands::resolve_mcp_approval,
             // Companion API (iPhone / Apple Watch)
             ipc::commands::companion_get_status,
             ipc::commands::companion_get_endpoint,

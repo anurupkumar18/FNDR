@@ -517,6 +517,15 @@ export interface McpServerStatus {
     last_error?: string | null;
 }
 
+export const MCP_APPROVAL_EVENT = "mcp-approval://request";
+
+export interface McpApprovalPrompt {
+    request_id: string;
+    tool: string;
+    arguments: Record<string, unknown>;
+    expires_at_ms: number;
+}
+
 export interface EvidenceRef {
     id: string;
     source_type: string;
@@ -1353,6 +1362,10 @@ export async function startMcpServer(port?: number): Promise<McpServerStatus> {
 
 export async function stopMcpServer(): Promise<McpServerStatus> {
     return invoke<McpServerStatus>("stop_mcp_server");
+}
+
+export async function resolveMcpApproval(requestId: string, approved: boolean): Promise<boolean> {
+    return invoke<boolean>("resolve_mcp_approval", { requestId, approved });
 }
 
 export async function getContextRuntimeStatus(): Promise<ContextRuntimeStatus> {

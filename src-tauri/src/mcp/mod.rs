@@ -44,6 +44,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
@@ -87,6 +88,7 @@ struct McpRuntime {
     shutdown: Option<oneshot::Sender<()>>,
     server_handle: Option<axum_server::Handle>,
     task: Option<JoinHandle<()>>,
+    approvals: Option<Arc<McpApprovalBroker>>,
     last_error: Option<String>,
 }
 
@@ -106,6 +108,7 @@ impl Default for McpRuntime {
             shutdown: None,
             server_handle: None,
             task: None,
+            approvals: None,
             last_error: None,
         }
     }
@@ -114,6 +117,8 @@ impl Default for McpRuntime {
 #[derive(Clone)]
 struct HttpState {
     app_state: Arc<AppState>,
+    app_handle: Option<AppHandle>,
+    approvals: Arc<McpApprovalBroker>,
     token: String,
     mode: McpDeploymentMode,
     require_auth: bool,
@@ -169,6 +174,115 @@ struct McpRequest {
     /// Who may make an assistant write: a caller when auth is on and a valid
     /// token came with the request, else the refusal to answer with.
     writer: Result<remember::WriteCaller, remember::Refusal>,
+    approval: Option<McpApprovalContext>,
+}
+
+const MCP_APPROVAL_EVENT: &str = "mcp-approval://request";
+const MCP_APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Clone)]
+struct McpApprovalContext {
+    app_handle: AppHandle,
+    broker: Arc<McpApprovalBroker>,
+}
+
+#[derive(Clone, Serialize)]
+struct McpApprovalPrompt {
+    request_id: String,
+    tool: String,
+    arguments: Value,
+    expires_at_ms: i64,
+}
+
+impl McpApprovalContext {
+    async fn request(&self, tool: &str, arguments: Value) -> Option<bool> {
+        let (request_id, receiver) = self.broker.create_request();
+        let _guard = PendingApprovalGuard {
+            broker: &self.broker,
+            request_id: &request_id,
+        };
+        let Some(window) = self.app_handle.get_webview_window("main") else {
+            return None;
+        };
+        if window.show().is_err() || window.set_focus().is_err() {
+            return None;
+        }
+        let expires_at_ms =
+            chrono::Utc::now().timestamp_millis() + MCP_APPROVAL_TIMEOUT.as_millis() as i64;
+        let prompt = McpApprovalPrompt {
+            request_id: request_id.clone(),
+            tool: tool.to_string(),
+            arguments,
+            expires_at_ms,
+        };
+        if self.app_handle.emit(MCP_APPROVAL_EVENT, prompt).is_err() {
+            return None;
+        }
+        wait_for_approval(&self.broker, &request_id, receiver, MCP_APPROVAL_TIMEOUT).await
+    }
+}
+
+#[derive(Clone, Default)]
+struct McpApprovalBroker {
+    pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+}
+
+impl McpApprovalBroker {
+    fn create_request(&self) -> (String, oneshot::Receiver<bool>) {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (sender, receiver) = oneshot::channel();
+        self.pending.lock().insert(request_id.clone(), sender);
+        (request_id, receiver)
+    }
+
+    fn resolve(&self, request_id: &str, approved: bool) -> bool {
+        self.pending
+            .lock()
+            .remove(request_id)
+            .is_some_and(|sender| sender.send(approved).is_ok())
+    }
+
+    fn cancel(&self, request_id: &str) {
+        self.pending.lock().remove(request_id);
+    }
+
+    fn close(&self) {
+        for (_, sender) in self.pending.lock().drain() {
+            let _ = sender.send(false);
+        }
+    }
+}
+
+struct PendingApprovalGuard<'a> {
+    broker: &'a McpApprovalBroker,
+    request_id: &'a str,
+}
+
+impl Drop for PendingApprovalGuard<'_> {
+    fn drop(&mut self) {
+        self.broker.cancel(self.request_id);
+    }
+}
+
+async fn wait_for_approval(
+    broker: &McpApprovalBroker,
+    request_id: &str,
+    receiver: oneshot::Receiver<bool>,
+    timeout: Duration,
+) -> Option<bool> {
+    let _guard = PendingApprovalGuard { broker, request_id };
+    match tokio::time::timeout(timeout, receiver).await {
+        Ok(Ok(approved)) => Some(approved),
+        Ok(Err(_)) | Err(_) => None,
+    }
+}
+
+pub fn resolve_approval(request_id: &str, approved: bool) -> bool {
+    runtime()
+        .lock()
+        .approvals
+        .as_ref()
+        .is_some_and(|broker| broker.resolve(request_id, approved))
 }
 
 impl McpRequest {
@@ -178,6 +292,7 @@ impl McpRequest {
                 "auth_required_for_writes",
                 "FNDR takes notes only from a client that sends the MCP token, and token checks are off. Turn them back on to let assistants add notes.",
             )),
+            approval: None,
         }
     }
 }
@@ -657,6 +772,9 @@ pub fn status() -> McpServerStatus {
                 rt.running = false;
                 rt.shutdown = None;
                 rt.task = None;
+                if let Some(approvals) = rt.approvals.take() {
+                    approvals.close();
+                }
                 if rt.last_error.is_none() {
                     rt.last_error = Some("MCP server exited unexpectedly".to_string());
                 }
@@ -668,6 +786,7 @@ pub fn status() -> McpServerStatus {
 }
 
 pub async fn start(
+    app_handle: Option<AppHandle>,
     app_state: Arc<AppState>,
     host: Option<String>,
     port: Option<u16>,
@@ -759,8 +878,11 @@ pub async fn start(
         .filter_map(|origin| HeaderValue::from_str(origin).ok())
         .collect();
 
+    let approvals = Arc::new(McpApprovalBroker::default());
     let server_state = Arc::new(HttpState {
         app_state,
+        app_handle,
+        approvals: approvals.clone(),
         token: tok.clone(),
         mode,
         require_auth,
@@ -821,6 +943,7 @@ pub async fn start(
     rt.shutdown = Some(shutdown_tx);
     rt.server_handle = Some(handle);
     rt.task = Some(task);
+    rt.approvals = Some(approvals);
     rt.last_error = None;
     Ok(to_status(&rt))
 }
@@ -835,11 +958,20 @@ fn mcp_router(server_state: Arc<HttpState>) -> Router {
 }
 
 pub async fn stop() -> McpServerStatus {
-    let (shutdown, server_handle, task) = {
+    let (shutdown, server_handle, task, approvals) = {
         let mut rt = runtime().lock();
         rt.running = false;
-        (rt.shutdown.take(), rt.server_handle.take(), rt.task.take())
+        (
+            rt.shutdown.take(),
+            rt.server_handle.take(),
+            rt.task.take(),
+            rt.approvals.take(),
+        )
     };
+
+    if let Some(approvals) = approvals {
+        approvals.close();
+    }
 
     if let Some(h) = server_handle {
         h.shutdown();
@@ -1187,6 +1319,10 @@ async fn mcp_handler(
     }
 
     let (client, new_session) = request_client(&state, &headers, &payload);
+    let approval = state.app_handle.as_ref().map(|app_handle| McpApprovalContext {
+        app_handle: app_handle.clone(),
+        broker: state.approvals.clone(),
+    });
     let request = if state.require_auth && check_auth(&headers, &state.token) {
         McpRequest {
             writer: Ok(remember::WriteCaller {
@@ -1194,9 +1330,12 @@ async fn mcp_handler(
                 limiter: state.note_limiter.clone(),
                 embedder: state.note_embedder.clone(),
             }),
+            approval,
         }
     } else {
-        McpRequest::without_writes()
+        let mut request = McpRequest::without_writes();
+        request.approval = approval;
+        request
     };
     let app_state = state.app_state.clone();
     let handled = tokio::task::spawn_blocking(move || {
@@ -2240,10 +2379,36 @@ async fn call_tool(
             ));
         }
         if policy.requires_approval {
-            return Ok(tool_error(format!(
-                    "{} needs the person's approval on the Mac. The approval card is not available yet, so the request was not run.",
-                    params.name
-                )));
+            let decision = match request.approval.as_ref() {
+                Some(approval) => {
+                    approval
+                        .request(&params.name, params.arguments.clone())
+                        .await
+                }
+                None => None,
+            };
+            match decision {
+                Some(true) => {}
+                Some(false) => {
+                    return Ok(tool_error(format!(
+                        "{} was declined. The action was not run.",
+                        params.name
+                    )))
+                }
+                None => {
+                    return Ok(tool_error(format!(
+                        "{} did not receive approval before the request expired. The action was not run.",
+                        params.name
+                    )))
+                }
+            }
+            if app_state.config.read().actions_kill_switch {
+                return Ok(tool_error(
+                    crate::agent::risk_policy::RefuseReason::KillSwitch
+                        .message()
+                        .to_string(),
+                ));
+            }
         }
     }
 
@@ -6299,7 +6464,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         runtime.block_on(async move {
             let _ = stop().await;
-            let status = start(app_state, None, Some(0)).await.expect("start mcp");
+            let status = start(None, app_state, None, Some(0)).await.expect("start mcp");
             let base_url = format!("http://{}:{}/", status.host, status.port);
             wait_for_server(&base_url).await;
 
@@ -6647,6 +6812,30 @@ mod tests {
             assert!(policy.requires_approval, "{name} must require approval");
         }
         assert!(mcp_action_policy("fndr.search").is_none());
+    }
+
+    #[tokio::test]
+    async fn mcp_approval_broker_resolves_a_single_pending_request() {
+        let broker = McpApprovalBroker::default();
+        let (request_id, receiver) = broker.create_request();
+
+        assert!(broker.resolve(&request_id, true));
+        assert_eq!(
+            wait_for_approval(&broker, &request_id, receiver, Duration::from_secs(1)).await,
+            Some(true)
+        );
+        assert!(!broker.resolve(&request_id, false));
+    }
+
+    #[tokio::test]
+    async fn mcp_approval_timeout_fails_closed() {
+        let broker = McpApprovalBroker::default();
+        let (request_id, receiver) = broker.create_request();
+
+        assert_eq!(
+            wait_for_approval(&broker, &request_id, receiver, Duration::from_millis(1)).await,
+            None
+        );
     }
 
     #[test]
