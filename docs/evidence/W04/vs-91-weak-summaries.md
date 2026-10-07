@@ -38,8 +38,26 @@ The repair rewrote 23 rows and re-embedded all 23. Searching with the sentences 
 - Counting only what a person can see, weak summaries are at 6 percent on the copy, under the 10 percent target. Counting every stored row they are at 14 percent, and the rest is the visual path: rows that never got a description.
 - The reworded lines read "Reviewing ..." or "Opened ...". They are neutral but not always past tense.
 
+## Applied to the real vault, 2026-10-07
+
+With FNDR closed and the database backed up, `repair_truncated_summaries --apply --allow-real-profile` rewrote 30 rows: 23 reworded and re-embedded, 7 relabelled with their vectors kept. A second run changed nothing. Checked on a fresh copy afterwards:
+
+| | Before | After |
+|---|---|---|
+| Memories | 147 | 147 |
+| Narrated | 26 (18%) | 3 (2%) |
+| Placeholder | 18 (12%) | 18 (12%) |
+| Activity labels outside the list | 7 | 0 |
+| Weak rows shown to the person | not measured | 7 of 121 |
+| Top five by the summary each row had before | n/a | 37 of 40 |
+| Top five by new summary gist | 37 of 40 | 37 of 40 |
+| Top five by summary words | 35 of 40 | 34 of 40 |
+| Rows with a zero vector | 0 | 0 |
+| Unrelated queries marked strong | 3 of 8 | 0 of 8 |
+
+The last row is the strong-match rule (`strong-match.md`), not this repair.
+
 ## Not done
 
-- Not applied to the real vault. It needs FNDR closed and a backup first.
 - The six reviewed placeholders need another review pass to pick up fix 2.
 - The visual-only rows belong to the VS-90 backlog work.

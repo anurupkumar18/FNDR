@@ -38,7 +38,9 @@ The support figures are word overlap against the memory as it is now, which can 
 
 ## Cleanup, on the copy
 
-`cargo run --example retire_task_suggestions -- --data-dir <copy> --apply` dismissed all 471 (every one was an unquoted suggestion; none was the person's own). Open tasks 471 to 0, nothing deleted, and a second run changed nothing. Not applied to the real vault.
+`cargo run --example retire_task_suggestions -- --data-dir <copy> --apply` dismissed all 471 (every one was an unquoted suggestion; none was the person's own). Open tasks 471 to 0, nothing deleted, and a second run changed nothing.
+
+Applied to the real vault on 2026-10-07 with FNDR closed and the database backed up: 471 dismissed, 0 open, 471 still stored, and a second run changed nothing.
 
 ## The new prompt on the real model
 
