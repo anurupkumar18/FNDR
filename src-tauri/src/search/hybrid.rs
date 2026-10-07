@@ -230,8 +230,8 @@ impl QueryProfile {
         variants
     }
 
-    /// Build the embedding query, optionally augmented with extra concept
-    /// terms (e.g., LLM-expanded synonyms for the original query).
+    /// Build the unprompted embedding query, optionally augmented with extra
+    /// concept terms (e.g., LLM-expanded synonyms for the original query).
     pub(crate) fn embedding_query_with_extras(&self, extras: &[String]) -> String {
         let mut parts = Vec::new();
 
@@ -273,15 +273,9 @@ impl QueryProfile {
             parts.push(extras_join);
         }
 
-        let joined = parts.join(" ").trim().to_string();
-        if joined.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "Represent this sentence for searching relevant passages: {}",
-                joined
-            )
-        }
+        // Raw text only. The embedding contract adds its own query prompt
+        // (`embedding::prefixes::query_text_for`); MiniLM takes none.
+        parts.join(" ").trim().to_string()
     }
 
     fn is_short_intent_query(&self) -> bool {
@@ -2469,6 +2463,16 @@ mod tests {
         assert!(!QueryProfile::from_query("Rust").is_abstract_concept_query());
         assert!(!QueryProfile::from_query("Claude").is_abstract_concept_query());
         assert!(!QueryProfile::from_query("src/main.rs").is_abstract_concept_query());
+    }
+
+    #[test]
+    fn embedding_query_text_carries_no_model_instruction() {
+        // The embedding contract owns the query prompt (`embedding::prefixes`).
+        // MiniLM takes none, so the text handed over must be the query itself.
+        let text = QueryProfile::from_query("quarterly budget review")
+            .embedding_query_with_extras(&[]);
+        assert!(text.starts_with("quarterly budget review"), "{text}");
+        assert!(!text.contains("Represent this"), "{text}");
     }
 
     #[test]

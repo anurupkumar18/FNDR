@@ -337,6 +337,12 @@ impl Embedder {
         self.contract.dimensions
     }
 
+    /// The contract this embedder writes and searches under; it decides the
+    /// query and document prompts (`embedding::prefixes`).
+    pub fn contract(&self) -> TextEmbeddingContract {
+        self.contract
+    }
+
     pub fn backend(&self) -> EmbeddingBackend {
         if self.degraded_to_mock.load(Ordering::Relaxed) {
             return EmbeddingBackend::Mock;

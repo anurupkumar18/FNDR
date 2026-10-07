@@ -2,6 +2,7 @@ use crate::context_runtime::query_plan::{QueryPlan, Route};
 use crate::context_runtime::retrieval_routes::{
     finish_route, hit_from_search_result, RetrievalRoute, RouteBranch, RouteCtx, RouteHits,
 };
+use crate::embedding::prefixes::query_text_for;
 use crate::embedding::{Embedder, EmbeddingBackend};
 use crate::search::QueryProfile;
 use crate::telemetry::runtime_metrics;
@@ -37,7 +38,10 @@ impl RetrievalRoute for VectorRoute {
             let semantic_timeout = Duration::from_millis(ctx.search_config.semantic_timeout_ms);
             let snippet_timeout = Duration::from_millis(ctx.search_config.snippet_timeout_ms);
 
-            let embedding_query = profile.embedding_query_with_extras(ctx.expansion);
+            let embedding_query = query_text_for(
+                embedder.contract(),
+                &profile.embedding_query_with_extras(ctx.expansion),
+            );
             let embed_started = Instant::now();
             let worker_embedder = Embedder::clone(embedder);
             let query_embedding = match tokio::task::spawn_blocking(move || {
