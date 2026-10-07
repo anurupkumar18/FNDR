@@ -48,6 +48,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 **Result, 2026-10-06.** Swept and closed with no change; see `docs/evidence/W04/vs-87-fusion-retune.md`. The config weights named below are not read by the live path, which ranks with `FusionWeights` in `context_runtime`. No setting beat the defaults by more than one query. Follow-ups are listed in the evidence file.
 
+**Found 2026-10-07.** The config weights belong to `HybridSearcher`, an older second search engine still used by the mobile companion, the legacy graph and the raw MCP search tool. Moving those callers onto `context_runtime` and deleting the old engine is a separate piece of work.
+
 **Do (original).** Sweep `vector_weight`, `snippet_weight`, `keyword_weight` and the short-query weights on the three personas plus the vault scorecard. Hold out one persona when choosing, so the weights are not fitted to the test set (`tests/anti_overfitting.rs`). Re-record the references with the pinned tokenizer.
 
 **Done when.** MRR@10 is at or above the pre-change value on all three personas with Recall@5 unchanged or better, and the references are re-recorded.
@@ -108,6 +110,10 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 **Why.** 55 of 147 summaries narrate ("The user is viewing...") and 17 are placeholders. A preview on a copy (`cargo run --example review_preview`) rewrote 9 of 12 weak rows into neutral summaries; 3 were refused by the grounding and narration guards and kept their old text. The evidence-based repair (`repair_truncated_summaries`) found 6 rows cut inside a token.
 
 **Do.** After VS-90, back up the vault, run the repair with `--apply --allow-real-profile`, then queue the weak rows through the review worker. Compare the scorecard before and after. The reviewed summaries are short (24 words), so check that detail a person would search for is not lost.
+
+**Result, 2026-10-06.** Applied to the owner vault with a backup: 34 reviewed, 5 refused by the guards, 17 skipped. Narrated summaries went from 55 to 26, cut summaries from 3 to 0, placeholders stayed at 18, and known-item search held at 37 of 40. The target is not met (30 percent).
+
+**Found 2026-10-07.** Every skip comes from `review_skip_reason`: the row is a visual-only capture with no text for the review to check against. The counts line up with the placeholder rows (17 skips, 18 placeholders) and with the rows VS-90 reports as stuck in `pending_visual_semantics`; confirm row by row before relying on it. If it holds, the placeholder half of the target cannot move until the visual path is fixed.
 
 **Done when.** The scorecard shows narrated and placeholder summaries under 10 percent combined and known-item search no worse.
 

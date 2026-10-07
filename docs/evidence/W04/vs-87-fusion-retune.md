@@ -6,7 +6,7 @@ No weight change. Nothing in the sweep beat the current defaults by more than on
 
 ## What the ticket got wrong
 
-VS-87 named `search.vector_weight`, `search.snippet_weight` and `search.keyword_weight`. Those config values are read only by `HybridSearcher` in `search/hybrid.rs`. The live Search, Ask and retrieve paths rank with `context_runtime::fusion::fuse` and `FusionWeights` (`context_runtime/context_pack.rs`): vector 0.45, keyword 0.20, with per-intent variants. Setting the config weights to 1, 0, 0 and to 0, 0, 1 produced identical results on office-pm (Recall@5 0.950, MRR@10 0.654). They are dead knobs on the live path.
+VS-87 named `search.vector_weight`, `search.snippet_weight` and `search.keyword_weight`. Those config values are read only by `HybridSearcher` in `search/hybrid.rs`. The live Search, Ask and retrieve paths rank with `context_runtime::fusion::fuse` and `FusionWeights` (`context_runtime/context_pack.rs`): vector 0.45, keyword 0.20, with per-intent variants. Setting the config weights to 1, 0, 0 and to 0, 0, 1 produced identical results on office-pm (Recall@5 0.950, MRR@10 0.654). They have no effect on the live path.
 
 In `fuse`, the two branches of the vector route (primary vector and snippet vector) each add `score x 0.45`, so the snippet vector counts as much as the primary one.
 
@@ -50,6 +50,6 @@ Copy of the owner vault after the re-embed and re-review, 40 sampled memories, f
 
 ## Follow-ups
 
-- Either wire `search.vector_weight`, `snippet_weight` and `keyword_weight` to the live fusion or remove them; today they mislead.
+- Checked 2026-10-07: the config weights are not dead. `HybridSearcher` is a second search engine that still serves the mobile companion (`companion/handlers/search.rs`), the legacy graph (`graph/legacy.rs`), the raw MCP search tool and `tests/search_relevance_eval.rs`. Those callers get none of the work done on the live path (query text contract, snippet branch, intent weights). The fix is to move them onto `context_runtime` and then delete the old engine and its three weights together, not to wire the weights across.
 - The seeded corpora need distinct primary and snippet vectors (seed through the capture embedding path) before they can evaluate fusion.
 - The remaining misses and the first-to-second moves need a per-query look at the route scores, not a weight sweep.
