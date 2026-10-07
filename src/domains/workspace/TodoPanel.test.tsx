@@ -65,6 +65,15 @@ describe("TodoPanel", () => {
         expect(within(trace).queryByText("Prioritize the release checklist.")).toBeNull();
     });
 
+    it("shows no briefing block when there is nothing to brief on", async () => {
+        render(<TodoPanel isVisible onClose={vi.fn()} />);
+
+        await screen.findByText(todoTask.title);
+        await waitFor(() => expect(screen.queryByText(/generating your summary/i)).toBeNull());
+        expect(screen.queryByText(/today's briefing/i)).toBeNull();
+        expect(screen.queryByLabelText("Daily briefing activity")).toBeNull();
+    });
+
     it("keeps the task list usable when an edit fails", async () => {
         ipc.updateTodo.mockRejectedValueOnce(new Error("Could not save that title"));
         render(<TodoPanel isVisible onClose={vi.fn()} />);

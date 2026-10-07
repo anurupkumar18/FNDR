@@ -294,19 +294,23 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 onClose={onClose}
             />
 
-            <section className="todo-briefing-row">
-                {briefingActivity && <ActivityTrace trace={briefingActivity} />}
-                <section className="todo-briefing-summary" aria-live="polite">
-                    <p className="todo-briefing-label">Today&apos;s Briefing</p>
-                    <p className="todo-briefing-text">
-                        {dailyBriefingLoading
-                            ? "Generating your summary…"
-                            : dailyBriefingError
-                                ? "The briefing could not be generated. Your task list is still available."
-                                : dailyBriefing || "No briefing is available yet."}
-                    </p>
+            {/* With nothing to brief on, the block says nothing useful and
+                only pushes the list down. */}
+            {(dailyBriefingLoading || dailyBriefingError || dailyBriefing) && (
+                <section className="todo-briefing-row">
+                    {briefingActivity && <ActivityTrace trace={briefingActivity} />}
+                    <section className="todo-briefing-summary" aria-live="polite">
+                        <p className="todo-briefing-label">Today&apos;s Briefing</p>
+                        <p className="todo-briefing-text">
+                            {dailyBriefingLoading
+                                ? "Generating your summary…"
+                                : dailyBriefingError
+                                    ? "The briefing could not be generated. Your task list is still available."
+                                    : dailyBriefing || "No briefing is available yet."}
+                        </p>
+                    </section>
                 </section>
-            </section>
+            )}
 
             <section className="todo-create-row">
                 <label className="todo-create-field" htmlFor="todo-new-title">
