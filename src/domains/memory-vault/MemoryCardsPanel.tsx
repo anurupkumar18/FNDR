@@ -20,6 +20,7 @@ import { GRAPH_SIM_MAX_TICKS, useGraph } from "./useGraph";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
 import { VaultDayList } from "./VaultDayList";
 import { groupVaultMemories } from "./vaultGrouping";
+import { matchesPerspective, type Perspective } from "./perspectiveFilter";
 import { KnowledgeGraph3D, GraphErrorBoundary } from "@/features/graph/components";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
@@ -67,13 +68,7 @@ type TimeFilter =
     | "last_24h"
     | "last_7d";
 
-type PerspectiveFilter =
-    | typeof PERSPECTIVE_FILTER_ALL
-    | "web"
-    | "coding"
-    | "meetings"
-    | "communication"
-    | "docs";
+type PerspectiveFilter = typeof PERSPECTIVE_FILTER_ALL | Perspective;
 
 const TIME_FILTER_OPTIONS: Array<{ value: TimeFilter; label: string }> = [
     { value: TIME_FILTER_ALL, label: "All history" },
@@ -92,17 +87,6 @@ const PERSPECTIVE_FILTER_OPTIONS: Array<{ value: PerspectiveFilter; label: strin
     { value: "docs", label: "Docs & writing" },
 ];
 
-function normalizeText(value: string | undefined | null): string {
-    if (!value) {
-        return "";
-    }
-    return value
-        .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-        .replace(/\s*Sources:\s*[A-Za-z0-9,\-\s]+\.?$/i, "")
-        .replace(/\s+/g, " ")
-        .trim();
-}
-
 function matchesFilters(
     card: MemoryCard,
     timeFilter: TimeFilter,
@@ -119,47 +103,8 @@ function matchesFilters(
         if (timeFilter === "last_7d" && timestamp < now - 7 * 24 * 60 * 60 * 1000) return false;
     }
 
-    // 2. Perspective Filtering: prefer structured activity_type when present
-    if (perspectiveFilter === PERSPECTIVE_FILTER_ALL) {
-        return true;
-    }
-
-    // Use structured field first for accuracy
-    if (card.activity_type && card.activity_type !== "other") {
-        if (perspectiveFilter === "coding") return card.activity_type === "coding";
-        if (perspectiveFilter === "docs") return card.activity_type === "docs";
-        if (perspectiveFilter === "communication") return card.activity_type === "communication";
-        if (perspectiveFilter === "web") return card.activity_type === "browsing";
-    }
-
-    // Fall back to generic text signals when structured activity_type is absent.
-        const text = normalizeText(
-        `${card.window_title ?? ""} ${(card.context ?? []).join(" ")} ${card.summary ?? ""} ${card.display_summary ?? ""} ${card.internal_context ?? ""}`
-    ).toLowerCase();
-    const url = (card.url ?? "").toLowerCase();
-    const hasAny = (terms: string[]) => terms.some((term) => text.includes(term));
-
-    if (perspectiveFilter === "web") {
-        return Boolean(card.url) || /^https?:\/\//i.test(url);
-    }
-
-    if (perspectiveFilter === "coding") {
-        return hasAny(["code", "debug", "build", "compile", "branch", "commit", "pull request", "repo"]);
-    }
-
-    if (perspectiveFilter === "meetings") {
-        return hasAny(["meeting", "agenda", "call", "transcript", "attendee", "follow-up"]);
-    }
-
-    if (perspectiveFilter === "communication") {
-        return hasAny(["message", "email", "chat", "inbox", "reply", "thread"]);
-    }
-
-    if (perspectiveFilter === "docs") {
-        return hasAny(["doc", "document", "summary", "outline", "spec", "readme", "note", "draft", "pdf"]);
-    }
-
-    return true;
+    // 2. Perspective Filtering
+    return perspectiveFilter === PERSPECTIVE_FILTER_ALL || matchesPerspective(card, perspectiveFilter);
 }
 
 async function handleReopen(memoryId: string) {

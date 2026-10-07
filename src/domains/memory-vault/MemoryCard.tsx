@@ -139,8 +139,8 @@ export function MemoryCard({
                         {card.reopen_page ? ` · page ${card.reopen_page}` : null}
                     </em>
                     {card.activity_type && card.activity_type !== "other" && (
-                        <span className="fndr-mc-c-chip fndr-mc-c-chip--activity" aria-label={`activity: ${card.activity_type}`}>
-                            {card.activity_type}
+                        <span className="fndr-mc-c-chip fndr-mc-c-chip--activity" aria-label={`activity: ${activityLabel(card.activity_type)}`}>
+                            {activityLabel(card.activity_type)}
                         </span>
                     )}
                     {Array.isArray(card.files_touched) && card.files_touched.length > 0 && (
@@ -403,6 +403,11 @@ const META_OCR_PREFIXES = [
     "i can see",
     "i see ",
 ];
+
+/** `activity_type` is an identifier such as `testing_workflow`; show it as words. */
+export function activityLabel(activityType: string): string {
+    return activityType.replace(/_/g, " ").trim();
+}
 
 /** Returns true when the text is a meta-narration about OCR / the screenshot
  *  rather than the actual captured content. Such phrasing pollutes the card

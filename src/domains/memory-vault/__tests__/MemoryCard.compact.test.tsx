@@ -121,6 +121,12 @@ describe("MemoryCard — compact variant (narrow container)", () => {
         expect(chip.textContent).toBe("coding");
     });
 
+    it("shows a multi-word activity as words, not as an identifier", () => {
+        renderCompact(makeCard({ activity_type: "testing_workflow" }));
+        const chip = screen.getByLabelText("activity: testing workflow");
+        expect(chip.textContent).toBe("testing workflow");
+    });
+
     it("does NOT render activity_type chip when value is 'other'", () => {
         const card = makeCard({ activity_type: "other" });
         renderCompact(card);
