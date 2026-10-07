@@ -84,8 +84,29 @@ The model words one task differently every time, so a suggestion is also compare
 
 `SAME_TASK_SIMILARITY` is 0.80. The 40 "other" pairs at that level are an upper bound on wrong merges: they were not read, and many are likely repeats the word-overlap grouping missed. Without an embedder loaded nothing is dropped by meaning.
 
+## Replay on real captures
+
+`cargo run --example task_suggestion_replay -- --data-dir <copy>` runs the new pipeline over every memory in a copy of the owner vault, with the real model, and writes nothing.
+
+| Step | Count |
+|---|---|
+| Memories | 147 |
+| Skipped: AI chat or system screen | 95 |
+| Skipped: too little text | 1 |
+| Asked the model | 51 |
+| Task lines the model wrote | 51 |
+| Lines the screen text supports | 0 |
+| Suggestions | 0 |
+
+The old extractor made 471 tasks from these same memories. The new one makes none.
+
+The 51 rejected lines were read on the machine (not recorded here). None quotes a sentence in which someone commits to or asks for something. They are what the audit predicted: titles of pages and videos restated as tasks, file names, and meeting times that appear nowhere on the screen (the same invented date and time recurs across unrelated captures). Two concern course pages that may well be real work, a survey and a report; neither capture holds a due date or a request in its text, so by the rule they are not suggestions. That judgment is the assistant's, not the owner's.
+
+So on this vault precision is not measurable (nothing was kept) and the open question is recall: whether real tasks exist in these captures that the pipeline cannot see. Most of this vault is AI chat, video and course pages; it holds almost no mail, chat or notes, which is where the synthetic sets found tasks.
+
 ## Not measured
 
 - A fresh set of screens after the last rule. The first-sight rate has been 6 of 9, then 7 of 8.
 - Requests the model never offers: the check can only reject, it cannot find a task the model skipped.
-- Precision on real captures. There is no labeled set of captures with the tasks a person would write.
+- Recall on real captures. It needs the owner to mark, on a few days of their own captures, the tasks they would have written down.
+- Captures from mail, chat and notes, which this vault barely contains.
