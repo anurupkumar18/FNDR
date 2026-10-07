@@ -434,3 +434,64 @@ fn system_processes_are_not_apps_a_person_used() {
         assert!(!fndr_lib::tasks::suggest::is_system_surface(app), "{app}");
     }
 }
+
+fn suggestion(title: &str) -> fndr_lib::tasks::suggest::Suggestion {
+    fndr_lib::tasks::suggest::Suggestion {
+        task_type: TaskType::Todo,
+        title: title.to_string(),
+        quote: format!("please {title}"),
+    }
+}
+
+/// Stands in for the embedder: titles about the report point one way, titles
+/// about the lease another.
+fn toy_vectors(texts: &[String]) -> Option<Vec<Vec<f32>>> {
+    Some(
+        texts
+            .iter()
+            .map(|text| {
+                let lower = text.to_lowercase();
+                if lower.contains("report") {
+                    vec![1.0, 0.05]
+                } else if lower.contains("lease") {
+                    vec![0.05, 1.0]
+                } else {
+                    vec![0.7, 0.7]
+                }
+            })
+            .collect(),
+    )
+}
+
+#[test]
+fn a_suggestion_that_means_what_a_task_already_says_is_not_offered_again() {
+    use fndr_lib::tasks::suggest::drop_repeats;
+    let known = vec!["Send Priya the draft report".to_string()];
+    let kept = drop_repeats(
+        vec![
+            suggestion("Email the draft report to Priya"),
+            suggestion("Renew the lease"),
+            suggestion("Sign the lease renewal"),
+        ],
+        &known,
+        toy_vectors,
+    );
+    let titles: Vec<&str> = kept.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        vec!["Renew the lease"],
+        "the reworded report task and the second lease task repeat"
+    );
+}
+
+#[test]
+fn without_an_embedder_every_suggestion_is_kept() {
+    use fndr_lib::tasks::suggest::drop_repeats;
+    let known = vec!["Send Priya the draft report".to_string()];
+    let kept = drop_repeats(
+        vec![suggestion("Email the draft report to Priya")],
+        &known,
+        |_| None,
+    );
+    assert_eq!(kept.len(), 1);
+}

@@ -198,6 +198,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .count();
 
+        // How close in meaning are titles that say the same thing (by the
+        // word-overlap groups above) against titles that do not? This is
+        // where a same-task threshold can sit.
+        let similarity = match fndr_lib::embedding::Embedder::new() {
+            Ok(embedder) => {
+                let texts: Vec<String> = open.iter().map(|task| task.title.clone()).collect();
+                let vectors = embedder.embed_batch(&texts).map_err(|e| e.to_string())?;
+                let cosine = |a: &[f32], b: &[f32]| {
+                    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+                    let norm = |v: &[f32]| v.iter().map(|x| x * x).sum::<f32>().sqrt();
+                    dot / (norm(a) * norm(b)).max(1e-6)
+                };
+                let (mut same, mut other) = (Vec::new(), Vec::new());
+                for i in 0..open.len() {
+                    for j in (i + 1)..open.len() {
+                        let score = cosine(&vectors[i], &vectors[j]);
+                        if group_of[i] == group_of[j] {
+                            same.push(score);
+                        } else {
+                            other.push(score);
+                        }
+                    }
+                }
+                let at = |values: &mut Vec<f32>, q: f32| {
+                    values.sort_by(|a, b| a.total_cmp(b));
+                    values.get(((values.len() as f32 - 1.0).max(0.0) * q) as usize).copied()
+                };
+                let over = |values: &[f32], bar: f32| values.iter().filter(|v| **v >= bar).count();
+                json!({
+                    "pairs_same_group": same.len(),
+                    "pairs_other": other.len(),
+                    "same_group": { "p10": at(&mut same, 0.1), "p25": at(&mut same, 0.25), "median": at(&mut same, 0.5) },
+                    "other": { "median": at(&mut other, 0.5), "p99": at(&mut other, 0.99), "p999": at(&mut other, 0.999) },
+                    "at_0_70": { "same_group_kept": over(&same, 0.70), "other_merged": over(&other, 0.70) },
+                    "at_0_80": { "same_group_kept": over(&same, 0.80), "other_merged": over(&other, 0.80) },
+                    "at_0_85": { "same_group_kept": over(&same, 0.85), "other_merged": over(&other, 0.85) },
+                })
+            }
+            Err(_) => json!(null),
+        };
+
         let titles = show_titles.then(|| {
             groups
                 .values()
@@ -233,6 +274,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "50_to_80_percent": weakly_supported,
                 "under_50_percent": unsupported,
             },
+            "title_similarity": similarity,
             "repeats": {
                 "distinct_after_merging_similar_titles": groups.len(),
                 "tasks_that_repeat_another": repeated,

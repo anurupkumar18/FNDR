@@ -67,6 +67,23 @@ With both rules all three sets read 27 of 28. The one miss is the request the mo
 
 Across the three sets the model wrote 42 task lines for 28 screens, 12 of which state a task. The check kept 11.
 
+## Same task, different words
+
+The model words one task differently every time, so a suggestion is also compared by meaning with tasks from the last 14 days, in any state. The threshold comes from the 471 real titles, embedded with the model the app already loads (MiniLM, 384 dimensions):
+
+| Pairs of titles | Count | Cosine similarity |
+|---|---|---|
+| Repeat each other (word overlap 0.5 or more) | 150 | median 0.83, lower quartile 0.73 |
+| All other pairs | 110,535 | median 0.10, 99th percentile 0.49 |
+
+| Threshold | Repeats caught | Other pairs merged |
+|---|---|---|
+| 0.70 | 118 of 150 | 157 |
+| 0.80 | 88 of 150 | 40 |
+| 0.85 | 67 of 150 | 16 |
+
+`SAME_TASK_SIMILARITY` is 0.80. The 40 "other" pairs at that level are an upper bound on wrong merges: they were not read, and many are likely repeats the word-overlap grouping missed. Without an embedder loaded nothing is dropped by meaning.
+
 ## Not measured
 
 - A fresh set of screens after the last rule. The first-sight rate has been 6 of 9, then 7 of 8.

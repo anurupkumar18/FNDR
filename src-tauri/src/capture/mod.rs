@@ -4604,6 +4604,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state.as_ref(),
             &merged_or_new,
             engine.as_ref(),
+            text_embedder.as_ref(),
             is_new_memory,
         )
         .await
@@ -6377,6 +6378,9 @@ fn purge_capture_artifacts(frames_dir: PathBuf) {
 /// The screen text a task must be quoted from. Never the model's summary.
 const TASK_EVIDENCE_CHARS: usize = 1500;
 const MIN_TASK_EVIDENCE_CHARS: usize = 40;
+/// How far back, and against how many tasks, a new suggestion is compared.
+const TASK_REPEAT_LOOKBACK_MS: i64 = 14 * 24 * 60 * 60 * 1000;
+const MAX_TASKS_COMPARED: usize = 200;
 
 fn task_extraction_gate() -> &'static std::sync::Mutex<crate::tasks::suggest::ExtractionGate> {
     static GATE: std::sync::OnceLock<std::sync::Mutex<crate::tasks::suggest::ExtractionGate>> =
@@ -6421,9 +6425,10 @@ async fn maybe_create_tasks_from_memory(
     state: &AppState,
     record: &MemoryRecord,
     engine: Option<&Arc<crate::inference::InferenceEngine>>,
+    text_embedder: Option<&Embedder>,
     is_new_memory: bool,
 ) -> Result<(), String> {
-    use crate::tasks::suggest::{is_task_source, parse_suggestions, surface_of};
+    use crate::tasks::suggest::{drop_repeats, is_task_source, parse_suggestions, surface_of};
 
     let Some(engine) = engine else {
         return Ok(());
@@ -6462,6 +6467,18 @@ async fn maybe_create_tasks_from_memory(
     }
 
     let mut all_tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
+    // The model words one task differently each time. Compare by meaning
+    // with recent tasks in any state, so a dismissed one stays dismissed.
+    let recent_titles: Vec<String> = all_tasks
+        .iter()
+        .filter(|task| record.timestamp - task.created_at <= TASK_REPEAT_LOOKBACK_MS)
+        .rev()
+        .take(MAX_TASKS_COMPARED)
+        .map(|task| task.title.clone())
+        .collect();
+    let suggestions = drop_repeats(suggestions, &recent_titles, |texts| {
+        text_embedder.and_then(|embedder| embedder.embed_batch(texts).ok())
+    });
     let created = tasks_from_suggestions(suggestions, record, &all_tasks);
     if created.is_empty() {
         return Ok(());

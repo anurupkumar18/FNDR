@@ -532,3 +532,51 @@ pub fn open_commitments(tasks: Vec<Task>) -> Vec<Task> {
     own.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     own
 }
+
+/// Two titles this close in meaning are the same task. Measured on 471 real
+/// titles (2026-10-07, `docs/evidence/W04/task-audit.md`): pairs that repeat
+/// each other had a median of 0.83, and 40 of 110,535 other pairs reached 0.80.
+pub const SAME_TASK_SIMILARITY: f32 = 0.80;
+
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let norm = |v: &[f32]| v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    dot / (norm(a) * norm(b)).max(1e-6)
+}
+
+/// Drop suggestions that mean what a known task, or an earlier suggestion in
+/// the same batch, already says. The model words one task differently every
+/// time, so matching titles exactly is not enough. `embed` returns one vector
+/// per text, or `None` when no embedder is loaded, in which case nothing is
+/// dropped here.
+pub fn drop_repeats(
+    suggestions: Vec<Suggestion>,
+    known_titles: &[String],
+    embed: impl Fn(&[String]) -> Option<Vec<Vec<f32>>>,
+) -> Vec<Suggestion> {
+    if suggestions.is_empty() {
+        return suggestions;
+    }
+    let mut texts: Vec<String> = known_titles.to_vec();
+    texts.extend(
+        suggestions
+            .iter()
+            .map(|suggestion| suggestion.title.clone()),
+    );
+    let Some(vectors) = embed(&texts).filter(|vectors| vectors.len() == texts.len()) else {
+        return suggestions;
+    };
+    let (known, new) = vectors.split_at(known_titles.len());
+    let mut kept_vectors: Vec<&Vec<f32>> = known.iter().collect();
+    let mut kept = Vec::new();
+    for (suggestion, vector) in suggestions.into_iter().zip(new) {
+        let repeats = kept_vectors
+            .iter()
+            .any(|other| cosine(other, vector) >= SAME_TASK_SIMILARITY);
+        if !repeats {
+            kept_vectors.push(vector);
+            kept.push(suggestion);
+        }
+    }
+    kept
+}
