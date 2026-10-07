@@ -83,6 +83,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 2. Normalize stored activity labels to `ACTIVITY_TYPES` on read and on write.
 3. Either improve the rules with evidence from the scorecard or remove the field from display and ranking.
 
+**Result, 2026-10-07.** See `docs/evidence/W04/vs-89-labels-and-intent.md`. The stored label list now equals the list the prompts offer, guarded by a test; the repair scan relabels older rows. Removing the intent or workflow segment moved no cell by more than two queries on the vault copy, so the embedded text is unchanged. The intent rules were left alone because the label affects neither retrieval nor the card. The personas were not used: they cannot show an embedding-text effect.
+
 **Done when.** The scorecard shows no activity label outside the list, and an evidence note says whether intent helps retrieval on the three personas.
 
 ## VS-90 Make memory rewrites safe and clear the review backlog

@@ -35,10 +35,12 @@ pub struct RepairExample {
 pub struct RepairSummary {
     pub dry_run: bool,
     pub scanned: usize,
-    /// Rows with at least one field cut inside a token or narrated.
+    /// Rows with a field cut inside a token, a narrated summary or a retired label.
     pub repairable: usize,
     /// Of those, rows whose narrated summary was reworded.
     pub reworded: usize,
+    /// Rows whose activity label was brought onto the current list.
+    pub relabelled: usize,
     /// Rows rewritten (always 0 in a dry run).
     pub repaired: usize,
     /// Repaired rows whose vectors were refreshed from the new text.
@@ -158,6 +160,16 @@ pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
     })
 }
 
+/// Brings a stored activity label onto the current list. Rows written before
+/// a label was retired keep it until something rewrites them. Returns whether
+/// the label changed.
+pub fn relabel_activity(record: &mut MemoryRecord) -> bool {
+    let current = crate::inference::normalize_activity_type(&record.activity_type);
+    let changed = current != record.activity_type;
+    record.activity_type = current;
+    changed
+}
+
 const MIN_REWORDED_WORDS: usize = 3;
 
 fn narrates(text: &str) -> bool {
@@ -213,19 +225,27 @@ pub async fn repair_truncated_summaries(
         ..Default::default()
     };
     for mut record in records {
+        let relabelled = relabel_activity(&mut record);
+        summary.relabelled += usize::from(relabelled);
         let reworded = reword_narration(&mut record);
         summary.reworded += usize::from(reworded.is_some());
-        let Some(example) = repair_record(&mut record).or(reworded) else {
+        let text_change = repair_record(&mut record).or(reworded);
+        if text_change.is_none() && !relabelled {
             continue;
-        };
+        }
         summary.repairable += 1;
-        if summary.examples.len() < MAX_EXAMPLES {
-            summary.examples.push(example);
+        if let Some(example) = text_change.clone() {
+            if summary.examples.len() < MAX_EXAMPLES {
+                summary.examples.push(example);
+            }
         }
         if dry_run {
             continue;
         }
-        if refresh_text_vectors(&mut record, embedder) {
+        // The activity label is not part of the embedded text.
+        if text_change.is_none() {
+            summary.vectors_kept += 1;
+        } else if refresh_text_vectors(&mut record, embedder) {
             summary.reembedded += 1;
         } else {
             summary.vectors_kept += 1;
@@ -409,6 +429,19 @@ mod tests {
         let mut note = cut_row("m5", "Reviewed search/hybrid.rs today.");
         note.source_type = "agent".into();
         assert!(repair_record(&mut note).is_none());
+    }
+
+    #[test]
+    fn a_retired_activity_label_becomes_unknown_and_a_current_one_stays() {
+        let mut row = narrated_row("Reviewed the Q3 forecast with margins by region.");
+        row.activity_type = "screen_review".into();
+        assert!(relabel_activity(&mut row));
+        assert_eq!(row.activity_type, "unknown");
+        assert!(!relabel_activity(&mut row), "second pass changes nothing");
+
+        row.activity_type = "debugging".into();
+        assert!(!relabel_activity(&mut row));
+        assert_eq!(row.activity_type, "debugging");
     }
 
     #[tokio::test]

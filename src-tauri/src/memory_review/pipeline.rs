@@ -279,11 +279,7 @@ pub async fn review_one_memory_with_mode(
 
     let (merged_display_summary, narration_fallback_used) = {
         let url_ref = record.url.as_deref();
-        let candidate = if !validated.display_summary.trim().is_empty() {
-            validated.display_summary.clone()
-        } else {
-            record.display_summary.clone()
-        };
+        let candidate = summary_candidate(&validated, &record.display_summary);
         clean_or_fallback_display_summary(
             &candidate,
             &record.window_title,
@@ -332,6 +328,23 @@ pub async fn review_one_memory_with_mode(
         memory_id: record.id.clone(),
         reviewer_generation: record.reviewer_generation,
     })
+}
+
+/// The line to show on the card after a review. The reviewer's own line
+/// wins, then the stored one. A placeholder is neither: when that is all
+/// there is, the first sentence of the reviewed context is used, which was
+/// already checked against the evidence.
+fn summary_candidate(reviewed: &ReviewedMemory, stored: &str) -> String {
+    use crate::summariser::narration_filter::is_placeholder_summary;
+    [reviewed.display_summary.as_str(), stored]
+        .into_iter()
+        .find(|line| !is_placeholder_summary(line))
+        .map(|line| line.trim().to_string())
+        .unwrap_or_else(|| {
+            crate::summariser::sentences::first_sentence(&reviewed.memory_context)
+                .trim()
+                .to_string()
+        })
 }
 
 fn apply_reviewed_to_record(
@@ -777,6 +790,56 @@ mod tests {
         };
         let validated = validate_review(&r, &i).expect("valid");
         assert_eq!(validated.related_memory_ids.len(), MAX_RELATED_MEMORY_IDS);
+    }
+
+    fn reviewed(context: &str, summary: &str) -> ReviewedMemory {
+        ReviewedMemory {
+            memory_context: context.to_string(),
+            display_summary: summary.to_string(),
+            topic: String::new(),
+            user_intent: String::new(),
+            activity_type: String::new(),
+            related_memory_ids: Vec::new(),
+            confidence: 0.8,
+        }
+    }
+
+    #[test]
+    fn the_reviewers_own_card_line_is_used_when_it_says_something() {
+        let review = reviewed(
+            "Compared two rerankers. Kept the smaller one.",
+            "Compared two rerankers",
+        );
+        assert_eq!(
+            summary_candidate(&review, "Screen capture (visual)"),
+            "Compared two rerankers"
+        );
+    }
+
+    #[test]
+    fn a_real_stored_line_survives_a_review_that_returned_none() {
+        let review = reviewed("Compared two rerankers. Kept the smaller one.", "");
+        assert_eq!(
+            summary_candidate(&review, "Reranker comparison notes"),
+            "Reranker comparison notes"
+        );
+    }
+
+    #[test]
+    fn a_placeholder_is_replaced_by_the_reviewed_context() {
+        let review = reviewed("Compared two rerankers. Kept the smaller one.", "");
+        assert_eq!(
+            summary_candidate(&review, "Screen capture (visual)"),
+            "Compared two rerankers"
+        );
+        let placeholder_from_model = reviewed(
+            "Compared two rerankers. Kept the smaller one.",
+            "Screen capture",
+        );
+        assert_eq!(
+            summary_candidate(&placeholder_from_model, ""),
+            "Compared two rerankers"
+        );
     }
 
     #[test]
