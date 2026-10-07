@@ -43,4 +43,4 @@ The "before" persona figures are the score against the bar, which is how `retrie
 ## Also found
 
 - `tests/search_relevance_eval.rs` measured the older `HybridSearcher`. It now runs the live retrieval function (average MRR 0.919 on its 31 real cases, gate 0.72). Its five no-match cases are reported, not gated, because the mock embedder gives no real vectors.
-- In that test the "Display Settings" memory, captured in System Settings, is never returned by the live path for its two queries. Not investigated.
+- In that test the "Display Settings" memory, captured in System Settings, is never returned by the live path for its two queries. System Settings is in the default list of excluded apps (`config.rs`), which the live path honors and the older engine did not, so this looks intended; the two cases should be dropped or moved to an app that is not excluded.
