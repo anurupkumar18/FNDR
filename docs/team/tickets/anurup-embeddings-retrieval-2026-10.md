@@ -46,7 +46,9 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 **Why.** Removing the BGE instruction from MiniLM queries raised vector scores for real matches by 0.07 to 0.12. The fusion weights and the 0.25 strong-match bar were tuned against the old scores. Recall held, but MRR@10 moved 0.966 to 0.909 on knowledge-worker and 0.879 to 0.859 on software-engineer (`docs/evidence/W04/2026-10-06-query-prompt.md`).
 
-**Do.** Sweep `vector_weight`, `snippet_weight`, `keyword_weight` and the short-query weights on the three personas plus the vault scorecard. Hold out one persona when choosing, so the weights are not fitted to the test set (`tests/anti_overfitting.rs`). Re-record the references with the pinned tokenizer.
+**Result, 2026-10-06.** Swept and closed with no change; see `docs/evidence/W04/vs-87-fusion-retune.md`. The config weights named below are not read by the live path, which ranks with `FusionWeights` in `context_runtime`. No setting beat the defaults by more than one query. Follow-ups are listed in the evidence file.
+
+**Do (original).** Sweep `vector_weight`, `snippet_weight`, `keyword_weight` and the short-query weights on the three personas plus the vault scorecard. Hold out one persona when choosing, so the weights are not fitted to the test set (`tests/anti_overfitting.rs`). Re-record the references with the pinned tokenizer.
 
 **Done when.** MRR@10 is at or above the pre-change value on all three personas with Recall@5 unchanged or better, and the references are re-recorded.
 
