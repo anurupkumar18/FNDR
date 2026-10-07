@@ -203,6 +203,113 @@ fn echoes_the_format(title: &str) -> bool {
         || lower.contains("words copied")
 }
 
+/// Phrases that mark text written to steer an AI. A line carrying one can
+/// never be the reason for a task, whatever else it says.
+const AI_ADDRESSED: &[&str] = &[
+    "ignore all previous instructions",
+    "ignore previous instructions",
+    "ignore the above",
+    "disregard previous",
+    "system note",
+    "system prompt",
+    "add the task",
+    "reply only with",
+    "you are an ai",
+];
+
+fn addressed_to_an_ai(line: &str) -> bool {
+    let plain_line = plain(line);
+    AI_ADDRESSED
+        .iter()
+        .any(|phrase| plain_line.contains(&format!(" {phrase} ")))
+}
+
+/// Share of the title's words a passage must hold to be what states it.
+const MIN_TITLE_SHARE: f32 = 0.6;
+const MAX_QUOTE_CHARS: usize = 200;
+
+/// The sentences on the screen. A line with no sentence ending is one
+/// passage. The words that make something a task and the words that say what
+/// it is must sit in the same sentence, so whole multi-sentence lines are not
+/// passages.
+fn passages(evidence: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    for line in evidence
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let mut start = 0;
+        for (index, _) in line.match_indices(['.', '?', '!']) {
+            if line[index + 1..].starts_with(' ') || index + 1 == line.len() {
+                out.push(line[start..=index].trim());
+                start = index + 1;
+            }
+        }
+        out.push(line[start..].trim());
+    }
+    out.retain(|passage| !passage.is_empty());
+    out
+}
+
+fn content_words(text: &str) -> Vec<String> {
+    const STOP: &[&str] = &[
+        "the", "and", "for", "with", "that", "this", "from", "you", "your",
+    ];
+    plain(text)
+        .split_whitespace()
+        .filter(|word| {
+            (word.len() > 2 || word.chars().all(|c| c.is_ascii_digit())) && !STOP.contains(word)
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+fn states_a_task(passage: &str) -> bool {
+    passage.split_whitespace().count() >= MIN_QUOTE_WORDS
+        && has_cue(&plain(passage), COMMITMENT_CUES)
+}
+
+/// The words on the screen that state `title`. The model's own copy is used
+/// when it holds up; it usually does not (a 2B model returns one word of the
+/// sentence, or another line), so otherwise the shortest passage that states
+/// a commitment or request and holds most of the title's words is used.
+fn supporting_quote(
+    title: &str,
+    model_quote: &str,
+    evidence: &str,
+    plain_evidence: &str,
+) -> Option<String> {
+    let chosen =
+        if states_a_task(model_quote) && plain_evidence.contains(plain(model_quote).trim_end()) {
+            model_quote.to_string()
+        } else {
+            let wanted = content_words(title);
+            if wanted.len() < 2 {
+                return None;
+            }
+            passages(evidence)
+                .into_iter()
+                .filter(|passage| states_a_task(passage))
+                .filter(|passage| {
+                    let held = content_words(passage);
+                    let found = wanted.iter().filter(|word| held.contains(word)).count();
+                    found as f32 / wanted.len() as f32 >= MIN_TITLE_SHARE
+                })
+                .min_by_key(|passage| passage.len())?
+                .chars()
+                .take(MAX_QUOTE_CHARS)
+                .collect()
+        };
+    // Judge the whole line the words sit on, not only the words chosen.
+    let plain_chosen = plain(&chosen);
+    let steered = evidence
+        .lines()
+        .filter(|line| plain(line).contains(plain_chosen.trim_end()))
+        .any(addressed_to_an_ai);
+    (!steered).then_some(chosen)
+}
+
 /// Keep the model's lines that the capture supports. `evidence` is the
 /// screen text the model was shown, never a model-written summary.
 pub fn parse_suggestions(raw: &str, evidence: &str) -> Vec<Suggestion> {
@@ -210,8 +317,10 @@ pub fn parse_suggestions(raw: &str, evidence: &str) -> Vec<Suggestion> {
     let mut kept: Vec<Suggestion> = Vec::new();
     for line in raw.lines() {
         let parts: Vec<&str> = line.split('|').map(str::trim).collect();
-        let [kind, title, quote] = parts[..] else {
-            continue;
+        let (kind, title, model_quote) = match parts[..] {
+            [kind, title] => (kind, title, ""),
+            [kind, title, quote] => (kind, title, quote),
+            _ => continue,
         };
         let kind = kind
             .trim_start_matches(['-', '*', ' '])
@@ -223,30 +332,28 @@ pub fn parse_suggestions(raw: &str, evidence: &str) -> Vec<Suggestion> {
             _ => continue,
         };
         let title = title.trim_matches(['"', '\'', '`', ' ']);
-        let quote = quote.trim_matches(['"', '\'', '`', ' ']);
+        let model_quote = model_quote.trim_matches(['"', '\'', '`', ' ']);
         if !is_actionable_task_title(title) || echoes_the_format(title) {
             continue;
         }
-        let plain_quote = plain(quote);
-        let on_screen = quote.split_whitespace().count() >= MIN_QUOTE_WORDS
-            && plain_evidence.contains(plain_quote.trim_end());
-        if !on_screen || !has_cue(&plain_quote, COMMITMENT_CUES) {
+        let Some(quote) = supporting_quote(title, model_quote, evidence, &plain_evidence) else {
             continue;
-        }
+        };
         // A reminder with no date and a follow-up with no one to follow up
         // with are still things to do.
-        if (task_type == TaskType::Reminder && !has_date(quote))
-            || (task_type == TaskType::Followup && !names_someone(quote))
+        if (task_type == TaskType::Reminder && !has_date(&quote))
+            || (task_type == TaskType::Followup && !names_someone(&quote))
         {
             task_type = TaskType::Todo;
         }
+        let plain_quote = plain(&quote);
         if kept.iter().any(|other| plain(&other.quote) == plain_quote) {
             continue;
         }
         kept.push(Suggestion {
             task_type,
             title: title.to_string(),
-            quote: quote.to_string(),
+            quote,
         });
         if kept.len() == MAX_SUGGESTIONS_PER_CAPTURE {
             break;
