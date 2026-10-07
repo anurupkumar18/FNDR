@@ -348,10 +348,20 @@ def app_primary_text(entry: dict) -> str:
         if value and value.lower() != "unknown":
             segments.append(f"{label}: {value}")
 
+    # Document version 2: the card summary leads, and what_happened is not
+    # repeated when it is the same sentence.
+    summary = entry.get("summary", "").strip()
+    has_summary = bool(summary) and not _is_template_summary(summary)
+    if has_summary:
+        push("summary", summary)
+    title = entry.get("window_title", "").strip()
+    if title.lower() != entry.get("app_name", "").strip().lower():
+        push("title", title)
     push("project", entry.get("project", ""))
     push("topic", entry.get("topic", ""))
     push("context", entry.get("summary", ""))
-    push("what_happened", what)
+    if not (has_summary and what.strip() == summary):
+        push("what_happened", what)
     push("why_mattered", why)
     push("what_changed", changed)
     push("context_thread", thread)

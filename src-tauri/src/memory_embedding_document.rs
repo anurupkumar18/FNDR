@@ -15,7 +15,9 @@ use crate::storage::MemoryRecord;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const EMBEDDING_DOCUMENT_VERSION: u32 = 1;
+/// 2 (2026-10-06): the card summary leads the primary text, and prose
+/// misfiled as a command is left out.
+pub const EMBEDDING_DOCUMENT_VERSION: u32 = 2;
 pub const EMBEDDING_MANIFEST_KEY: &str = "embedding_manifest";
 
 const PRIMARY_TEXT_MAX_CHARS: usize = 2_000;
@@ -199,6 +201,41 @@ pub fn compose_memory_embedding_document(
         support_texts,
         chunk_source_text,
         visual_semantic_text,
+    }
+}
+
+/// Recompose `record.embedding_text` and refresh the primary and snippet
+/// vectors the way capture writes them. Every path that rewrites a memory's text uses this, so one index
+/// never holds vectors made by two recipes. Returns false, leaving the
+/// vectors as they were, when no embedder is available or it returns another
+/// dimension.
+pub fn refresh_text_vectors(
+    record: &mut MemoryRecord,
+    embedder: Option<&crate::embedding::Embedder>,
+) -> bool {
+    let document = compose_memory_embedding_document(record, None);
+    record.embedding_text = document.primary_text.clone();
+    let Some(embedder) = embedder else {
+        return false;
+    };
+    // Plain embedding, on purpose. The context path runs the screen-text
+    // chunker, which adds the window title and screen-noise cleanup. That
+    // suits OCR, but on these composed texts it made memories from one app
+    // look alike. Measured on a vault copy, known-item search by summary found
+    // 30 of 40 with the stored vectors, 37 with both vectors plain, and 31
+    // with only the primary plain (docs/evidence/W04/vs-85-known-item-search.md).
+    match embedder.embed_batch(&[document.primary_text, document.snippet_text]) {
+        Ok(vectors)
+            if vectors.len() == 2
+                && vectors[0].len() == record.embedding.len()
+                && vectors[1].len() == record.snippet_embedding.len() =>
+        {
+            let mut vectors = vectors.into_iter();
+            record.embedding = vectors.next().unwrap_or_default();
+            record.snippet_embedding = vectors.next().unwrap_or_default();
+            true
+        }
+        _ => false,
     }
 }
 

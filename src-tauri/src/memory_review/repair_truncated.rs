@@ -13,7 +13,7 @@
 //! the second time.
 
 use crate::embedding::Embedder;
-use crate::memory_embedding_document::compose_memory_embedding_document;
+use crate::memory_embedding_document::refresh_text_vectors;
 use crate::storage::{MemoryRecord, Store};
 use crate::summariser::narration_filter::clean_or_fallback_display_summary;
 use crate::summariser::sentences::first_sentence;
@@ -151,32 +151,6 @@ pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
     })
 }
 
-/// Recompose the embedding text and refresh the primary and snippet vectors
-/// the way capture writes them: with the app and window as chunking context.
-/// Returns false, leaving the vectors as they were, when that is not possible.
-fn reembed(record: &mut MemoryRecord, embedder: Option<&Embedder>) -> bool {
-    let document = compose_memory_embedding_document(record, None);
-    record.embedding_text = document.primary_text.clone();
-    let Some(embedder) = embedder else {
-        return false;
-    };
-    let texts = [document.primary_text, document.snippet_text]
-        .map(|text| (record.app_name.clone(), record.window_title.clone(), text));
-    match embedder.embed_batch_with_context(&texts) {
-        Ok(vectors)
-            if vectors.len() == 2
-                && vectors[0].len() == record.embedding.len()
-                && vectors[1].len() == record.snippet_embedding.len() =>
-        {
-            let mut vectors = vectors.into_iter();
-            record.embedding = vectors.next().unwrap_or_default();
-            record.snippet_embedding = vectors.next().unwrap_or_default();
-            true
-        }
-        _ => false,
-    }
-}
-
 /// Scan every memory and repair summaries cut inside a token. With `dry_run`
 /// nothing is written and the summary reports what would change.
 pub async fn repair_truncated_summaries(
@@ -201,7 +175,7 @@ pub async fn repair_truncated_summaries(
         if dry_run {
             continue;
         }
-        if reembed(&mut record, embedder) {
+        if refresh_text_vectors(&mut record, embedder) {
             summary.reembedded += 1;
         } else {
             summary.vectors_kept += 1;

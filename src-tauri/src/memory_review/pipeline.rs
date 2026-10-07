@@ -22,7 +22,6 @@
 
 use crate::embedding::Embedder;
 use crate::inference::extraction_evidence::has_source_evidence;
-use crate::memory_embedding_document::compose_memory_embedding_document;
 use crate::memory_insight::derive_insight_for_record;
 use crate::storage::{MemoryRecord, Store};
 use crate::summariser::narration_filter::clean_or_fallback_display_summary;
@@ -304,31 +303,13 @@ pub async fn review_one_memory_with_mode(
 
     derive_insight_for_record(&mut record);
 
-    record.embedding_text = compose_memory_embedding_document(&record, None).primary_text;
-    if let Some(embedder) = embedder {
-        match embedder.embed_batch(&[record.embedding_text.clone()]) {
-            Ok(vectors) => {
-                if let Some(vector) = vectors.into_iter().next() {
-                    if vector.len() == record.embedding.len() {
-                        record.embedding = vector;
-                    } else {
-                        tracing::warn!(
-                            memory_id = %record.id,
-                            actual_dim = vector.len(),
-                            expected_dim = record.embedding.len(),
-                            "memory_review: embedder returned wrong-dim vector; keeping prior embedding"
-                        );
-                    }
-                }
-            }
-            Err(err) => {
-                tracing::warn!(
-                    memory_id = %record.id,
-                    err = %err,
-                    "memory_review: embedder failed; keeping prior embedding"
-                );
-            }
-        }
+    if !crate::memory_embedding_document::refresh_text_vectors(&mut record, embedder)
+        && embedder.is_some()
+    {
+        tracing::warn!(
+            memory_id = %record.id,
+            "memory_review: embedder failed or returned another dimension; keeping prior vectors"
+        );
     }
 
     if mode.persists() {

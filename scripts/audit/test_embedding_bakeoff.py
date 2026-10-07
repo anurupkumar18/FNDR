@@ -40,10 +40,11 @@ class PrimaryTextTests(unittest.TestCase):
             entry(decisions=["Keep SMS reminders out of v1", "Ship email reminders first"])
         )
         labels = [
+            "summary:",
+            "title:",
             "project:",
             "topic:",
             "context:",
-            "what_happened:",
             "why_mattered:",
             "what_changed:",
             "decisions:",
@@ -57,7 +58,9 @@ class PrimaryTextTests(unittest.TestCase):
         text = eb.app_primary_text(entry())
         self.assertIn("project: Smart Reminders launch", text)
         self.assertIn("context: Drafted the Smart Reminders PRD", text)
-        self.assertIn("what_happened: Drafted the Smart Reminders PRD", text)
+        self.assertIn("summary: Drafted the Smart Reminders PRD", text)
+        # what_happened is the same sentence as the summary, so it is not repeated.
+        self.assertNotIn("what_happened:", text)
         # why_mattered prefers the first decision.
         self.assertIn("why_mattered: Keep SMS reminders out of v1", text)
         # what_changed holds outcomes, never next steps or the decision already shown.
@@ -72,10 +75,10 @@ class PrimaryTextTests(unittest.TestCase):
         self.assertIn("what_changed: Ship email reminders first", two)
         self.assertIn("urls: https://docs.google.com/document/d/abc/edit", text)
 
-    def test_never_includes_ocr_or_window_title(self):
+    def test_includes_the_window_title_but_never_ocr(self):
         text = eb.app_primary_text(entry(ocr_text="RAW_OCR_ONLY_TOKEN"))
         self.assertNotIn("RAW_OCR_ONLY_TOKEN", text)
-        self.assertNotIn("Google Docs", text)
+        self.assertIn("title: Smart Reminders PRD - Google Docs", text)
 
     def test_why_mattered_falls_back_to_error_then_first_summary_sentence(self):
         with_error = eb.app_primary_text(
@@ -108,7 +111,7 @@ class PrimaryTextTests(unittest.TestCase):
     def test_long_what_happened_is_clipped_like_clip_chars(self):
         long_summary = "word " * 100
         text = eb.app_primary_text(entry(summary=long_summary.strip()))
-        what = text.split("what_happened: ", 1)[1].split(" why_mattered:", 1)[0]
+        what = text.split("what_happened: ", 1)[1].split(" why_mattered:", 1)[0] if "what_happened: " in text else text.split("summary: ", 1)[1].split(" project:", 1)[0]
         self.assertTrue(what.endswith("…"), what)
         self.assertLessEqual(len(what), 280)
 

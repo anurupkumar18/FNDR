@@ -11,7 +11,7 @@ use fndr_lib::graph::GraphStore;
 use fndr_lib::ipc::commands::search::search_ranked_results_explained;
 use fndr_lib::memory_review::repair_record;
 use fndr_lib::storage::{MemoryRecord, StateStore, Store};
-use fndr_lib::summariser::narration_filter::{is_placeholder_summary, narration_filter_hits};
+use fndr_lib::summariser::narration_filter::{is_placeholder_summary, narration_filter_hits, neutral_voice};
 use fndr_lib::AppState;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -86,16 +86,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tally(&mut by_activity, &row.activity_type);
         }
 
+        // Search keeps one result per content hash. Memories sharing a hash
+        // can never appear together, whatever they say.
+        let mut by_hash: BTreeMap<String, usize> = BTreeMap::new();
+        for row in &rows {
+            tally(&mut by_hash, &row.content_hash);
+        }
+        let shared: usize = by_hash.values().filter(|count| **count > 1).sum();
+        let hidden_low_signal = rows
+            .iter()
+            .filter(|row| fndr_lib::memory_quality::record_low_signal_reason(row).is_some())
+            .count();
+        let dedup = json!({
+            "hidden_from_search_as_low_signal": hidden_low_signal,
+            "memories": rows.len(),
+            "distinct_content_hashes": by_hash.len(),
+            "memories_sharing_a_hash": shared,
+            "largest_group": by_hash.values().max().copied().unwrap_or(0),
+            "empty_hash": by_hash.get("(empty)").copied().unwrap_or(0),
+        });
+
+        // Do the stored vectors still describe the stored text? Re-embed each
+        // row's current primary and snippet text the way capture does and
+        // compare with what is stored.
+        let mut freshness = BTreeMap::new();
+        if let Some(embedder) = embedder.as_ref() {
+            for row in &rows {
+                let document = fndr_lib::memory_embedding_document::compose_memory_embedding_document(row, None);
+                let mut current = (*row).clone();
+                if !fndr_lib::memory_embedding_document::refresh_text_vectors(&mut current, Some(embedder)) {
+                    continue;
+                }
+                let fresh = [current.embedding, current.snippet_embedding];
+                let cos = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+                let bucket = |value: f32| if value >= 0.98 { "matches (0.98+)" } else if value >= 0.85 { "drifted (0.85 to 0.98)" } else { "stale (under 0.85)" };
+                tally(&mut freshness, &format!("primary vector {}", bucket(cos(&fresh[0], &row.embedding))));
+                tally(&mut freshness, &format!("snippet vector {}", bucket(cos(&fresh[1], &row.snippet_embedding))));
+                if cos(&fresh[1], &row.snippet_embedding) < 0.85 {
+                    tally(&mut freshness, &format!("stale snippet vector, stored as: {}", row.storage_outcome));
+                    tally(&mut freshness, &format!("stale snippet vector, status: {}", row.enrichment_status));
+                }
+                if document.primary_text != row.embedding_text {
+                    tally(&mut freshness, "stored embedding_text differs from the text composed now");
+                }
+            }
+        }
+
         // Known-item search: can a memory be found again from its own words?
         let candidates: Vec<&MemoryRecord> = rows
             .iter()
             .filter(|row| !row.is_agent_note() && !is_placeholder_summary(&row.display_summary))
             .filter(|row| row.display_summary.split_whitespace().count() >= 5)
+            // Search hides low-signal memories on purpose; they are not misses.
+            .filter(|row| fndr_lib::memory_quality::record_low_signal_reason(row).is_none())
             .take(sample)
             .collect();
         let mut search = json!({});
         for (label, query_of) in [
             ("summary_words", (|row: &MemoryRecord| first_words(&row.display_summary, 7)) as fn(&MemoryRecord) -> String),
+            // The same summary without a narrator opener ("The user is ..."),
+            // which is shared by many memories and says nothing about this one.
+            ("summary_gist", |row: &MemoryRecord| first_words(&neutral_voice(&row.display_summary), 8)),
             ("window_title", |row: &MemoryRecord| first_words(&row.window_title, 7)),
         ] {
             let (mut asked, mut h1, mut h5, mut v1, mut v5, mut top_score) = (0usize, 0usize, 0usize, 0usize, 0usize, 0f64);
@@ -133,6 +184,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
 
+        // VS-85: why a memory is not in the top five for its own summary.
+        let mut misses = BTreeMap::new();
+        let mut miss_count = 0usize;
+        for row in &candidates {
+            let query = first_words(&neutral_voice(&row.display_summary), 8);
+            let (results, _) = search_ranked_results_explained(&state, &query, None, None, 50).await?;
+            let rank = results.iter().position(|result| result.id == row.id);
+            if rank.is_some_and(|rank| rank < 5) {
+                continue;
+            }
+            miss_count += 1;
+            let summary_embedded = row
+                .embedding_text
+                .to_lowercase()
+                .contains(&query.to_lowercase());
+            let crowd = results
+                .iter()
+                .take(5)
+                .filter(|top| top.app_name == row.app_name && (top.timestamp - row.timestamp).abs() <= 30 * 60 * 1000)
+                .count();
+            let same_summary_above = results
+                .iter()
+                .take(5)
+                .filter(|top| first_words(&top.snippet, 7).eq_ignore_ascii_case(&query))
+                .count();
+            let vector_rank = match embedder.as_ref() {
+                Some(embedder) => {
+                    let vector = embedder.embed_query(&query)?;
+                    store
+                        .vector_search(&vector, 50, None, None)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .iter()
+                        .position(|hit| hit.id == row.id)
+                }
+                None => None,
+            };
+            // Exact ranks from the stored vectors, with no dedup and no
+            // filters, to separate "the vector is far away" from "a sibling
+            // with the same content hash took its place".
+            if let Some(embedder) = embedder.as_ref() {
+                let q = embedder.embed_query(&query)?;
+                let cos = |v: &[f32]| q.iter().zip(v).map(|(a, b)| a * b).sum::<f32>();
+                let own_primary = cos(&row.embedding);
+                let own_snippet = cos(&row.snippet_embedding);
+                let primary_rank = rows.iter().filter(|other| cos(&other.embedding) > own_primary).count();
+                let snippet_rank = rows.iter().filter(|other| cos(&other.snippet_embedding) > own_snippet).count();
+                let beaten_by_sibling = rows.iter().any(|other| {
+                    other.id != row.id && other.content_hash == row.content_hash && cos(&other.embedding) > own_primary
+                });
+                tally(&mut misses, if primary_rank < 5 { "exact primary-vector rank: top 5" } else if primary_rank < 20 { "exact primary-vector rank: 6 to 20" } else { "exact primary-vector rank: beyond 20" });
+                tally(&mut misses, if snippet_rank < 5 { "exact snippet-vector rank: top 5" } else if snippet_rank < 20 { "exact snippet-vector rank: 6 to 20" } else { "exact snippet-vector rank: beyond 20" });
+                tally(&mut misses, if beaten_by_sibling { "a same-hash sibling has a closer primary vector" } else { "no same-hash sibling is closer" });
+            }
+            let sibling_rank = results
+                .iter()
+                .position(|top| !row.content_hash.is_empty() && top.content_hash == row.content_hash);
+            tally(&mut misses, match sibling_rank {
+                Some(rank) if rank < 5 => "a same-page sibling (same content hash) is in the top five",
+                Some(_) => "a same-page sibling ranks 6 to 50",
+                None => "no same-page sibling returned",
+            });
+            tally(&mut misses, if summary_embedded { "summary is in the embedded text" } else { "summary is NOT in the embedded text" });
+            tally(&mut misses, match rank { Some(_) => "hybrid: ranked 6 to 50", None => "hybrid: not in top 50" });
+            tally(&mut misses, match vector_rank { Some(rank) if rank < 5 => "vector alone: top 5", Some(_) => "vector alone: ranked 6 to 50", None => "vector alone: not in top 50" });
+            tally(&mut misses, if crowd >= 3 { "top five crowded by the same session (3 or more)" } else { "top five not crowded by the same session" });
+            tally(&mut misses, if same_summary_above > 0 { "another memory with the same opening words ranks above" } else { "no memory with the same opening words above" });
+            tally(&mut misses, &format!("status: {}", row.enrichment_status));
+            tally(&mut misses, &format!("stored as: {}", row.storage_outcome));
+        }
+
         // One real capture, stage by stage, as it is stored.
         let traced = rows
             .iter()
@@ -161,7 +283,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "summary_quality": { "placeholder": pct(placeholder), "narrated": pct(narrated), "cut_inside_token": pct(cut), "no_why_it_mattered": pct(no_why) },
             "vector_health": { "zero_primary_vector": pct(zero_vec), "primary_equals_snippet_vector": pct(same_vec), "embedding_text_carries_session_id": pct(session_noise), "model_and_dim": by_model },
             "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity },
-            "known_item_search": { "sampled": candidates.len(), "by_query": search },
+            "search_dedup": dedup,
+            "vector_freshness": freshness,
+            "known_item_search": { "sampled": candidates.len(), "by_query": search, "misses_by_summary_words": miss_count, "miss_analysis": misses },
             "one_capture": trace,
         }))
     })?;

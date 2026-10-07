@@ -4659,6 +4659,7 @@ fn embed_text_inputs_with_memo(
     let mut missing = Vec::new();
     let mut missing_positions = Vec::new();
     let mut missing_dedup: HashMap<String, usize> = HashMap::new();
+    let mut structured_keys: HashSet<String> = HashSet::new();
     let app_key = app_name.trim().to_lowercase();
     let title_key = window_title.trim().to_lowercase();
 
@@ -4668,7 +4669,15 @@ fn embed_text_inputs_with_memo(
             out[idx] = Some(vec![0.0; EMBEDDING_DIM]);
             continue;
         }
-        let key = format!("{app_key}|||{title_key}|||{text_key}");
+        let structured = idx < 2;
+        let key = if structured {
+            format!("structured|||{text_key}")
+        } else {
+            format!("{app_key}|||{title_key}|||{text_key}")
+        };
+        if structured {
+            structured_keys.insert(key.clone());
+        }
 
         if let Some(cached) = memo.get(&key) {
             out[idx] = Some(cached);
@@ -4687,9 +4696,20 @@ fn embed_text_inputs_with_memo(
     }
 
     if !missing.is_empty() {
+        // The first two inputs are the composed primary and snippet texts.
+        // They are embedded plain: the screen-text chunker (title line and
+        // screen-noise cleanup) is for OCR and made memories from one app look
+        // alike (docs/evidence/W04/vs-85-known-item-search.md). Support
+        // texts are screen text and keep their app and window context.
         let contextual_inputs = missing
             .iter()
-            .map(|(_, text)| (app_name.to_string(), window_title.to_string(), text.clone()))
+            .map(|(key, text)| {
+                if structured_keys.contains(key) {
+                    (String::new(), String::new(), text.clone())
+                } else {
+                    (app_name.to_string(), window_title.to_string(), text.clone())
+                }
+            })
             .collect::<Vec<_>>();
         if let Ok(vectors) = text_embedder.embed_batch_with_context(&contextual_inputs) {
             for ((memo_key, _), vector) in missing.iter().cloned().zip(vectors.iter().cloned()) {
