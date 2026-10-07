@@ -129,6 +129,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => "200 chars or more",
             };
             let review = fndr_lib::memory_review::review_skip_reason(row).unwrap_or("reviewable");
+            // Low-signal memories are kept but never shown in search or lists.
+            let shown = fndr_lib::memory_quality::record_low_signal_reason(row).is_none();
+            tally(
+                &mut weak_summaries,
+                if shown { "total shown to the person" } else { "total hidden as low signal" },
+            );
             // Would the wording cleanup alone fix it, with no model run?
             let reworded = fndr_lib::summariser::narration_filter::neutral_voice(&row.display_summary);
             let reworded_lower = reworded.trim().to_lowercase();

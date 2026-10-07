@@ -8,8 +8,6 @@
 //! a migration in progress; both are live and intentionally coexist. See
 //! `docs/architecture/graph-schema.md` for the full picture.
 
-use crate::embedding::Embedder;
-use crate::search::HybridSearcher;
 use crate::storage::{
     EdgeType, GraphEdge, GraphNode, MeetingSegment, MemoryRecord, NodeType, Store,
 };
@@ -30,13 +28,6 @@ pub struct MemoryCard {
     pub screenshot_path: Option<String>,
     pub score: f32,
     pub related_tasks: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryReconstruction {
-    pub answer: String,
-    pub cards: Vec<MemoryCard>,
-    pub structural_context: Vec<String>,
 }
 
 /// Persisted graph store.
@@ -378,89 +369,6 @@ impl GraphStore {
         related_urls_for_task_from_snapshot(&nodes, &edges, task_id)
     }
 
-    pub async fn reconstruct(
-        &self,
-        store: &Store,
-        embedder: &Embedder,
-        query: &str,
-        limit: usize,
-    ) -> Result<MemoryReconstruction, Box<dyn std::error::Error>> {
-        let results = HybridSearcher::search(store, embedder, query, limit, None, None).await?;
-        let nodes = self.store.get_all_nodes().await?;
-        let edges = self.store.get_all_edges().await?;
-
-        let cards = self.map_cards(results, &nodes, &edges);
-        let structural_context = self.structural_context_for_query(query, &nodes, &edges);
-
-        Ok(MemoryReconstruction {
-            answer: String::new(),
-            cards,
-            structural_context,
-        })
-    }
-
-    fn structural_context_for_query(
-        &self,
-        _query: &str,
-        nodes: &[GraphNode],
-        edges: &[GraphEdge],
-    ) -> Vec<String> {
-        // Always surface task context — the hybrid search pipeline already
-        // ensures that only semantically relevant results reach this point,
-        // so hard-coded keyword gates ("task", "todo", etc.) are unnecessary.
-        let mut task_nodes: Vec<&GraphNode> = nodes
-            .iter()
-            .filter(|node| node.node_type == NodeType::Task)
-            .collect();
-        task_nodes.sort_by_key(|node| std::cmp::Reverse(node.created_at));
-
-        let mut notes = Vec::new();
-        for task in task_nodes.into_iter().take(5) {
-            let id = task.id.trim_start_matches("task:");
-            let urls = related_urls_for_task_from_snapshot(nodes, edges, id);
-            if urls.is_empty() {
-                notes.push(format!("Task '{}': no linked URL context", task.label));
-            } else {
-                notes.push(format!(
-                    "Task '{}': linked URLs {}",
-                    task.label,
-                    urls.join(", ")
-                ));
-            }
-        }
-        notes
-    }
-
-    fn map_cards(
-        &self,
-        results: Vec<crate::storage::SearchResult>,
-        nodes: &[GraphNode],
-        edges: &[GraphEdge],
-    ) -> Vec<MemoryCard> {
-        let memory_to_tasks = task_edges_by_memory(nodes, edges);
-
-        results
-            .into_iter()
-            .map(|result| {
-                let task_titles = memory_to_tasks
-                    .get(&memory_node_id(&result.id))
-                    .cloned()
-                    .unwrap_or_default();
-                MemoryCard {
-                    id: result.id,
-                    timestamp: result.timestamp,
-                    app_name: result.app_name,
-                    window_title: result.window_title,
-                    snippet: result.snippet,
-                    url: result.url,
-                    screenshot_path: result.screenshot_path,
-                    score: result.score,
-                    related_tasks: task_titles,
-                }
-            })
-            .collect()
-    }
-
     /// Export all nodes and edges for frontend visualization.
     pub async fn export_for_visualization(&self) -> (Vec<GraphNode>, Vec<GraphEdge>) {
         let nodes = match self.store.get_all_nodes().await {
@@ -620,37 +528,6 @@ fn is_browser_app(app_name: &str) -> bool {
         || app_name.contains("brave")
         || app_name.contains("edge")
         || app_name.contains("firefox")
-}
-
-fn task_edges_by_memory(nodes: &[GraphNode], edges: &[GraphEdge]) -> HashMap<String, Vec<String>> {
-    let node_map: HashMap<&str, &GraphNode> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let mut mapping: HashMap<String, Vec<String>> = HashMap::new();
-
-    for edge in edges {
-        if edge.edge_type != EdgeType::ReferenceForTask {
-            continue;
-        }
-        let Some(source) = node_map.get(edge.source.as_str()) else {
-            continue;
-        };
-        let Some(target) = node_map.get(edge.target.as_str()) else {
-            continue;
-        };
-        if source.node_type != NodeType::Task || target.node_type != NodeType::Memory {
-            continue;
-        }
-
-        mapping
-            .entry(target.id.clone())
-            .or_default()
-            .push(source.label.clone());
-    }
-
-    for titles in mapping.values_mut() {
-        *titles = unique_keep_order(std::mem::take(titles));
-    }
-
-    mapping
 }
 
 fn related_urls_for_task_from_snapshot(
