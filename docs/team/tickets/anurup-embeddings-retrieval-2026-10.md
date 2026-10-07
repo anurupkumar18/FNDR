@@ -100,6 +100,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 2. Report the review backlog in the inspector and find why `pending_visual_semantics` rows stay pending.
 3. Check which LanceDB indexes exist on the memories table and whether the vector search is a flat scan at this size; record it in `docs/evidence/W04/storage-indexes.md`.
 
+**Result, 2026-10-07.** Parent memories and chunk rows now use merge-insert keyed by id. The chunk regression test asserts a replacement creates exactly one table version, so the previous delete plus append implementation fails it. The Memory Vault graph inspector now shows visible `pending`, `pending_visual_semantics`, and `review_failed` totals. `pending_visual_semantics` rows are visual-only or visual-metadata fallback records that `review_skip_reason` deliberately skips for lack of text evidence; the review pipeline persists that status to keep them out of ordinary text review. That code is in the parallel session's `memory_review` lane, so this lane records the cause and leaves the review policy untouched. No live profile counts were read or copied. Index inventory and the 10k timing evidence are in `docs/evidence/W04/storage-indexes.md`.
+
 **Done when.** The injected-failure test passes, and the backlog numbers are visible and explained.
 
 ## VS-91 Re-review weak summaries on the owner vault

@@ -1167,23 +1167,15 @@ impl Store {
         }
         validate_memory_chunk_vectors(chunks)?;
 
-        let ids = chunks
-            .iter()
-            .map(|chunk| chunk.id.clone())
-            .collect::<Vec<_>>();
-        for id_chunk in ids.chunks(128) {
-            if let Some(filter) = build_string_match_filter("id", id_chunk) {
-                self.memory_chunks_table.delete(&filter).await?;
-            }
-        }
-
         let batch = memory_chunks_to_batch(chunks, BGE_V5_DIMENSIONS as i32)?;
         let schema = Arc::new(memory_chunk_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
-        self.memory_chunks_table
-            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
-            .mode(AddDataMode::Append)
-            .execute()
+        let mut merge = self.memory_chunks_table.merge_insert(&["id"]);
+        merge
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all();
+        merge
+            .execute(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
             .await?;
         Ok(())
     }

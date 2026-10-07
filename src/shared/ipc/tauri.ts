@@ -358,6 +358,11 @@ export interface MemoryDebugInspector {
     };
     storage_outcome: string;
     quality_gate_reason: string;
+    review_backlog: {
+        pending: number;
+        pending_visual_semantics: number;
+        review_failed: number;
+    };
     query_match_reasons: string[];
     related_knowledge_pages: unknown[];
 }

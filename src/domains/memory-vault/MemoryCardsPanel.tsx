@@ -999,6 +999,11 @@ export function MemoryCardsPanel({
                                         </div>
                                         <div className="memory-graph-memory-block">
                                             <h4>Primary memory</h4>
+                                            {memoryInspector && (
+                                                <p className="memory-graph-detail-muted" aria-label="Review backlog counts">
+                                                    Review backlog: {memoryInspector.review_backlog.pending} pending, {memoryInspector.review_backlog.pending_visual_semantics} pending visual semantics, {memoryInspector.review_backlog.review_failed} review failed.
+                                                </p>
+                                            )}
                                             {memoryInspectorLoading && (
                                                 <p className="memory-graph-detail-muted">Loading memory…</p>
                                             )}

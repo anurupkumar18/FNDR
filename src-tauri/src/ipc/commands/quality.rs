@@ -72,8 +72,17 @@ pub struct MemoryDebugInspector {
     pub graph: MemoryGraphSnapshot,
     pub storage_outcome: String,
     pub quality_gate_reason: String,
+    #[serde(default)]
+    pub review_backlog: MemoryReviewBacklogCounts,
     pub query_match_reasons: Vec<String>,
     pub related_knowledge_pages: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryReviewBacklogCounts {
+    pub pending: usize,
+    pub pending_visual_semantics: usize,
+    pub review_failed: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -755,6 +764,23 @@ async fn memory_debug_inspector(
         inspected_storage_outcome = "low_quality_evidence".to_string();
         inspected_quality_gate_reason = shared_quality_gate_reason(&memory);
     }
+    let backlog_records = state
+        .store
+        .list_all_memories()
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut review_backlog = MemoryReviewBacklogCounts::default();
+    for record in backlog_records
+        .iter()
+        .filter(|record| memory_is_visible(record, &blocklist))
+    {
+        match record.enrichment_status.as_str() {
+            "pending" => review_backlog.pending += 1,
+            "pending_visual_semantics" => review_backlog.pending_visual_semantics += 1,
+            "review_failed" => review_backlog.review_failed += 1,
+            _ => {}
+        }
+    }
 
     Ok(MemoryDebugInspector {
         memory_id: memory.id.clone(),
@@ -785,6 +811,7 @@ async fn memory_debug_inspector(
         graph,
         storage_outcome: inspected_storage_outcome,
         quality_gate_reason: inspected_quality_gate_reason,
+        review_backlog,
         query_match_reasons: query
             .map(|q| build_query_match_reasons(&memory, q))
             .unwrap_or_default(),
@@ -1215,6 +1242,35 @@ mod tests {
             raw_evidence: serde_json::json!({"debug_marker":format!("RAW_{id}")}).to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn debug_inspector_reports_review_backlog_counts() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = inspector_state(dir.path());
+        let mut rows = vec![];
+        for (id, status) in [
+            ("pending-a", "pending"),
+            ("pending-b", "pending"),
+            ("visual-a", "pending_visual_semantics"),
+            ("failed-a", "review_failed"),
+            ("reviewed-a", "reviewed_local"),
+        ] {
+            let mut row = inspector_memory(id);
+            row.enrichment_status = status.into();
+            rows.push(row);
+        }
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&rows))
+            .unwrap();
+
+        let inspector = runtime
+            .block_on(memory_debug_inspector(&state, "pending-a", None))
+            .unwrap();
+        assert_eq!(inspector.review_backlog.pending, 2);
+        assert_eq!(inspector.review_backlog.pending_visual_semantics, 1);
+        assert_eq!(inspector.review_backlog.review_failed, 1);
     }
 
     #[test]

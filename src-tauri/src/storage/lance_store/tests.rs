@@ -51,6 +51,27 @@ fn memory_chunk(id: &str, memory_id: &str, dim: usize) -> MemoryChunkRecord {
     }
 }
 
+#[tokio::test]
+async fn replacing_memory_chunks_uses_one_atomic_table_version() {
+    let (_dir, store) = keyword_store(vec![]).await;
+    let first = memory_chunk("chunk-1", "memory-1", BGE_V5_DIMENSIONS);
+    store.upsert_memory_chunks(std::slice::from_ref(&first)).await.unwrap();
+    let before = store.memory_chunks_table.list_versions().await.unwrap().len();
+
+    let mut replacement = first;
+    replacement.text = "Updated chunk text for the same parent memory.".into();
+    store
+        .upsert_memory_chunks(std::slice::from_ref(&replacement))
+        .await
+        .unwrap();
+
+    let after = store.memory_chunks_table.list_versions().await.unwrap().len();
+    assert_eq!(after, before + 1, "replacement should be a single merge-insert");
+    let rows = store.list_chunks_for_memory("memory-1").await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].text, replacement.text);
+}
+
 #[test]
 fn normalize_record_for_index_suppresses_auth_urls() {
     let normalized = normalize_record_for_index(&record(
