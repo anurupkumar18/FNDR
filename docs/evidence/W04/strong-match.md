@@ -50,7 +50,7 @@ Twelve new no-match queries were added afterwards, four per persona, written to 
 | The 12 new ones | 8 | 3 |
 | All 24 | 13 | 3 |
 
-Real queries marked weak stayed at 6 of 98. So the rule holds up on new queries but is not complete. Of the three it still passes, one names a time ("last weekend"), where the time route counts as evidence although it says nothing about the topic, and one is close to a real memory (a different hiring search).
+Real queries marked weak stayed at 6 of 98. So the rule holds up on new queries but is not complete. Of the three it still passes, one names a time ("last weekend"), where the time route counts as evidence although it says nothing about the topic; one is close to a real memory (a different hiring search); and one ("notes from the podcast about sourdough baking") passed on keyword and vector support alone and was not looked into. `retrieval_qa` now names each no-match query it marks strong.
 
 ## Two ideas measured and not adopted
 

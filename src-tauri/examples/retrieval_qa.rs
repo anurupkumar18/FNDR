@@ -653,6 +653,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if case.kind == NEGATIVE_KIND {
             product_strength.0 += 1;
             product_strength.1 += usize::from(retrieved.strong_match);
+            if retrieved.strong_match {
+                let why = retrieved.hits.first().map(|hit| hit.why.routes.join("+"));
+                eprintln!(
+                    "no-match query marked strong: {:?} (routes of the top result: {})",
+                    case.query,
+                    why.unwrap_or_default()
+                );
+            }
         } else {
             product_strength.2 += 1;
             product_strength.3 += usize::from(!retrieved.strong_match);
