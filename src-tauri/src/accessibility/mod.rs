@@ -559,6 +559,10 @@ fn workspace_frontmost_pid() -> Option<PidT> {
     }
 }
 
+fn accessibility_text_target_allowed(pid: PidT, own_pid: PidT) -> bool {
+    pid > 0 && own_pid > 0 && pid != own_pid
+}
+
 fn expected_pid_remained_frontmost(
     expected_pid: PidT,
     before_snapshot: Option<PidT>,
@@ -763,7 +767,10 @@ pub fn frontmost_focused_text(max_chars: usize) -> Option<FocusedText> {
 /// read, or when the window exposes no text. Secure text fields are never read.
 /// Callers run the capture privacy gates before calling this.
 pub fn focused_text(pid: i32, max_chars: usize) -> Option<FocusedText> {
-    if pid <= 0 || !has_accessibility_permission() || workspace_frontmost_pid() != Some(pid) {
+    if !accessibility_text_target_allowed(pid, std::process::id() as PidT)
+        || !has_accessibility_permission()
+        || workspace_frontmost_pid() != Some(pid)
+    {
         return None;
     }
     let started = std::time::Instant::now();
@@ -1064,7 +1071,14 @@ fn inject_text_into_target(
 
 #[cfg(test)]
 mod tests {
-    use super::expected_pid_remained_frontmost;
+    use super::{accessibility_text_target_allowed, expected_pid_remained_frontmost};
+
+    #[test]
+    fn accessibility_text_skips_fndr_own_webview_pid() {
+        assert!(!accessibility_text_target_allowed(42, 42));
+        assert!(accessibility_text_target_allowed(7, 42));
+        assert!(!accessibility_text_target_allowed(0, 42));
+    }
 
     #[test]
     fn direct_pid_snapshot_requires_same_frontmost_process_before_and_after() {
