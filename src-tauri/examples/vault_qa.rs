@@ -1,0 +1,170 @@
+//! Quality scorecard for a COPY of a profile: how good the stored summaries
+//! are, how healthy the vectors are, and whether a memory can be found again
+//! from its own title or summary (known-item search), through the hybrid
+//! path and through the vector branch alone. Also prints the stage-by-stage
+//! record of one real capture. Refuses the real profile; pass a copy.
+//! Usage: cargo run --example vault_qa -- --data-dir <profile copy> [--sample N]
+
+use fndr_lib::config::Config;
+use fndr_lib::embedding::Embedder;
+use fndr_lib::graph::GraphStore;
+use fndr_lib::ipc::commands::search::search_ranked_results_explained;
+use fndr_lib::memory_review::repair_record;
+use fndr_lib::storage::{MemoryRecord, StateStore, Store};
+use fndr_lib::summariser::narration_filter::{is_placeholder_summary, narration_filter_hits};
+use fndr_lib::AppState;
+use serde_json::json;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+fn arg(name: &str) -> Option<String> {
+    let mut args = std::env::args();
+    while let Some(current) = args.next() {
+        if current == name {
+            return args.next();
+        }
+    }
+    None
+}
+
+fn norm(vector: &[f32]) -> f32 {
+    vector.iter().map(|x| x * x).sum::<f32>().sqrt()
+}
+
+fn first_words(text: &str, count: usize) -> String {
+    text.split_whitespace().take(count).collect::<Vec<_>>().join(" ")
+}
+
+fn tally(map: &mut BTreeMap<String, usize>, key: &str) {
+    let key = if key.trim().is_empty() { "(empty)" } else { key.trim() };
+    *map.entry(key.to_string()).or_default() += 1;
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let data_dir = PathBuf::from(arg("--data-dir").ok_or("--data-dir required")?).canonicalize()?;
+    let sample: usize = arg("--sample").and_then(|value| value.parse().ok()).unwrap_or(40);
+    let real = dirs::data_dir().ok_or("no data dir")?.join("com.fndr.app");
+    if real.canonicalize().is_ok_and(|real| data_dir.starts_with(&real)) {
+        return Err("refusing the real FNDR profile; pass a copy".into());
+    }
+
+    let store = Arc::new(Store::new(&data_dir)?);
+    let state_store = Arc::new(StateStore::new(&data_dir)?);
+    let graph = GraphStore::new(store.clone());
+    let mut config = Config::default();
+    config.search.semantic_timeout_ms = 10_000;
+    config.search.snippet_timeout_ms = 10_000;
+    config.search.keyword_timeout_ms = 10_000;
+    let state = Arc::new(AppState::new(data_dir.clone(), config, store.clone(), state_store, graph, None));
+    let embedder = Embedder::new().ok();
+    let runtime = tokio::runtime::Runtime::new()?;
+
+    let report = runtime.block_on(async {
+        let mut rows: Vec<MemoryRecord> = store.list_all_memories().await.map_err(|e| e.to_string())?;
+        rows.sort_by_key(|row| std::cmp::Reverse(row.timestamp));
+        let total = rows.len().max(1);
+
+        let (mut placeholder, mut narrated, mut cut, mut no_why, mut zero_vec, mut same_vec, mut session_noise) = (0, 0, 0, 0, 0, 0, 0);
+        let (mut by_source, mut by_status, mut by_intent, mut by_model, mut by_activity) =
+            (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        for row in &rows {
+            let lower = row.display_summary.trim().to_lowercase();
+            placeholder += usize::from(is_placeholder_summary(&row.display_summary));
+            narrated += usize::from(
+                narration_filter_hits(&row.display_summary) || lower.starts_with("the user") || lower.starts_with("you "),
+            );
+            cut += usize::from(repair_record(&mut row.clone()).is_some());
+            no_why += usize::from(row.insight_why_mattered.trim().is_empty());
+            zero_vec += usize::from(norm(&row.embedding) < 1e-6);
+            same_vec += usize::from(row.embedding == row.snippet_embedding);
+            session_noise += usize::from(row.embedding_text.contains("context_thread: session"));
+            tally(&mut by_source, &row.summary_source);
+            tally(&mut by_status, &row.enrichment_status);
+            tally(&mut by_intent, &row.intent_analysis.intent_label);
+            tally(&mut by_model, &format!("{} / {}", row.embedding_model, row.embedding_dim));
+            tally(&mut by_activity, &row.activity_type);
+        }
+
+        // Known-item search: can a memory be found again from its own words?
+        let candidates: Vec<&MemoryRecord> = rows
+            .iter()
+            .filter(|row| !row.is_agent_note() && !is_placeholder_summary(&row.display_summary))
+            .filter(|row| row.display_summary.split_whitespace().count() >= 5)
+            .take(sample)
+            .collect();
+        let mut search = json!({});
+        for (label, query_of) in [
+            ("summary_words", (|row: &MemoryRecord| first_words(&row.display_summary, 7)) as fn(&MemoryRecord) -> String),
+            ("window_title", |row: &MemoryRecord| first_words(&row.window_title, 7)),
+        ] {
+            let (mut asked, mut h1, mut h5, mut v1, mut v5, mut top_score) = (0usize, 0usize, 0usize, 0usize, 0usize, 0f64);
+            let mut same_session_first = 0usize;
+            for row in &candidates {
+                let query = query_of(row);
+                if query.split_whitespace().count() < 2 {
+                    continue;
+                }
+                asked += 1;
+                let (results, _) = search_ranked_results_explained(&state, &query, None, None, 10).await?;
+                let rank = results.iter().position(|result| result.id == row.id);
+                h1 += usize::from(rank == Some(0));
+                h5 += usize::from(rank.is_some_and(|rank| rank < 5));
+                // Not first, but the top hit is another capture of the same
+                // app within 30 minutes: the session was found, not the moment.
+                same_session_first += usize::from(rank != Some(0) && results.first().is_some_and(|top| {
+                    top.app_name == row.app_name && (top.timestamp - row.timestamp).abs() <= 30 * 60 * 1000
+                }));
+                top_score += results.first().map_or(0.0, |result| f64::from(result.score));
+                if let Some(embedder) = embedder.as_ref() {
+                    let vector = embedder.embed_query(&query)?;
+                    let hits = store.vector_search(&vector, 10, None, None).await.map_err(|e| e.to_string())?;
+                    let rank = hits.iter().position(|hit| hit.id == row.id);
+                    v1 += usize::from(rank == Some(0));
+                    v5 += usize::from(rank.is_some_and(|rank| rank < 5));
+                }
+            }
+            let rate = |hits: usize| format!("{hits}/{asked}");
+            search[label] = json!({
+                "hybrid_first": rate(h1), "hybrid_top5": rate(h5),
+                "not_first_but_same_session_first": rate(same_session_first),
+                "vector_first": rate(v1), "vector_top5": rate(v5),
+                "mean_top_score": if asked > 0 { top_score / asked as f64 } else { 0.0 },
+            });
+        }
+
+        // One real capture, stage by stage, as it is stored.
+        let traced = rows
+            .iter()
+            .find(|row| row.summary_source == "llm" && !row.clean_text.trim().is_empty() && !is_placeholder_summary(&row.display_summary));
+        let trace = match traced {
+            Some(row) => {
+                let query = first_words(&row.display_summary, 6);
+                let (results, explanation) = search_ranked_results_explained(&state, &query, None, None, 5).await?;
+                json!({
+                    "1_capture": { "app": row.app_name, "window_title": row.window_title, "url": row.url, "timestamp_ms": row.timestamp, "source_type": row.source_type },
+                    "2_text": { "raw_text_chars": row.text.chars().count(), "clean_text_chars": row.clean_text.chars().count(), "ocr_confidence": row.ocr_confidence, "ocr_blocks": row.ocr_block_count, "ocr_noise": row.ocr_noise_score },
+                    "3_extraction": { "summary_source": row.summary_source, "synthesis_branch": row.synthesis_branch, "activity_type": row.activity_type, "topic": row.topic, "has_source_evidence": row.raw_evidence.contains("source_evidence"), "entities": row.entities.len(), "decisions": row.decisions.len(), "errors": row.errors.len(), "files": row.files_touched.len() },
+                    "4_summary": { "memory_context": row.memory_context, "display_summary": row.display_summary, "snippet": row.snippet },
+                    "5_insight": { "what_happened": row.insight_what_happened, "why_mattered": row.insight_why_mattered, "what_changed": row.insight_what_changed, "thread": row.insight_context_thread, "intent": row.intent_analysis.intent_label },
+                    "6_embedding": { "model": row.embedding_model, "dim": row.embedding_dim, "embedding_text": row.embedding_text, "primary_norm": norm(&row.embedding), "snippet_norm": norm(&row.snippet_embedding), "support_norm": norm(&row.support_embedding) },
+                    "7_storage": { "storage_outcome": row.storage_outcome, "enrichment_status": row.enrichment_status, "reviewer_generation": row.reviewer_generation, "schema_version": row.schema_version },
+                    "8_retrieval": { "query": query, "rank_of_this_memory": results.iter().position(|result| result.id == row.id).map(|rank| rank + 1), "top": results.iter().take(3).map(|result| json!({"title": result.window_title, "score": result.score, "is_this_memory": result.id == row.id})).collect::<Vec<_>>(), "routes": explanation.get("production_retrieval") },
+                })
+            }
+            None => json!(null),
+        };
+
+        let pct = |count: usize| format!("{count} ({:.0}%)", 100.0 * count as f64 / total as f64);
+        Ok::<_, String>(json!({
+            "memories": rows.len(),
+            "summary_quality": { "placeholder": pct(placeholder), "narrated": pct(narrated), "cut_inside_token": pct(cut), "no_why_it_mattered": pct(no_why) },
+            "vector_health": { "zero_primary_vector": pct(zero_vec), "primary_equals_snippet_vector": pct(same_vec), "embedding_text_carries_session_id": pct(session_noise), "model_and_dim": by_model },
+            "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity },
+            "known_item_search": { "sampled": candidates.len(), "by_query": search },
+            "one_capture": trace,
+        }))
+    })?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}

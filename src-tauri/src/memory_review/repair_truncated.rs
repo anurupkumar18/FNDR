@@ -44,6 +44,28 @@ pub struct RepairSummary {
     pub examples: Vec<RepairExample>,
 }
 
+#[derive(Clone, Copy)]
+enum InsightField {
+    WhatHappened,
+    WhyMattered,
+}
+
+impl InsightField {
+    fn get(self, record: &MemoryRecord) -> &str {
+        match self {
+            Self::WhatHappened => &record.insight_what_happened,
+            Self::WhyMattered => &record.insight_why_mattered,
+        }
+    }
+
+    fn get_mut(self, record: &mut MemoryRecord) -> &mut String {
+        match self {
+            Self::WhatHappened => &mut record.insight_what_happened,
+            Self::WhyMattered => &mut record.insight_why_mattered,
+        }
+    }
+}
+
 /// A stored summary without the period capture appended to it.
 fn stem_of(stored: &str) -> &str {
     stored.trim().trim_end_matches('.').trim_end()
@@ -63,8 +85,11 @@ fn uncut_sentence(stored: &str, record: &MemoryRecord) -> Option<String> {
             // Spaces may sit between the stored text and the period it was
             // cut at ("SELECT ... FOR" was stored as "SELECT.").
             let mut after = source[start + stem.len()..].trim_start_matches(' ').chars();
-            let cut_inside_token =
-                after.next() == Some('.') && after.next().is_some_and(|next| !next.is_whitespace());
+            // A letter or digit after the period means a file name, decimal
+            // or version; another period means an ellipsis. Punctuation such
+            // as ".;" is a real sentence end inside a joined list.
+            let cut_inside_token = after.next() == Some('.')
+                && after.next().is_some_and(|next| next.is_alphanumeric() || next == '.');
             cut_inside_token.then(|| first_sentence(&source[start..]).to_string())
         })
 }
@@ -75,9 +100,30 @@ pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
     if record.is_agent_note() {
         return None;
     }
+    // The insight rows are derived separately and can be cut even when the
+    // summary is whole; the card shows them first.
+    let mut insight_change = None;
+    for field in [InsightField::WhatHappened, InsightField::WhyMattered] {
+        let stored = field.get(record).to_string();
+        if let Some(sentence) = uncut_sentence(&stored, record) {
+            let repaired = format!("{}.", sentence.trim_end_matches('.'));
+            if repaired.len() > stored.trim().len() && repaired.starts_with(stem_of(&stored)) {
+                insight_change.get_or_insert(RepairExample {
+                    memory_id: record.id.clone(),
+                    before: stored,
+                    after: repaired.clone(),
+                });
+                *field.get_mut(record) = repaired;
+            }
+        }
+    }
+
     let before = record.display_summary.clone();
-    let sentence = uncut_sentence(&record.display_summary, record)
-        .or_else(|| uncut_sentence(&record.snippet, record))?;
+    let Some(sentence) = uncut_sentence(&record.display_summary, record)
+        .or_else(|| uncut_sentence(&record.snippet, record))
+    else {
+        return insight_change;
+    };
     let (repaired, fell_back) = clean_or_fallback_display_summary(
         &sentence,
         &record.window_title,
@@ -87,7 +133,7 @@ pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
     // A fallback line ("Viewed X at 3:04 PM") is not the original sentence.
     let stem = stem_of(&before);
     if fell_back || repaired.len() <= before.trim().len() || !repaired.starts_with(stem) {
-        return None;
+        return insight_change;
     }
 
     let same_as_summary = |field: &str| stem_of(field) == stem;
@@ -212,6 +258,21 @@ mod tests {
     }
 
     #[test]
+    fn repairs_insight_rows_cut_inside_a_token_when_the_summary_is_whole() {
+        let mut row = cut_row("m7", "The current state is FNDR 1.0 at the repo root. The index maps the files.");
+        row.display_summary = "Reviewed the FNDR review index.".into();
+        row.snippet = row.display_summary.clone();
+        row.insight_what_happened = "The current state is FNDR 1.".into();
+        row.insight_why_mattered = "The current state is FNDR 1".into();
+        let change = repair_record(&mut row).expect("repair");
+        assert_eq!(change.after, "The current state is FNDR 1.0 at the repo root.");
+        assert_eq!(row.insight_what_happened, change.after);
+        assert_eq!(row.insight_why_mattered, change.after);
+        assert_eq!(row.display_summary, "Reviewed the FNDR review index.");
+        assert!(repair_record(&mut row).is_none());
+    }
+
+    #[test]
     fn repairs_a_summary_cut_at_an_ellipsis() {
         let mut row = cut_row("m6", "Read about Postgres queues with SELECT ... FOR UPDATE SKIP LOCKED.");
         row.display_summary = "Read about Postgres queues with SELECT .".into();
@@ -236,7 +297,15 @@ mod tests {
         let mut unrelated = cut_row("m4", "Reviewed search/hybrid.rs today.");
         unrelated.display_summary = "Compared two rerankers.".into();
         unrelated.snippet = unrelated.display_summary.clone();
+        unrelated.insight_what_happened = unrelated.display_summary.clone();
         assert!(repair_record(&mut unrelated).is_none());
+
+        // A whole sentence followed by ".;" in a joined list is not a cut.
+        let mut joined = cut_row("m8", "Kept MiniLM for now.; Considering a later test.");
+        joined.display_summary = "Kept MiniLM for now.".into();
+        joined.snippet = joined.display_summary.clone();
+        joined.insight_what_happened = joined.display_summary.clone();
+        assert!(repair_record(&mut joined).is_none());
 
         let mut note = cut_row("m5", "Reviewed search/hybrid.rs today.");
         note.source_type = "agent".into();
