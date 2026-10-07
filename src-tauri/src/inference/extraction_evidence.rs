@@ -34,6 +34,43 @@ pub struct ExtractionEvidence {
     pub issues: Vec<String>,
 }
 
+const MAX_COMMAND_CHARS: usize = 160;
+/// Six or more plain words with no flag, path or assignment among them read
+/// as a sentence, not a command line.
+const PROSE_WORDS: usize = 6;
+
+/// Whether an extracted `commands` entry looks like something typed at a
+/// shell. The model sometimes files a request written in prose here, and the
+/// field feeds the embedded text.
+pub fn is_command_like(value: &str) -> bool {
+    let line = value.trim();
+    let line = ["$ ", "% ", "> "]
+        .iter()
+        .find_map(|prompt| line.strip_prefix(prompt))
+        .unwrap_or(line)
+        .trim();
+    if line.is_empty() || line.contains('\n') || line.chars().count() > MAX_COMMAND_CHARS {
+        return false;
+    }
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let first = words[0];
+    // "Please ...", "Ran ..." open a sentence; `RUST_LOG=debug` opens a command.
+    if first.starts_with(|c: char| c.is_uppercase()) && !first.contains('=') {
+        return false;
+    }
+    if line.ends_with('?') {
+        return false;
+    }
+    let ends_a_sentence = line.ends_with('.')
+        && line[..line.len() - 1].ends_with(|c: char| c.is_alphabetic())
+        && words.len() >= 4;
+    if ends_a_sentence {
+        return false;
+    }
+    let shell_shaped = |word: &&str| word.contains(['-', '/', '.', '_', '=', ':', '|', '$', '"', '\'', '`', '<', '>', '~', '&']);
+    words.len() < PROSE_WORDS || words.iter().any(shell_shaped)
+}
+
 pub fn extraction_source_text(input: &str) -> String {
     input.chars().take(4000).collect()
 }
@@ -278,6 +315,38 @@ pub fn render_source_statements(evidence: &ExtractionEvidence) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shell_command_is_command_like() {
+        for command in [
+            "ls",
+            "cd ..",
+            "cargo test --lib capture",
+            "$ npm run dev",
+            "./scripts/dev.sh",
+            "RUST_LOG=debug cargo run",
+            "make qa-retrieval-check QA_CHUNKS=1",
+            "git commit -m \"fix the review queue so stale rows are derived again\"",
+        ] {
+            assert!(is_command_like(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn a_request_written_in_prose_is_not_a_command() {
+        let long = format!("cargo run -- {}", "x".repeat(200));
+        for prose in [
+            "Please refactor the capture module so that summaries are never cut",
+            "make the output and product better more usable and consistent",
+            "Can you run the tests?",
+            "Ran the build and fixed the errors.",
+            "cargo build\ncargo test",
+            long.as_str(),
+            "   ",
+        ] {
+            assert!(!is_command_like(prose), "{prose}");
+        }
+    }
     use serde_json::json;
 
     #[test]

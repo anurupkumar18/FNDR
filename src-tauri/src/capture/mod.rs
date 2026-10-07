@@ -1378,6 +1378,14 @@ fn validate_structured_memory_extraction(
     supported += extraction.entities.len()
         + extraction.files_touched.len()
         + extraction.search_aliases.len();
+    // A request written in prose is not a command, however it was filed.
+    let commands_before = extraction.commands.len();
+    extraction
+        .commands
+        .retain(|command| crate::inference::extraction_evidence::is_command_like(command));
+    if extraction.commands.len() < commands_before {
+        issues.push("commands_not_command_like".to_string());
+    }
     if !is_supported_dedup_fingerprint(&extraction.dedup_fingerprint) {
         if !extraction.dedup_fingerprint.trim().is_empty() {
             issues.push("unsupported_dedup_fingerprint".to_string());
@@ -7629,6 +7637,26 @@ Activity patterns and insights dashboard
                 "src-tauri/src/capture/mod.rs".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn validation_drops_prose_from_the_commands_field() {
+        let mut extraction = crate::inference::StructuredMemoryExtraction {
+            commands: vec![
+                "cargo test --lib capture".into(),
+                "Please refactor the capture module so that summaries are never cut".into(),
+            ],
+            ..Default::default()
+        };
+        let (_, issues) = validate_structured_memory_extraction(
+            &mut extraction,
+            "Terminal",
+            "zsh",
+            "cargo test --lib capture",
+            "cargo test --lib capture",
+        );
+        assert_eq!(extraction.commands, vec!["cargo test --lib capture"]);
+        assert!(issues.iter().any(|issue| issue == "commands_not_command_like"));
     }
 
     #[test]

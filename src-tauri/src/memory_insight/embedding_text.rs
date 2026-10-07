@@ -90,6 +90,7 @@ pub fn compose_insight_embedding_text(record: &MemoryRecord) -> String {
         .commands
         .iter()
         .filter(|command| command.chars().count() <= MAX_COMMAND_CHARS)
+        .filter(|command| crate::inference::extraction_evidence::is_command_like(command))
         .take(MAX_COMMANDS)
         .cloned()
         .collect::<Vec<_>>();
@@ -147,5 +148,18 @@ mod tests {
         let out = compose_insight_embedding_text(&r);
         assert!(out.contains("commands: cargo test --lib"), "{out}");
         assert!(!out.contains("please please"), "{out}");
+    }
+
+    #[test]
+    fn a_short_request_filed_as_a_command_is_left_out() {
+        let mut r = MemoryRecord::default();
+        r.topic = "build".to_string();
+        r.commands = vec![
+            "Please fix the failing capture test".to_string(),
+            "cargo test --lib".to_string(),
+        ];
+        let out = compose_insight_embedding_text(&r);
+        assert!(out.contains("commands: cargo test --lib"), "{out}");
+        assert!(!out.contains("Please fix"), "{out}");
     }
 }

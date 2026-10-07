@@ -140,4 +140,6 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 **Do.** Validate `commands` entries (length cap, must look like a command) in `extraction_evidence::finalize_extraction`. Trace what the merge path does to `clean_text` and decide whether that is intended.
 
+**Result, 2026-10-07.** `extraction_evidence::is_command_like` decides: one line, at most 160 characters, does not open like a sentence, and is either short or carries a flag, path or assignment. The capture validator drops other entries and records `commands_not_command_like`; the embedded text applies the same check, so rows stored earlier are cleaned the next time they are re-embedded. On the merge question: `merge_story_text` only keeps or extends `clean_text`, it never shortens it. A short `clean_text` beside a long `memory_context` therefore comes from a capture with little readable text whose context was written from the image, which is intended. This was read from the code, not re-checked on the traced record.
+
 **Done when.** A test rejects a prose `commands` entry, and the merge behavior is documented or fixed.
