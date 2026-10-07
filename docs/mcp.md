@@ -22,7 +22,7 @@ Configuration is documented in `README.md`:
 - `agent.run`: builds a pack, persists an audit record, and returns deterministic local output with policy and blocked action details. It does not execute dangerous actions.
 - `agent.privacy_status`: reports MCP/Agent privacy posture, auth mode, raw-evidence defaults, blocklist count, redaction setting, and dangerous-action policy.
 - `agent.explain_retrieval`: explains selected memories, qualitative ranking signals, dropped context, redactions, policy reasons, and limitations.
-- `agent.rate_result`: logs retrieval feedback (`useful`, `irrelevant`, `wrong`, `stale`, `missing_context`) without mutating ranking.
+- `agent.rate_result`: logs retrieval feedback (`useful`, `irrelevant`, `wrong`, `stale`, `missing_context`) without mutating ranking. Requires a valid MCP token, actions enabled, and "Let assistants add notes" enabled.
 - `agent.list_prompts`: lists FNDR-specific prompt templates.
 - `agent.get_prompt`: returns one prompt template.
 

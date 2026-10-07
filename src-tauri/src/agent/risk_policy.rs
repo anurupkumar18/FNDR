@@ -78,10 +78,14 @@ pub fn mcp_side_effect_tools() -> &'static [&'static str] {
     &MCP_SIDE_EFFECT_TOOLS
 }
 
-/// Assistant note and decision writes (VS-68, VS-35). `decide` would confirm
+/// Assistant note, decision, and retrieval-feedback writes. `decide` would confirm
 /// every MCP call, so these use the person's explicit notes setting through
 /// `decide_mcp_write` instead.
-const MCP_WRITE_TOOLS: [&str; 2] = ["fndr.remember", "fndr_remember_decision"];
+const MCP_WRITE_TOOLS: [&str; 3] = [
+    "fndr.remember",
+    "fndr_remember_decision",
+    "agent.rate_result",
+];
 
 pub fn mcp_write_tools() -> &'static [&'static str] {
     &MCP_WRITE_TOOLS
@@ -202,7 +206,7 @@ mod tests {
     fn mcp_call_tool_checks_the_gate_before_dispatching_any_tool() {
         let source = include_str!("../mcp/mod.rs");
         let gate = source
-            .find("mcp_tool_risk(params.name.as_str())")
+            .find("mcp_action_policy(params.name.as_str())")
             .expect("call_tool consults the risk policy");
         let dispatch = source
             .find("match params.name.as_str()")
@@ -227,7 +231,7 @@ mod tests {
         assert_eq!(decide_mcp_write(false, true), Decision::Run);
         assert_eq!(
             mcp_write_tools(),
-            ["fndr.remember", "fndr_remember_decision"]
+            ["fndr.remember", "fndr_remember_decision", "agent.rate_result"]
         );
         for name in mcp_write_tools() {
             assert_eq!(mcp_tool_risk(name), None, "{name} is gated once, not twice");

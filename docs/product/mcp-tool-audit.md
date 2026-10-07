@@ -34,7 +34,7 @@ module doc comment), **verdict**.
 | `agent.run` | execute | no | runs an agent action | none | none (v1-only, post-dates v2) | approval card required; closed if unavailable, declined, or expired |
 | `agent.privacy_status` | read | no | none | `fndr.privacy_status` | `fndr.privacy_status` | merge |
 | `agent.explain_retrieval` | read | no | none | none | `fndr.explain_retrieval` | keep |
-| `agent.rate_result` | write | no | appends to `RetrievalFeedbackRating` | none | `fndr.feedback` | keep |
+| `agent.rate_result` | write | no | appends to `RetrievalFeedbackRating` | none | `fndr.feedback` | keep; valid MCP token, actions on, assistant notes on |
 | `agent.list_prompts` | read | no | none | none | none | keep |
 | `agent.get_prompt` | read | no | none | none | none | keep |
 | `memory.timeline` | read | no | none | `fndr.timeline` | `fndr.timeline` | merge |
@@ -85,6 +85,7 @@ module doc comment), **verdict**.
 - **~18 merge**: same information under a second name, usually from the `memory.*` namespace duplicating a newer `fndr.*` one. The `fndr.*` namespace should become canonical; `memory.*`/bare-name equivalents are the legacy surface to fold in.
 - **4 execute-class tools require approval**: `agent.run`, `start_meeting`, `stop_meeting`, and `fndr.open_target` consult `policy_for_action` and wait for an explicit in-app approval card before dispatch. Missing UI, timeout, decline, or the actions kill switch refuses the action.
 - **Raw captured text is opt-in**: `memory.source_evidence` has `include_raw`, which defaults to false. `memory.search_raw` was removed.
+- **Retrieval feedback is a write**: `agent.rate_result` requires a valid MCP token, actions enabled, and assistant notes enabled before it can append feedback.
 
 ## Proposed target surface
 

@@ -6864,6 +6864,29 @@ mod tests {
     }
 
     #[test]
+    fn retrieval_feedback_requires_mcp_write_permission_before_it_is_saved() {
+        let app_state = build_test_app_state();
+        let feedback_path = app_state
+            .app_data_dir
+            .join("agent")
+            .join("retrieval_feedback.jsonl");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let response = runtime
+            .block_on(call_tool(
+                Some(json!({
+                    "name": "agent.rate_result",
+                    "arguments": {"run_id": "run-test", "rating": "useful"}
+                })),
+                app_state,
+                &McpRequest::without_writes(),
+            ))
+            .expect("feedback response");
+
+        assert_eq!(response["isError"], true);
+        assert!(!feedback_path.exists(), "a refused rating must not be saved");
+    }
+
+    #[test]
     fn tools_list_advertises_bounded_resume_work() {
         let tools = tools_list_result();
         let resume = tools["tools"]
