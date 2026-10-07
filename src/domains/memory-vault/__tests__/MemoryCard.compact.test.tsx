@@ -95,6 +95,17 @@ describe("MemoryCard — compact variant (narrow container)", () => {
         expect(previewEl).toBeTruthy();
     });
 
+    it("shows low confidence as a badge without changing the preview sentence", () => {
+        renderCompact(makeCard({
+            summary: "A grounded sentence about the capture.",
+            low_confidence: true,
+        }));
+
+        expect(screen.getByText("Low confidence")).toBeTruthy();
+        expect(screen.getByTitle("A grounded sentence about the capture.")).toBeTruthy();
+        expect(screen.queryByText(/Low confidence: A grounded sentence/)).toBeNull();
+    });
+
     it("does NOT hide critical elements via inline styles", () => {
         const { container } = renderCompact(makeCard());
         const article = container.querySelector("[data-testid='memory-card']") as HTMLElement;

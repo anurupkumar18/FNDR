@@ -49,6 +49,8 @@ pub struct MemoryCard {
     #[serde(default)]
     pub confidence: f32,
     #[serde(default)]
+    pub low_confidence: bool,
+    #[serde(default)]
     pub anchor_coverage_score: f32,
     /// High-level activity category: "coding", "browsing", "communication", "docs", "design", "other"
     #[serde(default)]
@@ -249,12 +251,13 @@ impl MemoryCardSynthesizer {
                 }
             }
 
-            let (title, mut summary, action, mut context) = match draft.as_ref().and_then(|d| {
+            let (title, summary, action, mut context) = match draft.as_ref().and_then(|d| {
                 validate_draft(d, query, &snippets, &anchor.app_name, &anchor.window_title)
             }) {
                 Some(valid) => valid,
                 None => deterministic_fallback(query, &anchor, &snippets),
             };
+            let summary = remove_low_confidence_prefix(summary);
 
             let match_reason = build_match_reason(query, &group.members, &anchor);
             if !match_reason.is_empty()
@@ -269,6 +272,7 @@ impl MemoryCardSynthesizer {
             let mut score = aggregate_score(&group.members);
             let source_count = group.members.len();
             let confidence = grounding_confidence(query, &summary, score, &snippets);
+            let low_confidence = !query.trim().is_empty() && confidence < 0.42;
             let anchor_coverage = aggregate_anchor_coverage(&group.members);
             let query_support = query_support_ratio(query, &snippets, &anchor);
             if !query.trim().is_empty() && query_support < 0.10 && confidence < 0.32 {
@@ -282,13 +286,6 @@ impl MemoryCardSynthesizer {
                     score *= 0.62;
                 }
             }
-            if !query.trim().is_empty()
-                && confidence < 0.42
-                && !summary.to_lowercase().starts_with("low confidence:")
-            {
-                summary = format!("Low confidence: {}", summary);
-            }
-
             let activity_type =
                 infer_activity_type(&anchor.app_name, &anchor.window_title, &snippets);
             let files_touched = extract_files_touched(&snippets);
@@ -330,6 +327,7 @@ impl MemoryCardSynthesizer {
                 raw_snippets: snippets,
                 evidence_ids,
                 confidence,
+                low_confidence,
                 anchor_coverage_score: anchor_coverage,
                 activity_type,
                 files_touched,
@@ -847,7 +845,7 @@ fn deterministic_fallback(
 
 fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     let snippets = collect_group_snippets(std::slice::from_ref(result));
-    let (title, mut summary, action, context) = if result.is_agent_note() {
+    let (title, summary, action, context) = if result.is_agent_note() {
         (
             result.window_title.clone(),
             if result.memory_context.is_empty() {
@@ -861,15 +859,10 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     } else {
         deterministic_fallback(query, result, &snippets)
     };
+    let summary = remove_low_confidence_prefix(summary);
     let evidence_ids = vec![result.id.clone()];
     let confidence = grounding_confidence(query, &summary, result.score, &snippets);
-    if !result.is_agent_note()
-        && !query.trim().is_empty()
-        && confidence < 0.42
-        && !summary.to_lowercase().starts_with("low confidence:")
-    {
-        summary = format!("Low confidence: {}", summary);
-    }
+    let low_confidence = !result.is_agent_note() && !query.trim().is_empty() && confidence < 0.42;
     let activity_type = infer_activity_type(&result.app_name, &result.window_title, &snippets);
     let files_touched = extract_files_touched(&snippets);
     let anchor_memory_context = if !result.memory_context.trim().is_empty() {
@@ -904,6 +897,7 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         raw_snippets: snippets,
         evidence_ids,
         confidence,
+        low_confidence,
         anchor_coverage_score: result.anchor_coverage_score.clamp(0.0, 1.0),
         activity_type,
         files_touched,
@@ -1554,6 +1548,16 @@ fn starts_with_ascii_case_insensitive(value: &str, prefix: &str) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
+fn remove_low_confidence_prefix(value: String) -> String {
+    let trimmed = value.trim_start();
+    let prefix = "Low confidence:";
+    if starts_with_ascii_case_insensitive(trimmed, prefix) {
+        trimmed[prefix.len()..].trim_start().to_string()
+    } else {
+        value
+    }
+}
+
 fn looks_like_diff_stat(token: &str) -> bool {
     let trimmed = token.trim_matches(|ch: char| matches!(ch, ',' | ';' | ':' | '.' | ')' | '('));
     if trimmed.len() < 2 {
@@ -1955,6 +1959,23 @@ mod tests {
         assert_eq!(grouped.len(), 1, "possible matches remain visible");
         assert_eq!(grouped[0].insight_what_changed, "");
         assert!(!grouped[0].summary.is_empty());
+    }
+
+    #[test]
+    fn low_confidence_is_card_metadata_not_summary_text() {
+        let result = SearchResult {
+            id: "low-confidence".into(),
+            app_name: "Chrome".into(),
+            window_title: "A captured page".into(),
+            snippet: "A short captured note about a deployment.".into(),
+            clean_text: "A short captured note about a deployment.".into(),
+            score: 0.1,
+            ..Default::default()
+        };
+
+        let card = fallback_card_for_result("unrelated query", &result);
+        assert!(card.low_confidence);
+        assert!(!card.summary.starts_with("Low confidence:"));
     }
 
     #[test]

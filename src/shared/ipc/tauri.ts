@@ -73,6 +73,7 @@ export interface MemoryCard {
     raw_snippets: string[];
     evidence_ids?: string[];
     confidence?: number;
+    low_confidence?: boolean;
     anchor_coverage_score?: number;
     /** High-level activity category: content-derived, never tied to an app name. */
     activity_type?: string;

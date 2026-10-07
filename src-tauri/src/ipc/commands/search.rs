@@ -359,6 +359,7 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         raw_snippets: vec![fallback_snippet],
         evidence_ids: vec![memory_id],
         confidence: card_confidence(&result),
+        low_confidence: false,
         anchor_coverage_score: result.anchor_coverage_score.clamp(0.0, 1.0),
         activity_type: result.activity_type.clone(),
         files_touched: result.files_touched.clone(),

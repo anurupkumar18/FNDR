@@ -127,6 +127,11 @@ export function MemoryCard({
                     <span className="fndr-mc-c-title">{card.title}</span>
                     {previewText ? (
                         <span className="fndr-mc-c-preview" title={previewText}>
+                            {card.low_confidence && (
+                                <span className="fndr-mc-low-confidence" aria-label="Low confidence">
+                                    Low confidence
+                                </span>
+                            )}
                             {previewText}
                         </span>
                     ) : null}
@@ -210,6 +215,11 @@ export function MemoryCard({
 
             {previewText && (
                 <p className="fndr-mc-preview">
+                    {card.low_confidence && (
+                        <span className="fndr-mc-low-confidence" aria-label="Low confidence">
+                            Low confidence
+                        </span>
+                    )}{" "}
                     &ldquo;{previewText}&rdquo;
                 </p>
             )}
