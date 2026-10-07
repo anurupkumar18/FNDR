@@ -1,6 +1,6 @@
 # Releasing FNDR
 
-A release is one tag push. `.github/workflows/release.yml` typechecks and tests, builds an Apple Silicon DMG, publishes a GitHub Release with the updater manifest, and verifies the signature.
+A release is one tag push. `.github/workflows/release.yml` typechecks and tests, builds an Apple Silicon DMG, publishes a GitHub Release with the updater manifest, verifies the signature, and uploads `FNDR-latest.dmg` as a stable public-download alias alongside the versioned DMG.
 
 ```bash
 # bump "version" in src-tauri/tauri.conf.json and package.json first
@@ -10,9 +10,29 @@ git push origin v0.3.1
 
 Installed copies pick the release up from Settings → Updates.
 
+The public download site is deployed from `website/` to <https://anurupkumar18.github.io/FNDR/>. Its CTA resolves through:
+
+```text
+https://github.com/anurupkumar18/FNDR/releases/latest/download/FNDR-latest.dmg
+```
+
+GitHub's `latest` redirect follows the newest full release, so neither the site nor its workflow contains a product version.
+
+## One-time: enable the public website
+
+The repository owner must do this once after the Pages workflow reaches the default branch:
+
+1. Open **GitHub repository → Settings → Pages**.
+2. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+3. Run the **website** workflow once, or merge a change under `website/`, then confirm the deployment URL is `https://anurupkumar18.github.io/FNDR/`.
+
+No Pages secret, custom domain, branch, or paid hosting account is required. Do not select **Deploy from a branch**; `.github/workflows/pages.yml` is the publishing source.
+
+Until the first full `v*` release succeeds, the site correctly reports that no public release exists. Publishing that first release is a normal release operation, not a Pages setting.
+
 ## One-time: Developer ID signing and notarization
 
-Without these secrets the build is ad-hoc signed. macOS then blocks the first launch until the user clicks "Open Anyway" in System Settings → Privacy & Security, and can ask for Screen Recording again after updates. With them, the DMG opens like any App Store-adjacent app.
+Without these secrets the build is ad-hoc signed. macOS then blocks the first launch until the user clicks "Open Anyway" in System Settings → Privacy & Security, and can ask for Screen Recording again after updates. With them, the DMG is Developer ID signed and notarized by Apple.
 
 Requires an Apple Developer Program membership.
 
@@ -47,3 +67,12 @@ npm run tauri build -- --bundles dmg --config '{"bundle":{"createUpdaterArtifact
 
 On this repo's Macs with the broken Command Line Tools libc++ headers, prefix with
 `CXXFLAGS="-isystem $(xcrun --show-sdk-path)/usr/include/c++/v1"`.
+
+## Website checks
+
+```bash
+node --test website/tests/*.test.mjs
+python3 -c 'import pathlib, yaml; [yaml.safe_load(pathlib.Path(p).read_text()) for p in (".github/workflows/release.yml", ".github/workflows/pages.yml")]'
+```
+
+The Node suite protects release selection, static fallback copy and links, the absence of a stale hard-coded version, accessibility fallbacks, and the workflow contract. Pages also runs it before every deployment.

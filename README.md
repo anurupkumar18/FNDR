@@ -119,9 +119,9 @@ flowchart LR
 
 ### Install from a release (recommended)
 
-1. Download the latest DMG from [GitHub Releases](https://github.com/anurupkumar18/FNDR/releases).
+1. Download the latest DMG from the [FNDR website](https://anurupkumar18.github.io/FNDR/) or [GitHub Releases](https://github.com/anurupkumar18/FNDR/releases).
 2. Drag FNDR into Applications.
-3. First launch only: right-click the app and choose **Open** (builds are ad-hoc signed, not notarized).
+3. Open FNDR. Developer ID releases are notarized and should open normally. If macOS says it cannot verify the developer, the release was ad-hoc signed: open **System Settings → Privacy & Security**, scroll to the FNDR message, and choose **Open Anyway**.
 4. Onboarding downloads the required search embedding model in-app; the multimodal Qwen model is optional.
 5. Later releases install automatically through Settings → Updates.
 

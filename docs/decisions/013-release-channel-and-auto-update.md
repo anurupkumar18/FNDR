@@ -11,21 +11,25 @@ FNDR previously had no distributable artifact: installation required a developer
 ## Decision
 
 - **Single release path:** pushing a `v*` tag runs `.github/workflows/release.yml` (tauri-action on `macos-14`), which builds an aarch64 DMG, publishes a GitHub Release, and emits an updater manifest (`latest.json`).
+- **Stable public download:** the same release job also uploads `FNDR-latest.dmg` alongside tauri-action's versioned artifacts after signature verification. GitHub's `releases/latest/download/FNDR-latest.dmg` redirect is the stable public download URL; it does not replace the updater manifest or versioned DMG.
 - **Ad-hoc signing:** builds are ad-hoc signed. First launch requires right-click → Open. Notarization can be layered in later by adding Apple credentials to the same workflow, without redesign.
 - **Auto-update:** `tauri-plugin-updater` with minisign signatures, independent of Apple signing. The public key is committed in `tauri.conf.json`; the private key lives outside the repo (`~/.tauri/fndr-updater.key`) and in GitHub Actions secrets (`TAURI_SIGNING_PRIVATE_KEY`, empty `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
 - **Update endpoint:** `https://github.com/anurupkumar18/FNDR/releases/latest/download/latest.json`.
 - **User surface:** Settings → Updates → "Check for updates" / "Install and restart" (`tauri-plugin-process` relaunch).
+- **Public website:** `website/` is a dependency-free static site deployed by `.github/workflows/pages.yml`. GitHub Releases remains the only source of release version and artifact truth. Static HTML links to the stable alias; progressive JavaScript may display metadata from the GitHub Releases API but cannot invent or publish a version.
 
 ## Consequences
 
 Positive:
 
 - One tag push produces an installable, self-updating release; every future fix reaches installed users.
+- The public website and direct DMG URL follow the latest full release without a website edit.
 - Updater integrity does not depend on Apple infrastructure.
 
 Negative / accepted risks:
 
 - Gatekeeper shows the unidentified-developer flow on first launch until notarization is added.
+- Before the first full release exists, the website can only point visitors to the empty Releases page; it must not imply that a DMG is available.
 - Losing the minisign private key breaks the update chain for existing installs; the key must be backed up.
 - aarch64-only until an x86_64 target is added deliberately.
 
@@ -34,3 +38,10 @@ Negative / accepted risks:
 - `release.yml` now signs with Developer ID and notarizes whenever the Apple secrets listed in `docs/setup/releasing.md` exist, and falls back to ad-hoc signing when they don't. It verifies the result with `codesign` (and `spctl` + `stapler` when signed) and gates on typecheck + tests first.
 - Right-click → Open no longer bypasses Gatekeeper on current macOS; unsigned users must use System Settings → Privacy & Security → Open Anyway. Ad-hoc signatures also change every build, so macOS can ask for Screen Recording again after an update. Both go away with Developer ID signing, which is why it is now the recommended path rather than out of scope.
 - The first release run failed before building: the repo-wide `*.json` ignore hid `src-tauri/tauri.conf.json` from tauri-action's config search. `.gitignore` now un-ignores the project config files.
+
+## Addendum (2026-10-07): public website and stable DMG alias
+
+- GitHub Pages is the public host because this repository is public and the site needs no server, secrets, or paid runtime. Pages must be enabled once with **GitHub Actions** as its publishing source.
+- The site is intentionally plain HTML, CSS, and an ES module under `website/`. It has no analytics, cookies, account, external font, or duplicated release manifest.
+- The release API enhancement selects only non-draft, non-prerelease `v*` releases and only DMG assets. If the API is unavailable, the static stable download and Releases links remain present.
+- The release workflow remains authoritative. The Pages workflow only tests and deploys the site; it never creates or edits a release.
