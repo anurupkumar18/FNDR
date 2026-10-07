@@ -102,7 +102,7 @@ fn run_query_returns_grounded_answer_with_evidence_for_planner_bug() {
     );
     assert!(!fused.is_empty(), "expected at least one fused hit");
 
-    let evidence = rt.block_on(async { collect_evidence(&fused, &store).await });
+    let evidence = rt.block_on(async { collect_evidence(&fused, &store, &[]).await });
     assert!(
         evidence.files.iter().any(|f| f.path.contains("plan.ts")),
         "expected plan.ts in evidence files"

@@ -17,8 +17,10 @@ import "./MemoryCardsPanel.css";
 import { InsightLayers } from "./InsightLayers";
 import { KnowledgeGraph } from "./KnowledgeGraph";
 import { GRAPH_SIM_MAX_TICKS, useGraph } from "./useGraph";
-import { MemoryCard as MemoryCardComponent } from "./MemoryCard";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
+import { VaultDayList } from "./VaultDayList";
+import { groupVaultMemories } from "./vaultGrouping";
+import { matchesPerspective, type Perspective } from "./perspectiveFilter";
 import { KnowledgeGraph3D, GraphErrorBoundary } from "@/features/graph/components";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
@@ -66,13 +68,7 @@ type TimeFilter =
     | "last_24h"
     | "last_7d";
 
-type PerspectiveFilter =
-    | typeof PERSPECTIVE_FILTER_ALL
-    | "web"
-    | "coding"
-    | "meetings"
-    | "communication"
-    | "docs";
+type PerspectiveFilter = typeof PERSPECTIVE_FILTER_ALL | Perspective;
 
 const TIME_FILTER_OPTIONS: Array<{ value: TimeFilter; label: string }> = [
     { value: TIME_FILTER_ALL, label: "All history" },
@@ -91,17 +87,6 @@ const PERSPECTIVE_FILTER_OPTIONS: Array<{ value: PerspectiveFilter; label: strin
     { value: "docs", label: "Docs & writing" },
 ];
 
-function normalizeText(value: string | undefined | null): string {
-    if (!value) {
-        return "";
-    }
-    return value
-        .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-        .replace(/\s*Sources:\s*[A-Za-z0-9,\-\s]+\.?$/i, "")
-        .replace(/\s+/g, " ")
-        .trim();
-}
-
 function matchesFilters(
     card: MemoryCard,
     timeFilter: TimeFilter,
@@ -118,47 +103,8 @@ function matchesFilters(
         if (timeFilter === "last_7d" && timestamp < now - 7 * 24 * 60 * 60 * 1000) return false;
     }
 
-    // 2. Perspective Filtering — prefer structured activity_type when present
-    if (perspectiveFilter === PERSPECTIVE_FILTER_ALL) {
-        return true;
-    }
-
-    // Use structured field first for accuracy
-    if (card.activity_type && card.activity_type !== "other") {
-        if (perspectiveFilter === "coding") return card.activity_type === "coding";
-        if (perspectiveFilter === "docs") return card.activity_type === "docs";
-        if (perspectiveFilter === "communication") return card.activity_type === "communication";
-        if (perspectiveFilter === "web") return card.activity_type === "browsing";
-    }
-
-    // Fall back to generic text signals when structured activity_type is absent.
-        const text = normalizeText(
-        `${card.window_title ?? ""} ${(card.context ?? []).join(" ")} ${card.summary ?? ""} ${card.display_summary ?? ""} ${card.internal_context ?? ""}`
-    ).toLowerCase();
-    const url = (card.url ?? "").toLowerCase();
-    const hasAny = (terms: string[]) => terms.some((term) => text.includes(term));
-
-    if (perspectiveFilter === "web") {
-        return Boolean(card.url) || /^https?:\/\//i.test(url);
-    }
-
-    if (perspectiveFilter === "coding") {
-        return hasAny(["code", "debug", "build", "compile", "branch", "commit", "pull request", "repo"]);
-    }
-
-    if (perspectiveFilter === "meetings") {
-        return hasAny(["meeting", "agenda", "call", "transcript", "attendee", "follow-up"]);
-    }
-
-    if (perspectiveFilter === "communication") {
-        return hasAny(["message", "email", "chat", "inbox", "reply", "thread"]);
-    }
-
-    if (perspectiveFilter === "docs") {
-        return hasAny(["doc", "document", "summary", "outline", "spec", "readme", "note", "draft", "pdf"]);
-    }
-
-    return true;
+    // 2. Perspective Filtering
+    return perspectiveFilter === PERSPECTIVE_FILTER_ALL || matchesPerspective(card, perspectiveFilter);
 }
 
 async function handleReopen(memoryId: string) {
@@ -213,10 +159,12 @@ export function MemoryCardsPanel({
     const [cards, setCards] = useState<MemoryCard[]>([]);
     const [needsSignalCards, setNeedsSignalCards] = useState<NeedsSignalCard[]>([]);
     const [showNeedsSignal, setShowNeedsSignal] = useState(false);
+    const [showConnections, setShowConnections] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [vaultActivity, setVaultActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [appFilter, setAppFilter] = useState<string>(APP_FILTER_ALL);
+    const [vaultQuery, setVaultQuery] = useState("");
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(TIME_FILTER_ALL);
     const [perspectiveFilter, setPerspectiveFilter] = useState<PerspectiveFilter>(PERSPECTIVE_FILTER_ALL);
     const [renderedCardLimit, setRenderedCardLimit] = useState(MEMORY_RENDER_BATCH);
@@ -237,7 +185,8 @@ export function MemoryCardsPanel({
     const isGraphFeature = feature === "graph";
     const showListSurface = !isGraphFeature && browseMode === "list";
     const showGraphSurface = !isVaultFeature && (browseMode === "graph" || browseMode === "project");
-    const showEmbeddedGraphStrip = feature === "mixed" && browseMode === "list";
+    const showEmbeddedGraphStrip = showListSurface && showConnections;
+    const wantsGraph = !isVaultFeature || showConnections;
 
     useEffect(() => {
         if (feature === "vault" && browseMode !== "list") {
@@ -267,9 +216,21 @@ export function MemoryCardsPanel({
             .sort((a, b) => a.localeCompare(b));
     }, [appNames]);
 
-    const filteredCards = useMemo(
-        () => cards.filter((card) => matchesFilters(card, timeFilter, perspectiveFilter)),
-        [cards, timeFilter, perspectiveFilter]
+    const filteredCards = useMemo(() => {
+        const needle = vaultQuery.trim().toLowerCase();
+        return cards.filter(
+            (card) =>
+                matchesFilters(card, timeFilter, perspectiveFilter) &&
+                (!needle ||
+                    `${card.title} ${card.summary} ${card.display_summary ?? ""} ${card.app_name} ${card.window_title}`
+                        .toLowerCase()
+                        .includes(needle))
+        );
+    }, [cards, timeFilter, perspectiveFilter, vaultQuery]);
+
+    const vaultDays = useMemo(
+        () => groupVaultMemories(filteredCards.slice(0, renderedCardLimit), Date.now()),
+        [filteredCards, renderedCardLimit]
     );
 
     useEffect(() => {
@@ -278,14 +239,11 @@ export function MemoryCardsPanel({
 
 
     useEffect(() => {
-        if (!isVisible) {
-            return;
-        }
-        if (isVaultFeature) {
+        if (!isVisible || !wantsGraph) {
             return;
         }
         void loadGraph({ mode: "full" });
-    }, [isVisible, loadGraph, isVaultFeature]);
+    }, [isVisible, loadGraph, wantsGraph]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -664,6 +622,16 @@ export function MemoryCardsPanel({
                             Excluded captures ({needsSignalCards.length})
                         </button>
                     )}
+                    {showListSurface && !showNeedsSignal && (
+                        <button
+                            type="button"
+                            className={`ui-action-btn memory-cards-tab${showConnections ? " memory-cards-tab--active" : ""}`}
+                            aria-pressed={showConnections}
+                            onClick={() => setShowConnections((current) => !current)}
+                        >
+                            Connections
+                        </button>
+                    )}
                     {showGraphSurface && (
                         <div className="memory-cards-count">
                             {(subgraph?.nodes?.length ?? 0)} nodes · {(subgraph?.edges?.length ?? 0)} links
@@ -673,8 +641,16 @@ export function MemoryCardsPanel({
 
                 {showListSurface && !showNeedsSignal && (
                 <div className="memory-cards-filters">
+                    <input
+                        type="search"
+                        className="memory-cards-search"
+                        aria-label="Filter memories by text"
+                        placeholder="Filter these memories"
+                        value={vaultQuery}
+                        onChange={(event) => setVaultQuery(event.target.value)}
+                    />
                     <label className="memory-cards-filter">
-                        App
+                        <span className="sr-only">App</span>
                         <div className="memory-cards-filter-control">
                             <select
                                 value={appFilter}
@@ -694,7 +670,7 @@ export function MemoryCardsPanel({
                     </label>
 
                     <label className="memory-cards-filter">
-                        When
+                        <span className="sr-only">When</span>
                         <div className="memory-cards-filter-control">
                             <select
                                 value={timeFilter}
@@ -713,7 +689,7 @@ export function MemoryCardsPanel({
                     </label>
 
                     <label className="memory-cards-filter">
-                        Activity
+                        <span className="sr-only">Activity</span>
                         <div className="memory-cards-filter-control">
                             <select
                                 value={perspectiveFilter}
@@ -739,12 +715,6 @@ export function MemoryCardsPanel({
                 )}
             </div>
 
-            {showListSurface && vaultActivity && (
-                <div className="memory-cards-activity-trace">
-                    <ActivityTrace trace={vaultActivity} />
-                </div>
-            )}
-
             <div
                 className={`memory-cards-body${
                     showGraphSurface ? " memory-cards-body--graph" : ""
@@ -769,7 +739,7 @@ export function MemoryCardsPanel({
                     </section>
                 ) : <>
                 {showEmbeddedGraphStrip && (
-                <section className="memory-vault-global-graph" aria-label="Global memory graph">
+                <section className="memory-vault-global-graph" aria-label="Connections">
                     {subgraph?.cluster_0_name ? (
                         <div className="memory-vault-cluster-legend" title="Louvain community 0 label">
                             {subgraph.cluster_0_name}
@@ -780,11 +750,14 @@ export function MemoryCardsPanel({
                             {graphError}
                         </div>
                     )}
-                    {graphLoading && (subgraph?.nodes?.length ?? 0) === 0 && !graphError && (
+                    {(graphLoading || !subgraph) && (subgraph?.nodes?.length ?? 0) === 0 && !graphError && (
                         <div className="memory-vault-graph-strip-loading">
                             <ThinkingIndicator state="searching" size="md" />
-                            <p>Loading global graph…</p>
+                            <p>Loading connections…</p>
                         </div>
+                    )}
+                    {!graphLoading && subgraph && subgraph.nodes.length === 0 && (
+                        <p className="memory-vault-graph-strip-empty">No connections to show yet.</p>
                     )}
                     {(subgraph?.nodes?.length ?? 0) > 0 && (
                         <KnowledgeGraph
@@ -832,22 +805,12 @@ export function MemoryCardsPanel({
 
                 {filteredCards.length > 0 && (
                     <div className="memory-cards-stream">
-                        {filteredCards.slice(0, renderedCardLimit).map((card) => (
-                            <MemoryCardComponent
-                                key={card.id}
-                                card={card}
-                                variant="compact"
-                                onOpen={(c) => {
-                                    setOpenExpandedId(c.id);
-                                }}
-                                threadCountHint={
-                                    card.topic_categories?.length ||
-                                    (card.insight_context_thread?.trim() ? 1 : 0) ||
-                                    card.files_touched?.length ||
-                                    undefined
-                                }
-                            />
-                        ))}
+                        <VaultDayList
+                            days={vaultDays}
+                            focusMemoryId={focusMemoryId}
+                            onOpen={(c) => setOpenExpandedId(c.id)}
+                            onReopen={(c) => void handleReopen(c.id)}
+                        />
                         {filteredCards.length > renderedCardLimit && (
                             <button
                                 type="button"
@@ -900,7 +863,7 @@ export function MemoryCardsPanel({
                         )}
                         {(subgraph?.nodes?.length ?? 0) > 0 && (
                             <div className="memory-graph-stage" style={{ position: "relative" }}>
-                                {/* 2D / 3D mode switch — explicit segmented control */}
+                                {/* 2D / 3D mode switch: explicit segmented control */}
                                 <div className="mg-mode-segmented" role="tablist" aria-label="Graph view mode">
                                     <button
                                         type="button"
@@ -1112,7 +1075,7 @@ export function MemoryCardsPanel({
                         insightsSlot={
                             <>
                                 <InsightLayers card={expandedCard} evalUi={false} />
-                                <div className="fndr-emc-extra-actions">
+                                {expandedCard.source_type !== "agent" && <div className="fndr-emc-extra-actions">
                                     <button
                                         type="button"
                                         className="ui-action-btn"
@@ -1132,10 +1095,10 @@ export function MemoryCardsPanel({
                                             ? "Hide similar"
                                             : "Find similar screens"}
                                     </button>
-                                </div>
+                                </div>}
                             </>
                         }
-                        similarSlot={similarSlot}
+                        similarSlot={expandedCard.source_type === "agent" ? undefined : similarSlot}
                         onClose={() => setOpenExpandedId(null)}
                         onDelete={async (id) => {
                             const deleted = await handleDeleteCard(id);
@@ -1147,6 +1110,11 @@ export function MemoryCardsPanel({
                     />
                 );
             })()}
+            {showListSurface && vaultActivity && (
+                <div className="memory-cards-activity-trace">
+                    <ActivityTrace trace={vaultActivity} />
+                </div>
+            )}
         </div>
     );
 }

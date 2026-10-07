@@ -52,6 +52,54 @@ fn corpus_has_thirty_screens_across_six_classes() {
     }
 }
 
+#[test]
+fn production_perceptual_hasher_accepts_novel_fixture_and_skips_repeats() {
+    let fixtures = load_manifest();
+    let read_fixture = |id: &str| {
+        let fixture = fixtures
+            .iter()
+            .find(|fixture| fixture.id == id)
+            .expect("fixture id");
+        assert_eq!(
+            fixture.expected_outcome, "store",
+            "only positive fixtures enter pixel dedupe"
+        );
+        std::fs::read(fixtures_dir().join(&fixture.file)).expect("read positive fixture image")
+    };
+    let frame_a = read_fixture("editor-01");
+    let frame_b = read_fixture("browser_article-04");
+    let threshold = fndr_lib::config::Config::default().dedupe_threshold;
+    let mut hasher = PerceptualHasher::new();
+
+    let first = hasher.check(&frame_a, threshold);
+    assert!(
+        !first.is_duplicate,
+        "first positive frame should be admitted: {first:?}"
+    );
+    assert_eq!(first.match_kind.as_str(), "novel");
+
+    let repeated = hasher.check(&frame_a, threshold);
+    assert!(
+        repeated.is_duplicate,
+        "identical frame should be skipped: {repeated:?}"
+    );
+    assert_eq!(repeated.match_kind.as_str(), "bytes_identical");
+
+    let changed = hasher.check(&frame_b, threshold);
+    assert!(
+        !changed.is_duplicate,
+        "changed positive frame should be admitted: {changed:?}"
+    );
+    assert_eq!(changed.match_kind.as_str(), "novel");
+
+    let returned = hasher.check(&frame_a, threshold);
+    assert!(
+        returned.is_duplicate,
+        "A→B→A frame should be recognized as a recent loop: {returned:?}"
+    );
+    assert_eq!(returned.match_kind.as_str(), "recent_loop_hash");
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn ocr_plus_cleanup_stays_within_each_fixtures_cer_budget() {
@@ -337,7 +385,8 @@ fn dhash_dedupe_keeps_expected_frames_with_zero_false_drops_on_sequences() {
         typing_sequence(),
     ];
 
-    let mut report = String::from("# CAP-08 dedupe comparison: img_hash (before) vs dHash + A-B-A (after)\n\n");
+    let mut report =
+        String::from("# CAP-08 dedupe comparison: img_hash (before) vs dHash + A-B-A (after)\n\n");
     report.push_str("| Sequence | Expected keep | img_hash keeps | dHash+ABA keeps |\n");
     report.push_str("|---|---|---|---|\n");
 

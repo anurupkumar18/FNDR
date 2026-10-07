@@ -47,6 +47,7 @@ python3 scripts/team/gitlab_sync.py list --user minhpro001    # someone else's
 python3 scripts/team/gitlab_sync.py move VS-05 doing
 python3 scripts/team/gitlab_sync.py comment VS-05 "Started. Plan: failing test first, then remove the cutoff."
 python3 scripts/team/gitlab_sync.py move VS-05 evidence
+python3 scripts/team/gitlab_sync.py flag VS-05 needs-human          # fills the Needs human column; add --clear to remove it (also: blocked)
 python3 scripts/team/gitlab_sync.py comment VS-05 "MR !57 ready for review. make qa-retrieval-check: Search Recall@5 0.68 -> 0.77, no query lost."
 ```
 

@@ -58,7 +58,11 @@ pub async fn backfill_memory_review_in_range(
     let records = store
         .get_memories_in_range(start_ms, end_ms)
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        // Agent notes are never review candidates (VS-68).
+        .filter(|record| !record.is_agent_note())
+        .collect::<Vec<_>>();
 
     let scanned = records.len();
     let mut summary = BackfillReviewSummary {
@@ -143,7 +147,6 @@ mod tests {
             store.clone(),
             state_store,
             graph,
-            None,
             None,
         ));
         (state, store)
@@ -269,5 +272,43 @@ mod tests {
         assert_eq!(summary.already_queued, 1);
         // The pre-existing queued job is preserved.
         assert_eq!(state.pending_memory_reviews.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn memory_review_skips_agent_notes() {
+        // VS-68: note text never sits in a prompt whose output writes to memory.
+        let (state, store) = build_state_with_store().await;
+        let base = 1_700_000_000_000;
+        let mut note = make("note", base + 1_000, super::super::STATUS_PENDING);
+        note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string();
+        assert_eq!(
+            crate::memory_review::review_skip_reason(&note),
+            Some("agent_note")
+        );
+        assert!(!crate::memory_review::should_enqueue_review(&note));
+        store
+            .add_batch_preserving_ids(&[
+                note,
+                make("screen", base + 2_000, super::super::STATUS_PENDING),
+            ])
+            .await
+            .unwrap();
+
+        let summary = backfill_memory_review_in_range(
+            &state,
+            &store,
+            base,
+            base + 10_000,
+            chrono::Utc::now().timestamp_millis(),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(summary.scanned, 1);
+        assert_eq!(summary.queued, 1);
+        assert_eq!(
+            state.pending_memory_reviews.pending_memory_ids(),
+            ["screen"]
+        );
     }
 }

@@ -12,6 +12,8 @@ FNDR stores screen-derived OCR in `MemoryRecord.text` / `clean_text` for provena
 
 3. **`memory_context` purity** — `memory_context` remains **human-readable prose** only. Structured continuation, reopen targets, and IDs stay in dedicated fields (`related_memory_ids`, `parent_id`, card-level `reopen_target` on synthesized search cards, etc.). Do not encode machine markers into `memory_context` going forward; legacy rows may still contain markers until backfill.
 
+4. **Source statements** — New text extraction selects references into host-numbered source text. Rust resolves complete quotes with adjacent context and stores the source snapshot hash, selected line and quote in `raw_evidence.source_evidence`, with bounded original-snapshot history on merge. Quotes stay separate from `memory_context`, `internal_context` and embedding text. Human detail views and agent evidence packs may expose them as observations, with ownership and pending status explicitly unverified. Capture, merge, review and storage must not regenerate canonical intent or actions for these records. Legacy records retain their existing behavior until explicitly migrated; merely reading them does not certify their claims.
+
 ## Consequences
 
 - **Migrations** — New nullable/default columns are added via `ensure_memory_schema_columns` for existing databases.

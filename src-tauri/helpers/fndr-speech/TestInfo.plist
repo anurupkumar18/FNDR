@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>fndr-speech</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.fndr.app.speech-test</string>
+    <key>CFBundleName</key>
+    <string>FNDR Speech Test</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>FNDR Speech Test needs microphone access to transcribe a spoken test phrase.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>FNDR Speech Test converts a spoken test phrase into text on this Mac.</string>
+</dict>
+</plist>

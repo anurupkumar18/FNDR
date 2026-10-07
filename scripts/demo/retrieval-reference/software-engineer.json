@@ -1,0 +1,434 @@
+{
+  "schema_version": 2,
+  "case_set": "software-engineer",
+  "case_count": 34,
+  "case_count_by_kind": {
+    "app": 4,
+    "keyword": 12,
+    "negative": 4,
+    "paraphrase": 9,
+    "time": 5
+  },
+  "paths": {
+    "search": {
+      "recall_at_5": 1.0,
+      "mrr_at_10": 0.8309523809523809,
+      "latency_ms": {
+        "p50": 223,
+        "p95": 369
+      },
+      "recall_at_5_by_kind": {
+        "app": 1.0,
+        "keyword": 1.0,
+        "paraphrase": 1.0,
+        "time": 1.0
+      },
+      "no_match": {
+        "cases": 4,
+        "returned_nothing": 0,
+        "no_strong_match": 3,
+        "positive_without_strong_match": 0,
+        "bar": 0.25,
+        "top_score_median": 0.14943459630012512,
+        "positive_top_score_median": 0.44059398770332336
+      }
+    },
+    "ask": {
+      "recall_at_5": 1.0,
+      "mrr_at_10": 0.8309523809523809,
+      "latency_ms": {
+        "p50": 1024,
+        "p95": 1214
+      },
+      "recall_at_5_by_kind": {
+        "app": 1.0,
+        "keyword": 1.0,
+        "paraphrase": 1.0,
+        "time": 1.0
+      },
+      "no_match": {
+        "cases": 4,
+        "returned_nothing": 0,
+        "no_strong_match": 3,
+        "positive_without_strong_match": 0,
+        "bar": 0.25,
+        "top_score_median": 0.14943459630012512,
+        "positive_top_score_median": 0.44059398770332336
+      }
+    },
+    "retrieve": {
+      "recall_at_5": 1.0,
+      "mrr_at_10": 0.8309523809523809,
+      "latency_ms": {
+        "p50": 203,
+        "p95": 315
+      },
+      "recall_at_5_by_kind": {
+        "app": 1.0,
+        "keyword": 1.0,
+        "paraphrase": 1.0,
+        "time": 1.0
+      },
+      "no_match": {
+        "cases": 4,
+        "returned_nothing": 0,
+        "no_strong_match": 3,
+        "positive_without_strong_match": 0,
+        "bar": 0.25,
+        "top_score_median": 0.14943459630012512,
+        "positive_top_score_median": 0.44059398770332336
+      }
+    }
+  },
+  "top1_agreement": {
+    "count": 34,
+    "total": 34,
+    "rate": 1.0
+  },
+  "chunk_route": {
+    "enabled": false,
+    "chunks": 0
+  },
+  "queries": [
+    {
+      "query": "INC-2291 postmortem",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5287249088287354,
+      "ask_top_score": 0.5287249088287354,
+      "retrieve_top_score": 0.5287249088287354
+    },
+    {
+      "query": "PR 4187 idempotency keys",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.43316036462783813,
+      "ask_top_score": 0.43316036462783813,
+      "retrieve_top_score": 0.433158278465271
+    },
+    {
+      "query": "UniqueViolation labels_idempotency_key_key",
+      "kind": "keyword",
+      "search_rank_at_10": 4,
+      "ask_rank_at_10": 4,
+      "retrieve_rank_at_10": 4,
+      "search_top_score": 0.5193569660186768,
+      "ask_top_score": 0.5193569660186768,
+      "retrieve_top_score": 0.5193569660186768
+    },
+    {
+      "query": "kubectl rollout undo shipment-tracker",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5938100814819336,
+      "ask_top_score": 0.5938100814819336,
+      "retrieve_top_score": 0.5938100814819336
+    },
+    {
+      "query": "FOR UPDATE SKIP LOCKED",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5599751472473145,
+      "ask_top_score": 0.5599751472473145,
+      "retrieve_top_score": 0.5599751472473145
+    },
+    {
+      "query": "SSL SYSCALL error EOF detected",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.40248942375183105,
+      "ask_top_score": 0.40248942375183105,
+      "retrieve_top_score": 0.40248942375183105
+    },
+    {
+      "query": "token bucket 50 requests per second",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5278691649436951,
+      "ask_top_score": 0.5278691649436951,
+      "retrieve_top_score": 0.5278691649436951
+    },
+    {
+      "query": "Postgres 16 runbook due October 9",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.528807520866394,
+      "ask_top_score": 0.528807520866394,
+      "retrieve_top_score": 0.528807520866394
+    },
+    {
+      "query": "ENG-912 query count assertion",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.4799176752567291,
+      "ask_top_score": 0.4799176752567291,
+      "retrieve_top_score": 0.4799176752567291
+    },
+    {
+      "query": "Retry-After header on 429",
+      "kind": "keyword",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 2,
+      "retrieve_rank_at_10": 2,
+      "search_top_score": 0.4958033859729767,
+      "ask_top_score": 0.4958033859729767,
+      "retrieve_top_score": 0.4958033859729767
+    },
+    {
+      "query": "PR 4215 flaky test_track_webhook_retry",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.4941546320915222,
+      "ask_top_score": 0.4941546320915222,
+      "retrieve_top_score": 0.4941546320915222
+    },
+    {
+      "query": "promo packet",
+      "kind": "keyword",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.37661921977996826,
+      "ask_top_score": 0.37661921977996826,
+      "retrieve_top_score": 0.37661921977996826
+    },
+    {
+      "query": "why did the tracking API get slow after the release",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5967196226119995,
+      "ask_top_score": 0.5967196226119995,
+      "retrieve_top_score": 0.5967196226119995
+    },
+    {
+      "query": "how do we stop a retried request from buying two shipping labels",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5033108592033386,
+      "ask_top_score": 0.5033108592033386,
+      "retrieve_top_score": 0.5033108592033386
+    },
+    {
+      "query": "which approach did we pick for moving the database to the new major version",
+      "kind": "paraphrase",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 2,
+      "retrieve_rank_at_10": 2,
+      "search_top_score": 0.3521357774734497,
+      "ask_top_score": 0.3521357774734497,
+      "retrieve_top_score": 0.3521357774734497
+    },
+    {
+      "query": "how many calls each partner is allowed to make",
+      "kind": "paraphrase",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 2,
+      "retrieve_rank_at_10": 2,
+      "search_top_score": 0.378792941570282,
+      "ask_top_score": 0.378792941570282,
+      "retrieve_top_score": 0.378792941570282
+    },
+    {
+      "query": "the article about using the database as a work queue",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.44876739382743835,
+      "ask_top_score": 0.44876739382743835,
+      "retrieve_top_score": 0.44876739382743835
+    },
+    {
+      "query": "what broke in the build for the labels change",
+      "kind": "paraphrase",
+      "search_rank_at_10": 5,
+      "ask_rank_at_10": 5,
+      "retrieve_rank_at_10": 5,
+      "search_top_score": 0.3938666582107544,
+      "ask_top_score": 0.3938666582107544,
+      "retrieve_top_score": 0.3938666582107544
+    },
+    {
+      "query": "who is the new teammate I am helping get started",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.28762322664260864,
+      "ask_top_score": 0.28762322664260864,
+      "retrieve_top_score": 0.28762322664260864
+    },
+    {
+      "query": "what my manager said I need to get promoted",
+      "kind": "paraphrase",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.3832927942276001,
+      "ask_top_score": 0.3832927942276001,
+      "retrieve_top_score": 0.3832927942276001
+    },
+    {
+      "query": "the fix for dropped database connections",
+      "kind": "paraphrase",
+      "search_rank_at_10": 2,
+      "ask_rank_at_10": 2,
+      "retrieve_rank_at_10": 2,
+      "search_top_score": 0.3599458336830139,
+      "ask_top_score": 0.3599458336830139,
+      "retrieve_top_score": 0.3599458336830139
+    },
+    {
+      "query": "the postmortem draft from yesterday",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5160000920295715,
+      "ask_top_score": 0.5160000920295715,
+      "retrieve_top_score": 0.5160000920295715
+    },
+    {
+      "query": "the incident channel from two days ago",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.3351324796676636,
+      "ask_top_score": 0.3351324796676636,
+      "retrieve_top_score": 0.3351324796676636
+    },
+    {
+      "query": "the onboarding notes from three days ago",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.44383734464645386,
+      "ask_top_score": 0.44383734464645386,
+      "retrieve_top_score": 0.44383734464645386
+    },
+    {
+      "query": "the design review notes from four days ago",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.2885631322860718,
+      "ask_top_score": 0.2885631322860718,
+      "retrieve_top_score": 0.2885631322860718
+    },
+    {
+      "query": "the job queue article from five days ago",
+      "kind": "time",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.43735063076019287,
+      "ask_top_score": 0.43735063076019287,
+      "retrieve_top_score": 0.43735063076019287
+    },
+    {
+      "query": "the rollback in Terminal",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.25937551259994507,
+      "ask_top_score": 0.25937551259994507,
+      "retrieve_top_score": 0.25937551259994507
+    },
+    {
+      "query": "the idempotency test fix in VS Code",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.4270552694797516,
+      "ask_top_score": 0.4270552694797516,
+      "retrieve_top_score": 0.4270552694797516
+    },
+    {
+      "query": "the database upgrade thread in Slack",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.3805387020111084,
+      "ask_top_score": 0.3805387020111084,
+      "retrieve_top_score": 0.3805387020111084
+    },
+    {
+      "query": "the upgrade runbook in Notion",
+      "kind": "app",
+      "search_rank_at_10": 1,
+      "ask_rank_at_10": 1,
+      "retrieve_rank_at_10": 1,
+      "search_top_score": 0.5118322968482971,
+      "ask_top_score": 0.5118322968482971,
+      "retrieve_top_score": 0.5118322968482971
+    },
+    {
+      "query": "kitchen remodel contractor quote",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "retrieve_rank_at_10": null,
+      "search_top_score": 0.1464788168668747,
+      "ask_top_score": 0.1464788168668747,
+      "retrieve_top_score": 0.1464788168668747
+    },
+    {
+      "query": "flight to Lisbon booking confirmation",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "retrieve_rank_at_10": null,
+      "search_top_score": 0.14676524698734283,
+      "ask_top_score": 0.14676524698734283,
+      "retrieve_top_score": 0.14676524698734283
+    },
+    {
+      "query": "React Native push notification crash on Android",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "retrieve_rank_at_10": null,
+      "search_top_score": 0.1521039456129074,
+      "ask_top_score": 0.1521039456129074,
+      "retrieve_top_score": 0.1521039456129074
+    },
+    {
+      "query": "quarterly sales commission spreadsheet",
+      "kind": "negative",
+      "search_rank_at_10": null,
+      "ask_rank_at_10": null,
+      "retrieve_rank_at_10": null,
+      "search_top_score": 0.3557991087436676,
+      "ask_top_score": 0.3557991087436676,
+      "retrieve_top_score": 0.3557991087436676
+    }
+  ]
+}

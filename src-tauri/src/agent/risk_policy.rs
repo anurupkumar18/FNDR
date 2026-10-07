@@ -17,12 +17,17 @@ pub enum Caller {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefuseReason {
     KillSwitch,
+    /// "Let assistants add notes" is off (VS-68).
+    AgentNotesOff,
 }
 
 impl RefuseReason {
     pub fn message(self) -> &'static str {
         match self {
             RefuseReason::KillSwitch => "Actions are turned off in FNDR settings.",
+            RefuseReason::AgentNotesOff => {
+                "Assistant notes are off. The person can turn on \"Let assistants add notes\" in FNDR settings."
+            }
         }
     }
 }
@@ -60,8 +65,8 @@ pub fn decide_for_tool(
 }
 
 /// MCP tools with side effects that are not command-bar registry tools. Each
-/// goes through `decide` before its handler runs. Tools not listed here are
-/// read-only (`docs/product/mcp-tool-audit.md`).
+/// goes through `decide` before its handler runs. Assistant note and decision
+/// writes are listed separately in `MCP_WRITE_TOOLS`.
 const MCP_SIDE_EFFECT_TOOLS: [&str; 4] = [
     "agent.run",
     "start_meeting",
@@ -71,6 +76,27 @@ const MCP_SIDE_EFFECT_TOOLS: [&str; 4] = [
 
 pub fn mcp_side_effect_tools() -> &'static [&'static str] {
     &MCP_SIDE_EFFECT_TOOLS
+}
+
+/// Assistant note and decision writes (VS-68, VS-35). `decide` would confirm
+/// every MCP call, so these use the person's explicit notes setting through
+/// `decide_mcp_write` instead.
+const MCP_WRITE_TOOLS: [&str; 2] = ["fndr.remember", "fndr_remember_decision"];
+
+pub fn mcp_write_tools() -> &'static [&'static str] {
+    &MCP_WRITE_TOOLS
+}
+
+/// The kill switch refuses first, then the notes setting; otherwise the
+/// write runs.
+pub fn decide_mcp_write(kill_switch: bool, agent_notes_enabled: bool) -> Decision {
+    if kill_switch {
+        return Decision::Refuse(RefuseReason::KillSwitch);
+    }
+    if !agent_notes_enabled {
+        return Decision::Refuse(RefuseReason::AgentNotesOff);
+    }
+    Decision::Run
 }
 
 pub fn mcp_tool_risk(name: &str) -> Option<ToolRisk> {
@@ -182,5 +208,41 @@ mod tests {
             .find("match params.name.as_str()")
             .expect("call_tool dispatches by name");
         assert!(gate < dispatch, "the gate must run before the dispatch");
+    }
+
+    #[test]
+    fn mcp_writes_refuse_on_the_kill_switch_then_the_notes_setting() {
+        assert_eq!(
+            decide_mcp_write(true, true),
+            Decision::Refuse(RefuseReason::KillSwitch)
+        );
+        assert_eq!(
+            decide_mcp_write(true, false),
+            Decision::Refuse(RefuseReason::KillSwitch)
+        );
+        assert_eq!(
+            decide_mcp_write(false, false),
+            Decision::Refuse(RefuseReason::AgentNotesOff)
+        );
+        assert_eq!(decide_mcp_write(false, true), Decision::Run);
+        assert_eq!(mcp_write_tools(), ["fndr.remember", "fndr_remember_decision"]);
+        for name in mcp_write_tools() {
+            assert_eq!(mcp_tool_risk(name), None, "{name} is gated once, not twice");
+        }
+    }
+
+    #[test]
+    fn remember_gate_runs_before_dispatch() {
+        let source = include_str!("../mcp/mod.rs");
+        let gate = source
+            .find("decide_mcp_write(")
+            .expect("call_tool gates MCP writes");
+        let dispatch = source
+            .find("match params.name.as_str()")
+            .expect("call_tool dispatches by name");
+        assert!(
+            gate < dispatch,
+            "the write gate must run before the dispatch"
+        );
     }
 }

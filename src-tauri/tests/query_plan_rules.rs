@@ -8,13 +8,14 @@ fn route_names(plan_routes: &[Route]) -> Vec<Route> {
 }
 
 #[test]
-fn definition_query_uses_graph_evidence() {
+fn definition_query_plans_evidence_hops_without_a_graph_route() {
     let plan = plan("why is the planner debounce 250ms", &PlanHints::default());
 
     assert_eq!(plan.intent, PlannerIntent::Definition);
     assert_eq!(
         route_names(&plan.retrieval_routes),
-        vec![Route::Chunk, Route::Vector, Route::Keyword, Route::Graph]
+        // No graph route until `retrieve` loads the insight graph (VS-33).
+        vec![Route::Chunk, Route::Vector, Route::Keyword]
     );
     assert_eq!(plan.graph_expansion.max_hops, 2);
     assert!(plan

@@ -1,0 +1,9 @@
+persona,path,stage,recall_at_5,mrr_at_10,p95_ms,recall_at_5_keyword,recall_at_5_paraphrase,recall_at_5_time,recall_at_5_app
+knowledge-worker,search,before,0.955,0.909,1512,1.0,0.875,1.0,1.0
+knowledge-worker,search,after,1.0,0.966,339,1.0,1.0,1.0,1.0
+knowledge-worker,ask,before,1.0,1.0,2920,1.0,1.0,1.0,1.0
+knowledge-worker,ask,after,1.0,0.966,917,1.0,1.0,1.0,1.0
+office-pm,search,before,0.7,0.589,913,1.0,0.333,0.875,1.0
+office-pm,search,after,0.9,0.661,372,1.0,0.778,1.0,1.0
+office-pm,ask,before,0.9,0.657,3197,1.0,0.778,0.875,1.0
+office-pm,ask,after,0.9,0.661,1390,1.0,0.778,1.0,1.0

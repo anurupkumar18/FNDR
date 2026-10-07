@@ -35,6 +35,8 @@ HOST = os.environ.get("GITLAB_HOST", "https://capstone.cs.utah.edu")
 PROJECT_PATH = os.environ.get("GITLAB_PROJECT_PATH", "fndr/fndr")
 
 STATUSES = ("ready", "doing", "evidence")
+# Board columns that are plain labels, independent of the status:: lifecycle.
+FLAGS = ("needs-human", "blocked")
 MILESTONES = {
     "W02-Measure": ("2026-09-28", "2026-10-04"),
     "W03-Build": ("2026-10-05", "2026-10-11"),
@@ -200,6 +202,13 @@ def status_change(current: list[str], new_status: str) -> tuple[list[str], list[
     remove = [l for l in current if l.startswith("status::") and l != f"status::{new_status}"]
     add = [] if f"status::{new_status}" in current else [f"status::{new_status}"]
     return add, remove
+
+
+def flag_change(current: list[str], flag: str, on: bool) -> tuple[list[str], list[str]]:
+    """Labels to add and remove to set or clear a plain flag label."""
+    if on:
+        return ([] if flag in current else [flag]), []
+    return [], ([flag] if flag in current else [])
 
 
 def board_url(board_id: int, scoped: bool, username: str | None) -> str:
@@ -445,6 +454,16 @@ def require_own(gl: GitLab, issue: dict, allow_any: bool) -> None:
         raise SystemExit(f"{issue['title']} is assigned to {sorted(assignees)}; pass --any to act on it anyway")
 
 
+def cmd_flag(args) -> int:
+    gl = GitLab(read_token() or sys.exit("No token"))
+    issue = find_issue(gl, args.ticket)
+    require_own(gl, issue, args.any)
+    add, remove = flag_change(issue["labels"], args.flag, not args.clear)
+    gl.put(f"issues/{issue['iid']}", {"add_labels": ",".join(add), "remove_labels": ",".join(remove)})
+    print(f"{issue['title']} -> {args.flag} {'cleared' if args.clear else 'set'}")
+    return 0
+
+
 def cmd_move(args) -> int:
     gl = GitLab(read_token() or sys.exit("No token"))
     issue = find_issue(gl, args.ticket)
@@ -498,6 +517,11 @@ def main(argv: list[str] | None = None) -> int:
     p_move.add_argument("ticket")
     p_move.add_argument("status", choices=(*STATUSES, "closed"))
     p_move.add_argument("--any", action="store_true")
+    p_flag = sub.add_parser("flag", help="set or clear the needs-human or blocked board label")
+    p_flag.add_argument("ticket")
+    p_flag.add_argument("flag", choices=FLAGS)
+    p_flag.add_argument("--clear", action="store_true")
+    p_flag.add_argument("--any", action="store_true")
     p_comment = sub.add_parser("comment")
     p_comment.add_argument("ticket")
     p_comment.add_argument("text")
@@ -507,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
         return plan()
     if args.cmd == "sync":
         return sync(args.apply, args.update)
-    return {"list": cmd_list, "move": cmd_move, "comment": cmd_comment}[args.cmd](args)
+    return {"list": cmd_list, "move": cmd_move, "comment": cmd_comment, "flag": cmd_flag}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -121,6 +121,12 @@ describe("MemoryCard — compact variant (narrow container)", () => {
         expect(chip.textContent).toBe("coding");
     });
 
+    it("shows a multi-word activity as words, not as an identifier", () => {
+        renderCompact(makeCard({ activity_type: "testing_workflow" }));
+        const chip = screen.getByLabelText("activity: testing workflow");
+        expect(chip.textContent).toBe("testing workflow");
+    });
+
     it("does NOT render activity_type chip when value is 'other'", () => {
         const card = makeCard({ activity_type: "other" });
         renderCompact(card);
@@ -167,6 +173,18 @@ describe("MemoryCard — compact variant (narrow container)", () => {
         renderCompact(card);
         expect(screen.getByLabelText("activity: coding")).toBeTruthy();
         expect(screen.getByLabelText("2 files")).toBeTruthy();
+    });
+
+    it("renders page N on the source line when reopen_page is set", () => {
+        renderCompact(makeCard({ reopen_page: 112, app_name: "Preview" }));
+        const sourceEl = screen.getByLabelText("Source and activity");
+        expect(sourceEl.textContent).toContain("Preview · page 112");
+    });
+
+    it("does not render a page label when reopen_page is absent", () => {
+        renderCompact(makeCard({ app_name: "Preview" }));
+        const sourceEl = screen.getByLabelText("Source and activity");
+        expect(sourceEl.textContent).not.toMatch(/page /);
     });
 
     it("card is still interactive (has role=button and tabIndex) when onOpen is provided", () => {

@@ -153,7 +153,9 @@ they become gold.
 - Cancellation removes partial data.
 - Reconstructed journeys never claim unavailable evidence was observed.
 - Scoped model tracing records content only for the selected journey.
-- Normal and explained Search/Ask outputs are identical.
+- Explained Search/Ask ranks, scores, and evidence describe the exact results
+  returned by that same call. Separate requests may differ if the active model
+  backend changes after a runtime failure.
 - Vector dimension, zero, non-finite, and stale-source mismatches are detected.
 - Retention, size cap, export, restart cleanup, and deletion are deterministic.
 - Production builds exclude raw Memory Journey commands and UI.

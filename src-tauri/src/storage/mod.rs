@@ -21,5 +21,6 @@ pub use schema::{
     MatchedChunkEvidence, MeetingBreakdown, MeetingSegment, MeetingSession, MemoryActionItem,
     MemoryChunkRecord, MemoryChunkSearchResult, MemoryRecord, NodeType, PrivacyClass,
     ProjectContext, RelevantFile, SearchResult, Stats, Task, TaskType, WorkingState,
+    AGENT_NOTE_SESSION_PREFIX, AGENT_NOTE_SOURCE_TYPE,
 };
 pub use state_store::StateStore;

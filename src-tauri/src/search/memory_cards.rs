@@ -30,6 +30,13 @@ pub struct MemoryCard {
     pub context: Vec<String>,
     pub timestamp: i64,
     pub app_name: String,
+    #[serde(default)]
+    pub source_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_by: Option<String>,
+    /// Capture method, independent of the synthesis branch.
+    #[serde(default)]
+    pub text_source: String,
     pub window_title: String,
     pub url: Option<String>,
     pub score: f32,
@@ -54,13 +61,15 @@ pub struct MemoryCard {
     pub session_duration_mins: u32,
     /// Short id of the prior card this one continues from, parsed out of
     /// the durable `memory_context` "Continues from <short_id>" marker.
-    /// Never persisted on its own — derived from `memory_context` metadata.
+    /// Never persisted on its own; derived from `memory_context` metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_of: Option<String>,
     /// URL / file:// / app:// link derived from typed persisted reopen provenance.
     /// Legacy `memory_context` marker parsing is fallback-only during migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reopen_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_page: Option<u32>,
     /// Insight-first layers (ADR 007), copied from search hits.
     #[serde(default)]
     pub insight_what_happened: String,
@@ -92,7 +101,7 @@ pub struct MemoryCard {
     /// Synonym/alias terms surfaced by synthesis.
     #[serde(default)]
     pub search_aliases: Vec<String>,
-    /// Phase 3 — "Why this surfaced" populated by the composer when this card
+    /// Phase 3: "Why this surfaced" populated by the composer when this card
     /// was produced by the agentic-graph-rag pipeline. Defaults to `None` for
     /// legacy code paths so existing frontend / serde consumers stay unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,7 +112,11 @@ pub struct MemoryCard {
     pub matched_chunk_ids: Vec<String>,
     #[serde(default)]
     pub chunk_evidence: Vec<crate::storage::MatchedChunkEvidence>,
-    /// Lifecycle status from `MemoryRecord.enrichment_status` — surfaced so the
+    /// True when no result for the query reached the strong-match bar, so
+    /// Search says "No strong matches" and folds these cards away (VS-12).
+    #[serde(default)]
+    pub weak_match: bool,
+    /// Lifecycle status from `MemoryRecord.enrichment_status`, surfaced so the
     /// vault can render DEVELOPED / PENDING / REVIEW_FAILED chips deterministically.
     #[serde(default)]
     pub enrichment_status: String,
@@ -126,15 +139,6 @@ struct SessionGroup {
 pub struct MemoryCardSynthesizer;
 
 impl MemoryCardSynthesizer {
-    /// Product-named wrapper for the search-results -> MemoryCards boundary.
-    pub async fn build_memory_cards(
-        inference: Option<&InferenceEngine>,
-        query: &str,
-        results: &[SearchResult],
-    ) -> Vec<MemoryCard> {
-        Self::from_results(inference, query, results).await
-    }
-
     pub async fn from_results(
         inference: Option<&InferenceEngine>,
         query: &str,
@@ -206,6 +210,10 @@ impl MemoryCardSynthesizer {
             let snippets = collect_group_snippets(&group.members);
             let grounded_snippets = collect_grounded_snippets(&group.members);
             let anchor = select_anchor(&group.members);
+            if anchor.is_agent_note() {
+                cards.push(fallback_card_for_result(query, &anchor));
+                continue;
+            }
             let evidence_ids = collect_evidence_ids(&group.members, 4);
 
             let mut draft = None;
@@ -303,6 +311,17 @@ impl MemoryCardSynthesizer {
                 context,
                 timestamp: anchor.timestamp,
                 app_name: anchor.app_name.clone(),
+                source_type: anchor.source_type.clone(),
+                added_by: anchor.added_by.clone(),
+                text_source: if group
+                    .members
+                    .iter()
+                    .all(|member| member.text_source == anchor.text_source)
+                {
+                    anchor.text_source.clone()
+                } else {
+                    "mixed".to_string()
+                },
                 window_title: anchor.window_title.clone(),
                 url: anchor.url.clone(),
                 score,
@@ -317,10 +336,11 @@ impl MemoryCardSynthesizer {
                 session_duration_mins,
                 continuation_of,
                 reopen_target,
-                insight_what_happened: anchor.insight_what_happened.clone(),
-                insight_why_mattered: anchor.insight_why_mattered.clone(),
-                insight_what_changed: anchor.insight_what_changed.clone(),
-                insight_context_thread: anchor.insight_context_thread.clone(),
+                reopen_page: anchor.reopen_page,
+                insight_what_happened: safe_insight(&anchor.insight_what_happened),
+                insight_why_mattered: safe_insight(&anchor.insight_why_mattered),
+                insight_what_changed: safe_insight(&anchor.insight_what_changed),
+                insight_context_thread: safe_thread(&anchor.insight_context_thread),
                 insight_spans_json: anchor.insight_spans_json.clone(),
                 insight_card_confidence: anchor.insight_card_confidence,
                 timeline_action_class: crate::timeline::classify_action_class(&anchor)
@@ -335,6 +355,7 @@ impl MemoryCardSynthesizer {
                 matched_routes: anchor.matched_routes.clone(),
                 matched_chunk_ids: anchor.matched_chunk_ids.clone(),
                 chunk_evidence: anchor.chunk_evidence.clone(),
+                weak_match: false,
                 enrichment_status: anchor.enrichment_status.clone(),
                 reviewed_at_ms: anchor.reviewed_at_ms,
                 reviewer_generation: anchor.reviewer_generation,
@@ -347,6 +368,7 @@ impl MemoryCardSynthesizer {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| b.timestamp.cmp(&a.timestamp))
+                .then_with(|| a.id.cmp(&b.id))
         });
         apply_story_continuity(&mut cards);
 
@@ -379,7 +401,7 @@ fn group_results_with_query_support(
     enforce_query_support: bool,
 ) -> Vec<SessionGroup> {
     let mut sorted = results.to_vec();
-    sorted.sort_by_key(|r| std::cmp::Reverse(r.timestamp));
+    sorted.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| a.id.cmp(&b.id)));
 
     let mut groups: Vec<SessionGroup> = Vec::new();
     let mut key_to_group_idx: HashMap<String, usize> = HashMap::new();
@@ -418,6 +440,9 @@ fn grouping_key(result: &SearchResult) -> String {
 }
 
 fn should_group(a: &SearchResult, b: &SearchResult, enforce_query_support: bool) -> bool {
+    if a.is_agent_note() || b.is_agent_note() {
+        return false;
+    }
     let within_time_window = (a.timestamp - b.timestamp).abs() <= 5 * 60 * 1000;
     if !within_time_window {
         return false;
@@ -633,6 +658,7 @@ fn select_anchor(results: &[SearchResult]) -> SearchResult {
                 .partial_cmp(&b.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.timestamp.cmp(&b.timestamp))
+                .then_with(|| b.id.cmp(&a.id))
         })
         .cloned()
         .unwrap_or_else(|| results[0].clone())
@@ -674,6 +700,7 @@ fn collect_evidence_ids(results: &[SearchResult], max_ids: usize) -> Vec<String>
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.timestamp.cmp(&a.timestamp))
+            .then_with(|| a.id.cmp(&b.id))
     });
 
     ranked
@@ -820,10 +847,24 @@ fn deterministic_fallback(
 
 fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     let snippets = collect_group_snippets(std::slice::from_ref(result));
-    let (title, mut summary, action, context) = deterministic_fallback(query, result, &snippets);
+    let (title, mut summary, action, context) = if result.is_agent_note() {
+        (
+            result.window_title.clone(),
+            if result.memory_context.is_empty() {
+                result.clean_text.clone()
+            } else {
+                result.memory_context.clone()
+            },
+            "View note".to_string(),
+            Vec::new(),
+        )
+    } else {
+        deterministic_fallback(query, result, &snippets)
+    };
     let evidence_ids = vec![result.id.clone()];
     let confidence = grounding_confidence(query, &summary, result.score, &snippets);
-    if !query.trim().is_empty()
+    if !result.is_agent_note()
+        && !query.trim().is_empty()
         && confidence < 0.42
         && !summary.to_lowercase().starts_with("low confidence:")
     {
@@ -836,7 +877,11 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     } else {
         result.internal_context.clone()
     };
-    let continuation_of = parse_continuation_of(&anchor_memory_context);
+    let continuation_of = if result.is_agent_note() {
+        None
+    } else {
+        parse_continuation_of(&anchor_memory_context)
+    };
     let reopen_target = parse_reopen_target(&anchor_memory_context, result);
     MemoryCard {
         id: result.id.clone(),
@@ -848,6 +893,9 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         context,
         timestamp: result.timestamp,
         app_name: result.app_name.clone(),
+        source_type: result.source_type.clone(),
+        added_by: result.added_by.clone(),
+        text_source: result.text_source.clone(),
         window_title: result.window_title.clone(),
         url: result.url.clone(),
         score: result.score,
@@ -862,10 +910,11 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         session_duration_mins: 0,
         continuation_of,
         reopen_target,
-        insight_what_happened: result.insight_what_happened.clone(),
-        insight_why_mattered: result.insight_why_mattered.clone(),
-        insight_what_changed: result.insight_what_changed.clone(),
-        insight_context_thread: result.insight_context_thread.clone(),
+        reopen_page: result.reopen_page,
+        insight_what_happened: safe_insight(&result.insight_what_happened),
+        insight_why_mattered: safe_insight(&result.insight_why_mattered),
+        insight_what_changed: safe_insight(&result.insight_what_changed),
+        insight_context_thread: safe_thread(&result.insight_context_thread),
         insight_spans_json: result.insight_spans_json.clone(),
         insight_card_confidence: result.insight_card_confidence,
         timeline_action_class: crate::timeline::classify_action_class(result)
@@ -880,10 +929,31 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         matched_routes: result.matched_routes.clone(),
         matched_chunk_ids: result.matched_chunk_ids.clone(),
         chunk_evidence: result.chunk_evidence.clone(),
+        weak_match: false,
         enrichment_status: result.enrichment_status.clone(),
         reviewed_at_ms: result.reviewed_at_ms,
         reviewer_generation: result.reviewer_generation,
         storage_outcome: result.storage_outcome.clone(),
+    }
+}
+
+/// Insight text as a card shows it: nothing that reads like instructions to a
+/// summarizer, and no narrator left over from records written by older prompts.
+fn safe_insight(value: &str) -> String {
+    if crate::summariser::narration_filter::is_summary_instruction(value) {
+        String::new()
+    } else {
+        crate::summariser::narration_filter::neutral_voice(value)
+    }
+}
+
+/// Older records stored a session-id fragment as their thread. That is an
+/// internal identifier, not something to show.
+fn safe_thread(value: &str) -> String {
+    if value.trim_start().starts_with("session …") {
+        String::new()
+    } else {
+        value.to_string()
     }
 }
 
@@ -946,6 +1016,9 @@ pub fn parse_continuation_of(memory_context: &str) -> Option<String> {
 /// Resolve reopen target from typed persisted fields. Legacy `memory_context`
 /// marker parsing remains as migration fallback only.
 pub fn parse_reopen_target(memory_context: &str, result: &SearchResult) -> Option<String> {
+    if result.is_agent_note() {
+        return None;
+    }
     match &result.reopen_kind {
         crate::memory::reopen::ReopenKind::BrowserUrl => {
             if let Some(url) = result.reopen_url.as_deref() {
@@ -1012,7 +1085,7 @@ pub fn parse_reopen_target(memory_context: &str, result: &SearchResult) -> Optio
 }
 
 /// Classify the high-level activity from content-derived signals only.
-/// All cues are generic English / file-extension morphology — no app names,
+/// All cues are generic English / file-extension morphology: no app names,
 /// no URL-host allowlists.
 fn infer_activity_type(_app_name: &str, _window_title: &str, snippets: &[String]) -> String {
     let haystack = snippets.join(" ").to_lowercase();
@@ -1115,7 +1188,29 @@ fn compute_session_duration(members: &[SearchResult]) -> u32 {
     (diff_ms / 60_000).max(0) as u32
 }
 
+/// "Midterm Study Guide - Google Chrome" is "Midterm Study Guide"; the app
+/// already has its own label on the card.
+fn without_app_suffix(title: &str, app_name: &str) -> String {
+    let app = app_name.trim();
+    let trimmed = title.trim();
+    if app.is_empty()
+        || trimmed.len() <= app.len()
+        || !trimmed.is_char_boundary(trimmed.len() - app.len())
+    {
+        return trimmed.to_string();
+    }
+    let (head, tail) = trimmed.split_at(trimmed.len() - app.len());
+    if tail.eq_ignore_ascii_case(app) {
+        let head = head.trim_end().trim_end_matches(['-', '|', '·']).trim_end();
+        if !head.is_empty() {
+            return head.to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
 fn sanitize_title(raw: &str, app_name: &str, window_title: &str) -> String {
+    let window_title = &without_app_suffix(window_title, app_name);
     let candidate = normalize_sentence(raw);
     if !candidate.is_empty() && !is_generic_title(&candidate) {
         return truncate_words(&candidate, 18);
@@ -1377,6 +1472,9 @@ fn extract_story_facts(snippets: &[String]) -> Vec<String> {
 
 fn apply_story_continuity(cards: &mut [MemoryCard]) {
     for card in cards.iter_mut() {
+        if card.source_type == crate::storage::AGENT_NOTE_SOURCE_TYPE {
+            continue;
+        }
         if let Some(cleaned) = sanitize_summary(&card.summary) {
             card.summary = cleaned;
             continue;
@@ -1399,44 +1497,16 @@ fn clean_story_fact(value: &str) -> String {
         .split_whitespace()
         .filter(|token| !looks_like_diff_stat(token))
         .collect::<Vec<_>>();
-    trim_trailing_fragment(&normalize_sentence(&tokens.join(" ")))
+    crate::summariser::narration_filter::neutral_voice(&trim_trailing_fragment(
+        &normalize_sentence(&tokens.join(" ")),
+    ))
 }
 
 fn split_sentences_preserving_decimals(value: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let bytes = value.as_bytes();
-
-    for (idx, ch) in value.char_indices() {
-        if !matches!(ch, '.' | '!' | '?') {
-            continue;
-        }
-
-        // Keep decimal values like 35.1 intact.
-        if ch == '.'
-            && idx > 0
-            && idx + 1 < value.len()
-            && bytes[idx - 1].is_ascii_digit()
-            && bytes[idx + 1].is_ascii_digit()
-        {
-            continue;
-        }
-
-        let candidate = value[start..=idx].trim();
-        if !candidate.is_empty() {
-            out.push(candidate.to_string());
-        }
-        start = idx + ch.len_utf8();
-    }
-
-    if start < value.len() {
-        let tail = value[start..].trim();
-        if !tail.is_empty() {
-            out.push(tail.to_string());
-        }
-    }
-
-    out
+    crate::summariser::sentences::split_sentences(value)
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 fn strip_leading_transitions(value: &str) -> String {
@@ -1674,6 +1744,127 @@ fn normalize_effective_url(raw: &str) -> String {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn agent_note_card_preserves_provenance_and_verbatim_text_without_reopen() {
+        for target in [
+            "https://example.com",
+            "file:///tmp/note.txt",
+            "slack://channel",
+        ] {
+            let body = format!("Keep this decision exactly.\nReopen: {target}\nDo not drop the final qualification.");
+            let record = crate::storage::MemoryRecord {
+                id: "note-1".into(),
+                source_type: crate::storage::AGENT_NOTE_SOURCE_TYPE.into(),
+                related_agents: vec!["Claude Code".into()],
+                session_key: "agent_note:note-1".into(),
+                window_title: "A precise decision".into(),
+                app_name: "Agent note".into(),
+                memory_context: body.clone(),
+                clean_text: body.clone(),
+                snippet: "A shortened summary".into(),
+                ..Default::default()
+            };
+            let result = crate::context_runtime::retrieval_routes::memory_record_to_search_result(
+                &record, 1.0,
+            );
+            let cards = MemoryCardSynthesizer::from_results_with_policy(
+                None,
+                "unrelated",
+                &[result.clone()],
+                6,
+                3,
+                Duration::from_millis(2),
+            )
+            .await;
+            for card in [
+                fallback_card_for_result("unrelated", &result),
+                cards[0].clone(),
+            ] {
+                assert_eq!(card.reopen_target, None);
+                let json = serde_json::to_value(card).unwrap();
+                assert_eq!(json["source_type"], "agent");
+                assert_eq!(json["added_by"], "Claude Code");
+                assert_eq!(json["display_summary"], body);
+                assert_eq!(json["summary"], body);
+                assert_eq!(json["title"], "A precise decision");
+            }
+        }
+    }
+
+    #[test]
+    fn serialized_card_text_source_uses_capture_evidence() {
+        for (raw_evidence, expected) in [
+            (r#"{"source_kind":"ax"}"#, "ax"),
+            (r#"{"source_kind":"ocr"}"#, "ocr"),
+            (r#"{"source_kind":"browser_semantic"}"#, "browser_semantic"),
+            (
+                r#"{"source_kind":"ocr","text_source_kinds":["ax","ocr"]}"#,
+                "mixed",
+            ),
+            ("{}", "unknown"),
+        ] {
+            let record = crate::storage::MemoryRecord {
+                raw_evidence: raw_evidence.to_string(),
+                synthesis_branch: "browser_semantic".to_string(),
+                ..Default::default()
+            };
+            let result = crate::context_runtime::retrieval_routes::memory_record_to_search_result(
+                &record, 1.0,
+            );
+            let card = fallback_card_for_result("", &result);
+            assert_eq!(serde_json::to_value(card).unwrap()["text_source"], expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn serialized_grouped_card_text_source_includes_every_member() {
+        for (sources, expected) in [
+            (["ax", "ax"], "ax"),
+            (["ax", "ocr"], "mixed"),
+            (["ax", "unknown"], "mixed"),
+            (["mixed", "ax"], "mixed"),
+        ] {
+            let results: Vec<_> = sources
+                .iter()
+                .enumerate()
+                .map(|(index, source)| {
+                    let record = crate::storage::MemoryRecord {
+                        id: format!("source-{index}"),
+                        timestamp: 3_000_000 - index as i64 * 60_000,
+                        app_name: "VS Code".to_string(),
+                        window_title: "capture provenance".to_string(),
+                        session_id: "capture-session".to_string(),
+                        session_key: "vscode:capture".to_string(),
+                        anchor_coverage_score: 0.9,
+                        text: "Reviewed capture provenance sources".to_string(),
+                        clean_text: "Reviewed capture provenance sources".to_string(),
+                        snippet: "Reviewed capture provenance sources".to_string(),
+                        raw_evidence: serde_json::json!({"source_kind": source}).to_string(),
+                        ..Default::default()
+                    };
+                    crate::context_runtime::retrieval_routes::memory_record_to_search_result(
+                        &record, 1.0,
+                    )
+                })
+                .collect();
+            let cards = MemoryCardSynthesizer::from_results_with_policy(
+                None,
+                "capture",
+                &results,
+                6,
+                3,
+                Duration::from_millis(2),
+            )
+            .await;
+            assert_eq!(cards.len(), 1);
+            assert_eq!(cards[0].source_count, 2);
+            assert_eq!(
+                serde_json::to_value(&cards[0]).unwrap()["text_source"],
+                expected
+            );
+        }
+    }
+
     #[test]
     fn groups_nearby_same_session_hits() {
         let base = SearchResult {
@@ -1716,6 +1907,47 @@ mod tests {
             "Reviewed IPL highlights on YouTube while comparing match statistics."
         )
         .is_some());
+    }
+
+    #[tokio::test]
+    async fn hides_instruction_like_insights_without_dropping_the_search_match() {
+        let result = SearchResult {
+            id: "instruction-leak".into(),
+            app_name: "Google Chrome".into(),
+            window_title: "James Blake — Death of Love (Live) — YouTube".into(),
+            snippet: "Listening to James Blake perform Death of Love live on YouTube".into(),
+            clean_text: "Listening to James Blake perform Death of Love live on YouTube".into(),
+            insight_what_happened:
+                "Listening to James Blake perform Death of Love live on YouTube.".into(),
+            insight_why_mattered: "You were listening to a live performance.".into(),
+            insight_what_changed: "extract and analyze the content from the OCR text; identify key themes and narrative elements in the video summary".into(),
+            score: 0.8,
+            ..Default::default()
+        };
+
+        let fallback = fallback_card_for_result("James Blake", &result);
+        assert!(!fallback.title.is_empty());
+        assert!(!fallback.summary.is_empty());
+        assert!(fallback.confidence > 0.0);
+        assert_eq!(fallback.insight_what_changed, "");
+        assert_eq!(fallback.insight_what_happened, result.insight_what_happened);
+        assert_eq!(
+            fallback.insight_why_mattered,
+            "Listening to a live performance."
+        );
+
+        let grouped = MemoryCardSynthesizer::from_results_with_policy(
+            None,
+            "James Blake",
+            &[result],
+            6,
+            0,
+            Duration::from_millis(2),
+        )
+        .await;
+        assert_eq!(grouped.len(), 1, "possible matches remain visible");
+        assert_eq!(grouped[0].insight_what_changed, "");
+        assert!(!grouped[0].summary.is_empty());
     }
 
     #[test]
@@ -1861,5 +2093,24 @@ mod tests {
 
         let parsed = parse_reopen_target("Reopen: https://legacy.example/path", &result);
         assert_eq!(parsed.as_deref(), Some("https://legacy.example/path"));
+    }
+
+    #[test]
+    fn memory_card_copies_reopen_page_from_anchor() {
+        let result = SearchResult {
+            reopen_kind: crate::memory::reopen::ReopenKind::FilePath,
+            reopen_file_path: Some("/Users/qa/doc.pdf".to_string()),
+            reopen_page: Some(112),
+            app_name: "Preview".to_string(),
+            window_title: "doc.pdf \u{2013} Page 112 of 150".to_string(),
+            snippet: "PDF page".to_string(),
+            ..Default::default()
+        };
+        let card = fallback_card_for_result("", &result);
+        assert_eq!(card.reopen_page, Some(112));
+        assert_eq!(
+            card.reopen_target.as_deref(),
+            Some("file:///Users/qa/doc.pdf")
+        );
     }
 }

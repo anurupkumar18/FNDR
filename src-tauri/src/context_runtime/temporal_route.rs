@@ -1,7 +1,7 @@
 use crate::context_runtime::query_plan::{QueryPlan, Route};
 use crate::context_runtime::retrieval_routes::{
-    finish_route, hit_from_search_result, memory_record_to_search_result, RetrievalRoute,
-    RouteBranch, RouteCtx, RouteHit, RouteHits,
+    finish_route, hit_from_search_result, memory_record_to_search_result, sort_route_hits,
+    RetrievalRoute, RouteBranch, RouteCtx, RouteHit, RouteHits,
 };
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -34,9 +34,11 @@ impl RetrievalRoute for TemporalRoute {
                         if !app_matches(&result.app_name, ctx.app_filter) {
                             continue;
                         }
-                        let temporal_score =
+                        // The range query gives every row a placeholder 1.0;
+                        // taking the max with it tied every memory in the
+                        // window, and a random `limit` of them won (VS-21).
+                        result.score =
                             temporal_score_for_query(&plan.raw, ctx.now_ms, result.timestamp);
-                        result.score = result.score.max(temporal_score);
                         insert_best(
                             &mut by_id,
                             hit_from_search_result(Route::Temporal, RouteBranch::Temporal, result),
@@ -100,19 +102,11 @@ impl RetrievalRoute for TemporalRoute {
             }
 
             let mut hits = by_id.into_values().collect::<Vec<_>>();
-            hits.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            sort_route_hits(&mut hits);
             hits.truncate(ctx.limit.max(1));
             finish_route(Route::Temporal, started, hits)
         })
     }
-}
-
-pub fn apply_recency_decay(now_ms: i64, event_ms: i64) -> f32 {
-    recency_decay(now_ms, event_ms, 24.0 * HOUR_MS)
 }
 
 fn temporal_score_for_query(raw: &str, now_ms: i64, event_ms: i64) -> f32 {
@@ -132,7 +126,8 @@ fn temporal_half_life_ms(raw: &str, now_ms: i64, event_ms: i64) -> f32 {
 }
 
 fn recency_decay(now_ms: i64, event_ms: i64, half_life_ms: f32) -> f32 {
-    let age_ms = (now_ms - event_ms).max(0) as f32;
+    // Whole minutes, so two searches a moment apart score identically.
+    let age_ms = ((now_ms - event_ms).max(0) / 60_000 * 60_000) as f32;
     2.0_f32
         .powf(-(age_ms / half_life_ms.max(1.0)))
         .clamp(0.0, 1.0)
@@ -163,6 +158,9 @@ mod tests {
     use crate::embedding::EMBEDDING_DIM;
     use crate::storage::{MemoryRecord, Store};
 
+    /// A one-day half-life, as the route uses for older events.
+    const DAY_HALF_LIFE: f32 = 24.0 * HOUR_MS;
+
     fn record(id: &str, timestamp: i64) -> MemoryRecord {
         MemoryRecord {
             id: id.to_string(),
@@ -186,7 +184,24 @@ mod tests {
     #[test]
     fn recency_decay_scores_recent_events_higher() {
         let now = 1_000_000;
-        assert!(apply_recency_decay(now, now) > apply_recency_decay(now, now - 86_400_000));
+        assert!(
+            recency_decay(now, now, DAY_HALF_LIFE)
+                > recency_decay(now, now - 86_400_000, DAY_HALF_LIFE)
+        );
+    }
+
+    #[test]
+    fn recency_decay_is_the_same_within_a_minute() {
+        // Two searches a moment apart must score identically (VS-10).
+        let event = 1_000_000;
+        assert_eq!(
+            recency_decay(event + 90_000, event, DAY_HALF_LIFE),
+            recency_decay(event + 90_900, event, DAY_HALF_LIFE)
+        );
+        assert!(
+            recency_decay(event + 60_000, event, DAY_HALF_LIFE)
+                < recency_decay(event, event, DAY_HALF_LIFE)
+        );
     }
 
     #[tokio::test]

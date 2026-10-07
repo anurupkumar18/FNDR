@@ -1,13 +1,42 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeHero } from "./HomeHero";
 
-const ipcMocks = vi.hoisted(() => ({
-    transcribeVoiceInput: vi.fn(),
+const voiceMocks = vi.hoisted(() => ({
+    start: vi.fn(),
+    stop: vi.fn(),
+    cancel: vi.fn(),
+    retry: vi.fn(),
+    options: null as null | {
+        surface: string;
+        mode: string;
+        onPartial?: (text: string) => void;
+        onFinal?: (text: string) => void;
+    },
+    state: { kind: "idle" } as
+        | { kind: "idle" }
+        | { kind: "listening"; level: number }
+        | { kind: "unavailable"; reason: "private_context"; message: string },
+    level: 0,
+    isActive: false,
 }));
 
-vi.mock("@/shared/ipc/tauri", () => ({
-    transcribeVoiceInput: ipcMocks.transcribeVoiceInput,
+vi.mock("@/shared/voice/useVoice", () => ({
+    useVoice: vi.fn((options) => {
+        voiceMocks.options = options;
+        return {
+            state: voiceMocks.state,
+            level: voiceMocks.level,
+            sessionId: voiceMocks.isActive ? "home-session" : null,
+            surface: "home_search",
+            mode: "toggle",
+            isActive: voiceMocks.isActive,
+            start: voiceMocks.start,
+            stop: voiceMocks.stop,
+            cancel: voiceMocks.cancel,
+            retry: voiceMocks.retry,
+        };
+    }),
 }));
 
 vi.mock("@/shared/motion/useReducedMotionSafe", () => ({
@@ -19,45 +48,31 @@ class MockIntersectionObserver {
     disconnect = vi.fn();
 }
 
-class FakeMediaRecorder {
-    static instances: FakeMediaRecorder[] = [];
-    static isTypeSupported() {
-        return true;
-    }
-
-    mimeType = "audio/webm";
-    state: RecordingState = "inactive";
-    startArgs: unknown[] | null = null;
-    ondataavailable: ((event: { data: Blob }) => void) | null = null;
-    onstop: (() => void) | null = null;
-
-    constructor() {
-        FakeMediaRecorder.instances.push(this);
-    }
-
-    start(...args: unknown[]) {
-        this.startArgs = args;
-        this.state = "recording";
-    }
-
-    stop() {
-        this.state = "inactive";
-        this.ondataavailable?.({ data: new Blob(["audio"], { type: this.mimeType }) });
-        this.onstop?.();
-    }
-}
-
-if (typeof Blob.prototype.arrayBuffer !== "function") {
-    Blob.prototype.arrayBuffer = function arrayBuffer(): Promise<ArrayBuffer> {
-        return Promise.resolve(new TextEncoder().encode("audio").buffer);
+function renderHero(onHeroSearch = vi.fn()) {
+    return {
+        onHeroSearch,
+        ...render(
+            <HomeHero
+                userName="Anurup"
+                now={new Date("2026-05-28T22:00:00")}
+                greeting="Good Night, Anurup!"
+                onHeroSearch={onHeroSearch}
+            />,
+        ),
     };
 }
 
 describe("HomeHero", () => {
     beforeEach(() => {
         vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
-        FakeMediaRecorder.instances = [];
-        ipcMocks.transcribeVoiceInput.mockResolvedValue({ text: "private spoken search" });
+        voiceMocks.start.mockReset();
+        voiceMocks.stop.mockReset();
+        voiceMocks.cancel.mockReset();
+        voiceMocks.retry.mockReset();
+        voiceMocks.options = null;
+        voiceMocks.state = { kind: "idle" };
+        voiceMocks.level = 0;
+        voiceMocks.isActive = false;
     });
 
     afterEach(() => {
@@ -66,98 +81,67 @@ describe("HomeHero", () => {
     });
 
     it("keeps the landing screen focused on search instead of extra CTA buttons", () => {
-        render(
-            <HomeHero
-                userName="Anurup"
-                now={new Date("2026-05-28T22:00:00")}
-                greeting="Good Night, Anurup!"
-                onHeroSearch={vi.fn()}
-            />
-        );
+        renderHero();
 
         expect(screen.getByRole("search")).toBeInTheDocument();
         expect(screen.getByPlaceholderText("What shall we uncover tonight?")).toBeInTheDocument();
         expect(screen.getByText("Let's dive into your memories.")).toBeInTheDocument();
         expect(screen.getByText(/search saved memories by topic, app, person, or time/i)).toBeInTheDocument();
-        expect(screen.queryByText(/scroll to explore/i)).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Enter the reel" })).not.toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Open work mode" })).not.toBeInTheDocument();
     });
 
-    it("gives a useful typed-search fallback when voice capture is unavailable", () => {
-        vi.stubGlobal("MediaRecorder", undefined);
-        render(
+    it("uses the shared home-search toggle voice session", () => {
+        const { rerender } = renderHero();
+        expect(voiceMocks.options).toMatchObject({ surface: "home_search", mode: "toggle" });
+
+        fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
+        expect(voiceMocks.start).toHaveBeenCalledOnce();
+
+        voiceMocks.state = { kind: "listening", level: 0.4 };
+        voiceMocks.level = 0.4;
+        voiceMocks.isActive = true;
+        rerender(
             <HomeHero
                 userName="Anurup"
                 now={new Date("2026-05-28T22:00:00")}
                 onHeroSearch={vi.fn()}
-            />
+            />,
         );
+        fireEvent.click(screen.getByRole("button", { name: "Stop voice input" }));
+        expect(voiceMocks.stop).toHaveBeenCalledOnce();
+    });
 
-        fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
+    it("drafts partial speech without submitting a search", () => {
+        const { onHeroSearch } = renderHero();
 
-        expect(screen.getByText(
-            "Microphone isn't available here. Type your search instead."
-        )).not.toHaveAttribute("role");
-        expect(screen.getByLabelText("Voice input activity")).toContainElement(
-            screen.getByRole("status"),
-        );
+        act(() => voiceMocks.options?.onPartial?.("show my"));
+
+        expect(screen.getByRole("textbox", { name: "Search your memories" })).toHaveValue("show my");
+        expect(onHeroSearch).not.toHaveBeenCalled();
+    });
+
+    it("keeps final speech reviewable until Enter confirms it", () => {
+        const { onHeroSearch } = renderHero();
+
+        act(() => voiceMocks.options?.onFinal?.("show my meetings"));
+
+        const input = screen.getByRole("textbox", { name: "Search your memories" });
+        expect(input).toHaveValue("show my meetings");
+        expect(onHeroSearch).not.toHaveBeenCalled();
+
+        fireEvent.keyDown(input, { key: "Enter" });
+        expect(onHeroSearch).toHaveBeenCalledWith("show my meetings");
+    });
+
+    it("keeps typed search available when shared voice is unavailable", () => {
+        voiceMocks.state = {
+            kind: "unavailable",
+            reason: "private_context",
+            message: "Voice isn't available in Private Mode. Type your search instead.",
+        };
+        renderHero();
+
+        expect(screen.getByRole("alert")).toHaveTextContent("Voice isn't available in Private Mode");
         expect(screen.getByRole("textbox", { name: "Search your memories" })).toBeEnabled();
-    });
-
-    it("records one complete clip instead of requesting time-sliced fragments", async () => {
-        vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
-        vi.stubGlobal("navigator", Object.assign(Object.create(navigator), {
-            mediaDevices: {
-                getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [] }),
-            },
-        }));
-        render(
-            <HomeHero
-                userName="Anurup"
-                now={new Date("2026-05-28T22:00:00")}
-                onHeroSearch={vi.fn()}
-            />
-        );
-
-        fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
-
-        await waitFor(() => expect(FakeMediaRecorder.instances).toHaveLength(1));
-        expect(FakeMediaRecorder.instances[0].startArgs).toEqual([]);
-    });
-
-    it("shows only observed, privacy-safe voice activity", async () => {
-        vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
-        vi.stubGlobal("navigator", Object.assign(Object.create(navigator), {
-            mediaDevices: {
-                getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [] }),
-            },
-        }));
-        render(
-            <HomeHero
-                userName="Anurup"
-                now={new Date("2026-05-28T22:00:00")}
-                onHeroSearch={vi.fn()}
-            />
-        );
-
-        const startedAt = Date.now();
-        const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-        fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
-
-        await screen.findByText("Recording voice input");
-        expect(screen.getByRole("region", { name: "Voice input activity" })).toBeInTheDocument();
-
-        clock.mockReturnValue(startedAt + 1_500);
-        fireEvent.click(screen.getByRole("button", { name: "Stop voice recording" }));
-
-        await screen.findByText("Transcript ready");
-        fireEvent.click(screen.getByRole("button", { name: "Show Voice input activity details" }));
-        expect(screen.getByText("Requesting microphone access")).toBeInTheDocument();
-        expect(screen.getByText("Microphone connected")).toBeInTheDocument();
-        expect(screen.getByText("Recording stopped")).toBeInTheDocument();
-        expect(screen.getByText("Transcribing on this Mac")).toBeInTheDocument();
-        expect(screen.queryByText("private spoken search")).not.toBeInTheDocument();
-        clock.mockRestore();
     });
 });

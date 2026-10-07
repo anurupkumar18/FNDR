@@ -87,6 +87,10 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(add, ["status::doing"])
         self.assertEqual(remove, ["status::ready"])
         self.assertEqual(gs.status_change(["status::doing"], "doing"), ([], []))
+        self.assertEqual(gs.flag_change(["status::doing"], "needs-human", True), (["needs-human"], []))
+        self.assertEqual(gs.flag_change(["needs-human"], "needs-human", True), ([], []))
+        self.assertEqual(gs.flag_change(["needs-human", "status::doing"], "needs-human", False), ([], ["needs-human"]))
+        self.assertEqual(gs.flag_change(["status::doing"], "blocked", False), ([], []))
 
     def test_board_url_falls_back_to_a_filter_when_scope_is_unavailable(self):
         self.assertTrue(gs.board_url(7, True, "minhpro001").endswith("/-/boards/7"))

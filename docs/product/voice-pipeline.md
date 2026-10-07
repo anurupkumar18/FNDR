@@ -97,7 +97,13 @@ type VoiceState =
   | { kind: "partial"; text: string }
   | { kind: "final"; text: string }
   | { kind: "error"; code: VoiceErrorCode; message: string }
-  | { kind: "unavailable"; reason: VoiceUnavailableReason; message: string };
+  | {
+      kind: "unavailable";
+      reason: VoiceUnavailableReason;
+      message: string;
+      permission?: "microphone" | "speech_recognition";
+      settingsPane?: "microphone" | "speech-recognition";
+    };
 ```
 
 - `level` is normalized to `0` through `1`; it is for visual feedback only and
@@ -120,7 +126,11 @@ idle → requesting_permission? → preparing_model? → listening
      → final → idle
 ```
 
-The permission and model-preparation states are emitted only when needed.
+The permission and model-preparation states are emitted only when needed. A
+permission with macOS status `notDetermined` first emits
+`requesting_permission`, then opens the system prompt. Denied or restricted
+access emits `unavailable` with the affected permission and a `settingsPane`
+that the UI can pass to the existing `open_system_settings` command.
 Normal push-to-talk flow is otherwise the same, except the press starts the
 session and release calls `voice_stop`. An explicit cancel discards buffered
 text, emits a typed `cancelled` error, then emits `idle`. Permission denial,
@@ -134,7 +144,9 @@ described above.
 `recording_failed`, `recognition_failed`, `helper_crashed`, and `cancelled`.
 `VoiceUnavailableReason` covers a capability that cannot currently be used:
 `private_context`, `speech_recognition_unavailable`, `language_asset_missing`,
-`platform_unsupported`, and `policy_not_enabled`.
+`platform_unsupported`, `policy_not_enabled`, `permission_denied`, and
+`permission_restricted`. The permission-specific unavailable state keeps typed
+input available and offers an Open System Settings recovery action.
 
 Every error or unavailable state includes a concise, person-readable message
 and leaves typed input available. Voice audio, level data, and partial text are

@@ -174,9 +174,8 @@
         transform 0.12s var(--film-ease-shutter);
 }
 
-.home-hero__voice-btn svg {
-    width: 14px;
-    height: 14px;
+.home-hero__voice-btn .fndr-voice-button__icon {
+    color: var(--cp-accent, var(--accent));
 }
 
 .home-hero__voice-btn:hover:not(:disabled) {
@@ -204,32 +203,6 @@
 .home-hero__search-submit:focus-visible {
     outline: 3px solid var(--focus-ring);
     outline-offset: 2px;
-}
-
-/* ─── Voice waveform bars (recording state) ───────────────────────────────── */
-
-.home-hero__voice-wave {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    height: 14px;
-}
-
-.home-hero__voice-wave span {
-    display: block;
-    width: 2.5px;
-    border-radius: 1.5px;
-    background: var(--cp-accent, var(--accent));
-    animation: voiceBar 0.9s ease-in-out infinite;
-}
-
-.home-hero__voice-wave span:nth-child(1) { height: 6px; animation-delay: 0s; }
-.home-hero__voice-wave span:nth-child(2) { height: 14px; animation-delay: 0.15s; }
-.home-hero__voice-wave span:nth-child(3) { height: 8px; animation-delay: 0.3s; }
-
-@keyframes voiceBar {
-    0%, 100% { transform: scaleY(0.6); opacity: 0.7; }
-    50%       { transform: scaleY(1);   opacity: 1; }
 }
 
 /* ─── Submit button ───────────────────────────────────────────────────────── */
@@ -303,9 +276,12 @@
     overflow-wrap: anywhere;
 }
 
-.home-hero__voice-trace {
-    margin-top: var(--s-2);
-    text-align: left;
+.home-hero__voice-status .fndr-voice-status__meter {
+    margin-inline: auto;
+}
+
+.home-hero__voice-status .fndr-voice-status__actions {
+    justify-content: center;
 }
 
 .home-hero__search-help {
@@ -362,7 +338,7 @@
         justify-content: center;
     }
 
-    .home-hero__voice-label {
+    .home-hero__voice-btn > span:last-child {
         position: absolute;
         width: 1px;
         height: 1px;
@@ -402,10 +378,6 @@
         animation: none;
         opacity: 1;
         transform: none;
-    }
-
-    .home-hero__voice-wave span {
-        animation: none;
     }
 
     /* Disable hover transform */

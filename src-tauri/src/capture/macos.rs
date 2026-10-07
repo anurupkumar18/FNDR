@@ -14,6 +14,7 @@ pub struct FrontmostAppContext {
     pub window_title: String,
     pub window_title_verified: bool,
     pub browser_url: Option<String>,
+    pub document_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -31,6 +32,8 @@ pub struct BrowserSemanticContent {
     pub meta_description: String,
     pub h1: String,
     pub article_excerpt: String,
+    /// Text of the block under the middle of the viewport, when the browser script provides it.
+    pub visible_passage: String,
     pub nav_ratio: f32,
     pub content_signal_score: f32,
 }
@@ -46,6 +49,10 @@ impl BrowserSemanticContent {
         }
         if !self.article_excerpt.trim().is_empty() {
             parts.push(self.article_excerpt.trim().to_string());
+        }
+        let passage = self.visible_passage.trim();
+        if !passage.is_empty() && !self.article_excerpt.trim().contains(passage) {
+            parts.push(passage.to_string());
         }
         if parts.is_empty() {
             self.title.trim().to_string()
@@ -204,14 +211,15 @@ fn read_frontmost_app_info() -> FrontmostAppContext {
             .and_then(|window| window.title.as_deref());
         let window_title_verified = native_title.is_some_and(|title| !title.trim().is_empty());
         let window_title = resolve_window_title(native_title, bundle_id.as_deref());
-        let browser_url = is_browser_app(&app_name)
-            .then(|| {
-                normalize_browser_document_url(
-                    native_window
-                        .as_ref()
-                        .and_then(|window| window.document_url.as_deref()),
-                )
-            })
+        let document_url = native_window
+            .as_ref()
+            .and_then(|window| window.document_url.as_deref());
+        let browser = is_browser_app(&app_name);
+        let browser_url = browser
+            .then(|| normalize_browser_document_url(document_url))
+            .flatten();
+        let document_path = (!browser)
+            .then(|| native_document_path_from_ax_url(document_url))
             .flatten();
 
         FrontmostAppContext {
@@ -220,6 +228,7 @@ fn read_frontmost_app_info() -> FrontmostAppContext {
             window_title,
             window_title_verified,
             browser_url,
+            document_path,
         }
     }
 }
@@ -249,6 +258,60 @@ fn resolve_window_title(native_title: Option<&str>, bundle_id: Option<&str>) -> 
 fn normalize_browser_document_url(document_url: Option<&str>) -> Option<String> {
     let url = document_url?.trim();
     (url.starts_with("http://") || url.starts_with("https://")).then(|| url.to_string())
+}
+
+fn native_document_path_from_ax_url(document_url: Option<&str>) -> Option<String> {
+    let url = document_url?.trim();
+    let scheme = url.get(..7)?;
+    if !scheme.eq_ignore_ascii_case("file://") {
+        return None;
+    }
+    let rest = &url[7..];
+    let path = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !path.starts_with('/') {
+        return None;
+    }
+    percent_decode_utf8(path).filter(|decoded| !decoded.is_empty())
+}
+
+fn percent_decode_utf8(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return None;
+            }
+            let hi = from_hex(bytes[i + 1])?;
+            let lo = from_hex(bytes[i + 2])?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn from_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+pub(super) fn preferred_reopen_file_path<'a>(
+    document_path: Option<&'a str>,
+    files_touched: &'a [String],
+) -> Option<&'a str> {
+    document_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .or_else(|| files_touched.first().map(String::as_str))
 }
 
 pub fn is_browser_app(app_name: &str) -> bool {
@@ -348,7 +411,24 @@ fn browser_semantic_javascript() -> &'static str {
             const navRatio=bodyWords>0 ? Math.min(1, (navWords/Math.max(1, bodyWords))*1.8) : 0;\
             const contentSignal=Math.max(0, Math.min(1, primaryWords/120))*(1-navRatio);\
             const articleOut=article.slice(0, 2800);\
-            return [title,desc,h1,articleOut,navRatio.toFixed(3),contentSignal.toFixed(3)].join('|||FNDR|||');\
+            const blockSel='p,li,blockquote,h1,h2,h3,h4,h5,h6,td,dd';\
+            const allowed={p:1,li:1,blockquote:1,h1:1,h2:1,h3:1,h4:1,h5:1,h6:1,td:1,dd:1};\
+            const passageAt=(y)=>{\
+                let el=document.elementFromPoint(Math.round((window.innerWidth||0)*0.5), y);\
+                if(!el) return '';\
+                const block=el.closest ? el.closest(blockSel) : null;\
+                const node=block||el;\
+                const tag=String(node.tagName||'').toLowerCase();\
+                if(!allowed[tag]) return '';\
+                return norm(node.innerText||node.textContent||'');\
+            };\
+            let visible='';\
+            const samples=[0.35,0.50,0.65];\
+            for (let s=0;s<samples.length && !visible;s++){\
+                const raw=passageAt(Math.round((window.innerHeight||0)*samples[s]));\
+                if(w(raw)>=8) visible=raw.slice(0,600);\
+            }\
+            return [title,desc,h1,articleOut,navRatio.toFixed(3),contentSignal.toFixed(3),visible].join('|||FNDR|||');\
         } catch (e) {\
             return '';\
         }\
@@ -387,6 +467,10 @@ fn parse_browser_semantic_payload(payload: &str) -> Option<BrowserSemanticConten
             .get(3)
             .map(|v| v.trim().to_string())
             .unwrap_or_default(),
+        visible_passage: parts
+            .get(6)
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default(),
         nav_ratio,
         content_signal_score,
     };
@@ -394,6 +478,7 @@ fn parse_browser_semantic_payload(payload: &str) -> Option<BrowserSemanticConten
         && content.meta_description.is_empty()
         && content.h1.is_empty()
         && content.article_excerpt.is_empty()
+        && content.visible_passage.is_empty()
     {
         None
     } else {
@@ -613,12 +698,78 @@ mod tests {
     }
 
     #[test]
+    fn native_document_path_percent_decodes_file_urls() {
+        assert_eq!(
+            native_document_path_from_ax_url(Some("file:///Users/qa/My%20Doc.pdf")),
+            Some("/Users/qa/My Doc.pdf".to_string())
+        );
+        assert_eq!(
+            native_document_path_from_ax_url(Some(
+                " file:///Users/qa/caf%C3%A9%20%F0%9F%93%81/report%20(1)%20%E2%9C%A8.txt "
+            )),
+            Some("/Users/qa/café 📁/report (1) ✨.txt".to_string())
+        );
+        assert_eq!(
+            native_document_path_from_ax_url(Some("file://localhost/Users/qa/a.txt")),
+            Some("/Users/qa/a.txt".to_string())
+        );
+        assert_eq!(
+            native_document_path_from_ax_url(Some("FILE:///Users/qa/Doc.pdf")),
+            Some("/Users/qa/Doc.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn native_document_path_rejects_non_file_urls() {
+        for input in [
+            Some("https://example.com/doc.pdf"),
+            Some("http://example.com/doc.pdf"),
+            Some("javascript:alert(1)"),
+            Some("data:text/html,hi"),
+            Some("file://relative/path"),
+            Some("   "),
+            Some(""),
+            None,
+        ] {
+            assert_eq!(native_document_path_from_ax_url(input), None, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn preferred_reopen_file_path_uses_document_path_ahead_of_files_touched() {
+        let junk = ["plan.md".to_string(), "en.wikipedia.org/wiki/Nitrogen".to_string()];
+        assert_eq!(
+            preferred_reopen_file_path(Some("/Users/qa/report.pdf"), &junk),
+            Some("/Users/qa/report.pdf")
+        );
+        assert_eq!(
+            preferred_reopen_file_path(Some("  /Users/qa/report.pdf  "), &junk),
+            Some("/Users/qa/report.pdf")
+        );
+        assert_eq!(preferred_reopen_file_path(None, &junk), Some("plan.md"));
+        assert_eq!(preferred_reopen_file_path(Some("  "), &junk), Some("plan.md"));
+        let empty: [String; 0] = [];
+        assert_eq!(preferred_reopen_file_path(None, &empty), None);
+    }
+
+    #[test]
     fn parses_browser_semantic_payload() {
         let payload = "Screenpipe Docs|||FNDR|||Memory indexing guide|||FNDR|||Memory indexing|||FNDR|||This page explains capture and retrieval details.|||FNDR|||0.120|||FNDR|||0.740";
         let parsed = parse_browser_semantic_payload(payload).expect("payload parse");
         assert_eq!(parsed.title, "Screenpipe Docs");
+        assert!(parsed.visible_passage.is_empty());
         assert!(parsed.content_signal_score > 0.7);
         assert!(parsed.has_signal());
+    }
+
+    #[test]
+    fn parses_browser_semantic_payload_keeps_visible_passage() {
+        let payload = "Title|||FNDR|||Desc|||FNDR|||Heading|||FNDR|||Article start.|||FNDR|||0.100|||FNDR|||0.800|||FNDR|||The visible sentence sits in the middle of the viewport today.";
+        let parsed = parse_browser_semantic_payload(payload).expect("payload parse");
+        assert_eq!(
+            parsed.visible_passage,
+            "The visible sentence sits in the middle of the viewport today."
+        );
     }
 
     #[test]
@@ -632,5 +783,25 @@ mod tests {
         let text = semantic.content_text();
         assert!(text.contains("Screenpipe indexing"));
         assert!(text.contains("Detailed walkthrough"));
+    }
+
+    #[test]
+    fn content_text_appends_visible_passage_only_when_missing_from_excerpt() {
+        let already = BrowserSemanticContent {
+            article_excerpt: "The visible sentence sits in the middle of the viewport today.".into(),
+            visible_passage: "The visible sentence sits in the middle of the viewport today.".into(),
+            ..Default::default()
+        };
+        let once = already.content_text();
+        assert_eq!(once.matches("visible sentence").count(), 1);
+
+        let extra = BrowserSemanticContent {
+            article_excerpt: "Opening paragraphs only.".into(),
+            visible_passage: "The visible sentence sits in the middle of the viewport today.".into(),
+            ..Default::default()
+        };
+        let text = extra.content_text();
+        assert!(text.contains("Opening paragraphs only."));
+        assert!(text.contains("middle of the viewport"));
     }
 }

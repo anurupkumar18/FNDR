@@ -1,0 +1,111 @@
+name: retrieval-gate
+
+# VS-34: the retrieval merge gate (VS-04) on pull requests into main that
+# touch retrieval code, the seed corpora, or the gate itself.
+# It seeds the three synthetic personas from scripts/demo/ and fails when any
+# path's Recall@5 drops more than 0.05 against scripts/demo/retrieval-reference/,
+# or when a query a path found in its top ten becomes a miss
+# (scripts/audit/retrieval_check.py). No real data is involved: the runner
+# starts with no FNDR profile, and the only download is the pinned MiniLM.
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "src-tauri/**"
+      - "scripts/demo/**"
+      - "scripts/audit/retrieval_check.py"
+      - "Makefile"
+      - ".github/workflows/retrieval-gate.yml"
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src-tauri/**"
+      - "scripts/demo/**"
+      - "scripts/audit/retrieval_check.py"
+      - "Makefile"
+      - ".github/workflows/retrieval-gate.yml"
+
+concurrency:
+  group: retrieval-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Retrieval gate (synthetic corpora)
+    # The Swift speech helper needs the macOS 26 SDK (see test.yml).
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      # The seeds and references use America/Denver days.
+      TZ: America/Denver
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      # lance-encoding's build script requires protoc.
+      - name: Install protobuf
+        run: brew install protobuf
+
+      # tauri::generate_context! requires frontendDist ("../dist") to exist.
+      - name: Create empty frontend dist
+        run: mkdir -p dist
+
+      # Same revision and hashes as EMBEDDING_MODEL_* in
+      # src-tauri/src/inference/model_config.rs.
+      - name: Restore the pinned embedding model
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/fndr-models
+          key: minilm-751bff37182d3f1213fa05d7196b954e230abad9
+
+      - name: Download the pinned embedding model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          MODEL_DIR="$RUNNER_TEMP/fndr-models"
+          rev=751bff37182d3f1213fa05d7196b954e230abad9
+          base="https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/$rev"
+          mkdir -p "$MODEL_DIR"
+          curl -L --fail --retry 3 -o "$MODEL_DIR/all-MiniLM-L6-v2.onnx" "$base/onnx/model.onnx"
+          curl -L --fail --retry 3 -o "$MODEL_DIR/tokenizer.json" "$base/tokenizer.json"
+
+      - name: Check the model hashes and link the models folder
+        run: |
+          MODEL_DIR="$RUNNER_TEMP/fndr-models"
+          cd "$MODEL_DIR"
+          shasum -a 256 -c <<'EOF'
+          759c3cd2b7fe7e93933ad23c4c9181b7396442a2ed746ec7c1d46192c469c46e  all-MiniLM-L6-v2.onnx
+          da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0  tokenizer.json
+          EOF
+          app="$HOME/Library/Application Support/com.fndr.app"
+          mkdir -p "$app"
+          ln -sfn "$MODEL_DIR" "$app/models"
+
+      - name: Gate, knowledge-worker
+        run: make qa-retrieval-check CARGO_BUILD_JOBS=4
+
+      - name: Gate, office-pm
+        if: success() || failure()
+        run: make qa-retrieval-check PERSONA=office-pm CARGO_BUILD_JOBS=4
+
+      - name: Gate, software-engineer
+        if: success() || failure()
+        run: make qa-retrieval-check PERSONA=software-engineer CARGO_BUILD_JOBS=4
+
+      - name: Publish the check reports
+        if: success() || failure()
+        run: |
+          for report in src-tauri/target/qa-retrieval-check/*/check.md; do
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+          done

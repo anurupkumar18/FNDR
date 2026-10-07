@@ -176,6 +176,7 @@ async fn keyword_search_with_budget(
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.timestamp.cmp(&a.timestamp))
+            .then_with(|| a.id.cmp(&b.id))
     });
     deduped.truncate(branch_limit.max(1));
     Ok(deduped)

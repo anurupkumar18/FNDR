@@ -3,65 +3,77 @@ set -euo pipefail
 
 TARGET_DIR_DEFAULT="$HOME/Library/Application Support/com.fndr.app/models"
 TARGET_DIR="${1:-$TARGET_DIR_DEFAULT}"
-MODEL_PATH="$TARGET_DIR/all-MiniLM-L6-v2.onnx"
-TOKENIZER_PATH="$TARGET_DIR/tokenizer.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-mkdir -p "$TARGET_DIR"
-
-echo "🔄 Downloading All-MiniLM-L6-v2 to: $TARGET_DIR"
-
-export FNDR_MODEL_TARGET_DIR="$TARGET_DIR"
-
-python3 << 'PYEOF'
-from huggingface_hub import hf_hub_download
+python3 - "$TARGET_DIR" "$SCRIPT_DIR/../../src-tauri/src/inference/model_config.rs" << 'PYEOF'
+import hashlib
 import os
+from pathlib import Path
+import re
 import shutil
 import sys
+import tempfile
+from urllib.request import urlopen
 
-target_dir = os.path.expanduser(os.environ.get("FNDR_MODEL_TARGET_DIR", ""))
-if not target_dir:
-    print("❌ FNDR_MODEL_TARGET_DIR is not set")
-    sys.exit(1)
-os.makedirs(target_dir, exist_ok=True)
 
-print("📥 Downloading all-MiniLM-L6-v2.onnx...")
+def verify(path, expected):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    if digest.hexdigest() != expected:
+        raise ValueError(f"SHA-256 mismatch for {path.name}")
+
+
+def install():
+    target = Path(sys.argv[1]).expanduser()
+    source = Path(sys.argv[2]).read_text()
+
+    def constant(name):
+        match = re.search(r'pub const ' + name + r': &str =\s*"([^"\n]+)";', source)
+        if not match:
+            raise ValueError(f"Missing model_config.rs constant: {name}")
+        return match.group(1)
+
+    assets = [tuple(constant(prefix + suffix) for suffix in
+                    ("_FILENAME", "_DOWNLOAD_URL", "_SHA256"))
+              for prefix in ("EMBEDDING_MODEL", "EMBEDDING_TOKENIZER")]
+    target.mkdir(parents=True, exist_ok=True)
+    missing = []
+    for name, url, digest in assets:
+        destination = target / name
+        if destination.exists():
+            try:
+                verify(destination, digest)
+            except ValueError as error:
+                raise ValueError(
+                    f"{error}. Existing assets were not changed. Use a separate model "
+                    "directory to evaluate the pinned assets; changing an installed "
+                    "tokenizer may require reindexing existing memories."
+                ) from error
+            print(f"Verified existing {name}")
+        else:
+            missing.append((name, url, digest))
+
+    # Verify every missing asset before promoting any of them. A failed or
+    # interrupted transfer cannot leave a partial file in the live model pair.
+    with tempfile.TemporaryDirectory(prefix=".minilm-download-", dir=target) as staging:
+        for name, url, digest in missing:
+            staged = Path(staging) / name
+            print(f"Downloading pinned {name}")
+            with urlopen(url, timeout=60) as response, staged.open("wb") as output:
+                shutil.copyfileobj(response, output)
+            verify(staged, digest)
+        for name, _, _ in missing:
+            destination = target / name
+            # Do not overwrite an asset another process installed meanwhile.
+            os.link(Path(staging) / name, destination)
+    print(f"Verified MiniLM assets ready at {target}")
+
+
 try:
-    # Download to temp location to get the directory structure
-    model_path = hf_hub_download(
-        repo_id="Xenova/all-MiniLM-L6-v2",
-        filename="onnx/model.onnx",
-        repo_type="model",
-        local_dir=target_dir
-    )
-    # Move from onnx/model.onnx to all-MiniLM-L6-v2.onnx
-    final_model_path = os.path.join(target_dir, "all-MiniLM-L6-v2.onnx")
-    if model_path != final_model_path:
-        shutil.move(model_path, final_model_path)
-    size_mb = os.path.getsize(final_model_path) / 1e6
-    print(f"   ✅ Model: {size_mb:.1f} MB")
-except Exception as e:
-    print(f"   ❌ Failed: {e}")
+    install()
+except (OSError, ValueError) as error:
+    print(f"MiniLM installation failed: {error}", file=sys.stderr)
     sys.exit(1)
-
-print("📥 Downloading tokenizer.json...")
-try:
-    tokenizer_path = hf_hub_download(
-        repo_id="Xenova/all-MiniLM-L6-v2",
-        filename="tokenizer.json",
-        repo_type="model",
-        local_dir=target_dir
-    )
-    size_kb = os.path.getsize(tokenizer_path) / 1e3
-    print(f"   ✅ Tokenizer: {size_kb:.1f} KB")
-except Exception as e:
-    print(f"   ❌ Failed: {e}")
-    sys.exit(1)
-
-# Clean up empty subdirectories
-onnx_dir = os.path.join(target_dir, "onnx")
-if os.path.isdir(onnx_dir) and not os.listdir(onnx_dir):
-    os.rmdir(onnx_dir)
-
-print("\n🎉 All-MiniLM-L6-v2 ready!")
-print("   📊 Model: ~90 MB, uses ~0.5 GB RAM")
 PYEOF

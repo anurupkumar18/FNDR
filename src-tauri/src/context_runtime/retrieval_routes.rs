@@ -255,6 +255,10 @@ pub fn memory_record_to_search_result(record: &MemoryRecord, score: f32) -> Sear
         id: record.id.clone(),
         timestamp: record.timestamp,
         app_name: record.app_name.clone(),
+        source_type: record.source_type.clone(),
+        added_by: record.added_by(),
+        text_source: crate::memory_quality::text_source_from_raw_evidence(&record.raw_evidence)
+            .to_string(),
         bundle_id: record.bundle_id.clone(),
         window_title: record.window_title.clone(),
         session_id: record.session_id.clone(),
@@ -279,6 +283,7 @@ pub fn memory_record_to_search_result(record: &MemoryRecord, score: f32) -> Sear
         reopen_captured_at_ms: record.reopen_captured_at_ms,
         reopen_confidence: record.reopen_confidence,
         reopen_validation_status: record.reopen_validation_status.clone(),
+        reopen_page: record.reopen_page,
         user_intent: record.user_intent.clone(),
         topic: record.topic.clone(),
         workflow: record.workflow.clone(),
@@ -355,6 +360,25 @@ fn push_unique(values: &mut Vec<String>, value: String) {
     if !value.trim().is_empty() && !values.iter().any(|existing| existing == &value) {
         values.push(value);
     }
+}
+
+/// Highest score first; ties go to the newer memory, then the smaller id, so
+/// the same query keeps the same hits in the same order every time (VS-21).
+/// Routes sort with this before they truncate.
+pub fn sort_route_hits(hits: &mut [RouteHit]) {
+    let timestamp = |hit: &RouteHit| {
+        hit.signals
+            .search_result
+            .as_ref()
+            .map_or(i64::MIN, |result| result.timestamp)
+    };
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| timestamp(b).cmp(&timestamp(a)))
+            .then_with(|| a.memory_id.cmp(&b.memory_id))
+    });
 }
 
 pub fn finish_route(route: Route, started: Instant, hits: Vec<RouteHit>) -> RouteHits {

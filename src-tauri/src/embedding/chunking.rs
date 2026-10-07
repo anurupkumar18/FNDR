@@ -16,6 +16,7 @@ const OCR_TARGET_MIN: usize = DEFAULT_CHUNK_OCR_TARGET_MIN_CHARS;
 const OCR_TARGET_MAX: usize = DEFAULT_CHUNK_OCR_TARGET_MAX_CHARS;
 
 /// Text chunker for splitting long texts.
+#[derive(Clone)]
 pub struct TextChunker {
     max_chars: usize,
     overlap_chars: usize,
@@ -328,10 +329,13 @@ impl TextChunker {
                 break;
             }
 
-            // Try to break at word boundary
+            // Prefer a word boundary only when it advances past the start.
+            // A leading space before a long token otherwise produces an empty
+            // chunk and leaves both the boundary and overlap paths stuck.
             let chunk_end = if end < text.len() {
                 text[start..end]
                     .rfind(|c: char| c.is_whitespace())
+                    .filter(|&pos| pos > 0)
                     .map(|pos| start + pos)
                     .unwrap_or(end)
             } else {
@@ -890,6 +894,30 @@ mod tests {
             merged.contains("sprint backlog"),
             "real content should survive"
         );
+    }
+
+    #[test]
+    fn long_unbroken_token_after_word_boundary_makes_progress() {
+        let chunker = TextChunker::new();
+        for token in ["a".repeat(3890), "é".repeat(1945)] {
+            let text = format!("prefix {token} tail words");
+            let chunks = chunker.chunk_by_chars_with_spans(&text);
+
+            assert!(chunks.len() > 1);
+            assert_eq!(chunks.last().unwrap().end_byte, text.len());
+            assert!(chunks.last().unwrap().text.ends_with("tail words"));
+            let mut covered_until = 0;
+            for (index, chunk) in chunks.iter().enumerate() {
+                assert!(chunk.start_byte < chunk.end_byte);
+                assert!(chunk.start_byte <= covered_until, "source text was skipped");
+                assert!(chunk.end_byte - chunk.start_byte <= chunker.max_chars);
+                assert_eq!(chunk.text, text[chunk.start_byte..chunk.end_byte].trim());
+                if index > 0 {
+                    assert!(chunk.start_byte > chunks[index - 1].start_byte);
+                }
+                covered_until = covered_until.max(chunk.end_byte);
+            }
+        }
     }
 
     #[test]

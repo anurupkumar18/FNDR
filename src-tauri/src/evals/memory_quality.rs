@@ -86,8 +86,8 @@ pub async fn judge_insight_quality(
          why_mattered:  \"{why}\"\n\
          topic_categories: [{cats}]\n\n\
          Rate 0.0-1.0:\n\
-         1.0 = Specific, names the task/event/objective (e.g., \"You reviewed PR #42 for auth\")\n\
-         0.7 = Identifiable but generic (\"You used the IDE\")\n\
+         1.0 = Specific, names the task/event/objective (e.g., \"Reviewed PR #42 for auth\")\n\
+         0.7 = Identifiable but generic (\"Used the IDE\")\n\
          0.4 = Mostly metadata, low information value\n\
          0.0 = Template/filename/empty, no real content\n\n\
          Penalize: redundant app/website name repetition, fluff (\"the user did things\"), \
@@ -99,7 +99,7 @@ pub async fn judge_insight_quality(
         cats = topic_categories.join(", "),
     );
 
-    let raw = engine.answer(&prompt_body, "").await;
+    let raw = engine.judge(&prompt_body).await;
     parse_judge_output(&raw)
 }
 

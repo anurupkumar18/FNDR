@@ -1,0 +1,100 @@
+.fndr-voice-button {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.55rem;
+    padding: 0.65rem 1rem;
+    border: 1px solid var(--accent, currentColor);
+    border-radius: 999px;
+    color: inherit;
+    background: color-mix(in srgb, currentColor 4%, transparent);
+    font: inherit;
+    font-weight: 650;
+    cursor: pointer;
+    transition: background-color 160ms ease, transform 160ms ease;
+}
+
+.fndr-voice-button:hover:not(:disabled),
+.fndr-voice-button--active {
+    background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.fndr-voice-button:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.fndr-voice-button:focus-visible,
+.fndr-voice-status button:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 3px;
+}
+
+.fndr-voice-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.fndr-voice-button__icon {
+    font-size: 0.65em;
+}
+
+.fndr-voice-status {
+    display: grid;
+    gap: 0.65rem;
+    color: inherit;
+}
+
+.fndr-voice-status__message {
+    min-height: 1.5em;
+}
+
+.fndr-voice-status__meter {
+    width: min(18rem, 100%);
+    height: 0.35rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: color-mix(in srgb, currentColor 15%, transparent);
+}
+
+.fndr-voice-status__meter > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: currentColor;
+    transition: width 80ms linear;
+}
+
+.fndr-voice-status__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.fndr-voice-status__actions:empty {
+    display: none;
+}
+
+.fndr-voice-status button {
+    border: 0;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    font-weight: 650;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fndr-voice-button,
+    .fndr-voice-status__meter > span {
+        transition: none;
+    }
+}
+
+[data-motion="reduced"] .fndr-voice-button,
+[data-motion="reduced"] .fndr-voice-status__meter > span,
+.fndr-voice-button[data-reduced-motion="true"] {
+    transition: none;
+}

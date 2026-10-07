@@ -297,6 +297,16 @@
   margin-bottom: 8px !important;
 }
 
+.timeline-state .ui-action-btn {
+  margin-top: 16px;
+}
+
+.timeline-weak-note {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
 .load-more-container {
   display: flex;
   justify-content: center;

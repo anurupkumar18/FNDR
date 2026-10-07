@@ -100,8 +100,8 @@ Spec-name aliases are normalized by `src-tauri/src/graph/edges.rs::edge_aliases:
 
 ## MCP
 
-- `memory.graph_query` — keyword search over **legacy** string-id nodes/edges.
-- `memory.graph_context` — bounded JSON over **insight** `graph_*` tables (summary + optional UUID neighborhood).
+- `memory.graph_query`: keyword search over **legacy** string-id nodes/edges.
+- `memory.graph_context`: bounded JSON over **insight** `graph_*` tables (summary + optional UUID neighborhood).
 
 ## MCP `ContextPack.graph_context`
 
@@ -115,6 +115,6 @@ Bounded JSON (~7500 serialized chars) with top project nodes, top edges, conflic
 
 - Schema & pure algorithms: `src-tauri/src/graph/entities.rs`, `edges.rs`, `schema.rs`, `traversal.rs`, `pathfinding.rs`, `community.rs`
 - Lance I/O: `src-tauri/src/graph/graph_store.rs` (uses `Store`’s opened `graph_nodes_table` / `graph_edges_table`)
-- Retrieval scaffolding: `src-tauri/src/graph/graph_index.rs`, `graph_rerank.rs`
+- Retrieval: `src-tauri/src/graph/graph_index.rs` builds the graph route's index. `retrieve` does not load the insight graph yet, so it plans no graph route (VS-33); the route runs only in tests.
 - Extraction: `src-tauri/src/capture/entity_extractor.rs`
 - Tauri commands: `src-tauri/src/ipc/commands/graph.rs`

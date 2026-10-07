@@ -34,10 +34,10 @@ const MEETINGS_DIR: &str = "meetings";
 const SEGMENT_SECONDS: i64 = 20;
 const STATUS_EVENT: &str = "meeting://status";
 const FORCED_MODEL: &str = "whisper-large-v3-turbo-gguf";
-static MEETING_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
+static MEETING_EMBEDDER: OnceLock<Embedder> = OnceLock::new();
 
 fn shared_meeting_embedder() -> Option<&'static Embedder> {
-    match MEETING_EMBEDDER.get_or_init(Embedder::new) {
+    match crate::embedding::cached_embedder(&MEETING_EMBEDDER, Embedder::new) {
         Ok(embedder) => Some(embedder),
         Err(err) => {
             tracing::debug!("Meeting embedder unavailable: {}", err);

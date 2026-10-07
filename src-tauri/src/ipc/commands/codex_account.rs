@@ -767,7 +767,7 @@ mod tests {
 
     /// Talks to the real `codex` on PATH; run with `--ignored` on a dev Mac.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "Requires an installed Codex CLI; run: cargo test --lib live_status_against_installed_codex -- --ignored --nocapture"]
     async fn live_status_against_installed_codex() {
         let status = read_status().await;
         println!(
@@ -785,7 +785,7 @@ mod tests {
     /// Starts a ChatGPT sign-in and cancels it before any browser step, so an
     /// existing login is untouched.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "Starts and cancels a real ChatGPT login via the installed Codex CLI; run: cargo test --lib live_login_start_then_cancel -- --ignored --nocapture"]
     async fn live_login_start_then_cancel() {
         let executable = ready_executable().expect("codex on PATH");
         let mut server = AppServer::spawn(&executable).await.expect("app-server starts");
@@ -812,7 +812,7 @@ mod tests {
 
     /// One real ChatGPT turn with synthetic OCR; run with `--ignored`.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "Requires signed-in Codex and makes a live ChatGPT request with synthetic OCR; run: cargo test --lib live_screen_guide_turn_returns_a_point_tag -- --ignored --nocapture"]
     async fn live_screen_guide_turn_returns_a_point_tag() {
         let ocr = "[LOC:0.120,0.050] File  Edit  View\n[LOC:0.850,0.060] Share\n[LOC:0.500,0.500] Untitled document";
         let answer = answer_screen_guide_with_codex(

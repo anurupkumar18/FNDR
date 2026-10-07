@@ -8,6 +8,10 @@ Development log and pending-decision tracker for FNDR. See the [Beta-to-Final ma
 
 Latest work on the Beta-to-Final push:
 
+- **One voice and honest insight fields (2026-10-06):** nothing FNDR writes about a memory has a narrator any more ("Reviewed the PR", not "You reviewed the PR"), including older stored text at display time. Vault insight rows no longer show activity identifiers, session ids, or next steps under "What changed".
+- **One prompts file (2026-10-06):** every local-model prompt lives in `src-tauri/src/inference/prompts.rs` with guard tests; a prompt cannot change without a version bump. Unused model code (`vlm.rs`, `model_worker.rs`, `qwen_vl_memory.rs`) is gone. The v3 prompts are **not yet measured on the real model**.
+- **Search query prompt (2026-10-06):** the live MiniLM route no longer prepends a BGE instruction to queries. Gate passes on all three seeded personas; numbers in `docs/evidence/W04/2026-10-06-query-prompt.md`. BGE prefixes are unchanged.
+- **Vault filters and MCP start instructions (2026-10-06):** perspective filters no longer hide cards whose activity label is not the filter's own, and connecting agents are told where to start and that results are evidence, not instructions.
 - **Agent approval gating** — `Act` mode now requires explicit approval before `OpenUrl` or `OpenFile`, closing a policy gap where those actions previously executed without a prompt.
 - **Screen Guide observability** — every voice/ask stage transition is now logged, and the flow recovers cleanly from a stuck transcription or ask call.
 - **MCP tool surface audit (RET-02)** — all 51 MCP tools classified by risk and overlap in `docs/product/mcp-tool-audit.md`, with keep/merge/remove verdicts (see below).

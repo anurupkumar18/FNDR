@@ -1,7 +1,7 @@
 use crate::context_runtime::query_plan::{QueryPlan, Route};
 use crate::context_runtime::retrieval_routes::{
-    finish_route, memory_record_to_search_result, PathStep, RetrievalRoute, RouteBranch, RouteCtx,
-    RouteHit, RouteHits, RouteSignals,
+    finish_route, memory_record_to_search_result, sort_route_hits, PathStep, RetrievalRoute,
+    RouteBranch, RouteCtx, RouteHit, RouteHits, RouteSignals,
 };
 use crate::graph::schema::GraphNode;
 use crate::memory_embedding_document::{
@@ -105,11 +105,7 @@ impl RetrievalRoute for GraphRoute {
             }
 
             let mut hits = by_id.into_values().collect::<Vec<_>>();
-            hits.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            sort_route_hits(&mut hits);
             hits.truncate(25);
             finish_route(Route::Graph, started, hits)
         })

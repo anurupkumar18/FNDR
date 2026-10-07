@@ -20,5 +20,22 @@
   { "query": "food bank inventory app presentation", "kind": "paraphrase", "relevant_ids": ["kw-cap-slides", "kw-cap-script", "kw-cap-standup"] },
   { "query": "transit dataset assignment requirements", "kind": "keyword", "relevant_ids": ["kw-cs-a4-spec"] },
   { "query": "my thesis about why Reconstruction failed", "kind": "paraphrase", "relevant_ids": ["kw-hist-outline", "kw-hist-draft"] },
-  { "query": "the problem our capstone app solves", "kind": "paraphrase", "relevant_ids": ["kw-cap-script"] }
+  { "query": "the problem our capstone app solves", "kind": "paraphrase", "relevant_ids": ["kw-cap-script"] },
+  { "query": "the essay draft I was working on earlier today", "kind": "time", "relevant_ids": ["kw-hist-draft"] },
+  { "query": "the pandas error I hit earlier today", "kind": "time", "relevant_ids": ["kw-cs-a4-error-new"] },
+  { "query": "the capstone standup two days ago", "kind": "time", "relevant_ids": ["kw-cap-standup"] },
+  { "query": "the ridership charts I worked on two days ago", "kind": "time", "relevant_ids": ["kw-cs-a4-charts"] },
+  { "query": "the survey themes I coded yesterday", "kind": "time", "relevant_ids": ["kw-intern-themes"] },
+  { "query": "the course reader chapter I read yesterday", "kind": "time", "relevant_ids": ["kw-hist-reader"] },
+  { "query": "what Dana asked me to do in Slack", "kind": "app", "relevant_ids": ["kw-intern-brief"] },
+  { "query": "the labor contracts passage in the PDF", "kind": "app", "relevant_ids": ["kw-hist-reader"] },
+  { "query": "the survey data in Sheets", "kind": "app", "relevant_ids": ["kw-intern-clean", "kw-intern-themes"] },
+  { "query": "the pandas error in Terminal", "kind": "app", "relevant_ids": ["kw-cs-a4-error-old", "kw-cs-a4-error-new"] },
+  { "query": "the pandas error from five days ago", "kind": "time", "relevant_ids": ["kw-cs-a4-error-old", "kw-cs-a4-fix-old"] },
+  { "query": "the weekday vs weekend chart from two days ago", "kind": "time", "relevant_ids": ["kw-cs-a4-charts"] },
+  { "query": "the pandas page I had open in Chrome", "kind": "app", "relevant_ids": ["kw-cs-a4-fix-old"] },
+  { "query": "flight confirmation to Denver", "kind": "negative", "relevant_ids": [] },
+  { "query": "organic chemistry lab report", "kind": "negative", "relevant_ids": [] },
+  { "query": "apartment lease renewal", "kind": "negative", "relevant_ids": [] },
+  { "query": "dentist appointment reminder", "kind": "negative", "relevant_ids": [] }
 ]

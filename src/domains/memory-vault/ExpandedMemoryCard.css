@@ -106,6 +106,12 @@
 
 .fndr-emc-related li {
     position: relative;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.fndr-emc-related .fndr-emc-meta {
+    margin: 4px 0 8px;
 }
 
 .fndr-emc-related button {
@@ -118,6 +124,7 @@
     color: var(--fg);
     font: inherit;
     text-align: left;
+    white-space: normal;
     cursor: pointer;
 }
 
@@ -166,6 +173,23 @@
     color: var(--fg-2);
     font-size: var(--t-body-sm);
     line-height: 1.45;
+}
+
+.fndr-emc-statements {
+    margin-top: 8px;
+}
+
+.fndr-emc-statements blockquote {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.fndr-emc-statements cite {
+    font-style: normal;
+    font-size: 11px;
+    color: var(--fg-3);
+    overflow-wrap: anywhere;
 }
 
 .fndr-emc-chunk-meta {

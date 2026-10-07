@@ -168,7 +168,6 @@ fn main() {
                 state_store,
                 graph,
                 None,
-                None,
             ));
             state.set_app_handle(app.handle().clone());
 
@@ -207,7 +206,7 @@ fn main() {
                     );
                     let loaded =
                         fndr_lib::load_ai_engines(restore_data_dir.as_path(), &config).await;
-                    restore_state.replace_ai_engines(loaded.inference, loaded.vlm);
+                    restore_state.replace_ai_engines(loaded.inference);
                 });
             }
 
@@ -615,6 +614,7 @@ fn main() {
             }
 
             app.manage(state.clone());
+            app.manage(fndr_lib::voice::VoiceManager::for_app(app.handle().clone()));
 
             // Start the Companion API (iPhone/Watch local-network surface) as a
             // background task so app startup is not blocked on TLS init. The
@@ -695,6 +695,7 @@ fn main() {
             ipc::commands::retrieval::fndr_build_context_pack,
             ipc::commands::retrieval::fndr_get_memory_subgraph,
             ipc::commands::retrieval::fndr_get_related_memories,
+            ipc::commands::retrieval::fndr_get_memory_source_statements,
             ipc::commands::retrieval::fndr_quality_status,
             ipc::commands::retrieval::fndr_timeline,
             ipc::commands::search::find_visually_similar_memories,
@@ -732,10 +733,15 @@ fn main() {
             ipc::commands::open_exported_pdf,
             // Voice / Speech
             ipc::commands::transcribe_voice_input,
+            fndr_lib::voice::voice_start,
+            fndr_lib::voice::voice_stop,
+            fndr_lib::voice::voice_cancel,
             // Capture control
             ipc::commands::pause_capture,
             ipc::commands::resume_capture,
             // Privacy & data
+            ipc::commands::get_agent_notes_enabled,
+            ipc::commands::set_agent_notes_enabled,
             ipc::commands::get_blocklist,
             ipc::commands::set_blocklist,
             ipc::commands::delete_all_data,
@@ -884,6 +890,12 @@ fn main() {
             ipc::commands::delete_memory_journey,
             #[cfg(debug_assertions)]
             ipc::commands::delete_all_memory_journeys,
+            // Synthetic image replay is debug-only and refuses any profile
+            // without the explicit Quality Lab marker.
+            #[cfg(debug_assertions)]
+            ipc::commands::get_quality_lab_fixtures,
+            #[cfg(debug_assertions)]
+            ipc::commands::replay_quality_lab_fixture,
             // Clipboard history
             ipc::commands::get_clipboard_history,
             ipc::commands::copy_clipboard_entry,
@@ -918,6 +930,7 @@ fn main() {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
             ipc::commands::shutdown_screen_guide(app_handle);
+            fndr_lib::voice::shutdown(app_handle);
             fndr_lib::speech::shutdown_speech();
         }
     });

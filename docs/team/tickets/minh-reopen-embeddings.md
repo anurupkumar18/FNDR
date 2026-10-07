@@ -102,7 +102,7 @@ How to work this lane: test first, then fix, then rerun the matrix. The two matr
 2. Pass it as `first_file_path` to `build_reopen_target` at every capture call site (search `build_reopen_target(` in `capture/mod.rs`), ahead of `files_touched`.
 3. Tests for decoding (`%20`, unicode) and for the browser case staying unchanged.
 
-**Done when.** Matrix rows R15 to R17, R19, R25 pass.
+**Done when.** Matrix rows R15 to R17, R25 pass. R19 moved to RE-10 (2026-10-01): VS Code exposes no `AXDocument`, so it stays app only after this ticket.
 
 **Evidence.** Matrix rows and test output.
 
@@ -224,6 +224,8 @@ How to work this lane: test first, then fix, then rerun the matrix. The two matr
 1. Table-driven mapping: VS Code (`vscode://file/<path>:<line>` when the title shows a line), Notion (keep the https URL), Figma (https URL), Slack (only when a workspace and channel id are visible in the URL).
 2. Tests per mapping; unsupported apps stay app only.
 
+**Note (from RE-03).** VS Code gives no `AXDocument`, and its default window title has only the file name (`re03-notes.txt`), not the folder. A `vscode://file/` link needs the full path from somewhere else, or R19 is documented as app only.
+
 **Done when.** R19, R26, R27 pass or are documented as app only.
 
 **Evidence.** Matrix rows.
@@ -288,6 +290,26 @@ How to work this lane: test first, then fix, then rerun the matrix. The two matr
 **Done when.** At least 36 of 41 rows exact or honestly labeled, zero executions from R35, and 90% of the live day's memories reopen to a page or file.
 
 **Evidence.** The matrix and vault health.
+
+## RE-15 Store the browser URL when Accessibility has no http document
+- assignee: minhpro001
+- labels: area::reopen, type::bug, prio::p0
+- milestone: W03-Build
+- estimate: 3h
+- depends: RE-05
+
+**Why.** A text anchor cannot scroll a page that was never stored. On 2026-10-05, Chrome stored `https://en.wikipedia.org/wiki/Nitrogen` as `browser_url`. Safari stored the Helium article as `app_bundle` with an empty `reopen_url` (window title `Helium - Wikipedia` only).
+
+**Today.** `capture/macos.rs` `read_frontmost_app_info` sets `browser_url` only from `normalize_browser_document_url`, which keeps an Accessibility `AXDocument` when it is already `http://` or `https://`. Safari's focused window did not yield one, so `build_reopen_target` fell through to the app.
+
+**Do.**
+1. When the frontmost app is a browser and `AXDocument` is not an http(s) URL, read the active tab URL the same way `get_browser_semantic_content` already talks to Safari, Chrome, Arc, Brave, and Edge.
+2. Run that URL through `strip_url_credentials` before it is stored.
+3. Tests: Safari-style missing `AXDocument` still stores the tab URL; `javascript:`, `data:`, and `chrome:` stay rejected.
+
+**Done when.** R02 stores an https URL. R01 stays a stored URL. R03 passes or stays "Arc not installed."
+
+**Evidence.** Matrix rows R01 to R03.
 
 ## EM-01 Map every way a memory is written and the vectors each writes
 - assignee: minhpro001

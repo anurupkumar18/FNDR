@@ -1,0 +1,510 @@
+[
+  {
+    "id": "se-desktop-low-signal",
+    "day_offset": -6,
+    "time": "08:05",
+    "app_name": "Finder",
+    "bundle_id": "com.apple.finder",
+    "window_title": "Desktop",
+    "summary": "",
+    "ocr_text": "",
+    "session": "desktop",
+    "low_signal": true
+  },
+  {
+    "id": "se-ratelimit-design-v1",
+    "day_offset": -6,
+    "time": "10:20",
+    "app_name": "Notion",
+    "bundle_id": "notion.id",
+    "window_title": "Partner webhook rate limiting - Design doc - Notion",
+    "url": "https://www.notion.so/kestrel/partner-webhook-rate-limiting",
+    "summary": "Started the partner webhook rate limiting design doc: a token bucket per partner at 50 requests per second with bursts up to 100.",
+    "ocr_text": "Partner webhook rate limiting\nStatus: Draft   Author: Sam K.   Reviewers: Theo L., Bea N.\nProblem\nTwo partners retry webhooks in tight loops and starve the shipment-tracker workers\nProposal\nToken bucket per partner: 50 requests per second, burst up to 100\nRequests over the limit get HTTP 429\nOpen questions\nWhere does the bucket live: Redis or in process?\nDo some partners need a higher limit?",
+    "session": "ratelimit-design",
+    "project": "Partner webhook rate limiting",
+    "topic": "Drafting the partner rate limiting design",
+    "outcome": "Draft proposes a per-partner token bucket at 50 requests per second, burst 100; storage and overrides are open.",
+    "next_steps": [
+      "Book a design review with Theo and Bea"
+    ],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-pg16-runbook-v1",
+    "day_offset": -6,
+    "time": "15:40",
+    "app_name": "Notion",
+    "bundle_id": "notion.id",
+    "window_title": "Postgres 16 upgrade runbook - Notion",
+    "url": "https://www.notion.so/kestrel/postgres-16-upgrade-runbook",
+    "summary": "Outlined the Postgres 16 upgrade runbook for the shipments database, due October 9, comparing pg_upgrade with logical replication.",
+    "ocr_text": "Postgres 16 upgrade runbook\nOwner: Sam K.   Due: October 9\nDatabase: shipments-prod (Postgres 14.11, 1.2 TB)\nOption A: pg_upgrade --link\nOption B: logical replication to a new 16 cluster, then cut over\nTo decide: downtime budget with the DBA team\nChecklist\n1. Snapshot and restore test\n2. Extension check: postgis, pg_stat_statements\n3. Cutover plan and rollback plan",
+    "session": "pg16-runbook",
+    "project": "Postgres 16 upgrade",
+    "topic": "Outlining the Postgres 16 upgrade runbook",
+    "outcome": "Runbook outline lists pg_upgrade and logical replication; the downtime budget decides between them.",
+    "next_steps": [
+      "Ask the DBA team about the downtime budget"
+    ],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-redis-ratelimit-docs",
+    "day_offset": -5,
+    "time": "09:10",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Rate limiting pattern - Redis docs - Google Chrome",
+    "url": "https://redis.io/docs/latest/develop/use/patterns/rate-limiter/",
+    "summary": "Read the Redis documentation on building a rate limiter with INCR and EXPIRE.",
+    "ocr_text": "Redis docs\nPattern: Rate limiter\nINCR a key per user per second, set EXPIRE on first write\nIf the counter is above the limit, reject the request\nA sliding window needs a sorted set (ZADD, ZREMRANGEBYSCORE)\nNote: Lua scripts keep the check and the increment atomic",
+    "session": "ratelimit-research",
+    "project": "Partner webhook rate limiting",
+    "topic": "Reading about Redis rate limiters",
+    "outcome": "Redis INCR plus EXPIRE gives a fixed window; a Lua script keeps it atomic.",
+    "next_steps": [],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-pr4187-open",
+    "day_offset": -5,
+    "time": "11:30",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Add idempotency keys to POST /v2/labels by samk - Pull Request #4187 - kestrel/shipment-tracker - Google Chrome",
+    "url": "https://github.com/kestrel/shipment-tracker/pull/4187",
+    "summary": "Opened PR #4187 adding an Idempotency-Key header to POST /v2/labels so a retried request returns the first label instead of buying a second one.",
+    "ocr_text": "Add idempotency keys to POST /v2/labels #4187\nsamk wants to merge 3 commits into main\nWhy: carriers time out and clients retry, so we sometimes buy two labels for one shipment\nWhat: clients send an Idempotency-Key header; we store the key with the label and return the stored label on a repeat\nNew table column: labels.idempotency_key (unique)\nTests: test_idempotent_retry, test_different_keys_create_two_labels",
+    "session": "pr-4187",
+    "project": "Idempotency keys for labels",
+    "topic": "Opening the idempotency keys pull request",
+    "outcome": "PR #4187 adds an Idempotency-Key header and a unique labels.idempotency_key column.",
+    "next_steps": [
+      "Wait for CI",
+      "Ask Theo to review"
+    ],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-pr4187-ci-fail",
+    "day_offset": -5,
+    "time": "12:05",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "CI / test (pull_request) - Pull Request #4187 - kestrel/shipment-tracker - Google Chrome",
+    "url": "https://github.com/kestrel/shipment-tracker/actions/runs/11873",
+    "summary": "CI failed on PR #4187: test_idempotent_retry raised a UniqueViolation on labels_idempotency_key_key instead of returning the stored label.",
+    "ocr_text": "CI / test (pull_request) failed after 6m 12s\nFAILED tests/api/test_labels.py::test_idempotent_retry\npsycopg2.errors.UniqueViolation: duplicate key value violates unique constraint \"labels_idempotency_key_key\"\nDETAIL: Key (idempotency_key)=(retry-7f3a) already exists.\n1 failed, 412 passed in 371.02s",
+    "session": "pr-4187",
+    "project": "Idempotency keys for labels",
+    "topic": "Reading the failed CI run on the idempotency PR",
+    "outcome": "The second insert hits the unique constraint; the handler must return the stored label instead.",
+    "next_steps": [
+      "Catch the unique violation and return the stored label"
+    ],
+    "decisions": [],
+    "errors": [
+      "UniqueViolation: duplicate key value violates unique constraint labels_idempotency_key_key"
+    ]
+  },
+  {
+    "id": "se-skip-locked-article",
+    "day_offset": -5,
+    "time": "16:45",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Postgres as a job queue with FOR UPDATE SKIP LOCKED - Google Chrome",
+    "url": "https://example-engineering.blog/postgres-skip-locked-queue",
+    "summary": "Read an article on using Postgres as a job queue with SELECT ... FOR UPDATE SKIP LOCKED instead of a separate broker.",
+    "ocr_text": "Postgres as a job queue\nWorkers claim jobs with SELECT id FROM jobs WHERE state = 'ready' ORDER BY run_at LIMIT 10 FOR UPDATE SKIP LOCKED\nSKIP LOCKED lets many workers poll the same table without blocking each other\nKeep the transaction short; mark the job done in the same transaction\nWhen not to: more than a few thousand jobs per second, or fan-out to many consumers",
+    "session": "queue-reading",
+    "project": "Webhook delivery queue",
+    "topic": "Reading about Postgres job queues",
+    "outcome": "SKIP LOCKED lets many workers claim jobs from one table without blocking.",
+    "next_steps": [],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-ratelimit-review",
+    "day_offset": -4,
+    "time": "10:00",
+    "app_name": "zoom.us",
+    "bundle_id": "us.zoom.xos",
+    "window_title": "Zoom Meeting - Rate limiting design review",
+    "summary": "Design review for partner rate limiting: agreed on a Redis token bucket at 50 requests per second, HTTP 429 with a Retry-After header, and per-partner overrides.",
+    "ocr_text": "Rate limiting design review\nSam K.  Theo L.  Bea N.\nTheo: keep the bucket in Redis so all pods share it\nBea: Fleetline needs 200 requests per second during peak\nDecision: token bucket in Redis, default 50 per second, burst 100\nOver the limit: 429 with a Retry-After header\nPer-partner overrides in a config table",
+    "session": "ratelimit-review",
+    "project": "Partner webhook rate limiting",
+    "topic": "Reviewing the rate limiting design",
+    "outcome": "Agreed: Redis token bucket, 50 per second default, 429 with Retry-After, per-partner overrides.",
+    "next_steps": [
+      "Add the override table to the design doc"
+    ],
+    "decisions": [
+      "Keep the token bucket in Redis",
+      "Return 429 with a Retry-After header"
+    ],
+    "errors": []
+  },
+  {
+    "id": "se-pr4187-fix",
+    "day_offset": -4,
+    "time": "14:20",
+    "app_name": "Visual Studio Code",
+    "bundle_id": "com.microsoft.VSCode",
+    "window_title": "labels.py - shipment-tracker - Visual Studio Code",
+    "summary": "Fixed test_idempotent_retry: the labels handler now catches the unique violation and returns the stored label for a repeated Idempotency-Key.",
+    "ocr_text": "labels.py\n    try:\n        label = buy_label(shipment, idempotency_key=key)\n    except UniqueViolation:\n        db.rollback()\n        label = Label.get(idempotency_key=key)\n    return label_response(label, status=200)\nTERMINAL\n$ pytest tests/api/test_labels.py -k idempotent\n2 passed in 3.41s\n$ git commit -m \"return stored label on repeated idempotency key\"",
+    "session": "pr-4187",
+    "project": "Idempotency keys for labels",
+    "topic": "Fixing the idempotent retry test",
+    "outcome": "Repeated keys now return the stored label; both idempotency tests pass.",
+    "next_steps": [
+      "Push the fix to PR #4187"
+    ],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-pg16-dba-thread",
+    "day_offset": -4,
+    "time": "16:10",
+    "app_name": "Slack",
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "window_title": "#db-ops - Kestrel - Slack",
+    "summary": "DBA Marisol said pg_upgrade needs about 40 minutes of downtime on shipments-prod; we chose logical replication for a near-zero-downtime cutover.",
+    "ocr_text": "#db-ops\nSam K. 3:58 PM\nFor the Postgres 16 upgrade on shipments-prod, what downtime can we take?\nMarisol V. 4:02 PM\npg_upgrade --link was about 40 minutes on the staging copy. Too long for prod\nMarisol V. 4:03 PM\nLogical replication to a new 16 cluster gets us to a cutover of a minute or two\nSam K. 4:06 PM\nOk, going with logical replication. I'll update the runbook",
+    "session": "pg16-runbook",
+    "project": "Postgres 16 upgrade",
+    "topic": "Choosing the Postgres 16 upgrade method with the DBA",
+    "outcome": "Chose logical replication over pg_upgrade to avoid 40 minutes of downtime.",
+    "next_steps": [
+      "Rewrite the runbook for logical replication"
+    ],
+    "decisions": [
+      "Use logical replication for the Postgres 16 upgrade"
+    ],
+    "errors": []
+  },
+  {
+    "id": "se-pr4187-review",
+    "day_offset": -3,
+    "time": "10:15",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Add idempotency keys to POST /v2/labels - Pull Request #4187 - Review - Google Chrome",
+    "url": "https://github.com/kestrel/shipment-tracker/pull/4187#pullrequestreview-2291",
+    "summary": "Theo reviewed PR #4187 and asked for a 24 hour expiry on stored idempotency keys before approving.",
+    "ocr_text": "Theo L. reviewed\nlabels.py line 48: we should not keep keys forever. 24 hour TTL?\nmigrations/0091_label_idempotency.py: add an index on created_at for the cleanup job\nsamk: added expires_at and a nightly cleanup\nTheo L. approved these changes",
+    "session": "pr-4187",
+    "project": "Idempotency keys for labels",
+    "topic": "Addressing review on the idempotency PR",
+    "outcome": "Approved after adding a 24 hour expiry and a nightly cleanup.",
+    "next_steps": [
+      "Merge PR #4187 after CI"
+    ],
+    "decisions": [
+      "Expire idempotency keys after 24 hours"
+    ],
+    "errors": []
+  },
+  {
+    "id": "se-pairing-dana",
+    "day_offset": -3,
+    "time": "13:30",
+    "app_name": "Notion",
+    "bundle_id": "notion.id",
+    "window_title": "Onboarding: Dana R. - Notion",
+    "summary": "Wrote onboarding notes for Dana R., the new backend engineer: local setup, the on-call rotation, and two good first issues.",
+    "ocr_text": "Onboarding: Dana R.\nStart date: this week   Buddy: Sam K.\nDay 1: laptop, VPN, make dev-up for shipment-tracker\nDay 2: shadow the on-call handoff\nGood first issues\n#4201 flaky test_track_webhook_retry\n#4210 docs for the /v2/labels idempotency header\nPairing: Tuesdays and Thursdays 2 to 3 pm",
+    "session": "onboarding-dana",
+    "project": "Onboarding Dana",
+    "topic": "Writing onboarding notes for Dana",
+    "outcome": "Dana has a setup checklist, an on-call shadow day, and two good first issues.",
+    "next_steps": [
+      "Pair with Dana on #4201"
+    ],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-psycopg-ssl-so",
+    "day_offset": -3,
+    "time": "15:50",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "psycopg2.OperationalError: SSL SYSCALL error: EOF detected - Stack Overflow - Google Chrome",
+    "url": "https://stackoverflow.com/questions/56289874",
+    "summary": "Looked up psycopg2 'SSL SYSCALL error: EOF detected' after idle connections dropped; the fix is TCP keepalives and pool_pre_ping in SQLAlchemy.",
+    "ocr_text": "psycopg2.OperationalError: SSL SYSCALL error: EOF detected\nAsked 4 years ago\nThe load balancer closes idle connections after 350 seconds\nAnswer (212 votes): enable TCP keepalives: keepalives=1, keepalives_idle=30\nWith SQLAlchemy, set pool_pre_ping=True so dead connections are replaced before use\nAlso set pool_recycle below the idle timeout",
+    "session": "db-connections",
+    "project": "Worker reliability",
+    "topic": "Fixing dropped Postgres connections in the workers",
+    "outcome": "Idle connections are cut by the load balancer; keepalives plus pool_pre_ping fix it.",
+    "next_steps": [
+      "Set pool_pre_ping and keepalives in the worker config"
+    ],
+    "decisions": [],
+    "errors": [
+      "psycopg2.OperationalError: SSL SYSCALL error: EOF detected"
+    ]
+  },
+  {
+    "id": "se-tail-latency-article",
+    "day_offset": -3,
+    "time": "21:10",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Why your p99 matters more than your average - Google Chrome",
+    "url": "https://example-perf.blog/p99-matters",
+    "summary": "Read an article about tail latency: why p99 response time matters more than the average for user-facing APIs.",
+    "ocr_text": "Why your p99 matters more than your average\nA page that calls 20 services sees the slowest one\nIf each service has a 1% chance of a slow call, most pages hit at least one\nMeasure p99 and p99.9, not the mean\nHedged requests and timeouts cut the tail",
+    "session": "latency-reading",
+    "project": "Reading",
+    "topic": "Reading about tail latency",
+    "outcome": "Tail latency compounds across fan-out; track p99, not the mean.",
+    "next_steps": [],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-inc2291-page",
+    "day_offset": -2,
+    "time": "14:03",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "INC-2291 shipment-tracker p99 latency above 2s - PagerDuty - Google Chrome",
+    "url": "https://kestrel.pagerduty.com/incidents/INC-2291",
+    "summary": "Got paged for INC-2291: shipment-tracker p99 latency above 2 seconds on GET /v2/shipments, 11 minutes after the v3.18.0 deploy.",
+    "ocr_text": "INC-2291   Triggered   High urgency\nshipment-tracker: p99 latency > 2s for 5 minutes\nService: shipment-tracker-api   Escalation: Backend on-call\nAssigned to: Sam K.\nTriggered at 14:02, 11 minutes after deploy v3.18.0\nAcknowledge   Resolve",
+    "session": "inc-2291",
+    "project": "INC-2291 latency incident",
+    "topic": "Responding to the INC-2291 page",
+    "outcome": "Acknowledged INC-2291; latency rose right after the v3.18.0 deploy.",
+    "next_steps": [
+      "Open the Grafana dashboard",
+      "Start the incident channel"
+    ],
+    "decisions": [],
+    "errors": [
+      "p99 latency above 2s on GET /v2/shipments"
+    ]
+  },
+  {
+    "id": "se-inc2291-grafana",
+    "day_offset": -2,
+    "time": "14:06",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "shipment-tracker API - Grafana - Google Chrome",
+    "url": "https://grafana.kestrel.internal/d/shipment-api",
+    "summary": "Grafana showed GET /v2/shipments p99 at 2.4 seconds after v3.18.0, up from 180 ms, with database queries per request jumping from 3 to 41.",
+    "ocr_text": "shipment-tracker API\nRoute: GET /v2/shipments\np99 latency 2.41 s   p50 640 ms\nBefore deploy: p99 180 ms\nDB queries per request: 41 (was 3)\nDeploy marker: v3.18.0 at 13:51\nError rate 0.4%",
+    "session": "inc-2291",
+    "project": "INC-2291 latency incident",
+    "topic": "Reading the latency dashboard during INC-2291",
+    "outcome": "Queries per request went from 3 to 41 after v3.18.0, which points at an N+1 query.",
+    "next_steps": [],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-inc2291-slack",
+    "day_offset": -2,
+    "time": "14:10",
+    "app_name": "Slack",
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "window_title": "#inc-2291 - Kestrel - Slack",
+    "summary": "In the INC-2291 channel we found an N+1 query in the shipments serializer from v3.18.0 and decided to roll back.",
+    "ocr_text": "#inc-2291\nSam K. 2:08 PM\nQueries per request went from 3 to 41 on /v2/shipments after v3.18.0\nTheo L. 2:09 PM\nThe new carrier field in ShipmentSerializer loads the carrier per row. N+1\nSam K. 2:10 PM\nRolling back to v3.17.2 now, fix forward tomorrow\nBea N. 2:11 PM\nFleetline is seeing timeouts, I'll update them",
+    "session": "inc-2291",
+    "project": "INC-2291 latency incident",
+    "topic": "Coordinating the INC-2291 response",
+    "outcome": "Root cause is an N+1 carrier lookup in ShipmentSerializer; decision is to roll back to v3.17.2.",
+    "next_steps": [
+      "Roll back to v3.17.2",
+      "Write the postmortem"
+    ],
+    "decisions": [
+      "Roll back instead of fixing forward during the incident"
+    ],
+    "errors": []
+  },
+  {
+    "id": "se-inc2291-rollback",
+    "day_offset": -2,
+    "time": "14:13",
+    "app_name": "Terminal",
+    "bundle_id": "com.apple.Terminal",
+    "window_title": "sam@kestrel-ops: ~ - zsh",
+    "summary": "Rolled back shipment-tracker in prod with kubectl rollout undo; p99 returned to about 180 ms.",
+    "ocr_text": "$ kubectl rollout undo deployment/shipment-tracker -n prod\ndeployment.apps/shipment-tracker rolled back\n$ kubectl rollout status deployment/shipment-tracker -n prod\nWaiting for deployment \"shipment-tracker\" rollout to finish: 4 of 12 updated replicas are available...\ndeployment \"shipment-tracker\" successfully rolled out\n$ kubectl get deploy shipment-tracker -n prod -o jsonpath='{.spec.template.spec.containers[0].image}'\nkestrel/shipment-tracker:v3.17.2",
+    "session": "inc-2291",
+    "project": "INC-2291 latency incident",
+    "topic": "Rolling back shipment-tracker during INC-2291",
+    "outcome": "Prod is back on v3.17.2 and latency recovered.",
+    "next_steps": [
+      "Watch p99 for 30 minutes"
+    ],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-inc2291-postmortem",
+    "day_offset": -1,
+    "time": "10:30",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "INC-2291 postmortem - Google Docs - Google Chrome",
+    "url": "https://docs.google.com/document/d/1inc2291-postmortem/edit",
+    "summary": "Drafted the INC-2291 postmortem: 38 minutes of degraded latency caused by an N+1 carrier query in ShipmentSerializer, with three action items.",
+    "ocr_text": "INC-2291 postmortem (draft)\nImpact: 38 minutes of p99 above 2 s on GET /v2/shipments; 0.4% errors\nRoot cause: v3.18.0 added carrier to ShipmentSerializer, which ran one query per shipment\nDetection: latency alert after 11 minutes\nResolution: rollback to v3.17.2\nAction items\n1. select_related('carrier') in the shipments query (ENG-911)\n2. Query count assertion in serializer tests (ENG-912)\n3. Alert at p99 > 1 s instead of 2 s (ENG-913)",
+    "session": "inc-2291-postmortem",
+    "project": "INC-2291 latency incident",
+    "topic": "Writing the INC-2291 postmortem",
+    "outcome": "Postmortem draft: 38 minutes of impact, N+1 root cause, three action items.",
+    "next_steps": [
+      "Share the postmortem with the team"
+    ],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-inc2291-followup",
+    "day_offset": -1,
+    "time": "11:15",
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "ENG-912 Add query count assertion to shipments serializer tests - Linear - Google Chrome",
+    "url": "https://linear.app/kestrel/issue/ENG-912",
+    "summary": "Filed ENG-912 to add a query count assertion to the shipments serializer tests so another N+1 fails CI.",
+    "ocr_text": "ENG-912  Add query count assertion to shipments serializer tests\nProject: INC-2291 follow-ups   Assignee: Dana R.   Priority: High\nUse django_assert_max_num_queries(5) around the list endpoint test\nAcceptance: the v3.18.0 serializer change fails this test",
+    "session": "inc-2291-postmortem",
+    "project": "INC-2291 latency incident",
+    "topic": "Filing INC-2291 follow-up tickets",
+    "outcome": "ENG-912 assigned to Dana: a query count assertion that would have caught the N+1.",
+    "next_steps": [],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-one-on-one",
+    "day_offset": -1,
+    "time": "15:00",
+    "app_name": "Notion",
+    "bundle_id": "notion.id",
+    "window_title": "1:1 Sam / Grace - Notion",
+    "summary": "In my 1:1, Grace said the promo packet needs a design doc I led and an incident I ran; she suggested the rate limiting design and INC-2291.",
+    "ocr_text": "1:1 Sam / Grace\nCareer\nGrace: the senior promo packet needs (1) a design you led end to end and (2) an incident you ran\nCandidates: partner rate limiting design, INC-2291\nPacket due at the end of the quarter\nOther\nDana is ramping well; keep pairing twice a week",
+    "session": "one-on-one",
+    "project": "Career growth",
+    "topic": "Discussing promotion in the 1:1 with Grace",
+    "outcome": "Promo packet: the rate limiting design and INC-2291, due end of quarter.",
+    "next_steps": [
+      "Start the promo packet outline"
+    ],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-ratelimit-v2",
+    "day_offset": -1,
+    "time": "17:20",
+    "app_name": "Notion",
+    "bundle_id": "notion.id",
+    "window_title": "Partner webhook rate limiting - Design doc v2 - Notion",
+    "url": "https://www.notion.so/kestrel/partner-webhook-rate-limiting",
+    "summary": "Updated the rate limiting design to v2: per-partner override table, 429 with Retry-After, and a one-week shadow mode before enforcing.",
+    "ocr_text": "Partner webhook rate limiting (v2)\nDecided in review: Redis token bucket, default 50 requests per second, burst 100\nOverrides: partner_rate_limits table (Fleetline: 200 per second)\nOver the limit: HTTP 429 with Retry-After\nRollout: shadow mode for one week, log would-be rejections, then enforce\nMetrics: rejections per partner, bucket fill",
+    "session": "ratelimit-design",
+    "project": "Partner webhook rate limiting",
+    "topic": "Revising the rate limiting design after review",
+    "outcome": "v2 adds per-partner overrides and a one-week shadow rollout.",
+    "next_steps": [
+      "Ask Bea to confirm Fleetline's limit"
+    ],
+    "decisions": [
+      "Shadow mode for one week before enforcing"
+    ],
+    "errors": []
+  },
+  {
+    "id": "se-pg16-runbook-v2",
+    "minutes_ago": 180,
+    "app_name": "Notion",
+    "bundle_id": "notion.id",
+    "window_title": "Postgres 16 upgrade runbook - Notion",
+    "url": "https://www.notion.so/kestrel/postgres-16-upgrade-runbook",
+    "summary": "Rewrote the Postgres 16 upgrade runbook around logical replication, still due October 9, with a staging dry run next.",
+    "ocr_text": "Postgres 16 upgrade runbook\nOwner: Sam K.   Due: October 9   Method: logical replication (decided with Marisol)\n1. Create the 16 cluster and the publication on shipments-prod\n2. Initial sync, then watch replication lag below 1 s\n3. Cutover: pause writers, wait for lag 0, switch the DATABASE_URL secret\n4. Rollback: point writers back at 14 within 5 minutes\nNext: dry run on staging",
+    "session": "pg16-runbook",
+    "project": "Postgres 16 upgrade",
+    "topic": "Rewriting the runbook for logical replication",
+    "outcome": "Runbook now uses logical replication with a cutover and a rollback plan.",
+    "next_steps": [
+      "Dry run the upgrade on staging"
+    ],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-pr4187-merged",
+    "minutes_ago": 90,
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Add idempotency keys to POST /v2/labels - Pull Request #4187 - Merged - Google Chrome",
+    "url": "https://github.com/kestrel/shipment-tracker/pull/4187",
+    "summary": "Merged PR #4187; idempotency keys for POST /v2/labels are deploying to staging.",
+    "ocr_text": "samk merged commit 9c41e2d into main\nAdd idempotency keys to POST /v2/labels #4187\nAll checks have passed\nDeploying to staging: shipment-tracker v3.19.0-rc1",
+    "session": "pr-4187",
+    "project": "Idempotency keys for labels",
+    "topic": "Merging the idempotency keys pull request",
+    "outcome": "PR #4187 merged and deploying to staging.",
+    "next_steps": [
+      "Verify a retried label request on staging"
+    ],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-standup",
+    "minutes_ago": 45,
+    "app_name": "Slack",
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "window_title": "#backend-standup - Kestrel - Slack",
+    "summary": "Posted standup: finished the INC-2291 postmortem, today the Postgres runbook dry run and reviewing Dana's PR #4215.",
+    "ocr_text": "#backend-standup\nSam K. 9:31 AM\nYesterday: INC-2291 postmortem draft, rate limiting design v2\nToday: Postgres 16 runbook dry run on staging, review Dana's PR #4215\nBlockers: none",
+    "session": "standup",
+    "project": "Team",
+    "topic": "Posting the daily standup",
+    "outcome": "Today: the runbook dry run and Dana's PR review.",
+    "next_steps": [],
+    "decisions": [],
+    "errors": []
+  },
+  {
+    "id": "se-dana-pr-review",
+    "minutes_ago": 20,
+    "app_name": "Google Chrome",
+    "bundle_id": "com.google.Chrome",
+    "window_title": "Fix flaky test_track_webhook_retry by danar - Pull Request #4215 - kestrel/shipment-tracker - Google Chrome",
+    "url": "https://github.com/kestrel/shipment-tracker/pull/4215",
+    "summary": "Reviewing Dana's PR #4215, which fixes the flaky test_track_webhook_retry by freezing time instead of sleeping.",
+    "ocr_text": "Fix flaky test_track_webhook_retry #4215\ndanar wants to merge 1 commit into main\nThe test slept 2 seconds and raced the retry scheduler\nNow uses freezegun to move time forward\nsamk commented: nice. Can you also remove the retry=5 override in conftest?\nCloses #4201",
+    "session": "pr-4215",
+    "project": "Onboarding Dana",
+    "topic": "Reviewing Dana's flaky test fix",
+    "outcome": "Dana's fix freezes time; asked her to drop the retry override too.",
+    "next_steps": [
+      "Approve PR #4215 after the conftest change"
+    ],
+    "decisions": [],
+    "errors": []
+  }
+]

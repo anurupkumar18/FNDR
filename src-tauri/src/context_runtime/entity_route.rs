@@ -1,7 +1,7 @@
 use crate::context_runtime::query_plan::{EntityHintKind, QueryPlan, Route};
 use crate::context_runtime::retrieval_routes::{
-    finish_route, memory_record_to_search_result, RetrievalRoute, RouteBranch, RouteCtx, RouteHit,
-    RouteHits, RouteSignals,
+    finish_route, memory_record_to_search_result, sort_route_hits, RetrievalRoute, RouteBranch,
+    RouteCtx, RouteHit, RouteHits, RouteSignals,
 };
 use crate::graph::schema::{GraphNode, GraphNodeType};
 use crate::memory_embedding_document::{
@@ -68,11 +68,7 @@ impl RetrievalRoute for EntityRoute {
             }
 
             let mut hits = by_id.into_values().collect::<Vec<_>>();
-            hits.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            sort_route_hits(&mut hits);
             hits.truncate(ctx.limit.max(1));
             finish_route(Route::Entity, started, hits)
         })
