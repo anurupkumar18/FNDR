@@ -130,3 +130,13 @@ rules are already enforced.
   transcript.
 - A settings migration test proves spoken answers default to off without
   relabeling a legacy default as an explicit opt-in.
+
+## Amendment 2026-10-06: Notch Do
+
+Decided by Kunj for the Notch Do surface only (branch `kunj-notch-computer-use`). Home/Search, Screen Guide and Notch Ask keep the rules above.
+
+- Notch Do uses the shared native voice owner (`voice/mod.rs`, surface `notch_do`). The WebKit listener and its spoken replies are removed; Notch Do does not speak.
+- Opening the notch in Do mode starts listening. The notch ends the utterance after about 1.2 s without new partial text, or reports silence after 8 s with no speech.
+- The final transcript and the planned steps appear on a plan card. The run starts by itself after 1.5 s unless the person says "stop" or taps Cancel; "go" or a tap starts it at once. The plan card is the review step this ADR requires.
+- While a run is in progress the notch keeps listening. "Stop" (as partial or final text) or the Stop button kills the run, including an action in flight. Any other new final transcript stops the run and plans the new request.
+- Microphone denied, no speech, and speech mid-run are explicit notch states.

@@ -1,0 +1,52 @@
+.setup-center-list {
+    display: grid;
+    margin: 0 0 16px;
+    padding: 0;
+    list-style: none;
+}
+
+.setup-center-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 0;
+}
+
+.setup-center-row + .setup-center-row {
+    border-top: 1px solid var(--border);
+}
+
+.setup-center-row > span:first-child {
+    display: grid;
+    gap: 2px;
+}
+
+.setup-center-row small {
+    color: var(--text-secondary, inherit);
+}
+
+.setup-center-detail {
+    word-break: break-all;
+}
+
+.setup-center-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.setup-center-state {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.setup-center-state.is-ready {
+    color: #30d158;
+}
+
+.setup-center-state.is-missing,
+.setup-center-state.is-error {
+    color: #ff9f0a;
+}

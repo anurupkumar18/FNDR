@@ -236,7 +236,10 @@ mod tests {
             !watchdog_fired.load(Ordering::SeqCst),
             "query embedding blocked the executor until the cache watchdog released it"
         );
-        assert!(hits.hits.iter().any(|hit| hit.memory_id == "responsive-query"));
+        assert!(hits
+            .hits
+            .iter()
+            .any(|hit| hit.memory_id == "responsive-query"));
     }
 
     #[tokio::test]

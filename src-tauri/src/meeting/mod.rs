@@ -267,7 +267,10 @@ impl MeetingStore {
             .list_meetings()
             .await
             .map_err(|e| e.to_string())?;
-        let removed = meetings.iter().position(|m| m.id == meeting_id).map(|index| meetings.remove(index));
+        let removed = meetings
+            .iter()
+            .position(|m| m.id == meeting_id)
+            .map(|index| meetings.remove(index));
 
         let Some(meeting) = removed else {
             return Ok(false);
@@ -462,7 +465,6 @@ struct MeetingRuntime {
     app_state: Option<Arc<AppState>>,
     last_error: Option<String>,
 }
-
 
 static RUNTIME: OnceLock<Mutex<MeetingRuntime>> = OnceLock::new();
 static POSTPROCESS_IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();

@@ -59,7 +59,12 @@ fn thread_title(record: &MemoryRecord) -> String {
     }
     let window = record.window_title.trim();
     if !window.is_empty() && !window.eq_ignore_ascii_case(record.app_name.trim()) {
-        return window.chars().take(80).collect::<String>().trim().to_string();
+        return window
+            .chars()
+            .take(80)
+            .collect::<String>()
+            .trim()
+            .to_string();
     }
     record
         .url
@@ -262,7 +267,8 @@ mod tests {
         let described = MemoryRecord {
             app_name: "Claude".into(),
             topic: "claude".into(),
-            memory_context: "You reviewed the prompt catalog and removed dead model code. More.".into(),
+            memory_context: "You reviewed the prompt catalog and removed dead model code. More."
+                .into(),
             ..Default::default()
         };
         assert_eq!(

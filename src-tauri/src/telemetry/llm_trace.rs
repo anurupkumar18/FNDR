@@ -36,12 +36,16 @@ pub async fn with_memory_journey<F: Future>(
     journey_id: String,
     fut: F,
 ) -> F::Output {
-    MEMORY_JOURNEY_SCOPE.scope((recorder, journey_id), fut).await
+    MEMORY_JOURNEY_SCOPE
+        .scope((recorder, journey_id), fut)
+        .await
 }
 
 #[cfg(debug_assertions)]
-pub fn current_memory_journey(
-) -> Option<(std::sync::Arc<crate::memory_journey::MemoryJourneyRecorder>, String)> {
+pub fn current_memory_journey() -> Option<(
+    std::sync::Arc<crate::memory_journey::MemoryJourneyRecorder>,
+    String,
+)> {
     MEMORY_JOURNEY_SCOPE.try_with(|scope| scope.clone()).ok()
 }
 
@@ -183,9 +187,9 @@ mod tests {
     #[tokio::test]
     async fn memory_journey_scope_is_explicit_and_does_not_leak() {
         let dir = tempfile::tempdir().unwrap();
-        let recorder = std::sync::Arc::new(
-            crate::memory_journey::MemoryJourneyRecorder::new(dir.path().join("journeys")),
-        );
+        let recorder = std::sync::Arc::new(crate::memory_journey::MemoryJourneyRecorder::new(
+            dir.path().join("journeys"),
+        ));
         assert!(current_memory_journey().is_none());
         let inside = with_memory_journey(recorder.clone(), "journey-1".to_string(), async {
             current_memory_journey().map(|(_, id)| id)

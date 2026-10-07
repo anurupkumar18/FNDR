@@ -74,8 +74,14 @@ mod tests {
                 "Margin rose from 0.120 to 0.432 on v1.5!"
             ]
         );
-        assert_eq!(first_sentence("Reviewed search/hybrid.rs today. Then left."), "Reviewed search/hybrid.rs today");
-        assert_eq!(split_sentences("Compared tools, e.g. ripgrep and ag. Done."), vec!["Compared tools, e.g. ripgrep and ag.", "Done."]);
+        assert_eq!(
+            first_sentence("Reviewed search/hybrid.rs today. Then left."),
+            "Reviewed search/hybrid.rs today"
+        );
+        assert_eq!(
+            split_sentences("Compared tools, e.g. ripgrep and ag. Done."),
+            vec!["Compared tools, e.g. ripgrep and ag.", "Done."]
+        );
         assert_eq!(first_sentence(""), "");
         assert_eq!(
             split_sentences("Read about SELECT ... FOR UPDATE SKIP LOCKED. Tried it."),
@@ -86,8 +92,14 @@ mod tests {
 
     #[test]
     fn complete_sentences_drops_a_cut_off_tail_and_caps_the_count() {
-        assert_eq!(complete_sentences("One. Two. Three. Four", 3), "One. Two. Three.");
+        assert_eq!(
+            complete_sentences("One. Two. Three. Four", 3),
+            "One. Two. Three."
+        );
         assert_eq!(complete_sentences("One. Two is cut of", 3), "One.");
-        assert_eq!(complete_sentences("no terminal punctuation at all", 2), "no terminal punctuation at all");
+        assert_eq!(
+            complete_sentences("no terminal punctuation at all", 2),
+            "no terminal punctuation at all"
+        );
     }
 }

@@ -632,8 +632,13 @@ fn extraction_grounding_confidence(record: &MemoryRecord) -> Option<f32> {
 
 /// Lifecycle values `MemoryRecord.enrichment_status` may hold (MEM-07
 /// invariant 3).
-const VALID_ENRICHMENT_STATUSES: &[&str] =
-    &["", "pending", "reviewed_local", "reviewed_daily", "review_failed"];
+const VALID_ENRICHMENT_STATUSES: &[&str] = &[
+    "",
+    "pending",
+    "reviewed_local",
+    "reviewed_daily",
+    "review_failed",
+];
 
 /// The finalized-memory contract (MEM-07): every invariant a stored
 /// `MemoryRecord` must satisfy, checkable from the record alone. Invariants
@@ -685,7 +690,11 @@ pub fn assert_memory_contract(record: &MemoryRecord) -> Result<(), String> {
     if is_visual_semantics_failed_record(record) {
         let capped = [
             ("evidence_confidence", record.evidence_confidence, 0.30),
-            ("agent_usefulness_score", record.agent_usefulness_score, 0.25),
+            (
+                "agent_usefulness_score",
+                record.agent_usefulness_score,
+                0.25,
+            ),
             ("retrieval_value_score", record.retrieval_value_score, 0.25),
             ("graph_readiness_score", record.graph_readiness_score, 0.15),
             ("specificity_score", record.specificity_score, 0.15),
@@ -693,7 +702,11 @@ pub fn assert_memory_contract(record: &MemoryRecord) -> Result<(), String> {
             ("confidence_score", record.confidence_score, 0.20),
             ("importance_score", record.importance_score, 0.20),
             ("extraction_confidence", record.extraction_confidence, 0.15),
-            ("insight_card_confidence", record.insight_card_confidence, 0.15),
+            (
+                "insight_card_confidence",
+                record.insight_card_confidence,
+                0.15,
+            ),
         ];
         for (label, value, ceiling) in capped {
             if value > ceiling {
@@ -759,7 +772,9 @@ pub fn assert_memory_contract(record: &MemoryRecord) -> Result<(), String> {
         ("insight_why_mattered", &record.insight_why_mattered),
     ];
     for (label, value) in narration_fields {
-        if !value.trim().is_empty() && crate::summariser::narration_filter::narration_filter_hits(value) {
+        if !value.trim().is_empty()
+            && crate::summariser::narration_filter::narration_filter_hits(value)
+        {
             return Err(format!(
                 "invariant 5 (no meta narration): {label} reads like narration about the capture itself"
             ));
@@ -961,7 +976,8 @@ mod tests {
     #[test]
     fn contract_rejects_meta_narration_in_memory_context() {
         let mut record = valid_memory_record();
-        record.memory_context = "The user is viewing a spreadsheet of quarterly numbers.".to_string();
+        record.memory_context =
+            "The user is viewing a spreadsheet of quarterly numbers.".to_string();
         let err = assert_memory_contract(&record).unwrap_err();
         assert!(err.contains("invariant 5"), "{err}");
     }

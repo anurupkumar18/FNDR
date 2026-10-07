@@ -1,3 +1,4 @@
+import { OperatorPermissions } from "./OperatorPermissions";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import {
     armScreenGuideDiagnostic,
@@ -681,9 +682,9 @@ export function ScreenGuidePanel({
                         <span>
                             <strong>Operate my Mac</strong>
                             <small>
-                                {computerUse && !computerUse.openComputerUsePath
-                                    ? "Needs open-computer-use: run npm install -g open-computer-use, then open-computer-use doctor."
-                                    : "Talk to the notch in Do mode and FNDR clicks and types for you. Every action asks first; say “stop” anytime."}
+                                {computerUse && !computerUse.backend
+                                    ? "Needs Computer Use: install the ChatGPT app with Computer Use, or run npm install -g open-computer-use."
+                                    : "Talk to the notch in Do mode and FNDR opens apps, clicks and types for you. Sent to ChatGPT on your plan: what you say, the on-screen text of the app being operated, and up to 5 memory snippets when you refer to the past. Sending, deleting, buying and passwords are always refused. Say “stop” anytime."}
                             </small>
                         </span>
                         <input
@@ -698,6 +699,7 @@ export function ScreenGuidePanel({
                             }
                         />
                     </label>
+                    {settings?.operate_computer ? <OperatorPermissions /> : null}
                 </section>
 
                 <section className="sg-ask-card">

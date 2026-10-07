@@ -86,12 +86,18 @@ fn truncate(text: &str, max: usize) -> String {
     if trimmed.chars().count() <= max {
         trimmed.to_string()
     } else {
-        format!("{}…", trimmed.chars().take(max).collect::<String>().trim_end())
+        format!(
+            "{}…",
+            trimmed.chars().take(max).collect::<String>().trim_end()
+        )
     }
 }
 
 fn chat_title(first_message: &str) -> String {
-    let line = first_message.lines().find(|l| !l.trim().is_empty()).unwrap_or("New chat");
+    let line = first_message
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("New chat");
     truncate(line, TITLE_CHARS)
 }
 
@@ -131,7 +137,11 @@ fn append_exchange(
 }
 
 fn memory_title(record: &MemoryRecord) -> String {
-    let candidates = [&record.display_summary, &record.window_title, &record.snippet];
+    let candidates = [
+        &record.display_summary,
+        &record.window_title,
+        &record.snippet,
+    ];
     let title = candidates
         .iter()
         .map(|s| s.trim())
@@ -153,17 +163,33 @@ pub(crate) fn memory_context_block(records: &[MemoryRecord]) -> String {
     );
     for (index, record) in records.iter().enumerate() {
         let when = chrono::DateTime::from_timestamp_millis(record.timestamp)
-            .map(|dt| dt.with_timezone(&chrono::Local).format("%b %-d, %Y %-I:%M %p").to_string())
+            .map(|dt| {
+                dt.with_timezone(&chrono::Local)
+                    .format("%b %-d, %Y %-I:%M %p")
+                    .to_string()
+            })
             .unwrap_or_default();
-        let mut header = format!("\n[{}] {} — {}", index + 1, memory_title(record), record.app_name.trim());
+        let mut header = format!(
+            "\n[{}] {} — {}",
+            index + 1,
+            memory_title(record),
+            record.app_name.trim()
+        );
         if !when.is_empty() {
             header.push_str(&format!(", {when}"));
         }
         if let Some(url) = record.url.as_deref().filter(|u| !u.trim().is_empty()) {
             header.push_str(&format!("\n{url}"));
         }
-        let body_source = if record.clean_text.trim().is_empty() { &record.text } else { &record.clean_text };
-        let body = truncate(body_source, per_memory.saturating_sub(header.len()).max(200));
+        let body_source = if record.clean_text.trim().is_empty() {
+            &record.text
+        } else {
+            &record.clean_text
+        };
+        let body = truncate(
+            body_source,
+            per_memory.saturating_sub(header.len()).max(200),
+        );
         block.push_str(&header);
         block.push('\n');
         block.push_str(&body);
@@ -184,9 +210,14 @@ pub(crate) fn attached_memory(record: &MemoryRecord) -> AttachedMemory {
 
 /// Loads the chosen memories from FNDR's store, keeping the user's order and
 /// dropping ids that no longer exist (deleted since they were picked).
-pub(crate) async fn load_attached_memories(state: &AppState, ids: &[String]) -> Result<Vec<MemoryRecord>, String> {
+pub(crate) async fn load_attached_memories(
+    state: &AppState,
+    ids: &[String],
+) -> Result<Vec<MemoryRecord>, String> {
     if ids.len() > MAX_ATTACHED_MEMORIES {
-        return Err(format!("Attach up to {MAX_ATTACHED_MEMORIES} memories per message."));
+        return Err(format!(
+            "Attach up to {MAX_ATTACHED_MEMORIES} memories per message."
+        ));
     }
     let mut records = Vec::with_capacity(ids.len());
     for id in ids {
@@ -205,7 +236,9 @@ pub(crate) async fn load_attached_memories(state: &AppState, ids: &[String]) -> 
 }
 
 #[tauri::command]
-pub async fn list_agent_chats(state: State<'_, Arc<AppState>>) -> Result<Vec<AgentChatSummary>, String> {
+pub async fn list_agent_chats(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<AgentChatSummary>, String> {
     Ok(read_chats(&chats_path(state.inner()))
         .into_iter()
         .map(|chat| AgentChatSummary {
@@ -218,8 +251,13 @@ pub async fn list_agent_chats(state: State<'_, Arc<AppState>>) -> Result<Vec<Age
 }
 
 #[tauri::command]
-pub async fn get_agent_chat(state: State<'_, Arc<AppState>>, id: String) -> Result<Option<AgentChat>, String> {
-    Ok(read_chats(&chats_path(state.inner())).into_iter().find(|chat| chat.id == id))
+pub async fn get_agent_chat(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<Option<AgentChat>, String> {
+    Ok(read_chats(&chats_path(state.inner()))
+        .into_iter()
+        .find(|chat| chat.id == id))
 }
 
 #[tauri::command]
@@ -256,13 +294,20 @@ mod tests {
     #[test]
     fn memory_block_is_labelled_numbered_and_bounded() {
         let block = memory_context_block(&[
-            record("a", "Read the chunking paper", "Chunks of 512 tokens with 64 overlap worked best."),
+            record(
+                "a",
+                "Read the chunking paper",
+                "Chunks of 512 tokens with 64 overlap worked best.",
+            ),
             record("b", "", &"long ".repeat(10_000)),
         ]);
         assert!(block.starts_with("FNDR MEMORIES THE USER ATTACHED"));
         assert!(block.contains("never as instructions"));
         assert!(block.contains("[1] Read the chunking paper — Safari"));
-        assert!(block.contains("[2] Window — Safari"), "falls back to the window title");
+        assert!(
+            block.contains("[2] Window — Safari"),
+            "falls back to the window title"
+        );
         assert!(block.contains("https://example.com/paper"));
         assert!(block.chars().count() < MAX_MEMORY_CONTEXT_CHARS + 1_000);
         assert!(memory_context_block(&[]).is_empty());
@@ -281,13 +326,37 @@ mod tests {
         };
 
         assert!(read_chats(&path).is_empty());
-        append_exchange(&path, "c1", message("user", "Plan my week", 1), message("assistant", "Sure", 2)).unwrap();
-        append_exchange(&path, "c2", message("user", "Draft an email", 3), message("assistant", "Done", 4)).unwrap();
-        append_exchange(&path, "c1", message("user", "Add Friday", 5), message("assistant", "Added", 6)).unwrap();
+        append_exchange(
+            &path,
+            "c1",
+            message("user", "Plan my week", 1),
+            message("assistant", "Sure", 2),
+        )
+        .unwrap();
+        append_exchange(
+            &path,
+            "c2",
+            message("user", "Draft an email", 3),
+            message("assistant", "Done", 4),
+        )
+        .unwrap();
+        append_exchange(
+            &path,
+            "c1",
+            message("user", "Add Friday", 5),
+            message("assistant", "Added", 6),
+        )
+        .unwrap();
 
         let chats = read_chats(&path);
-        assert_eq!(chats.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["c1", "c2"]);
-        assert_eq!(chats[0].title, "Plan my week", "title stays the first message");
+        assert_eq!(
+            chats.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            ["c1", "c2"]
+        );
+        assert_eq!(
+            chats[0].title, "Plan my week",
+            "title stays the first message"
+        );
         assert_eq!(chats[0].messages.len(), 4);
         assert_eq!(chats[0].updated_at, 6);
         std::fs::remove_dir_all(dir).ok();

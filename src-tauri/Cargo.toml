@@ -108,7 +108,7 @@ objc2-screen-capture-kit = { version = "0.3.2", features = ["SCScreenshotManager
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSString", "NSData", "NSDictionary", "NSArray", "NSThread"] }
+objc2-foundation = { version = "0.2", features = ["NSString", "NSData", "NSDictionary", "NSArray", "NSThread", "NSURL"] }
 objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSWorkspace", "NSRunningApplication", "NSImage", "NSPasteboard", "NSScreen", "libc"] }
 block2 = "0.5"
 

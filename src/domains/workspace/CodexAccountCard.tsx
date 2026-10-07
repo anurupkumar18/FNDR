@@ -31,6 +31,8 @@ const CODEX_PLAN_HELP_URL = "https://help.openai.com/en/articles/11369540-using-
 interface CodexAccountCardProps {
     /** Called whenever the account changes, so the panel can offer its models. */
     onStatusChange: (status: CodexAccountStatus) => void;
+    /** Hermes or Notch Do could not use or refresh the sign-in: offer Reconnect. */
+    reconnect?: boolean;
 }
 
 function formatPlan(planType: string | null): string {
@@ -83,7 +85,7 @@ function UsageMeter({ window }: { window: CodexUsageWindow }) {
  * runs the OAuth flow in the user's browser and keeps the tokens; FNDR only
  * shows the result, so the subscription powers Hermes without an API key.
  */
-export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
+export function CodexAccountCard({ onStatusChange, reconnect = false }: CodexAccountCardProps) {
     const [status, setStatus] = useState<CodexAccountStatus | null>(null);
     const [pending, setPending] = useState<CodexLoginStarted | null>(null);
     const [busy, setBusy] = useState(false);
@@ -392,7 +394,22 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                 </p>
                 {accountActivity ? <ActivityTrace trace={accountActivity} /> : null}
                 {error && <p className="codex-card-error" role="alert">{error}</p>}
+                {reconnect ? (
+                    <p className="codex-card-error" role="alert">
+                        The ChatGPT sign-in could not be refreshed. Reconnect to keep Hermes and Notch Do working.
+                    </p>
+                ) : null}
                 <div className="codex-actions">
+                    {reconnect ? (
+                        <button
+                            type="button"
+                            className="codex-btn codex-btn-primary"
+                            onClick={() => void handleSignIn()}
+                            disabled={busy || refreshing}
+                        >
+                            Reconnect ChatGPT
+                        </button>
+                    ) : null}
                     <button type="button" className="codex-btn" onClick={() => void handleSignOut()} disabled={busy || refreshing}>
                         Sign out
                     </button>
@@ -440,7 +457,7 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                             onClick={() => void handleSignIn()}
                             disabled={busy || refreshing}
                         >
-                            Sign in with ChatGPT
+                            {reconnect ? "Reconnect ChatGPT" : "Sign in with ChatGPT"}
                         </button>
                         <button type="button" className="codex-link" onClick={() => void openExternalUrl(CODEX_PLAN_HELP_URL)}>
                             Which plans work?

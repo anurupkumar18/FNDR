@@ -334,8 +334,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_memory_logic_removes_the_memory_graph_node_but_keeps_the_shared_session_node()
-    {
+    async fn delete_memory_logic_removes_the_memory_graph_node_but_keeps_the_shared_session_node() {
         // MEM-07 invariant 10: deleting a memory must not leave its own
         // graph node and edges behind. A session node it shares with other
         // memories is left alone, since deleting one memory should not sever
@@ -349,8 +348,14 @@ mod tests {
         let graph = GraphStore::new(store.clone());
 
         let record = deletable_record("mem-1");
-        store.add_batch(&[record.clone()]).await.expect("add memory");
-        graph.ingest_memory(&record).await.expect("ingest into graph");
+        store
+            .add_batch(&[record.clone()])
+            .await
+            .expect("add memory");
+        graph
+            .ingest_memory(&record)
+            .await
+            .expect("ingest into graph");
 
         let nodes_before = store.get_all_nodes().await.expect("nodes before");
         assert!(
@@ -703,7 +708,11 @@ mod tests {
                 Some(R::AppDeepLink("notion://www.notion.so/page-123".into())),
             ),
             ("empty marker", marker("Reopen: "), None),
-            ("javascript marker", marker("Reopen: javascript:alert(1)"), None),
+            (
+                "javascript marker",
+                marker("Reopen: javascript:alert(1)"),
+                None,
+            ),
             (
                 "indented marker after other lines",
                 marker("App: Chrome\n   Reopen: https://legacy.example  "),
@@ -760,7 +769,9 @@ mod tests {
         };
         assert_eq!(
             resolve_reopen_target(&record),
-            Some(R::FilePath(PathBuf::from("/Users/qa/My%20Doc%20caf%C3%A9.pdf")))
+            Some(R::FilePath(PathBuf::from(
+                "/Users/qa/My%20Doc%20caf%C3%A9.pdf"
+            )))
         );
     }
 
@@ -871,9 +882,7 @@ mod tests {
                     reopen_text_anchor: s(anchor),
                     ..Default::default()
                 },
-                Some(R::BrowserUrl(
-                    "https://example.com/article#section".into(),
-                )),
+                Some(R::BrowserUrl("https://example.com/article#section".into())),
             ),
         ]);
     }

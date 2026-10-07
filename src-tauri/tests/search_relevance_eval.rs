@@ -221,7 +221,16 @@ fn hybrid_search_relevance_eval_suite() {
     for case in &cases {
         let hits = rt
             .block_on(async {
-                HybridSearcher::search_with_config(&store, &embedder, &case.query, 6, None, None, &search_config).await
+                HybridSearcher::search_with_config(
+                    &store,
+                    &embedder,
+                    &case.query,
+                    6,
+                    None,
+                    None,
+                    &search_config,
+                )
+                .await
             })
             .expect("search query");
         let hit_ids = hits.into_iter().map(|item| item.id).collect::<Vec<_>>();

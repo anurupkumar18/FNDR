@@ -49,6 +49,25 @@ describe("PrivacyProof", () => {
         expect(screen.getByText(/2 FNDR network requests recorded this app session/i)).toBeInTheDocument();
         expect(screen.getByText(/huggingface\.co/)).toBeInTheDocument();
     });
+
+    it("lists cloud model requests by feature, host and size, without content", () => {
+        render(
+            <PrivacyProof
+                proof={{
+                    ...proof,
+                    model_requests: [
+                        { atMs: Date.now(), feature: "notch_do_plan", host: "chatgpt.com", bytesSent: 1300 },
+                        { atMs: Date.now(), feature: "hermes_chat", host: "chatgpt.com", bytesSent: 420 },
+                    ],
+                }}
+            />,
+        );
+        const list = screen.getByRole("list", { name: "Cloud model requests" });
+        expect(list).toHaveTextContent("Notch Do planned a request · chatgpt.com");
+        expect(list).toHaveTextContent("1.3 KB");
+        expect(list).toHaveTextContent("Hermes chat message");
+        expect(list).toHaveTextContent("420 B");
+    });
 });
 
 describe("PrivacyProofPanel", () => {

@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed, 2026-10-04. Not accepted.** Draft for PD-01. The decision is the owner's.
+**Proposed, 2026-10-04.** Option B accepted on 2026-10-06 by Kunj **for Notch Do and Hermes only** (see the amendment at the end). Every other task stays local until this ADR is accepted as a whole.
 
 Until this is accepted:
 
@@ -102,3 +102,12 @@ If C is accepted: this is not a one-line edit. Month plan sections 1 and 6, the 
 - VS-24 and other Ask work may add a cloud path only for a task enabled under this ADR.
 
 This draft changes no code.
+
+## Amendment 2026-10-06: Notch Do and Hermes on the ChatGPT plan
+
+Option B, scoped to two features. The "your own key" condition is met by the person's own ChatGPT sign-in through the official `codex app-server`; FNDR stores no key and never reads token values.
+
+- **Consent:** the "Operate my Mac" toggle is the one-time opt-in for Notch Do. Its copy names what leaves the Mac: the transcript, the accessibility text of the app being operated, and up to 5 retrieved memory snippets.
+- **Memories:** sent only when the request refers to the past (decided locally before any request, `operator::plan::refers_to_past`). Bounded to 5 snippets from `context_runtime::retrieve`.
+- **Logging:** every Codex and Hermes model request is recorded in Privacy Activity with feature, host and bytes FNDR sent. No content.
+- **Hermes** answers with the same ChatGPT sign-in, imported by Hermes itself from `~/.codex`; the Codex app-server is the only refresher.

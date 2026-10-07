@@ -1,26 +1,26 @@
-//! Voice-driven computer use from the notch.
+//! Notch Do: a spoken request becomes a plan, then runs step by step on the
+//! Mac (ADR-020, ADR-022 and ADR-018 amendments of 2026-10-06).
 //!
-//! One long-lived Codex app-server session per conversation, on the user's
-//! ChatGPT plan, with open-computer-use (github.com/iFurySt/open-codex-computer-use)
-//! attached as an MCP server for this process only. The user talks; Codex
-//! narrates what it is about to do, then acts through accessibility tools.
+//! One `codex app-server` per run, on the person's ChatGPT sign-in, with a
+//! computer-use MCP server attached for this process only: OpenAI's bundled
+//! Computer Use when it is installed, otherwise open-computer-use.
 //!
-//! Safety model:
-//! - Off unless Screen Guide's `operate_computer` setting is on.
-//! - Codex's own shell, browser, computer-use, apps, plugins and hooks are
-//!   disabled, and every MCP server from the user's config is switched off by
-//!   name, so open-computer-use is the only way to touch the Mac.
-//! - Every open-computer-use call arrives as an approval request. Read-only
-//!   look-ups (listing apps, reading an app's UI tree) are granted
-//!   automatically; anything that clicks, types, scrolls, drags or presses a
-//!   key is surfaced to the notch and waits for the user's yes or no.
-//! - Any other server-initiated request is declined.
+//! - A planner turn returns the steps as JSON. Opening apps and links is done
+//!   by FNDR natively; only `operate` steps hand an app's UI to Codex.
+//! - Every computer-use call arrives as an approval request and is decided by
+//!   `operator::policy` from the call itself and FNDR's own view of the UI:
+//!   it runs, waits for the person's yes, or is refused.
+//! - Every step is checked by FNDR (`operator::plan::verify`), retried once,
+//!   and every action is written to the local journal.
+//! - Stop aborts the run and kills Codex's whole process group, so an action
+//!   in flight dies with it.
 
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 
@@ -28,47 +28,104 @@ use super::codex_account::{
     configured_mcp_server_names, is_plain_config_key, parse_account, ready_executable, AppServer,
     READ_ONLY_DISABLED_FEATURES,
 };
+use crate::inference::prompts::{OPERATOR_PLANNER_SYSTEM, OPERATOR_STEP_SYSTEM};
+use crate::operator::journal::{redact, Journal, JournalEntry};
+use crate::operator::plan::{self, Plan, PlanStep, StepAction, StepCheck};
+use crate::operator::policy::{classify, Decision, Observed, Risk};
+use crate::operator::{memory, native};
 use crate::AppState;
 
 pub const COMPUTER_USE_EVENT: &str = "computer-use://event";
 
-/// Name of the open-computer-use server inside FNDR's Codex session.
+/// Name of the computer-use server inside FNDR's Codex session.
 const COMPUTER_SERVER: &str = "fndr_computer";
 
-/// Tools that only observe. Granted without asking so a conversation doesn't
-/// stall on "may I look at the screen" for every step.
-const READ_ONLY_TOOLS: &[&str] = &["list_apps", "get_app_state"];
+/// Where Codex sends model requests on the ChatGPT plan.
+const MODEL_HOST: &str = "chatgpt.com";
 
-const OPERATOR_INSTRUCTIONS: &str = "\
-You are FNDR's operator on the user's Mac. The user talks to you through the notch and \
-everything you write is read aloud, so write the way you would speak: short sentences, no \
-markdown, no lists, never more than 25 words per message. Before each action, say in one \
-sentence what you are about to do. Operate the Mac only through the fndr_computer tools; \
-look at an app with get_app_state before clicking in it. Never type passwords, payment \
-details or one-time codes, and never change security or privacy settings; ask the user to \
-do those themselves. Before anything irreversible, such as sending, deleting, buying or \
-submitting, stop and ask the user to confirm in words. If the user redirects you mid-task, \
-follow the new instruction. When finished, say what you did in one sentence.";
+const PLAN_TIMEOUT: Duration = Duration::from_secs(90);
+const STEP_TIMEOUT: Duration = Duration::from_secs(180);
+const FRONTMOST_TIMEOUT: Duration = Duration::from_secs(6);
+const PAGE_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StepView {
+    pub label: String,
+    pub action: StepAction,
+    pub app: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum ComputerUseEvent {
-    /// Session is ready for the first instruction.
-    Ready,
-    /// Something Codex said: `final` is true for the turn's answer.
-    Message { text: String, r#final: bool },
-    /// A tool call started.
-    Action { item_id: String, tool: String, summary: String },
-    /// A tool call finished.
-    ActionDone { item_id: String, tool: String, ok: bool },
-    /// An action needs the user's yes or no.
-    Approval { request_key: String, tool: String, summary: String },
-    /// The approval was settled (answered, or cleared by an interrupt).
-    ApprovalResolved { request_key: String },
-    /// A turn ended: `completed`, `interrupted` or `failed`.
-    TurnDone { status: String, error: Option<String> },
-    /// The session ended; `error` is set when it failed.
-    Ended { error: Option<String> },
+    Planning {
+        run_id: String,
+        used_memories: usize,
+    },
+    Planned {
+        run_id: String,
+        steps: Vec<StepView>,
+    },
+    StepStarted {
+        run_id: String,
+        index: usize,
+        attempt: u8,
+    },
+    Action {
+        run_id: String,
+        index: usize,
+        item_id: String,
+        tool: String,
+        summary: String,
+        risk: Risk,
+    },
+    ActionDone {
+        run_id: String,
+        item_id: String,
+        ok: bool,
+    },
+    Approval {
+        run_id: String,
+        request_key: String,
+        tool: String,
+        summary: String,
+    },
+    ApprovalResolved {
+        run_id: String,
+        request_key: String,
+    },
+    Blocked {
+        run_id: String,
+        index: usize,
+        tool: String,
+        summary: String,
+        reason: String,
+    },
+    StepDone {
+        run_id: String,
+        index: usize,
+        ok: bool,
+        detail: String,
+    },
+    Finished {
+        run_id: String,
+        ok: bool,
+        summary: String,
+    },
+    Stopped {
+        run_id: String,
+    },
+    /// `reconnect` is true when the ChatGPT sign-in has to be redone.
+    Failed {
+        run_id: String,
+        error: String,
+        reconnect: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -76,34 +133,95 @@ pub enum ComputerUseEvent {
 pub struct ComputerUseStatus {
     pub enabled: bool,
     pub codex_ready: bool,
-    pub open_computer_use_path: Option<String>,
-    pub active: bool,
+    pub backend: Option<String>,
+    pub backend_path: Option<String>,
+    pub active_run: Option<String>,
 }
 
-enum Command {
-    Say(String),
-    Interrupt,
+#[derive(Debug)]
+enum RunCommand {
+    Start,
     Respond { request_key: String, approve: bool },
-    Stop,
 }
 
-fn session() -> &'static Mutex<Option<mpsc::UnboundedSender<Command>>> {
-    static SESSION: OnceLock<Mutex<Option<mpsc::UnboundedSender<Command>>>> = OnceLock::new();
-    SESSION.get_or_init(|| Mutex::new(None))
+#[derive(Debug, PartialEq)]
+enum RunError {
+    Stopped,
+    Failed(String),
+    /// The ChatGPT sign-in is missing or expired.
+    SignedOut(String),
 }
 
-fn send_command(command: Command) -> Result<(), String> {
-    let guard = session().lock().map_err(|_| "Computer use is unavailable.".to_string())?;
-    guard
-        .as_ref()
-        .ok_or_else(|| "Start a computer-use conversation first.".to_string())?
-        .send(command)
-        .map_err(|_| "The computer-use session has ended.".to_string())
+struct RunHandle {
+    run_id: String,
+    commands: mpsc::UnboundedSender<RunCommand>,
+    task: tauri::async_runtime::JoinHandle<()>,
+    /// Codex's process group, killed on Stop.
+    codex_pid: Arc<Mutex<Option<u32>>>,
+}
+
+fn current_run() -> &'static Mutex<Option<RunHandle>> {
+    static RUN: OnceLock<Mutex<Option<RunHandle>>> = OnceLock::new();
+    RUN.get_or_init(|| Mutex::new(None))
+}
+
+// MARK: - Backends
+
+/// Which computer-use MCP server the run attaches.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Backend {
+    /// OpenAI's Computer Use plugin, installed with the ChatGPT/Codex app.
+    CodexBundled(PathBuf),
+    OpenComputerUse(PathBuf),
+}
+
+impl Backend {
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Backend::CodexBundled(_) => "codex_computer_use",
+            Backend::OpenComputerUse(_) => "open_computer_use",
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        match self {
+            Backend::CodexBundled(path) | Backend::OpenComputerUse(path) => path,
+        }
+    }
+}
+
+/// The newest installed `computer-use-client-launcher` under a Codex home.
+fn bundled_computer_use(codex_home: &Path) -> Option<PathBuf> {
+    let root = codex_home.join("plugins/cache/openai-bundled/computer-use");
+    let mut versions: Vec<PathBuf> = std::fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .collect();
+    versions.sort_by_key(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| {
+                name.split('.')
+                    .map(|part| part.parse::<u64>().unwrap_or(0))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    versions
+        .into_iter()
+        .rev()
+        .map(|version| version.join("bin/computer-use-client-launcher"))
+        .find(|launcher| launcher.is_file())
 }
 
 pub(crate) fn detect_open_computer_use() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).map(|dir| dir.join("open-computer-use")).collect())
+        .map(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("open-computer-use"))
+                .collect()
+        })
         .unwrap_or_default();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         candidates.push(home.join(".npm-global/bin/open-computer-use"));
@@ -114,29 +232,97 @@ pub(crate) fn detect_open_computer_use() -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
-/// A spoken-length description of a tool call, e.g. `click "Send" in Mail`.
-fn describe_tool_call(tool: &str, params: &Value) -> String {
-    let text = |key: &str| params.get(key).and_then(Value::as_str).filter(|s| !s.is_empty());
-    let app = text("app").or_else(|| text("bundle_id")).or_else(|| text("app_name"));
-    let target = text("element").or_else(|| text("label")).or_else(|| text("title"));
+/// Set when the bundled Computer Use was refused Automation access, so the
+/// next run falls back to open-computer-use instead of failing the same way.
+static BUNDLED_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+const AUTOMATION_REFUSED: &str = "Computer Use was refused Automation access. Allow FNDR under System Settings > Privacy & Security > Automation, then try again; the next run uses open-computer-use if it is installed.";
+
+pub(crate) fn detect_backend() -> Option<Backend> {
+    // A fixed choice for diagnosis: `codex_computer_use` or `open_computer_use`.
+    match std::env::var("FNDR_COMPUTER_USE").ok().as_deref() {
+        Some("open_computer_use") => {
+            return detect_open_computer_use().map(Backend::OpenComputerUse)
+        }
+        Some("codex_computer_use") => {
+            return bundled_computer_use(&super::codex_account::codex_home_dir())
+                .map(Backend::CodexBundled)
+        }
+        _ => {}
+    }
+    let bundled = (!BUNDLED_REFUSED.load(std::sync::atomic::Ordering::Relaxed))
+        .then(|| bundled_computer_use(&super::codex_account::codex_home_dir()))
+        .flatten()
+        .map(Backend::CodexBundled);
+    bundled.or_else(|| detect_open_computer_use().map(Backend::OpenComputerUse))
+}
+
+fn session_args(user_mcp_servers: &[String], backend: &Backend) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    for feature in READ_ONLY_DISABLED_FEATURES {
+        args.push("--disable".to_string());
+        args.push((*feature).to_string());
+    }
+    for name in user_mcp_servers
+        .iter()
+        .filter(|name| name.as_str() != COMPUTER_SERVER)
+    {
+        if !is_plain_config_key(name) {
+            return Err(format!(
+                "FNDR can't isolate the Codex MCP server \"{name}\". Rename it in ~/.codex/config.toml to use Notch Do."
+            ));
+        }
+        args.push("-c".to_string());
+        args.push(format!("mcp_servers.{name}.enabled=false"));
+    }
+    let command =
+        serde_json::to_string(&backend.path().display().to_string()).map_err(|e| e.to_string())?;
+    args.extend([
+        "-c".to_string(),
+        format!("mcp_servers.{COMPUTER_SERVER}.command={command}"),
+        "-c".to_string(),
+        format!("mcp_servers.{COMPUTER_SERVER}.args=[\"mcp\"]"),
+        "-c".to_string(),
+        format!("mcp_servers.{COMPUTER_SERVER}.default_tools_approval_mode=\"prompt\""),
+    ]);
+    Ok(args)
+}
+
+// MARK: - Describing actions
+
+/// A short description of a tool call for the notch, e.g. `click "Play" in Spotify`.
+fn describe_tool_call(tool: &str, params: &Value, observed: &Observed) -> String {
+    let text = |key: &str| {
+        params
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+    };
+    let app = text("app");
     let in_app = app.map(|a| format!(" in {a}")).unwrap_or_default();
+    let target = app
+        .zip(text("element_index"))
+        .and_then(|(app, index)| observed.describe(app, index))
+        .map(|label| format!(" \"{}\"", truncate(&label, 40)))
+        .unwrap_or_default();
     match tool {
-        "click" => match target {
-            Some(t) => format!("click \"{t}\"{in_app}"),
-            None => format!("click{in_app}"),
-        },
-        "type_text" => match text("text") {
-            Some(t) => format!("type \"{}\"{in_app}", truncate(t, 60)),
-            None => format!("type{in_app}"),
-        },
+        "click" => format!("click{target}{in_app}"),
+        "type_text" => format!(
+            "type \"{}\"{in_app}",
+            truncate(text("text").unwrap_or_default(), 40)
+        ),
+        "set_value" => format!("set{target}{in_app}"),
         "press_key" => format!("press {}{in_app}", text("key").unwrap_or("a key")),
         "scroll" => format!("scroll{in_app}"),
         "drag" => format!("drag{in_app}"),
-        "set_value" => format!("change a value{in_app}"),
-        "perform_secondary_action" => format!("use a menu action{in_app}"),
-        "get_app_state" => format!("look at{}", app.map(|a| format!(" {a}")).unwrap_or_else(|| " the app".into())),
+        "perform_secondary_action" => format!(
+            "{}{target}{in_app}",
+            text("action").unwrap_or("menu action")
+        ),
+        "get_app_state" => format!("look at {}", app.unwrap_or("the app")),
         "list_apps" => "check which apps are open".to_string(),
-        other => format!("run {other}{in_app}"),
+        "select_text" => format!("select text{in_app}"),
+        other => format!("{other}{in_app}"),
     }
 }
 
@@ -155,248 +341,273 @@ fn tool_from_approval_message(message: &str) -> Option<String> {
     Some(message[start..end].to_string())
 }
 
-fn session_args(user_mcp_servers: &[String], open_computer_use: &std::path::Path) -> Result<Vec<String>, String> {
-    let mut args = Vec::new();
-    for feature in READ_ONLY_DISABLED_FEATURES {
-        args.push("--disable".to_string());
-        args.push((*feature).to_string());
-    }
-    for name in user_mcp_servers.iter().filter(|name| name.as_str() != COMPUTER_SERVER) {
-        if !is_plain_config_key(name) {
-            return Err(format!(
-                "FNDR can't isolate the Codex MCP server \"{name}\". Rename it in ~/.codex/config.toml to use computer use."
-            ));
-        }
-        args.push("-c".to_string());
-        args.push(format!("mcp_servers.{name}.enabled=false"));
-    }
-    let command = serde_json::to_string(&open_computer_use.display().to_string()).map_err(|e| e.to_string())?;
-    args.extend([
-        "-c".to_string(),
-        format!("mcp_servers.{COMPUTER_SERVER}.command={command}"),
-        "-c".to_string(),
-        format!("mcp_servers.{COMPUTER_SERVER}.args=[\"mcp\"]"),
-        "-c".to_string(),
-        format!("mcp_servers.{COMPUTER_SERVER}.default_tools_approval_mode=\"prompt\""),
-    ]);
-    Ok(args)
+fn looks_signed_out(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    [
+        "401",
+        "unauthorized",
+        "not logged in",
+        "log in",
+        "login",
+        "sign in",
+        "refresh token",
+        "expired",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
-struct Session {
-    app: AppHandle,
+// MARK: - One Codex session
+
+struct TurnContext<'a> {
+    run_id: &'a str,
+    step: Option<usize>,
+    observed: &'a mut Observed,
+    journal: &'a Journal,
+    emit: &'a (dyn Fn(ComputerUseEvent) + Send + Sync),
+    commands: &'a mut mpsc::UnboundedReceiver<RunCommand>,
+}
+
+struct PendingApproval {
+    request_id: Value,
+    tool: String,
+    args: Value,
+    risk: Risk,
+}
+
+pub(crate) struct Session {
     server: AppServer,
-    thread_id: String,
-    active_turn: Option<String>,
     next_id: u64,
-    /// Our outgoing request ids for turn/start, so we learn the turn id.
-    pending_turn_starts: Vec<u64>,
-    /// Approval request ids waiting on the user, keyed for the frontend.
-    approvals: HashMap<String, Value>,
-    /// Tool name + arguments of in-flight calls, by item id.
-    tool_calls: HashMap<String, (String, Value)>,
+    planner_thread: String,
+    operator_thread: String,
 }
 
 impl Session {
-    fn emit(&self, event: ComputerUseEvent) {
-        let _ = self.app.emit(COMPUTER_USE_EVENT, event);
+    async fn open(codex: &Path, args: &[String]) -> Result<Self, RunError> {
+        let mut server = AppServer::spawn_with(codex, args)
+            .await
+            .map_err(RunError::Failed)?;
+        let account = server
+            .request("account/read", json!({ "refreshToken": false }))
+            .await
+            .map_err(RunError::Failed)?;
+        if parse_account(&account).map(|a| a.kind) != Some("chatgpt".to_string()) {
+            server.shutdown().await;
+            return Err(RunError::SignedOut(
+                "Sign in with ChatGPT to use Notch Do.".to_string(),
+            ));
+        }
+        let cwd = std::env::temp_dir().join("fndr-computer-use");
+        std::fs::create_dir_all(&cwd)
+            .map_err(|e| RunError::Failed(format!("Could not prepare Notch Do: {e}")))?;
+        let thread = |instructions: &'static str, service: &'static str| {
+            json!({
+                "ephemeral": true,
+                "cwd": cwd,
+                "sandbox": "read-only",
+                "approvalPolicy": "on-request",
+                "developerInstructions": instructions,
+                "serviceName": service,
+            })
+        };
+        let planner = server
+            .request(
+                "thread/start",
+                thread(OPERATOR_PLANNER_SYSTEM, "fndr_notch_do_plan"),
+            )
+            .await;
+        let operator = server
+            .request(
+                "thread/start",
+                thread(OPERATOR_STEP_SYSTEM, "fndr_notch_do"),
+            )
+            .await;
+        let id = |result: Result<Value, String>| -> Result<String, RunError> {
+            result
+                .map_err(RunError::Failed)?
+                .pointer("/thread/id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| RunError::Failed("Codex did not start a conversation.".to_string()))
+        };
+        Ok(Session {
+            planner_thread: id(planner)?,
+            operator_thread: id(operator)?,
+            server,
+            next_id: 1_000,
+        })
     }
 
-    async fn send_request(&mut self, method: &str, params: Value) -> Result<u64, String> {
+    async fn send_request(&mut self, method: &str, params: Value) -> Result<u64, RunError> {
         self.next_id += 1;
         let id = self.next_id;
-        self.server.write(json!({ "method": method, "id": id, "params": params })).await?;
+        self.server
+            .write(json!({ "method": method, "id": id, "params": params }))
+            .await
+            .map_err(RunError::Failed)?;
         Ok(id)
     }
 
-    async fn say(&mut self, text: String) -> Result<(), String> {
-        let input = json!([{ "type": "text", "text": text, "text_elements": [] }]);
-        match self.active_turn.clone() {
-            Some(turn_id) => {
-                self.send_request(
-                    "turn/steer",
-                    json!({ "threadId": self.thread_id, "input": input, "expectedTurnId": turn_id }),
-                )
-                .await?;
-            }
-            None => {
-                let id = self
-                    .send_request("turn/start", json!({ "threadId": self.thread_id, "input": input, "effort": "low" }))
-                    .await?;
-                self.pending_turn_starts.push(id);
-            }
-        }
-        Ok(())
-    }
-
-    async fn interrupt(&mut self) -> Result<(), String> {
-        if let Some(turn_id) = self.active_turn.clone() {
-            self.send_request("turn/interrupt", json!({ "threadId": self.thread_id, "turnId": turn_id }))
-                .await?;
-        }
-        for key in self.approvals.keys().cloned().collect::<Vec<_>>() {
-            self.answer_approval(&key, false).await?;
-        }
-        Ok(())
-    }
-
-    async fn answer_approval(&mut self, request_key: &str, approve: bool) -> Result<(), String> {
-        let Some(id) = self.approvals.remove(request_key) else {
-            return Ok(());
-        };
+    async fn answer(&mut self, request_id: Value, approve: bool) -> Result<(), RunError> {
         let result = if approve {
             json!({ "action": "accept", "content": {} })
         } else {
             json!({ "action": "decline", "content": null })
         };
-        self.server.write(json!({ "id": id, "result": result })).await?;
-        self.emit(ComputerUseEvent::ApprovalResolved { request_key: request_key.to_string() });
-        Ok(())
+        self.server
+            .write(json!({ "id": request_id, "result": result }))
+            .await
+            .map_err(RunError::Failed)
     }
 
-    async fn handle_server_request(&mut self, id: Value, method: &str, params: &Value) -> Result<(), String> {
-        let is_tool_approval = method == "mcpServer/elicitation/request"
-            && params.get("serverName").and_then(Value::as_str) == Some(COMPUTER_SERVER)
-            && params.pointer("/_meta/codex_approval_kind").and_then(Value::as_str) == Some("mcp_tool_call");
-        if !is_tool_approval {
-            tracing::warn!(%method, "computer_use:declined_server_request");
-            return self
-                .server
-                .write(json!({ "id": id, "error": { "code": -32000, "message": "FNDR does not grant this request." } }))
-                .await;
-        }
+    /// Runs one turn on `thread_id` and returns the final answer's text.
+    /// Computer-use approval requests are decided by the policy as they arrive.
+    async fn run_turn(
+        &mut self,
+        ctx: &mut TurnContext<'_>,
+        thread_id: &str,
+        text: &str,
+        schema: Value,
+    ) -> Result<String, RunError> {
+        let input = json!([{ "type": "text", "text": text, "text_elements": [] }]);
+        let turn_request = self
+            .send_request(
+                "turn/start",
+                json!({ "threadId": thread_id, "input": input, "effort": "low", "outputSchema": schema }),
+            )
+            .await?;
+        let mut final_text = String::new();
+        let mut pending: HashMap<String, PendingApproval> = HashMap::new();
+        let mut calls: HashMap<String, (String, Value)> = HashMap::new();
+        let index = ctx.step.unwrap_or(0);
 
-        let tool = params
-            .get("message")
-            .and_then(Value::as_str)
-            .and_then(tool_from_approval_message)
-            .unwrap_or_else(|| "tool".to_string());
-        let tool_params = params.pointer("/_meta/tool_params").cloned().unwrap_or(Value::Null);
-        let request_key = uuid::Uuid::new_v4().to_string();
-        self.approvals.insert(request_key.clone(), id);
-
-        if READ_ONLY_TOOLS.contains(&tool.as_str()) {
-            return self.answer_approval(&request_key, true).await;
-        }
-        self.emit(ComputerUseEvent::Approval {
-            request_key,
-            summary: describe_tool_call(&tool, &tool_params),
-            tool,
-        });
-        Ok(())
-    }
-
-    fn handle_response(&mut self, id: u64, message: &Value) {
-        if let Some(position) = self.pending_turn_starts.iter().position(|pending| *pending == id) {
-            self.pending_turn_starts.remove(position);
-            if let Some(turn_id) = message.pointer("/result/turn/id").and_then(Value::as_str) {
-                self.active_turn = Some(turn_id.to_string());
-            }
-        }
-        if let Some(error) = message.get("error") {
-            let detail = error.get("message").and_then(Value::as_str).unwrap_or("Codex refused that request.");
-            tracing::warn!(detail, "computer_use:request_failed");
-        }
-    }
-
-    fn handle_notification(&mut self, method: &str, params: &Value) {
-        match method {
-            "turn/started" => {
-                if let Some(turn_id) = params.pointer("/turn/id").and_then(Value::as_str) {
-                    self.active_turn = Some(turn_id.to_string());
-                }
-            }
-            "item/started" => {
-                let item = &params["item"];
-                if item.get("type").and_then(Value::as_str) == Some("mcpToolCall") {
-                    let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
-                    let tool = item.get("tool").and_then(Value::as_str).unwrap_or("tool").to_string();
-                    let arguments = item.get("arguments").cloned().unwrap_or(Value::Null);
-                    self.emit(ComputerUseEvent::Action {
-                        item_id: item_id.clone(),
-                        summary: describe_tool_call(&tool, &arguments),
-                        tool: tool.clone(),
-                    });
-                    self.tool_calls.insert(item_id, (tool, arguments));
-                }
-            }
-            "item/completed" => {
-                let item = &params["item"];
-                match item.get("type").and_then(Value::as_str) {
-                    Some("agentMessage") => {
-                        let text = item.get("text").and_then(Value::as_str).unwrap_or_default().trim().to_string();
-                        if !text.is_empty() {
-                            let r#final = item.get("phase").and_then(Value::as_str) == Some("final_answer");
-                            self.emit(ComputerUseEvent::Message { text, r#final });
-                        }
-                    }
-                    Some("mcpToolCall") => {
-                        let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
-                        let (tool, _) = self.tool_calls.remove(&item_id).unwrap_or_default();
-                        let ok = item.get("status").and_then(Value::as_str) == Some("completed")
-                            && item.get("error").map_or(true, Value::is_null);
-                        self.emit(ComputerUseEvent::ActionDone { item_id, tool, ok });
-                    }
-                    _ => {}
-                }
-            }
-            "turn/completed" => {
-                self.active_turn = None;
-                self.tool_calls.clear();
-                let status = params.pointer("/turn/status").and_then(Value::as_str).unwrap_or("completed").to_string();
-                let error = params
-                    .pointer("/turn/error/message")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                self.emit(ComputerUseEvent::TurnDone { status, error });
-            }
-            "serverRequest/resolved" => {
-                // An interrupt can clear a pending approval server-side.
-                let resolved = params.get("requestId").cloned();
-                if let Some(resolved) = resolved {
-                    let keys: Vec<String> = self
-                        .approvals
-                        .iter()
-                        .filter(|(_, id)| **id == resolved)
-                        .map(|(key, _)| key.clone())
-                        .collect();
-                    for key in keys {
-                        self.approvals.remove(&key);
-                        self.emit(ComputerUseEvent::ApprovalResolved { request_key: key });
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    async fn run(mut self, mut commands: mpsc::UnboundedReceiver<Command>) -> Result<(), String> {
         loop {
             tokio::select! {
-                command = commands.recv() => match command {
-                    Some(Command::Say(text)) => self.say(text).await?,
-                    Some(Command::Interrupt) => self.interrupt().await?,
-                    Some(Command::Respond { request_key, approve }) => self.answer_approval(&request_key, approve).await?,
-                    Some(Command::Stop) | None => {
-                        let _ = self.interrupt().await;
-                        return Ok(());
+                command = ctx.commands.recv() => match command {
+                    Some(RunCommand::Respond { request_key, approve }) => {
+                        if let Some(approval) = pending.remove(&request_key) {
+                            self.answer(approval.request_id, approve).await?;
+                            journal(ctx, &approval.tool, &approval.args, Some(approval.risk), if approve { "approved" } else { "declined" }, None);
+                            (ctx.emit)(ComputerUseEvent::ApprovalResolved { run_id: ctx.run_id.to_string(), request_key });
+                        }
                     }
+                    Some(RunCommand::Start) => {}
+                    None => return Err(RunError::Stopped),
                 },
                 message = self.server.read_raw() => {
-                    let message = message?;
-                    match (message.get("id").cloned(), message.get("method").and_then(Value::as_str).map(str::to_string)) {
-                        (Some(id), Some(method)) => {
-                            let params = message.get("params").cloned().unwrap_or(Value::Null);
-                            self.handle_server_request(id, &method, &params).await?;
-                        }
-                        (Some(id), None) => {
-                            if let Some(id) = id.as_u64() {
-                                self.handle_response(id, &message);
+                    let message = message.map_err(RunError::Failed)?;
+                    let id = message.get("id").cloned();
+                    let method = message.get("method").and_then(Value::as_str).map(str::to_string);
+                    let params = message.get("params").cloned().unwrap_or(Value::Null);
+                    match (id, method) {
+                        (Some(request_id), Some(method)) => {
+                            let is_tool_approval = method == "mcpServer/elicitation/request"
+                                && params.get("serverName").and_then(Value::as_str) == Some(COMPUTER_SERVER)
+                                && params.pointer("/_meta/codex_approval_kind").and_then(Value::as_str) == Some("mcp_tool_call");
+                            if !is_tool_approval {
+                                tracing::warn!(%method, "computer_use:declined_server_request");
+                                self.server
+                                    .write(json!({ "id": request_id, "error": { "code": -32000, "message": "FNDR does not grant this request." } }))
+                                    .await
+                                    .map_err(RunError::Failed)?;
+                                continue;
+                            }
+                            let tool = params.get("message").and_then(Value::as_str).and_then(tool_from_approval_message).unwrap_or_default();
+                            let args = params.pointer("/_meta/tool_params").cloned().unwrap_or(Value::Null);
+                            let Decision { risk, reason } = classify(&tool, &args, ctx.observed);
+                            let summary = describe_tool_call(&tool, &args, ctx.observed);
+                            match risk {
+                                Risk::Runs => self.answer(request_id, true).await?,
+                                Risk::Never => {
+                                    self.answer(request_id, false).await?;
+                                    journal(ctx, &tool, &args, Some(risk), "blocked", Some(reason.clone()));
+                                    (ctx.emit)(ComputerUseEvent::Blocked { run_id: ctx.run_id.to_string(), index, tool, summary, reason });
+                                }
+                                Risk::Confirm => {
+                                    let request_key = uuid::Uuid::new_v4().to_string();
+                                    (ctx.emit)(ComputerUseEvent::Approval {
+                                        run_id: ctx.run_id.to_string(),
+                                        request_key: request_key.clone(),
+                                        tool: tool.clone(),
+                                        summary,
+                                    });
+                                    pending.insert(request_key, PendingApproval { request_id, tool, args, risk });
+                                }
                             }
                         }
-                        (None, Some(method)) => {
-                            let params = message.get("params").cloned().unwrap_or(Value::Null);
-                            self.handle_notification(&method, &params);
+                        (Some(response_id), None) => {
+                            if response_id.as_u64() == Some(turn_request) {
+                                if let Some(error) = message.pointer("/error/message").and_then(Value::as_str) {
+                                    return Err(if looks_signed_out(error) { RunError::SignedOut(error.to_string()) } else { RunError::Failed(error.to_string()) });
+                                }
+                            }
                         }
+                        (None, Some(method)) => match method.as_str() {
+                            "item/started" if params.pointer("/item/type").and_then(Value::as_str) == Some("mcpToolCall") => {
+                                let item = &params["item"];
+                                let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+                                let tool = item.get("tool").and_then(Value::as_str).unwrap_or_default().to_string();
+                                let args = item.get("arguments").cloned().unwrap_or(Value::Null);
+                                let risk = classify(&tool, &args, ctx.observed).risk;
+                                (ctx.emit)(ComputerUseEvent::Action {
+                                    run_id: ctx.run_id.to_string(),
+                                    index,
+                                    item_id: item_id.clone(),
+                                    summary: describe_tool_call(&tool, &args, ctx.observed),
+                                    tool: tool.clone(),
+                                    risk,
+                                });
+                                calls.insert(item_id, (tool, args));
+                            }
+                            "item/completed" => {
+                                let item = &params["item"];
+                                match item.get("type").and_then(Value::as_str) {
+                                    Some("mcpToolCall") => {
+                                        let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+                                        let (tool, args) = calls.remove(&item_id).unwrap_or_default();
+                                        let result_text = tool_result_text(item);
+                                        let ok = item.get("status").and_then(Value::as_str) == Some("completed")
+                                            && item.get("error").is_none_or(Value::is_null)
+                                            && item.pointer("/result/isError").and_then(Value::as_bool) != Some(true);
+                                        record_tool_result(ctx, &tool, &args, ok, &result_text);
+                                        if result_text.contains("-1743") {
+                                            // Apple Events refused: every retry would wait
+                                            // minutes for the same answer.
+                                            return Err(RunError::Failed(AUTOMATION_REFUSED.to_string()));
+                                        }
+                                        (ctx.emit)(ComputerUseEvent::ActionDone { run_id: ctx.run_id.to_string(), item_id, ok });
+                                    }
+                                    Some("agentMessage") if item.get("phase").and_then(Value::as_str) == Some("final_answer") => {
+                                        final_text = item.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            "serverRequest/resolved" => {
+                                if let Some(resolved) = params.get("requestId") {
+                                    pending.retain(|key, approval| {
+                                        let settled = approval.request_id == *resolved;
+                                        if settled {
+                                            (ctx.emit)(ComputerUseEvent::ApprovalResolved { run_id: ctx.run_id.to_string(), request_key: key.clone() });
+                                        }
+                                        !settled
+                                    });
+                                }
+                            }
+                            "turn/completed" => {
+                                let status = params.pointer("/turn/status").and_then(Value::as_str).unwrap_or("completed");
+                                if status == "completed" {
+                                    return Ok(final_text);
+                                }
+                                let error = params
+                                    .pointer("/turn/error/message")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("Codex stopped before finishing.")
+                                    .to_string();
+                                return Err(if looks_signed_out(&error) { RunError::SignedOut(error) } else { RunError::Failed(error) });
+                            }
+                            _ => {}
+                        },
                         (None, None) => {}
                     }
                 }
@@ -405,121 +616,682 @@ impl Session {
     }
 }
 
-async fn open_session(app: AppHandle) -> Result<Session, String> {
-    let codex = ready_executable()?;
-    let computer = detect_open_computer_use().ok_or_else(|| {
-        "Computer use needs open-computer-use. Install it with `npm install -g open-computer-use`, then run `open-computer-use doctor` once to grant Accessibility and Screen Recording.".to_string()
-    })?;
-    let user_servers = configured_mcp_server_names(&codex).await?;
-    let args = session_args(&user_servers, &computer)?;
-    let mut server = AppServer::spawn_with(&codex, &args).await?;
+fn tool_result_text(item: &Value) -> String {
+    item.pointer("/result/content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
 
-    let account = server.request("account/read", json!({ "refreshToken": false })).await?;
-    if parse_account(&account).map(|a| a.kind) != Some("chatgpt".to_string()) {
-        server.shutdown().await;
-        return Err("Sign in with ChatGPT in Hermes Agent settings to use computer use.".to_string());
+fn journal(
+    ctx: &TurnContext<'_>,
+    tool: &str,
+    args: &Value,
+    risk: Option<Risk>,
+    outcome: &str,
+    detail: Option<String>,
+) {
+    let entry = JournalEntry {
+        at: chrono::Utc::now().to_rfc3339(),
+        run_id: ctx.run_id.to_string(),
+        step: ctx.step,
+        tool: tool.to_string(),
+        args: redact(args),
+        risk,
+        outcome: outcome.to_string(),
+        detail,
+    };
+    if let Err(error) = ctx.journal.append(&entry) {
+        tracing::warn!(%error, "computer_use:journal_write_failed");
     }
+}
 
-    let cwd = std::env::temp_dir().join("fndr-computer-use");
-    std::fs::create_dir_all(&cwd).map_err(|e| format!("Could not prepare computer use: {e}"))?;
-    let thread = server
-        .request(
-            "thread/start",
-            json!({
-                "ephemeral": true,
-                "cwd": cwd,
-                "sandbox": "read-only",
-                "approvalPolicy": "on-request",
-                "developerInstructions": OPERATOR_INSTRUCTIONS,
-                "serviceName": "fndr_computer_use",
-            }),
+/// Bookkeeping after a computer-use call: what FNDR learned about the UI,
+/// the journal line, and the screen text that went to the model.
+fn record_tool_result(
+    ctx: &mut TurnContext<'_>,
+    tool: &str,
+    args: &Value,
+    ok: bool,
+    result_text: &str,
+) {
+    let app = args.get("app").and_then(Value::as_str).unwrap_or_default();
+    if ok && tool == "get_app_state" && !app.is_empty() {
+        ctx.observed.observe_tree(app, result_text);
+    }
+    if ok && matches!(tool, "click" | "set_value") {
+        if let Some(index) = args.get("element_index").and_then(Value::as_str) {
+            ctx.observed.note_target(app, index);
+        }
+    }
+    if result_text.contains("-1743") {
+        BUNDLED_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    if !result_text.is_empty() {
+        crate::privacy_proof::record_model_request(
+            "notch_do_screen_text",
+            MODEL_HOST,
+            result_text.len(),
+        );
+    }
+    let risk = classify(tool, args, ctx.observed).risk;
+    let detail = (!ok).then(|| truncate(result_text, 200));
+    journal(
+        ctx,
+        tool,
+        args,
+        Some(risk),
+        if ok { "ok" } else { "failed" },
+        detail,
+    );
+}
+
+// MARK: - A run
+
+fn plan_request_text(transcript: &str, snippets: &[memory::MemorySnippet]) -> String {
+    if snippets.is_empty() {
+        format!("Request: {transcript}")
+    } else {
+        format!(
+            "Request: {transcript}\n\nMemory snippets:\n{}",
+            memory::format_block(snippets)
         )
-        .await?;
-    let thread_id = thread
-        .pointer("/thread/id")
-        .and_then(Value::as_str)
-        .ok_or("Codex did not start a conversation.")?
-        .to_string();
-
-    Ok(Session {
-        app,
-        server,
-        thread_id,
-        active_turn: None,
-        next_id: 1_000,
-        pending_turn_starts: Vec::new(),
-        approvals: HashMap::new(),
-        tool_calls: HashMap::new(),
-    })
+    }
 }
 
+fn step_request_text(
+    index: usize,
+    total: usize,
+    step: &PlanStep,
+    retry_note: Option<&str>,
+) -> String {
+    let mut text = format!(
+        "Step {} of {}. App: {}. Goal: {}.",
+        index + 1,
+        total,
+        step.app,
+        step.goal
+    );
+    if let Some(note) = retry_note {
+        text.push_str(&format!(
+            " The previous attempt did not land: {note}. Try once more."
+        ));
+    }
+    text
+}
+
+struct RunContext {
+    run_id: String,
+    emit: Arc<dyn Fn(ComputerUseEvent) + Send + Sync>,
+    journal: Journal,
+}
+
+async fn wait_for_start(
+    commands: &mut mpsc::UnboundedReceiver<RunCommand>,
+) -> Result<(), RunError> {
+    loop {
+        match commands.recv().await {
+            Some(RunCommand::Start) => return Ok(()),
+            Some(RunCommand::Respond { .. }) => {}
+            None => return Err(RunError::Stopped),
+        }
+    }
+}
+
+/// One attempt at one step; returns what FNDR saw afterward.
+async fn attempt_step(
+    session: &mut Session,
+    ctx: &RunContext,
+    observed: &mut Observed,
+    commands: &mut mpsc::UnboundedReceiver<RunCommand>,
+    plan: &Plan,
+    index: usize,
+    retry_note: Option<&str>,
+) -> Result<plan::Verdict, RunError> {
+    let step = &plan.steps[index];
+    let native_entry = |tool: &str, args: Value, outcome: &str, detail: Option<String>| {
+        let _ = ctx.journal.append(&JournalEntry {
+            at: chrono::Utc::now().to_rfc3339(),
+            run_id: ctx.run_id.clone(),
+            step: Some(index),
+            tool: tool.to_string(),
+            args: redact(&args),
+            risk: Some(classify(tool, &args, observed).risk),
+            outcome: outcome.to_string(),
+            detail,
+        });
+    };
+    match step.action {
+        StepAction::OpenApp => {
+            let args = json!({ "name": step.app });
+            if classify("open_app", &args, observed).risk == Risk::Never {
+                native_entry("open_app", args, "blocked", None);
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: format!("{} is off limits", step.app),
+                });
+            }
+            if let Err(error) = native::open_app(&step.app) {
+                native_entry("open_app", args, "failed", Some(error.clone()));
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: error,
+                });
+            }
+            let seen = native::wait_until_frontmost(&step.app, FRONTMOST_TIMEOUT).await;
+            let verdict = plan::verify(step, &seen);
+            native_entry(
+                "open_app",
+                args,
+                if verdict.ok { "ok" } else { "failed" },
+                Some(verdict.detail.clone()),
+            );
+            Ok(verdict)
+        }
+        StepAction::OpenUrl => {
+            let args = json!({ "url": step.url });
+            if let Err(error) = native::open_url(&step.url) {
+                native_entry("open_url", args, "failed", Some(error.clone()));
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: error,
+                });
+            }
+            let started = std::time::Instant::now();
+            let verdict = loop {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                let verdict = plan::verify(step, &native::observe(None).await);
+                if verdict.ok || started.elapsed() >= PAGE_TIMEOUT {
+                    break verdict;
+                }
+            };
+            native_entry(
+                "open_url",
+                args,
+                if verdict.ok { "ok" } else { "failed" },
+                Some(verdict.detail.clone()),
+            );
+            Ok(verdict)
+        }
+        StepAction::Operate => {
+            let media_app = (step.check == StepCheck::MediaPlaying).then_some(step.app.as_str());
+            let track_before = match media_app {
+                Some(app) => native::media_state(app).await.1,
+                None => None,
+            };
+            if classify("open_app", &json!({ "name": step.app }), observed).risk != Risk::Never {
+                let _ = native::open_app(&step.app);
+                native::wait_until_frontmost(&step.app, FRONTMOST_TIMEOUT).await;
+            }
+            let text = step_request_text(index, plan.steps.len(), step, retry_note);
+            crate::privacy_proof::record_model_request("notch_do_step", MODEL_HOST, text.len());
+            let operator_thread = session.operator_thread.clone();
+            let mut turn = TurnContext {
+                run_id: &ctx.run_id,
+                step: Some(index),
+                observed,
+                journal: &ctx.journal,
+                emit: ctx.emit.as_ref(),
+                commands,
+            };
+            let report = tokio::time::timeout(
+                STEP_TIMEOUT,
+                session.run_turn(
+                    &mut turn,
+                    &operator_thread,
+                    &text,
+                    plan::step_report_schema(),
+                ),
+            )
+            .await
+            .map_err(|_| RunError::Failed(format!("\"{}\" took too long.", step.label)))??;
+            let reported_done = serde_json::from_str::<Value>(&report)
+                .ok()
+                .and_then(|value| value.get("done").and_then(Value::as_bool));
+            let mut seen = native::observe(media_app).await;
+            // Poll only a player that answered: an unreadable one stays unreadable.
+            if media_app.is_some() && seen.media_playing == Some(false) {
+                // Playback can start a moment after the click lands.
+                for _ in 0..8 {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    seen = native::observe(media_app).await;
+                    if seen.media_playing == Some(true) {
+                        break;
+                    }
+                }
+            }
+            seen.media_track_before = track_before;
+            seen.reported_done = reported_done;
+            Ok(plan::verify(step, &seen))
+        }
+    }
+}
+
+async fn run(
+    state: Arc<AppState>,
+    ctx: RunContext,
+    transcript: String,
+    commands: mpsc::UnboundedReceiver<RunCommand>,
+    codex_pid: Arc<Mutex<Option<u32>>>,
+) -> Result<(), RunError> {
+    let snippets = if plan::refers_to_past(&transcript) {
+        memory::snippets(&state, &transcript).await
+    } else {
+        Vec::new()
+    };
+    run_with_snippets(ctx, transcript, snippets, commands, codex_pid).await
+}
+
+/// Plans, waits for Start, then runs and checks every step. Everything after
+/// memory retrieval, so it runs without the app's state.
+async fn run_with_snippets(
+    ctx: RunContext,
+    transcript: String,
+    snippets: Vec<memory::MemorySnippet>,
+    mut commands: mpsc::UnboundedReceiver<RunCommand>,
+    codex_pid: Arc<Mutex<Option<u32>>>,
+) -> Result<(), RunError> {
+    let codex = ready_executable().map_err(RunError::Failed)?;
+    let backend = detect_backend().ok_or_else(|| {
+        RunError::Failed("Notch Do needs Computer Use. Install the ChatGPT app with Computer Use, or open-computer-use.".to_string())
+    })?;
+    let user_servers = configured_mcp_server_names(&codex)
+        .await
+        .map_err(RunError::Failed)?;
+    let args = session_args(&user_servers, &backend).map_err(RunError::Failed)?;
+
+    (ctx.emit)(ComputerUseEvent::Planning {
+        run_id: ctx.run_id.clone(),
+        used_memories: snippets.len(),
+    });
+
+    let mut session = Session::open(&codex, &args).await?;
+    if let Ok(mut slot) = codex_pid.lock() {
+        *slot = session.server.pid();
+    }
+    let mut observed = Observed::default();
+
+    let request = plan_request_text(&transcript, &snippets);
+    crate::privacy_proof::record_model_request("notch_do_plan", MODEL_HOST, request.len());
+    let planner_thread = session.planner_thread.clone();
+    let mut turn = TurnContext {
+        run_id: &ctx.run_id,
+        step: None,
+        observed: &mut observed,
+        journal: &ctx.journal,
+        emit: ctx.emit.as_ref(),
+        commands: &mut commands,
+    };
+    let plan_text = tokio::time::timeout(
+        PLAN_TIMEOUT,
+        session.run_turn(
+            &mut turn,
+            &planner_thread,
+            &request,
+            plan::plan_output_schema(),
+        ),
+    )
+    .await
+    .map_err(|_| RunError::Failed("Planning took too long.".to_string()))??;
+    let plan = plan::parse_plan(&plan_text).map_err(RunError::Failed)?;
+    (ctx.emit)(ComputerUseEvent::Planned {
+        run_id: ctx.run_id.clone(),
+        steps: plan
+            .steps
+            .iter()
+            .map(|step| StepView {
+                label: step.label.clone(),
+                action: step.action,
+                app: step.app.clone(),
+            })
+            .collect(),
+    });
+
+    wait_for_start(&mut commands).await?;
+
+    let mut done = Vec::new();
+    for index in 0..plan.steps.len() {
+        let mut retry_note: Option<String> = None;
+        let mut verdict = plan::Verdict {
+            ok: false,
+            detail: String::new(),
+        };
+        for attempt in 1..=2u8 {
+            (ctx.emit)(ComputerUseEvent::StepStarted {
+                run_id: ctx.run_id.clone(),
+                index,
+                attempt,
+            });
+            verdict = attempt_step(
+                &mut session,
+                &ctx,
+                &mut observed,
+                &mut commands,
+                &plan,
+                index,
+                retry_note.as_deref(),
+            )
+            .await?;
+            if verdict.ok {
+                break;
+            }
+            retry_note = Some(verdict.detail.clone());
+        }
+        (ctx.emit)(ComputerUseEvent::StepDone {
+            run_id: ctx.run_id.clone(),
+            index,
+            ok: verdict.ok,
+            detail: verdict.detail.clone(),
+        });
+        if !verdict.ok {
+            (ctx.emit)(ComputerUseEvent::Finished {
+                run_id: ctx.run_id.clone(),
+                ok: false,
+                summary: format!(
+                    "Stopped at \"{}\": {}",
+                    plan.steps[index].label, verdict.detail
+                ),
+            });
+            session.server.shutdown().await;
+            return Ok(());
+        }
+        done.push(plan.steps[index].label.clone());
+    }
+    (ctx.emit)(ComputerUseEvent::Finished {
+        run_id: ctx.run_id.clone(),
+        ok: true,
+        summary: format!("Done: {}.", done.join(", ")),
+    });
+    session.server.shutdown().await;
+    Ok(())
+}
+
+fn kill_process_group(pid: u32) {
+    #[cfg(unix)]
+    unsafe {
+        libc::killpg(pid as i32, libc::SIGKILL);
+    }
+}
+
+/// Ends the active run at once: aborts its task and kills Codex's process
+/// group, including the computer-use server and any action it is running.
+fn stop_active_run(app: &AppHandle) {
+    let handle = current_run().lock().ok().and_then(|mut slot| slot.take());
+    if let Some(handle) = handle {
+        handle.task.abort();
+        if let Some(pid) = handle.codex_pid.lock().ok().and_then(|slot| *slot) {
+            kill_process_group(pid);
+        }
+        let _ = app.emit(
+            COMPUTER_USE_EVENT,
+            ComputerUseEvent::Stopped {
+                run_id: handle.run_id,
+            },
+        );
+    }
+}
+
+fn send_to_run(command: RunCommand) -> Result<(), String> {
+    let guard = current_run()
+        .lock()
+        .map_err(|_| "Notch Do is unavailable.".to_string())?;
+    guard
+        .as_ref()
+        .ok_or_else(|| "Nothing is running.".to_string())?
+        .commands
+        .send(command)
+        .map_err(|_| "That run has ended.".to_string())
+}
+
+// MARK: - IPC
+
 #[tauri::command]
-pub async fn computer_use_status(state: State<'_, std::sync::Arc<AppState>>) -> Result<ComputerUseStatus, String> {
-    let enabled = state.inner().config.read().screen_guide.operate_computer;
-    let active = session().lock().map(|guard| guard.is_some()).unwrap_or(false);
+pub async fn computer_use_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<ComputerUseStatus, String> {
+    let backend = detect_backend();
     Ok(ComputerUseStatus {
-        enabled,
+        enabled: state.inner().config.read().screen_guide.operate_computer,
         codex_ready: ready_executable().is_ok(),
-        open_computer_use_path: detect_open_computer_use().map(|p| p.display().to_string()),
-        active,
+        backend: backend.as_ref().map(|b| b.label().to_string()),
+        backend_path: backend.as_ref().map(|b| b.path().display().to_string()),
+        active_run: current_run()
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|run| run.run_id.clone())),
     })
 }
 
-/// Opens a conversation (if none is open) and sends the user's words.
+/// Plans a spoken request. Any run in progress is stopped first, so speaking
+/// again mid-run redirects. Returns the new run's id; the run waits for
+/// `computer_use_start` once its plan is on screen.
 #[tauri::command]
-pub async fn computer_use_say(
+pub async fn computer_use_plan(
     app: AppHandle,
-    state: State<'_, std::sync::Arc<AppState>>,
+    state: State<'_, Arc<AppState>>,
     text: String,
-) -> Result<(), String> {
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        return Ok(());
+) -> Result<String, String> {
+    let transcript = text.trim().to_string();
+    if transcript.is_empty() {
+        return Err("Nothing was heard.".to_string());
     }
     if !state.inner().config.read().screen_guide.operate_computer {
-        return Err("Turn on \"Operate my Mac\" in Screen Guide settings first.".to_string());
+        return Err("Turn on \"Operate my Mac\" first.".to_string());
     }
-    if state.inner().is_incognito.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err("Computer use is paused while FNDR is private.".to_string());
+    if state
+        .inner()
+        .is_incognito
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err("Notch Do is paused while FNDR is private.".to_string());
     }
+    stop_active_run(&app);
 
-    let has_session = session().lock().map(|guard| guard.is_some()).unwrap_or(false);
-    if !has_session {
-        let opened = open_session(app.clone()).await?;
-        let (tx, rx) = mpsc::unbounded_channel();
-        if let Ok(mut guard) = session().lock() {
-            *guard = Some(tx);
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let (commands, receiver) = mpsc::unbounded_channel();
+    let codex_pid = Arc::new(Mutex::new(None));
+    let emit_app = app.clone();
+    let ctx = RunContext {
+        run_id: run_id.clone(),
+        emit: Arc::new(move |event| {
+            let _ = emit_app.emit(COMPUTER_USE_EVENT, event);
+        }),
+        journal: Journal::new(
+            state
+                .inner()
+                .app_data_dir
+                .join("operator")
+                .join("journal.jsonl"),
+        ),
+    };
+    let task_state = state.inner().clone();
+    let task_app = app.clone();
+    let task_run_id = run_id.clone();
+    let task_pid = codex_pid.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        let result = run(task_state, ctx, transcript, receiver, task_pid).await;
+        let failure = match result {
+            Ok(()) | Err(RunError::Stopped) => None,
+            Err(RunError::Failed(error)) => Some((error, false)),
+            Err(RunError::SignedOut(error)) => Some((error, true)),
+        };
+        if let Some((error, reconnect)) = failure {
+            tracing::warn!(%error, "computer_use:run_failed");
+            let _ = task_app.emit(
+                COMPUTER_USE_EVENT,
+                ComputerUseEvent::Failed {
+                    run_id: task_run_id.clone(),
+                    error,
+                    reconnect,
+                },
+            );
         }
-        let _ = app.emit(COMPUTER_USE_EVENT, ComputerUseEvent::Ready);
-        let task_app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let result = opened.run(rx).await;
-            if let Ok(mut guard) = session().lock() {
-                *guard = None;
+        if let Ok(mut slot) = current_run().lock() {
+            if slot.as_ref().is_some_and(|run| run.run_id == task_run_id) {
+                *slot = None;
             }
-            let _ = task_app.emit(COMPUTER_USE_EVENT, ComputerUseEvent::Ended { error: result.err() });
+        }
+    });
+    if let Ok(mut slot) = current_run().lock() {
+        *slot = Some(RunHandle {
+            run_id: run_id.clone(),
+            commands,
+            task,
+            codex_pid,
         });
     }
-    send_command(Command::Say(text))
+    Ok(run_id)
 }
 
+/// Starts the planned run (the plan card's countdown, "go", or a tap).
 #[tauri::command]
-pub async fn computer_use_interrupt() -> Result<(), String> {
-    send_command(Command::Interrupt)
+pub async fn computer_use_start(run_id: String) -> Result<(), String> {
+    let matches = current_run()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|run| run.run_id == run_id))
+        .unwrap_or(false);
+    if !matches {
+        return Err("That plan is no longer current.".to_string());
+    }
+    send_to_run(RunCommand::Start)
 }
 
 #[tauri::command]
 pub async fn computer_use_respond(request_key: String, approve: bool) -> Result<(), String> {
-    send_command(Command::Respond { request_key, approve })
+    send_to_run(RunCommand::Respond {
+        request_key,
+        approve,
+    })
 }
 
 #[tauri::command]
-pub async fn computer_use_stop() -> Result<(), String> {
-    let sender = session().lock().ok().and_then(|mut guard| guard.take());
-    if let Some(sender) = sender {
-        let _ = sender.send(Command::Stop);
-    }
+pub async fn computer_use_stop(app: AppHandle) -> Result<(), String> {
+    stop_active_run(&app);
     Ok(())
+}
+
+// MARK: - Permissions
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorPermissions {
+    /// FNDR may read other apps' windows (step checks, browser URL).
+    pub accessibility: bool,
+    pub screen_recording: bool,
+    /// FNDR may ask Spotify or Music what is playing; `None` when neither runs.
+    pub automation_media: Option<bool>,
+    pub backend: Option<String>,
+    /// The computer-use server answered `list_apps`; `None` until probed.
+    pub backend_ready: Option<bool>,
+    pub backend_detail: Option<String>,
+}
+
+/// Starts the computer-use server as FNDR's child and asks it for the app
+/// list, which is what triggers and then proves its macOS permissions.
+async fn probe_backend(backend: &Backend) -> (bool, String) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let spawned = tokio::process::Command::new(backend.path())
+        .arg("mcp")
+        .env("CODEX_HOME", super::codex_account::codex_home_dir())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(error) => return (false, format!("Could not start Computer Use: {error}")),
+    };
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        return (false, "Computer Use did not open its pipes.".to_string());
+    };
+    let requests = [
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "fndr", "version": env!("CARGO_PKG_VERSION") } } }),
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "list_apps", "arguments": {} } }),
+    ];
+    for request in requests {
+        if stdin
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .is_err()
+        {
+            return (false, "Computer Use closed before answering.".to_string());
+        }
+    }
+    let mut lines = BufReader::new(stdout).lines();
+    let answer = tokio::time::timeout(Duration::from_secs(30), async {
+        while let Ok(Some(line)) = lines.next_line().await {
+            let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if message.get("id") == Some(&json!(2)) {
+                return Some(message);
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten();
+    let _ = child.kill().await;
+    let Some(answer) = answer else {
+        return (
+            false,
+            "Computer Use did not answer. Finish any macOS permission prompt, then check again."
+                .to_string(),
+        );
+    };
+    let text = answer
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let failed = answer.pointer("/result/isError").and_then(Value::as_bool) == Some(true)
+        || answer.get("error").is_some();
+    if !failed {
+        return (true, "Computer Use can see your apps.".to_string());
+    }
+    if text.contains("-1743") {
+        BUNDLED_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
+        return (
+            false,
+            "Allow FNDR to control Codex Computer Use in Privacy & Security > Automation."
+                .to_string(),
+        );
+    }
+    (false, truncate(&text, 200))
+}
+
+#[tauri::command]
+pub async fn computer_use_permissions(probe: bool) -> Result<OperatorPermissions, String> {
+    let backend = detect_backend();
+    let (backend_ready, backend_detail) = match (&backend, probe) {
+        (Some(backend), true) => {
+            let (ready, detail) = probe_backend(backend).await;
+            (Some(ready), Some(detail))
+        }
+        _ => (None, None),
+    };
+    let automation_media = match native::automation_allowed("Spotify").await {
+        Some(allowed) => Some(allowed),
+        None => native::automation_allowed("Music").await,
+    };
+    Ok(OperatorPermissions {
+        accessibility: crate::accessibility::has_accessibility_permission(),
+        screen_recording: crate::ipc::onboarding::check_screen_recording_permission(),
+        automation_media,
+        backend: detect_backend().map(|b| b.label().to_string()),
+        backend_ready,
+        backend_detail,
+    })
 }
 
 #[cfg(test)]
@@ -527,15 +1299,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn describes_actions_in_spoken_length() {
-        assert_eq!(
-            describe_tool_call("click", &json!({ "app": "Mail", "element": "Send" })),
-            "click \"Send\" in Mail"
+    fn session_attaches_only_the_computer_use_server_and_prompts_for_it() {
+        let backend =
+            Backend::OpenComputerUse(PathBuf::from("/opt/homebrew/bin/open-computer-use"));
+        let args = session_args(&["node_repl".into(), "computer-use".into()], &backend)
+            .unwrap()
+            .join(" ");
+        assert!(
+            args.contains("--disable computer_use"),
+            "Codex's own computer use stays off"
         );
-        assert_eq!(describe_tool_call("press_key", &json!({ "key": "cmd+s" })), "press cmd+s");
-        assert_eq!(describe_tool_call("list_apps", &json!({})), "check which apps are open");
-        let long = "x".repeat(200);
-        assert!(describe_tool_call("type_text", &json!({ "text": long })).chars().count() < 80);
+        assert!(args.contains("--disable shell_tool"));
+        assert!(args.contains("mcp_servers.node_repl.enabled=false"));
+        assert!(args.contains("mcp_servers.computer-use.enabled=false"));
+        assert!(args
+            .contains("mcp_servers.fndr_computer.command=\"/opt/homebrew/bin/open-computer-use\""));
+        assert!(args.contains("mcp_servers.fndr_computer.default_tools_approval_mode=\"prompt\""));
+    }
+
+    #[test]
+    fn finds_the_newest_bundled_computer_use() {
+        let home = tempfile::tempdir().unwrap();
+        for version in ["1.0.900", "1.0.1000926", "1.0.99"] {
+            let bin = home.path().join(format!(
+                "plugins/cache/openai-bundled/computer-use/{version}/bin"
+            ));
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join("computer-use-client-launcher"), "").unwrap();
+        }
+        let found = bundled_computer_use(home.path()).unwrap();
+        assert!(
+            found.to_string_lossy().contains("/1.0.1000926/"),
+            "{}",
+            found.display()
+        );
+        assert!(bundled_computer_use(&home.path().join("missing")).is_none());
     }
 
     #[test]
@@ -548,38 +1346,362 @@ mod tests {
     }
 
     #[test]
-    fn session_attaches_only_open_computer_use_and_prompts_for_it() {
-        let args = session_args(
-            &["node_repl".into(), "computer-use".into()],
-            std::path::Path::new("/opt/homebrew/bin/open-computer-use"),
+    fn describes_actions_with_labels_fndr_has_seen() {
+        let mut observed = Observed::default();
+        observed.observe_tree(
+            "Spotify",
+            "App=com.spotify.client (pid 1)\n0 window\n\t2 button Play\n",
+        );
+        assert_eq!(
+            describe_tool_call(
+                "click",
+                &json!({ "app": "Spotify", "element_index": "2" }),
+                &observed
+            ),
+            "click \"button play\" in Spotify"
+        );
+        assert_eq!(
+            describe_tool_call(
+                "press_key",
+                &json!({ "key": "Return", "app": "Spotify" }),
+                &observed
+            ),
+            "press Return in Spotify"
+        );
+        let long = "x".repeat(200);
+        assert!(
+            describe_tool_call("type_text", &json!({ "text": long }), &observed)
+                .chars()
+                .count()
+                < 60
+        );
+    }
+
+    #[test]
+    fn memories_reach_the_planner_only_when_retrieved() {
+        assert_eq!(
+            plan_request_text("open Spotify", &[]),
+            "Request: open Spotify"
+        );
+        let snippet = memory::MemorySnippet {
+            memory_id: "m1".into(),
+            app: "Spotify".into(),
+            title: "Blinding Lights".into(),
+            when: "2026-10-05 21:00".into(),
+            text: "played".into(),
+        };
+        let text = plan_request_text("play the song from yesterday", &[snippet]);
+        assert!(text.contains("Memory snippets:\n[1] 2026-10-05 21:00 | Spotify | Blinding Lights"));
+    }
+
+    #[test]
+    fn retry_requests_say_why_the_first_attempt_failed() {
+        let step = PlanStep {
+            action: StepAction::Operate,
+            label: "Play".into(),
+            app: "Spotify".into(),
+            url: String::new(),
+            goal: "play Blinding Lights".into(),
+            check: StepCheck::MediaPlaying,
+        };
+        assert_eq!(
+            step_request_text(1, 3, &step, None),
+            "Step 2 of 3. App: Spotify. Goal: play Blinding Lights."
+        );
+        assert!(step_request_text(1, 3, &step, Some("Nothing is playing"))
+            .contains("did not land: Nothing is playing"));
+    }
+
+    /// Drives a planner turn and an operator turn through a scripted
+    /// app-server and checks what the policy did with each tool call.
+    #[tokio::test]
+    async fn turns_dispatch_tool_calls_through_the_policy() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/operator/fake_codex_app_server.py");
+        let dir = tempfile::tempdir().unwrap();
+        let answers = dir.path().join("answers.jsonl");
+        std::env::set_var("FAKE_CODEX_LOG", &answers);
+
+        let mut session = Session::open(&fixture, &[])
+            .await
+            .expect("fake app-server opens");
+        let events: Arc<Mutex<Vec<ComputerUseEvent>>> = Arc::default();
+        let (commands, mut receiver) = mpsc::unbounded_channel();
+        let recorded = events.clone();
+        let emit = move |event: ComputerUseEvent| {
+            if let ComputerUseEvent::Approval { request_key, .. } = &event {
+                // The person says yes to whatever asks.
+                commands
+                    .send(RunCommand::Respond {
+                        request_key: request_key.clone(),
+                        approve: true,
+                    })
+                    .unwrap();
+            }
+            recorded.lock().unwrap().push(event);
+        };
+        let journal = Journal::new(dir.path().join("journal.jsonl"));
+        let mut observed = Observed::default();
+
+        let planner = session.planner_thread.clone();
+        let mut turn = TurnContext {
+            run_id: "r1",
+            step: None,
+            observed: &mut observed,
+            journal: &journal,
+            emit: &emit,
+            commands: &mut receiver,
+        };
+        let plan_text = session
+            .run_turn(
+                &mut turn,
+                &planner,
+                "Request: open Spotify",
+                plan::plan_output_schema(),
+            )
+            .await
+            .unwrap();
+        let plan = plan::parse_plan(&plan_text).unwrap();
+        assert_eq!(plan.steps.len(), 3);
+        assert_eq!(plan.steps[1].check, StepCheck::MediaPlaying);
+
+        let operator = session.operator_thread.clone();
+        let mut turn = TurnContext {
+            run_id: "r1",
+            step: Some(1),
+            observed: &mut observed,
+            journal: &journal,
+            emit: &emit,
+            commands: &mut receiver,
+        };
+        let step_text = step_request_text(1, 3, &plan.steps[1], None);
+        let report = session
+            .run_turn(&mut turn, &operator, &step_text, plan::step_report_schema())
+            .await
+            .unwrap();
+        assert!(
+            report.contains("\"done\": true") || report.contains("\"done\":true"),
+            "{report}"
+        );
+
+        let answers: Vec<Value> = std::fs::read_to_string(&answers)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let by_id = |id: u64| {
+            answers
+                .iter()
+                .find(|a| a["id"] == id)
+                .map(|a| a["answer"].as_str().unwrap_or_default().to_string())
+        };
+        assert_eq!(
+            by_id(900).as_deref(),
+            Some("accept"),
+            "reading the screen runs"
+        );
+        assert_eq!(
+            by_id(901).as_deref(),
+            Some("decline"),
+            "a purchase button is refused"
+        );
+        assert_eq!(
+            by_id(902).as_deref(),
+            Some("accept"),
+            "typing outside a search field waits for a yes"
+        );
+
+        {
+            let events = events.lock().unwrap();
+            assert!(events
+                .iter()
+                .any(|e| matches!(e, ComputerUseEvent::Blocked { tool, .. } if tool == "click")));
+            assert!(events.iter().any(
+                |e| matches!(e, ComputerUseEvent::Approval { tool, .. } if tool == "type_text")
+            ));
+            assert!(!events.iter().any(
+                |e| matches!(e, ComputerUseEvent::Approval { tool, .. } if tool == "get_app_state")
+            ));
+        }
+
+        let journal: Vec<Value> = std::fs::read_to_string(dir.path().join("journal.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let outcomes: Vec<(String, String)> = journal
+            .iter()
+            .map(|e| {
+                (
+                    e["tool"].as_str().unwrap().to_string(),
+                    e["outcome"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert!(outcomes.contains(&("get_app_state".into(), "ok".into())));
+        assert!(outcomes.contains(&("click".into(), "blocked".into())));
+        assert!(outcomes.contains(&("type_text".into(), "approved".into())));
+        let typed = journal.iter().find(|e| e["tool"] == "type_text").unwrap();
+        assert!(
+            !typed["args"]["text"].as_str().unwrap().contains("hello"),
+            "typed text is hashed"
+        );
+        session.server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn stop_ends_a_turn_waiting_for_approval() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/operator/fake_codex_app_server.py");
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::open(&fixture, &[]).await.unwrap();
+        let (commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
+        let journal = Journal::new(dir.path().join("journal.jsonl"));
+        let mut observed = Observed::default();
+        // Dropping the sender is what aborting the run does to the turn.
+        let sender = std::sync::Mutex::new(Some(commands));
+        let emit = move |event: ComputerUseEvent| {
+            if matches!(event, ComputerUseEvent::Approval { .. }) {
+                sender.lock().unwrap().take();
+            }
+        };
+        let operator = session.operator_thread.clone();
+        let mut turn = TurnContext {
+            run_id: "r2",
+            step: Some(0),
+            observed: &mut observed,
+            journal: &journal,
+            emit: &emit,
+            commands: &mut receiver,
+        };
+        let result = session
+            .run_turn(
+                &mut turn,
+                &operator,
+                "Step 1 of 1. App: Notes. Goal: x.",
+                plan::step_report_schema(),
+            )
+            .await;
+        assert_eq!(result, Err(RunError::Stopped));
+        session.server.shutdown().await;
+    }
+
+    /// The example request, end to end on this Mac: real Codex, real Computer
+    /// Use, real apps. Steps that need a yes are declined, so nothing beyond
+    /// the policy's "runs" tier happens. Events print as they arrive.
+    /// `FNDR_LIVE_REQUEST="..." cargo test --lib live_notch_do -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "live: operates apps on this Mac with the real ChatGPT login"]
+    async fn live_notch_do_runs_the_example_request() {
+        let transcript = std::env::var("FNDR_LIVE_REQUEST").unwrap_or_else(|_| {
+            "open Spotify, play Blinding Lights, then open the browser and look up looped transformers".to_string()
+        });
+        let journal_dir = std::env::temp_dir().join("fndr-live-notch-do");
+        std::fs::create_dir_all(&journal_dir).unwrap();
+        let (commands, receiver) = mpsc::unbounded_channel();
+        let finished: Arc<Mutex<Option<(bool, String)>>> = Arc::default();
+        let recorded = finished.clone();
+        let started = std::time::Instant::now();
+        let ctx = RunContext {
+            run_id: "live".to_string(),
+            journal: Journal::new(journal_dir.join("journal.jsonl")),
+            emit: Arc::new(move |event| {
+                println!(
+                    "[{:>5.1}s] {}",
+                    started.elapsed().as_secs_f32(),
+                    serde_json::to_string(&event).unwrap()
+                );
+                match &event {
+                    ComputerUseEvent::Planned { .. } => commands.send(RunCommand::Start).unwrap(),
+                    ComputerUseEvent::Approval { request_key, .. } => commands
+                        .send(RunCommand::Respond {
+                            request_key: request_key.clone(),
+                            approve: false,
+                        })
+                        .unwrap(),
+                    ComputerUseEvent::Finished { ok, summary, .. } => {
+                        *recorded.lock().unwrap() = Some((*ok, summary.clone()));
+                    }
+                    _ => {}
+                }
+            }),
+        };
+        let result = run_with_snippets(ctx, transcript, Vec::new(), receiver, Arc::default()).await;
+        println!(
+            "run result: {result:?}; journal: {}",
+            journal_dir.join("journal.jsonl").display()
+        );
+        let finished = finished.lock().unwrap().clone();
+        assert_eq!(result, Ok(()));
+        let (ok, summary) = finished.expect("the run finished");
+        assert!(ok, "{summary}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_automation_grant_ends_the_turn_with_the_fix() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/operator/fake_codex_app_server.py");
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::open(&fixture, &[]).await.unwrap();
+        let (_commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
+        let journal = Journal::new(dir.path().join("journal.jsonl"));
+        let mut observed = Observed::default();
+        let emit = |_event: ComputerUseEvent| {};
+        let operator = session.operator_thread.clone();
+        let mut turn = TurnContext {
+            run_id: "r3",
+            step: Some(1),
+            observed: &mut observed,
+            journal: &journal,
+            emit: &emit,
+            commands: &mut receiver,
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            session.run_turn(
+                &mut turn,
+                &operator,
+                "AUTOMATION_DENIED",
+                plan::step_report_schema(),
+            ),
         )
-        .unwrap()
-        .join(" ");
-        assert!(args.contains("--disable computer_use"), "Codex's own computer use stays off");
-        assert!(args.contains("--disable shell_tool"));
-        assert!(args.contains("mcp_servers.node_repl.enabled=false"));
-        assert!(args.contains("mcp_servers.computer-use.enabled=false"));
-        assert!(args.contains("mcp_servers.fndr_computer.command=\"/opt/homebrew/bin/open-computer-use\""));
-        assert!(args.contains("mcp_servers.fndr_computer.default_tools_approval_mode=\"prompt\""));
+        .await
+        .expect("the turn ends at once");
+        match result {
+            Err(RunError::Failed(message)) => assert!(message.contains("Automation"), "{message}"),
+            other => panic!("expected a permission failure, got {other:?}"),
+        }
+        session.server.shutdown().await;
+    }
+
+    #[test]
+    fn signed_out_errors_ask_for_reconnect() {
+        assert!(looks_signed_out("unexpected status 401 Unauthorized"));
+        assert!(looks_signed_out(
+            "Your refresh token has expired; please log in again"
+        ));
+        assert!(!looks_signed_out("Rate limit reached"));
     }
 
     #[test]
     fn events_serialize_in_the_shape_the_notch_reads() {
-        let action = serde_json::to_value(ComputerUseEvent::ActionDone {
-            item_id: "i1".into(),
-            tool: "click".into(),
+        let done = serde_json::to_value(ComputerUseEvent::StepDone {
+            run_id: "r".into(),
+            index: 1,
             ok: true,
+            detail: "Playing".into(),
         })
         .unwrap();
-        assert_eq!(action, json!({ "kind": "actionDone", "itemId": "i1", "tool": "click", "ok": true }));
-        let message = serde_json::to_value(ComputerUseEvent::Message { text: "Done.".into(), r#final: true }).unwrap();
-        assert_eq!(message, json!({ "kind": "message", "text": "Done.", "final": true }));
-    }
-
-    #[test]
-    fn only_observation_tools_skip_the_approval_prompt() {
-        for tool in ["click", "type_text", "press_key", "scroll", "drag", "set_value", "perform_secondary_action"] {
-            assert!(!READ_ONLY_TOOLS.contains(&tool), "{tool} must ask first");
-        }
+        assert_eq!(
+            done,
+            json!({ "kind": "stepDone", "runId": "r", "index": 1, "ok": true, "detail": "Playing" })
+        );
+        let failed = serde_json::to_value(ComputerUseEvent::Failed {
+            run_id: "r".into(),
+            error: "x".into(),
+            reconnect: true,
+        })
+        .unwrap();
+        assert_eq!(failed["reconnect"], true);
     }
 }

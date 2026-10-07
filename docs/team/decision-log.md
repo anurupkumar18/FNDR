@@ -28,6 +28,9 @@ Seeded on 2026-10-04 from decisions already recorded in the repo as accepted or 
 | 2026-09-28 | Activity traces show only observed steps, never content or chain-of-thought, and are never persisted. | Raw logs in the UI; a product-wide polling or telemetry system (both rejected in the ADR's context) | Not recorded | [ADR-021](../decisions/021-privacy-safe-activity-traces.md) |
 | 2026-09-30 | Command bar actions policy: twelve tools in three tiers (runs, one tap, never). Nothing sends, deletes, or buys this semester. (PD-06) | Everything one tap; allow send with confirm (both rejected in the ADR) | Not recorded | [ADR-022](../decisions/022-command-bar-actions-policy.md), [actions policy](../product/actions-policy.md) |
 | 2026-10-01 | Five destinations (Home, Search and Ask, Memory Vault, Daily Brief, Trust and Settings) plus a Labs group. No mounted panel is deleted. (PD-15) | Not listed. Builds on UI/UX decisions D-01, D-05, D-06, D-07. | Not recorded | [ADR-023](../decisions/023-five-destinations-and-labs.md) |
+| 2026-10-06 | Notch Do: native voice owner, listen on open, plan card that auto-starts after 1.5 s, voice or button Stop kills the run. | Keep the WebKit listener; require a tap on every transcript | Kunj (lane owner) | [ADR-020 amendment](../decisions/020-voice-interaction-policy.md) |
+| 2026-10-06 | Notch Do computer use: tiered per-call policy (runs, one confirmation, never) in code; ADR-022's never tier unchanged. | Approve every click (the 09-24 build) | Kunj (lane owner) | [ADR-022 amendment](../decisions/022-command-bar-actions-policy.md) |
+| 2026-10-06 | ADR-018 option B for Notch Do and Hermes only, on the ChatGPT sign-in; Codex app-server is the agent loop and the only token refresher. | Hermes as the loop; a token proxy | Kunj (lane owner) | [ADR-018 amendment](../decisions/018-reasoning-tier.md) |
 
 ## Earlier accepted ADRs (background, before this log)
 

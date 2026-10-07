@@ -347,9 +347,7 @@ async fn remember_decision_checks_settings_before_parsing_arguments() {
             config.agent_notes_enabled = notes_enabled;
         }
         for args in [json!({ "title": "Keep the parser local" }), Value::Null] {
-            let (status, body, _) = server
-                .post(Some(TOKEN), None, decision_call(2, args))
-                .await;
+            let (status, body, _) = server.post(Some(TOKEN), None, decision_call(2, args)).await;
             assert_eq!(outcome(status, &body), Err(expected.to_string()));
             assert!(server.decisions().await.is_empty());
         }

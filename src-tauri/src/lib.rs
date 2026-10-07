@@ -24,12 +24,13 @@ pub mod memory;
 pub mod memory_compaction;
 pub mod memory_embedding_document;
 pub mod memory_insight;
-pub mod memory_quality;
-pub mod memory_review;
 #[cfg(debug_assertions)]
 pub mod memory_journey;
+pub mod memory_quality;
+pub mod memory_review;
 pub mod models;
 pub mod ocr;
+pub mod operator;
 pub mod privacy;
 pub mod privacy_proof;
 pub mod resume;

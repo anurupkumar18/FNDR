@@ -317,7 +317,9 @@ impl VoiceManager {
         validate_surface_mode(surface, mode)?;
         let session = self.new_session(surface);
 
-        if matches!(surface, VoiceSurface::NotchAsk | VoiceSurface::NotchDo) {
+        // Notch Do is migrated to this owner (ADR-020 amendment 2026-10-06);
+        // Notch Ask is not.
+        if surface == VoiceSurface::NotchAsk {
             self.send_unavailable(
                 session.clone(),
                 VoiceUnavailableReason::PolicyNotEnabled,
@@ -436,7 +438,7 @@ fn validate_surface_mode(surface: VoiceSurface, mode: VoiceMode) -> Result<(), S
         (VoiceSurface::HomeSearch, VoiceMode::Toggle)
             | (VoiceSurface::ScreenGuide, VoiceMode::PushToTalk)
             | (VoiceSurface::NotchAsk, _)
-            | (VoiceSurface::NotchDo, _)
+            | (VoiceSurface::NotchDo, VoiceMode::Toggle)
     );
     valid
         .then_some(())
@@ -1159,6 +1161,53 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         assert!(temp.path().join("quit-marker").exists());
+    }
+
+    #[tokio::test]
+    async fn notch_do_listens_through_the_shared_owner_and_notch_ask_stays_off() {
+        let (manager, events, _temp) = manager("normal", Duration::from_secs(5));
+        let ask = manager
+            .start(VoiceSurface::NotchAsk, VoiceMode::Toggle)
+            .await
+            .expect("notch ask session");
+        wait_for(&events, |events| {
+            events.iter().any(|event| {
+                event.session_id.as_deref() == Some(&ask.session_id)
+                    && matches!(
+                        event.state,
+                        VoiceState::Unavailable {
+                            reason: VoiceUnavailableReason::PolicyNotEnabled,
+                            ..
+                        }
+                    )
+            })
+        })
+        .await;
+
+        let session = manager
+            .start(VoiceSurface::NotchDo, VoiceMode::Toggle)
+            .await
+            .expect("notch do session");
+        wait_for(&events, |events| {
+            events.iter().any(|event| {
+                event.session_id.as_deref() == Some(&session.session_id)
+                    && event.surface == Some(VoiceSurface::NotchDo)
+                    && matches!(&event.state, VoiceState::Partial { text } if text == "Show my")
+            })
+        })
+        .await;
+        manager.stop(&session.session_id).await.expect("stop");
+        wait_for(&events, |events| {
+            events.iter().any(|event| {
+                event.session_id.as_deref() == Some(&session.session_id)
+                    && matches!(&event.state, VoiceState::Final { text } if text == "Show my meetings")
+            })
+        })
+        .await;
+        assert!(manager
+            .start(VoiceSurface::NotchDo, VoiceMode::PushToTalk)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

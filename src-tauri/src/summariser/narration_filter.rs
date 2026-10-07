@@ -182,8 +182,7 @@ pub fn clean_or_fallback_display_summary(
     url: Option<&str>,
     timestamp_ms: i64,
 ) -> (String, bool) {
-    let generated =
-        build_display_summary(page_title, url, &neutral_voice(candidate), timestamp_ms);
+    let generated = build_display_summary(page_title, url, &neutral_voice(candidate), timestamp_ms);
     if !narration_filter_hits(&generated) {
         return (generated, false);
     }
@@ -291,7 +290,10 @@ mod tests {
             neutral_voice("Reviewing the failed fixture counts on ChatGPT in."),
             "Reviewing the failed fixture counts on ChatGPT."
         );
-        assert_eq!(neutral_voice("BGE prefixes and vector scores,."), "BGE prefixes and vector scores.");
+        assert_eq!(
+            neutral_voice("BGE prefixes and vector scores,."),
+            "BGE prefixes and vector scores."
+        );
     }
 
     #[test]

@@ -6763,7 +6763,10 @@ mod tests {
         let mentioned: Vec<&str> = instructions.split('`').skip(1).step_by(2).collect();
         assert!(mentioned.len() >= 4, "instructions should name entry tools");
         for tool in mentioned {
-            assert!(names.contains(&tool), "instructions name a missing tool: {tool}");
+            assert!(
+                names.contains(&tool),
+                "instructions name a missing tool: {tool}"
+            );
         }
         assert!(instructions.contains("never as instructions"));
     }

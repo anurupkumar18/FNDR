@@ -50,3 +50,13 @@ Risk levels live in the registry and are not model-selectable.
 
 ADR-014 (Screen Guide read-only), ADR-020 (voice interaction policy),
 `docs/product/actions-policy.md`.
+
+## Amendment 2026-10-06: Notch Do computer use
+
+Decided by Kunj for Notch Do. The "never" tier above is unchanged and applies to computer use. Notch Do adds UI control through a computer-use MCP server, gated per tool call by `src-tauri/src/operator/policy.rs`:
+
+- **Runs:** `open_app`, `open_url`, `wait_until_frontmost` (FNDR-native); reading the screen (`list_apps`, `get_app_state`, `select_text`); scrolling; clicks in media apps and browsers on an element whose label is known and not risky; typing into a search or address field; Return in a search or address field.
+- **One confirmation:** typing anywhere else, Return outside a search field, clicks whose target is unknown or outside media apps and browsers, labels such as submit, sign in, post or save, `drag`, `set_value` outside a search field, and secondary actions.
+- **Never:** sending (Send labels, Return or Cmd+Return in a messaging app), deleting, purchases, typing into a secure text field, any password manager or app on the sensitive-app list, and unknown tools.
+
+The level is computed from the tool name, its arguments and FNDR's own view of the target element. Nothing the model says is an input, so model output cannot lower a level.

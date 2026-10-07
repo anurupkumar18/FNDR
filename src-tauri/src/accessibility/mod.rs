@@ -550,6 +550,25 @@ pub(crate) struct FocusedWindowSnapshot {
     pub document_url: Option<String>,
 }
 
+/// The focused app's pid and window, read through Accessibility. Unlike
+/// `NSWorkspace.frontmostApplication`, this does not depend on the main run
+/// loop having processed activation notifications.
+pub(crate) fn ax_frontmost() -> Option<(PidT, FocusedWindowSnapshot)> {
+    if !has_accessibility_permission() {
+        return None;
+    }
+    unsafe {
+        let pid = frontmost_pid()?;
+        let application = AXUIElementCreateApplication(pid);
+        if application.is_null() {
+            return None;
+        }
+        let snapshot = window_snapshot_for_application(application);
+        CFRelease(application);
+        Some((pid, snapshot))
+    }
+}
+
 fn workspace_frontmost_pid() -> Option<PidT> {
     unsafe {
         NSWorkspace::sharedWorkspace()
@@ -573,9 +592,7 @@ fn expected_pid_remained_frontmost(
         && after_snapshot == Some(expected_pid)
 }
 
-unsafe fn window_snapshot_for_application(
-    application: AXUIElementRef,
-) -> FocusedWindowSnapshot {
+unsafe fn window_snapshot_for_application(application: AXUIElementRef) -> FocusedWindowSnapshot {
     let (window_title, window_document_url) = ax_copy_attr_value(application, "AXFocusedWindow")
         .ok()
         .map(|window| {
@@ -586,8 +603,7 @@ unsafe fn window_snapshot_for_application(
         })
         .unwrap_or_default();
     let title = window_title.or_else(|| ax_string_attr(application, "AXTitle"));
-    let document_url =
-        window_document_url.or_else(|| ax_string_attr(application, "AXDocument"));
+    let document_url = window_document_url.or_else(|| ax_string_attr(application, "AXDocument"));
 
     FocusedWindowSnapshot {
         title,
@@ -620,12 +636,8 @@ pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<Focu
             CFRelease(application);
 
             let after_snapshot = workspace_frontmost_pid();
-            return expected_pid_remained_frontmost(
-                expected_pid,
-                before_snapshot,
-                after_snapshot,
-            )
-            .then_some(snapshot);
+            return expected_pid_remained_frontmost(expected_pid, before_snapshot, after_snapshot)
+                .then_some(snapshot);
         }
 
         let system_el = AXUIElementCreateSystemWide();
@@ -645,8 +657,7 @@ pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<Focu
         }
 
         let mut pid: PidT = 0;
-        let pid_matches = AXUIElementGetPid(focused_app, &mut pid) == K_AX_ERROR_SUCCESS
-            && pid > 0;
+        let pid_matches = AXUIElementGetPid(focused_app, &mut pid) == K_AX_ERROR_SUCCESS && pid > 0;
         if !pid_matches {
             CFRelease(focused_app);
             return None;

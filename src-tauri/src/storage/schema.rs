@@ -69,7 +69,9 @@ impl MemoryRecord {
     }
 
     pub fn added_by(&self) -> Option<String> {
-        self.is_agent_note().then(|| self.related_agents.first().cloned()).flatten()
+        self.is_agent_note()
+            .then(|| self.related_agents.first().cloned())
+            .flatten()
     }
 }
 

@@ -490,20 +490,15 @@ fn ensure_screen_guide_request_current_or_discard_diagnostic<R: tauri::Runtime>(
     local_restore: &DeferredFndrRestore,
     diagnostic: &mut Option<ScreenGuideDiagnosticSession>,
 ) -> Result<(), String> {
-    ensure_screen_guide_request_current_or_restore(
-        app,
-        state,
-        request_generation,
-        local_restore,
-    )
-    .map_err(|error| {
-        // A cancelled or newly-private turn must never publish a partial
-        // diagnostic bundle. Dropping the session removes its private
-        // `.partial` directory, including any raw pixels or OCR already
-        // written by an earlier async stage.
-        diagnostic.take();
-        error
-    })
+    ensure_screen_guide_request_current_or_restore(app, state, request_generation, local_restore)
+        .map_err(|error| {
+            // A cancelled or newly-private turn must never publish a partial
+            // diagnostic bundle. Dropping the session removes its private
+            // `.partial` directory, including any raw pixels or OCR already
+            // written by an earlier async stage.
+            diagnostic.take();
+            error
+        })
 }
 
 fn screen_guide_diagnostic_display(
@@ -577,11 +572,7 @@ fn record_screen_guide_diagnostic_capture_without_raw(
         return;
     };
     if let Some(session) = diagnostic.as_mut() {
-        session.record_capture_without_raw(
-            capture.bytes.len(),
-            capture.display,
-            capture.metrics,
-        );
+        session.record_capture_without_raw(capture.bytes.len(), capture.display, capture.metrics);
     }
 }
 
@@ -1557,6 +1548,11 @@ fn reset_screen_guide_state_after_terminal<R: tauri::Runtime>(
     }
 }
 
+/// The ⌘ mark, black on transparency, 22 pt at 2x: raw RGBA of
+/// `icons/tray-template.png` (regenerate both together).
+const MENU_BAR_TEMPLATE_RGBA: &[u8] = include_bytes!("../../../icons/tray-template.rgba");
+const MENU_BAR_ICON_SIZE: u32 = 44;
+
 /// Create the passive OS-managed companion beside the Mac notch. The icon is
 /// always present while FNDR runs; only bounded state glyphs and fixed copy are
 /// shown so questions, answers, file names, and errors never enter menu-bar UI.
@@ -1568,11 +1564,15 @@ pub fn create_screen_guide_notch_companion<R: tauri::Runtime>(app: &AppHandle<R>
     let mut builder = TrayIconBuilder::with_id(SCREEN_GUIDE_NOTCH_ID)
         .tooltip("FNDR — Screen Guide is off")
         .show_menu_on_left_click(false);
-    if let Some(icon) = app.default_window_icon().cloned() {
-        builder = builder.icon(icon).icon_as_template(true);
-    } else {
-        builder = builder.title("FNDR");
-    }
+    // A template image is drawn from its alpha alone, so it must be the
+    // glyph on transparency. The app icon's opaque background showed as a
+    // white square in the menu bar.
+    let icon = tauri::image::Image::new(
+        MENU_BAR_TEMPLATE_RGBA,
+        MENU_BAR_ICON_SIZE,
+        MENU_BAR_ICON_SIZE,
+    );
+    builder = builder.icon(icon).icon_as_template(true);
 
     match builder.build(app) {
         Ok(_) => {
@@ -2495,10 +2495,7 @@ pub async fn ask_screen_guide(
         return Err("Screen Guide is turned off.".to_string());
     }
     if state.inner().is_incognito.load(Ordering::SeqCst) {
-        let _ = screen_guide_diagnostics::take_session(
-            state.inner().app_data_dir.as_path(),
-            true,
-        );
+        let _ = screen_guide_diagnostics::take_session(state.inner().app_data_dir.as_path(), true);
         return Err(private_mode_message());
     }
 
@@ -2548,20 +2545,15 @@ pub async fn ask_screen_guide(
 
     // File-name lookup intentionally does not consume the one-shot diagnostic
     // arm. Diagnostics begin only for a display-reading turn.
-    let mut diagnostic = match screen_guide_diagnostics::take_session(
-        state.inner().app_data_dir.as_path(),
-        false,
-    ) {
-        Ok(session) => session,
-        Err(error) => {
-            tracing::warn!(%error, "screen_guide:diagnostic_start_failed");
-            None
-        }
-    };
-    record_screen_guide_diagnostic_stage(
-        &mut diagnostic,
-        ScreenGuideActivityStage::Preparing,
-    );
+    let mut diagnostic =
+        match screen_guide_diagnostics::take_session(state.inner().app_data_dir.as_path(), false) {
+            Ok(session) => session,
+            Err(error) => {
+                tracing::warn!(%error, "screen_guide:diagnostic_start_failed");
+                None
+            }
+        };
+    record_screen_guide_diagnostic_stage(&mut diagnostic, ScreenGuideActivityStage::Preparing);
 
     let (has_capture_access, permission_detail) =
         crate::capture::permissions::preflight_screen_capture_access();
@@ -2582,10 +2574,7 @@ pub async fn ask_screen_guide(
         return Err(screen_guide_accessibility_permission_error());
     }
 
-    record_screen_guide_diagnostic_stage(
-        &mut diagnostic,
-        ScreenGuideActivityStage::HidingFndr,
-    );
+    record_screen_guide_diagnostic_stage(&mut diagnostic, ScreenGuideActivityStage::HidingFndr);
     publish_screen_guide_activity(
         &app,
         request_generation,
@@ -2652,10 +2641,7 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
-        finish_screen_guide_diagnostic(
-            &mut diagnostic,
-            ScreenGuideDiagnosticOutcome::Failed,
-        );
+        finish_screen_guide_diagnostic(&mut diagnostic, ScreenGuideDiagnosticOutcome::Failed);
         return Err(err);
     }
     schedule_screen_guide_hidden_lease(&app, request_generation);
@@ -2808,10 +2794,7 @@ pub async fn ask_screen_guide(
     // Omnibar/Autofill cannot reopen and a newer Screen Guide overlay cannot
     // appear inside the synchronous CG capture. All slower context probes stay
     // outside this section.
-    record_screen_guide_diagnostic_stage(
-        &mut diagnostic,
-        ScreenGuideActivityStage::Capturing,
-    );
+    record_screen_guide_diagnostic_stage(&mut diagnostic, ScreenGuideActivityStage::Capturing);
     publish_screen_guide_activity(
         &app,
         request_generation,
@@ -2955,10 +2938,7 @@ pub async fn ask_screen_guide(
             request_generation,
             &deferred_restore,
         );
-        finish_screen_guide_diagnostic(
-            &mut diagnostic,
-            ScreenGuideDiagnosticOutcome::Failed,
-        );
+        finish_screen_guide_diagnostic(&mut diagnostic, ScreenGuideDiagnosticOutcome::Failed);
         return Err(err);
     }
     schedule_screen_guide_hidden_lease(&app, request_generation);
@@ -2978,18 +2958,16 @@ pub async fn ask_screen_guide(
         .then(|| image_data.clone());
     // Explicit diagnostic consent keeps one in-memory copy until OCR and its
     // privacy decision finish. No raw diagnostic file exists before that gate.
-    let mut pending_diagnostic_capture = diagnostic.as_ref().map(|_| {
-        PendingScreenGuideDiagnosticCapture {
-            bytes: image_data.clone(),
-            display: screen_guide_diagnostic_display(&captured_display),
-            metrics: screen_guide_diagnostic_capture_metrics(&capture_signal),
-        }
-    });
+    let mut pending_diagnostic_capture =
+        diagnostic
+            .as_ref()
+            .map(|_| PendingScreenGuideDiagnosticCapture {
+                bytes: image_data.clone(),
+                display: screen_guide_diagnostic_display(&captured_display),
+                metrics: screen_guide_diagnostic_capture_metrics(&capture_signal),
+            });
 
-    record_screen_guide_diagnostic_stage(
-        &mut diagnostic,
-        ScreenGuideActivityStage::ReadingText,
-    );
+    record_screen_guide_diagnostic_stage(&mut diagnostic, ScreenGuideActivityStage::ReadingText);
     publish_screen_guide_activity(
         &app,
         request_generation,
@@ -3085,22 +3063,15 @@ pub async fn ask_screen_guide(
     }
 
     if ocr.plain_text.trim().is_empty() {
-        persist_screen_guide_diagnostic_capture(
-            &mut diagnostic,
-            &mut pending_diagnostic_capture,
-        )
-        .await;
+        persist_screen_guide_diagnostic_capture(&mut diagnostic, &mut pending_diagnostic_capture)
+            .await;
         if let Some(session) = diagnostic.as_mut() {
             if let Err(error) = session.write_ocr(
                 &ocr.plain_text,
                 &ocr.lines,
                 OcrConfig::screen_guide().minimum_text_height,
             ) {
-                abort_screen_guide_diagnostic_after_write_error(
-                    &mut diagnostic,
-                    &error,
-                    "ocr",
-                );
+                abort_screen_guide_diagnostic_after_write_error(&mut diagnostic, &error, "ocr");
             }
         }
         ensure_screen_guide_request_current_or_discard_diagnostic(
@@ -3136,22 +3107,14 @@ pub async fn ask_screen_guide(
         return result;
     }
 
-    persist_screen_guide_diagnostic_capture(
-        &mut diagnostic,
-        &mut pending_diagnostic_capture,
-    )
-    .await;
+    persist_screen_guide_diagnostic_capture(&mut diagnostic, &mut pending_diagnostic_capture).await;
     if let Some(session) = diagnostic.as_mut() {
         if let Err(error) = session.write_ocr(
             &ocr.plain_text,
             &ocr.lines,
             OcrConfig::screen_guide().minimum_text_height,
         ) {
-            abort_screen_guide_diagnostic_after_write_error(
-                &mut diagnostic,
-                &error,
-                "ocr",
-            );
+            abort_screen_guide_diagnostic_after_write_error(&mut diagnostic, &error, "ocr");
         }
     }
     ensure_screen_guide_request_current_or_discard_diagnostic(
@@ -3204,15 +3167,13 @@ pub async fn ask_screen_guide(
         match answer {
             Ok(answer) => answer,
             Err(err) => {
-                if let Err(cancelled) =
-                    ensure_screen_guide_request_current_or_discard_diagnostic(
-                        &app,
-                        state.inner(),
-                        request_generation,
-                        &deferred_restore,
-                        &mut diagnostic,
-                    )
-                {
+                if let Err(cancelled) = ensure_screen_guide_request_current_or_discard_diagnostic(
+                    &app,
+                    state.inner(),
+                    request_generation,
+                    &deferred_restore,
+                    &mut diagnostic,
+                ) {
                     return Err(cancelled);
                 }
                 restore_screen_guide_capture_if_owned(
@@ -3363,10 +3324,7 @@ pub async fn ask_screen_guide(
         "screen_guide:ask_finished"
     );
     if result.is_ok() {
-        finish_screen_guide_diagnostic(
-            &mut diagnostic,
-            ScreenGuideDiagnosticOutcome::Completed,
-        );
+        finish_screen_guide_diagnostic(&mut diagnostic, ScreenGuideDiagnosticOutcome::Completed);
     } else {
         diagnostic.take();
     }
@@ -5087,6 +5045,19 @@ fn cancel_screen_guide_for_privacy_reason<R: tauri::Runtime>(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn menu_bar_icon_is_a_glyph_on_transparency() {
+        let size = MENU_BAR_ICON_SIZE as usize;
+        assert_eq!(MENU_BAR_TEMPLATE_RGBA.len(), size * size * 4);
+        let alpha = |x: usize, y: usize| MENU_BAR_TEMPLATE_RGBA[(y * size + x) * 4 + 3];
+        assert_eq!(alpha(0, 0), 0, "corners are transparent, not a square");
+        assert!(
+            MENU_BAR_TEMPLATE_RGBA.chunks(4).any(|px| px[3] > 200),
+            "the glyph is drawn"
+        );
+    }
+
     use super::*;
 
     #[cfg(target_os = "macos")]

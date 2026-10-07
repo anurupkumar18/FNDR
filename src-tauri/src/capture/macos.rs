@@ -737,7 +737,10 @@ mod tests {
 
     #[test]
     fn preferred_reopen_file_path_uses_document_path_ahead_of_files_touched() {
-        let junk = ["plan.md".to_string(), "en.wikipedia.org/wiki/Nitrogen".to_string()];
+        let junk = [
+            "plan.md".to_string(),
+            "en.wikipedia.org/wiki/Nitrogen".to_string(),
+        ];
         assert_eq!(
             preferred_reopen_file_path(Some("/Users/qa/report.pdf"), &junk),
             Some("/Users/qa/report.pdf")
@@ -747,7 +750,10 @@ mod tests {
             Some("/Users/qa/report.pdf")
         );
         assert_eq!(preferred_reopen_file_path(None, &junk), Some("plan.md"));
-        assert_eq!(preferred_reopen_file_path(Some("  "), &junk), Some("plan.md"));
+        assert_eq!(
+            preferred_reopen_file_path(Some("  "), &junk),
+            Some("plan.md")
+        );
         let empty: [String; 0] = [];
         assert_eq!(preferred_reopen_file_path(None, &empty), None);
     }
@@ -788,8 +794,10 @@ mod tests {
     #[test]
     fn content_text_appends_visible_passage_only_when_missing_from_excerpt() {
         let already = BrowserSemanticContent {
-            article_excerpt: "The visible sentence sits in the middle of the viewport today.".into(),
-            visible_passage: "The visible sentence sits in the middle of the viewport today.".into(),
+            article_excerpt: "The visible sentence sits in the middle of the viewport today."
+                .into(),
+            visible_passage: "The visible sentence sits in the middle of the viewport today."
+                .into(),
             ..Default::default()
         };
         let once = already.content_text();
@@ -797,7 +805,8 @@ mod tests {
 
         let extra = BrowserSemanticContent {
             article_excerpt: "Opening paragraphs only.".into(),
-            visible_passage: "The visible sentence sits in the middle of the viewport today.".into(),
+            visible_passage: "The visible sentence sits in the middle of the viewport today."
+                .into(),
             ..Default::default()
         };
         let text = extra.content_text();

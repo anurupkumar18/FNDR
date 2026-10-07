@@ -1,16 +1,14 @@
 //! Search-related Tauri commands and helpers.
 
 use super::common::truncate_chars;
-use crate::context_runtime::{retrieve_search_results, RetrieveRequest};
 use crate::context_runtime::retrieve::{
     authorize_related_memory_ids, memory_is_permitted, memory_is_visible,
 };
+use crate::context_runtime::{retrieve_search_results, RetrieveRequest};
 use crate::graph::graph_store::GraphStore;
 use crate::memory_quality::{partition_surfaceable, LowSignalReason};
 use crate::privacy::Blocklist;
-use crate::search::{
-    anchor_coverage_score, MemoryCard, MemoryCardSynthesizer, QueryContext,
-};
+use crate::search::{anchor_coverage_score, MemoryCard, MemoryCardSynthesizer, QueryContext};
 use crate::storage::SearchResult;
 use crate::AppState;
 use std::collections::HashSet;
@@ -52,15 +50,9 @@ pub async fn search_ranked_results(
     app_filter: Option<&str>,
     raw_limit: usize,
 ) -> Result<Vec<SearchResult>, String> {
-    let (results, _, _) = search_ranked_results_internal(
-        state,
-        query,
-        time_filter,
-        app_filter,
-        raw_limit,
-        false,
-    )
-    .await?;
+    let (results, _, _) =
+        search_ranked_results_internal(state, query, time_filter, app_filter, raw_limit, false)
+            .await?;
     Ok(results)
 }
 
@@ -115,15 +107,9 @@ pub async fn search_ranked_results_explained(
     app_filter: Option<&str>,
     raw_limit: usize,
 ) -> Result<(Vec<SearchResult>, serde_json::Value), String> {
-    let (results, explanation, _) = search_ranked_results_internal(
-        state,
-        query,
-        time_filter,
-        app_filter,
-        raw_limit,
-        true,
-    )
-    .await?;
+    let (results, explanation, _) =
+        search_ranked_results_internal(state, query, time_filter, app_filter, raw_limit, true)
+            .await?;
     Ok((results, explanation.unwrap_or_default()))
 }
 
@@ -560,15 +546,9 @@ pub(super) async fn search_memory_cards_inner(
     }
 
     let raw_limit = limit.max(18).min(50);
-    let (raw_results, _, strong_match) = search_ranked_results_internal(
-        state,
-        query,
-        time_filter,
-        app_filter,
-        raw_limit,
-        false,
-    )
-    .await?;
+    let (raw_results, _, strong_match) =
+        search_ranked_results_internal(state, query, time_filter, app_filter, raw_limit, false)
+            .await?;
     let mut cards = synthesize_memory_cards_from_ranked(state, query, raw_results, limit).await;
     // "No strong matches" (VS-12): the whole query is judged by its best
     // result, because a right answer can rank below a wrong one near the bar.
