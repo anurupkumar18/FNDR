@@ -87,6 +87,17 @@ class QualityLabProfileTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "dev server"):
                 quality_lab.assert_no_running_fndr()
 
+    def test_quality_lab_start_disables_tauri_source_watcher(self):
+        profile = Path("/synthetic/quality-lab/knowledge-worker")
+        with patch.object(quality_lab, "validate_profile", return_value=profile):
+            with patch.object(quality_lab, "assert_no_running_fndr"):
+                with patch.object(quality_lab, "run") as run:
+                    quality_lab.start("knowledge-worker")
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["npm", "run", "tauri", "dev"])
+        self.assertIn("--no-watch", command)
+
     def test_fixture_log_metrics_capture_ocr_privacy_dedupe_and_production_hasher(self):
         fixture_rows = [
             {"id": "editor-01", "app_class": "editor", "expected_outcome": "store"},

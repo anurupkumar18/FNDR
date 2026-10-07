@@ -523,7 +523,7 @@ def start(suite: str) -> None:
     print(f"Starting this checkout's native Tauri dev build with FNDR_DATA_DIR={profile}")
     print("The app will use the synthetic profile; model files are shared by symlink to avoid a second copy.")
     print("Avoid installing or removing text or speech models from the Lab app; those directories are shared.")
-    run(["npm", "run", "tauri", "dev"], env=env)
+    run(["npm", "run", "tauri", "dev", "--", "--no-watch"], env=env)
 
 
 def main() -> int:
