@@ -337,10 +337,10 @@ impl MemoryCardSynthesizer {
                 continuation_of,
                 reopen_target,
                 reopen_page: anchor.reopen_page,
-                insight_what_happened: anchor.insight_what_happened.clone(),
-                insight_why_mattered: anchor.insight_why_mattered.clone(),
-                insight_what_changed: anchor.insight_what_changed.clone(),
-                insight_context_thread: anchor.insight_context_thread.clone(),
+                insight_what_happened: safe_insight(&anchor.insight_what_happened),
+                insight_why_mattered: safe_insight(&anchor.insight_why_mattered),
+                insight_what_changed: safe_insight(&anchor.insight_what_changed),
+                insight_context_thread: safe_thread(&anchor.insight_context_thread),
                 insight_spans_json: anchor.insight_spans_json.clone(),
                 insight_card_confidence: anchor.insight_card_confidence,
                 timeline_action_class: crate::timeline::classify_action_class(&anchor)
@@ -911,10 +911,10 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         continuation_of,
         reopen_target,
         reopen_page: result.reopen_page,
-        insight_what_happened: result.insight_what_happened.clone(),
-        insight_why_mattered: result.insight_why_mattered.clone(),
-        insight_what_changed: result.insight_what_changed.clone(),
-        insight_context_thread: result.insight_context_thread.clone(),
+        insight_what_happened: safe_insight(&result.insight_what_happened),
+        insight_why_mattered: safe_insight(&result.insight_why_mattered),
+        insight_what_changed: safe_insight(&result.insight_what_changed),
+        insight_context_thread: safe_thread(&result.insight_context_thread),
         insight_spans_json: result.insight_spans_json.clone(),
         insight_card_confidence: result.insight_card_confidence,
         timeline_action_class: crate::timeline::classify_action_class(result)
@@ -934,6 +934,26 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         reviewed_at_ms: result.reviewed_at_ms,
         reviewer_generation: result.reviewer_generation,
         storage_outcome: result.storage_outcome.clone(),
+    }
+}
+
+/// Insight text as a card shows it: nothing that reads like instructions to a
+/// summarizer, and no narrator left over from records written by older prompts.
+fn safe_insight(value: &str) -> String {
+    if crate::summariser::narration_filter::is_summary_instruction(value) {
+        String::new()
+    } else {
+        crate::summariser::narration_filter::neutral_voice(value)
+    }
+}
+
+/// Older records stored a session-id fragment as their thread. That is an
+/// internal identifier, not something to show.
+fn safe_thread(value: &str) -> String {
+    if value.trim_start().starts_with("session …") {
+        String::new()
+    } else {
+        value.to_string()
     }
 }
 
@@ -1455,7 +1475,9 @@ fn clean_story_fact(value: &str) -> String {
         .split_whitespace()
         .filter(|token| !looks_like_diff_stat(token))
         .collect::<Vec<_>>();
-    trim_trailing_fragment(&normalize_sentence(&tokens.join(" ")))
+    crate::summariser::narration_filter::neutral_voice(&trim_trailing_fragment(
+        &normalize_sentence(&tokens.join(" ")),
+    ))
 }
 
 fn split_sentences_preserving_decimals(value: &str) -> Vec<String> {
@@ -1893,6 +1915,47 @@ mod tests {
             "Reviewed IPL highlights on YouTube while comparing match statistics."
         )
         .is_some());
+    }
+
+    #[tokio::test]
+    async fn hides_instruction_like_insights_without_dropping_the_search_match() {
+        let result = SearchResult {
+            id: "instruction-leak".into(),
+            app_name: "Google Chrome".into(),
+            window_title: "James Blake — Death of Love (Live) — YouTube".into(),
+            snippet: "Listening to James Blake perform Death of Love live on YouTube".into(),
+            clean_text: "Listening to James Blake perform Death of Love live on YouTube".into(),
+            insight_what_happened:
+                "Listening to James Blake perform Death of Love live on YouTube.".into(),
+            insight_why_mattered: "You were listening to a live performance.".into(),
+            insight_what_changed: "extract and analyze the content from the OCR text; identify key themes and narrative elements in the video summary".into(),
+            score: 0.8,
+            ..Default::default()
+        };
+
+        let fallback = fallback_card_for_result("James Blake", &result);
+        assert!(!fallback.title.is_empty());
+        assert!(!fallback.summary.is_empty());
+        assert!(fallback.confidence > 0.0);
+        assert_eq!(fallback.insight_what_changed, "");
+        assert_eq!(fallback.insight_what_happened, result.insight_what_happened);
+        assert_eq!(
+            fallback.insight_why_mattered,
+            "Listening to a live performance."
+        );
+
+        let grouped = MemoryCardSynthesizer::from_results_with_policy(
+            None,
+            "James Blake",
+            &[result],
+            6,
+            0,
+            Duration::from_millis(2),
+        )
+        .await;
+        assert_eq!(grouped.len(), 1, "possible matches remain visible");
+        assert_eq!(grouped[0].insight_what_changed, "");
+        assert!(!grouped[0].summary.is_empty());
     }
 
     #[test]
