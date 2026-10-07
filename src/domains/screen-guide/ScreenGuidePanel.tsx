@@ -21,6 +21,7 @@ import {
 } from "./screenGuideState";
 import "./ScreenGuidePanel.css";
 import { PanelHeader } from "@/shared/components/PanelHeader";
+import { PanelState } from "@/shared/components/PanelState";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import type { ActivityTraceSnapshot } from "@/shared/activity/activityTrace";
@@ -478,19 +479,12 @@ export function ScreenGuidePanel({
                 </section>
 
                 {error && (
-                    <div className="sg-panel-error" role="alert">
-                        <p>{error}</p>
-                        {settingsLoadFailed && (
-                            <button
-                                type="button"
-                                className="ui-action-btn"
-                                onClick={() => setLoadAttempt((attempt) => attempt + 1)}
-                                aria-label="Retry loading Screen Guide"
-                            >
-                                Retry
-                            </button>
-                        )}
-                    </div>
+                    <PanelState
+                        kind="error"
+                        title="Screen Guide needs attention"
+                        description={error}
+                        action={settingsLoadFailed ? { label: "Retry loading Screen Guide", onAction: () => setLoadAttempt((attempt) => attempt + 1) } : undefined}
+                    />
                 )}
 
                 {activityTrace && status.phase !== "idle" && (

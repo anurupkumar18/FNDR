@@ -10,6 +10,7 @@ import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import "../workspace/PipelineInspectorPanel.css";
 import { PanelHeader } from "@/shared/components/PanelHeader";
+import { PanelState } from "@/shared/components/PanelState";
 
 interface Proof {
     evaluated: number;
@@ -195,7 +196,8 @@ export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps
                         announce={false}
                     />
                 )}
-                {error && <div className="pipeline-error" role="alert">{error}</div>}
+                {error ? <PanelState kind="error" title="Privacy activity could not load" description={error} /> : null}
+                {!error && !proof ? <PanelState kind="loading" title="Loading privacy activity" description="Reading this app session’s local counters." /> : null}
                 {proof ? <PrivacyProof proof={proof} /> : null}
             </div>
         </div>

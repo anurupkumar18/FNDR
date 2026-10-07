@@ -5,6 +5,7 @@ import {
     type ActivityTraceSnapshot,
 } from "@/shared/activity/activityTrace";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import { PanelState } from "@/shared/components/PanelState";
 import {
     getMemoryReviewStatus,
     getRuntimeMetrics,
@@ -193,25 +194,17 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
                 />
             )}
 
+            {runtimeMetricsLoading && !runtimeMetrics && !runtimeMetricsError ? (
+                <PanelState kind="loading" title="Loading engine diagnostics" description="Collecting local runtime counters." />
+            ) : null}
+
             {runtimeMetricsError && (
-                <div className="pipeline-error pipeline-diagnostic-error" role="alert">
-                    <div>
-                        <strong>
-                            {runtimeMetrics
-                                ? "Live refresh failed. Showing the last successful snapshot."
-                                : "Engine diagnostics could not load."}
-                        </strong>
-                        <p>{runtimeMetricsError}</p>
-                    </div>
-                    <button
-                        type="button"
-                        className="ui-action-btn"
-                        aria-label="Retry engine diagnostics"
-                        onClick={() => void loadRuntimeMetrics(() => mountedRef.current)}
-                    >
-                        Retry
-                    </button>
-                </div>
+                <PanelState
+                    kind="error"
+                    title={runtimeMetrics ? "Live refresh failed" : "Engine diagnostics could not load"}
+                    description={runtimeMetrics ? `Showing the last successful snapshot. ${runtimeMetricsError}` : runtimeMetricsError}
+                    action={{ label: "Retry engine diagnostics", onAction: () => void loadRuntimeMetrics(() => mountedRef.current) }}
+                />
             )}
 
             {runtimeMetrics && (
