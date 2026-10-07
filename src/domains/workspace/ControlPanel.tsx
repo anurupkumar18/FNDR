@@ -24,7 +24,10 @@ import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 import { STORAGE_KEYS } from "@/shared/utils/config";
 import {
     applyPalette,
-    listPalettes,
+    CANONICAL_PALETTE_KEYS,
+    getDefaultPalette,
+    isCanonicalPalette,
+    listOptionalPalettes,
     PALETTES,
     resolveStoredPalette,
     type PaletteKey,
@@ -310,7 +313,7 @@ export function ControlPanel({
     }, [isOpen]);
 
     const [palette, setPalette] = useState<PaletteKey>(() =>
-        resolveStoredPalette(localStorage.getItem(STORAGE_KEYS.palette)),
+        resolveStoredPalette(localStorage.getItem(STORAGE_KEYS.palette), theme),
     );
 
     const [wallpaper, setWallpaper] = useState<WallpaperId>(() => {
@@ -331,7 +334,11 @@ export function ControlPanel({
         );
     }, [theme, palette, wallpaper]);
 
-    const toggleTheme = () => setTheme((current) => (current === "dark" ? "light" : "dark"));
+    const toggleTheme = () => {
+        const nextTheme = theme === "dark" ? "light" : "dark";
+        setTheme(nextTheme);
+        setPalette((current) => isCanonicalPalette(current) ? getDefaultPalette(nextTheme) : current);
+    };
 
     const toggleSettings = () => {
         if (isOpen) {
@@ -562,8 +569,9 @@ export function ControlPanel({
                                         { value: "dark", label: "Dark" },
                                     ]}
                                 />
-                                <div className="palette-list" role="radiogroup" aria-label="Color palette">
-                                    {listPalettes().map((key) => {
+                                <p className="appearance-sublabel" id="settings-default-palette-label">Film &amp; Paper</p>
+                                <div className="palette-list" role="radiogroup" aria-labelledby="settings-default-palette-label">
+                                    {CANONICAL_PALETTE_KEYS.map((key) => {
                                         const option = PALETTES[key];
                                         const selected = key === palette;
                                         return (
@@ -585,6 +593,32 @@ export function ControlPanel({
                                         );
                                     })}
                                 </div>
+                                <details className="palette-customization">
+                                    <summary>Optional cinematic palettes</summary>
+                                    <div className="palette-list" role="radiogroup" aria-label="Optional cinematic palettes">
+                                        {listOptionalPalettes().map((key) => {
+                                            const option = PALETTES[key];
+                                            const selected = key === palette;
+                                            return (
+                                                <button
+                                                    key={key}
+                                                    type="button"
+                                                    role="radio"
+                                                    aria-checked={selected}
+                                                    className={`palette-option${selected ? " is-selected" : ""}`}
+                                                    onClick={() => setPalette(key)}
+                                                >
+                                                    <span className="palette-swatch" aria-hidden="true">
+                                                        <span style={{ background: option[theme].bg }} />
+                                                        <span style={{ background: option[theme].surfaceRaised }} />
+                                                        <span style={{ background: option[theme].accent }} />
+                                                    </span>
+                                                    <span className="palette-name">{option.name}</span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </details>
                                 <p className="appearance-sublabel" id="settings-wallpaper-label">Background</p>
                                 <div className="wallpaper-list" role="radiogroup" aria-labelledby="settings-wallpaper-label">
                                     {listWallpapers().map((key) => {

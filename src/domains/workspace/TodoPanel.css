@@ -267,18 +267,18 @@
 
 /* Type hues mixed with text-primary so they read on both themes. */
 .todo-pill.todo {
-    border-color: color-mix(in srgb, #4ade80 45%, transparent);
-    color: color-mix(in srgb, #4ade80 55%, var(--text-primary));
+    border-color: color-mix(in srgb, var(--success) 45%, transparent);
+    color: color-mix(in srgb, var(--success) 55%, var(--text-primary));
 }
 
 .todo-pill.reminder {
-    border-color: color-mix(in srgb, #facc15 45%, transparent);
-    color: color-mix(in srgb, #facc15 55%, var(--text-primary));
+    border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+    color: color-mix(in srgb, var(--warning) 55%, var(--text-primary));
 }
 
 .todo-pill.followup {
-    border-color: color-mix(in srgb, #60a5fa 45%, transparent);
-    color: color-mix(in srgb, #60a5fa 55%, var(--text-primary));
+    border-color: color-mix(in srgb, var(--info) 45%, transparent);
+    color: color-mix(in srgb, var(--info) 55%, var(--text-primary));
 }
 
 @media (max-width: 860px) {

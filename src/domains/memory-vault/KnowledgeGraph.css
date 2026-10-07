@@ -9,7 +9,7 @@
         ellipse at 50% 40%,
         var(--bg-2) 0%,
         var(--bg) 60%,
-        color-mix(in srgb, var(--bg) 70%, #000) 100%
+        color-mix(in srgb, var(--bg) 70%, transparent) 100%
     );
     overflow: hidden;
     position: relative;
@@ -162,7 +162,7 @@
     animation: none !important;
 }
 .kg-node-path .kg-node-core {
-    stroke: #fbbf24;
+    stroke: var(--warning);
     stroke-width: 1.8;
 }
 .kg-node-hub .kg-node-core {
@@ -306,7 +306,7 @@
     color: var(--fg-2);
 }
 .kg-tone-amber { color: var(--accent); }
-.kg-tone-alarm { color: #c4521e; }
+.kg-tone-alarm { color: var(--danger); }
 
 .kg-side-panel-actions {
     margin-top: auto;
