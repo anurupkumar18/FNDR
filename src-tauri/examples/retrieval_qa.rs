@@ -597,6 +597,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut retrieve_score = new_score();
     let mut top1_agreement = 0usize;
     let mut queries = Vec::with_capacity(cases.len());
+    // (negatives, negatives marked strong, positives, positives marked weak)
+    let mut product_strength = (0usize, 0usize, 0usize, 0usize);
     for case in &cases {
         let relevant = case.relevant_ids.iter().cloned().collect::<HashSet<_>>();
 
@@ -646,6 +648,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))?;
         let retrieve_latency_ms = started.elapsed().as_millis();
         let retrieve_top_score = retrieved.hits.first().map(|hit| f64::from(hit.score));
+        // What the product itself decided, which also weighs matched words
+        // and closeness in meaning, not only the score against the bar.
+        if case.kind == NEGATIVE_KIND {
+            product_strength.0 += 1;
+            product_strength.1 += usize::from(retrieved.strong_match);
+        } else {
+            product_strength.2 += 1;
+            product_strength.3 += usize::from(!retrieved.strong_match);
+        }
         let retrieve_ranked = retrieved
             .hits
             .into_iter()
@@ -680,6 +691,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    eprintln!(
+        "strong-match flag as the product sets it: {} of {} no-match queries marked strong, {} of {} real queries marked weak",
+        product_strength.1, product_strength.0, product_strength.3, product_strength.2
+    );
     let case_count = cases.len();
     let report = RetrievalReport {
         schema_version: SCHEMA_VERSION,

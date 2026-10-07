@@ -230,16 +230,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ] {
             let (mut asked, mut h1, mut h5, mut v1, mut v5, mut top_score) = (0usize, 0usize, 0usize, 0usize, 0usize, 0f64);
             let mut same_session_first = 0usize;
+            // Top scores when the right memory came first: where a
+            // strong-match bar can sit without calling real matches weak.
+            let mut right_scores: Vec<f32> = Vec::new();
+            // Right memory first, yet the cards would say "no strong match".
+            let mut right_but_weak = 0usize;
             for row in &candidates {
                 let query = query_of(row);
                 if query.split_whitespace().count() < 2 {
                     continue;
                 }
                 asked += 1;
-                let (results, _) = search_ranked_results_explained(&state, &query, None, None, 10).await?;
+                let (results, strong) =
+                    fndr_lib::ipc::commands::search::search_ranked_results_with_strength(&state, &query, None, None, 10).await?;
                 let rank = results.iter().position(|result| result.id == row.id);
+                right_but_weak += usize::from(rank == Some(0) && !strong);
                 h1 += usize::from(rank == Some(0));
                 h5 += usize::from(rank.is_some_and(|rank| rank < 5));
+                if rank == Some(0) {
+                    right_scores.push(results[0].score);
+                }
                 // Not first, but the top hit is another capture of the same
                 // app within 30 minutes: the session was found, not the moment.
                 same_session_first += usize::from(rank != Some(0) && results.first().is_some_and(|top| {
@@ -254,17 +264,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     v5 += usize::from(rank.is_some_and(|rank| rank < 5));
                 }
             }
+            right_scores.sort_by(|a, b| a.total_cmp(b));
+            let at = |q: f32| right_scores.get(((right_scores.len() as f32 - 1.0).max(0.0) * q) as usize).copied();
+            let when_right = json!({ "lowest": at(0.0), "p10": at(0.1), "p25": at(0.25), "median": at(0.5) });
             let rate = |hits: usize| format!("{hits}/{asked}");
             search[label] = json!({
                 "hybrid_first": rate(h1), "hybrid_top5": rate(h5),
                 "not_first_but_same_session_first": rate(same_session_first),
                 "vector_first": rate(v1), "vector_top5": rate(v5),
                 "mean_top_score": if asked > 0 { top_score / asked as f64 } else { 0.0 },
+                "top_score_when_right": when_right,
+                "right_but_marked_weak": rate(right_but_weak),
             });
         }
 
         // VS-85: why a memory is not in the top five for its own summary.
         let mut misses = BTreeMap::new();
+        // Queries about things this person almost certainly never looked at.
+        // Search still returns the nearest memories; they should be marked
+        // weak, not presented as a confident match.
+        let mut unrelated = Vec::new();
+        for query in [
+            "quantum mechanics lecture notes",
+            "estate probate trust documents",
+            "grocery shopping list for the week",
+            "mountain biking trails near the lake",
+            "wedding invitation template wording",
+            "sourdough starter feeding schedule",
+            "used kayak price comparison",
+            "toddler swimming lesson signup",
+        ] {
+            let (results, strong) =
+                fndr_lib::ipc::commands::search::search_ranked_results_with_strength(&state, query, None, None, 5).await?;
+            unrelated.push(json!({
+                "query": query,
+                "marked_strong": strong,
+                "top_score": results.first().map(|result| result.score),
+                "routes_of_top": results.first().map(|result| result.matched_routes.clone()),
+                "query_words_in_top": results.first().map(|result| {
+                    let text = format!("{} {} {}", result.window_title, result.snippet, result.display_summary).to_lowercase();
+                    query.split_whitespace().filter(|word| word.len() > 3 && text.contains(&word.to_lowercase())).collect::<Vec<_>>()
+                }),
+            }));
+        }
+
         let mut miss_count = 0usize;
         for row in candidates.iter().filter(|_| !fast) {
             let query = first_words(&neutral_voice(&row.display_summary), 8);
@@ -365,6 +408,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity },
             "search_dedup": dedup,
             "vector_freshness": freshness,
+            "unrelated_queries": unrelated,
             "known_item_search": { "sampled": candidates.len(), "by_query": search, "misses_by_summary_words": miss_count, "miss_analysis": misses },
             "one_capture": trace,
         }))

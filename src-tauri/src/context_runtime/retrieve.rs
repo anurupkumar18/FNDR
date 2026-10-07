@@ -40,6 +40,13 @@ pub const STRONG_MATCH_SCORE: f32 = 0.25;
 /// exist on a real vault (EM-03).
 pub const STRONG_MATCH_SCORE_WITH_CHUNKS: f32 = 0.45;
 
+/// How close in meaning the best hit must be when the keyword route scored
+/// it without finding the query's words. Measured 2026-10-07
+/// (`docs/evidence/W04/strong-match.md`): no-match queries topped out at
+/// 0.31 on the owner vault and 0.28 on the labeled sets, and 95 percent of
+/// known-item queries on the vault were at 0.39 or more.
+pub const STRONG_MATCH_MIN_VECTOR: f32 = 0.33;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type, PartialEq)]
 pub struct RetrieveResult {
     pub hits: Vec<RetrieveHit>,
@@ -475,7 +482,13 @@ pub(crate) async fn retrieve_with_fused(
             },
         })
         .collect();
-    let strong_match = hits.first().is_some_and(|hit| is_strong_match(hit, &terms));
+    let top_vector = retrieval
+        .fused
+        .first()
+        .map_or(0.0, |hit| hit.signals.vector);
+    let strong_match = hits
+        .first()
+        .is_some_and(|hit| is_strong_match(hit, &terms, top_vector));
     (
         RetrieveResult {
             hits,
@@ -491,21 +504,37 @@ pub(crate) async fn retrieve_with_fused(
 /// when the keyword route found every word of the query in it. The second
 /// rule keeps exact matches strong when no embedding model is loaded: then
 /// only the keyword route scores, and a perfect match fuses to about 0.20.
-fn is_strong_match(hit: &RetrieveHit, terms: &[String]) -> bool {
+///
+/// One case is taken back out. The keyword route also scores rows that hold
+/// few or none of the query's whole words, which lifted unrelated queries
+/// over the bar. When under a third of the words are there, no time or
+/// entity route found the hit, and it is not close in meaning either
+/// (`vector` under `STRONG_MATCH_MIN_VECTOR`), the hit is weak.
+fn is_strong_match(hit: &RetrieveHit, terms: &[String], vector: f32) -> bool {
     let words = terms
         .iter()
         .filter(|term| !term.contains(' '))
         .collect::<Vec<_>>();
-    let bar = if hit.why.routes.iter().any(|route| route == "chunk") {
+    let matched = words
+        .iter()
+        .filter(|word| hit.why.matched_terms.contains(word))
+        .count();
+    if !words.is_empty() && matched == words.len() {
+        return true;
+    }
+    let found_by = |name: &str| hit.why.routes.iter().any(|route| route == name);
+    let bar = if found_by("chunk") {
         STRONG_MATCH_SCORE_WITH_CHUNKS
     } else {
         STRONG_MATCH_SCORE
     };
-    hit.score >= bar
-        || (!words.is_empty()
-            && words
-                .iter()
-                .all(|word| hit.why.matched_terms.contains(word)))
+    let only_loose_keyword_support = found_by("keyword")
+        && !found_by("chunk")
+        && !found_by("temporal")
+        && !found_by("entity")
+        && matched * 3 < words.len()
+        && vector < STRONG_MATCH_MIN_VECTOR;
+    hit.score >= bar && !only_loose_keyword_support
 }
 
 /// Read time and app phrases out of the query (VS-13). Returns the filters
@@ -814,11 +843,78 @@ mod tests {
             },
         };
         let words = terms(&["dentist", "appointment"]);
-        assert!(is_strong_match(&hit(0.30, &["vector", "keyword"]), &words));
-        assert!(!is_strong_match(&hit(0.20, &["vector"]), &words));
+        assert!(is_strong_match(&hit(0.30, &["vector"]), &words, 0.45));
+        assert!(!is_strong_match(&hit(0.20, &["vector"]), &words, 0.45));
         // With chunks the same evidence scores higher (VS-18), so the bar rises.
-        assert!(!is_strong_match(&hit(0.41, &["chunk", "vector"]), &words));
-        assert!(is_strong_match(&hit(0.53, &["chunk", "vector"]), &words));
+        assert!(!is_strong_match(
+            &hit(0.41, &["chunk", "vector"]),
+            &words,
+            0.45
+        ));
+        assert!(is_strong_match(
+            &hit(0.53, &["chunk", "vector"]),
+            &words,
+            0.45
+        ));
+    }
+
+    fn found_by(routes: &[&str], score: f32, matched: &[&str]) -> RetrieveHit {
+        RetrieveHit {
+            memory_id: "m".to_string(),
+            chunk_id: None,
+            matched_text: None,
+            score,
+            why: RetrieveWhy {
+                routes: routes.iter().map(|route| route.to_string()).collect(),
+                matched_terms: terms(matched),
+            },
+        }
+    }
+
+    #[test]
+    fn keyword_score_without_the_query_words_does_not_make_a_strong_match() {
+        // "estate probate trust documents" on a vault with nothing about it:
+        // the keyword route scored a row holding none of the words and the
+        // meaning score was low, yet the fused score cleared the bar.
+        let words = terms(&["estate", "probate", "trust", "documents"]);
+        let routes = ["vector", "keyword"];
+        assert!(!is_strong_match(
+            &found_by(&routes, 0.40, &[]),
+            &words,
+            0.31
+        ));
+        // One word of four is still not the query.
+        assert!(!is_strong_match(
+            &found_by(&routes, 0.30, &["documents"]),
+            &words,
+            0.18
+        ));
+    }
+
+    #[test]
+    fn other_evidence_keeps_a_match_strong() {
+        let words = terms(&["estate", "probate", "trust", "documents"]);
+        let routes = ["vector", "keyword"];
+        // Close in meaning, whatever the keyword route found.
+        assert!(is_strong_match(&found_by(&routes, 0.40, &[]), &words, 0.50));
+        // A third or more of the words are there.
+        assert!(is_strong_match(
+            &found_by(&routes, 0.30, &["estate", "probate"]),
+            &words,
+            0.18
+        ));
+        // The time or entity route also found it.
+        assert!(is_strong_match(
+            &found_by(&["vector", "keyword", "temporal"], 0.30, &[]),
+            &words,
+            0.18
+        ));
+        // Every word is there, even under the score bar.
+        assert!(is_strong_match(
+            &found_by(&routes, 0.20, &["estate", "probate", "trust", "documents"]),
+            &words,
+            0.0
+        ));
     }
 
     #[test]
