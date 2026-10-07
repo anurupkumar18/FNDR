@@ -117,6 +117,41 @@ pub fn neutral_voice(text: &str) -> String {
     }
 }
 
+/// True when `text` is a machine placeholder, not a description: a capture
+/// file name ("Screen capture visual : ChatGPT_1789709739566."), a timed
+/// stub ("Captured recent activity at 08:30 AM"), or an app name said twice
+/// ("Claude: Claude"). Empty text counts. Such text is never shown as a
+/// summary; the window title says more.
+pub fn is_placeholder_summary(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    // Punctuation is dropped before matching because display cleanup strips
+    // brackets, which hid "Screen capture (visual)" from the older check.
+    let words = lower
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>();
+    let words = words.split_whitespace().collect::<Vec<_>>().join(" ");
+    let digit_run = lower
+        .split(|c: char| !c.is_ascii_digit())
+        .any(|run| run.len() >= 10);
+    let said_twice = lower.split_once(':').is_some_and(|(left, right)| {
+        let (left, right) = (left.trim(), right.trim().trim_end_matches('.'));
+        !left.is_empty() && left == right
+    });
+    words.starts_with("screen capture")
+        || words.starts_with("captured recent")
+        || words.starts_with("viewed content on")
+        || words.starts_with("url only surface capture")
+        || (words.starts_with("viewed ") && lower.contains(" at "))
+        || (lower.contains(".png") && lower.chars().filter(char::is_ascii_digit).count() >= 6)
+        || digit_run
+        || said_twice
+}
+
 pub fn narration_filter_hits(summary: &str) -> bool {
     let value = summary.trim();
     if value.is_empty() {
@@ -216,6 +251,27 @@ mod tests {
             neutral_voice("User is debugging a borrow error"),
             "Debugging a borrow error"
         );
+    }
+
+    #[test]
+    fn placeholders_are_recognised_with_or_without_their_punctuation() {
+        for placeholder in [
+            "Screen capture (visual): Claude_1778938598807.png. Claude",
+            "Screen capture visual : ChatGPT_1789709739566.",
+            "Captured recent activity at 08:30 AM",
+            "URL-only surface capture for x.com at 12:00 PM",
+            "Claude: Claude",
+            "",
+        ] {
+            assert!(is_placeholder_summary(placeholder), "{placeholder}");
+        }
+        for real in [
+            "Watched the IPL match on Willow TV",
+            "Got paged for INC-2291: p99 latency above 2 seconds",
+            "Usage limits explained in Google Chrome.",
+        ] {
+            assert!(!is_placeholder_summary(real), "{real}");
+        }
     }
 
     #[test]

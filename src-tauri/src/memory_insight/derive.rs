@@ -25,24 +25,7 @@ fn pollution_for_insight(record: &MemoryRecord) -> f32 {
 /// content — filenames with timestamps, "Screen capture (visual): X.png. App",
 /// "Captured recent activity at HH:MM", etc.
 fn is_template_summary(s: &str) -> bool {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-
-    // Filename with embedded timestamp (heuristic: contains .png AND 6+ digits)
-    let has_png = lower.contains(".png");
-    let digit_count = lower.chars().filter(|c| c.is_ascii_digit()).count();
-    if has_png && digit_count >= 6 {
-        return true;
-    }
-
-    lower.starts_with("screen capture (visual)")
-        || lower.starts_with("captured recent")
-        || lower.starts_with("viewed content on")
-        || lower.starts_with("url-only surface capture")
-        || (lower.starts_with("viewed ") && lower.contains(" at "))
+    crate::summariser::narration_filter::is_placeholder_summary(s)
 }
 
 /// Strip redundant repetition of app/project names from a candidate insight

@@ -940,7 +940,10 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
 /// Insight text as a card shows it: nothing that reads like instructions to a
 /// summarizer, and no narrator left over from records written by older prompts.
 fn safe_insight(value: &str) -> String {
-    if crate::summariser::narration_filter::is_summary_instruction(value) {
+    if crate::summariser::narration_filter::is_summary_instruction(value)
+        || (!value.trim().is_empty()
+            && crate::summariser::narration_filter::is_placeholder_summary(value))
+    {
         String::new()
     } else {
         crate::summariser::narration_filter::neutral_voice(value)
@@ -1227,7 +1230,7 @@ fn sanitize_title(raw: &str, app_name: &str, window_title: &str) -> String {
 fn sanitize_action(raw: &str) -> String {
     let cleaned = normalize_sentence(raw);
     if cleaned.is_empty() || is_ui_chrome_phrase(&cleaned) {
-        "Reviewed key details".to_string()
+        "Viewed".to_string()
     } else {
         truncate_words(&cleaned, 10)
     }
@@ -1319,14 +1322,13 @@ fn build_story_summary(anchor: &SearchResult, snippets: &[String]) -> String {
 
     if facts.is_empty() {
         let domain = extract_domain(anchor.url.as_deref());
-        return if let Some(dom) = domain {
-            format!(
-                "Reviewed {} updates on {}.",
-                truncate_words(&anchor.window_title, 6),
-                dom
-            )
-        } else {
-            format!("Reviewed {}.", truncate_words(&anchor.window_title, 8))
+        // Nothing is known beyond where the capture was; say only that.
+        let title = truncate_words(&without_app_suffix(&anchor.window_title, &anchor.app_name), 8);
+        return match domain {
+            Some(dom) if !title.is_empty() => format!("{title} on {dom}."),
+            Some(dom) => format!("A page on {dom}."),
+            None if !title.is_empty() => format!("{title}."),
+            None => format!("{}.", anchor.app_name.trim()),
         };
     }
 
@@ -1350,10 +1352,10 @@ fn build_action_summary(anchor: &SearchResult, snippets: &[String]) -> String {
     }
 
     if let Some(domain) = extract_domain(anchor.url.as_deref()) {
-        return format!("Followed updates on {}", domain);
+        return format!("Viewed {}", domain);
     }
 
-    format!("Reviewed {}", truncate_words(&anchor.window_title, 5))
+    format!("Viewed {}", truncate_words(&anchor.window_title, 5))
 }
 
 fn build_match_reason(query: &str, members: &[SearchResult], anchor: &SearchResult) -> String {
@@ -1441,7 +1443,8 @@ fn extract_story_facts(snippets: &[String]) -> Vec<String> {
             continue;
         }
         let lower = cleaned.to_lowercase();
-        if lower.starts_with("worked in ")
+        if crate::summariser::narration_filter::is_placeholder_summary(&cleaned)
+            || lower.starts_with("worked in ")
             || lower == "google chrome"
             || lower.contains("new tab")
             || is_ui_chrome_phrase(&cleaned)
@@ -1541,10 +1544,11 @@ fn strip_leading_transitions(value: &str) -> String {
 }
 
 fn starts_with_ascii_case_insensitive(value: &str, prefix: &str) -> bool {
-    if value.len() < prefix.len() {
-        return false;
-    }
-    value[..prefix.len()].eq_ignore_ascii_case(prefix)
+    // `get` returns None inside a multi-byte character; indexing panicked on
+    // text such as "doc.pdf – Page 112".
+    value
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
 fn looks_like_diff_stat(token: &str) -> bool {
@@ -1948,6 +1952,13 @@ mod tests {
         assert_eq!(grouped.len(), 1, "possible matches remain visible");
         assert_eq!(grouped[0].insight_what_changed, "");
         assert!(!grouped[0].summary.is_empty());
+    }
+
+    #[test]
+    fn prefix_check_survives_text_that_starts_with_multi_byte_characters() {
+        assert!(!starts_with_ascii_case_insensitive("doc.pdf – Page 112", "then also"));
+        assert!(!starts_with_ascii_case_insensitive("日本語のメモ", "also"));
+        assert!(starts_with_ascii_case_insensitive("Also, the é", "also"));
     }
 
     #[test]
