@@ -1,6 +1,7 @@
 //! Task extraction and management helpers.
 
 pub mod extract_from_memory;
+pub mod suggest;
 
 pub use crate::storage::{Task, TaskType};
 
@@ -78,7 +79,7 @@ pub fn infer_task_type_from_title(title: &str) -> TaskType {
     }
 }
 
-fn is_actionable_task_title(title: &str) -> bool {
+pub(crate) fn is_actionable_task_title(title: &str) -> bool {
     let normalized = normalize_task_text(title);
     if normalized.len() < 6 {
         return false;

@@ -60,9 +60,8 @@ use crate::models;
 use crate::ocr::{OcrEngine, RecognizedText};
 use crate::privacy::safety_gate::{self, SafetyDecision};
 use crate::privacy::Blocklist;
-use crate::storage::{MemoryRecord, SearchResult, Task, TaskType};
+use crate::storage::{MemoryRecord, SearchResult, Task};
 use crate::summariser::narration_filter::clean_or_fallback_display_summary;
-use crate::tasks::parse_tasks_from_llm_response;
 use crate::telemetry::quality_logger::append_quality_event;
 use crate::telemetry::runtime_metrics;
 use crate::AppState;
@@ -4599,8 +4598,15 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             });
         }
 
-        if let Err(err) =
-            maybe_create_tasks_from_memory(state.as_ref(), &merged_or_new, engine.as_ref()).await
+        // A capture merged into an earlier memory was already asked once.
+        let is_new_memory = merged_or_new.id == incoming_record_id;
+        if let Err(err) = maybe_create_tasks_from_memory(
+            state.as_ref(),
+            &merged_or_new,
+            engine.as_ref(),
+            is_new_memory,
+        )
+        .await
         {
             tracing::debug!("Auto task extraction skipped: {}", err);
         }
@@ -6368,96 +6374,98 @@ fn purge_capture_artifacts(frames_dir: PathBuf) {
     let _ = std::fs::create_dir_all(frames_dir);
 }
 
+/// The screen text a task must be quoted from. Never the model's summary.
+const TASK_EVIDENCE_CHARS: usize = 1500;
+const MIN_TASK_EVIDENCE_CHARS: usize = 40;
+
+fn task_extraction_gate() -> &'static std::sync::Mutex<crate::tasks::suggest::ExtractionGate> {
+    static GATE: std::sync::OnceLock<std::sync::Mutex<crate::tasks::suggest::ExtractionGate>> =
+        std::sync::OnceLock::new();
+    GATE.get_or_init(Default::default)
+}
+
+/// Turn checked suggestions into tasks for `record`, leaving out any whose
+/// title is already on the list in any state, so a dismissed task does not
+/// come back.
+fn tasks_from_suggestions(
+    suggestions: Vec<crate::tasks::suggest::Suggestion>,
+    record: &MemoryRecord,
+    existing: &[Task],
+) -> Vec<Task> {
+    let mut known: HashSet<String> = existing
+        .iter()
+        .map(|task| crate::tasks::normalize_task_text(&task.title))
+        .collect();
+    suggestions
+        .into_iter()
+        .filter(|suggestion| known.insert(crate::tasks::normalize_task_text(&suggestion.title)))
+        .map(|suggestion| Task {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: suggestion.title,
+            // The words on screen that state the task, shown as its reason.
+            description: suggestion.quote,
+            source_app: format!("Memory:{}", record.app_name),
+            source_memory_id: Some(record.id.clone()),
+            created_at: record.timestamp,
+            due_date: None,
+            is_completed: false,
+            is_dismissed: false,
+            task_type: suggestion.task_type,
+            linked_urls: record.url.clone().map(|u| vec![u]).unwrap_or_default(),
+            linked_memory_ids: vec![record.id.clone()],
+        })
+        .collect()
+}
+
 async fn maybe_create_tasks_from_memory(
     state: &AppState,
     record: &MemoryRecord,
     engine: Option<&Arc<crate::inference::InferenceEngine>>,
+    is_new_memory: bool,
 ) -> Result<(), String> {
-    // Only run task extraction for summarized memories to keep precision high.
-    if !record.summary_source.eq_ignore_ascii_case("llm") {
-        return Ok(());
-    }
+    use crate::tasks::suggest::{is_task_source, parse_suggestions};
 
     let Some(engine) = engine else {
         return Ok(());
     };
-
-    if record.snippet.trim().len() < 16 {
+    // Ask once per memory, only where a person's own tasks appear, and only
+    // when there is enough screen text to quote from.
+    if !is_new_memory
+        || !record.summary_source.eq_ignore_ascii_case("llm")
+        || !is_task_source(&record.app_name, record.url.as_deref())
+        || record.clean_text.trim().chars().count() < MIN_TASK_EVIDENCE_CHARS
+    {
+        return Ok(());
+    }
+    let admitted = task_extraction_gate()
+        .lock()
+        .map(|mut gate| gate.admit(&record.app_name, record.timestamp))
+        .unwrap_or(false);
+    if !admitted {
         return Ok(());
     }
 
-    let extraction_input = format!(
-        "APP: {}\nWINDOW: {}\nSUMMARY: {}\nTEXT: {}",
-        record.app_name,
+    let evidence = format!(
+        "{}\n{}",
         record.window_title,
-        record.snippet,
-        record.clean_text.chars().take(800).collect::<String>()
+        record
+            .clean_text
+            .chars()
+            .take(TASK_EVIDENCE_CHARS)
+            .collect::<String>()
     );
-    let raw = engine.extract_todos(&extraction_input).await;
-    if raw.trim().is_empty() {
-        return Ok(());
-    }
-
-    let mut parsed = parse_tasks_from_llm_response(&raw, &record.app_name);
-    if parsed.is_empty() {
+    let raw = engine.suggest_tasks(&evidence).await;
+    let suggestions = parse_suggestions(&raw, &evidence);
+    if suggestions.is_empty() {
         return Ok(());
     }
 
     let mut all_tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
-    let mut active_keys: HashSet<(String, String)> = all_tasks
-        .iter()
-        .filter(|task| !task.is_completed && !task.is_dismissed)
-        .map(|task| {
-            (
-                task.title.trim().to_lowercase(),
-                task_type_key(&task.task_type).to_string(),
-            )
-        })
-        .collect();
-
-    let source_app = format!("Memory:{}", record.app_name);
-    let mut changed = false;
-    for task in parsed.iter_mut() {
-        let normalized_title = task.title.trim().to_lowercase();
-        if normalized_title.len() < 4 {
-            continue;
-        }
-
-        let type_key = task_type_key(&task.task_type).to_string();
-        let dedupe_key = (normalized_title, type_key);
-        if active_keys.contains(&dedupe_key) {
-            continue;
-        }
-        active_keys.insert(dedupe_key);
-
-        task.id = uuid::Uuid::new_v4().to_string();
-        task.created_at = record.timestamp;
-        task.source_app = source_app.clone();
-        task.source_memory_id = Some(record.id.clone());
-        task.linked_memory_ids = vec![record.id.clone()];
-        task.linked_urls = record.url.clone().map(|u| vec![u]).unwrap_or_default();
-
-        all_tasks.push(Task {
-            id: task.id.clone(),
-            title: task.title.clone(),
-            description: task.description.clone(),
-            source_app: task.source_app.clone(),
-            source_memory_id: task.source_memory_id.clone(),
-            created_at: task.created_at,
-            due_date: task.due_date,
-            is_completed: false,
-            is_dismissed: false,
-            task_type: task.task_type.clone(),
-            linked_urls: task.linked_urls.clone(),
-            linked_memory_ids: task.linked_memory_ids.clone(),
-        });
-        changed = true;
-    }
-
-    if !changed {
+    let created = tasks_from_suggestions(suggestions, record, &all_tasks);
+    if created.is_empty() {
         return Ok(());
     }
-
+    all_tasks.extend(created.iter().cloned());
     state
         .store
         .upsert_tasks(&all_tasks)
@@ -6465,28 +6473,13 @@ async fn maybe_create_tasks_from_memory(
         .map_err(|e| e.to_string())?;
 
     // Link created tasks into the graph for task-memory navigation.
-    for task in all_tasks.iter().rev().take(8) {
-        if task
-            .source_memory_id
-            .as_ref()
-            .map(|id| id == &record.id)
-            .unwrap_or(false)
-        {
-            if let Err(err) = state.graph.link_task(task).await {
-                tracing::warn!("Failed linking auto-created task in graph: {}", err);
-            }
+    for task in &created {
+        if let Err(err) = state.graph.link_task(task).await {
+            tracing::warn!("Failed linking auto-created task in graph: {}", err);
         }
     }
 
     Ok(())
-}
-
-fn task_type_key(task_type: &TaskType) -> &'static str {
-    match task_type {
-        TaskType::Todo => "todo",
-        TaskType::Reminder => "reminder",
-        TaskType::Followup => "followup",
-    }
 }
 
 fn build_session_key(app_name: &str, window_title: &str, url: Option<&str>) -> String {
@@ -7636,6 +7629,46 @@ Activity patterns and insights dashboard
                 "src-tauri/src/store/lance_store.rs".to_string(),
                 "src-tauri/src/capture/mod.rs".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn a_suggestion_becomes_a_task_once_and_carries_its_quote() {
+        use crate::tasks::suggest::Suggestion;
+        let record = MemoryRecord {
+            id: "mem-mail".into(),
+            timestamp: 1_790_000_000_000,
+            app_name: "Mail".into(),
+            ..Default::default()
+        };
+        let suggest = |title: &str| Suggestion {
+            task_type: crate::storage::TaskType::Todo,
+            title: title.into(),
+            quote: "can you send me the draft report by Friday".into(),
+        };
+        let created = tasks_from_suggestions(vec![suggest("Send the draft report")], &record, &[]);
+        assert_eq!(created.len(), 1);
+        assert_eq!(
+            created[0].description,
+            "can you send me the draft report by Friday"
+        );
+        assert_eq!(created[0].source_memory_id.as_deref(), Some("mem-mail"));
+        assert_eq!(created[0].source_app, "Memory:Mail");
+
+        // Already on the list, even dismissed: it does not come back.
+        let mut dismissed = created[0].clone();
+        dismissed.is_dismissed = true;
+        let again = tasks_from_suggestions(
+            vec![suggest("send the draft report."), suggest("Book the room")],
+            &record,
+            &[dismissed],
+        );
+        assert_eq!(
+            again
+                .iter()
+                .map(|task| task.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Book the room"]
         );
     }
 
