@@ -7,6 +7,7 @@ import {
     type MemoryCard,
     NOTCH_HUD_GEOMETRY_EVENT,
     NOTCH_HUD_HOVER_EVENT,
+    NOTCH_HUD_SUMMON_EVENT,
     type NotchHudGeometry,
     fndrAnswer,
     getNotchHudGeometry,
@@ -298,6 +299,18 @@ export function NotchHud() {
         void setNotchHudKeyboard(true).catch(() => undefined);
         window.requestAnimationFrame(() => inputRef.current?.focus());
     }, []);
+
+    // Alt+N opens the panel in Do mode, which starts listening (Do shows only
+    // once Operate my Mac is on; otherwise this is Ask), and closes it when
+    // pressed again.
+    useTauriEvent<boolean>(NOTCH_HUD_SUMMON_EVENT, (open) => {
+        if (!open) {
+            closePanel();
+            return;
+        }
+        setModeState("do");
+        openPanel();
+    });
 
     // Peek follows the pointer; the open panel outlives it, since the cursor
     // leaves the moment the user starts typing.

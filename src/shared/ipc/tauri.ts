@@ -2722,6 +2722,8 @@ export async function companionRevokeDevice(deviceId: string): Promise<boolean> 
 
 export const NOTCH_HUD_HOVER_EVENT = "notch-hud://hover";
 export const NOTCH_HUD_GEOMETRY_EVENT = "notch-hud://geometry";
+/** Alt+N: `true` opens the panel, `false` closes it. */
+export const NOTCH_HUD_SUMMON_EVENT = "notch-hud://summon";
 
 /** Logical points, as measured from the display the HUD is parked on. */
 export interface NotchHudGeometry {
@@ -2838,4 +2840,45 @@ export async function computerUsePermissions(probe: boolean): Promise<OperatorPe
 /** Kills the run at once, including an action in flight. */
 export async function computerUseStop(): Promise<void> {
     return invoke("computer_use_stop");
+}
+
+// Setup center: what FNDR depends on, and installing or updating it from the app.
+
+export type SetupComponentState = "ready" | "missing" | "error";
+export type SetupComponentAction = "install" | "sign_in" | "open_url";
+
+export interface SetupComponent {
+    id: string;
+    name: string;
+    purpose: string;
+    required: boolean;
+    state: SetupComponentState;
+    version: string | null;
+    detail: string | null;
+    action: SetupComponentAction | null;
+    url: string | null;
+}
+
+export async function setupComponents(): Promise<SetupComponent[]> {
+    return invoke<SetupComponent[]>("setup_components");
+}
+
+export async function installComponent(id: string): Promise<void> {
+    return invoke("install_component", { id });
+}
+
+export interface HermesUpdateStatus {
+    installed: string | null;
+    latest: string | null;
+    update_available: boolean;
+    error: string | null;
+}
+
+export async function checkHermesUpdate(): Promise<HermesUpdateStatus> {
+    return invoke<HermesUpdateStatus>("check_hermes_update");
+}
+
+/** Moves Hermes to its newest release; keeps the previous one if that fails. */
+export async function updateHermes(): Promise<HermesBridgeStatus> {
+    return invoke<HermesBridgeStatus>("update_hermes");
 }

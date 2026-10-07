@@ -58,7 +58,9 @@ pub use openclicky_bridge::*;
 
 mod computer_use;
 mod hermes_codex;
+mod setup_center;
 pub use computer_use::*;
+pub use setup_center::*;
 
 mod agent;
 pub use agent::*;

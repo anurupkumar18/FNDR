@@ -57,6 +57,17 @@ afterEach(() => {
 });
 
 describe("AgentWorkspace", () => {
+    it("still opens setup when Hermes status cannot be read, and retries", async () => {
+        ipc.getHermesBridgeStatus.mockRejectedValueOnce(new Error("vault is locked"));
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+
+        expect(await screen.findByRole("heading", { name: "Hermes isn't reachable yet" })).toBeInTheDocument();
+        expect(screen.getByRole("alert")).toHaveTextContent("vault is locked");
+        ipc.getHermesBridgeStatus.mockResolvedValue(hermes(false));
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        expect(await screen.findByRole("heading", { name: "Choose a model" })).toBeInTheDocument();
+    });
+
     it("asks for a model before offering the chat", async () => {
         ipc.getHermesBridgeStatus.mockResolvedValue(hermes(false));
         render(<AgentWorkspace isVisible onClose={vi.fn()} />);

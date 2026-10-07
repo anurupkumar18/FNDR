@@ -191,6 +191,83 @@ pub(crate) fn on_crash(restarts_in_streak: u32, uptime: Duration) -> CrashRespon
     }
 }
 
+/// The newest `vYYYY.M.D[.N]` tag in `git ls-remote --tags` output.
+/// Pre-releases (anything with a suffix) are skipped.
+pub(crate) fn newest_release_tag(ls_remote: &str) -> Option<String> {
+    ls_remote
+        .lines()
+        .filter_map(|line| line.split("refs/tags/").nth(1))
+        .filter(|tag| !tag.ends_with("^{}"))
+        .filter_map(|tag| {
+            let parts: Option<Vec<u64>> = tag
+                .strip_prefix('v')?
+                .split('.')
+                .map(|p| p.parse().ok())
+                .collect();
+            parts
+                .filter(|parts| parts.len() >= 3)
+                .map(|parts| (parts, tag.to_string()))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, tag)| tag)
+}
+
+fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let output = std::process::Command::new("/usr/bin/git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("Could not run git: {e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// The newest Hermes release on GitHub.
+pub(crate) fn latest_hermes_release() -> Result<String, String> {
+    crate::privacy_proof::record_egress("github.com");
+    let output = std::process::Command::new("/usr/bin/git")
+        .args(["ls-remote", "--tags", HERMES_REPO_URL])
+        .output()
+        .map_err(|e| format!("Could not check for a Hermes update: {e}"))?;
+    if !output.status.success() {
+        return Err("Could not reach GitHub to check for a Hermes update.".to_string());
+    }
+    newest_release_tag(&String::from_utf8_lossy(&output.stdout))
+        .ok_or_else(|| "No Hermes release was found.".to_string())
+}
+
+/// The installed Hermes: its release tag when it sits on one, else the short commit.
+pub(crate) fn installed_hermes_version(runtime_root: &Path) -> Option<String> {
+    let dir = pinned_hermes_dir(runtime_root);
+    git_in(&dir, &["describe", "--tags", "--exact-match"])
+        .or_else(|_| git_in(&dir, &["rev-parse", "--short", "HEAD"]))
+        .ok()
+}
+
+/// Checks out `tag` in FNDR's Hermes copy. Returns the commit it replaced, so a
+/// failed reinstall can go back.
+pub(crate) fn checkout_hermes_release(runtime_root: &Path, tag: &str) -> Result<String, String> {
+    let dir = pinned_hermes_dir(runtime_root);
+    let previous = git_in(&dir, &["rev-parse", "HEAD"])?;
+    crate::privacy_proof::record_egress("github.com");
+    git_in(&dir, &["fetch", "-q", "--depth", "1", "origin", "tag", tag])
+        .map_err(|e| format!("Downloading Hermes {tag} failed: {e}"))?;
+    git_in(&dir, &["checkout", "-q", tag])
+        .map_err(|e| format!("Switching to Hermes {tag} failed: {e}"))?;
+    Ok(previous)
+}
+
+pub(crate) fn checkout_hermes_commit(runtime_root: &Path, commit: &str) -> Result<(), String> {
+    git_in(
+        &pinned_hermes_dir(runtime_root),
+        &["checkout", "-q", commit],
+    )
+    .map(|_| ())
+}
+
 pub(crate) fn pinned_hermes_dir(runtime_root: &Path) -> PathBuf {
     runtime_root.join("src")
 }
@@ -299,6 +376,13 @@ mod tests {
             codex_last_refresh(home.path()).as_deref(),
             Some("2026-10-02T17:14:49Z")
         );
+    }
+
+    #[test]
+    fn picks_the_newest_release_tag() {
+        let ls_remote = "a1\trefs/tags/v2026.7.7.2\nb2\trefs/tags/v2026.9.24\nb2\trefs/tags/v2026.9.24^{}\nc3\trefs/tags/v2026.9.7\nd4\trefs/tags/nightly\ne5\trefs/tags/v2026.10.1-rc1\n";
+        assert_eq!(newest_release_tag(ls_remote).as_deref(), Some("v2026.9.24"));
+        assert_eq!(newest_release_tag("").as_deref(), None);
     }
 
     #[test]

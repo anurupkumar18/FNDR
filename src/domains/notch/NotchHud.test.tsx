@@ -16,6 +16,7 @@ const onboardingMocks = vi.hoisted(() => ({
 const ipcMocks = vi.hoisted(() => ({
     NOTCH_HUD_HOVER_EVENT: "notch-hud://hover",
     NOTCH_HUD_GEOMETRY_EVENT: "notch-hud://geometry",
+    NOTCH_HUD_SUMMON_EVENT: "notch-hud://summon",
     getNotchHudGeometry: vi.fn(),
     setNotchHudHitRect: vi.fn(),
     setNotchHudKeyboard: vi.fn(),
@@ -445,6 +446,22 @@ describe("NotchHud", () => {
                 backendPath: "/x/computer-use-client-launcher",
                 activeRun: null,
             });
+        });
+
+        it("Alt+N opens the panel and starts listening; pressing it again closes it", async () => {
+            // Even after the person last used Ask, the shortcut opens Do.
+            window.localStorage.setItem("fndr.notch.mode", "ask");
+            render(<NotchHud />);
+            await waitFor(() => expect(handlers.has("notch-hud://summon")).toBe(true));
+            emit("notch-hud://summon", true);
+            await waitFor(() =>
+                expect(coreMocks.invoke).toHaveBeenCalledWith("voice_start", { surface: "notch_do", mode: "toggle" }),
+            );
+            expect(ipcMocks.setNotchHudKeyboard).toHaveBeenCalledWith(true);
+
+            emit("notch-hud://summon", false);
+            await waitFor(() => expect(ipcMocks.setNotchHudKeyboard).toHaveBeenCalledWith(false));
+            await waitFor(() => expect(coreMocks.invoke).toHaveBeenCalledWith("voice_cancel", { sessionId: "v1" }));
         });
 
         it("keeps Do hidden until Operate my Mac is on", async () => {

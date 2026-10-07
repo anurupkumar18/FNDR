@@ -176,14 +176,14 @@ pub(crate) enum Backend {
 }
 
 impl Backend {
-    fn label(&self) -> &'static str {
+    pub(crate) fn label(&self) -> &'static str {
         match self {
             Backend::CodexBundled(_) => "codex_computer_use",
             Backend::OpenComputerUse(_) => "open_computer_use",
         }
     }
 
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         match self {
             Backend::CodexBundled(path) | Backend::OpenComputerUse(path) => path,
         }

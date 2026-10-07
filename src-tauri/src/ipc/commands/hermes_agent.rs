@@ -864,11 +864,16 @@ fn file_modified_at_ms(path: &PathBuf) -> Option<i64> {
 async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStatus, String> {
     let context_path = hermes_project_context_path(state);
     let home_dir = hermes_home_dir(state);
+    // Memory and task counts are decoration; a vault that can't be read
+    // (locked, migrating) must not hide Hermes setup.
     let recent_results = state
         .store
         .list_recent_results(18, None)
         .await
-        .map_err(|e| e.to_string())?;
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "hermes:status_recent_memories_unavailable");
+            Vec::new()
+        });
     let mut recent_memories: Vec<MemoryCard> = strip_internal_fndr_results(recent_results)
         .into_iter()
         .map(memory_card_from_result)
@@ -910,7 +915,7 @@ async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStat
         .store
         .list_tasks()
         .await
-        .map_err(|e| e.to_string())?
+        .unwrap_or_default()
         .into_iter()
         .filter(|task| !task.is_completed && !task.is_dismissed)
         .count() as u32;
@@ -1326,6 +1331,85 @@ pub async fn install_hermes_bridge(
     state: State<'_, Arc<AppState>>,
 ) -> Result<HermesBridgeStatus, String> {
     ensure_pinned_hermes(state.inner())?;
+    build_hermes_bridge_status(state.inner()).await
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HermesUpdateStatus {
+    pub installed: Option<String>,
+    pub latest: Option<String>,
+    pub update_available: bool,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn check_hermes_update(
+    state: State<'_, Arc<AppState>>,
+) -> Result<HermesUpdateStatus, String> {
+    let runtime_root = hermes_runtime_root(state.inner());
+    tokio::task::spawn_blocking(move || {
+        let installed = super::hermes_codex::installed_hermes_version(&runtime_root);
+        match super::hermes_codex::latest_hermes_release() {
+            Ok(latest) => HermesUpdateStatus {
+                update_available: installed.as_deref() != Some(latest.as_str()),
+                installed,
+                latest: Some(latest),
+                error: None,
+            },
+            Err(error) => HermesUpdateStatus {
+                installed,
+                latest: None,
+                update_available: false,
+                error: Some(error),
+            },
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Moves FNDR's Hermes to the newest release, reinstalls its dependencies and
+/// checks it starts; on any failure it goes back to the previous version.
+#[tauri::command]
+pub async fn update_hermes(state: State<'_, Arc<AppState>>) -> Result<HermesBridgeStatus, String> {
+    let app_state = state.inner().clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let state = app_state.as_ref();
+        let runtime_root = hermes_runtime_root(state);
+        if !super::hermes_codex::pinned_hermes_dir(&runtime_root)
+            .join("pyproject.toml")
+            .exists()
+        {
+            return ensure_pinned_hermes(state);
+        }
+        let latest = super::hermes_codex::latest_hermes_release()?;
+        let previous = super::hermes_codex::checkout_hermes_release(&runtime_root, &latest)?;
+        let healthy = prepare_vendored_hermes_runtime(state).and_then(|_| {
+            let launcher = detect_hermes_runtime(state)
+                .launcher
+                .ok_or("Hermes did not install.")?;
+            let output = launcher
+                .command()
+                .arg("--version")
+                .output()
+                .map_err(|e| e.to_string())?;
+            output.status.success().then_some(()).ok_or_else(|| {
+                format!(
+                    "Hermes {latest} would not start: {}",
+                    command_failure_detail(&output)
+                )
+            })
+        });
+        if let Err(error) = healthy {
+            let _ = super::hermes_codex::checkout_hermes_commit(&runtime_root, &previous);
+            let _ = prepare_vendored_hermes_runtime(state);
+            return Err(format!("{error} FNDR kept the previous Hermes."));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    stop_hermes_gateway_process();
     build_hermes_bridge_status(state.inner()).await
 }
 
