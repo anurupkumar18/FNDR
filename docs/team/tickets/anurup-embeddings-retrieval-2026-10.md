@@ -83,7 +83,7 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 ## VS-90 Make memory rewrites safe and clear the review backlog
 - assignee: anurupkumar
-- labels: area::storage, type::bug, prio::p1
+- labels: area::vault-search, type::bug, prio::p1
 - milestone: W04-Prove
 - estimate: 6h
 
@@ -124,7 +124,7 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 ## VS-93 Stop prose landing in the commands field, and explain the short clean text
 - assignee: anurupkumar
-- labels: area::capture, type::bug, prio::p2
+- labels: area::vault-search, type::bug, prio::p2
 - milestone: W04-Prove
 - estimate: 3h
 
