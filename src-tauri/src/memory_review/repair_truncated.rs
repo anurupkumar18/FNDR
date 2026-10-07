@@ -89,7 +89,9 @@ fn uncut_sentence(stored: &str, record: &MemoryRecord) -> Option<String> {
             // or version; another period means an ellipsis. Punctuation such
             // as ".;" is a real sentence end inside a joined list.
             let cut_inside_token = after.next() == Some('.')
-                && after.next().is_some_and(|next| next.is_alphanumeric() || next == '.');
+                && after
+                    .next()
+                    .is_some_and(|next| next.is_alphanumeric() || next == '.');
             cut_inside_token.then(|| first_sentence(&source[start..]).to_string())
         })
 }
@@ -158,7 +160,10 @@ pub async fn repair_truncated_summaries(
     embedder: Option<&Embedder>,
     dry_run: bool,
 ) -> Result<RepairSummary, String> {
-    let records = store.list_all_memories().await.map_err(|err| err.to_string())?;
+    let records = store
+        .list_all_memories()
+        .await
+        .map_err(|err| err.to_string())?;
     let mut summary = RepairSummary {
         dry_run,
         scanned: records.len(),
@@ -211,14 +216,23 @@ mod tests {
 
     #[test]
     fn repairs_a_summary_cut_inside_a_file_name() {
-        let mut row = cut_row("m1", "Reviewed search/hybrid.rs and the reranker weights. Then ran the gate.");
+        let mut row = cut_row(
+            "m1",
+            "Reviewed search/hybrid.rs and the reranker weights. Then ran the gate.",
+        );
         assert_eq!(row.display_summary, "Reviewed search/hybrid.");
         let change = repair_record(&mut row).expect("repair");
         assert_eq!(change.before, "Reviewed search/hybrid.");
-        assert_eq!(change.after, "Reviewed search/hybrid.rs and the reranker weights.");
+        assert_eq!(
+            change.after,
+            "Reviewed search/hybrid.rs and the reranker weights."
+        );
         assert_eq!(row.snippet, change.after);
         assert_eq!(row.insight_what_happened, change.after);
-        assert!(repair_record(&mut row).is_none(), "second pass changes nothing");
+        assert!(
+            repair_record(&mut row).is_none(),
+            "second pass changes nothing"
+        );
     }
 
     #[test]
@@ -233,13 +247,19 @@ mod tests {
 
     #[test]
     fn repairs_insight_rows_cut_inside_a_token_when_the_summary_is_whole() {
-        let mut row = cut_row("m7", "The current state is FNDR 1.0 at the repo root. The index maps the files.");
+        let mut row = cut_row(
+            "m7",
+            "The current state is FNDR 1.0 at the repo root. The index maps the files.",
+        );
         row.display_summary = "Reviewed the FNDR review index.".into();
         row.snippet = row.display_summary.clone();
         row.insight_what_happened = "The current state is FNDR 1.".into();
         row.insight_why_mattered = "The current state is FNDR 1".into();
         let change = repair_record(&mut row).expect("repair");
-        assert_eq!(change.after, "The current state is FNDR 1.0 at the repo root.");
+        assert_eq!(
+            change.after,
+            "The current state is FNDR 1.0 at the repo root."
+        );
         assert_eq!(row.insight_what_happened, change.after);
         assert_eq!(row.insight_why_mattered, change.after);
         assert_eq!(row.display_summary, "Reviewed the FNDR review index.");
@@ -248,7 +268,10 @@ mod tests {
 
     #[test]
     fn repairs_a_summary_cut_at_an_ellipsis() {
-        let mut row = cut_row("m6", "Read about Postgres queues with SELECT ... FOR UPDATE SKIP LOCKED.");
+        let mut row = cut_row(
+            "m6",
+            "Read about Postgres queues with SELECT ... FOR UPDATE SKIP LOCKED.",
+        );
         row.display_summary = "Read about Postgres queues with SELECT .".into();
         row.snippet = "Read about Postgres queues with SELECT".into();
         row.insight_what_happened = row.display_summary.clone();
@@ -262,7 +285,10 @@ mod tests {
     #[test]
     fn leaves_rows_without_evidence_alone() {
         // A real sentence end: the period is followed by a space.
-        let mut whole = cut_row("m3", "Drafted the essay to 1,450 words. The quote is not in yet.");
+        let mut whole = cut_row(
+            "m3",
+            "Drafted the essay to 1,450 words. The quote is not in yet.",
+        );
         let untouched = whole.clone();
         assert!(repair_record(&mut whole).is_none());
         assert_eq!(whole.display_summary, untouched.display_summary);
@@ -295,18 +321,28 @@ mod tests {
             .unwrap();
         let cut = cut_row("cut", "Reviewed search/hybrid.rs and the reranker weights.");
         let whole = cut_row("whole", "Drafted the essay to 1,450 words. More later.");
-        store.add_batch_preserving_ids(&[cut, whole.clone()]).await.unwrap();
+        store
+            .add_batch_preserving_ids(&[cut, whole.clone()])
+            .await
+            .unwrap();
 
-        let dry = repair_truncated_summaries(&store, None, true).await.unwrap();
+        let dry = repair_truncated_summaries(&store, None, true)
+            .await
+            .unwrap();
         assert_eq!((dry.scanned, dry.repairable, dry.repaired), (2, 1, 0));
         let stored = store.get_memory_by_id("cut").await.unwrap().unwrap();
         assert_eq!(stored.display_summary, "Reviewed search/hybrid.");
 
         let before_whole = store.get_memory_by_id("whole").await.unwrap().unwrap();
-        let applied = repair_truncated_summaries(&store, None, false).await.unwrap();
+        let applied = repair_truncated_summaries(&store, None, false)
+            .await
+            .unwrap();
         assert_eq!((applied.repaired, applied.vectors_kept), (1, 1));
         let stored = store.get_memory_by_id("cut").await.unwrap().unwrap();
-        assert_eq!(stored.display_summary, "Reviewed search/hybrid.rs and the reranker weights.");
+        assert_eq!(
+            stored.display_summary,
+            "Reviewed search/hybrid.rs and the reranker weights."
+        );
         assert!(stored.embedding_text.contains("hybrid.rs"));
         let after_whole = store.get_memory_by_id("whole").await.unwrap().unwrap();
         assert_eq!(
@@ -315,7 +351,9 @@ mod tests {
             "a row without evidence must not change at all"
         );
 
-        let again = repair_truncated_summaries(&store, None, false).await.unwrap();
+        let again = repair_truncated_summaries(&store, None, false)
+            .await
+            .unwrap();
         assert_eq!(again.repairable, 0, "the repair is idempotent");
     }
 }

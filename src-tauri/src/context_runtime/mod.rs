@@ -35,7 +35,8 @@ pub mod verifier;
 
 pub use retrieve::{
     memory_source_statements, related_memories, retrieve, retrieve_search_results, RetrieveHit,
-    RetrieveRequest, RetrieveResult, RetrieveWhy, STRONG_MATCH_SCORE, STRONG_MATCH_SCORE_WITH_CHUNKS,
+    RetrieveRequest, RetrieveResult, RetrieveWhy, STRONG_MATCH_SCORE,
+    STRONG_MATCH_SCORE_WITH_CHUNKS,
 };
 
 static URL_RE: Lazy<Regex> =
@@ -247,9 +248,12 @@ pub async fn insight_graph_context_mcp(
     let backed_edges = edges
         .iter()
         .filter_map(|edge| {
-            let ids = if edge.metadata.is_null() { Some(Vec::new()) }
-                else { graph_memory_references(&edge.metadata) }?;
-            Some((edge,ids))
+            let ids = if edge.metadata.is_null() {
+                Some(Vec::new())
+            } else {
+                graph_memory_references(&edge.metadata)
+            }?;
+            Some((edge, ids))
         })
         .collect::<Vec<_>>();
     let mut source_ids = nodes
@@ -711,7 +715,6 @@ pub async fn build_context_pack(
 
     Ok(pack)
 }
-
 
 pub async fn build_code_context(
     state: &AppState,

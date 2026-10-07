@@ -622,6 +622,9 @@ function previewHermesStatus(codexSignedIn: boolean, configured: boolean): Herme
         recent_memories: [],
         last_error: null,
         install_command: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+        gateway_state: "stopped",
+        gateway_restarts: 0,
+        reconnect_chatgpt: false,
     };
 }
 

@@ -1,0 +1,516 @@
+//! The plan a spoken request becomes, and how FNDR checks that each step landed.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+pub const MAX_STEPS: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepAction {
+    /// FNDR launches or focuses the app natively.
+    OpenApp,
+    /// FNDR opens an http(s) link in the default browser.
+    OpenUrl,
+    /// Codex operates the app's UI through the computer-use tools.
+    Operate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepCheck {
+    /// The app is frontmost.
+    Frontmost,
+    /// A media app is playing.
+    MediaPlaying,
+    /// The browser is frontmost on the requested page.
+    PageLoaded,
+    /// Only the operator's own report.
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanStep {
+    pub action: StepAction,
+    /// Short label for the notch, e.g. "Open Spotify".
+    pub label: String,
+    #[serde(default)]
+    pub app: String,
+    #[serde(default)]
+    pub url: String,
+    /// What `operate` should achieve, in the person's words.
+    #[serde(default)]
+    pub goal: String,
+    pub check: StepCheck,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Plan {
+    pub steps: Vec<PlanStep>,
+}
+
+/// JSON schema the planner turn must answer with (strict structured output).
+pub fn plan_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["steps"],
+        "properties": {
+            "steps": {
+                "type": "array",
+                "maxItems": MAX_STEPS,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["action", "label", "app", "url", "goal", "check"],
+                    "properties": {
+                        "action": { "type": "string", "enum": ["open_app", "open_url", "operate"] },
+                        "label": { "type": "string" },
+                        "app": { "type": "string" },
+                        "url": { "type": "string" },
+                        "goal": { "type": "string" },
+                        "check": { "type": "string", "enum": ["frontmost", "media_playing", "page_loaded", "none"] }
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// JSON schema for the report at the end of an `operate` step.
+pub fn step_report_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["done", "detail"],
+        "properties": {
+            "done": { "type": "boolean" },
+            "detail": { "type": "string" }
+        }
+    })
+}
+
+/// Parses and validates the planner's answer. A plan that cannot run as
+/// written is refused here, before anything touches the Mac.
+pub fn parse_plan(text: &str) -> Result<Plan, String> {
+    let mut plan: Plan =
+        serde_json::from_str(text.trim()).map_err(|e| format!("The plan was not readable: {e}"))?;
+    if plan.steps.is_empty() {
+        return Err("Nothing to do in that request.".to_string());
+    }
+    if plan.steps.len() > MAX_STEPS {
+        return Err(format!("That plan has more than {MAX_STEPS} steps."));
+    }
+    for step in &mut plan.steps {
+        step.app = step.app.trim().to_string();
+        step.url = step.url.trim().to_string();
+        step.label = step.label.trim().to_string();
+        match step.action {
+            StepAction::OpenApp | StepAction::Operate if step.app.is_empty() => {
+                return Err(format!("Step \"{}\" names no app.", step.label));
+            }
+            StepAction::OpenUrl => {
+                let lower = step.url.to_lowercase();
+                if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+                    return Err(format!("Step \"{}\" is not a web link.", step.label));
+                }
+            }
+            _ => {}
+        }
+        if step.label.is_empty() {
+            step.label = match step.action {
+                StepAction::OpenApp => format!("Open {}", step.app),
+                StepAction::OpenUrl => "Open the page".to_string(),
+                StepAction::Operate => step.goal.clone(),
+            };
+        }
+    }
+    Ok(plan)
+}
+
+/// Whether a request points at something in the past ("the song from
+/// yesterday", "that paper I was reading"). Decided on the Mac, before any
+/// request leaves it; only then are memory snippets sent.
+pub fn refers_to_past(request: &str) -> bool {
+    static PAST: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = PAST.get_or_init(|| {
+        regex::Regex::new(
+            r"(?ix)
+            \b(yesterday|earlier|again|ago|previous(ly)?|last\s+(night|week|month|time)|this\s+(morning|afternoon))\b
+            | \b(i|we)\s+(was|were|had\s+been)\s+\w+ing\b
+            | \b(i|we)\s+(read|watched|saw|heard|played|opened|visited|listened)\b
+            | \bthe\s+one\s+(i|we)\b",
+        )
+        .expect("past-reference pattern compiles")
+    });
+    pattern.is_match(request)
+}
+
+/// What FNDR saw on the Mac after a step.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Observation {
+    pub frontmost_app: String,
+    pub frontmost_bundle: String,
+    pub window_title: String,
+    pub browser_url: Option<String>,
+    pub media_playing: Option<bool>,
+    pub media_track: Option<String>,
+    pub media_track_before: Option<String>,
+    /// The operator's own `done` report for an `operate` step.
+    pub reported_done: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Verdict {
+    pub ok: bool,
+    pub detail: String,
+}
+
+fn same_app(wanted: &str, seen: &Observation) -> bool {
+    let wanted = wanted.trim().to_lowercase();
+    if wanted.is_empty() {
+        return false;
+    }
+    let name = seen.frontmost_app.to_lowercase();
+    let bundle = seen.frontmost_bundle.to_lowercase();
+    name == wanted
+        || name.contains(&wanted)
+        || wanted.contains(&name) && !name.is_empty()
+        || bundle == wanted
+}
+
+fn is_browser(seen: &Observation) -> bool {
+    let name = seen.frontmost_app.to_lowercase();
+    let bundle = seen.frontmost_bundle.to_lowercase();
+    [
+        "safari", "chrome", "arc", "dia", "firefox", "brave", "edge", "opera", "vivaldi", "orion",
+        "zen",
+    ]
+    .iter()
+    .any(|browser| name.contains(browser))
+        || [
+            "com.apple.safari",
+            "com.google.chrome",
+            "company.thebrowser",
+            "org.mozilla",
+            "com.brave",
+            "com.microsoft.edgemac",
+        ]
+        .iter()
+        .any(|prefix| bundle.starts_with(prefix))
+}
+
+/// Search words in a link's query (`q=looped+transformers`).
+fn query_words(url: &str) -> Vec<String> {
+    let query = url.split_once('?').map(|(_, q)| q).unwrap_or_default();
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .filter(|(key, _)| matches!(*key, "q" | "query" | "search_query" | "p" | "text"))
+        .flat_map(|(_, value)| {
+            value
+                .split(['+', ' '])
+                .map(|word| word.replace("%20", " ").to_lowercase())
+                .filter(|word| word.len() > 2)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn host(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split(['/', '?'])
+        .next()
+        .unwrap_or_default()
+        .to_lowercase()
+}
+
+/// Whether a player's window title names what the goal asked for. Spotify and
+/// Music title the window "Artist - Track" while playing.
+fn title_names_goal(goal: &str, title: &str) -> bool {
+    const FILLER: &[&str] = &[
+        "play", "the", "song", "track", "music", "by", "listen", "to", "some", "start",
+    ];
+    let title = title.to_lowercase();
+    let words: Vec<String> = goal
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.len() > 1 && !FILLER.contains(word))
+        .map(str::to_string)
+        .collect();
+    !words.is_empty() && words.iter().all(|word| title.contains(word.as_str()))
+}
+
+fn verdict(ok: bool, detail: impl Into<String>) -> Verdict {
+    Verdict {
+        ok,
+        detail: detail.into(),
+    }
+}
+
+/// Whether a step landed, judged from what FNDR saw rather than what the
+/// operator says, except where FNDR has no reading of its own.
+pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
+    match step.check {
+        StepCheck::Frontmost => {
+            if same_app(&step.app, seen) {
+                verdict(true, format!("{} is open", step.app))
+            } else {
+                verdict(
+                    false,
+                    format!("{} is not in front ({} is)", step.app, seen.frontmost_app),
+                )
+            }
+        }
+        StepCheck::MediaPlaying => match seen.media_playing {
+            Some(true) => {
+                let track = seen.media_track.clone().unwrap_or_default();
+                let unchanged = seen.media_track_before.as_deref() == Some(track.as_str());
+                if unchanged && seen.reported_done != Some(true) {
+                    verdict(false, "The same track is still playing")
+                } else if track.is_empty() {
+                    verdict(true, "Playing")
+                } else {
+                    verdict(true, format!("Playing {track}"))
+                }
+            }
+            Some(false) => verdict(false, "Nothing is playing"),
+            None if title_names_goal(&step.goal, &seen.window_title) => verdict(
+                true,
+                format!("{} shows {}", step.app, seen.window_title.trim()),
+            ),
+            None => verdict(
+                seen.reported_done == Some(true),
+                "Playback could not be read; went by the operator's report",
+            ),
+        },
+        StepCheck::PageLoaded => {
+            if !is_browser(seen) {
+                return verdict(
+                    false,
+                    format!("The browser is not in front ({} is)", seen.frontmost_app),
+                );
+            }
+            let words = query_words(&step.url);
+            let url_matches = seen.browser_url.as_deref().is_some_and(|url| {
+                let url = url.to_lowercase();
+                host(&url) == host(&step.url)
+                    || words.iter().all(|word| url.contains(word.as_str()))
+            });
+            let title = seen.window_title.to_lowercase();
+            let title_matches =
+                !words.is_empty() && words.iter().all(|word| title.contains(word.as_str()));
+            if url_matches || title_matches {
+                verdict(true, "The page is open")
+            } else if seen.browser_url.is_none() && seen.window_title.trim().is_empty() {
+                verdict(true, "The browser is in front; the page could not be read")
+            } else {
+                verdict(false, "The browser is showing a different page")
+            }
+        }
+        StepCheck::None => match seen.reported_done {
+            Some(true) => verdict(true, "Done"),
+            _ => verdict(false, "The operator could not finish this step"),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXAMPLE: &str = r#"{"steps":[
+        {"action":"open_app","label":"Open Spotify","app":"Spotify","url":"","goal":"","check":"frontmost"},
+        {"action":"operate","label":"Play Blinding Lights","app":"Spotify","url":"","goal":"play Blinding Lights","check":"media_playing"},
+        {"action":"open_url","label":"Search looped transformers","app":"","url":"https://www.google.com/search?q=looped+transformers","goal":"","check":"page_loaded"}
+    ]}"#;
+
+    fn step(action: StepAction, app: &str, url: &str, check: StepCheck) -> PlanStep {
+        PlanStep {
+            action,
+            label: "x".into(),
+            app: app.into(),
+            url: url.into(),
+            goal: "g".into(),
+            check,
+        }
+    }
+
+    #[test]
+    fn parses_the_example_plan_in_order() {
+        let plan = parse_plan(EXAMPLE).unwrap();
+        let actions: Vec<_> = plan.steps.iter().map(|s| s.action).collect();
+        assert_eq!(
+            actions,
+            vec![
+                StepAction::OpenApp,
+                StepAction::Operate,
+                StepAction::OpenUrl
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_plans_that_cannot_run() {
+        assert!(parse_plan(r#"{"steps":[]}"#).is_err(), "empty plan");
+        assert!(parse_plan("not json").is_err());
+        let bad_url = r#"{"steps":[{"action":"open_url","label":"x","app":"","url":"file:///etc","goal":"","check":"none"}]}"#;
+        assert!(parse_plan(bad_url).is_err());
+        let no_app = r#"{"steps":[{"action":"operate","label":"x","app":"","url":"","goal":"play","check":"none"}]}"#;
+        assert!(parse_plan(no_app).is_err());
+        let many = format!(
+            r#"{{"steps":[{}]}}"#,
+            [r#"{"action":"open_app","label":"x","app":"Notes","url":"","goal":"","check":"frontmost"}"#; MAX_STEPS + 1].join(",")
+        );
+        assert!(parse_plan(&many).is_err());
+    }
+
+    #[test]
+    fn past_references_are_detected_and_plain_commands_are_not() {
+        for text in [
+            "play the song I was listening to yesterday",
+            "open that paper I was reading",
+            "reopen the doc from last week",
+            "play it again",
+            "open the article I read this morning",
+        ] {
+            assert!(refers_to_past(text), "{text}");
+        }
+        for text in [
+            "open Spotify, play Blinding Lights, then open the browser and look up looped transformers",
+            "open Safari",
+            "search for the best pasta recipe",
+        ] {
+            assert!(!refers_to_past(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn open_app_lands_when_the_app_is_frontmost() {
+        let s = step(StepAction::OpenApp, "Spotify", "", StepCheck::Frontmost);
+        let seen = Observation {
+            frontmost_app: "Spotify".into(),
+            ..Default::default()
+        };
+        assert!(verify(&s, &seen).ok);
+        let other = Observation {
+            frontmost_app: "Finder".into(),
+            ..Default::default()
+        };
+        assert!(!verify(&s, &other).ok);
+    }
+
+    #[test]
+    fn media_step_needs_playback_not_just_a_report() {
+        let s = step(StepAction::Operate, "Spotify", "", StepCheck::MediaPlaying);
+        let playing = Observation {
+            frontmost_app: "Spotify".into(),
+            media_playing: Some(true),
+            media_track: Some("Blinding Lights".into()),
+            reported_done: Some(true),
+            ..Default::default()
+        };
+        assert!(verify(&s, &playing).ok);
+        let paused = Observation {
+            media_playing: Some(false),
+            reported_done: Some(true),
+            ..playing.clone()
+        };
+        assert!(!verify(&s, &paused).ok);
+        let unchanged = Observation {
+            media_track_before: Some("Blinding Lights".into()),
+            reported_done: Some(false),
+            ..playing.clone()
+        };
+        assert!(
+            !verify(&s, &unchanged).ok,
+            "same track and the operator says it failed"
+        );
+        let unknown = Observation {
+            media_playing: None,
+            reported_done: Some(true),
+            ..playing
+        };
+        assert!(
+            verify(&s, &unknown).ok,
+            "no media reading falls back to the report"
+        );
+    }
+
+    #[test]
+    fn unreadable_playback_falls_back_to_the_players_window_title() {
+        let mut s = step(StepAction::Operate, "Spotify", "", StepCheck::MediaPlaying);
+        s.goal = "play Blinding Lights".into();
+        let titled = Observation {
+            frontmost_app: "Spotify".into(),
+            window_title: "The Weeknd - Blinding Lights".into(),
+            media_playing: None,
+            reported_done: Some(false),
+            ..Default::default()
+        };
+        let verdict = verify(&s, &titled);
+        assert!(verdict.ok, "{}", verdict.detail);
+        assert!(verdict.detail.contains("Blinding Lights"));
+        let untitled = Observation {
+            window_title: "Spotify Premium".into(),
+            ..titled
+        };
+        assert!(!verify(&s, &untitled).ok);
+    }
+
+    #[test]
+    fn page_loaded_checks_the_browser_url_or_title() {
+        let s = step(
+            StepAction::OpenUrl,
+            "",
+            "https://www.google.com/search?q=looped+transformers",
+            StepCheck::PageLoaded,
+        );
+        let by_url = Observation {
+            frontmost_app: "Dia".into(),
+            frontmost_bundle: "company.thebrowser.dia".into(),
+            browser_url: Some("https://www.google.com/search?q=looped+transformers&sca=1".into()),
+            ..Default::default()
+        };
+        assert!(verify(&s, &by_url).ok);
+        let by_title = Observation {
+            browser_url: None,
+            window_title: "looped transformers - Google Search".into(),
+            ..by_url.clone()
+        };
+        assert!(verify(&s, &by_title).ok);
+        let not_browser = Observation {
+            frontmost_app: "Spotify".into(),
+            frontmost_bundle: "com.spotify.client".into(),
+            ..by_url
+        };
+        assert!(!verify(&s, &not_browser).ok);
+    }
+
+    #[test]
+    fn operate_without_a_check_trusts_the_report() {
+        let s = step(StepAction::Operate, "Notes", "", StepCheck::None);
+        assert!(
+            verify(
+                &s,
+                &Observation {
+                    reported_done: Some(true),
+                    ..Default::default()
+                }
+            )
+            .ok
+        );
+        assert!(
+            !verify(
+                &s,
+                &Observation {
+                    reported_done: Some(false),
+                    ..Default::default()
+                }
+            )
+            .ok
+        );
+    }
+}

@@ -165,10 +165,7 @@ pub(crate) fn report_storage_failure(error: &io::Error) {
     set_last_result(storage_error_receipt(code));
 }
 
-fn disarm_control_for_privacy(
-    arm: &mut DiagnosticArm,
-    reason: ScreenGuideDiagnosticDisarmReason,
-) {
+fn disarm_control_for_privacy(arm: &mut DiagnosticArm, reason: ScreenGuideDiagnosticDisarmReason) {
     let was_armed = arm.expires_at.is_some();
     arm.disarm();
     if was_armed {
@@ -1070,10 +1067,7 @@ mod tests {
         let mut arm = DiagnosticArm::default();
         arm.arm(now);
 
-        disarm_control_for_privacy(
-            &mut arm,
-            ScreenGuideDiagnosticDisarmReason::PrivacySettings,
-        );
+        disarm_control_for_privacy(&mut arm, ScreenGuideDiagnosticDisarmReason::PrivacySettings);
 
         let status = arm.status(now);
         assert!(!status.armed);
@@ -1363,20 +1357,21 @@ mod tests {
             ScreenGuideDiagnosticSession::new(temp.path(), SystemTime::now(), Instant::now())
                 .unwrap();
 
-        let second = match ScreenGuideDiagnosticSession::new(
-            temp.path(),
-            SystemTime::now(),
-            Instant::now(),
-        ) {
-            Ok(_) => panic!("second concurrent session unexpectedly started"),
-            Err(error) => error,
-        };
+        let second =
+            match ScreenGuideDiagnosticSession::new(temp.path(), SystemTime::now(), Instant::now())
+            {
+                Ok(_) => panic!("second concurrent session unexpectedly started"),
+                Err(error) => error,
+            };
         assert_eq!(second.kind(), io::ErrorKind::WouldBlock);
         assert_eq!(
             fs::read_dir(diagnostics_root(temp.path()))
                 .unwrap()
                 .filter_map(Result::ok)
-                .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("partial"))
+                .filter(
+                    |entry| entry.path().extension().and_then(|value| value.to_str())
+                        == Some("partial")
+                )
                 .count(),
             1
         );

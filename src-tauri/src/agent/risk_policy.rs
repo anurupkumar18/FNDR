@@ -225,7 +225,10 @@ mod tests {
             Decision::Refuse(RefuseReason::AgentNotesOff)
         );
         assert_eq!(decide_mcp_write(false, true), Decision::Run);
-        assert_eq!(mcp_write_tools(), ["fndr.remember", "fndr_remember_decision"]);
+        assert_eq!(
+            mcp_write_tools(),
+            ["fndr.remember", "fndr_remember_decision"]
+        );
         for name in mcp_write_tools() {
             assert_eq!(mcp_tool_risk(name), None, "{name} is gated once, not twice");
         }

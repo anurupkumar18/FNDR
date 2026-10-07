@@ -11,7 +11,9 @@ use fndr_lib::graph::GraphStore;
 use fndr_lib::ipc::commands::search::search_ranked_results_explained;
 use fndr_lib::memory_review::repair_record;
 use fndr_lib::storage::{MemoryRecord, StateStore, Store};
-use fndr_lib::summariser::narration_filter::{is_placeholder_summary, narration_filter_hits, neutral_voice};
+use fndr_lib::summariser::narration_filter::{
+    is_placeholder_summary, narration_filter_hits, neutral_voice,
+};
 use fndr_lib::AppState;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -35,19 +37,31 @@ fn norm(vector: &[f32]) -> f32 {
 }
 
 fn first_words(text: &str, count: usize) -> String {
-    text.split_whitespace().take(count).collect::<Vec<_>>().join(" ")
+    text.split_whitespace()
+        .take(count)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn tally(map: &mut BTreeMap<String, usize>, key: &str) {
-    let key = if key.trim().is_empty() { "(empty)" } else { key.trim() };
+    let key = if key.trim().is_empty() {
+        "(empty)"
+    } else {
+        key.trim()
+    };
     *map.entry(key.to_string()).or_default() += 1;
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = PathBuf::from(arg("--data-dir").ok_or("--data-dir required")?).canonicalize()?;
-    let sample: usize = arg("--sample").and_then(|value| value.parse().ok()).unwrap_or(40);
+    let sample: usize = arg("--sample")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(40);
     let real = dirs::data_dir().ok_or("no data dir")?.join("com.fndr.app");
-    if real.canonicalize().is_ok_and(|real| data_dir.starts_with(&real)) {
+    if real
+        .canonicalize()
+        .is_ok_and(|real| data_dir.starts_with(&real))
+    {
         return Err("refusing the real FNDR profile; pass a copy".into());
     }
 
@@ -58,7 +72,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.search.semantic_timeout_ms = 10_000;
     config.search.snippet_timeout_ms = 10_000;
     config.search.keyword_timeout_ms = 10_000;
-    let state = Arc::new(AppState::new(data_dir.clone(), config, store.clone(), state_store, graph, None));
+    let state = Arc::new(AppState::new(
+        data_dir.clone(),
+        config,
+        store.clone(),
+        state_store,
+        graph,
+        None,
+    ));
     let embedder = Embedder::new().ok();
     let runtime = tokio::runtime::Runtime::new()?;
 

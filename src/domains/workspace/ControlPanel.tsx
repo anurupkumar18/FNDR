@@ -1,3 +1,4 @@
+import { SetupCenter } from "@/domains/setup/SetupCenter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -611,6 +612,8 @@ export function ControlPanel({
                                     })}
                                 </div>
                             </section>
+
+                            <SetupCenter />
 
                             <section className="panel-section" aria-labelledby="settings-capture-title">
                                 <h3 id="settings-capture-title">Capture</h3>

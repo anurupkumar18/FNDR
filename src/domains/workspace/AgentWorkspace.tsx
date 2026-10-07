@@ -95,6 +95,8 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
     const [error, setError] = useState<string | null>(null);
     const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [setupOpen, setSetupOpen] = useState(false);
+    /** Why Hermes status could not be read; setup still opens with a Retry. */
+    const [statusError, setStatusError] = useState<string | null>(null);
     const [pickerOpen, setPickerOpen] = useState(false);
 
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -107,8 +109,9 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
     const refreshHermes = useCallback(async () => {
         try {
             setHermes(await getHermesBridgeStatus());
+            setStatusError(null);
         } catch (reason) {
-            setError(reason instanceof Error ? reason.message : String(reason));
+            setStatusError(reason instanceof Error ? reason.message : String(reason));
         }
     }, []);
 
@@ -316,7 +319,17 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                     onClose={onClose}
                 />
 
-                {showSetup && hermes ? (
+                {statusError && !hermes ? (
+                    <div className="aw-setup">
+                        <h3>Hermes isn&apos;t reachable yet</h3>
+                        <p className="aw-error" role="alert">{statusError}</p>
+                        <div className="aw-setup-actions">
+                            <button type="button" className="aw-primary" onClick={() => void refreshHermes()}>
+                                Retry
+                            </button>
+                        </div>
+                    </div>
+                ) : showSetup && hermes ? (
                     <AgentSetup
                         hermes={hermes}
                         onSaved={async () => {

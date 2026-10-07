@@ -824,7 +824,8 @@ pub async fn evaluate_recent_memory_quality(
         };
 
         let blocklist = state.inner().config.read().blocklist.clone();
-        let graph = build_memory_graph_snapshot(state.inner().as_ref(), &memory, &blocklist).await?;
+        let graph =
+            build_memory_graph_snapshot(state.inner().as_ref(), &memory, &blocklist).await?;
         let mut issues = Vec::new();
         if is_vague_memory_context(&memory.memory_context) {
             issues.push("vague_memory_context".to_string());
@@ -1179,7 +1180,6 @@ pub async fn backfill_insight_layers_for_range(
     }
     Ok(InsightBackfillReport { changed, dry_run })
 }
-
 
 #[cfg(test)]
 mod tests {

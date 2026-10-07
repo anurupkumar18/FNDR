@@ -79,7 +79,10 @@ mod tests {
             is_duplicate_story: true,
             ..base()
         };
-        assert_eq!(should_enrich_now(&i, 4), EnrichNow::Defer("host_memory_high"));
+        assert_eq!(
+            should_enrich_now(&i, 4),
+            EnrichNow::Defer("host_memory_high")
+        );
     }
 
     #[test]

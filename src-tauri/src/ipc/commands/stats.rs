@@ -1084,7 +1084,9 @@ pub async fn get_weekly_wrapped(
         None => expected_end_day,
     };
     if end_day != expected_end_day {
-        return Err("Wrapped weeks must end on Sunday, or today for the current week so far.".to_string());
+        return Err(
+            "Wrapped weeks must end on Sunday, or today for the current week so far.".to_string(),
+        );
     }
     let start = start_day
         .and_hms_opt(0, 0, 0)
@@ -1103,7 +1105,12 @@ pub async fn get_weekly_wrapped(
         chrono::Local
             .from_local_datetime(&next_day_start)
             .earliest()
-            .unwrap_or_else(|| chrono::Local.from_local_datetime(&next_day_start).latest().unwrap())
+            .unwrap_or_else(|| {
+                chrono::Local
+                    .from_local_datetime(&next_day_start)
+                    .latest()
+                    .unwrap()
+            })
             .timestamp_millis()
             - 1
     };
@@ -1155,8 +1162,14 @@ pub async fn get_weekly_wrapped(
             }
         }
 
-        if let Some(local_timestamp) = chrono::Local.timestamp_millis_opt(record.timestamp).single() {
-            let day = local_timestamp.date_naive().format("%a, %b %-d").to_string();
+        if let Some(local_timestamp) = chrono::Local
+            .timestamp_millis_opt(record.timestamp)
+            .single()
+        {
+            let day = local_timestamp
+                .date_naive()
+                .format("%a, %b %-d")
+                .to_string();
             *day_counts.entry(day).or_insert(0) += 1;
             *hour_counts.entry(local_timestamp.hour() as u8).or_insert(0) += 1;
         }

@@ -2469,8 +2469,8 @@ mod tests {
     fn embedding_query_text_carries_no_model_instruction() {
         // The embedding contract owns the query prompt (`embedding::prefixes`).
         // MiniLM takes none, so the text handed over must be the query itself.
-        let text = QueryProfile::from_query("quarterly budget review")
-            .embedding_query_with_extras(&[]);
+        let text =
+            QueryProfile::from_query("quarterly budget review").embedding_query_with_extras(&[]);
         assert!(text.starts_with("quarterly budget review"), "{text}");
         assert!(!text.contains("Represent this"), "{text}");
     }

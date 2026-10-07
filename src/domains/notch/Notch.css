@@ -494,3 +494,98 @@ body,
     align-items: center;
     gap: 8px;
 }
+
+.notch-operator-heard {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.4;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.notch-operator-steps {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 13px;
+}
+
+.notch-operator-step {
+    display: grid;
+    grid-template-columns: 7px 1fr;
+    column-gap: 8px;
+    align-items: center;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.notch-operator-step.is-current,
+.notch-operator-step.is-done {
+    color: #ffffff;
+}
+
+.notch-operator-step.is-current .notch-operator-step-label {
+    font-weight: 600;
+}
+
+.notch-operator-step-detail {
+    grid-column: 2;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.notch-operator-step.is-failed .notch-operator-step-detail {
+    color: #ff6961;
+}
+
+.notch-operator-dot.is-pending {
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.notch-operator-dot.is-blocked {
+    background: #ff9f0a;
+}
+
+.notch-operator-countdown {
+    height: 2px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.notch-operator-countdown span {
+    display: block;
+    height: 100%;
+    background: #0a84ff;
+    transform-origin: left center;
+    animation-name: notch-operator-countdown;
+    animation-timing-function: linear;
+    animation-fill-mode: forwards;
+}
+
+@keyframes notch-operator-countdown {
+    from {
+        transform: scaleX(0);
+    }
+    to {
+        transform: scaleX(1);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .notch-operator-countdown span {
+        animation: none;
+        transform: scaleX(1);
+    }
+}
+
+.notch-operator-controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.notch-operator-controls:empty {
+    display: none;
+}

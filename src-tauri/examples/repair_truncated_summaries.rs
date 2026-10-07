@@ -61,7 +61,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Runtime::new()?;
     let before = runtime.block_on(fingerprint(&store))?;
     let summary = runtime
-        .block_on(repair_truncated_summaries(&store, embedder.as_ref(), !apply))
+        .block_on(repair_truncated_summaries(
+            &store,
+            embedder.as_ref(),
+            !apply,
+        ))
         .map_err(std::io::Error::other)?;
     let after = runtime.block_on(fingerprint(&store))?;
     println!(

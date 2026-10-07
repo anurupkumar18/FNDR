@@ -757,3 +757,23 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 **Done when.** The corpus passes and a note written from Claude Code is findable and never merged or fed to context.
 
 **Evidence.** Test output and a run log.
+
+## VS-94 Enable GitHub Pages for the public download site
+- assignee: anurupkumar
+- labels: area::product, type::chore, prio::p0
+- milestone: W03-Build
+- estimate: 1h
+- depends: none
+
+**Why.** The public FNDR download site is merged to `main`, but the repository has no GitHub Pages site configured, so the deployment fails and <https://anurupkumar18.github.io/FNDR/> returns 404. Enabling Pages requires repository-owner or administrator access.
+
+**Today.** Commit `12bf909c` added `website/` and `.github/workflows/pages.yml`. The first `website` run, GitHub Actions run `37581765374`, passed the site tests and packaging steps but failed at `actions/configure-pages` because Pages is not enabled with GitHub Actions as its publishing source.
+
+**Do.**
+1. In **GitHub repository → Settings → Pages**, set **Build and deployment → Source** to **GitHub Actions**.
+2. Rerun the existing failed `website` workflow; reuse `.github/workflows/pages.yml` and do not add another deployment workflow, hosting service, branch, or secret.
+3. Confirm the workflow completes successfully and `https://anurupkumar18.github.io/FNDR/` returns HTTP 200 with the FNDR download page.
+
+**Done when.** The `website` workflow is green on `main`, the project URL returns HTTP 200, and the page's Download for Mac action falls back truthfully to GitHub Releases while no full release exists.
+
+**Evidence.** Attach the successful Pages workflow URL and the HTTP status check to the ticket.

@@ -106,7 +106,10 @@ pub fn neutral_voice(text: &str) -> String {
     let rest = if let Some(found) = LEADING_PERSON.find(text) {
         &text[found.end()..]
     } else if let Some(captures) = LEADING_BARE_USER.captures(text) {
-        let verb = captures.get(1).or_else(|| captures.get(2)).or_else(|| captures.get(3));
+        let verb = captures
+            .get(1)
+            .or_else(|| captures.get(2))
+            .or_else(|| captures.get(3));
         &text[verb.map_or(0, |verb| verb.start())..]
     } else {
         text
@@ -182,8 +185,7 @@ pub fn clean_or_fallback_display_summary(
     url: Option<&str>,
     timestamp_ms: i64,
 ) -> (String, bool) {
-    let generated =
-        build_display_summary(page_title, url, &neutral_voice(candidate), timestamp_ms);
+    let generated = build_display_summary(page_title, url, &neutral_voice(candidate), timestamp_ms);
     if !narration_filter_hits(&generated) {
         return (generated, false);
     }
@@ -252,8 +254,14 @@ mod tests {
             neutral_voice("User is debugging a borrow error"),
             "Debugging a borrow error"
         );
-        assert_eq!(neutral_voice("User checks FNDR logs and trust settings."), "Checks FNDR logs and trust settings.");
-        assert_eq!(neutral_voice("User managing demo prep"), "Managing demo prep");
+        assert_eq!(
+            neutral_voice("User checks FNDR logs and trust settings."),
+            "Checks FNDR logs and trust settings."
+        );
+        assert_eq!(
+            neutral_voice("User managing demo prep"),
+            "Managing demo prep"
+        );
     }
 
     #[test]
@@ -291,7 +299,10 @@ mod tests {
             neutral_voice("Reviewing the failed fixture counts on ChatGPT in."),
             "Reviewing the failed fixture counts on ChatGPT."
         );
-        assert_eq!(neutral_voice("BGE prefixes and vector scores,."), "BGE prefixes and vector scores.");
+        assert_eq!(
+            neutral_voice("BGE prefixes and vector scores,."),
+            "BGE prefixes and vector scores."
+        );
     }
 
     #[test]

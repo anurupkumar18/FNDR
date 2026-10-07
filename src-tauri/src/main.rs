@@ -277,6 +277,18 @@ fn main() {
                 fndr_lib::memory_review::spawn_daily_scheduler(daily_state);
             }
 
+            // First run: install the pinned Hermes into FNDR's app data so the
+            // agent works without a system install. Off the main thread; a
+            // failure is reported when Hermes is first started.
+            {
+                let hermes_state = state.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(error) = ipc::commands::ensure_pinned_hermes(&hermes_state) {
+                        tracing::warn!(%error, "hermes:pinned_install_failed");
+                    }
+                });
+            }
+
             // Demo profile only: queue every stored memory for on-device review
             // once, so the seeded week is reviewed by the real local model.
             if std::env::var("FNDR_DEMO_REVIEW_BACKFILL").ok().as_deref() == Some("1") {
@@ -822,8 +834,13 @@ fn main() {
             ipc::commands::codex_logout,
             ipc::commands::openclicky_bridge_status,
             ipc::commands::computer_use_status,
-            ipc::commands::computer_use_say,
-            ipc::commands::computer_use_interrupt,
+            ipc::commands::computer_use_plan,
+            ipc::commands::check_hermes_update,
+            ipc::commands::setup_components,
+            ipc::commands::install_component,
+            ipc::commands::update_hermes,
+            ipc::commands::computer_use_permissions,
+            ipc::commands::computer_use_start,
             ipc::commands::computer_use_respond,
             ipc::commands::computer_use_stop,
             ipc::commands::send_direct_chat,

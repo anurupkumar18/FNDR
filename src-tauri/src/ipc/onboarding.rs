@@ -295,7 +295,7 @@ pub async fn check_permissions() -> Result<PermissionsStatus, String> {
     })
 }
 
-fn check_screen_recording_permission() -> bool {
+pub(crate) fn check_screen_recording_permission() -> bool {
     // Use CGPreflightScreenCaptureAccess() — the correct macOS API for checking
     // Screen Recording permission without triggering a system prompt.
     // Previously this used osascript talking to System Events, which only succeeds
@@ -378,6 +378,9 @@ fn system_settings_url(pane: &str) -> Result<&'static str, String> {
         }
         "speech-recognition" => {
             Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")
+        }
+        "automation" => {
+            Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
         }
         _ => Err(format!("Unknown settings pane: {pane}")),
     }

@@ -16,8 +16,8 @@ use crate::memory::reopen::{ReopenKind, ReopenValidationStatus};
 use crate::memory_embedding_document::search_embedding_provenance;
 use crate::storage::schema::{
     ActivityEvent, ContextDelta, ContextPack, DecisionLedgerEntry, EdgeType, EntityAliasRecord,
-    GraphEdge, GraphNode, KnowledgePage, MeetingSegment,
-    MeetingSession, MemoryChunkRecord, MemoryChunkSearchResult, MemoryRecord, NodeType, ProjectContext, SearchResult, Task, TaskType,
+    GraphEdge, GraphNode, KnowledgePage, MeetingSegment, MeetingSession, MemoryChunkRecord,
+    MemoryChunkSearchResult, MemoryRecord, NodeType, ProjectContext, SearchResult, Task, TaskType,
 };
 
 use super::schemas::{
@@ -26,10 +26,7 @@ use super::schemas::{
     meeting_schema, memory_chunk_schema, memory_schema_for_text_dim, node_schema,
     project_context_schema, segment_schema, task_schema,
 };
-use super::{
-    IMAGE_EMBED_DIM,
-    TEXT_EMBED_DIM,
-};
+use super::{IMAGE_EMBED_DIM, TEXT_EMBED_DIM};
 use arrow_array::builder::{Int64Builder, ListBuilder, StringBuilder};
 use sha2::{Digest, Sha256};
 

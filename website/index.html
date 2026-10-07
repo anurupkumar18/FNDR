@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="FNDR is a local-first searchable memory for macOS. Find screen context by meaning, with data stored on your Mac by default.">
+    <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
+    <meta name="color-scheme" content="light dark">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="FNDR — Find the thing you meant">
+    <meta property="og:description" content="Searchable local memory for macOS. Your context stays on your Mac by default.">
+    <meta property="og:url" content="https://anurupkumar18.github.io/FNDR/">
+    <link rel="canonical" href="https://anurupkumar18.github.io/FNDR/">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+    <title>FNDR — Searchable local memory for macOS</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="memory-field" aria-hidden="true">
+      <span class="memory-field__thread memory-field__thread--one"></span>
+      <span class="memory-field__thread memory-field__thread--two"></span>
+      <span class="memory-field__thread memory-field__thread--three"></span>
+    </div>
+
+    <header class="site-header">
+      <nav class="nav-shell" aria-label="Primary navigation">
+        <a class="brand" href="#top" aria-label="FNDR home">
+          <svg class="brand__mark" viewBox="0 0 64 64" aria-hidden="true">
+            <rect width="64" height="64" rx="16"></rect>
+            <path d="M25 25h-7a7 7 0 1 1 7-7v28a7 7 0 1 1-7-7h28a7 7 0 1 1-7 7V18a7 7 0 1 1 7 7H18"></path>
+          </svg>
+          <span>FNDR</span>
+        </a>
+        <div class="nav-shell__links">
+          <a href="#how-it-works">How it works</a>
+          <a href="#privacy">Privacy</a>
+          <a href="#install">Install</a>
+          <a href="https://github.com/anurupkumar18/FNDR">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero section-shell" id="top" aria-labelledby="hero-title">
+        <div class="hero__copy">
+          <p class="eyebrow"><span class="eyebrow__pulse" aria-hidden="true"></span> Local-first memory for macOS</p>
+          <h1 id="hero-title">Find the thing<br>you meant.</h1>
+          <p class="hero__lede">FNDR turns permitted screen context into searchable local memory, so a half-remembered page, phrase, or task is findable again.</p>
+
+          <div class="release-control" aria-label="Latest FNDR release">
+            <div class="release-control__actions">
+              <a
+                class="button button--primary"
+                data-download
+                href="https://github.com/anurupkumar18/FNDR/releases/latest/download/FNDR-latest.dmg"
+              >Download for Mac</a>
+              <a class="button button--quiet" href="https://github.com/anurupkumar18/FNDR/releases">Release notes</a>
+            </div>
+            <div class="release-control__status">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span data-release-status aria-live="polite">Latest full release on GitHub</span>
+            </div>
+            <div class="release-control__details" data-release-details hidden>
+              <span data-release-version></span>
+              <span aria-hidden="true">·</span>
+              <span data-release-size></span>
+              <span aria-hidden="true">·</span>
+              <span data-release-date></span>
+              <span aria-hidden="true">·</span>
+              <span data-release-trust></span>
+            </div>
+            <noscript>
+              <p class="release-control__noscript">The download link always resolves to the DMG attached to GitHub's latest full release.</p>
+            </noscript>
+          </div>
+
+          <p class="compatibility" data-release-compatibility>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M14.8 10.5c0-2.2 1.8-3.3 1.9-3.4a4 4 0 0 0-3.2-1.7c-1.4-.1-2.7.8-3.4.8-.7 0-1.8-.8-3-.8A4.5 4.5 0 0 0 3.3 7.7c-1.6 2.8-.4 6.8 1.1 9 .8 1.1 1.6 2.2 2.8 2.2 1.1 0 1.6-.7 3-.7s1.8.7 3 .7c1.2 0 2-1.1 2.7-2.2a9.7 9.7 0 0 0 1.2-2.5 3.8 3.8 0 0 1-2.3-3.7ZM12.6 4c.6-.8 1-1.8.9-2.8-1 .1-2 .7-2.7 1.4-.6.7-1.1 1.7-1 2.7 1 .1 2.1-.5 2.8-1.3Z"></path></svg>
+            macOS 13+ · Apple Silicon
+          </p>
+        </div>
+
+        <figure class="memory-demo">
+          <div class="memory-demo__halo" aria-hidden="true"></div>
+          <div class="app-window" aria-hidden="true">
+            <div class="app-window__bar">
+              <span></span><span></span><span></span>
+              <strong>Memory</strong>
+            </div>
+            <div class="app-window__body">
+              <div class="search-pill">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m16.5 16.5 4 4"></path></svg>
+                <span>that article about local embeddings</span>
+                <kbd>⌘ K</kbd>
+              </div>
+              <div class="memory-result memory-result--primary">
+                <div class="memory-result__source"><span class="source-dot source-dot--blue"></span> Safari · Research</div>
+                <p>Small embedding models can keep semantic search responsive and private on-device…</p>
+                <time>Yesterday, 3:42 PM</time>
+              </div>
+              <div class="memory-result">
+                <div class="memory-result__source"><span class="source-dot source-dot--violet"></span> Notes · Architecture</div>
+                <p>Compare exact identifiers with meaning-based retrieval before choosing the model.</p>
+                <time>Monday, 10:18 AM</time>
+              </div>
+            </div>
+          </div>
+          <div class="context-chip context-chip--browser" aria-hidden="true">Browser</div>
+          <div class="context-chip context-chip--notes" aria-hidden="true">Notes</div>
+          <div class="context-chip context-chip--work" aria-hidden="true">Work</div>
+          <figcaption>Search by meaning across work already done.</figcaption>
+        </figure>
+      </section>
+
+      <section class="proof-strip" aria-label="FNDR at a glance">
+        <div><strong>Local by default</strong><span>Default capture and search stay on the Mac</span></div>
+        <div><strong>No screenshot archive</strong><span>Compact memory records, not a camera roll</span></div>
+        <div><strong>Inspectable</strong><span>Source and release artifacts on GitHub</span></div>
+      </section>
+
+      <section class="section-shell product-section" id="how-it-works" aria-labelledby="product-title">
+        <div class="section-heading">
+          <p class="eyebrow">Recall without retracing</p>
+          <h2 id="product-title">Memory shaped around how recall actually works.</h2>
+          <p>Exact words when they matter. Meaning when they do not. Source context when the result needs to be trusted.</p>
+        </div>
+        <div class="feature-rail">
+          <article>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m16.5 16.5 4 4"></path><path d="M8.5 11h5M11 8.5v5"></path></svg>
+            <h3>Find the fragment</h3>
+            <p>Search browser, document, meeting, and task context by exact phrase or remembered intent.</p>
+          </article>
+          <article>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V8l7-4 7 4v11"></path><path d="M8 19v-7h8v7M3 19h18"></path></svg>
+            <h3>Keep it close</h3>
+            <p>OCR, retrieval, embeddings, and stored memory run on-device by default—not in a hosted memory account.</p>
+          </article>
+          <article>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h12"></path><path d="m12 6 6 6-6 6"></path><circle cx="5" cy="12" r="2"></circle></svg>
+            <h3>Return to the source</h3>
+            <p>Source metadata keeps useful results connected to the app, page, document, or moment they came from.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section-shell privacy-section" id="privacy" aria-labelledby="privacy-title">
+        <div class="privacy-visual" aria-hidden="true">
+          <div class="privacy-orbit privacy-orbit--outer"></div>
+          <div class="privacy-orbit privacy-orbit--inner"></div>
+          <div class="privacy-core">
+            <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="3"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path><circle cx="12" cy="15" r="1.5"></circle></svg>
+            <span>On this Mac</span>
+          </div>
+          <span class="privacy-node privacy-node--one">OCR</span>
+          <span class="privacy-node privacy-node--two">Search</span>
+          <span class="privacy-node privacy-node--three">Memory</span>
+        </div>
+        <div class="privacy-copy">
+          <p class="eyebrow">Privacy is product behavior</p>
+          <h2 id="privacy-title">A memory should not become someone else's dataset.</h2>
+          <p class="privacy-copy__lede">FNDR stores captured context, OCR, and embeddings locally by default. Optional cloud agent features only use services explicitly configured in the app.</p>
+          <dl class="privacy-list">
+            <div><dt>Capture control</dt><dd>Pause capture at any time and use the blocklist for specific apps or sites.</dd></div>
+            <div><dt>Deliberate storage</dt><dd>FNDR stores structured memory records and does not persist a screenshot archive.</dd></div>
+            <div><dt>Your exit</dt><dd>Delete records or set a retention limit from controls built into the app.</dd></div>
+            <div><dt>This website</dt><dd>No analytics, trackers, cookies, sign-in, or form collection.</dd></div>
+          </dl>
+          <a class="text-link" href="https://github.com/anurupkumar18/FNDR#7-privacy-and-safety-controls">Inspect the privacy controls <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+
+      <section class="install-section" id="install" aria-labelledby="install-title">
+        <div class="section-shell">
+          <div class="section-heading section-heading--install">
+            <p class="eyebrow">From download to first search</p>
+            <h2 id="install-title">Three steps. No developer tools.</h2>
+          </div>
+          <ol class="install-steps">
+            <li>
+              <span class="step-number" aria-hidden="true">1</span>
+              <div><h3>Download the DMG</h3><p>Choose <strong>Download for Mac</strong>. FNDR currently supports macOS 13 or later on Apple Silicon.</p></div>
+            </li>
+            <li>
+              <span class="step-number" aria-hidden="true">2</span>
+              <div><h3>Move FNDR to Applications</h3><p>Open the DMG, drag FNDR into Applications, then eject the installer.</p></div>
+            </li>
+            <li>
+              <span class="step-number" aria-hidden="true">3</span>
+              <div><h3>Open and finish setup</h3><p>Follow onboarding for the permissions and on-device search model FNDR needs. Each request explains what it enables.</p></div>
+            </li>
+          </ol>
+
+          <aside class="gatekeeper-note" aria-labelledby="gatekeeper-title">
+            <div class="gatekeeper-note__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.5 3 7.8 7.5 9.5 4.5-1.7 7.5-5 7.5-9.5V6L12 3Z"></path><path d="m8.5 12 2.2 2.2 4.8-5"></path></svg>
+            </div>
+            <div>
+              <h3 id="gatekeeper-title">If macOS blocks the first open</h3>
+              <p>Developer ID releases are signed and notarized by Apple and should open normally. A release built with ad-hoc signing can show that macOS cannot verify the developer. Open <strong>System Settings → Privacy &amp; Security</strong>, scroll to the FNDR message, choose <strong>Open Anyway</strong>, then confirm. Do not disable Gatekeeper.</p>
+            </div>
+          </aside>
+
+          <div class="install-cta">
+            <div>
+              <h2>Make the past work searchable.</h2>
+              <p>One DMG. Future full releases arrive through FNDR's built-in updater.</p>
+            </div>
+            <a
+              class="button button--primary"
+              data-download
+              href="https://github.com/anurupkumar18/FNDR/releases/latest/download/FNDR-latest.dmg"
+            >Download for Mac</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="section-shell site-footer__inner">
+        <div>
+          <a class="brand brand--footer" href="#top" aria-label="FNDR home">
+            <svg class="brand__mark" viewBox="0 0 64 64" aria-hidden="true">
+              <rect width="64" height="64" rx="16"></rect>
+              <path d="M25 25h-7a7 7 0 1 1 7-7v28a7 7 0 1 1-7-7h28a7 7 0 1 1-7 7V18a7 7 0 1 1 7 7H18"></path>
+            </svg>
+            <span>FNDR</span>
+          </a>
+          <p>Searchable local memory for macOS.</p>
+        </div>
+        <div class="site-footer__links" aria-label="Project links">
+          <a href="https://github.com/anurupkumar18/FNDR">Source</a>
+          <a href="https://github.com/anurupkumar18/FNDR/releases">All releases</a>
+          <a href="https://github.com/anurupkumar18/FNDR/blob/main/docs/setup/releasing.md">Release guide</a>
+          <a href="https://github.com/anurupkumar18/FNDR/blob/main/LICENSE">Apache 2.0</a>
+        </div>
+      </div>
+    </footer>
+
+    <script type="module" src="release.js"></script>
+  </body>
+</html>

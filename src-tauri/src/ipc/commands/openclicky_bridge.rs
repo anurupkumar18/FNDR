@@ -64,7 +64,12 @@ fn bridge_token() -> Option<String> {
 /// Converts a cue normalized to the main display (origin top-left) into
 /// global AppKit points (origin bottom-left of the main display), the space
 /// OpenClicky's bridge expects.
-fn appkit_point(normalized_x: f64, normalized_y: f64, width_pts: f64, height_pts: f64) -> (f64, f64) {
+fn appkit_point(
+    normalized_x: f64,
+    normalized_y: f64,
+    width_pts: f64,
+    height_pts: f64,
+) -> (f64, f64) {
     (normalized_x * width_pts, (1.0 - normalized_y) * height_pts)
 }
 
@@ -75,7 +80,9 @@ pub(crate) async fn bridge_status() -> OpenClickyBridgeStatus {
         Err(_) => None,
     };
     let body = match health {
-        Some(response) if response.status().is_success() => response.json::<serde_json::Value>().await.ok(),
+        Some(response) if response.status().is_success() => {
+            response.json::<serde_json::Value>().await.ok()
+        }
         _ => None,
     };
     OpenClickyBridgeStatus {
@@ -99,7 +106,8 @@ pub(crate) async fn point_at(
     caption: Option<&str>,
     display_points: (f64, f64),
 ) -> Result<(), String> {
-    let token = bridge_token().ok_or_else(|| format!("Add {TOKEN_KEY} to ~/.config/openclicky/secrets.env"))?;
+    let token = bridge_token()
+        .ok_or_else(|| format!("Add {TOKEN_KEY} to ~/.config/openclicky/secrets.env"))?;
     let (width, height) = display_points;
     if width <= 0.0 || height <= 0.0 {
         return Err("Could not read the main display size.".to_string());
@@ -116,7 +124,10 @@ pub(crate) async fn point_at(
     if response.status().is_success() {
         Ok(())
     } else {
-        Err(format!("OpenClicky refused the pointer ({}).", response.status()))
+        Err(format!(
+            "OpenClicky refused the pointer ({}).",
+            response.status()
+        ))
     }
 }
 
@@ -140,7 +151,13 @@ mod tests {
     fn reads_tokens_from_dotenv_lines() {
         let file = "# comment\nexport OPENCLICKY_BRIDGE_TOKEN=\"abc123\"\nOTHER=1\n";
         assert_eq!(env_file_value(file, TOKEN_KEY), Some("abc123".into()));
-        assert_eq!(env_file_value("OPENCLICKY_BRIDGE_TOKEN=\n", TOKEN_KEY), None);
-        assert_eq!(env_file_value("OPENCLICKY_BRIDGE_TOKENX=1\n", TOKEN_KEY), None);
+        assert_eq!(
+            env_file_value("OPENCLICKY_BRIDGE_TOKEN=\n", TOKEN_KEY),
+            None
+        );
+        assert_eq!(
+            env_file_value("OPENCLICKY_BRIDGE_TOKENX=1\n", TOKEN_KEY),
+            None
+        );
     }
 }

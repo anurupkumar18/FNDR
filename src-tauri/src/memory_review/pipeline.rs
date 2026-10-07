@@ -632,14 +632,18 @@ mod tests {
 
     #[test]
     fn source_backed_review_keeps_intent_and_actions_unset() {
-        for raw in [r#"{"source_evidence":{}}"#, r#"{"source_evidence":{"version":99}}"#] {
+        for raw in [
+            r#"{"source_evidence":{}}"#,
+            r#"{"source_evidence":{"version":99}}"#,
+        ] {
             let mut record = MemoryRecord {
                 raw_evidence: raw.into(),
                 user_intent: "Stale inferred intent".into(),
                 next_steps: vec!["Stale pending action".into()],
                 todos: vec!["Stale todo".into()],
                 action_items: vec![crate::storage::MemoryActionItem {
-                    text: "Stale action".into(), ..Default::default()
+                    text: "Stale action".into(),
+                    ..Default::default()
                 }],
                 ..Default::default()
             };
@@ -651,9 +655,19 @@ mod tests {
                 user_intent: "Review the draft now".into(),
                 ..Default::default()
             };
-            apply_reviewed_to_record(&mut record, &reviewed, "Draft discussion", 123,
-                STATUS_REVIEWED_LOCAL, SYNTHESIS_BRANCH_REVIEWED_LOCAL);
-            assert!(record.user_intent.is_empty(), "review must not assign ownership: {}", record.user_intent);
+            apply_reviewed_to_record(
+                &mut record,
+                &reviewed,
+                "Draft discussion",
+                123,
+                STATUS_REVIEWED_LOCAL,
+                SYNTHESIS_BRANCH_REVIEWED_LOCAL,
+            );
+            assert!(
+                record.user_intent.is_empty(),
+                "review must not assign ownership: {}",
+                record.user_intent
+            );
             assert!(record.intent_analysis.intent_label.is_empty());
             assert_eq!(record.intent_analysis.confidence, 0.0);
             assert_eq!(record.intent_score, 0.0);
@@ -796,7 +810,8 @@ mod tests {
                 self.0.lock().unwrap().push(input.clone());
                 async move {
                     Ok(ReviewedMemory {
-                        memory_context: "Reviewed parser behavior with the regression tests.".into(),
+                        memory_context: "Reviewed parser behavior with the regression tests."
+                            .into(),
                         display_summary: "Reviewed parser regression tests".into(),
                         related_memory_ids: vec!["observed-neighbor".into()],
                         ..Default::default()
@@ -933,7 +948,10 @@ mod tests {
         assert_eq!(written.synthesis_branch, SYNTHESIS_BRANCH_REVIEWED_LOCAL);
         let evidence: serde_json::Value = serde_json::from_str(&written.raw_evidence).unwrap();
         assert_eq!(evidence["source_kind"], "mixed");
-        assert_eq!(evidence["text_source_kinds"], serde_json::json!(["ax", "ocr"]));
+        assert_eq!(
+            evidence["text_source_kinds"],
+            serde_json::json!(["ax", "ocr"])
+        );
         assert!(written.memory_context.contains("chunk-first"));
         assert_eq!(
             written.embedding_text,

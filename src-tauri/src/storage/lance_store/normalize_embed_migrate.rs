@@ -4,10 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, RecordBatch,
-    RecordBatchIterator, RecordBatchReader, StringArray,
-};
+use arrow_array::{Array, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray};
 use arrow_schema::{ArrowError, DataType, Schema};
 use chrono::TimeZone;
 use futures::TryStreamExt;
@@ -31,8 +28,7 @@ use crate::memory_quality::{
     quality_gate_reason as shared_quality_gate_reason, VISUAL_SEMANTICS_FAILED_OUTCOME,
 };
 use crate::storage::schema::{
-    GraphEdge, GraphNode, MeetingSegment,
-    MeetingSession, MemoryRecord, SearchResult, Task,
+    GraphEdge, GraphNode, MeetingSegment, MeetingSession, MemoryRecord, SearchResult, Task,
 };
 
 use super::arrow_and_filters::{
@@ -41,15 +37,13 @@ use super::arrow_and_filters::{
 };
 use super::schemas::*;
 use super::text_kw::{
-    canonicalize_index_url, is_keyword_stop_word,
-    normalize_keyword_text, trim_chars,
+    canonicalize_index_url, is_keyword_stop_word, normalize_keyword_text, trim_chars,
 };
 use super::{
     ACTIVITY_EVENTS_TABLE, CONTEXT_DELTAS_TABLE, CONTEXT_PACKS_TABLE, DECISION_LEDGER_TABLE,
     EDGES_TABLE, ENTITY_ALIASES_TABLE, GRAPH_EDGES_TABLE, GRAPH_NODES_TABLE, IMAGE_EMBED_DIM,
     INDEX_NOISE_HOSTS, KNOWLEDGE_PAGES_TABLE, MEETINGS_TABLE, MEMORIES_TABLE, MEMORY_CHUNKS_TABLE,
-    NODES_TABLE, PROJECT_CONTEXTS_TABLE, SEGMENTS_TABLE, TASKS_TABLE,
-    TEXT_EMBED_DIM,
+    NODES_TABLE, PROJECT_CONTEXTS_TABLE, SEGMENTS_TABLE, TASKS_TABLE, TEXT_EMBED_DIM,
 };
 use crate::inference::model_config::{BGE_V5_DIMENSIONS, MEMORIES_V5_TABLE};
 
@@ -1874,7 +1868,10 @@ pub(super) async fn ensure_memory_schema_columns(table: &Table) -> Result<(), la
         ));
     }
     if !existing.contains("reopen_page") {
-        transforms.push(("reopen_page".to_string(), "CAST(NULL AS bigint)".to_string()));
+        transforms.push((
+            "reopen_page".to_string(),
+            "CAST(NULL AS bigint)".to_string(),
+        ));
     }
     if !existing.contains("reopen_text_anchor") {
         transforms.push(("reopen_text_anchor".to_string(), null_string_sql()));
@@ -2340,7 +2337,10 @@ mod tests {
             .map(|_| super::infer_intent_analysis(&record).intent_label)
             .collect();
         assert_eq!(labels.len(), 1, "{labels:?}");
-        assert_eq!(super::infer_workflow(&record), super::infer_intent_analysis(&record).intent_label);
+        assert_eq!(
+            super::infer_workflow(&record),
+            super::infer_intent_analysis(&record).intent_label
+        );
     }
 
     use super::*;

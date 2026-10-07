@@ -958,8 +958,7 @@ fn validate_voice_input_container(
     audio_bytes: &[u8],
     mime_type: Option<&str>,
 ) -> Result<(), String> {
-    let declared_webm = mime_type
-        .is_some_and(|value| value.to_ascii_lowercase().contains("webm"));
+    let declared_webm = mime_type.is_some_and(|value| value.to_ascii_lowercase().contains("webm"));
     let has_ebml_header = audio_bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]);
     if declared_webm && !has_ebml_header {
         return Err(
@@ -1073,9 +1072,14 @@ async fn transcribe_audio_file_with_hint(
     let started = Instant::now();
     tracing::info!(hint = ?hint, "speech:transcribe_started");
 
-    let model_path = match ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperBaseEn).await {
+    let model_path = match ensure_model_downloaded(app_data_dir, SpeechModelKind::WhisperBaseEn)
+        .await
+    {
         Ok(path) => {
-            tracing::info!(elapsed_ms = started.elapsed().as_millis() as u64, "speech:model_ready");
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "speech:model_ready"
+            );
             path
         }
         Err(err) => {
@@ -1192,7 +1196,10 @@ async fn transcribe_audio_file_with_hint(
 
     let text = normalize_transcript_text(&String::from_utf8_lossy(&output.stdout));
     if text.is_empty() {
-        tracing::warn!(elapsed_ms = started.elapsed().as_millis() as u64, "speech:transcribe_empty_result");
+        tracing::warn!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "speech:transcribe_empty_result"
+        );
         return Err("Whisper GGUF runner returned empty transcript".to_string());
     }
     tracing::info!(
