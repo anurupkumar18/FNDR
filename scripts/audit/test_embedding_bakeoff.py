@@ -36,7 +36,9 @@ def entry(**overrides):
 
 class PrimaryTextTests(unittest.TestCase):
     def test_follows_compose_insight_embedding_text_field_order(self):
-        text = eb.app_primary_text(entry())
+        text = eb.app_primary_text(
+            entry(decisions=["Keep SMS reminders out of v1", "Ship email reminders first"])
+        )
         labels = [
             "project:",
             "topic:",
@@ -44,7 +46,6 @@ class PrimaryTextTests(unittest.TestCase):
             "what_happened:",
             "why_mattered:",
             "what_changed:",
-            "context_thread:",
             "decisions:",
             "todos:",
             "urls:",
@@ -59,10 +60,16 @@ class PrimaryTextTests(unittest.TestCase):
         self.assertIn("what_happened: Drafted the Smart Reminders PRD", text)
         # why_mattered prefers the first decision.
         self.assertIn("why_mattered: Keep SMS reminders out of v1", text)
-        self.assertIn("what_changed: Get eng comments; Decide default on or opt-in", text)
-        # context_thread uses the first eight characters of the session id.
-        self.assertIn("context_thread: session …launch-p", text)
+        # what_changed holds outcomes, never next steps or the decision already shown.
+        self.assertNotIn("what_changed:", text)
+        # A session id is not a thread and is not embedded.
+        self.assertNotIn("context_thread:", text)
         self.assertIn("todos: Get eng comments; Decide default on or opt-in", text)
+
+        two = eb.app_primary_text(
+            entry(decisions=["Keep SMS reminders out of v1", "Ship email reminders first"])
+        )
+        self.assertIn("what_changed: Ship email reminders first", two)
         self.assertIn("urls: https://docs.google.com/document/d/abc/edit", text)
 
     def test_never_includes_ocr_or_window_title(self):
@@ -78,10 +85,11 @@ class PrimaryTextTests(unittest.TestCase):
             "why_mattered: Encountered error: ModuleNotFoundError: No module named 'pandas'",
             with_error,
         )
+        # The first summary sentence only repeats what_happened here, so it is not used.
         from_summary = eb.app_primary_text(
             entry(decisions=[], errors=[], summary="Read the rubric for the history essay. Then left.")
         )
-        self.assertIn("why_mattered: Read the rubric for the history essay", from_summary)
+        self.assertNotIn("why_mattered:", from_summary)
         short = eb.app_primary_text(entry(decisions=[], errors=[], summary="Q3 metrics. Long tail."))
         self.assertNotIn("why_mattered:", short)
 

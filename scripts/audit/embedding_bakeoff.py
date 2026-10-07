@@ -275,7 +275,7 @@ def _derived_insight(entry: dict) -> tuple[str, str, str, str]:
     if summary and not _is_template_summary(summary):
         what = summary
     elif title:
-        what = f'You were on "{title}".'
+        what = f"{title.rstrip('.')}."
     else:
         what = ""
 
@@ -289,20 +289,36 @@ def _derived_insight(entry: dict) -> tuple[str, str, str, str]:
         why = decisions[0][:MAX_WHY_CHARS]
     elif errors:
         why = f"Encountered error: {errors[0][: MAX_WHY_CHARS - 20]}"
-    elif first_sentence and not _is_template_summary(first_sentence) and len(first_sentence.split()) >= 5:
+    elif (
+        first_sentence
+        and not _is_template_summary(first_sentence)
+        and len(first_sentence.split()) >= 5
+        and not _says_the_same(first_sentence, what)
+    ):
         why = first_sentence[:MAX_WHY_CHARS]
     else:
         why = ""
 
-    changed = "; ".join(step for step in entry.get("next_steps", []) if step.strip())
-    session = entry.get("session", "").strip()
-    thread = f"session \u2026{session[:8]}" if session else ""
+    # Outcomes only: decisions not already shown as why_mattered. The seeded
+    # personas carry no results or files. A session id is not a thread.
+    changed = "; ".join(d.strip() for d in entry.get("decisions", []) if d.strip() and not _says_the_same(d, why))
     return (
         _clip_chars(what, MAX_WHAT_CHARS),
         _clip_chars(why, MAX_WHY_CHARS),
         _clip_chars(changed, MAX_CHANGED_CHARS),
-        thread,
+        "",
     )
+
+
+def _says_the_same(a: str, b: str) -> bool:
+    """Mirror of `says_the_same` in memory_insight/derive.rs."""
+
+    def norm(value: str) -> str:
+        kept = "".join(ch for ch in value.lower() if ch.isalnum() or ch.isspace())
+        return " ".join(kept.split())
+
+    a, b = norm(a), norm(b)
+    return bool(a) and bool(b) and (a in b or b in a)
 
 
 def app_primary_text(entry: dict) -> str:
@@ -319,9 +335,7 @@ def app_primary_text(entry: dict) -> str:
     normalized and capped at 2,000 chars.
 
     Not mirrored (documented gaps): intent, workflow, and aliases, which Rust
-    heuristics infer at insert time; why_mattered when a memory has no
-    decision or error and its first summary sentence has under five words
-    (the app then uses a salient OCR span); strip_fluff and
+    heuristics infer at insert time; strip_fluff and
     dedupe_repeating_phrases, which are no-ops on these personas (no repeated
     app, project, or domain names, separators, or preambles in the fields they
     touch).

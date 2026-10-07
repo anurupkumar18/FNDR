@@ -68,15 +68,38 @@ fn dedupe_repeating_phrases(s: &str) -> String {
     kept.join(" — ")
 }
 
-/// Build a coherent first-person what-happened from structured metadata,
-/// without touching OCR text or display_summary. The hierarchy prefers the
-/// most specific signal first.
+/// Display label for an `activity_type`. Stored values are identifiers such as
+/// `reviewing_agent_output` and must never reach a sentence as they are.
+fn activity_label(activity: &str) -> Option<String> {
+    let label = match activity.trim().to_ascii_lowercase().as_str() {
+        "" | "unknown" | "other" => return None,
+        "coding" => "Coding",
+        "debugging" => "Debugging",
+        "reviewing_agent_output" => "Reviewing agent output",
+        "researching" => "Research",
+        "planning" => "Planning",
+        "writing" => "Writing",
+        "studying" => "Studying",
+        "watching_or_listening" => "Watching or listening",
+        "configuring_tool" => "Tool setup",
+        "testing_workflow" => "Testing",
+        "reading_results" => "Reading results",
+        "organizing_information" => "Organizing information",
+        "communication" => "Communication",
+        "job_or_career_work" => "Career work",
+        "travel_or_logistics" => "Travel and logistics",
+        "entertainment_or_personal_interest" => "Personal interest",
+        other => return Some(capitalize_first(&other.replace('_', " "))),
+    };
+    Some(label.to_string())
+}
+
+/// Build a neutral what-happened line from structured metadata, without
+/// touching OCR text or display_summary. The most specific subject wins.
 fn coherent_what_happened_from_metadata(record: &MemoryRecord) -> String {
     let win = record.window_title.trim();
     let app = record.app_name.trim();
-    let activity = record.activity_type.trim();
     let topic = record.topic.trim();
-    let intent = record.user_intent.trim();
     let entities: Vec<&str> = record
         .entities
         .iter()
@@ -88,48 +111,45 @@ fn coherent_what_happened_from_metadata(record: &MemoryRecord) -> String {
     let win_is_meaningful =
         !win.is_empty() && !win.eq_ignore_ascii_case(app) && win.len() <= 120;
 
-    // Preferred shape: "You {intent} {window_title}" — concrete, specific,
-    // does NOT mention the app name (the app chip already shows that).
-    if win_is_meaningful {
-        if !intent.is_empty() && intent != "unknown" {
-            return format!("You were {} {}.", intent, win);
-        }
-        if !activity.is_empty() && activity != "unknown" {
-            return format!("You were {} {}.", activity, win);
-        }
-        return format!("You were on \"{}\".", win);
-    }
+    // The app name is left out because the app chip already shows it.
+    let subject = if win_is_meaningful {
+        win.to_string()
+    } else if !entities.is_empty() {
+        entities.join(", ")
+    } else if !topic.is_empty() && topic != "unknown" {
+        topic.to_string()
+    } else {
+        String::new()
+    };
+    let subject = subject.trim_end_matches('.');
 
-    // No useful window title — try entities + activity
-    if !entities.is_empty() {
-        let entity_join = entities.join(", ");
-        if !activity.is_empty() && activity != "unknown" {
-            return format!("You were {} regarding {}.", activity, entity_join);
-        }
-        if !topic.is_empty() && topic != "unknown" {
-            return format!("You engaged with {} on {}.", entity_join, topic);
-        }
-        return format!("You engaged with {}.", entity_join);
+    match (activity_label(&record.activity_type), subject.is_empty()) {
+        (Some(activity), false) => format!("{activity}: {subject}."),
+        (Some(activity), true) => format!("{activity}."),
+        (None, false) => format!("{subject}."),
+        (None, true) => String::new(),
     }
-
-    // No window title, no entities — last-resort metadata sentence
-    if !topic.is_empty() && topic != "unknown" {
-        if !activity.is_empty() && activity != "unknown" {
-            return format!("You were {} on {}.", activity, topic);
-        }
-        return format!("Activity related to {}.", topic);
-    }
-    if !activity.is_empty() && activity != "unknown" {
-        return format!("You were {}.", activity);
-    }
-
-    String::new()
 }
 
-/// Build a coherent why-mattered sentence from structured signals.
-/// Order: decisions > errors > first paragraph of memory_context (only if
-/// coherent narrative) > entity/intent-based construction.
-fn coherent_why_mattered_from_metadata(record: &MemoryRecord) -> String {
+/// True when two lines carry the same words, so showing both adds nothing.
+fn says_the_same(a: &str, b: &str) -> bool {
+    let normalize = |s: &str| {
+        s.to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let (a, b) = (normalize(a), normalize(b));
+    !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a))
+}
+
+/// Build a why-mattered sentence from structured signals.
+/// Order: decisions > errors > blockers > first sentence of memory_context
+/// (only when it adds to what-happened) > a stated goal. Empty beats filler.
+fn coherent_why_mattered_from_metadata(record: &MemoryRecord, what_happened: &str) -> String {
     // Prefer concrete structured signals that imply significance
     if let Some(d) = record
         .decisions
@@ -161,32 +181,14 @@ fn coherent_why_mattered_from_metadata(record: &MemoryRecord) -> String {
     if !ctx_first.is_empty()
         && !is_template_summary(ctx_first)
         && ctx_first.split_whitespace().count() >= 5
+        && !says_the_same(ctx_first, what_happened)
     {
         return ctx_first.chars().take(MAX_WHY_CHARS).collect();
     }
 
-    // Build from intent + entities
-    let intent = record.user_intent.trim();
-    let entities: Vec<&str> = record
-        .entities
-        .iter()
-        .filter(|e| !e.trim().is_empty())
-        .take(3)
-        .map(|s| s.as_str())
-        .collect();
-
-    if !intent.is_empty() && intent != "unknown" && !entities.is_empty() {
-        return format!("Engaged in {} involving {}.", intent, entities.join(", "));
-    }
-    if !entities.is_empty() {
-        let activity = record.activity_type.trim();
-        if !activity.is_empty() && activity != "unknown" {
-            return format!(
-                "{} involving {}.",
-                capitalize_first(activity),
-                entities.join(", ")
-            );
-        }
+    let intent = record.user_intent.trim().trim_end_matches('.');
+    if !intent.is_empty() && intent != "unknown" {
+        return format!("Goal: {intent}.");
     }
 
     String::new()
@@ -248,48 +250,38 @@ pub fn derive_insight_for_record(record: &mut MemoryRecord) {
     record.insight_what_happened = clip_chars(what, MAX_WHAT_CHARS);
 
     // --- why_mattered ---
-    let why = coherent_why_mattered_from_metadata(record);
-    let why = if !why.is_empty() {
-        why
-    } else if let Some(span) = spans.first() {
-        // Only use a salient OCR span as last resort and ONLY when it looks
-        // like a meaningful phrase (>= 4 words, not a single proper noun chunk).
-        if span.text.split_whitespace().count() >= 4 && !is_template_summary(&span.text) {
-            span.text.chars().take(MAX_WHY_CHARS).collect()
-        } else {
-            String::new()
-        }
-    } else {
-        String::new()
-    };
+    // A salient OCR line is evidence of what was on screen, not a reason, so
+    // it is never promoted to this field. Empty is the honest answer.
+    let why = coherent_why_mattered_from_metadata(record, &record.insight_what_happened);
     record.insight_why_mattered = clip_chars(why, MAX_WHY_CHARS);
 
     // --- what_changed ---
-    let mut changed: Vec<String> = Vec::new();
-    changed.extend(
-        record
-            .next_steps
-            .iter().filter(|&s| !s.trim().is_empty()).cloned(),
-    );
-    changed.extend(
-        record
-            .files_touched
-            .iter().filter(|&s| !s.trim().is_empty()).cloned(),
-    );
-    let joined = changed.join("; ");
-    record.insight_what_changed = if joined.is_empty() {
-        String::new()
-    } else {
-        clip_chars(joined, MAX_CHANGED_CHARS)
-    };
+    // Outcomes only: results, decisions not already shown above, and the files
+    // involved. Next steps are future work and stay on their own field.
+    let mut changed: Vec<String> = record
+        .results
+        .iter()
+        .chain(record.decisions.iter())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && !says_the_same(s, &record.insight_why_mattered))
+        .map(str::to_string)
+        .collect();
+    let files: Vec<&str> = record
+        .files_touched
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !files.is_empty() {
+        changed.push(format!("Files: {}", files.join(", ")));
+    }
+    record.insight_what_changed = clip_chars(changed.join("; "), MAX_CHANGED_CHARS);
 
-    // --- context_thread (only when we have real links; avoid fabrication) ---
-    if !record.related_memory_ids.is_empty() {
-        record.insight_context_thread =
-            format!("{} linked memories", record.related_memory_ids.len());
-    } else if !record.session_id.trim().is_empty() {
-        let short = record.session_id.chars().take(8).collect::<String>();
-        record.insight_context_thread = format!("session …{short}");
+    // --- context_thread (only real links; a session id is not a thread) ---
+    match record.related_memory_ids.len() {
+        0 => {}
+        1 => record.insight_context_thread = "1 linked memory".to_string(),
+        n => record.insight_context_thread = format!("{n} linked memories"),
     }
 
     let pollution = pollution_for_insight(record);
@@ -434,13 +426,66 @@ mod tests {
         r.entities = vec!["cargo build".to_string(), "release target".to_string()];
         r.activity_type = "building".to_string();
         derive_insight_for_record(&mut r);
-        let w = &r.insight_what_happened;
-        assert!(w.starts_with("You"), "should start with You: {}", w);
-        assert!(
-            w.contains("cargo build") || w.contains("release target"),
-            "entities missing: {}",
-            w
+        assert_eq!(
+            r.insight_what_happened,
+            "Building: cargo build, release target."
         );
+    }
+
+    #[test]
+    fn what_happened_never_shows_an_activity_identifier_or_a_narrator() {
+        let mut r = base();
+        r.app_name = "Google Chrome".to_string();
+        r.window_title = "Fix retrieval ranking by anurup · Pull Request #42".to_string();
+        r.activity_type = "reviewing_agent_output".to_string();
+        r.user_intent = "review the PR".to_string();
+        derive_insight_for_record(&mut r);
+        assert_eq!(
+            r.insight_what_happened,
+            "Reviewing agent output: Fix retrieval ranking by anurup · Pull Request #42."
+        );
+        assert_eq!(r.insight_why_mattered, "Goal: review the PR.");
+    }
+
+    #[test]
+    fn why_mattered_does_not_repeat_what_happened() {
+        let mut r = base();
+        r.display_summary = "Compared three embedding models on the seeded vault.".to_string();
+        r.memory_context =
+            "Compared three embedding models on the seeded vault. MiniLM stayed active."
+                .to_string();
+        derive_insight_for_record(&mut r);
+        assert!(r.insight_what_happened.starts_with("Compared three embedding"));
+        assert_eq!(r.insight_why_mattered, "");
+    }
+
+    #[test]
+    fn what_changed_lists_outcomes_and_files_not_next_steps() {
+        let mut r = base();
+        r.window_title = "retrieval notes".to_string();
+        r.results = vec!["Recall@5 rose from 0.71 to 0.83".to_string()];
+        r.next_steps = vec!["identify key themes in the video summary".to_string()];
+        r.files_touched = vec!["hybrid.rs".to_string(), "reranker.rs".to_string()];
+        derive_insight_for_record(&mut r);
+        assert_eq!(
+            r.insight_what_changed,
+            "Recall@5 rose from 0.71 to 0.83; Files: hybrid.rs, reranker.rs"
+        );
+    }
+
+    #[test]
+    fn thread_is_empty_without_real_links() {
+        let mut r = base();
+        r.window_title = "retrieval notes".to_string();
+        r.session_id = "9f3c2a1b7d".to_string();
+        derive_insight_for_record(&mut r);
+        assert_eq!(r.insight_context_thread, "");
+
+        let mut linked = base();
+        linked.window_title = "retrieval notes".to_string();
+        linked.related_memory_ids = vec!["m-1".to_string()];
+        derive_insight_for_record(&mut linked);
+        assert_eq!(linked.insight_context_thread, "1 linked memory");
     }
 
     #[test]

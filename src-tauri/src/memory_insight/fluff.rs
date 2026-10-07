@@ -20,8 +20,8 @@ pub fn strip_fluff(text: &str, app_name: &str, project: &str, domain: &str) -> S
 
     let mut out = text.to_string();
 
-    // Drop "the user" / "The user" prefixes — synthesis prompt asks for "You"
-    // already, but older models or fallbacks leak this.
+    // Drop "the user" / "The user" prefixes. The prompts ask for a neutral
+    // voice, but older models or fallbacks leak this.
     out = drop_pattern_ci(&out, "the user ");
     out = drop_pattern_ci(&out, "user is ");
     out = drop_pattern_ci(&out, "user was ");
