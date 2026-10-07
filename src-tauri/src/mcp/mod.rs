@@ -4172,6 +4172,9 @@ async fn run_memory_project_context(
         .into_iter()
         .filter(|event| timestamp_in_window(event.end_time, &time_window))
         .collect::<Vec<_>>();
+    let events = context_runtime::retain_context_events(&app_state, events)
+        .await
+        .map_err(internal_tool_error)?;
     let relevant_ids = events
         .iter()
         .map(|event| event.memory_id.clone())
@@ -5678,12 +5681,15 @@ mod tests {
         };
         let mut mixed = event("PRIVATE_MIXED", "visible");
         mixed.source_memory_ids.push("blocked".into());
+        let mut hidden_in_project = event("PRIVATE_CONTEXT_ERROR", "blocked");
+        hidden_in_project.project = Some("Visible project".into());
         runtime
             .block_on(state.store.upsert_activity_events(&[
                 event("Visible project", "visible"),
                 event("PRIVATE_BLOCKED", "blocked"),
                 event("PRIVATE_MISSING", "missing"),
                 mixed,
+                hidden_in_project,
             ]))
             .unwrap();
         state.config.write().blocklist = vec!["privateworkspace".into()];
@@ -5713,12 +5719,23 @@ mod tests {
         let error_rows = errors["structuredContent"]["errors"].as_array().unwrap();
         assert_eq!(error_rows.len(), 1);
         assert_eq!(error_rows[0]["error"], "Visible project");
+        let context = runtime
+            .block_on(run_memory_project_context(
+                state.clone(),
+                ProjectContextArgs {
+                    project: "Visible project".into(),
+                    time_window: Some(json!({"from": 0, "to": 1_900_000_000_000_i64})),
+                },
+            ))
+            .unwrap();
+        assert_eq!(context["structuredContent"]["errors"], json!(["Visible project"]));
+        assert!(!context.to_string().contains("PRIVATE_"));
         assert_eq!(
             runtime
                 .block_on(state.store.list_activity_events(20, None))
                 .unwrap()
                 .len(),
-            4,
+            5,
             "the visibility check must not rewrite stored activity"
         );
     }

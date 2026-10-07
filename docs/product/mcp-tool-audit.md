@@ -47,7 +47,7 @@ module doc comment), **verdict**.
 | `memory.source_evidence` | read | **yes** | none | none | `fndr.source_evidence` (gated by `include_raw`, default closed) | keep; raw text defaults off |
 | `memory.search_raw` | read | **yes** | none | `memory.search_full_context` | none | removed in migration step 2; retained here as history |
 | `memory.projects` | read | no | none | none | none | keep; authorize every activity source before grouping |
-| `memory.project_context` | read | no | none | `memory.project_wiki` | none | merge |
+| `memory.project_context` | read | no | none | `memory.project_wiki` | none | merge; authorize activity before derived errors and memory rows |
 | `memory.decisions` | read | no | none | none | `fndr.recall` (decisions only) | keep |
 | `memory.errors` | read | partial | none | none | none | keep; authorize every activity source before returning errors |
 | `memory.blockers` | read | partial | none | none | none | keep |
