@@ -366,6 +366,13 @@ fn apply_reviewed_to_record(
     }
     if !cleaned_display_summary.trim().is_empty() {
         record.display_summary = cleaned_display_summary.trim().to_string();
+        // The insight rows are derived from the summary and context, and the
+        // card shows them first. Left in place they keep the pre-review text,
+        // so the review never reaches the card. Clear them; the caller
+        // derives them again from the reviewed fields.
+        record.insight_what_happened.clear();
+        record.insight_why_mattered.clear();
+        record.insight_what_changed.clear();
     }
     if !reviewed.topic.trim().is_empty() {
         record.topic = reviewed.topic.trim().to_string();

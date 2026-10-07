@@ -57,9 +57,10 @@ static LEADING_PERSON: Lazy<Regex> = Lazy::new(|| {
 });
 
 // A bare "user" is a narrator only before a verb ("User opened VS Code",
-// "User is debugging"), never before a noun ("User guide", "User testing").
+// "User is debugging", "User checks the logs"), never before a noun ("User
+// guide", "User testing", "User settings").
 static LEADING_BARE_USER: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^\s*user\s+(?:(?:is|was|has been|had been)\s+([a-z]+)|([a-z]+ed)\b)")
+    Regex::new(r"(?i)^\s*user\s+(?:(?:is|was|has been|had been)\s+([a-z]+)|([a-z]+ed)\b|((?:checks|discusses|reviews|views|opens|reads|writes|runs|asks|uses|works|manages|managing|discussing|reviewing|viewing|working|checking|asking|using)\b))")
         .expect("valid bare user regex")
 });
 
@@ -105,7 +106,7 @@ pub fn neutral_voice(text: &str) -> String {
     let rest = if let Some(found) = LEADING_PERSON.find(text) {
         &text[found.end()..]
     } else if let Some(captures) = LEADING_BARE_USER.captures(text) {
-        let verb = captures.get(1).or_else(|| captures.get(2));
+        let verb = captures.get(1).or_else(|| captures.get(2)).or_else(|| captures.get(3));
         &text[verb.map_or(0, |verb| verb.start())..]
     } else {
         text
@@ -251,6 +252,8 @@ mod tests {
             neutral_voice("User is debugging a borrow error"),
             "Debugging a borrow error"
         );
+        assert_eq!(neutral_voice("User checks FNDR logs and trust settings."), "Checks FNDR logs and trust settings.");
+        assert_eq!(neutral_voice("User managing demo prep"), "Managing demo prep");
     }
 
     #[test]
@@ -296,6 +299,7 @@ mod tests {
         for kept in [
             "User guide for React hooks",
             "User testing session notes",
+            "User settings and permissions",
             "username field was edited",
             "Your invoice is ready",
             "Reviewed what you sent on Friday",

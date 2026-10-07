@@ -18,10 +18,9 @@ pub fn strip_fluff(text: &str, app_name: &str, project: &str, domain: &str) -> S
         return text.to_string();
     }
 
-    let mut out = text.to_string();
-
-    // Drop "the user" / "The user" prefixes. The prompts ask for a neutral
-    // voice, but older models or fallbacks leak this.
+    // Remove a leading narrator together with its auxiliary verb. Dropping
+    // only "the user " used to leave "Is monitoring the logs".
+    let mut out = crate::summariser::narration_filter::neutral_voice(text);
     out = drop_pattern_ci(&out, "the user ");
     out = drop_pattern_ci(&out, "user is ");
     out = drop_pattern_ci(&out, "user was ");
@@ -230,7 +229,7 @@ mod tests {
 
     #[test]
     fn strip_fluff_no_op_when_no_redundancy() {
-        let input = "You reviewed the auth refactor PR for security correctness.";
+        let input = "Reviewed the auth refactor PR for security correctness.";
         let out = strip_fluff(input, "GitHub", "", "github.com");
         // GitHub appears 0 times → no change
         assert_eq!(out, input);
