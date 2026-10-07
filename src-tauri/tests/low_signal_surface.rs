@@ -158,3 +158,65 @@ fn surface_policy_over_real_store_round_trip() {
         "hidden: {hidden_ids:?}"
     );
 }
+
+fn signals<'a>(
+    clean_text: &'a str,
+    display_summary: &'a str,
+) -> fndr_lib::memory_quality::SurfaceSignals<'a> {
+    fndr_lib::memory_quality::SurfaceSignals {
+        storage_outcome: "",
+        enrichment_status: "reviewed_local",
+        synthesis_branch: "llm",
+        ocr_block_count: 12,
+        ocr_confidence: 0.9,
+        clean_text,
+        display_summary,
+        app_name: "Google Chrome",
+    }
+}
+
+#[test]
+fn a_system_permission_prompt_is_not_something_the_person_worked_on() {
+    use fndr_lib::memory_quality::{low_signal_reason, LowSignalReason};
+    let dialog = "\"Google Chrome\" would like to record this computer's screen and audio. Grant access to this application in Privacy & Security settings. Open System Settings Don't Allow";
+    assert_eq!(
+        low_signal_reason(&signals(
+            dialog,
+            "Prompted about accessing screen and audio recordings."
+        )),
+        Some(LowSignalReason::SystemPrompt)
+    );
+    let microphone = "\"zoom.us\" would like to access the microphone. Don't Allow OK";
+    assert_eq!(
+        low_signal_reason(&signals(
+            microphone,
+            "A microphone permission request appeared."
+        )),
+        Some(LowSignalReason::SystemPrompt)
+    );
+}
+
+#[test]
+fn a_page_that_only_talks_about_permissions_is_kept() {
+    use fndr_lib::memory_quality::low_signal_reason;
+    let article = "How macOS privacy works. When an app would like to record your screen, macOS asks first. You can change this later in System Settings under Privacy & Security. This guide explains each permission and when to grant it.";
+    assert_eq!(
+        low_signal_reason(&signals(
+            article,
+            "Read a guide to macOS privacy permissions."
+        )),
+        None
+    );
+    // The dialog sits over a page full of real content: the page is the memory.
+    let over_content = format!(
+        "{} \"Google Chrome\" would like to record this computer's screen and audio. Don't Allow",
+        "Meiosis produces four haploid gametes from one diploid cell. ".repeat(12)
+    );
+    assert_eq!(
+        low_signal_reason(&signals(
+            &over_content,
+            "Studied meiosis and gamete chromosome counts."
+        )),
+        None
+    );
+}

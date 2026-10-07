@@ -273,7 +273,33 @@ fn clean_briefing_output(raw: &str) -> String {
         .split("\n\n")
         .next()
         .unwrap_or_default();
-    crate::summariser::sentences::complete_sentences(&normalize_whitespace(first_paragraph), 3)
+    let kept =
+        crate::summariser::sentences::split_sentences(&normalize_whitespace(first_paragraph))
+            .into_iter()
+            .filter(|sentence| !is_briefing_advice(sentence))
+            .collect::<Vec<_>>()
+            .join(" ");
+    crate::summariser::sentences::complete_sentences(&kept, 3)
+}
+
+/// A sentence that tells the reader what to do or learn. The notes record
+/// what happened; they hold no advice, so the model made it up.
+fn is_briefing_advice(sentence: &str) -> bool {
+    let lower = sentence.to_lowercase();
+    [
+        "takeaway",
+        "it is important to",
+        "it's important to",
+        "be sure to",
+        "make sure to",
+        "remember to",
+        "ensuring that",
+        "should ensure",
+        "is to ensure",
+        "going forward",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 fn is_usable_summary(summary: &str) -> bool {
@@ -2142,6 +2168,15 @@ mod tests {
     }
 
     #[test]
+    fn briefing_drops_advice_the_notes_never_gave() {
+        let raw = "Repaired the FNDR database and verified the result. A key takeaway for tomorrow is ensuring that all database backups are properly stored. Studied meiosis and gamete chromosome counts in Chrome.";
+        assert_eq!(
+            clean_briefing_output(raw),
+            "Repaired the FNDR database and verified the result. Studied meiosis and gamete chromosome counts in Chrome."
+        );
+    }
+
+    #[test]
     fn briefing_keeps_one_paragraph_of_finished_sentences() {
         let raw = "Fixed the capture test. Reviewed the forecast. Carry forward the retune. A fourth point.\n\nFixed the capture test again and aga";
         assert_eq!(
@@ -2158,7 +2193,7 @@ mod tests {
         );
         assert_eq!(
             clean_summary_output("You were listening to James Blake"),
-            "Listening to James Blake"
+            "Listened to James Blake"
         );
     }
 

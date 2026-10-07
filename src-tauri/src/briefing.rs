@@ -44,7 +44,9 @@ pub fn briefing_lines(
         .iter()
         .filter(|(app, _, _)| !crate::tasks::suggest::is_system_surface(app))
         .take(MAX_ACTIVITY_LINES)
-        .map(|(app, title, summary)| format!("- [{app}] {title}: {summary}"))
+        // The app goes last and in words, so it reads as a place. Leading
+        // with "[Claude]" made the model write "Claude completed ...".
+        .map(|(app, title, summary)| format!("- {title}: {summary} (in {app})"))
         .collect();
     if activity.len() < MIN_ACTIVITY_LINES {
         return None;
@@ -52,7 +54,7 @@ pub fn briefing_lines(
     let mut lines: Vec<String> = open_tasks
         .iter()
         .take(MAX_TASK_LINES)
-        .map(|title| format!("- [Open task] {title}"))
+        .map(|title| format!("- Open task: {title}"))
         .collect();
     lines.extend(activity);
     Some(lines)

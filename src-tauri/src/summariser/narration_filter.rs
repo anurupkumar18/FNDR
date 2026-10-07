@@ -17,6 +17,9 @@ static BANNED_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         r"(?i)\buser\.$",
         r"(?i)memory_compaction",
         r"(?i)src-tauri",
+        // "In a Google Chrome window titled 'X' and has been prompted ..."
+        // describes the window, not what happened in it.
+        r"(?i)^in an? [^.]{0,60}\bwindow titled\b",
     ]
     .iter()
     .map(|pattern| Regex::new(pattern).expect("valid narration filter regex"))
@@ -51,7 +54,7 @@ static SCRUB_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
 
 static LEADING_PERSON: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?i)^\s*(?:the\s+user|you)\s+(?:(?:is|was|are|were|has been|have been|had been)\s+)?",
+        r"(?i)^\s*(?:the\s+user|you)\s+(?:(?:is|was|are|were|has been|have been|had been|has|have|had)\s+)?",
     )
     .expect("valid leading person regex")
 });
@@ -70,6 +73,7 @@ static LEADING_BARE_USER: Lazy<Regex> = Lazy::new(|| {
 static NARRATION_OPENERS: Lazy<Vec<Regex>> = Lazy::new(|| {
     [
         r"(?i)^\s*the screen (?:shows|displays)\s+",
+        r"(?i)^\s*the (?:session|conversation|chat|page|window|document|video|thread)\s+(?:involves|is about|covers|contains|includes|focuses on|is focused on|shows|displays)\s+",
         r"(?i)^\s*[a-z][\w.]*\s+is responding with\s+(?:(?:updates?|details|information|info)\s+(?:on|about)\s+)?",
         r"(?i)^\s*a chat interface with\s+(?:multiple lines of\s+)?text\s+(?:related to|about)\s+",
     ]
@@ -83,10 +87,74 @@ static DANGLING_END: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)(?:\s*,|\s+(?:in|on|at|-))\s*\.\s*$").expect("valid dangling end regex")
 });
 
+/// "Reviewing the PR" left over from "The user is reviewing the PR" becomes
+/// "Reviewed the PR". Only verbs listed here are changed; guessing a past
+/// tense gets irregular verbs wrong.
+const PAST_TENSE: &[(&str, &str)] = &[
+    ("reviewing", "Reviewed"),
+    ("viewing", "Viewed"),
+    ("working", "Worked"),
+    ("reading", "Read"),
+    ("watching", "Watched"),
+    ("editing", "Edited"),
+    ("browsing", "Browsed"),
+    ("discussing", "Discussed"),
+    ("checking", "Checked"),
+    ("writing", "Wrote"),
+    ("using", "Used"),
+    ("looking", "Looked"),
+    ("interacting", "Interacted"),
+    ("debugging", "Debugged"),
+    ("studying", "Studied"),
+    ("searching", "Searched"),
+    ("testing", "Tested"),
+    ("running", "Ran"),
+    ("comparing", "Compared"),
+    ("exploring", "Explored"),
+    ("configuring", "Configured"),
+    ("managing", "Managed"),
+    ("analyzing", "Analyzed"),
+    ("preparing", "Prepared"),
+    ("drafting", "Drafted"),
+    ("planning", "Planned"),
+    ("opening", "Opened"),
+    ("navigating", "Navigated"),
+    ("scrolling", "Scrolled"),
+    ("typing", "Typed"),
+    ("composing", "Composed"),
+    ("completing", "Completed"),
+    ("learning", "Learned"),
+    ("examining", "Examined"),
+    ("monitoring", "Monitored"),
+    ("updating", "Updated"),
+    ("creating", "Created"),
+    ("fixing", "Fixed"),
+    ("asking", "Asked"),
+    ("listening", "Listened"),
+    ("playing", "Played"),
+    ("organizing", "Organized"),
+];
+
+static NARRATOR_POSSESSIVE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(?:their|your|his or her|the user's)\b").expect("valid possessive regex")
+});
+
+fn past_tense_lead(text: &str) -> String {
+    let first = text.split_whitespace().next().unwrap_or("");
+    match PAST_TENSE
+        .iter()
+        .find(|(ing, _)| first.eq_ignore_ascii_case(ing))
+    {
+        Some((_, past)) => format!("{past}{}", &text[first.len()..]),
+        None => text.to_string(),
+    }
+}
+
 /// FNDR's display voice has no narrator and no reader. Remove a leading "You",
 /// "The user", narrating "User" or screen-describing opener so stored text
 /// written under older prompts reads the same as new text: "You reviewed the
-/// PR" becomes "Reviewed the PR".
+/// PR" becomes "Reviewed the PR", and "The user has completed their review"
+/// becomes "Completed the review".
 pub fn neutral_voice(text: &str) -> String {
     let mut opened = text.to_string();
     for _ in 0..3 {
@@ -99,21 +167,28 @@ pub fn neutral_voice(text: &str) -> String {
         opened = opened[end..].to_string();
     }
     let tidied = DANGLING_END.replace(&opened, ".").into_owned();
-    if tidied == text && !LEADING_PERSON.is_match(text) && !LEADING_BARE_USER.is_match(text) {
+    let had_person = LEADING_PERSON.is_match(&tidied) || LEADING_BARE_USER.is_match(&tidied);
+    if tidied == text && !had_person {
         return text.to_string();
     }
-    let text = tidied.as_str();
-    let rest = if let Some(found) = LEADING_PERSON.find(text) {
-        &text[found.end()..]
-    } else if let Some(captures) = LEADING_BARE_USER.captures(text) {
+    let rest = if let Some(found) = LEADING_PERSON.find(&tidied) {
+        &tidied[found.end()..]
+    } else if let Some(captures) = LEADING_BARE_USER.captures(&tidied) {
         let verb = captures
             .get(1)
             .or_else(|| captures.get(2))
             .or_else(|| captures.get(3));
-        &text[verb.map_or(0, |verb| verb.start())..]
+        &tidied[verb.map_or(0, |verb| verb.start())..]
     } else {
-        text
+        tidied.as_str()
     };
+    // With the narrator gone, "their notes" has no one to belong to.
+    let rest = if had_person {
+        NARRATOR_POSSESSIVE.replace_all(rest, "the").into_owned()
+    } else {
+        rest.to_string()
+    };
+    let rest = past_tense_lead(&rest);
     let mut chars = rest.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),
@@ -248,11 +323,11 @@ mod tests {
         assert_eq!(neutral_voice("user opened VS Code"), "Opened VS Code");
         assert_eq!(
             neutral_voice("You were listening to James Blake"),
-            "Listening to James Blake"
+            "Listened to James Blake"
         );
         assert_eq!(
             neutral_voice("User is debugging a borrow error"),
-            "Debugging a borrow error"
+            "Debugged a borrow error"
         );
         assert_eq!(
             neutral_voice("User checks FNDR logs and trust settings."),
@@ -260,7 +335,7 @@ mod tests {
         );
         assert_eq!(
             neutral_voice("User managing demo prep"),
-            "Managing demo prep"
+            "Managed demo prep"
         );
     }
 
@@ -297,7 +372,7 @@ mod tests {
         );
         assert_eq!(
             neutral_voice("Reviewing the failed fixture counts on ChatGPT in."),
-            "Reviewing the failed fixture counts on ChatGPT."
+            "Reviewed the failed fixture counts on ChatGPT."
         );
         assert_eq!(
             neutral_voice("BGE prefixes and vector scores,."),
@@ -331,5 +406,62 @@ mod tests {
         assert!(filtered);
         assert!(!narration_filter_hits(&summary));
         assert!(summary.ends_with('.'));
+    }
+    #[test]
+    fn a_stripped_narrator_leaves_a_finished_past_tense_sentence() {
+        for (stored, shown) in [
+            (
+                "The user has completed a repair of their FNDR database, backed it up, and verified it.",
+                "Completed a repair of the FNDR database, backed it up, and verified it.",
+            ),
+            ("You have reviewed your notes on meiosis.", "Reviewed the notes on meiosis."),
+            ("The user had opened the lab report.", "Opened the lab report."),
+            ("The user is reviewing the rule refinement process.", "Reviewed the rule refinement process."),
+            ("The user was working on the capstone demo script.", "Worked on the capstone demo script."),
+            ("User is debugging the capture test.", "Debugged the capture test."),
+            ("The user is interacting with a chromosome count exercise.", "Interacted with a chromosome count exercise."),
+        ] {
+            assert_eq!(neutral_voice(stored), shown, "{stored}");
+        }
+    }
+
+    #[test]
+    fn a_sentence_about_the_session_keeps_only_the_work() {
+        assert_eq!(
+            neutral_voice("The session involves reviewing the FNDR app's development status, including commits and UI rendering."),
+            "Reviewed the FNDR app's development status, including commits and UI rendering."
+        );
+        assert_eq!(
+            neutral_voice("The conversation is about choosing an embedding model."),
+            "Choosing an embedding model."
+        );
+    }
+
+    #[test]
+    fn verbs_the_cleanup_does_not_know_and_neutral_text_are_left_alone() {
+        // No narrator: nothing to change, including a leading -ing noun.
+        assert_eq!(
+            neutral_voice("Reviewing guidelines for lab safety."),
+            "Reviewing guidelines for lab safety."
+        );
+        assert_eq!(
+            neutral_voice("Their team shipped the fix."),
+            "Their team shipped the fix."
+        );
+        // Narrator stripped, verb unknown: keep the word rather than guess.
+        assert_eq!(
+            neutral_voice("The user is triaging the inbox."),
+            "Triaging the inbox."
+        );
+    }
+
+    #[test]
+    fn a_description_of_the_window_is_narration() {
+        assert!(narration_filter_hits(
+            "In a Google Chrome window titled 'Gamete Chromosome Count' and has been prompted about accessing screen and audio recordings."
+        ));
+        assert!(!narration_filter_hits(
+            "In a meeting with Priya, agreed on the Friday deadline."
+        ));
     }
 }

@@ -159,6 +159,8 @@ pub enum LowSignalReason {
     VisualSemanticsFailed,
     ImageOnly,
     Ungrounded,
+    /// A macOS permission dialog was most of what was on screen.
+    SystemPrompt,
 }
 
 impl LowSignalReason {
@@ -167,6 +169,7 @@ impl LowSignalReason {
             Self::VisualSemanticsFailed => "visual_semantics_failed",
             Self::ImageOnly => "image_only",
             Self::Ungrounded => "ungrounded_summary",
+            Self::SystemPrompt => "system_prompt",
         }
     }
 
@@ -181,6 +184,9 @@ impl LowSignalReason {
             }
             Self::Ungrounded => {
                 "The summary couldn't be matched to on-screen text, so it was kept out of search."
+            }
+            Self::SystemPrompt => {
+                "A system permission prompt, not something you worked on, so it was kept out of search."
             }
         }
     }
@@ -282,7 +288,26 @@ pub fn low_signal_reason(s: &SurfaceSignals<'_>) -> Option<LowSignalReason> {
     if (visual_fallback || filename_summary) && thin_text {
         return Some(LowSignalReason::ImageOnly);
     }
+    if is_mostly_a_permission_prompt(s.clean_text) {
+        return Some(LowSignalReason::SystemPrompt);
+    }
     None
+}
+
+/// Text beyond the dialog's own wording that makes a capture worth keeping.
+const PERMISSION_PROMPT_MAX_CHARS: usize = 400;
+
+/// A macOS permission dialog ("X would like to record this computer's screen
+/// and audio", with its Don't Allow button) and little else. The same dialog
+/// over a page of real content is that page's memory, and a page that only
+/// discusses permissions has no dialog buttons.
+fn is_mostly_a_permission_prompt(clean_text: &str) -> bool {
+    let lower = clean_text.to_lowercase().replace('\u{2019}', "'");
+    let asks = lower.contains("would like to record")
+        || lower.contains("would like to access")
+        || lower.contains("is requesting to bypass");
+    let has_buttons = lower.contains("don't allow") || lower.contains("allow for one month");
+    asks && has_buttons && clean_text.chars().count() <= PERMISSION_PROMPT_MAX_CHARS
 }
 
 pub fn result_low_signal_reason(r: &SearchResult) -> Option<LowSignalReason> {

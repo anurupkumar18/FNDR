@@ -8,7 +8,9 @@
 use fndr_lib::embedding::Embedder;
 use fndr_lib::inference::InferenceEngine;
 use fndr_lib::storage::Store;
-use fndr_lib::tasks::suggest::{drop_repeats, is_task_source, parse_suggestions, surface_of, Surface};
+use fndr_lib::tasks::suggest::{
+    drop_repeats, is_task_source, parse_suggestions, surface_of, Surface,
+};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -32,7 +34,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("refusing the real FNDR profile; pass a copy".into());
     }
     let show = std::env::args().any(|current| current == "--show");
-    let limit: usize = arg("--limit").and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
+    let limit: usize = arg("--limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(usize::MAX);
 
     let store = Store::new(&data_dir)?;
     let embedder = Embedder::new().ok();
@@ -87,7 +91,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for suggestion in fresh {
                 kept += 1;
                 *by_surface
-                    .entry(if surface == Surface::Personal { "personal" } else { "public" })
+                    .entry(if surface == Surface::Personal {
+                        "personal"
+                    } else {
+                        "public"
+                    })
                     .or_insert(0) += 1;
                 *by_app.entry(memory.app_name.clone()).or_insert(0) += 1;
                 if show {

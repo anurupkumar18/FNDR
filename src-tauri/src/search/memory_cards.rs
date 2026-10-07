@@ -1944,7 +1944,7 @@ mod tests {
         assert_eq!(fallback.insight_what_happened, result.insight_what_happened);
         assert_eq!(
             fallback.insight_why_mattered,
-            "Listening to a live performance."
+            "Listened to a live performance."
         );
 
         let grouped = MemoryCardSynthesizer::from_results_with_policy(

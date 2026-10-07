@@ -127,7 +127,14 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
     let mut last_state = thread_state(newest, &title);
     // When the only name available is the app, the sentence about the work is
     // the better headline; the app stays visible through the source.
-    if title.eq_ignore_ascii_case(newest.app_name.trim()) && !last_state.is_empty() {
+    // A one-word window title ("FNDR" in a chat app) says as little. A
+    // one-word project name is a name the person chose, so it stays.
+    let one_word_window_title = title.split_whitespace().count() == 1
+        && title.eq_ignore_ascii_case(newest.window_title.trim())
+        && newest.project.trim().is_empty();
+    let title_says_little =
+        title.eq_ignore_ascii_case(newest.app_name.trim()) || one_word_window_title;
+    if title_says_little && !last_state.is_empty() {
         title = clip_at_word(last_state.trim_end_matches('.'), 80);
         last_state = String::new();
     }
@@ -321,6 +328,37 @@ mod tests {
             memory_context: "Looked at the merge decision path.".to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_one_word_window_title_gives_way_to_the_sentence_about_the_work() {
+        // Claude's window is titled with the project name alone.
+        let mut chat = record("chat", "", 1_800_000_000_000);
+        chat.app_name = "Claude".into();
+        chat.window_title = "FNDR".into();
+        chat.display_summary =
+            "Reviewed the app's development status, including commits and UI rendering.".into();
+        let thread = build_thread(vec![chat], 1_800_000_060_000, 800);
+        assert_eq!(
+            thread.title,
+            "Reviewed the app's development status, including commits and UI rendering"
+        );
+        assert!(
+            thread.last_state.is_empty(),
+            "the sentence is not shown twice"
+        );
+
+        // A title of several words already says what the thread is.
+        let mut page = record("page", "", 1_800_000_000_000);
+        page.app_name = "Google Chrome".into();
+        page.window_title = "Gamete Chromosome Count".into();
+        page.display_summary = "Answered questions on meiosis and chromosome counts.".into();
+        let thread = build_thread(vec![page], 1_800_000_060_000, 800);
+        assert_eq!(thread.title, "Gamete Chromosome Count");
+        assert_eq!(
+            thread.last_state,
+            "Answered questions on meiosis and chromosome counts."
+        );
     }
 
     #[test]

@@ -62,11 +62,11 @@ fn open_tasks_lead_and_system_processes_are_left_out() {
         "Pay the invoice".to_string(),
     ];
     let lines = briefing_lines(&cards, &tasks).expect("enough activity");
-    assert_eq!(lines[0], "- [Open task] Send Priya the draft report");
+    assert_eq!(lines[0], "- Open task: Send Priya the draft report");
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.contains("[Open task]"))
+            .filter(|line| line.starts_with("- Open task:"))
             .count(),
         3
     );
@@ -75,5 +75,5 @@ fn open_tasks_lead_and_system_processes_are_left_out() {
         .all(|line| !line.contains("UserNotificationCenter")));
     assert!(lines
         .iter()
-        .any(|line| line == "- [Mail] Thread 0: Replied to thread 0."));
+        .any(|line| line == "- Thread 0: Replied to thread 0. (in Mail)"));
 }
