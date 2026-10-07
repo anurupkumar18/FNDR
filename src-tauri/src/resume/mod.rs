@@ -74,11 +74,7 @@ const MAX_STATE_CHARS: usize = 160;
 /// title: a line that only repeats the title or the app name is dropped, and
 /// a long line is cut at a word, never mid-word.
 fn thread_state(record: &MemoryRecord, title: &str) -> String {
-    let first_sentence = record
-        .memory_context
-        .split_terminator(['.', '!', '?'])
-        .next()
-        .unwrap_or("");
+    let first_sentence = crate::summariser::sentences::first_sentence(&record.memory_context);
     let topic = record.topic.trim();
     let outcome = record.outcome.trim().replace('_', " ");
     let topic_line = format!("{topic} {outcome}");

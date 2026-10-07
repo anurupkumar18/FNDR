@@ -58,15 +58,8 @@ pub fn clean_sentence(input: &str) -> String {
     }
 
     // Keep only the first sentence to enforce concise, one-sentence summaries.
-    let sentence_end = text.char_indices().find_map(|(idx, ch)| {
-        if matches!(ch, '.' | '!' | '?') {
-            Some(idx)
-        } else {
-            None
-        }
-    });
-    if let Some(end_idx) = sentence_end {
-        text = text[..=end_idx].to_string();
+    if let Some(first) = super::sentences::split_sentences(&text).first() {
+        text = first.to_string();
     }
 
     text = text

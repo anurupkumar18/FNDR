@@ -172,12 +172,7 @@ fn coherent_why_mattered_from_metadata(record: &MemoryRecord, what_happened: &st
     }
 
     // Use memory_context first sentence ONLY if it's a real narrative
-    let ctx_first = record
-        .memory_context
-        .split_terminator(['.', '!', '?'])
-        .next()
-        .unwrap_or("")
-        .trim();
+    let ctx_first = crate::summariser::sentences::first_sentence(&record.memory_context);
     if !ctx_first.is_empty()
         && !is_template_summary(ctx_first)
         && ctx_first.split_whitespace().count() >= 5

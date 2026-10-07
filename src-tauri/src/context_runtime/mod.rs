@@ -1518,13 +1518,7 @@ pub async fn compile_knowledge_pages(
 
     let mut claim_groups: HashMap<String, Vec<ActivityEvent>> = HashMap::new();
     for event in &events {
-        let claim = event
-            .summary
-            .split('.')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        let claim = crate::summariser::sentences::first_sentence(&event.summary).to_string();
         let key = normalize_alias_key(&claim);
         if key.split('_').count() < 4 {
             continue;

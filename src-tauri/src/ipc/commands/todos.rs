@@ -238,9 +238,7 @@ struct MemoryTaskCandidate {
 }
 
 fn first_sentence(text: &str) -> String {
-    text.split(['.', '!', '?'])
-        .next()
-        .unwrap_or_default()
+    crate::summariser::sentences::first_sentence(text)
         .split_whitespace()
         .take(18)
         .collect::<Vec<_>>()

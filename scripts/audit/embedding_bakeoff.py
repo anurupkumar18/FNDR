@@ -37,6 +37,7 @@ Tests:   python3 -m unittest scripts/audit/test_embedding_bakeoff.py
 
 from __future__ import annotations
 
+import re
 import argparse
 import datetime as dt
 import json
@@ -281,10 +282,9 @@ def _derived_insight(entry: dict) -> tuple[str, str, str, str]:
 
     decisions = [d for d in entry.get("decisions", []) if d.strip() and not _is_template_summary(d)]
     errors = [e for e in entry.get("errors", []) if e.strip()]
-    first_sentence = summary
-    for terminator in ".!?":
-        first_sentence = first_sentence.split(terminator, 1)[0]
-    first_sentence = first_sentence.strip()
+    # Mirror of summariser::sentences::first_sentence: a sentence ends at
+    # . ! or ? only before whitespace or the end, so file names stay whole.
+    first_sentence = re.split(r"(?<=[.!?])\s", summary, maxsplit=1)[0].rstrip(".!?").strip()
     if decisions:
         why = decisions[0][:MAX_WHY_CHARS]
     elif errors:

@@ -35,6 +35,13 @@ Run it with `cargo test --lib v3_prompts_on_synthetic_captures -- --ignored --no
 | Merge snippet produced | 5 of 8 (chat thread and plan document came back empty; cause not yet traced) |
 | Outside the word budget | 4 of 42, mostly briefings (74 and 76 words for "2-3 sentences") |
 
+Fixed after this run, in code rather than in the prompts (rerun on the model the same day):
+
+- **One sentence splitter** (`summariser/sentences.rs`). Nine places cut text at the first period anywhere, so "search/hybrid.rs" ended a memory at "hybrid" and "0.120" became "0.". This was the cause of most cut-off snippets, display summaries and stored snippets. A sentence now ends only before whitespace or the end.
+- **List-shaped output.** For chats, inboxes and plans the model answers with bullets. Each item becomes a sentence; markers are removed.
+- **Echoed screen lines.** Output that only repeats lines of the captured text is discarded so the deterministic snippet is used.
+- **Cut-off output.** Snippets, answers and briefings keep finished sentences only. Briefings keep the first paragraph and at most three sentences; the model was writing several paragraphs and then repeating itself until the 160-token cap (now 54 and 65 words, was 128 and 130).
+
 Still weak: `memory_review` labels code, spreadsheets and documents `reviewing_agent_output` (3 of 8), and its `memory_context` often opens with "The code snippet shows" or "The Numbers app displays". Naming that label in the prompt made it worse (5 of 8), so it was reverted. The display filter strips some of these openers. Eight captures is a smoke test, not an evaluation; a day of real traces is still the next evidence.
 
 Run this after a day of use to fill the last column:

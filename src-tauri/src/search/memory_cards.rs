@@ -1503,40 +1503,10 @@ fn clean_story_fact(value: &str) -> String {
 }
 
 fn split_sentences_preserving_decimals(value: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let bytes = value.as_bytes();
-
-    for (idx, ch) in value.char_indices() {
-        if !matches!(ch, '.' | '!' | '?') {
-            continue;
-        }
-
-        // Keep decimal values like 35.1 intact.
-        if ch == '.'
-            && idx > 0
-            && idx + 1 < value.len()
-            && bytes[idx - 1].is_ascii_digit()
-            && bytes[idx + 1].is_ascii_digit()
-        {
-            continue;
-        }
-
-        let candidate = value[start..=idx].trim();
-        if !candidate.is_empty() {
-            out.push(candidate.to_string());
-        }
-        start = idx + ch.len_utf8();
-    }
-
-    if start < value.len() {
-        let tail = value[start..].trim();
-        if !tail.is_empty() {
-            out.push(tail.to_string());
-        }
-    }
-
-    out
+    crate::summariser::sentences::split_sentences(value)
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 fn strip_leading_transitions(value: &str) -> String {

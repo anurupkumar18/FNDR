@@ -885,12 +885,7 @@ fn build_structured_from_browser_semantics(
         memory_context.push_str(semantic.meta_description.trim());
     }
     if memory_context.trim().is_empty() {
-        memory_context = content_text
-            .split_terminator(['.', '!', '?'])
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        memory_context = crate::summariser::sentences::first_sentence(&content_text).to_string();
     }
     Some(StructuredMemoryExtraction {
         activity_type: "research".to_string(),
@@ -1458,12 +1453,9 @@ fn pick_semantic_center(
     }
     let spans = text_cleanup::rank_salient_spans(clean_text, app_name);
     if let Some(top) = spans.first() {
-        let trimmed = top
-            .text
-            .split_terminator(['.', '!', '?', '\n'])
-            .next()
-            .unwrap_or(&top.text)
-            .trim();
+        let trimmed = crate::summariser::sentences::first_sentence(
+            top.text.lines().next().unwrap_or(&top.text),
+        );
         if !trimmed.is_empty() {
             return trimmed.chars().take(120).collect::<String>();
         }
@@ -3719,12 +3711,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         // be dead code and has been removed.
         let (final_snippet, summary_source) = if let Some(ref mem) = structured_memory {
             let candidate = if !mem.memory_context.trim().is_empty() {
-                mem.memory_context
-                    .split_terminator(['.', '!', '?'])
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string()
+                crate::summariser::sentences::first_sentence(&mem.memory_context).to_string()
             } else {
                 mem.topic.trim().to_string()
             };

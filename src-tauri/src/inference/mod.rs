@@ -167,15 +167,37 @@ fn strip_known_prefixes(value: &str) -> String {
     trimmed.to_string()
 }
 
+/// A list marker the model put in front of a line: "- ", "* ", "• ", "1. ".
+fn without_list_marker(line: &str) -> &str {
+    let line = line.trim_start_matches(['-', '*', '•']).trim_start();
+    match line.split_once(". ") {
+        Some((number, rest)) if !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()) => rest,
+        _ => line,
+    }
+}
+
 fn clean_summary_output(raw: &str) -> String {
+    // The model sometimes answers with a list. Each item becomes a sentence
+    // so the two-sentence cut below lands between items, not inside one.
     let picked_lines = raw
         .lines()
-        .map(str::trim)
+        .map(|line| without_list_marker(line.trim()).trim())
         .filter(|line| !line.is_empty() && !is_separator_line(line))
         .take(2)
+        .map(|line| {
+            if line.ends_with(['.', '!', '?', ':']) {
+                line.to_string()
+            } else {
+                format!("{line}.")
+            }
+        })
         .collect::<Vec<_>>();
     let mut candidate = if picked_lines.is_empty() {
         raw.trim().to_string()
+    } else if picked_lines.len() == 1 {
+        without_list_marker(raw.lines().find(|line| !line.trim().is_empty()).unwrap_or(raw).trim())
+            .trim()
+            .to_string()
     } else {
         picked_lines.join(" ")
     }
@@ -199,22 +221,42 @@ fn clean_summary_output(raw: &str) -> String {
     }
     candidate = normalize_whitespace(&candidate);
 
-    // Keep at most two sentences for browsing ergonomics.
-    let normalized = candidate.replace(['!', '?'], ".");
-    let mut sentences = normalized
-        .split('.')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>();
-    if sentences.len() > 2 {
-        sentences.truncate(2);
-        candidate = format!("{}.", sentences.join(". "));
+    // Keep at most two finished sentences for browsing ergonomics.
+    let mut candidate = crate::summariser::sentences::complete_sentences(&candidate, 2);
+    // Two sentences that do not fit would be cut mid-word; one whole sentence reads better.
+    if candidate.chars().count() > MAX_SUMMARY_CHARS {
+        candidate = crate::summariser::sentences::complete_sentences(&candidate, 1);
     }
 
     // Remove a leading narrator/reader subject left by older model outputs.
     let candidate = crate::summariser::narration_filter::neutral_voice(candidate.trim());
 
     truncate_chars(&candidate, MAX_SUMMARY_CHARS)
+}
+
+/// True when every line the model returned is a line of the captured text.
+fn echoes_source_lines(output: &str, source: &str) -> bool {
+    let squash = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    let source = squash(source);
+    let lines: Vec<String> = output
+        .lines()
+        .map(|line| squash(without_list_marker(line.trim())))
+        .filter(|line| !line.is_empty())
+        .collect();
+    !lines.is_empty() && lines.iter().all(|line| source.contains(line.trim_end_matches('.')))
+}
+
+/// A briefing is one short paragraph. The model tends to write several and
+/// then repeat itself until it runs out of tokens, so keep the first
+/// paragraph, at most three finished sentences.
+fn clean_briefing_output(raw: &str) -> String {
+    let first_paragraph = raw
+        .trim()
+        .trim_matches(|ch| ch == '"' || ch == '\'')
+        .split("\n\n")
+        .next()
+        .unwrap_or_default();
+    crate::summariser::sentences::complete_sentences(&normalize_whitespace(first_paragraph), 3)
 }
 
 fn is_usable_summary(summary: &str) -> bool {
@@ -1014,6 +1056,12 @@ impl InferenceEngine {
             ocr_text.len()
         );
         let raw_summary = self.complete_task("memory_snippet", &prompt, 90).await;
+        // Copying screen lines back is not a summary; the caller's
+        // deterministic snippet is better than an echo of UI text.
+        if echoes_source_lines(&raw_summary, ocr_text) {
+            tracing::debug!("Discarded OCR summary that echoed source lines");
+            return String::new();
+        }
         let summary = clean_summary_output(&raw_summary);
 
         if !is_usable_summary(&summary) {
@@ -1047,7 +1095,8 @@ impl InferenceEngine {
             }
         };
 
-        self.complete_task("answer", &prompt, 150).await
+        let raw = self.complete_task("answer", &prompt, 150).await;
+        crate::summariser::sentences::complete_sentences(raw.trim(), 3)
     }
 
     /// Score an output against a caller-supplied rubric. Evals only; kept apart
@@ -1556,9 +1605,7 @@ impl InferenceEngine {
         tracing::debug!("Generating daily briefing (mode={})...", mode);
         let raw = self.complete_task("daily_briefing", &prompt, 160).await;
 
-        raw.trim()
-            .trim_matches(|ch| ch == '"' || ch == '\'')
-            .to_string()
+        clean_briefing_output(&raw)
     }
 
     fn build_prompt(&self, system_message: &str, user_message: &str) -> Result<String, String> {
@@ -2017,6 +2064,35 @@ mod tests {
     }
 
     #[test]
+    fn summary_cleanup_keeps_decimals_and_file_names_and_turns_a_list_into_sentences() {
+        assert_eq!(
+            clean_summary_output("Margin rose from 0.120 to 0.432 in runtime_metrics.rs over the period."),
+            "Margin rose from 0.120 to 0.432 in runtime_metrics.rs over the period."
+        );
+        assert_eq!(
+            clean_summary_output("- Alex asked if the benchmark finished overnight\n- Sam noted that 0.5x reduced accuracy\n- Jo proposed"),
+            "Alex asked if the benchmark finished overnight. Sam noted that 0.5x reduced accuracy."
+        );
+        assert_eq!(clean_summary_output("First done. Second done. Third is cut of"), "First done. Second done.");
+    }
+
+    #[test]
+    fn an_echo_of_screen_lines_is_not_a_summary() {
+        let source = "Search or enter website name\nFrequently visited: GitLab, Gmail, Calendar\nNew Tab";
+        assert!(echoes_source_lines("Search or enter website name  \nFrequently visited: GitLab, Gmail, Calendar", source));
+        assert!(!echoes_source_lines("Opened a new tab listing frequently visited sites.", source));
+    }
+
+    #[test]
+    fn briefing_keeps_one_paragraph_of_finished_sentences() {
+        let raw = "Fixed the capture test. Reviewed the forecast. Carry forward the retune. A fourth point.\n\nFixed the capture test again and aga";
+        assert_eq!(
+            clean_briefing_output(raw),
+            "Fixed the capture test. Reviewed the forecast. Carry forward the retune."
+        );
+    }
+
+    #[test]
     fn summary_cleanup_removes_narrator_and_reader() {
         assert_eq!(
             clean_summary_output("The user reviewed the PR"),
@@ -2440,5 +2516,6 @@ mod tests {
         );
         assert_eq!(obeyed, 0, "a prompt followed an instruction planted in captured text");
     }
+
 
 }
