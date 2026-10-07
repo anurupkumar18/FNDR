@@ -2,7 +2,7 @@
 //!
 //! A sentence ends at `.`, `!` or `?` only when whitespace or the end of the
 //! text follows, so file names (`hybrid.rs`), decimals (`0.120`), versions
-//! (`v1.5`) and paths (`mod.rs:2210`) stay whole. Splitting at the first
+//! (`v1.5`), paths (`mod.rs:2210`) and ellipses (`SELECT ... FOR`) stay whole. Splitting at the first
 //! period anywhere used to cut memories off in the middle of a file name.
 
 const ABBREVIATIONS: [&str; 4] = ["e.g", "i.e", "vs", "approx"];
@@ -17,13 +17,15 @@ pub fn split_sentences(text: &str) -> Vec<&str> {
             continue;
         }
         let at_boundary = chars.peek().is_none_or(|(_, next)| next.is_whitespace());
+        // "SELECT ... FOR UPDATE": an ellipsis is a pause, not an ending.
+        let in_ellipsis = ch == '.' && text[..idx].ends_with('.') && chars.peek().is_some();
         let after_abbreviation = ch == '.'
             && ABBREVIATIONS.iter().any(|abbreviation| {
                 text[start..idx]
                     .to_ascii_lowercase()
                     .ends_with(&format!(" {abbreviation}"))
             });
-        if at_boundary && !after_abbreviation {
+        if at_boundary && !after_abbreviation && !in_ellipsis {
             let sentence = text[start..idx + ch.len_utf8()].trim();
             if !sentence.is_empty() {
                 sentences.push(sentence);
@@ -75,6 +77,11 @@ mod tests {
         assert_eq!(first_sentence("Reviewed search/hybrid.rs today. Then left."), "Reviewed search/hybrid.rs today");
         assert_eq!(split_sentences("Compared tools, e.g. ripgrep and ag. Done."), vec!["Compared tools, e.g. ripgrep and ag.", "Done."]);
         assert_eq!(first_sentence(""), "");
+        assert_eq!(
+            split_sentences("Read about SELECT ... FOR UPDATE SKIP LOCKED. Tried it."),
+            vec!["Read about SELECT ... FOR UPDATE SKIP LOCKED.", "Tried it."]
+        );
+        assert_eq!(split_sentences("It trailed off..."), vec!["It trailed off..."]);
     }
 
     #[test]

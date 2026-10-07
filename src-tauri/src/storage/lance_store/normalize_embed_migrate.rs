@@ -693,8 +693,14 @@ pub(super) fn infer_intent_analysis(record: &MemoryRecord) -> crate::storage::In
         );
     }
 
+    // Ties are common (two 0.22 signals). Break them by label so the same
+    // record always gets the same intent; hash-map order differs per run.
     let mut ranked = scores.into_iter().collect::<Vec<_>>();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(b.0))
+    });
     let top = ranked.first().copied().unwrap_or(("unknown", 0.0));
     let total: f32 = ranked
         .iter()
@@ -2321,6 +2327,22 @@ pub(super) async fn migrate_graph_from_json(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn intent_is_the_same_on_every_run_when_two_signals_tie() {
+        // A url scores "researching" 0.22 and a next step scores
+        // "organizing_information" 0.22. Hash-map order used to pick the winner.
+        let record = MemoryRecord {
+            url: Some("https://example.com/pr/421".into()),
+            next_steps: vec!["reply to the review".into()],
+            ..Default::default()
+        };
+        let labels: std::collections::HashSet<String> = (0..64)
+            .map(|_| super::infer_intent_analysis(&record).intent_label)
+            .collect();
+        assert_eq!(labels.len(), 1, "{labels:?}");
+        assert_eq!(super::infer_workflow(&record), super::infer_intent_analysis(&record).intent_label);
+    }
+
     use super::*;
 
     #[test]

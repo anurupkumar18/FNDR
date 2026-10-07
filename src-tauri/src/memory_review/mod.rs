@@ -30,9 +30,11 @@ mod daily;
 mod inference_provider;
 mod pipeline;
 mod queue;
+mod repair_truncated;
 mod worker;
 
 pub use backfill::{backfill_memory_review_in_range, BackfillReviewSummary};
+pub use repair_truncated::{repair_record, repair_truncated_summaries, RepairExample, RepairSummary};
 pub use daily::{
     parse_day_range_local, run_daily_memory_review, spawn_daily_scheduler, DailyReviewOutcome,
     DailyReviewSummary, DAILY_REVIEW_TICK_INTERVAL,
