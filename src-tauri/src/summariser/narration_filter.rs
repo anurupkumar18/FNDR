@@ -63,17 +63,52 @@ static LEADING_BARE_USER: Lazy<Regex> = Lazy::new(|| {
         .expect("valid bare user regex")
 });
 
+// Openers that describe the screen or the assistant instead of the work:
+// "Claude is responding with updates on X", "The screen shows a chat
+// interface with multiple lines of text related to X". Only X is kept.
+static NARRATION_OPENERS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    [
+        r"(?i)^\s*the screen (?:shows|displays)\s+",
+        r"(?i)^\s*[a-z][\w.]*\s+is responding with\s+(?:(?:updates?|details|information|info)\s+(?:on|about)\s+)?",
+        r"(?i)^\s*a chat interface with\s+(?:multiple lines of\s+)?text\s+(?:related to|about)\s+",
+    ]
+    .iter()
+    .map(|pattern| Regex::new(pattern).expect("valid narration opener regex"))
+    .collect()
+});
+
+// A template that lost its last value leaves ", ." or " in." at the end.
+static DANGLING_END: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:\s*,|\s+(?:in|on|at|-))\s*\.\s*$").expect("valid dangling end regex")
+});
+
 /// FNDR's display voice has no narrator and no reader. Remove a leading "You",
-/// "The user" or narrating "User" so stored text written under older prompts
-/// reads the same as new text: "You reviewed the PR" becomes "Reviewed the PR".
+/// "The user", narrating "User" or screen-describing opener so stored text
+/// written under older prompts reads the same as new text: "You reviewed the
+/// PR" becomes "Reviewed the PR".
 pub fn neutral_voice(text: &str) -> String {
+    let mut opened = text.to_string();
+    for _ in 0..3 {
+        let Some(end) = NARRATION_OPENERS
+            .iter()
+            .find_map(|opener| opener.find(&opened).map(|found| found.end()))
+        else {
+            break;
+        };
+        opened = opened[end..].to_string();
+    }
+    let tidied = DANGLING_END.replace(&opened, ".").into_owned();
+    if tidied == text && !LEADING_PERSON.is_match(text) && !LEADING_BARE_USER.is_match(text) {
+        return text.to_string();
+    }
+    let text = tidied.as_str();
     let rest = if let Some(found) = LEADING_PERSON.find(text) {
         &text[found.end()..]
     } else if let Some(captures) = LEADING_BARE_USER.captures(text) {
         let verb = captures.get(1).or_else(|| captures.get(2));
         &text[verb.map_or(0, |verb| verb.start())..]
     } else {
-        return text.to_string();
+        text
     };
     let mut chars = rest.chars();
     match chars.next() {
@@ -181,6 +216,23 @@ mod tests {
             neutral_voice("User is debugging a borrow error"),
             "Debugging a borrow error"
         );
+    }
+
+    #[test]
+    fn neutral_voice_drops_screen_and_assistant_narration() {
+        assert_eq!(
+            neutral_voice("Claude is responding with updates on prompt development and testing."),
+            "Prompt development and testing."
+        );
+        assert_eq!(
+            neutral_voice("The screen shows a chat interface with multiple lines of text related to OpenMP scheduling."),
+            "OpenMP scheduling."
+        );
+        assert_eq!(
+            neutral_voice("Reviewing the failed fixture counts on ChatGPT in."),
+            "Reviewing the failed fixture counts on ChatGPT."
+        );
+        assert_eq!(neutral_voice("BGE prefixes and vector scores,."), "BGE prefixes and vector scores.");
     }
 
     #[test]

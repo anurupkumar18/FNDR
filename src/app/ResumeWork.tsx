@@ -63,7 +63,7 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
                             <li key={`${thread.title}:${thread.evidence[0] ?? ""}`}>
                                 <div className="resume-work-thread-heading">
                                     <h3>{thread.title || "Recent work"}</h3>
-                                    <span>{activityAge(thread.age_minutes)}</span>
+                                    <span>{thread.app_name && thread.app_name !== thread.title ? `${thread.app_name} · ` : ""}{activityAge(thread.age_minutes)}</span>
                                 </div>
                                 {thread.last_state && <p>{thread.last_state.replace(/\bin_progress\b/g, "in progress")}</p>}
                                 {latestSource && (

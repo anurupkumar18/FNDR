@@ -287,6 +287,7 @@ export async function fndrTimeline(args?: {
 
 export interface ResumeThread {
     title: string;
+    app_name?: string;
     last_state: string;
     age_minutes: number;
     next_steps: string[];

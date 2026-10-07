@@ -19,6 +19,8 @@ const MAX_SUGGESTED_NEXT_STEPS: usize = 3;
 #[derive(Debug, Clone, Serialize)]
 pub struct ResumeThread {
     pub title: String,
+    /// App of the newest memory, shown as a label beside the title.
+    pub app_name: String,
     pub last_state: String,
     pub age_minutes: i64,
     pub next_steps: Vec<String>,
@@ -119,9 +121,15 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
         .last()
         .expect("build_thread requires a non-empty group");
 
-    let title = thread_title(newest);
+    let mut title = thread_title(newest);
     let age_minutes = (now_ms - newest.timestamp).max(0) / 60_000;
-    let last_state = thread_state(newest, &title);
+    let mut last_state = thread_state(newest, &title);
+    // When the only name available is the app, the sentence about the work is
+    // the better headline; the app stays visible through the source.
+    if title.eq_ignore_ascii_case(newest.app_name.trim()) && !last_state.is_empty() {
+        title = clip_at_word(last_state.trim_end_matches('.'), 80);
+        last_state = String::new();
+    }
     let newest_source_backed = has_source_evidence(&newest.raw_evidence);
     let next_steps: Vec<String> = newest
         .next_steps
@@ -183,6 +191,7 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
 
     ResumeThread {
         title,
+        app_name: newest.app_name.trim().to_string(),
         last_state,
         age_minutes,
         next_steps,
@@ -215,8 +224,10 @@ pub async fn build_resume_threads(
         // Match existing read-side admission before a row can influence
         // thread state, suggestions or citations. Agent notes are not
         // observed work and remain excluded by the remember contract.
+        // A downloaded file is a fact for search, not a piece of work to resume.
         if !crate::context_runtime::retrieve::memory_is_visible(&record, blocklist)
             || record.source_type.trim().eq_ignore_ascii_case("agent")
+            || record.snippet.starts_with("Downloaded: ")
         {
             continue;
         }

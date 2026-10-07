@@ -1188,7 +1188,29 @@ fn compute_session_duration(members: &[SearchResult]) -> u32 {
     (diff_ms / 60_000).max(0) as u32
 }
 
+/// "Midterm Study Guide - Google Chrome" is "Midterm Study Guide"; the app
+/// already has its own label on the card.
+fn without_app_suffix(title: &str, app_name: &str) -> String {
+    let app = app_name.trim();
+    let trimmed = title.trim();
+    if app.is_empty()
+        || trimmed.len() <= app.len()
+        || !trimmed.is_char_boundary(trimmed.len() - app.len())
+    {
+        return trimmed.to_string();
+    }
+    let (head, tail) = trimmed.split_at(trimmed.len() - app.len());
+    if tail.eq_ignore_ascii_case(app) {
+        let head = head.trim_end().trim_end_matches(['-', '|', '·']).trim_end();
+        if !head.is_empty() {
+            return head.to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
 fn sanitize_title(raw: &str, app_name: &str, window_title: &str) -> String {
+    let window_title = &without_app_suffix(window_title, app_name);
     let candidate = normalize_sentence(raw);
     if !candidate.is_empty() && !is_generic_title(&candidate) {
         return truncate_words(&candidate, 18);

@@ -81,7 +81,7 @@ export function MemoryCard({
     const [deleteState, setDeleteState] = useState<
         "idle" | "confirming" | "deleting" | "error"
     >("idle");
-    const previewText = pickPreviewText(card);
+    const previewText = withoutTitleEcho(pickPreviewText(card), card.title);
     const isAgentNote = card.source_type === "agent";
     const sourceLabel = isAgentNote
         ? `Agent note${card.added_by ? ` · Added by ${card.added_by}` : ""}`
@@ -403,6 +403,13 @@ const META_OCR_PREFIXES = [
     "i can see",
     "i see ",
 ];
+
+/** A preview that only repeats the title adds nothing; show the title alone. */
+export function withoutTitleEcho(preview: string, title: string): string {
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const [p, t] = [norm(preview), norm(title)];
+    return p && t && (p.startsWith(t) || t.startsWith(p)) ? "" : preview;
+}
 
 /** `activity_type` is an identifier such as `testing_workflow`; show it as words. */
 export function activityLabel(activityType: string): string {
