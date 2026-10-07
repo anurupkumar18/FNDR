@@ -28,6 +28,8 @@ fn arg(name: &str) -> Option<String> {
     None
 }
 
+static EARLIER: std::sync::OnceLock<BTreeMap<String, String>> = std::sync::OnceLock::new();
+
 fn norm(vector: &[f32]) -> f32 {
     vector.iter().map(|x| x * x).sum::<f32>().sqrt()
 }
@@ -110,7 +112,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // row's current primary and snippet text the way capture does and
         // compare with what is stored.
         let mut freshness = BTreeMap::new();
-        if let Some(embedder) = embedder.as_ref() {
+        let fast = std::env::args().any(|current| current == "--fast");
+        if let Some(embedder) = embedder.as_ref().filter(|_| !fast) {
             for row in &rows {
                 let document = fndr_lib::memory_embedding_document::compose_memory_embedding_document(row, None);
                 let mut current = (*row).clone();
@@ -141,12 +144,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .filter(|row| fndr_lib::memory_quality::record_low_signal_reason(row).is_none())
             .take(sample)
             .collect();
+        if let Some(path) = arg("--dump-summaries") {
+            let dump: BTreeMap<&str, &str> = rows.iter().map(|row| (row.id.as_str(), row.display_summary.as_str())).collect();
+            std::fs::write(path, serde_json::to_string(&dump).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        }
+        if let Some(path) = arg("--queries") {
+            let earlier: BTreeMap<String, String> = serde_json::from_str(&std::fs::read_to_string(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            let _ = EARLIER.set(earlier);
+        }
         let mut search = json!({});
         for (label, query_of) in [
             ("summary_words", (|row: &MemoryRecord| first_words(&row.display_summary, 7)) as fn(&MemoryRecord) -> String),
             // The same summary without a narrator opener ("The user is ..."),
             // which is shared by many memories and says nothing about this one.
             ("summary_gist", |row: &MemoryRecord| first_words(&neutral_voice(&row.display_summary), 8)),
+            // The summary a memory had before a rewrite (`--queries`), to check
+            // that the words a person remembers still find it afterwards.
+            ("earlier_summary_gist", |row: &MemoryRecord| {
+                EARLIER.get().and_then(|map| map.get(&row.id)).map_or_else(String::new, |old| first_words(&neutral_voice(old), 8))
+            }),
             ("window_title", |row: &MemoryRecord| first_words(&row.window_title, 7)),
         ] {
             let (mut asked, mut h1, mut h5, mut v1, mut v5, mut top_score) = (0usize, 0usize, 0usize, 0usize, 0usize, 0f64);
@@ -187,7 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // VS-85: why a memory is not in the top five for its own summary.
         let mut misses = BTreeMap::new();
         let mut miss_count = 0usize;
-        for row in &candidates {
+        for row in candidates.iter().filter(|_| !fast) {
             let query = first_words(&neutral_voice(&row.display_summary), 8);
             let (results, _) = search_ranked_results_explained(&state, &query, None, None, 50).await?;
             let rank = results.iter().position(|result| result.id == row.id);

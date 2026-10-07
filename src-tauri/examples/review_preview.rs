@@ -1,7 +1,8 @@
-//! Re-reviews weak summaries on a COPY of a profile with the local model and
-//! prints before and after. Refuses the real profile. The copy is rewritten;
-//! the source profile is never opened.
-//! Usage: cargo run --example review_preview -- --data-dir <profile copy> [--limit N]
+//! Re-reviews weak summaries (placeholders and narration) with the local
+//! model and prints before and after. The profile is rewritten, so run it on
+//! a copy first. Refuses the real profile unless `--allow-real-profile` is
+//! given. `--quiet` prints counts only, never memory text.
+//! Usage: cargo run --example review_preview -- --data-dir <profile> [--limit N] [--quiet]
 
 use fndr_lib::embedding::Embedder;
 use fndr_lib::inference::InferenceEngine;
@@ -27,8 +28,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = PathBuf::from(arg("--data-dir").ok_or("--data-dir required")?).canonicalize()?;
     let limit: usize = arg("--limit").and_then(|value| value.parse().ok()).unwrap_or(12);
     let real = dirs::data_dir().ok_or("no data dir")?.join("com.fndr.app");
-    if real.canonicalize().is_ok_and(|real| data_dir.starts_with(&real)) {
-        return Err("refusing the real FNDR profile; pass a copy".into());
+    let quiet = std::env::args().any(|current| current == "--quiet");
+    if real.canonicalize().is_ok_and(|real| data_dir.starts_with(&real))
+        && !std::env::args().any(|current| current == "--allow-real-profile")
+    {
+        return Err("refusing the real FNDR profile without --allow-real-profile".into());
     }
 
     let store = Store::new(&data_dir)?;
@@ -51,6 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         println!("weak rows selected: {}", weak.len());
         let now = chrono::Utc::now().timestamp_millis();
+        let (mut reviewed, mut refused, mut skipped) = (0usize, 0usize, 0usize);
         for row in weak {
             let job = MemoryReviewJob {
                 memory_id: row.id.clone(),
@@ -64,6 +69,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 MemoryReviewOutcome::Failed { .. } => format!("{outcome:?}").chars().take(90).collect(),
                 MemoryReviewOutcome::Skipped { reason, .. } => format!("skipped: {reason}"),
             };
+            match &outcome {
+                MemoryReviewOutcome::Reviewed { .. } => reviewed += 1,
+                MemoryReviewOutcome::Failed { .. } => refused += 1,
+                MemoryReviewOutcome::Skipped { .. } => skipped += 1,
+            }
+            if quiet {
+                continue;
+            }
             println!("--- {} | {} | {label}", row.app_name, row.window_title.chars().take(60).collect::<String>());
             println!("  BEFORE {}", row.display_summary);
             if let Some(after) = after {
@@ -72,6 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  META   topic={:?} activity={:?}", after.topic, after.activity_type);
             }
         }
+        println!("reviewed={reviewed} refused_by_guards={refused} skipped={skipped}");
         Ok::<(), String>(())
     })?;
     Ok(())
