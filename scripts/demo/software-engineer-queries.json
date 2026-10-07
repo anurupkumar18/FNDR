@@ -32,5 +32,9 @@
   { "query": "kitchen remodel contractor quote", "kind": "negative", "relevant_ids": [] },
   { "query": "flight to Lisbon booking confirmation", "kind": "negative", "relevant_ids": [] },
   { "query": "React Native push notification crash on Android", "kind": "negative", "relevant_ids": [] },
-  { "query": "quarterly sales commission spreadsheet", "kind": "negative", "relevant_ids": [] }
+  { "query": "quarterly sales commission spreadsheet", "kind": "negative", "relevant_ids": [] },
+  { "query": "notes on migrating the mobile app to Flutter", "kind": "negative", "relevant_ids": [] },
+  { "query": "meeting about the office move to the fifth floor", "kind": "negative", "relevant_ids": [] },
+  { "query": "list of wedding venues with prices", "kind": "negative", "relevant_ids": [] },
+  { "query": "tax return documents for last year", "kind": "negative", "relevant_ids": [] }
 ]

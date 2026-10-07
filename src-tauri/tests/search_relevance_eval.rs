@@ -97,11 +97,14 @@ fn eval_rows() -> Vec<(
             None,
         ),
         (
+            // System Settings is on the default excluded-apps list, so a
+            // capture from it is never stored or returned. A support page
+            // about the same thing is.
             "mem_display_settings",
-            "System Settings",
-            "Display Settings",
-            "Configured MacBook Pro display resolution and brightness in System Settings.",
-            None,
+            "Safari",
+            "Change your Mac display's resolution - Apple Support",
+            "Read how to set MacBook Pro display resolution and brightness in System Settings.",
+            Some("https://support.apple.com"),
         ),
         (
             "mem_video_abs",
@@ -287,8 +290,8 @@ fn hybrid_search_relevance_eval_suite() {
         avg_precision_at_6
     );
     assert!(
-        avg_mrr >= 0.72,
-        "expected avg MRR >= 0.72, got {:.3}",
+        avg_mrr >= 0.90,
+        "expected avg MRR >= 0.90, got {:.3}",
         avg_mrr
     );
 }

@@ -37,5 +37,9 @@
   { "query": "flight confirmation to Denver", "kind": "negative", "relevant_ids": [] },
   { "query": "organic chemistry lab report", "kind": "negative", "relevant_ids": [] },
   { "query": "apartment lease renewal", "kind": "negative", "relevant_ids": [] },
-  { "query": "dentist appointment reminder", "kind": "negative", "relevant_ids": [] }
+  { "query": "dentist appointment reminder", "kind": "negative", "relevant_ids": [] },
+  { "query": "notes from the pottery class last weekend", "kind": "negative", "relevant_ids": [] },
+  { "query": "car insurance renewal documents", "kind": "negative", "relevant_ids": [] },
+  { "query": "list of baby names we liked", "kind": "negative", "relevant_ids": [] },
+  { "query": "meeting notes about the marathon training plan", "kind": "negative", "relevant_ids": [] }
 ]

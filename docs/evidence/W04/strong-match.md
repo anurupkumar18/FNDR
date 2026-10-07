@@ -40,7 +40,24 @@ The "before" persona figures are the score against the bar, which is how `retrie
 - The two conditions were chosen on the same 20 no-match queries they are reported on. Treat the result as fitted until new no-match queries are added.
 - First-place counts on the vault copy moved by one to three between identical runs while FNDR was running beside the measurement, so small differences in that column are noise here.
 
+## Checked on queries the rule was not fitted to
+
+Twelve new no-match queries were added afterwards, four per persona, written to use common words ("notes", "list", "documents", "meeting", "report") that exist in the corpora. None of their topics appears in a corpus.
+
+| No-match queries marked strong | Old rule (score against the bar) | Rule now |
+|---|---|---|
+| The 12 the rule was fitted on | 5 | 0 |
+| The 12 new ones | 8 | 3 |
+| All 24 | 13 | 3 |
+
+Real queries marked weak stayed at 6 of 98. So the rule holds up on new queries but is not complete. Of the three it still passes, one names a time ("last weekend"), where the time route counts as evidence although it says nothing about the topic, and one is close to a real memory (a different hiring search).
+
+## Two ideas measured and not adopted
+
+- **Stemming the word match.** The three real queries that lose their strong mark are paraphrases: "vacation" for "PTO", "rollback" for "Rolled back", "new teammate" for "new backend engineer". Stemming recovers none of them.
+- **Requiring the top result to stand out.** The gap between the top result's vector signal and the mean of the next three was at most 0.07 for the fitted persona negatives, but 0.11 on the vault's unrelated queries, against 0.15 for the nearest real query it would rescue. Too close to rely on.
+
 ## Also found
 
-- `tests/search_relevance_eval.rs` measured the older `HybridSearcher`. It now runs the live retrieval function (average MRR 0.919 on its 31 real cases, gate 0.72). Its five no-match cases are reported, not gated, because the mock embedder gives no real vectors.
-- In that test the "Display Settings" memory, captured in System Settings, is never returned by the live path for its two queries. System Settings is in the default list of excluded apps (`config.rs`), which the live path honors and the older engine did not, so this looks intended; the two cases should be dropped or moved to an app that is not excluded.
+- `tests/search_relevance_eval.rs` measured the older `HybridSearcher`. It now runs the live retrieval function (average MRR 0.984 on its 31 real cases, gate raised from 0.72 to 0.90). Its five no-match cases are reported, not gated, because the mock embedder gives no real vectors.
+- In that test the "Display Settings" memory was captured in System Settings, which is on the default list of excluded apps, so the live path never returned it. The fixture is now a support page in Safari and both of its queries find it first, which confirms the cause.

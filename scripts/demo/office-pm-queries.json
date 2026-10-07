@@ -35,5 +35,9 @@
   { "query": "rental car reservation", "kind": "negative", "relevant_ids": [] },
   { "query": "SOC 2 audit evidence request", "kind": "negative", "relevant_ids": [] },
   { "query": "Android app crash report", "kind": "negative", "relevant_ids": [] },
-  { "query": "GDPR data deletion request from a European customer", "kind": "negative", "relevant_ids": [] }
+  { "query": "GDPR data deletion request from a European customer", "kind": "negative", "relevant_ids": [] },
+  { "query": "report on warehouse inventory shrinkage", "kind": "negative", "relevant_ids": [] },
+  { "query": "notes from the podcast about sourdough baking", "kind": "negative", "relevant_ids": [] },
+  { "query": "list of candidates for the sales director role", "kind": "negative", "relevant_ids": [] },
+  { "query": "documents for the mortgage refinance", "kind": "negative", "relevant_ids": [] }
 ]
