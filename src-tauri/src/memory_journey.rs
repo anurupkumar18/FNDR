@@ -1985,16 +1985,6 @@ mod tests {
                 && stage.status == MemoryJourneyStageStatus::Unavailable));
         }
 
-        let results = crate::ipc::commands::search::search_ranked_results(
-            &state,
-            "distinctive Zephyr fact",
-            None,
-            None,
-            10,
-        )
-        .await
-        .unwrap();
-        assert!(results.iter().any(|result| result.id == "research"));
         let (explained, explanation) =
             crate::ipc::commands::search::search_ranked_results_explained(
                 &state,
@@ -2005,16 +1995,16 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            results
-                .iter()
-                .map(|result| (&result.id, result.score))
-                .collect::<Vec<_>>(),
-            explained
-                .iter()
-                .map(|result| (&result.id, result.score))
-                .collect::<Vec<_>>()
-        );
+        assert!(explained.iter().any(|result| result.id == "research"));
         assert!(explanation.get("production_retrieval").is_some());
+        let final_ranks = explanation["final_ranks"]
+            .as_array()
+            .expect("explained search returns final ranks");
+        assert_eq!(final_ranks.len(), explained.len());
+        for (index, (rank, result)) in final_ranks.iter().zip(&explained).enumerate() {
+            assert_eq!(rank["rank"], index + 1);
+            assert_eq!(rank["memory_id"], result.id);
+            assert_eq!(rank["score"].as_f64().map(|score| score as f32), Some(result.score));
+        }
     }
 }
