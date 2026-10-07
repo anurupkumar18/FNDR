@@ -15,7 +15,7 @@ finished, agreement-verified gold set. Review before trusting any number
   cases covering activity types the CAP-03 corpus doesn't exercise
   (debugging, reviewing_agent_output, watching_or_listening,
   job_or_career_work, travel_or_logistics, entertainment_or_personal_interest,
-  observing, screen_review, unknown). No scraped or copyrighted content;
+  unknown). No scraped or copyrighted content;
   all synthetic app names, people, and text.
 - `questions.jsonl` (30 lines): retrieval questions, each pointing at the
   `extraction.jsonl` id(s) that should be the relevant memory.
@@ -30,9 +30,12 @@ finished, agreement-verified gold set. Review before trusting any number
 
 ## Labeling rules used
 
-- `activity_type` is one of the 19 values in `CANONICAL_ACTIVITY_TYPES`
-  (`src-tauri/src/inference/mod.rs:646`). Every value in this set was checked
-  against that list programmatically.
+- `activity_type` is one of the 17 values in `CANONICAL_ACTIVITY_TYPES`
+  (`src-tauri/src/inference/mod.rs`), the same list the prompts offer the
+  model. `observing` and `screen_review` were retired on 2026-10-07 (VS-89)
+  because no prompt offered them: the two meeting cases became
+  `watching_or_listening`, and the two design-review cases and the textless
+  screenshot became `unknown` (owner decision for the design-review cases).
 - `topic` is at most 12 words and states what the user was doing. Also
   checked programmatically; none exceed 12 words.
 - `must_mention`: facts that must appear in a correct extraction, taken

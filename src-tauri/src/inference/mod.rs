@@ -678,6 +678,9 @@ pub struct StructuredMemoryExtraction {
     pub synthesis_branch: String,
 }
 
+/// The labels a stored memory may carry. The same list, in the same order, is
+/// offered to the model in `prompts::ACTIVITY_TYPES`; anything else, including
+/// the old `observing` and `screen_review` placeholders, is stored as `unknown`.
 pub const CANONICAL_ACTIVITY_TYPES: &[&str] = &[
     "coding",
     "debugging",
@@ -695,8 +698,6 @@ pub const CANONICAL_ACTIVITY_TYPES: &[&str] = &[
     "job_or_career_work",
     "travel_or_logistics",
     "entertainment_or_personal_interest",
-    "observing",
-    "screen_review",
     "unknown",
 ];
 
@@ -724,7 +725,6 @@ pub fn normalize_activity_type(value: &str) -> String {
         "entertainment" | "personal_interest" | "watching" | "listening" => {
             "entertainment_or_personal_interest"
         }
-        "screen" | "screen_capture" | "screen_reviewing" => "screen_review",
         other => other,
     };
     if CANONICAL_ACTIVITY_TYPES.contains(&mapped) {
@@ -2264,6 +2264,22 @@ mod tests {
             "job_or_career_work"
         );
         assert_eq!(normalize_activity_type("debugging"), "debugging");
+    }
+
+    #[test]
+    fn labels_the_model_is_never_offered_are_stored_as_unknown() {
+        for label in ["observing", "screen_review", "screen capture", "Observing"] {
+            assert_eq!(normalize_activity_type(label), "unknown", "{label}");
+        }
+    }
+
+    #[test]
+    fn stored_activity_labels_are_exactly_the_ones_the_prompts_offer() {
+        let offered: Vec<&str> = prompts::ACTIVITY_TYPES
+            .split(',')
+            .map(|label| label.trim().trim_start_matches("or ").trim())
+            .collect();
+        assert_eq!(offered, CANONICAL_ACTIVITY_TYPES);
     }
 
     #[test]
