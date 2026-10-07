@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Task, addTodo, completeTodo, generateDailyBriefing, getTodos, updateTodo } from "@/shared/ipc/tauri";
+import { Task, addTodo, completeTodo, dismissTodo, generateDailyBriefing, getTodos, updateTodo } from "@/shared/ipc/tauri";
+import { acceptSuggestion, isSuggestion, relativeTime, sourceLabel } from "./todoSuggestions";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./TodoPanel.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 import { PanelHeader } from "@/shared/components/PanelHeader";
-import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
     beginActivityTrace,
@@ -18,12 +18,22 @@ interface TodoPanelProps {
 }
 
 type TodoType = "Todo" | "Reminder" | "Followup";
-type StageFilter = TodoType | "All";
 
-function stageLabel(stage: StageFilter) {
-    if (stage === "Todo") return "To-do";
-    if (stage === "Followup") return "Follow-up";
-    return stage;
+function typeLabel(type: TodoType) {
+    if (type === "Todo") return "To-do";
+    if (type === "Followup") return "Follow-up";
+    return type;
+}
+
+/** Type (when it says more than "to-do"), where it was seen, and how long ago. */
+function metaLine(task: Task): string {
+    return [
+        task.task_type === "Todo" ? "" : typeLabel(task.task_type),
+        sourceLabel(task),
+        relativeTime(task.created_at),
+    ]
+        .filter(Boolean)
+        .join(" · ");
 }
 
 export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
@@ -34,7 +44,6 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
     const [creating, setCreating] = useState(false);
     const [newTitle, setNewTitle] = useState("");
     const [newType, setNewType] = useState<TodoType>("Todo");
-    const [activeStage, setActiveStage] = useState<StageFilter>("Todo");
     const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
     const [editingTitle, setEditingTitle] = useState("");
     const [dailyBriefing, setDailyBriefing] = useState<string>("");
@@ -155,24 +164,10 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
         };
     }, [isVisible]);
 
-    const sortedTasks = useMemo(() => tasks, [tasks]);
-
-    const countsByType = useMemo(() => {
-        return sortedTasks.reduce(
-            (acc, task) => {
-                acc[task.task_type] += 1;
-                return acc;
-            },
-            { Todo: 0, Reminder: 0, Followup: 0 }
-        );
-    }, [sortedTasks]);
-
-    const visibleTasks = useMemo(() => {
-        if (activeStage === "All") {
-            return sortedTasks;
-        }
-        return sortedTasks.filter((task) => task.task_type === activeStage);
-    }, [sortedTasks, activeStage]);
+    // What the person committed to, and what FNDR only noticed. A suggestion
+    // becomes a task when they add it, never on its own.
+    const myTasks = useMemo(() => tasks.filter((task) => !isSuggestion(task)), [tasks]);
+    const suggestedTasks = useMemo(() => tasks.filter(isSuggestion), [tasks]);
 
     const handleAddTask = async () => {
         const title = newTitle.trim();
@@ -186,7 +181,6 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             const created = await addTodo(title, newType);
             setTasks((prev) => [created, ...prev]);
             setNewTitle("");
-            setActiveStage(created.task_type);
             setActionNotice({ kind: "success", text: `Added “${created.title}”.` });
         } catch (err) {
             setActionNotice({
@@ -217,6 +211,40 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             setActionNotice({
                 kind: "error",
                 text: err instanceof Error ? err.message : "Unable to complete task.",
+            });
+        } finally {
+            setPendingTaskId(null);
+        }
+    };
+
+    const handleAccept = async (task: Task) => {
+        if (pendingTaskId) return;
+        setPendingTaskId(task.id);
+        setActionNotice(null);
+        try {
+            const accepted = await acceptSuggestion(task);
+            setTasks((previous) => previous.map((item) => (item.id === task.id ? accepted : item)));
+        } catch (err) {
+            setActionNotice({
+                kind: "error",
+                text: err instanceof Error ? err.message : "Unable to add that suggestion.",
+            });
+        } finally {
+            setPendingTaskId(null);
+        }
+    };
+
+    const handleNotATask = async (task: Task) => {
+        if (pendingTaskId) return;
+        setPendingTaskId(task.id);
+        setActionNotice(null);
+        try {
+            await dismissTodo(task.id);
+            setTasks((previous) => previous.filter((item) => item.id !== task.id));
+        } catch (err) {
+            setActionNotice({
+                kind: "error",
+                text: err instanceof Error ? err.message : "Unable to remove that suggestion.",
             });
         } finally {
             setPendingTaskId(null);
@@ -260,7 +288,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             <PanelHeader
                 title="To-dos"
                 titleId="todo-panel-title"
-                subtitle="Create, classify, edit, and complete work carried forward from your day."
+                subtitle="What you committed to, and what FNDR noticed on your screen."
                 closeLabel="Close To-dos"
                 closeRef={closeButtonRef}
                 onClose={onClose}
@@ -319,26 +347,6 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 </button>
             </section>
 
-            <SegmentedControl
-                className="todo-stage-toggle"
-                ariaLabel="Task stages"
-                value={activeStage}
-                onChange={setActiveStage}
-                options={(["Todo", "Reminder", "Followup", "All"] as StageFilter[]).map((stage) => {
-                    const count = stage === "All" ? sortedTasks.length : countsByType[stage];
-                    return {
-                        value: stage,
-                        ariaLabel: `${stageLabel(stage)} tasks, ${count}`,
-                        label: (
-                            <>
-                                {stageLabel(stage)}
-                                <span className="fndr-segment-count">{count}</span>
-                            </>
-                        ),
-                    };
-                })}
-            />
-
             {actionNotice && (
                 <div
                     className={`todo-action-notice is-${actionNotice.kind}`}
@@ -373,33 +381,23 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                     </div>
                 )}
 
-                {!loading && !loadError && sortedTasks.length === 0 && (
+                {!loading && !loadError && tasks.length === 0 && (
                     <div className="todo-page-state">
-                        <p>No active tasks yet. Add one above when something needs to carry forward.</p>
+                        <p>Nothing on your list. Add a task above when something needs to carry forward.</p>
                     </div>
                 )}
 
-                {sortedTasks.length > 0 && visibleTasks.length === 0 && (
-                    <div className="todo-page-state">
-                        <p>No {stageLabel(activeStage).toLowerCase()}s right now.</p>
-                    </div>
-                )}
-
-                {visibleTasks.length > 0 && (
-                    <div className="todo-page-list">
-                        {visibleTasks.map((task) => (
-                            <article key={task.id} className="todo-page-item">
-                                <div className="todo-page-item-main">
-                                    <span className={`todo-pill ${task.task_type.toLowerCase()}`}>
-                                        {stageLabel(task.task_type)}
-                                    </span>
-                                    <h3>{task.title}</h3>
-                                    <p>
-                                        {new Date(task.created_at).toLocaleString()}
-                                        {task.linked_urls.length > 0
-                                            ? ` · ${task.linked_urls.length} context links`
-                                            : ""}
-                                    </p>
+                {myTasks.length > 0 && (
+                    <section className="todo-section" aria-labelledby="todo-mine-heading">
+                        <h3 id="todo-mine-heading" className="todo-section-title">
+                            My tasks <span className="todo-section-count">{myTasks.length}</span>
+                        </h3>
+                        <div className="todo-page-list">
+                        {myTasks.map((task) => (
+                            <article key={task.id} className="todo-row">
+                                <div className="todo-row-main">
+                                    <h4>{task.title}</h4>
+                                    <p className="todo-row-meta">{metaLine(task)}</p>
                                     {editingTaskId === task.id && (
                                         <div className="todo-edit-row">
                                             <input
@@ -440,9 +438,9 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                                         </div>
                                     )}
                                 </div>
-                                <div className="todo-page-item-actions">
+                                <div className="todo-row-actions">
                                     <button
-                                        className="ui-action-btn todo-edit-btn"
+                                        className="ui-action-btn todo-row-btn"
                                         type="button"
                                         aria-label={`Edit ${task.title}`}
                                         disabled={pendingTaskId === task.id || savingTaskId === task.id}
@@ -454,7 +452,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                                         Edit
                                     </button>
                                     <button
-                                        className="ui-action-btn todo-done-btn"
+                                        className="ui-action-btn todo-row-btn todo-done-btn"
                                         type="button"
                                         aria-label={`Mark ${task.title} done`}
                                         disabled={pendingTaskId === task.id || savingTaskId === task.id}
@@ -465,7 +463,52 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                                 </div>
                             </article>
                         ))}
-                    </div>
+                        </div>
+                    </section>
+                )}
+
+                {suggestedTasks.length > 0 && (
+                    <section className="todo-section" aria-labelledby="todo-suggested-heading">
+                        <h3 id="todo-suggested-heading" className="todo-section-title">
+                            Suggested <span className="todo-section-count">{suggestedTasks.length}</span>
+                        </h3>
+                        <p className="todo-section-hint">
+                            Noticed on your screen. Nothing here is a task until you add it.
+                        </p>
+                        <div className="todo-page-list">
+                        {suggestedTasks.map((task) => (
+                            <article key={task.id} className="todo-row todo-row--suggested">
+                                <div className="todo-row-main">
+                                    <h4>{task.title}</h4>
+                                    {task.description.trim() && (
+                                        <p className="todo-row-quote">“{task.description.trim()}”</p>
+                                    )}
+                                    <p className="todo-row-meta">{metaLine(task)}</p>
+                                </div>
+                                <div className="todo-row-actions">
+                                    <button
+                                        className="ui-action-btn todo-row-btn"
+                                        type="button"
+                                        aria-label={`${task.title} is not a task`}
+                                        disabled={pendingTaskId === task.id}
+                                        onClick={() => void handleNotATask(task)}
+                                    >
+                                        Not a task
+                                    </button>
+                                    <button
+                                        className="ui-action-btn todo-row-btn todo-done-btn"
+                                        type="button"
+                                        aria-label={`Add ${task.title} to my tasks`}
+                                        disabled={pendingTaskId === task.id}
+                                        onClick={() => void handleAccept(task)}
+                                    >
+                                        Add
+                                    </button>
+                                </div>
+                            </article>
+                        ))}
+                        </div>
+                    </section>
                 )}
             </div>
         </div>
