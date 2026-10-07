@@ -100,6 +100,22 @@ async fn search_ranked_results_internal(
 }
 
 #[cfg(debug_assertions)]
+/// Ranked results plus whether the best one is a strong match. Search never
+/// returns nothing for an unrelated query; it returns the nearest memories
+/// and marks them weak, which the cards show.
+pub async fn search_ranked_results_with_strength(
+    state: &AppState,
+    query: &str,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+    raw_limit: usize,
+) -> Result<(Vec<SearchResult>, bool), String> {
+    let (results, _, strong_match) =
+        search_ranked_results_internal(state, query, time_filter, app_filter, raw_limit, false)
+            .await?;
+    Ok((results, strong_match))
+}
+
 pub async fn search_ranked_results_explained(
     state: &AppState,
     query: &str,
