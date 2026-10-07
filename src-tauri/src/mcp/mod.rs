@@ -4097,6 +4097,9 @@ async fn run_memory_projects(
         .list_activity_events(args.limit.clamp(1, 200).saturating_mul(8), None)
         .await
         .map_err(internal_tool_error)?;
+    let events = context_runtime::retain_context_events(&app_state, events)
+        .await
+        .map_err(internal_tool_error)?;
     let mut by_project: HashMap<String, Vec<_>> = HashMap::new();
     for event in events {
         let project = event
@@ -5646,6 +5649,60 @@ mod tests {
             json!([{
                 "memory_id":"visible", "timestamp":1_800_000_000_000_i64, "title":"Visible event"
             }])
+        );
+    }
+
+    #[test]
+    fn mcp_projects_omit_activity_with_hidden_or_missing_sources() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let visible = related_test_record("visible");
+        let mut blocked = related_test_record("blocked");
+        blocked.app_name = "PrivateWorkspace".into();
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&[visible, blocked]))
+            .unwrap();
+        let event = |id: &str, source: &str| crate::storage::ActivityEvent {
+            id: id.into(),
+            memory_id: source.into(),
+            project: Some(id.into()),
+            summary: id.into(),
+            end_time: 1_800_000_000_000,
+            source_memory_ids: vec![source.into()],
+            ..Default::default()
+        };
+        let mut mixed = event("PRIVATE_MIXED", "visible");
+        mixed.source_memory_ids.push("blocked".into());
+        runtime
+            .block_on(state.store.upsert_activity_events(&[
+                event("Visible project", "visible"),
+                event("PRIVATE_BLOCKED", "blocked"),
+                event("PRIVATE_MISSING", "missing"),
+                mixed,
+            ]))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+
+        let response = runtime
+            .block_on(run_memory_projects(state.clone(), ProjectsArgs { limit: 20 }))
+            .unwrap();
+        assert_eq!(
+            response["structuredContent"]["projects"],
+            json!([{
+                "project": "Visible project",
+                "activity_count": 1,
+                "last_active_at": 1_800_000_000_000_i64,
+                "summary": "Visible project",
+            }])
+        );
+        assert_eq!(
+            runtime
+                .block_on(state.store.list_activity_events(20, None))
+                .unwrap()
+                .len(),
+            4,
+            "the visibility check must not rewrite stored activity"
         );
     }
 
