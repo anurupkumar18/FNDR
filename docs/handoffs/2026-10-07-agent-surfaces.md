@@ -6,6 +6,14 @@ Date: 2026-10-07. Written at the owner's request when the session ran low on con
 
 The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
 
+## Update 2, 2026-10-07
+
+- Local `main` is ahead of `origin/main` by my commits `f45faa0`, `c156d93`, `055d36f` and the Agent stop test, plus another session's `98fe16e`; it is also behind by nine upstream commits (Minh's reopen merges).
+- **The push is blocked.** A merge is needed first, and upstream changed `src-tauri/src/mcp/mod.rs`, which another session has uncommitted edits in. Git will refuse to merge until that session commits. Do not stash it. Once it is committed: `git merge origin/main`, run the focused tests, `git push origin main`.
+- Upstream also changed `src/shared/ipc/tauri.ts` and `ipc/commands/screen_guide.rs`; expect to check those after the merge.
+- Done from the five-hour plan: land the batch, docs, tests for the mid-run halt and Agent reply Stop.
+- Left: tests for the stale-gateway kill and the operate setter; ten fixture screens; twenty-task Notch Do set; the six live checks (approved by the owner); fixes from them.
+
 ## Goal
 
 Take over Kunj's agent features, find what is unsafe or unclear, decide, fix,
