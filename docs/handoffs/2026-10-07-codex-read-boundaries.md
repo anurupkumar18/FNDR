@@ -1,5 +1,12 @@
 # Handoff: Codex read-boundary lane, 2026-10-07
 
+## Update: legacy graph and live smoke, 2026-10-07
+
+- `207a942` is pushed to GitLab and GitHub. `memory.graph_query` now searches graph memory nodes rebuilt from current authorized records. It omits unattributed legacy entities and edges; this trades incomplete legacy relationships for a source-backed read. The prior saved-label query failed the new regression with zero current hits, then passed after the change. Hidden sources, stale labels, session metadata, and private edges are covered.
+- `CARGO_BUILD_JOBS=1 cargo test --lib mcp::tests:: -- --nocapture`: 38 passed before the final private-edge assertion. The focused graph regression passed again after that assertion. `npm run typecheck` passed; `npm test` passed 85 files and 593 tests. The MCP group includes a real localhost HTTP startup/auth test.
+- The current native Tauri app compiled and launched with a temporary `HOME` and `FNDR_DATA_DIR`. Logs confirmed the profile override and a running process. No embedding model was present in the temporary home, and capture correctly blocked. The computer-use inventory exposed no FNDR window, so native visual/UI verification remains open. The test app was stopped; its disposable profile was moved to Trash. No owner vault was opened.
+- Remaining read-boundary work: saved context packs need complete provenance, and skill/eval drafts from historical audits need a safe source/output policy. Do not infer either is covered by the graph fix.
+
 ## Goal
 
 Close independent MCP and Agent audit reads that could show excluded or stale memory content while two Claude sessions work on briefing/output quality and agent surfaces in the shared `main` checkout.
@@ -48,14 +55,14 @@ The To-dos test first failed with seven rows instead of two, then passed. The gr
 ## Known issues
 
 - `get_context_runtime_status` and `list_recent_context_packs` still read historical packs. Packs can contain project summaries derived from extra events, tasks, and graph data without complete provenance. Do not certify them by checking `pack.evidence` alone.
-- `memory.graph_query` returns legacy string-ID graph nodes. Sessions, URLs, tasks, and audio segments often have no source IDs; its raw metadata may contain captured text.
+- `memory.graph_query` now returns only current authorized memory nodes. Legacy sessions, URLs, tasks, and audio segments remain omitted because they lack reliable source IDs. Their graph relationships are unavailable through this query.
 - `propose_skill_from_run` and `propose_eval_from_run` still consume raw saved audit records to build drafts. The Agent panel's audit list, detail, and explanation are guarded; draft creation needs a separate source and output provenance decision.
 - The saved audit projection retains the person's original goal and generic tool policy fields. It clears old output/error details and historical ranking prose.
 
 ## Next steps
 
 1. Design a complete source ledger for newly saved packs, including project expansion, tasks, and graph content; fail closed for old packs or rebuild read projections. Test current exclusions and missing sources before touching storage schema.
-2. Migrate or narrow `memory.graph_query` with explicit provenance for non-memory nodes. Preserve useful visible memory results and reject untraceable metadata.
+2. Add explicit provenance for non-memory legacy graph nodes before restoring their relationships to `memory.graph_query`.
 3. Gate skill/eval draft creation from historical audit rows without turning the eval's expected outcome into generic placeholder text.
 4. Run a combined gate after the Claude batches settle, then test the native audit and MCP approval flows with a disposable profile.
 
