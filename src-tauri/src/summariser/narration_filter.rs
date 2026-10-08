@@ -271,13 +271,48 @@ pub fn is_summary_instruction(value: &str) -> bool {
             .any(|pattern| pattern.is_match(value))
 }
 
+const MAX_LABEL_WORDS: usize = 8;
+
+fn label_words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.len() >= 2)
+        .map(str::to_string)
+        .collect()
+}
+
+/// A summary that only repeats words of the window title, such as
+/// "Netflix." or "System Settings - Storage.", is a label, not a statement
+/// of what happened. `restate_label` turns it into "Viewed {label}.".
+fn restate_label(summary: &str, page_title: &str) -> Option<String> {
+    let words = label_words(summary);
+    let title = label_words(page_title);
+    let leads_with_a_verb = words.first().is_some_and(|first| {
+        first.ends_with("ed") || PAST_TENSE.iter().any(|(_, past)| past == first)
+    });
+    if words.is_empty()
+        || words.len() > MAX_LABEL_WORDS
+        || leads_with_a_verb
+        || !words.iter().all(|word| title.contains(word))
+    {
+        return None;
+    }
+    let label = summary
+        .trim()
+        .trim_end_matches(|c: char| !c.is_alphanumeric() && c != ')')
+        .trim();
+    Some(format!("Viewed {label}."))
+}
+
 pub fn clean_or_fallback_display_summary(
     candidate: &str,
     page_title: &str,
     url: Option<&str>,
     timestamp_ms: i64,
 ) -> (String, bool) {
-    let generated = build_display_summary(page_title, url, &neutral_voice(candidate), timestamp_ms);
+    let voiced = neutral_voice(candidate);
+    let voiced = restate_label(&voiced, page_title).unwrap_or(voiced);
+    let generated = build_display_summary(page_title, url, &voiced, timestamp_ms);
     if !narration_filter_hits(&generated) {
         return (generated, false);
     }
@@ -304,6 +339,31 @@ pub fn clean_or_fallback_display_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_summary_that_is_only_the_title_becomes_a_statement() {
+        let shown = |summary: &str, title: &str| {
+            clean_or_fallback_display_summary(summary, title, None, 1_700_000_000_000).0
+        };
+        assert_eq!(
+            shown("Netflix.", "Netflix - Google Chrome"),
+            "Viewed Netflix."
+        );
+        assert_eq!(
+            shown("System Settings - Storage.", "Storage - System Settings"),
+            "Viewed System Settings - Storage."
+        );
+        // A sentence with words of its own is left as written.
+        let sentence = "Compared two laptop stands and picked the cheaper one.";
+        assert_eq!(shown(sentence, "Laptop stands - Safari"), sentence);
+        // So is one that already says what happened.
+        assert_eq!(
+            shown("Opened Storage.", "Opened Storage"),
+            "Opened Storage."
+        );
+        // No title, nothing to compare with.
+        assert_eq!(shown("Netflix.", ""), "Netflix.");
+    }
 
     #[test]
     fn detects_narration_leaks() {

@@ -54,3 +54,9 @@ Whether the second vector should carry the title on purpose is measured in `seco
 - Not applied to the real vault.
 - 32 visible summaries still open with "The" or "A" and 35 with a title or noun phrase. Those are the model's sentences; the display path falls back to the title for the ones that describe the screen.
 - 52 memories are labelled `reviewing_agent_output` by the model itself, not by the fallback. That label is offered in the prompt and the model overuses it.
+
+## A summary that is only the window title, 2026-10-08
+
+Some stored summaries are a label, not a sentence: the name of the page or the app with a full stop after it. When every word of a short summary (eight words or fewer, no leading past-tense verb) is in the window title, the card now shows "Viewed {label}." The stored summary is not changed.
+
+On a copy of the vault, summaries a person sees that open with a past-tense verb went from 51 to 55 of 131, and "other" openings from 39 to 36. The rest of the "other" and "describes a thing" openings are the model's own sentences about the state of a screen ("The ... is ..."). No rule can restate those safely; they need the summary prompt, which means runs with the on-device model while FNDR is closed.
