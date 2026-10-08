@@ -1274,6 +1274,21 @@ pub async fn computer_use_status(
     })
 }
 
+/// Changes the opt-in and saves it. If the save fails the setting stays as
+/// it was, so the switch never shows a state that is not on disk.
+fn save_operator_enabled(
+    config: &mut crate::config::Config,
+    enabled: bool,
+    save: impl FnOnce(&crate::config::Config) -> Result<(), String>,
+) -> Result<(), String> {
+    let previous = config.operator.enabled;
+    config.operator.enabled = enabled;
+    save(config).map_err(|error| {
+        config.operator.enabled = previous;
+        format!("Could not save that setting: {error}")
+    })
+}
+
 /// Turns "Operate my Mac" on or off. Turning it off ends any run.
 #[tauri::command]
 pub async fn set_computer_use_enabled(
@@ -1283,12 +1298,9 @@ pub async fn set_computer_use_enabled(
 ) -> Result<bool, String> {
     {
         let mut config = state.inner().config.write();
-        let previous = config.operator.enabled;
-        config.operator.enabled = enabled;
-        if let Err(error) = config.save() {
-            config.operator.enabled = previous;
-            return Err(format!("Could not save that setting: {error}"));
-        }
+        save_operator_enabled(&mut config, enabled, |config| {
+            config.save().map_err(|error| error.to_string())
+        })?;
     }
     if !enabled {
         stop_active_run(&app);
@@ -1933,6 +1945,30 @@ mod tests {
         // A run that finishes first keeps its own result.
         switched_off.store(false, std::sync::atomic::Ordering::SeqCst);
         assert_eq!(until_halted(async { Ok(()) }, halt, every).await, Ok(()));
+    }
+
+    #[test]
+    fn the_operate_opt_in_keeps_its_old_value_when_saving_fails() {
+        let mut config = crate::config::Config::default();
+        assert!(!config.operator.enabled);
+
+        let failed = save_operator_enabled(&mut config, true, |_| Err("disk full".to_string()));
+        assert_eq!(
+            failed,
+            Err("Could not save that setting: disk full".to_string())
+        );
+        assert!(!config.operator.enabled);
+
+        let saved = std::cell::Cell::new(false);
+        save_operator_enabled(&mut config, true, |config| {
+            saved.set(config.operator.enabled);
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            config.operator.enabled && saved.get(),
+            "the new value is what gets saved"
+        );
     }
 
     /// A planner that asks to read the screen is refused: nothing is read or

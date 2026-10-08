@@ -1260,27 +1260,35 @@ fn is_hermes_gateway_command(command: &str) -> bool {
 
 /// Ends a gateway that an earlier FNDR left running (a crash or force quit).
 pub fn reap_stale_hermes_gateway(app_data_dir: &Path) {
-    let pid_path = app_data_dir.join("hermes-gateway").join(GATEWAY_PID_FILE);
-    let Some(pid) = std::fs::read_to_string(&pid_path)
-        .ok()
-        .and_then(|raw| raw.trim().parse::<i32>().ok())
-    else {
-        return;
+    let gateway_dir = app_data_dir.join("hermes-gateway");
+    let command_of = |pid: i32| {
+        Command::new("/bin/ps")
+            .args(["-p", &pid.to_string(), "-o", "command="])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
+            .unwrap_or_default()
     };
-    let _ = std::fs::remove_file(&pid_path);
-    let command = Command::new("/bin/ps")
-        .args(["-p", &pid.to_string(), "-o", "command="])
-        .output()
-        .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
-        .unwrap_or_default();
-    // The pid may belong to something else by now.
-    if pid > 1 && is_hermes_gateway_command(&command) {
+    if let Some(pid) = take_stale_gateway_pid(&gateway_dir, command_of) {
         tracing::warn!(pid, "hermes:stale_gateway_stopped");
         #[cfg(unix)]
         unsafe {
             libc::kill(pid, libc::SIGTERM);
         }
     }
+}
+
+/// Reads and removes the saved gateway process id, and returns it only when
+/// that process is still a Hermes gateway. The id may belong to something
+/// else by now, and that something must never be stopped.
+fn take_stale_gateway_pid(gateway_dir: &Path, command_of: impl Fn(i32) -> String) -> Option<i32> {
+    let pid_path = gateway_dir.join(GATEWAY_PID_FILE);
+    let pid = std::fs::read_to_string(&pid_path)
+        .ok()?
+        .trim()
+        .parse::<i32>()
+        .ok();
+    let _ = std::fs::remove_file(&pid_path);
+    pid.filter(|pid| *pid > 1 && is_hermes_gateway_command(&command_of(*pid)))
 }
 
 fn spawn_gateway_child(
@@ -2152,6 +2160,33 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_leftover_gateway_is_stopped_only_when_its_id_is_still_a_gateway() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join(GATEWAY_PID_FILE);
+        let gateway = |_: i32| "/x/venv/bin/python /x/src/hermes gateway".to_string();
+        let something_else = |_: i32| "/Applications/Safari.app/Contents/MacOS/Safari".to_string();
+
+        std::fs::write(&pid_file, "4242\n").unwrap();
+        assert_eq!(take_stale_gateway_pid(dir.path(), gateway), Some(4242));
+        assert!(!pid_file.exists(), "the saved id is used once");
+        assert_eq!(take_stale_gateway_pid(dir.path(), gateway), None);
+
+        // The id was reused by another app after FNDR crashed.
+        std::fs::write(&pid_file, "4242").unwrap();
+        assert_eq!(take_stale_gateway_pid(dir.path(), something_else), None);
+        assert!(!pid_file.exists());
+
+        for unusable in ["", "not a number", "0", "1", "-7"] {
+            std::fs::write(&pid_file, unusable).unwrap();
+            assert_eq!(
+                take_stale_gateway_pid(dir.path(), gateway),
+                None,
+                "{unusable:?}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn stopping_ends_the_wait_for_a_reply_and_a_finished_reply_is_kept() {
