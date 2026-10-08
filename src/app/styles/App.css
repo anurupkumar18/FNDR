@@ -73,9 +73,21 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    color: var(--fg);
+    isolation: isolate;
     background:
-        radial-gradient(ellipse 90% 70% at 50% 35%, rgba(40, 44, 64, 0.5), transparent 70%),
-        radial-gradient(ellipse 100% 80% at 50% 50%, rgba(10, 11, 16, 0.85), rgba(4, 4, 8, 1));
+        radial-gradient(
+            ellipse 90% 70% at 50% 35%,
+            color-mix(in srgb, var(--accent) 14%, transparent),
+            transparent 70%
+        ),
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--bg) 82%, transparent),
+            color-mix(in srgb, var(--bg) 94%, transparent)
+        );
+    backdrop-filter: blur(18px) saturate(115%);
+    -webkit-backdrop-filter: blur(18px) saturate(115%);
     animation: lockFadeIn 0.5s var(--ease-smooth);
 }
 
@@ -85,8 +97,8 @@
     position: absolute;
     inset: 0;
     background-image:
-        radial-gradient(circle at 15% 25%, rgba(120, 130, 200, 0.08) 0%, transparent 40%),
-        radial-gradient(circle at 85% 75%, rgba(180, 130, 200, 0.06) 0%, transparent 45%);
+        radial-gradient(circle at 15% 25%, color-mix(in srgb, var(--accent) 10%, transparent) 0%, transparent 40%),
+        radial-gradient(circle at 85% 75%, color-mix(in srgb, var(--accent-2) 8%, transparent) 0%, transparent 45%);
     pointer-events: none;
     opacity: 0.9;
 }
@@ -109,9 +121,9 @@
     text-align: center;
     max-width: 380px;
     padding: 52px 44px 40px;
-    border-radius: var(--radius-xl, 16px);
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 28px;
+    background: color-mix(in srgb, var(--surface) 86%, transparent);
+    border: 1px solid var(--hairline-strong);
     backdrop-filter: blur(40px) saturate(180%);
     -webkit-backdrop-filter: blur(40px) saturate(180%);
     box-shadow: var(--shadow-floating);
@@ -126,8 +138,8 @@
     border-radius: inherit;
     padding: 1px;
     background: linear-gradient(180deg,
-            rgba(255, 255, 255, 0.15),
-            rgba(255, 255, 255, 0.02) 40%,
+            color-mix(in srgb, var(--fg) 18%, transparent),
+            color-mix(in srgb, var(--fg) 3%, transparent) 40%,
             transparent 100%);
     -webkit-mask: linear-gradient(#000, #000) content-box, linear-gradient(#000, #000);
     -webkit-mask-composite: xor;
@@ -148,35 +160,46 @@
 }
 
 .biometric-lock-icon {
-    font-size: 2.2rem;
-    font-weight: 800;
-    letter-spacing: 0.05em;
-    width: 100px;
-    height: 100px;
+    font-family: var(--font-display);
+    font-size: 3.2rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05));
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: var(--radius-md);
     margin-bottom: 28px;
-    box-shadow:
-        0 8px 20px rgba(0, 0, 0, 0.3),
-        inset 0 1px 1px rgba(255, 255, 255, 0.1);
+    animation: lockPulse 3s var(--ease-smooth) infinite;
+    color: var(--fg);
+    filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent) 24%, transparent));
+}
+
+@keyframes lockPulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 0.92;
+    }
+
+    50% {
+        transform: scale(1.06);
+        opacity: 1;
+}
 }
 
 .biometric-lock-title {
     font-size: 1.4rem;
     font-weight: 600;
     letter-spacing: -0.015em;
-    color: rgba(245, 246, 250, 0.98);
+    color: var(--fg);
+    font-family: var(--font-display);
     margin: 0 0 8px;
 }
 
 .biometric-lock-subtitle {
     font-size: 0.875rem;
     line-height: 1.55;
-    color: rgba(190, 195, 210, 0.72);
+    color: var(--fg-2);
     margin: 0 0 26px;
     max-width: 300px;
     letter-spacing: 0.005em;
@@ -184,9 +207,9 @@
 
 .biometric-lock-error {
     font-size: 0.8rem;
-    color: #fca5a5;
-    background: rgba(248, 113, 113, 0.1);
-    border: 1px solid rgba(248, 113, 113, 0.2);
+    color: var(--alarm-2);
+    background: color-mix(in srgb, var(--alarm) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--alarm) 32%, transparent);
     border-radius: 12px;
     padding: 10px 14px;
     margin-bottom: 18px;
@@ -227,26 +250,26 @@
     font-weight: 550;
     letter-spacing: 0.005em;
     font-family: inherit;
-    color: #fff;
+    color: var(--text-inverse);
     background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 60%),
-        linear-gradient(135deg, #5a6cf0, #7a5ae0);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: var(--radius-md, 10px);
+        linear-gradient(180deg, color-mix(in srgb, var(--fg) 16%, transparent), transparent 60%),
+        linear-gradient(135deg, var(--accent), var(--accent-2));
+    border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+    border-radius: 14px;
     cursor: pointer;
     overflow: hidden;
     transition: transform 0.1s ease-out, box-shadow 0.2s var(--ease-smooth);
     box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.18) inset,
-        0 2px 8px rgba(90, 108, 240, 0.25),
+        0 1px 0 color-mix(in srgb, var(--fg) 18%, transparent) inset,
+        0 4px 12px color-mix(in srgb, var(--accent) 30%, transparent),
         0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 .biometric-lock-btn:hover:not(:disabled) {
     box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.22) inset,
-        0 4px 14px rgba(90, 108, 240, 0.35),
-        0 1px 3px rgba(0, 0, 0, 0.22);
+        0 1px 0 color-mix(in srgb, var(--fg) 22%, transparent) inset,
+        0 8px 24px color-mix(in srgb, var(--accent) 45%, transparent),
+        0 2px 6px rgba(0, 0, 0, 0.25);
 }
 
 .biometric-lock-btn:active:not(:disabled) {
@@ -255,57 +278,13 @@
 }
 
 .biometric-lock-btn:focus-visible {
-    outline: 2px solid rgba(140, 160, 255, 0.7);
+    outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
     outline-offset: 3px;
 }
 
 .biometric-lock-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
-}
-
-/* ===== Light theme — lock screen ===== */
-[data-theme="light"] .biometric-lock-overlay {
-    background:
-        radial-gradient(ellipse 90% 70% at 50% 35%, rgba(255, 255, 255, 0.6), transparent 70%),
-        radial-gradient(ellipse 100% 80% at 50% 50%, rgba(238, 240, 246, 0.9), rgba(220, 224, 234, 1));
-}
-
-[data-theme="light"] .biometric-lock-overlay::before {
-    background-image:
-        radial-gradient(circle at 15% 25%, rgba(120, 130, 200, 0.1) 0%, transparent 40%),
-        radial-gradient(circle at 85% 75%, rgba(200, 150, 210, 0.08) 0%, transparent 45%);
-}
-
-[data-theme="light"] .biometric-lock-card {
-    background: rgba(255, 255, 255, 0.55);
-    border-color: rgba(255, 255, 255, 0.8);
-    box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.9) inset,
-        0 0 0 0.5px rgba(0, 0, 0, 0.04),
-        0 28px 64px rgba(60, 70, 110, 0.18),
-        0 10px 24px rgba(60, 70, 110, 0.1);
-}
-
-[data-theme="light"] .biometric-lock-card::before {
-    background: linear-gradient(180deg,
-            rgba(255, 255, 255, 0.9),
-            rgba(255, 255, 255, 0.1) 40%,
-            transparent 100%);
-}
-
-[data-theme="light"] .biometric-lock-title {
-    color: rgba(22, 24, 32, 0.96);
-}
-
-[data-theme="light"] .biometric-lock-subtitle {
-    color: rgba(70, 76, 92, 0.72);
-}
-
-[data-theme="light"] .biometric-lock-error {
-    color: #b91c1c;
-    background: rgba(220, 38, 38, 0.07);
-    border-color: rgba(220, 38, 38, 0.18);
 }
 
 /* ===== App shell ===== */

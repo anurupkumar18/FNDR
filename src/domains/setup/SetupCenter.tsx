@@ -26,7 +26,7 @@ const STATE_LABEL: Record<SetupComponent["state"], string> = {
  * install and update the rest without a terminal: Codex and the ChatGPT
  * sign-in, Computer Use, Hermes, macOS permissions and FNDR itself.
  */
-export function SetupCenter() {
+export function SetupCenter({ embedded = false }: { embedded?: boolean }) {
     const [components, setComponents] = useState<SetupComponent[] | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -93,9 +93,9 @@ export function SetupCenter() {
         }
     };
 
-    return (
-        <section className="panel-section setup-center" aria-labelledby="setup-center-title">
-            <h3 id="setup-center-title">Setup and updates</h3>
+    const content = (
+        <>
+            {embedded ? <h4 id="setup-center-title">Available components</h4> : <h3 id="setup-center-title">Setup and updates</h3>}
             <p className="section-hint">What FNDR needs, and installing or updating it from here.</p>
 
             <ul className="setup-center-list">
@@ -147,6 +147,12 @@ export function SetupCenter() {
                     {error}
                 </p>
             ) : null}
-        </section>
+        </>
+    );
+
+    return embedded ? (
+        <div className="setup-center" aria-labelledby="setup-center-title">{content}</div>
+    ) : (
+        <section className="panel-section setup-center" aria-labelledby="setup-center-title">{content}</section>
     );
 }

@@ -1979,10 +1979,10 @@ export interface AgentChatMessage {
     content: string;
     at: number;
     memories: AttachedMemory[];
-    /** The send failed; Hermes never answered this message. */
-    failed?: boolean;
     /** Memories FNDR added on its own to this message. */
     autoMemories?: AttachedMemory[];
+    /** The send failed; Hermes never answered this message. */
+    failed?: boolean;
     /** On an answer: what Hermes did on the way to it. */
     toolsUsed?: string[];
 }
@@ -2890,4 +2890,3 @@ export async function setupComponents(): Promise<SetupComponent[]> {
 export async function installComponent(id: string): Promise<void> {
     return invoke("install_component", { id });
 }
-
