@@ -1,5 +1,6 @@
 //! Exact, reviewable text prepared for a person-directed peer task.
 
+use crate::storage::MemoryRecord;
 use crate::AppState;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -17,6 +18,17 @@ pub struct DelegationPreview {
     pub destination: String,
     pub message_text: String,
     pub attachments: Vec<DelegationAttachment>,
+}
+
+fn shareable_summary(record: &MemoryRecord) -> Result<&str, String> {
+    let summary = record.display_summary.trim();
+    if summary.is_empty() {
+        return Err("An attached memory has no shareable summary".into());
+    }
+    if summary.len() > 500 {
+        return Err("An attached memory summary exceeds 500 bytes".into());
+    }
+    Ok(summary)
 }
 
 pub async fn preview_delegation(
@@ -54,13 +66,7 @@ pub async fn preview_delegation(
         if !seen.insert(current.id.clone()) {
             continue;
         }
-        let summary = [current.display_summary.as_str(), current.snippet.as_str()]
-            .into_iter()
-            .find(|text| !text.trim().is_empty())
-            .ok_or("An attached memory has no shareable summary")?;
-        if summary.len() > 500 {
-            return Err("An attached memory summary exceeds 500 bytes".into());
-        }
+        let summary = shareable_summary(current)?;
         attachments.push(DelegationAttachment {
             memory_id: current.id.clone(),
             summary: summary.to_string(),
@@ -140,5 +146,14 @@ mod tests {
             state.config.write().blocklist = vec!["editor".into()];
             assert!(preview_delegation(&state, &peer.id, "Review the plan", "Brief report", &["older".into()]).await.is_err());
         });
+    }
+
+    #[test]
+    fn never_uses_a_raw_snippet_when_display_summary_is_missing() {
+        let record = MemoryRecord {
+            snippet: "RAW_SCREEN_OCR_DO_NOT_SEND".into(),
+            ..Default::default()
+        };
+        assert!(shareable_summary(&record).is_err());
     }
 }
