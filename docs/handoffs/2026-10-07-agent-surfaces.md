@@ -6,7 +6,16 @@ Date: 2026-10-07. Written at the owner's request when the session ran low on con
 
 The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
 
-## Update 5, 2026-10-07 (read this first)
+## Update 6, 2026-10-07 (read this first)
+
+Live checks run with the owner's approval; results are at the end of the phase 1 evidence.
+
+- **Hermes tool limit confirmed live.** With FNDR's config the model has only `todo` and could not write a file. With Hermes's default it wrote a file and ran a shell command without asking. Script: `docs/evidence/W03/scripts/live_hermes_tool_limit.py`.
+- **Notch Do cannot run on this Mac.** No usable computer-use helper is installed (the bundled one has no launcher; `open-computer-use` is absent). Its live checks are blocked until the owner decides whether to install the helper.
+- **A9.6 is unblocked:** tool calls arrive as `function_call` items with `name`. Build: collect the names in `deliver_hermes_message`, return them with the reply, show "Hermes used: ..." on the answer.
+- Not run: anything that needs clicking in the FNDR window.
+
+## Update 5, 2026-10-07
 
 All pushed. Usefulness slices built since Update 4, each with tests:
 

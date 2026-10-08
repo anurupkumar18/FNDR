@@ -206,3 +206,28 @@ The pinned Hermes (`b8880f1`) is now installed in the main profile. Its own tool
 
 The MCP `tools.include` filter FNDR writes is also honored by the pinned source (`tools/mcp_tool.py`). So decision E4 holds at the pinned version, not only at 0.13. Still to do on a running gateway: confirm a write tool is refused through Hermes's MCP entry.
 
+## Live checks, 2026-10-07 (owner approved, ChatGPT account used)
+
+### Hermes with and without FNDR's tool limit: confirmed live
+
+The pinned Hermes gateway (`b8880f1`) was started the way FNDR starts it, on the ChatGPT sign-in, and asked to list its tools and to create a harmless file in the temp folder if it had any tool that could. Script: `docs/evidence/W03/scripts/live_hermes_tool_limit.py` (run with `--control` for the second row). Three model requests in all.
+
+| Config | Tools the model reported | File created | Seconds |
+| --- | --- | --- | --- |
+| FNDR's (`platform_toolsets: api_server: [todo]`) | `todo` only | No. It answered that no tool can run commands or write files | 10.6 |
+| Hermes default (what FNDR wrote before `ed175dd`) | 17, including `terminal`, `write_file`, `patch`, `execute_code`, `process`, `cronjob`, `delegate_task` | **Yes.** It called `write_file` and `terminal` with no question asked | 21.6 |
+
+This closes part A9.2: before the fix, any Agent message could make Hermes write files and run shell commands under the owner's account without asking. With the fix it cannot.
+
+Also observed: no gateway process was left afterwards, `codex login status` still reports "Logged in using ChatGPT", and `~/.codex/auth.json` was not rewritten, so Hermes did not rotate the shared login.
+
+For part A9.6: a tool call appears in the `/v1/responses` output as an item `{"type": "function_call", "name", "arguments", "call_id"}` followed by `{"type": "function_call_output", "call_id", "output"}`, before the final `message`.
+
+### Notch Do: could not run on this Mac
+
+`live_notch_do_runs_the_example_request` failed at once with "Notch Do needs Computer Use". The ChatGPT app's bundled Computer Use folder here (`1.0.1001365`) holds only `assets` and `skills`, with no `bin/computer-use-client-launcher`, and `open-computer-use` is not installed. So Notch Do does not work on the development Mac today, and none of its live checks (quit during a run, mid-run halt, the hand-check pages, the task set) could be run. Installing `open-computer-use` means running a third-party package with Accessibility control; that is the owner's call (part C4.2).
+
+### Not run
+
+The checks that need the FNDR window itself (quitting the app with its gateway up, the Agent page's Stop, Screen Guide's ChatGPT path): this session has no way to click in the native app.
+
