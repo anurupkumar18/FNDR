@@ -1296,6 +1296,27 @@ pub async fn set_computer_use_enabled(
     Ok(enabled)
 }
 
+/// Drives a run, ending it with the reason as soon as `halt` gives one.
+/// Dropping the run is what stops it: its Codex session dies with it.
+async fn until_halted(
+    run: impl std::future::Future<Output = Result<(), RunError>>,
+    halt: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    every: Duration,
+) -> Result<(), RunError> {
+    let halted = async move {
+        loop {
+            tokio::time::sleep(every).await;
+            if let Some(reason) = halt() {
+                return reason;
+            }
+        }
+    };
+    tokio::select! {
+        result = run => result,
+        reason = halted => Err(RunError::Failed(reason)),
+    }
+}
+
 /// Plans a spoken request. Any run in progress is stopped first, so speaking
 /// again mid-run redirects. Returns the new run's id; the run waits for
 /// `computer_use_start` once its plan is on screen.
@@ -1345,18 +1366,12 @@ pub async fn computer_use_plan(
         // Actions switched off or Private Mode ends a run at once, even in
         // the middle of an action; the guards inside the run cover the gaps.
         let halt = ctx.guards.halt.clone();
-        let halted = async move {
-            loop {
-                tokio::time::sleep(HALT_CHECK_INTERVAL).await;
-                if let Some(reason) = halt() {
-                    return reason;
-                }
-            }
-        };
-        let result = tokio::select! {
-            result = run(task_state, ctx, transcript, receiver, task_pid.clone()) => result,
-            reason = halted => Err(RunError::Failed(reason)),
-        };
+        let result = until_halted(
+            run(task_state, ctx, transcript, receiver, task_pid.clone()),
+            halt,
+            HALT_CHECK_INTERVAL,
+        )
+        .await;
         if result.is_err() {
             // A run that ended early leaves nothing behind that could still act.
             if let Some(pid) = task_pid.lock().ok().and_then(|slot| *slot) {
@@ -1887,6 +1902,37 @@ mod tests {
             off_limits: Arc::new(|app| app == "Spotify"),
         };
         assert!(!plan_starts_by_itself(&safe, request, &blocked));
+    }
+
+    /// Actions switched off mid-action ends the run without waiting for its next step.
+    #[tokio::test]
+    async fn a_run_in_the_middle_of_an_action_ends_when_halted() {
+        let switched_off = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = switched_off.clone();
+        let halt: Arc<dyn Fn() -> Option<String> + Send + Sync> = Arc::new(move || {
+            flag.load(std::sync::atomic::Ordering::SeqCst)
+                .then(|| ACTIONS_OFF.to_string())
+        });
+        let every = Duration::from_millis(10);
+
+        // A run that never finishes on its own, like an action stuck in flight.
+        let stuck = std::future::pending::<Result<(), RunError>>();
+        let flip = switched_off.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            flip.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let ended = tokio::time::timeout(
+            Duration::from_secs(2),
+            until_halted(stuck, halt.clone(), every),
+        )
+        .await
+        .expect("the run ends");
+        assert_eq!(ended, Err(RunError::Failed(ACTIONS_OFF.to_string())));
+
+        // A run that finishes first keeps its own result.
+        switched_off.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(until_halted(async { Ok(()) }, halt, every).await, Ok(()));
     }
 
     /// A planner that asks to read the screen is refused: nothing is read or
