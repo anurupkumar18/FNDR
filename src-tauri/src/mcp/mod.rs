@@ -3627,7 +3627,7 @@ async fn run_agent_explain_retrieval(
                 message: format!("No agent audit run found for {run_id}"),
             })?;
         return Ok(tool_success(json!({
-            "retrieval_explanation": explanation_from_audit(&record)
+            "retrieval_explanation": authorized_retrieval_explanation(&app_state, &record, true).await?
         })));
     }
 
@@ -3655,8 +3655,80 @@ async fn run_agent_explain_retrieval(
             message: "Agent run was created but audit detail was unavailable".to_string(),
         })?;
     Ok(tool_success(json!({
-        "retrieval_explanation": explanation_from_audit(&record)
+        "retrieval_explanation": authorized_retrieval_explanation(&app_state, &record, false).await?
     })))
+}
+
+async fn authorized_retrieval_explanation(
+    app_state: &AppState,
+    record: &crate::agent::audit::AgentAuditRecord,
+    saved: bool,
+) -> Result<crate::agent::audit::RetrievalExplanation, JsonRpcError> {
+    let mut explanation = explanation_from_audit(record);
+    let ids = explanation
+        .selected_memories
+        .iter()
+        .map(|memory| memory.memory_id.clone())
+        .chain(
+            explanation
+                .dropped_context
+                .iter()
+                .map(|note| note.id.clone()),
+        )
+        .chain(
+            explanation
+                .redacted_context
+                .iter()
+                .map(|note| note.id.clone()),
+        )
+        .collect::<Vec<_>>();
+    let visible = context_runtime::context_source_memories(app_state, &ids)
+        .await
+        .map_err(internal_tool_error)?;
+    explanation
+        .selected_memories
+        .retain(|memory| visible.contains_key(&memory.memory_id));
+    explanation
+        .dropped_context
+        .retain(|note| visible.contains_key(&note.id));
+    explanation
+        .redacted_context
+        .retain(|note| visible.contains_key(&note.id));
+    if saved {
+        for memory in &mut explanation.selected_memories {
+            let current = &visible[&memory.memory_id];
+            memory.title = [
+                current.display_summary.as_str(),
+                current.insight_what_happened.as_str(),
+                current.window_title.as_str(),
+            ]
+            .into_iter()
+            .find(|text| !text.trim().is_empty())
+            .unwrap_or_default()
+            .to_string();
+            memory.app_name = current.app_name.clone();
+            memory.url = current.url.clone();
+            memory.timestamp = current.timestamp;
+            memory.matched_reason =
+                "Selected in the saved run; rerun for current ranking reasons.".into();
+            let historical =
+                "Historical signal omitted after the current-source check.".to_string();
+            memory.semantic_relevance = historical.clone();
+            memory.keyword_match = historical.clone();
+            memory.recency = historical.clone();
+            memory.project_match = historical.clone();
+            memory.app_domain_match = historical.clone();
+            memory.workflow_continuity = historical;
+        }
+        for note in explanation
+            .dropped_context
+            .iter_mut()
+            .chain(explanation.redacted_context.iter_mut())
+        {
+            note.reason = "Historical reason omitted after the current-source check.".into();
+        }
+    }
+    Ok(explanation)
 }
 
 async fn run_agent_rate_result(
@@ -5937,6 +6009,73 @@ mod tests {
         let neighborhood = &hidden_seed["structuredContent"]["neighborhood"];
         assert!(neighborhood["nodes"].as_array().unwrap().is_empty());
         assert!(neighborhood["edges"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mcp_saved_retrieval_explanation_rechecks_current_sources() {
+        use crate::agent::audit::{
+            append_agent_audit_record, AgentAuditRecord, MemoryRetrievalExplanation,
+        };
+        use crate::agent::context::RedactionNote;
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let visible = related_test_record("visible");
+        let mut blocked = related_test_record("blocked");
+        blocked.app_name = "PrivateWorkspace".into();
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&[visible, blocked]))
+            .unwrap();
+        let memory = |id: &str| MemoryRetrievalExplanation {
+            memory_id: id.into(),
+            title: format!("{id} title"),
+            app_name: "Editor".into(),
+            url: Some(format!("https://example.com/{id}")),
+            ..Default::default()
+        };
+        let mut stale_visible = memory("visible");
+        stale_visible.title = "PRIVATE_STALE_TITLE".into();
+        stale_visible.matched_reason = "PRIVATE_STALE_REASON".into();
+        stale_visible.project_match = "PRIVATE_STALE_PROJECT".into();
+        stale_visible.app_domain_match = "PRIVATE_STALE_URL".into();
+        stale_visible.workflow_continuity = "PRIVATE_STALE_WORKFLOW".into();
+        let note = |id: &str| RedactionNote {
+            id: id.into(),
+            reason: format!("{id} reason"),
+        };
+        append_agent_audit_record(
+            &state.app_data_dir,
+            &AgentAuditRecord {
+                run_id: "saved-run".into(),
+                selected_memories: vec![stale_visible, memory("blocked"), memory("missing")],
+                dropped_context: vec![note("visible"), note("blocked"), note("missing")],
+                redactions_applied: vec![note("blocked")],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+
+        let response = runtime
+            .block_on(run_agent_explain_retrieval(
+                state,
+                ExplainRetrievalRequest {
+                    run_id: Some("saved-run".into()),
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        let explanation = &response["structuredContent"]["retrieval_explanation"];
+        assert_eq!(
+            explanation["selected_memories"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(explanation["selected_memories"][0]["memory_id"], "visible");
+        assert_eq!(explanation["dropped_context"].as_array().unwrap().len(), 1);
+        assert!(!response.to_string().contains("blocked"));
+        assert!(!response.to_string().contains("missing"));
+        assert!(!response.to_string().contains("PRIVATE_STALE"));
     }
 
     #[test]
