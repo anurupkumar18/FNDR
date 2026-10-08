@@ -106,6 +106,24 @@ The 51 rejected lines were read on the machine (not recorded here). None quotes 
 
 So on this vault precision is not measurable (nothing was kept) and the open question is recall: whether real tasks exist in these captures that the pipeline cannot see. Most of this vault is AI chat, video and course pages; it holds almost no mail, chat or notes, which is where the synthetic sets found tasks.
 
+## Thirty labeled screens
+
+`tests/fixtures/task_screens.json` holds 30 synthetic screens written after every rule above, each labeled with the number of tasks a person would write down: 12 screens with 13 tasks between them (mail, Gmail, Slack, Messages, Teams, notes, reminders, an assignment page, a project document) and 18 with none (a newsletter, a receipt, marketing mail that says "please", chat banter, deploy-bot messages, study notes, a calendar, grades, a tutorial, news about a deadline, an encyclopedia article, an issue page, terminal output, code, a video page, a shopping cart). `cargo run --example task_suggestion_eval` scores three ways on the real model.
+
+| At first sight | Screens right | False screens | Suggestions | Precision | Recall |
+|---|---|---|---|---|---|
+| Model with the screen check | 29 of 30 | 0 | 13 | 92% | 92% |
+| Finder, no model | 27 of 30 | 0 | 10 | 100% | 77% |
+| Both together | 30 of 30 | 0 | 14 | 93% | 100% |
+
+Precision and recall are by count per screen; every kept suggestion was also read and is the task the screen states. The one extra suggestion was a duplicate: the model copied a sentence once alone and once with the sentence after it.
+
+**The finder** (`find_stated_tasks`) reads a task straight off a personal surface when a sentence opens a direct ask ("can you", "could you", "I need to", "remember to", "don't forget to", or "please" with a name or a date). It exists because the model sometimes offers nothing for a plain request. The model missed one request in chat that the finder found; the finder missed an "Action item:" line, a dated assignment on a course page and a first-person plan in a document, all of which the model found. Capture now uses both (`suggestions_for`).
+
+After the first run three things were fixed, so the second run is no longer first sight: one quote holding another counts as the same task, titles start with a capital, and a task whose words name a day or a time is a reminder. Second run: 30 of 30, 13 suggestions for 13 tasks, none false.
+
+The screens were written by the author of the rules. They have not seen the rules fail, but they are not independent.
+
 ## Not measured
 
 - A fresh set of screens after the last rule. The first-sight rate has been 6 of 9, then 7 of 8.

@@ -6388,7 +6388,7 @@ async fn maybe_create_tasks_from_memory(
     text_embedder: Option<&Embedder>,
     is_new_memory: bool,
 ) -> Result<(), String> {
-    use crate::tasks::suggest::{drop_repeats, is_task_source, parse_suggestions, surface_of};
+    use crate::tasks::suggest::{drop_repeats, is_task_source, suggestions_for, surface_of};
 
     let Some(engine) = engine else {
         return Ok(());
@@ -6421,7 +6421,7 @@ async fn maybe_create_tasks_from_memory(
     );
     let raw = engine.suggest_tasks(&evidence).await;
     let surface = surface_of(&record.app_name, record.url.as_deref());
-    let suggestions = parse_suggestions(&raw, &evidence, surface);
+    let suggestions = suggestions_for(&raw, &evidence, surface);
     if suggestions.is_empty() {
         return Ok(());
     }

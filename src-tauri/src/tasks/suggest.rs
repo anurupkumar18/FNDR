@@ -395,6 +395,39 @@ fn supporting_quote(
     (!steered).then_some(chosen)
 }
 
+/// Two quotes are the same when one holds the other: the model often copies
+/// a sentence once alone and once with the sentence after it.
+fn same_quote(a: &str, b: &str) -> bool {
+    let (a, b) = (plain(a), plain(b));
+    a.contains(b.trim()) || b.contains(a.trim())
+}
+
+fn capitalized(title: &str) -> String {
+    let mut chars = title.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// Every suggestion a capture supports: the model's lines that pass the
+/// screen check, then tasks stated outright that the model did not offer.
+pub fn suggestions_for(raw: &str, evidence: &str, surface: Surface) -> Vec<Suggestion> {
+    let mut all = parse_suggestions(raw, evidence, surface);
+    for found in find_stated_tasks(evidence, surface) {
+        if all.len() == MAX_SUGGESTIONS_PER_CAPTURE {
+            break;
+        }
+        if !all
+            .iter()
+            .any(|other| same_quote(&other.quote, &found.quote))
+        {
+            all.push(found);
+        }
+    }
+    all
+}
+
 /// Keep the model's lines that the capture supports. `evidence` is the
 /// screen text the model was shown, never a model-written summary.
 pub fn parse_suggestions(raw: &str, evidence: &str, surface: Surface) -> Vec<Suggestion> {
@@ -429,19 +462,22 @@ pub fn parse_suggestions(raw: &str, evidence: &str, surface: Surface) -> Vec<Sug
             continue;
         };
         // A reminder with no date and a follow-up with no one to follow up
-        // with are still things to do.
-        if (task_type == TaskType::Reminder && !has_date(&quote))
+        // with are still things to do. A to-do that names a day or a time is
+        // a reminder, whatever the model called it.
+        if (task_type == TaskType::Reminder && !names_a_day_or_time(&quote))
             || (task_type == TaskType::Followup && !names_someone(&quote))
         {
             task_type = TaskType::Todo;
         }
-        let plain_quote = plain(&quote);
-        if kept.iter().any(|other| plain(&other.quote) == plain_quote) {
+        if task_type == TaskType::Todo && names_a_day_or_time(&quote) {
+            task_type = TaskType::Reminder;
+        }
+        if kept.iter().any(|other| same_quote(&other.quote, &quote)) {
             continue;
         }
         kept.push(Suggestion {
             task_type,
-            title: title.to_string(),
+            title: capitalized(title),
             quote,
         });
         if kept.len() == MAX_SUGGESTIONS_PER_CAPTURE {
@@ -449,6 +485,87 @@ pub fn parse_suggestions(raw: &str, evidence: &str, surface: Surface) -> Vec<Sug
         }
     }
     kept
+}
+
+/// Openers that make a sentence a direct request or a note to oneself, and
+/// are followed by the thing to do. Narrower than `REQUEST_CUES`: a bare
+/// "please" opens marketing as often as a request.
+const DIRECT_ASKS: &[&str] = &[
+    "can you",
+    "could you",
+    "would you be able to",
+    "would you",
+    "i need to",
+    "i have to",
+    "i'll",
+    "i will",
+    "we need to",
+    "remember to",
+    "don't forget to",
+    "do not forget to",
+    "remind me to",
+    "please",
+];
+
+/// Tasks stated outright on a personal surface, found without the model. A
+/// 2B model sometimes offers nothing for a plain request; a sentence that
+/// opens a direct ask in mail, chat or notes can be read off the screen. The
+/// title is the words after the ask.
+pub fn find_stated_tasks(evidence: &str, surface: Surface) -> Vec<Suggestion> {
+    if surface != Surface::Personal {
+        return Vec::new();
+    }
+    let body = evidence.split_once('\n').map_or("", |(_, body)| body);
+    let mut found: Vec<Suggestion> = Vec::new();
+    for line in body.lines().filter(|line| !addressed_to_an_ai(line)) {
+        for passage in passages(line) {
+            let lower = passage.to_lowercase();
+            // "please" counts only with a named person or a time, which a
+            // request has and an advertisement rarely does.
+            let Some((ask, at)) = DIRECT_ASKS
+                .iter()
+                .filter_map(|ask| {
+                    let at = lower.find(ask)?;
+                    let starts_a_word =
+                        at == 0 || !lower.as_bytes()[at - 1].is_ascii_alphanumeric();
+                    starts_a_word.then_some((*ask, at))
+                })
+                .min_by_key(|(_, at)| *at)
+            else {
+                continue;
+            };
+            if ask == "please" && !(has_date(passage) || names_someone(passage)) {
+                continue;
+            }
+            let after = passage[at + ask.len()..]
+                .trim()
+                .trim_end_matches(['.', '?', '!'])
+                .trim();
+            if after.split_whitespace().count() < 2 {
+                continue;
+            }
+            let title = capitalized(&after.chars().take(90).collect::<String>());
+            if !is_actionable_task_title(&title)
+                || found.iter().any(|other| same_quote(&other.quote, passage))
+            {
+                continue;
+            }
+            let task_type = if names_a_day_or_time(passage) {
+                TaskType::Reminder
+            } else {
+                TaskType::Todo
+            };
+            found.push(Suggestion {
+                task_type,
+                title,
+                quote: passage.chars().take(MAX_QUOTE_CHARS).collect(),
+            });
+            if found.len() == MAX_SUGGESTIONS_PER_CAPTURE {
+                return found;
+            }
+        }
+    }
+    found
 }
 
 /// Limits extraction to one run per app per window, so a long stretch in one
