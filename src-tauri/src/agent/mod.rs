@@ -4,6 +4,7 @@ pub mod audit;
 pub mod context;
 pub mod evals;
 pub mod execution;
+pub mod peer;
 pub mod policy;
 pub mod prompts;
 pub mod risk_policy;
