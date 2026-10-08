@@ -4316,48 +4316,11 @@ async fn run_memory_todos(
 ) -> Result<Value, JsonRpcError> {
     let index_status = inspect_memory_index_status(&app_state).await?;
     let limit = args.limit.clamp(1, 200);
-    let tasks = app_state
-        .store
-        .list_tasks()
+    let tasks = context_runtime::authorized_open_tasks(&app_state, args.project.as_deref())
         .await
         .map_err(internal_tool_error)?;
     let mut rows = Vec::new();
-    for task in tasks
-        .into_iter()
-        .filter(|task| !task.is_completed && !task.is_dismissed)
-    {
-        if let Some(project_filter) = args.project.as_deref() {
-            let mut matched = false;
-            if let Some(source_id) = task.source_memory_id.as_deref() {
-                if let Some(event) = app_state
-                    .store
-                    .get_activity_event_by_memory_id(source_id)
-                    .await
-                    .map_err(internal_tool_error)?
-                {
-                    matched = event.project.as_deref() == Some(project_filter);
-                }
-            }
-            if !matched {
-                for memory_id in &task.linked_memory_ids {
-                    if let Some(event) = app_state
-                        .store
-                        .get_activity_event_by_memory_id(memory_id)
-                        .await
-                        .map_err(internal_tool_error)?
-                    {
-                        if event.project.as_deref() == Some(project_filter) {
-                            matched = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if !matched {
-                continue;
-            }
-        }
-
+    for task in tasks {
         rows.push(json!({
             "id": task.id,
             "title": task.title,
@@ -5746,6 +5709,92 @@ mod tests {
             5,
             "the visibility check must not rewrite stored activity"
         );
+    }
+
+    #[test]
+    fn mcp_todos_authorizes_every_source_before_returning_task_text() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let visible = related_test_record("visible");
+        let mut blocked = related_test_record("blocked");
+        blocked.app_name = "PrivateWorkspace".into();
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&[visible, blocked]))
+            .unwrap();
+        runtime
+            .block_on(state.store.upsert_activity_events(&[
+                crate::storage::ActivityEvent {
+                    id: "visible-event".into(),
+                    memory_id: "visible".into(),
+                    project: Some("Atlas".into()),
+                    ..Default::default()
+                },
+                crate::storage::ActivityEvent {
+                    id: "blocked-event".into(),
+                    memory_id: "blocked".into(),
+                    project: Some("Atlas".into()),
+                    ..Default::default()
+                },
+            ]))
+            .unwrap();
+        let task =
+            |id: &str, source: Option<&str>, links: Vec<&str>, app: &str| crate::storage::Task {
+                id: id.into(),
+                title: id.into(),
+                description: format!("{id} description"),
+                source_app: app.into(),
+                source_memory_id: source.map(str::to_string),
+                created_at: 1,
+                due_date: None,
+                is_completed: false,
+                is_dismissed: false,
+                task_type: crate::storage::TaskType::Todo,
+                linked_urls: vec![],
+                linked_memory_ids: links.into_iter().map(str::to_string).collect(),
+            };
+        let mut blocked_url = task("PRIVATE_URL", Some("visible"), vec![], "Editor");
+        blocked_url.linked_urls = vec!["https://privateworkspace.example/plan".into()];
+        runtime
+            .block_on(state.store.upsert_tasks(&[
+                task("Visible task", Some("visible"), vec![], "Editor"),
+                task("Visible manual task", None, vec![], "Manual"),
+                task("PRIVATE_SOURCE", Some("blocked"), vec![], "Editor"),
+                task("PRIVATE_MISSING", Some("missing"), vec![], "Editor"),
+                task("PRIVATE_LINK", Some("visible"), vec!["blocked"], "Editor"),
+                task("PRIVATE_ORPHAN", None, vec![], "Editor"),
+                blocked_url,
+            ]))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+
+        let response = runtime
+            .block_on(run_memory_todos(
+                state.clone(),
+                TodosArgs {
+                    project: None,
+                    limit: 20,
+                },
+            ))
+            .unwrap();
+        let rows = response["structuredContent"]["todos"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|row| row["title"] == "Visible task"));
+        assert!(rows.iter().any(|row| row["title"] == "Visible manual task"));
+        assert!(!response.to_string().contains("PRIVATE_"));
+
+        let scoped = runtime
+            .block_on(run_memory_todos(
+                state,
+                TodosArgs {
+                    project: Some("Atlas".into()),
+                    limit: 20,
+                },
+            ))
+            .unwrap();
+        let scoped_rows = scoped["structuredContent"]["todos"].as_array().unwrap();
+        assert_eq!(scoped_rows.len(), 1);
+        assert_eq!(scoped_rows[0]["title"], "Visible task");
     }
 
     #[test]

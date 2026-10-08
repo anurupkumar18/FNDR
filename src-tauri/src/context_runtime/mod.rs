@@ -1683,10 +1683,10 @@ pub async fn compile_knowledge_pages(
     Ok(pages)
 }
 
-async fn collect_open_tasks(
+pub(crate) async fn authorized_open_tasks(
     state: &AppState,
     project: Option<&str>,
-) -> Result<Vec<ContextTask>, String> {
+) -> Result<Vec<crate::storage::Task>, String> {
     let tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
     let tasks = tasks
         .into_iter()
@@ -1748,7 +1748,19 @@ async fn collect_open_tasks(
                 continue;
             }
         }
-        open.push(ContextTask {
+        open.push(task);
+    }
+    Ok(open)
+}
+
+async fn collect_open_tasks(
+    state: &AppState,
+    project: Option<&str>,
+) -> Result<Vec<ContextTask>, String> {
+    let mut open = authorized_open_tasks(state, project)
+        .await?
+        .into_iter()
+        .map(|task| ContextTask {
             id: task.id,
             title: task.title,
             status: match task.task_type {
@@ -1758,8 +1770,8 @@ async fn collect_open_tasks(
             },
             source: task.source_app,
             due_at: task.due_date,
-        });
-    }
+        })
+        .collect::<Vec<_>>();
     open.sort_by(|a, b| a.title.cmp(&b.title));
     open.truncate(8);
     Ok(open)
