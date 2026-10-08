@@ -839,6 +839,7 @@ fn main() {
             ipc::commands::codex_logout,
             ipc::commands::openclicky_bridge_status,
             ipc::commands::computer_use_status,
+            ipc::commands::set_computer_use_enabled,
             ipc::commands::computer_use_plan,
             ipc::commands::setup_components,
             ipc::commands::install_component,

@@ -621,11 +621,21 @@ pub struct ScreenGuideConfig {
     /// (127.0.0.1:32123) instead of FNDR's own overlay cursor.
     #[serde(default)]
     pub openclicky_bridge: bool,
-    /// Let FNDR click, type and press keys through a computer-use helper when
-    /// asked in the notch. `operator::policy` decides per action whether it
-    /// runs, waits for a tap, or is refused (ADR-022 amendment, ADR 024).
-    #[serde(default)]
+    /// Where "Operate my Mac" was stored before it had its own section.
+    /// Read once from an older file and moved to `operator.enabled`; never
+    /// written again.
+    #[serde(default, skip_serializing)]
     pub operate_computer: bool,
+}
+
+/// Notch Do: letting FNDR operate apps when asked in the notch.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperatorConfig {
+    /// The "Operate my Mac" opt-in. `operator::policy` decides per action
+    /// whether it runs, waits for a tap, or is refused (ADR-022 amendment,
+    /// ADR 024).
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -732,6 +742,9 @@ pub struct Config {
     /// Click-through, local-only Screen Guide configuration.
     #[serde(default)]
     pub screen_guide: ScreenGuideConfig,
+    /// Notch Do's opt-in. Screen Guide itself only reads the screen.
+    #[serde(default)]
+    pub operator: OperatorConfig,
     /// Kill switch: every command-surface action is refused while true.
     #[serde(default)]
     pub actions_kill_switch: bool,
@@ -1119,6 +1132,7 @@ impl Default for Config {
             decay_half_life_days: 21,
             autofill: AutofillConfig::default(),
             screen_guide: ScreenGuideConfig::default(),
+            operator: OperatorConfig::default(),
             actions_kill_switch: false,
             agent_notes_enabled: false,
             embedding: EmbeddingConfig::default(),
@@ -1139,6 +1153,11 @@ impl Config {
         self.dismissed_privacy_alerts = dedupe_trimmed(self.dismissed_privacy_alerts);
         self.autofill = self.autofill.normalized();
         self.screen_guide = self.screen_guide.normalized();
+        if self.screen_guide.operate_computer {
+            // An older file kept this opt-in under Screen Guide.
+            self.operator.enabled = true;
+            self.screen_guide.operate_computer = false;
+        }
         self.embedding = self.embedding.normalized();
         self.chunking = self.chunking.normalized();
         self.search = self.search.normalized();
@@ -1291,12 +1310,33 @@ mod tests {
     }
 
     #[test]
+    fn the_operate_opt_in_moves_out_of_screen_guide_and_keeps_its_value() {
+        // An older file: the opt-in sits under [screen_guide], and nothing is under [operator].
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        assert!(!current.contains("operate_computer"));
+        let older_file = current.replace(
+            "[screen_guide]\n",
+            "[screen_guide]\noperate_computer = true\n",
+        );
+        assert!(older_file.contains("operate_computer = true"));
+        let older: Config = toml::from_str(&older_file).expect("an older config still loads");
+        let config = older.normalized();
+        assert!(config.operator.enabled);
+        assert!(!config.screen_guide.operate_computer);
+
+        let saved = toml::to_string(&config).expect("config serializes");
+        assert!(!saved.contains("operate_computer"));
+        let reloaded: Config = toml::from_str(&saved).expect("the new shape loads");
+        assert!(reloaded.normalized().operator.enabled);
+    }
+
+    #[test]
     fn screen_guide_never_sends_anything_off_device_by_default() {
         let config = Config::default().normalized();
         assert_eq!(config.screen_guide.model, ScreenGuideModel::Local);
         assert!(!config.screen_guide.send_screenshot_to_codex);
         assert!(!config.screen_guide.openclicky_bridge);
-        assert!(!config.screen_guide.operate_computer);
+        assert!(!config.operator.enabled);
 
         let stale = ScreenGuideConfig {
             send_screenshot_to_codex: true,

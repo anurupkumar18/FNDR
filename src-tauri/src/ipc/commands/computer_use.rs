@@ -1263,7 +1263,7 @@ pub async fn computer_use_status(
 ) -> Result<ComputerUseStatus, String> {
     let backend = detect_backend();
     Ok(ComputerUseStatus {
-        enabled: state.inner().config.read().screen_guide.operate_computer,
+        enabled: state.inner().config.read().operator.enabled,
         codex_ready: ready_executable().is_ok(),
         backend: backend.as_ref().map(|b| b.label().to_string()),
         backend_path: backend.as_ref().map(|b| b.path().display().to_string()),
@@ -1272,6 +1272,28 @@ pub async fn computer_use_status(
             .ok()
             .and_then(|slot| slot.as_ref().map(|run| run.run_id.clone())),
     })
+}
+
+/// Turns "Operate my Mac" on or off. Turning it off ends any run.
+#[tauri::command]
+pub async fn set_computer_use_enabled(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<bool, String> {
+    {
+        let mut config = state.inner().config.write();
+        let previous = config.operator.enabled;
+        config.operator.enabled = enabled;
+        if let Err(error) = config.save() {
+            config.operator.enabled = previous;
+            return Err(format!("Could not save that setting: {error}"));
+        }
+    }
+    if !enabled {
+        stop_active_run(&app);
+    }
+    Ok(enabled)
 }
 
 /// Plans a spoken request. Any run in progress is stopped first, so speaking
@@ -1287,7 +1309,7 @@ pub async fn computer_use_plan(
     if transcript.is_empty() {
         return Err("Nothing was heard.".to_string());
     }
-    if !state.inner().config.read().screen_guide.operate_computer {
+    if !state.inner().config.read().operator.enabled {
         return Err("Turn on \"Operate my Mac\" first.".to_string());
     }
     let guards = Guards::for_state(state.inner());

@@ -16,6 +16,7 @@ import { useVoice } from "@/shared/voice";
 import {
     AUTO_START_MS,
     ENDPOINT_MS,
+    HEARD_MS,
     SILENCE_MS,
     classifyUtterance,
     doRunReducer,
@@ -36,7 +37,7 @@ function runInProgress(state: DoState): boolean {
 
 /** Listening continues through a run so "stop" works; it ends with the run. */
 function wantsMicrophone(state: DoState): boolean {
-    return state.phase === "listening" || runInProgress(state);
+    return state.phase === "listening" || state.phase === "heard" || runInProgress(state);
 }
 
 function message(reason: unknown): string {
@@ -45,8 +46,10 @@ function message(reason: unknown): string {
 
 /**
  * Notch Do: opening the notch starts listening on FNDR's native voice owner.
- * When speech ends, the request is planned and shown as a step list that
- * starts by itself after 1.5 s unless the person says "stop" or taps Cancel.
+ * When speech ends, what was heard shows for a beat before it is sent to be
+ * planned, so a misheard request can be stopped while it is still on the Mac.
+ * The plan is a step list; it starts by itself only when no step can need a
+ * yes, otherwise it waits for Start or "go".
  * Saying "stop" or pressing Stop kills the run at any point.
  */
 export function NotchOperator({ active }: NotchOperatorProps) {
@@ -110,11 +113,11 @@ export function NotchOperator({ active }: NotchOperatorProps) {
     }, []);
 
     const handleUtterance = useCallback(
-        (text: string) => {
+        (text: string, spoken = true) => {
             const current = stateRef.current;
             const intent = classifyUtterance(text, {
                 awaitingApproval: current.approval !== null,
-                awaitingStart: current.phase === "plan" || current.redirect !== null,
+                awaitingStart: current.phase === "plan" || current.phase === "heard" || current.redirect !== null,
                 running: runInProgress(current),
             });
             if (!intent) return;
@@ -127,11 +130,14 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                     return;
                 case "go":
                     if (current.redirect) void plan(current.redirect);
+                    else if (current.phase === "heard") void plan(current.transcript);
                     else void startRun();
                     return;
                 case "request":
                     // Mid-run speech may be music or someone else; it waits for a yes.
                     if (current.phase === "running") dispatch({ type: "redirectHeard", text: intent.text });
+                    // Typed words were already read by the person who typed them.
+                    else if (spoken) dispatch({ type: "heard", text: intent.text });
                     else void plan(intent.text);
             }
         },
@@ -204,6 +210,14 @@ export function NotchOperator({ active }: NotchOperatorProps) {
         }
     }, [voice.state]);
 
+    // What was heard is sent to be planned after a beat, unless stopped or corrected.
+    useEffect(() => {
+        if (state.phase !== "heard") return;
+        const heard = state.transcript;
+        const timer = window.setTimeout(() => void plan(heard), HEARD_MS);
+        return () => window.clearTimeout(timer);
+    }, [state.phase, state.transcript, plan]);
+
     // The plan card starts the run by itself unless stopped or redirected.
     useEffect(() => {
         if (state.phase !== "plan" || state.redirect || !state.autoStart) return;
@@ -248,6 +262,8 @@ export function NotchOperator({ active }: NotchOperatorProps) {
             case "idle":
             case "listening":
                 return state.partial || "Listening — say what to do";
+            case "heard":
+                return "Heard this. Say “stop” if it is wrong";
             case "silence":
                 return "Didn't hear anything.";
             case "mic_denied":
@@ -351,6 +367,20 @@ export function NotchOperator({ active }: NotchOperatorProps) {
             ) : null}
 
             <div className="notch-operator-controls">
+                {state.phase === "heard" ? (
+                    <>
+                        <button type="button" className="notch-operator-btn" onClick={() => void stopRun()}>
+                            Cancel
+                        </button>
+                        <button
+                            type="button"
+                            className="notch-operator-btn notch-operator-btn-primary"
+                            onClick={() => void plan(state.transcript)}
+                        >
+                            Send now
+                        </button>
+                    </>
+                ) : null}
                 {state.phase === "plan" ? (
                     <>
                         <button type="button" className="notch-operator-btn" onClick={() => void stopRun()}>
@@ -390,7 +420,7 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                     const text = draft.trim();
                     if (!text) return;
                     setDraft("");
-                    handleUtterance(text);
+                    handleUtterance(text, false);
                 }}
             >
                 <input

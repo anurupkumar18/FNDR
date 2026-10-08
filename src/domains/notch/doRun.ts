@@ -13,9 +13,13 @@ export const SILENCE_MS = 8000;
 /** The plan card starts the run by itself after this long. */
 export const AUTO_START_MS = 1500;
 
+/** What was heard stays on screen this long before it is sent to be planned. */
+export const HEARD_MS = 1200;
+
 export type DoPhase =
     | "idle"
     | "listening"
+    | "heard"
     | "silence"
     | "mic_denied"
     | "voice_unavailable"
@@ -87,6 +91,7 @@ export type DoInput =
     | { type: "silence" }
     | { type: "micDenied"; message: string }
     | { type: "voiceUnavailable"; message: string }
+    | { type: "heard"; text: string }
     | { type: "planRequested"; runId: string; transcript: string }
     | { type: "redirectHeard"; text: string }
     | { type: "redirectDismissed" }
@@ -172,6 +177,9 @@ export function doRunReducer(state: DoState, input: DoInput): DoState {
             return { ...state, phase: "mic_denied", partial: "", error: input.message };
         case "voiceUnavailable":
             return { ...state, phase: "voice_unavailable", partial: "", error: input.message };
+        case "heard":
+            // Shown before anything leaves the Mac, so a misheard request can be stopped.
+            return { ...initialDoState, phase: "heard", transcript: input.text };
         case "planRequested":
             return {
                 ...initialDoState,

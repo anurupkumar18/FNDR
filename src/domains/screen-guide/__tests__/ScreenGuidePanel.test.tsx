@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     setScreenGuideSettings: vi.fn(),
     submitScreenGuideText: vi.fn(),
     computerUseStatus: vi.fn(),
+    setComputerUseEnabled: vi.fn(),
     openClickyBridgeStatus: vi.fn(),
 }));
 
@@ -234,7 +235,6 @@ describe("ScreenGuidePanel", () => {
             show_cursor: true,
             model: "codex",
             send_screenshot_to_codex: true,
-            operate_computer: false,
         });
         render(<ScreenGuidePanel isVisible onClose={() => {}} />);
 
@@ -305,14 +305,20 @@ describe("ScreenGuidePanel", () => {
             speak_responses: false,
             show_cursor: true,
             model: "local",
-            operate_computer: true,
+        });
+        mocks.computerUseStatus.mockResolvedValue({
+            enabled: true,
+            codexReady: true,
+            backend: "codex_computer_use",
+            backendPath: null,
+            activeRun: null,
         });
         render(<ScreenGuidePanel isVisible onClose={() => {}} />);
 
         expect(
             await screen.findByText("Local answers with approval-gated control"),
         ).toBeInTheDocument();
-        expect(screen.getByText(/click and type only after showing an approval/i)).toBeInTheDocument();
+        expect(screen.getByText(/other clicks and typing wait for your tap/i)).toBeInTheDocument();
         expect(screen.queryByText("Local and read-only")).not.toBeInTheDocument();
     });
 

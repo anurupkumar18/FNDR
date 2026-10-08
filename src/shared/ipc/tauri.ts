@@ -1869,6 +1869,10 @@ export interface HermesBridgeStatus {
     bundled_repo_available: boolean;
     runtime_source: string | null;
     provider_kind: string | null;
+    /** The saved provider answers on this Mac. */
+    provider_is_local?: boolean;
+    /** FNDR adds memories it finds itself to each message for this provider. */
+    related_memories?: boolean;
     model_name: string | null;
     base_url: string | null;
     api_url: string;
@@ -1882,10 +1886,6 @@ export interface HermesBridgeStatus {
     ollama_reachable: boolean;
     ollama_models: string[];
     ollama_base_url: string;
-    /** The saved provider answers on this Mac. */
-    provider_is_local?: boolean;
-    /** FNDR adds memories it finds itself to each message for this provider. */
-    related_memories?: boolean;
     codex_cli_installed: boolean;
     codex_logged_in: boolean;
     codex_auth_path: string;
@@ -1911,12 +1911,16 @@ export interface HermesSetupPayload {
     model_name: string;
     api_key?: string | null;
     base_url?: string | null;
+    /** Also send memories FNDR finds on its own to a provider that is not on this Mac. */
+    related_memories?: boolean;
 }
 
 export interface HermesChatReply {
     response_id: string;
     conversation_id: string;
     content: string;
+    /** Memories FNDR added on its own to the message this answers. */
+    auto_memories?: AttachedMemory[];
 }
 
 export async function startAgentTask(
@@ -1924,16 +1928,12 @@ export async function startAgentTask(
     contextUrls?: string[],
     contextNotes?: string[]
 ): Promise<AgentStatus> {
-    /** Also send memories FNDR finds on its own to a provider that is not on this Mac. */
-    related_memories?: boolean;
     return invoke<AgentStatus>("start_agent_task", { taskTitle, contextUrls, contextNotes });
 }
 
 export async function getAgentStatus(): Promise<AgentStatus> {
     return invoke<AgentStatus>("get_agent_status");
 }
-    /** Memories FNDR added on its own to the message this answers. */
-    auto_memories?: AttachedMemory[];
 
 export async function stopAgent(): Promise<AgentStatus> {
     return invoke<AgentStatus>("stop_agent");
@@ -1992,6 +1992,8 @@ export interface AgentChatMessage {
     memories: AttachedMemory[];
     /** The send failed; Hermes never answered this message. */
     failed?: boolean;
+    /** Memories FNDR added on its own to this message. */
+    autoMemories?: AttachedMemory[];
 }
 
 export interface AgentChat {
@@ -2005,8 +2007,6 @@ export interface AgentChat {
 export interface AgentChatSummary {
     id: string;
     title: string;
-    /** Memories FNDR added on its own to this message. */
-    autoMemories?: AttachedMemory[];
     updatedAt: number;
     messageCount: number;
 }
@@ -2293,7 +2293,6 @@ export interface ScreenGuideSettings {
     /** Point with OpenClicky's cursor via its local bridge. */
     openclicky_bridge?: boolean;
     /** Let the notch operate the Mac via open-computer-use; each action is approved. */
-    operate_computer?: boolean;
 }
 
 export interface ScreenGuideDiagnosticStatus {
@@ -2849,6 +2848,11 @@ export interface ComputerUseStatus {
 
 export async function computerUseStatus(): Promise<ComputerUseStatus> {
     return invoke<ComputerUseStatus>("computer_use_status");
+}
+
+/** Turns "Operate my Mac" on or off; returns the saved value. */
+export async function setComputerUseEnabled(enabled: boolean): Promise<boolean> {
+    return invoke<boolean>("set_computer_use_enabled", { enabled });
 }
 
 /** Plans a request and returns the run id. Stops any run in progress first. */

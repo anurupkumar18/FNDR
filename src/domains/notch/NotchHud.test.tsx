@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const eventMocks = vi.hoisted(() => ({
     listen: vi.fn(),
@@ -409,6 +409,10 @@ describe("NotchHud", () => {
     describe("Do mode: spoken computer use", () => {
         const REQUEST = "open Spotify, play Blinding Lights, then open the browser and look up looped transformers";
 
+        // A spoken request shows for a beat before it is sent, so waits are longer here.
+        beforeEach(() => configure({ asyncUtilTimeout: 3000 }));
+        afterEach(() => configure({ asyncUtilTimeout: 1000 }));
+
         /** What the native voice owner emits for the session it last started.
          *  Terminal states are followed by idle, as `emit_terminal` does. */
         function voice(state: { kind: string } & Record<string, unknown>) {
@@ -504,6 +508,18 @@ describe("NotchHud", () => {
             expect(await screen.findByText("Playing Blinding Lights")).toBeInTheDocument();
             emit("computer-use://event", { kind: "finished", runId: "r1", ok: true, summary: "Done: Open Spotify, Play Blinding Lights, Search looped transformers." });
             expect(await screen.findByText(/^Done: Open Spotify/)).toBeInTheDocument();
+        });
+
+        it("shows what it heard before sending it, and Cancel keeps it on the Mac", async () => {
+            await openDo();
+            voice({ kind: "final", text: "open my bank and pay rent" });
+            expect(await screen.findByText(/Heard this/)).toBeInTheDocument();
+            expect(screen.getByText("“open my bank and pay rent”")).toBeInTheDocument();
+            expect(ipcMocks.computerUsePlan).not.toHaveBeenCalled();
+
+            fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            expect(ipcMocks.computerUsePlan).not.toHaveBeenCalled();
         });
 
         it("waits for a tap when a step in the plan could need a yes", async () => {

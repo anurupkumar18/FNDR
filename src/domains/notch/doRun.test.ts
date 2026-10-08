@@ -86,6 +86,15 @@ describe("doRunReducer", () => {
         expect(state.result).toEqual({ ok: true, summary: "Done." });
     });
 
+    it("holds what was heard as its own step before any plan exists", () => {
+        const heard = doRunReducer(initialDoState, { type: "heard", text: "play some jazz" });
+        expect(heard.phase).toBe("heard");
+        expect(heard.transcript).toBe("play some jazz");
+        expect(heard.runId).toBeNull();
+        expect(classifyUtterance("go", { awaitingStart: true })).toEqual({ kind: "go" });
+        expect(doRunReducer(heard, { type: "stopped" }).phase).toBe("stopped");
+    });
+
     it("ignores events from a run that was replaced", () => {
         const state = run(
             { type: "planRequested", runId: "r2", transcript: "open Notes" },

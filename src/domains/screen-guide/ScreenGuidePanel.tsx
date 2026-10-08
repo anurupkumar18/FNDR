@@ -28,6 +28,7 @@ import type { ActivityTraceSnapshot } from "@/shared/activity/activityTrace";
 import { formatBytes } from "@/shared/utils/format";
 import {
     computerUseStatus,
+    setComputerUseEnabled,
     openClickyBridgeStatus,
     type ComputerUseStatus,
     type OpenClickyBridgeStatus,
@@ -259,7 +260,7 @@ export function ScreenGuidePanel({
         return () => {
             active = false;
         };
-    }, [isVisible, settings?.operate_computer]);
+    }, [isVisible]);
     useEffect(() => {
         if (!isVisible || !settings?.openclicky_bridge) return;
         let active = true;
@@ -281,7 +282,7 @@ export function ScreenGuidePanel({
     const hasDiagnosticFiles = (diagnosticStatus?.bundleCount ?? 0) > 0
         || (diagnosticStatus?.partialCount ?? 0) > 0;
     const sendsScreenshotToChatGpt = usesChatGpt && Boolean(settings?.send_screenshot_to_codex);
-    const canOperateComputer = Boolean(settings?.operate_computer);
+    const canOperateComputer = Boolean(computerUse?.enabled);
     const privacyHeading = !settings
         ? "Checking privacy and agency settings"
         : canOperateComputer
@@ -657,7 +658,9 @@ export function ScreenGuidePanel({
                     )}
                     <label className="sg-setting-row">
                         <span>
-                            <strong>Point with OpenClicky</strong>
+                            <strong>
+                                Point with OpenClicky <span className="sg-labs-tag">Labs</span>
+                            </strong>
                             <small>
                                 {openClicky?.reachable
                                     ? openClicky.tokenFound
@@ -680,7 +683,9 @@ export function ScreenGuidePanel({
                     </label>
                     <label className="sg-setting-row">
                         <span>
-                            <strong>Operate my Mac</strong>
+                            <strong>
+                                Operate my Mac <span className="sg-labs-tag">Labs</span>
+                            </strong>
                             <small>
                                 {computerUse && !computerUse.backend
                                     ? "Needs Computer Use: install the ChatGPT app with Computer Use, or run npm install -g open-computer-use."
@@ -692,14 +697,20 @@ export function ScreenGuidePanel({
                             role="switch"
                             className="fndr-switch"
                             aria-label="Operate my Mac"
-                            checked={settings?.operate_computer ?? false}
-                            disabled={controlsDisabled}
+                            checked={canOperateComputer}
+                            disabled={controlsDisabled || !computerUse}
                             onChange={(event) =>
-                                void updateSettings({ operate_computer: event.target.checked })
+                                void setComputerUseEnabled(event.target.checked)
+                                    .then((enabled) =>
+                                        setComputerUse((current) => (current ? { ...current, enabled } : current)),
+                                    )
+                                    .catch((reason) =>
+                                        setError(reason instanceof Error ? reason.message : String(reason)),
+                                    )
                             }
                         />
                     </label>
-                    {settings?.operate_computer ? <OperatorPermissions /> : null}
+                    {canOperateComputer ? <OperatorPermissions /> : null}
                 </section>
 
                 <section className="sg-ask-card">
@@ -874,7 +885,7 @@ export function ScreenGuidePanel({
                                 : "Your question and visible text are sent to OpenAI for this turn; screen pixels stay on this Mac."
                             : "The question, temporary display image, transcription, and answer stay on this Mac for this turn."}{" "}
                         {canOperateComputer
-                            ? "Operate mode can click and type only after showing an approval for each action; say Stop at any time."
+                            ? "Operate mode acts from the notch: opening apps, playback, links and searches you asked for run without asking; other clicks and typing wait for your tap. Say Stop at any time."
                             : "Screen Guide does not click or type."}{" "}
                         The turn is not added to Memory Vault. File search checks only file names in
                         Documents, Desktop, and Downloads; it never reads or opens files. Normal turns

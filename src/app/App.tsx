@@ -62,12 +62,17 @@ export const SIDEBAR_GROUPS = [
         ],
     },
     {
-        label: "Assist",
+        label: "Trust",
+        items: [{ key: "privacyProof", text: "Privacy Activity" }],
+    },
+    {
+        // ADR-023: everything outside the five destinations is Labs. Notch
+        // Do has no entry here; its switch in Screen Guide carries the tag.
+        label: "Labs",
         items: [
             { key: "agent", text: "Hermes Agent" },
             { key: "screenGuide", text: "Screen Guide" },
             { key: "engineMetrics", text: "Engine diagnostics" },
-            { key: "privacyProof", text: "Privacy Activity" },
         ],
     },
 ] as const satisfies ReadonlyArray<{
