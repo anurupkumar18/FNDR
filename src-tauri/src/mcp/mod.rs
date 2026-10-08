@@ -4425,10 +4425,56 @@ async fn run_memory_graph_context(
         })?;
         let depth = args.depth.clamp(1, 3);
         let gs = crate::graph::graph_store::GraphStore::new(app_state.store.clone());
-        let neighborhood = gs
-            .get_subgraph(id, depth)
+        let nodes = gs.all_nodes().await.map_err(internal_tool_error)?;
+        let edges = gs.all_edges().await.map_err(internal_tool_error)?;
+        let source_ids = nodes
+            .iter()
+            .flat_map(|node| node.source_memory_ids.iter().cloned())
+            .chain(edges.iter().flat_map(|edge| {
+                context_runtime::graph_memory_references(&edge.metadata).unwrap_or_default()
+            }))
+            .collect::<Vec<_>>();
+        let visible = context_runtime::context_source_memories(&app_state, &source_ids)
             .await
             .map_err(internal_tool_error)?;
+        let nodes = nodes
+            .into_iter()
+            .filter(|node| {
+                !node.source_memory_ids.is_empty()
+                    && node
+                        .source_memory_ids
+                        .iter()
+                        .all(|source| visible.contains_key(source))
+            })
+            .collect::<Vec<_>>();
+        let node_ids = nodes.iter().map(|node| node.id).collect::<HashSet<_>>();
+        let edges = edges
+            .into_iter()
+            .filter(|edge| {
+                node_ids.contains(&edge.source_id)
+                    && node_ids.contains(&edge.target_id)
+                    && (edge.metadata.is_null()
+                        || edge
+                            .metadata
+                            .as_object()
+                            .is_some_and(serde_json::Map::is_empty)
+                        || context_runtime::graph_memory_references(&edge.metadata).is_some_and(
+                            |ids| {
+                                !ids.is_empty()
+                                    && ids.iter().all(|source| visible.contains_key(source))
+                            },
+                        ))
+            })
+            .collect::<Vec<_>>();
+        let neighborhood = crate::graph::traversal::bfs_neighborhood(
+            &crate::graph::schema::GraphSubgraph {
+                nodes,
+                edges,
+                ..Default::default()
+            },
+            id,
+            depth,
+        );
         let insight = context_runtime::insight_graph_context_mcp(app_state.as_ref(), proj).await;
         return Ok(tool_success(json!({
             "index_status": index_status,
@@ -5795,6 +5841,102 @@ mod tests {
         let scoped_rows = scoped["structuredContent"]["todos"].as_array().unwrap();
         assert_eq!(scoped_rows.len(), 1);
         assert_eq!(scoped_rows[0]["title"], "Visible task");
+    }
+
+    #[test]
+    fn mcp_graph_neighborhood_omits_hidden_sources_and_hidden_seeds() {
+        use crate::graph::schema::{GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let state = related_test_state(dir.path());
+        let visible = related_test_record("visible");
+        let mut blocked = related_test_record("blocked");
+        blocked.app_name = "PrivateWorkspace".into();
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&[visible, blocked]))
+            .unwrap();
+        let graph = crate::graph::graph_store::GraphStore::new(state.store.clone());
+        let now = chrono::Utc::now();
+        let node = |id: u128, label: &str, source: &str| GraphNode {
+            id: uuid::Uuid::from_u128(id),
+            node_type: GraphNodeType::Concept,
+            label: label.into(),
+            confidence: 0.9,
+            source_memory_ids: vec![source.into()],
+            embedding: None,
+            created_at: now,
+            updated_at: now,
+            stale: false,
+            metadata: json!({}),
+        };
+        for graph_node in [
+            node(1, "Visible seed", "visible"),
+            node(2, "Visible neighbor", "visible"),
+            node(3, "PRIVATE_NODE", "blocked"),
+            node(4, "Visible behind hidden bridge", "visible"),
+            node(5, "Visible with private edge", "visible"),
+            node(6, "Visible with unbacked edge", "visible"),
+        ] {
+            runtime.block_on(graph.upsert_node(&graph_node)).unwrap();
+        }
+        let edge = |id: u128, target: u128| GraphEdge {
+            id: uuid::Uuid::from_u128(id),
+            source_id: uuid::Uuid::from_u128(1),
+            target_id: uuid::Uuid::from_u128(target),
+            edge_type: GraphEdgeType::SimilarTo,
+            confidence: 0.9,
+            conflict_flag: false,
+            created_at: now,
+            metadata: Value::Null,
+        };
+        runtime.block_on(graph.upsert_edge(&edge(4, 2))).unwrap();
+        runtime.block_on(graph.upsert_edge(&edge(5, 3))).unwrap();
+        let mut hidden_bridge = edge(6, 4);
+        hidden_bridge.source_id = uuid::Uuid::from_u128(3);
+        runtime.block_on(graph.upsert_edge(&hidden_bridge)).unwrap();
+        let mut private_edge = edge(7, 5);
+        private_edge.metadata = json!({"source_memory_ids": ["blocked"]});
+        runtime.block_on(graph.upsert_edge(&private_edge)).unwrap();
+        let mut unbacked_edge = edge(8, 6);
+        unbacked_edge.metadata = json!({"note": "PRIVATE_UNBACKED"});
+        runtime.block_on(graph.upsert_edge(&unbacked_edge)).unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+
+        let response = runtime
+            .block_on(run_memory_graph_context(
+                state.clone(),
+                GraphContextArgs {
+                    project: None,
+                    start_node_id: Some(uuid::Uuid::from_u128(1).to_string()),
+                    depth: 2,
+                },
+            ))
+            .unwrap();
+        let neighborhood = &response["structuredContent"]["neighborhood"];
+        assert_eq!(neighborhood["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(neighborhood["edges"].as_array().unwrap().len(), 1);
+        assert!(!response.to_string().contains("PRIVATE_NODE"));
+        assert!(!response
+            .to_string()
+            .contains("Visible behind hidden bridge"));
+        assert!(!response.to_string().contains("Visible with private edge"));
+        assert!(!response.to_string().contains("PRIVATE_UNBACKED"));
+        assert!(!response.to_string().contains("Visible with unbacked edge"));
+
+        let hidden_seed = runtime
+            .block_on(run_memory_graph_context(
+                state,
+                GraphContextArgs {
+                    project: None,
+                    start_node_id: Some(uuid::Uuid::from_u128(3).to_string()),
+                    depth: 2,
+                },
+            ))
+            .unwrap();
+        let neighborhood = &hidden_seed["structuredContent"]["neighborhood"];
+        assert!(neighborhood["nodes"].as_array().unwrap().is_empty());
+        assert!(neighborhood["edges"].as_array().unwrap().is_empty());
     }
 
     #[test]

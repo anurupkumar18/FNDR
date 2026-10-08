@@ -86,6 +86,7 @@ module doc comment), **verdict**.
 - **4 execute-class tools require approval**: `agent.run`, `start_meeting`, `stop_meeting`, and `fndr.open_target` consult `policy_for_action` and wait for an explicit in-app approval card before dispatch. Missing UI, timeout, decline, or the actions kill switch refuses the action.
 - **Raw captured text is opt-in**: `memory.source_evidence` has `include_raw`, which defaults to false. `memory.search_raw` was removed.
 - **Retrieval feedback is a write**: `agent.rate_result` requires a valid MCP token, actions enabled, and assistant notes enabled before it can append feedback.
+- **Task and insight-graph reads check current sources**: `memory.todos` uses the same source and historical-event admission as context packs. `memory.graph_context` filters its UUID neighborhood before traversal, including edge provenance. Legacy `memory.graph_query` and saved context packs still need separate authorization work.
 
 ## Proposed target surface
 
