@@ -3064,7 +3064,10 @@ pub async fn ask_screen_guide(
     let fallback = grounded_fallback(&ocr.plain_text);
 
     let inference_started = Instant::now();
-    let raw_answer = if settings.model == ScreenGuideModel::Codex {
+    // ChatGPT can be signed out, over its limit or unreachable. The turn then
+    // answers on this Mac and says so, instead of failing.
+    let mut chatgpt_unavailable = false;
+    let chatgpt_answer = if settings.model == ScreenGuideModel::Codex {
         record_screen_guide_diagnostic_stage(
             &mut diagnostic,
             ScreenGuideActivityStage::AnsweringChatGpt,
@@ -3104,7 +3107,7 @@ pub async fn ask_screen_guide(
             "screen_guide:codex_finished"
         );
         match answer {
-            Ok(answer) => answer,
+            Ok(answer) => Some(answer),
             Err(err) => {
                 if let Err(cancelled) = ensure_screen_guide_request_current_or_discard_diagnostic(
                     &app,
@@ -3115,19 +3118,16 @@ pub async fn ask_screen_guide(
                 ) {
                     return Err(cancelled);
                 }
-                restore_screen_guide_capture_if_owned(
-                    &app,
-                    state.inner(),
-                    request_generation,
-                    &deferred_restore,
-                );
-                finish_screen_guide_diagnostic(
-                    &mut diagnostic,
-                    ScreenGuideDiagnosticOutcome::ModelUnavailable,
-                );
-                return Err(err);
+                tracing::warn!(error = %err, "screen_guide:codex_unavailable_answering_on_device");
+                chatgpt_unavailable = true;
+                None
             }
         }
+    } else {
+        None
+    };
+    let raw_answer = if let Some(answer) = chatgpt_answer {
+        answer
     } else {
         record_screen_guide_diagnostic_stage(
             &mut diagnostic,
@@ -3234,6 +3234,9 @@ pub async fn ask_screen_guide(
         fallback
     };
     let mut parsed = parsed;
+    if chatgpt_unavailable {
+        parsed.answer = with_on_device_note(&parsed.answer);
+    }
     if settings.openclicky_bridge {
         if let Some(cue) = parsed.point_cue.as_ref() {
             let scale = f64::from_bits(captured_display.scale_factor_bits).max(1.0);
@@ -4806,6 +4809,19 @@ pub(super) fn validate_screen_guide_shortcut_conflicts(
     Ok(())
 }
 
+const ANSWERED_ON_DEVICE: &str = "ChatGPT could not be reached, so this answer is from this Mac.";
+
+/// Says that an answer came from this Mac when ChatGPT was chosen but
+/// unavailable, so the person knows which model they are reading.
+fn with_on_device_note(answer: &str) -> String {
+    let answer = answer.trim();
+    if answer.is_empty() {
+        ANSWERED_ON_DEVICE.to_string()
+    } else {
+        format!("{ANSWERED_ON_DEVICE} {answer}")
+    }
+}
+
 pub(crate) fn parse_screen_guide_response(raw: &str) -> ScreenGuideAnswer {
     let trimmed = raw.trim();
     let Some(tag_start) = trimmed.rfind("[POINT:") else {
@@ -4998,6 +5014,15 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn an_answer_given_on_device_after_chatgpt_failed_says_so() {
+        assert_eq!(
+            with_on_device_note("  The total is 42. "),
+            "ChatGPT could not be reached, so this answer is from this Mac. The total is 42."
+        );
+        assert_eq!(with_on_device_note(""), ANSWERED_ON_DEVICE);
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

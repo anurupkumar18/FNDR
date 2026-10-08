@@ -117,6 +117,9 @@ get an optional visual point cue or learn where a matching local file lives.
 - FR8: Voice transcription reuses FNDR's local speech path.
 - FR9: Answers use local inference when available and degrade to a bounded,
   grounded screen summary when it is not.
+- FR9a: When ChatGPT is the chosen model and cannot answer (signed out, over
+  its limit, unreachable, timed out), the turn is answered on this Mac as in
+  FR9, and the answer begins by saying so. A cancelled turn stays cancelled.
 - FR10: Model point syntax is parsed and removed in Rust; React receives only a
   typed point cue that exactly matches and snaps to an Apple Vision text-line
   center supplied as model evidence.
