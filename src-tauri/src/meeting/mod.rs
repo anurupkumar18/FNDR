@@ -34,10 +34,10 @@ const MEETINGS_DIR: &str = "meetings";
 const SEGMENT_SECONDS: i64 = 20;
 const STATUS_EVENT: &str = "meeting://status";
 const FORCED_MODEL: &str = "whisper-large-v3-turbo-gguf";
-static MEETING_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
+static MEETING_EMBEDDER: OnceLock<Embedder> = OnceLock::new();
 
 fn shared_meeting_embedder() -> Option<&'static Embedder> {
-    match MEETING_EMBEDDER.get_or_init(Embedder::new) {
+    match crate::embedding::cached_embedder(&MEETING_EMBEDDER, Embedder::new) {
         Ok(embedder) => Some(embedder),
         Err(err) => {
             tracing::debug!("Meeting embedder unavailable: {}", err);
@@ -267,7 +267,10 @@ impl MeetingStore {
             .list_meetings()
             .await
             .map_err(|e| e.to_string())?;
-        let removed = meetings.iter().position(|m| m.id == meeting_id).map(|index| meetings.remove(index));
+        let removed = meetings
+            .iter()
+            .position(|m| m.id == meeting_id)
+            .map(|index| meetings.remove(index));
 
         let Some(meeting) = removed else {
             return Ok(false);
@@ -462,7 +465,6 @@ struct MeetingRuntime {
     app_state: Option<Arc<AppState>>,
     last_error: Option<String>,
 }
-
 
 static RUNTIME: OnceLock<Mutex<MeetingRuntime>> = OnceLock::new();
 static POSTPROCESS_IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();

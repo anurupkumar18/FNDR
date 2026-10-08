@@ -22,7 +22,7 @@ Configuration is documented in `README.md`:
 - `agent.run`: builds a pack, persists an audit record, and returns deterministic local output with policy and blocked action details. It does not execute dangerous actions.
 - `agent.privacy_status`: reports MCP/Agent privacy posture, auth mode, raw-evidence defaults, blocklist count, redaction setting, and dangerous-action policy.
 - `agent.explain_retrieval`: explains selected memories, qualitative ranking signals, dropped context, redactions, policy reasons, and limitations.
-- `agent.rate_result`: logs retrieval feedback (`useful`, `irrelevant`, `wrong`, `stale`, `missing_context`) without mutating ranking.
+- `agent.rate_result`: logs retrieval feedback (`useful`, `irrelevant`, `wrong`, `stale`, `missing_context`) without mutating ranking. Requires a valid MCP token, actions enabled, and "Let assistants add notes" enabled.
 - `agent.list_prompts`: lists FNDR-specific prompt templates.
 - `agent.get_prompt`: returns one prompt template.
 
@@ -65,7 +65,43 @@ Defaults:
 - blocklist enforced before agent context exposure
 - dangerous actions approval-gated or blocked
 
-Set `FNDR_MCP_REQUIRE_AUTH=0` to opt back into the old no-auth-on-localhost behavior for local development; this is not recommended since any local process or web page that finds the port would regain full access. Remote/tunnel/public modes must use bearer auth and strict origin rules regardless. Do not expose MCP publicly without auth.
+Set `FNDR_MCP_REQUIRE_AUTH=0` to opt back into the old no-auth-on-localhost behavior for local development; this is not recommended since any local process or web page that finds the port would regain full access. Remote/tunnel/public modes must use bearer auth and strict origin rules regardless: in `tunnel` and `public` mode the server ignores `FNDR_MCP_REQUIRE_AUTH=0` and `FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS=1` and logs a warning (VS-61). Do not expose MCP publicly without auth.
+
+## Agent notes: `fndr.remember` (VS-68)
+
+An assistant can save a short note, decision, summary, or to-do into memory. The contract is `docs/product/fndr-remember-spec.md`; this is its smallest safe slice.
+
+- **Off by default.** In Settings → Trust, turn on **Let assistants add notes**. The switch saves `agent_notes_enabled` in FNDR's `config.toml`; turning it off keeps existing notes. Until enabled every call answers `notes_disabled`. The actions kill switch answers `actions_off`.
+- **Token required.** A note needs the bearer token. With `FNDR_MCP_REQUIRE_AUTH=0`, every call answers `auth_required_for_writes`, even one that carries the token.
+- **Who wrote it.** The client name comes from `clientInfo.name` at `initialize`. The response carries an `Mcp-Session-Id` header, and later calls send it back. A missing name, or one that starts with "FNDR", is stored as "Unknown client". The name is self-reported, because the token is shared.
+- **Limits.**
+  - 4,000 characters, never cut: a longer note is refused whole.
+  - 10 notes per minute and 200 per day per client.
+  - 30 per minute and 500 per day for all clients together.
+- **Refused before storing:**
+  - unknown arguments, so a caller cannot set `source_type`, `app_name`, `url`, or a time;
+  - hidden or control characters;
+  - anything the capture secret detector flags in the title, body or project;
+  - blocklisted words in any of those fields;
+  - any call made while the real embedding model is missing.
+
+  Refusals return a stable code in `structuredContent.error` and never repeat the note.
+- **Stored as a leaf.**
+  - A note is one memory with `source_type = "agent"`, app "Agent note", and its own card.
+  - It has no open target, including when its text contains a legacy `Reopen:` marker, and is never compacted.
+  - Capture merging and memory review exclude it, including review context for other memories. Building a work-context pack does not promote it to graph/activity/project context.
+  - Search/Vault cards and MCP search rows preserve `source_type = "agent"` and `added_by`. Cards say "Added" and preserve note text. Other MCP row source categories retain their existing behavior.
+  - Ask labels note evidence with its client, time and memory ID. Client names are self-reported, not verified identities.
+- **Not in this slice:**
+  - the Vault filter;
+  - adding notes to derived work-context packs;
+  - Privacy Activity lines.
+
+### Legacy decision writes: `fndr_remember_decision`
+
+The older decision-ledger tool uses the same permission gates: MCP token checks must be on, the request must carry a valid token, actions must be enabled, and **Let assistants add notes** must be on. The gates run before argument parsing and return the same refusal codes as `fndr.remember`. Turning the setting off keeps existing notes and decision records.
+
+The tool still writes to the separate decision ledger and rebuilds project context when a project is supplied. It retains its existing content rules: it does not inherit `fndr.remember`'s size and rate limits, secret checks, client provenance, or leaf-record isolation.
 
 ## Example Tool Calls
 

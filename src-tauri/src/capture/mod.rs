@@ -7,15 +7,18 @@
 mod admission;
 pub mod clipboard;
 mod dedupe;
-pub mod entity_extractor;
 pub mod enrich_policy;
+pub mod entity_extractor;
 pub(crate) mod macos;
 pub mod permissions;
 mod sampling;
 pub mod text_cleanup;
 
 use admission::{classify_capture_surface_policy, CaptureSurfacePolicy};
-pub use dedupe::{dhash_9x8, hamming, is_aba, luma_9x8_from_rgba, PerceptualHasher};
+pub use dedupe::{
+    dhash_9x8, hamming, is_aba, luma_9x8_from_rgba, DedupeMatchKind, DedupeVerdict,
+    PerceptualHasher,
+};
 pub use sampling::AdaptiveSampler;
 
 /// Convenience wrapper: return just the frontmost app name on macOS.
@@ -34,6 +37,9 @@ use crate::config::{
 };
 use crate::context_runtime;
 use crate::embedding::{embed_imported_image, Embedder, EmbeddingBackend, EMBEDDING_DIM};
+use crate::inference::extraction_evidence::{
+    has_source_evidence, source_evidence_sets_from_raw, validate_source_evidence,
+};
 use crate::inference::vlm_router::{
     should_run_vlm, vlm_capability_label, vlm_runtime_status_label, VlmRouteDecision, VlmRouteInput,
 };
@@ -54,9 +60,8 @@ use crate::models;
 use crate::ocr::{OcrEngine, RecognizedText};
 use crate::privacy::safety_gate::{self, SafetyDecision};
 use crate::privacy::Blocklist;
-use crate::storage::{MemoryRecord, SearchResult, Task, TaskType};
+use crate::storage::{MemoryRecord, SearchResult, Task};
 use crate::summariser::narration_filter::clean_or_fallback_display_summary;
-use crate::tasks::parse_tasks_from_llm_response;
 use crate::telemetry::quality_logger::append_quality_event;
 use crate::telemetry::runtime_metrics;
 use crate::AppState;
@@ -271,6 +276,18 @@ async fn try_admit_visual_capture(
     }
 }
 
+fn visual_insight_from_structured(
+    extraction: &StructuredMemoryExtraction,
+) -> (
+    crate::inference::ImageSemanticInsight,
+    Option<crate::inference::extraction_evidence::ExtractionEvidence>,
+) {
+    (
+        crate::inference::insight_from_structured(extraction),
+        extraction.source_evidence.clone(),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn compose_visual_capture_record(
     state: &AppState,
@@ -336,13 +353,13 @@ async fn compose_visual_capture_record(
         engine
             .extract_structured_memory(app_name, window_title, &llm_fallback_context)
             .await
-            .map(|s| crate::inference::insight_from_structured(&s))
+            .map(|s| visual_insight_from_structured(&s))
     };
 
     // Removed ungrounded low-RAM visual capture gate: store captures even without OCR/VLM grounding
 
     let structure_started = Instant::now();
-    let insight = if !vlm_route.runs_pixel_vlm() {
+    let (insight, source_evidence) = if !vlm_route.runs_pixel_vlm() {
         let reason = vlm_route
             .fallback_reason()
             .unwrap_or_else(|| vlm_route.label());
@@ -353,11 +370,14 @@ async fn compose_visual_capture_record(
         if let Some(i) = try_llm_fallback().await {
             i
         } else {
-            crate::inference::insight_from_ocr_only(
-                &synthetic_filename,
-                Some(app_name),
-                Some(window_title),
-                "",
+            (
+                crate::inference::insight_from_ocr_only(
+                    &synthetic_filename,
+                    Some(app_name),
+                    Some(window_title),
+                    "",
+                ),
+                None,
             )
         }
     } else {
@@ -372,7 +392,7 @@ async fn compose_visual_capture_record(
         )
         .await
         {
-            Ok(i) => i,
+            Ok(i) => (i, None),
             Err(e) => {
                 tracing::warn!(
                     app = %app_name,
@@ -381,11 +401,14 @@ async fn compose_visual_capture_record(
                 if let Some(i) = try_llm_fallback().await {
                     i
                 } else {
-                    crate::inference::insight_from_ocr_only(
-                        &synthetic_filename,
-                        Some(app_name),
-                        Some(window_title),
-                        "",
+                    (
+                        crate::inference::insight_from_ocr_only(
+                            &synthetic_filename,
+                            Some(app_name),
+                            Some(window_title),
+                            "",
+                        ),
+                        None,
                     )
                 }
             }
@@ -428,7 +451,9 @@ async fn compose_visual_capture_record(
     } else {
         "unknown".to_string()
     };
-    let user_intent = if !composed.user_intent.trim().is_empty() {
+    let user_intent = if source_evidence.is_some() {
+        String::new()
+    } else if !composed.user_intent.trim().is_empty() {
         composed.user_intent.clone()
     } else {
         composed.activity_type.clone()
@@ -530,6 +555,7 @@ async fn compose_visual_capture_record(
     );
     let raw_evidence = upsert_embedding_manifest(&json!({
         "source_kind": "visual_capture",
+        "source_evidence": source_evidence,
         "vision_model_id": insight.model_id,
         "semantic_confidence": insight.confidence,
         "synthesis_branch": synthesis_branch,
@@ -858,12 +884,7 @@ fn build_structured_from_browser_semantics(
         memory_context.push_str(semantic.meta_description.trim());
     }
     if memory_context.trim().is_empty() {
-        memory_context = content_text
-            .split_terminator(['.', '!', '?'])
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        memory_context = crate::summariser::sentences::first_sentence(&content_text).to_string();
     }
     Some(StructuredMemoryExtraction {
         activity_type: "research".to_string(),
@@ -1286,6 +1307,7 @@ fn validate_structured_memory_extraction(
     app_name: &str,
     window_title: &str,
     clean_text: &str,
+    source_text: &str,
 ) -> (f32, Vec<String>) {
     let evidence_norm = normalize_evidence_text(&format!("{app_name} {window_title} {clean_text}"));
     let mut issues = Vec::new();
@@ -1355,6 +1377,14 @@ fn validate_structured_memory_extraction(
     supported += extraction.entities.len()
         + extraction.files_touched.len()
         + extraction.search_aliases.len();
+    // A request written in prose is not a command, however it was filed.
+    let commands_before = extraction.commands.len();
+    extraction
+        .commands
+        .retain(|command| crate::inference::extraction_evidence::is_command_like(command));
+    if extraction.commands.len() < commands_before {
+        issues.push("commands_not_command_like".to_string());
+    }
     if !is_supported_dedup_fingerprint(&extraction.dedup_fingerprint) {
         if !extraction.dedup_fingerprint.trim().is_empty() {
             issues.push("unsupported_dedup_fingerprint".to_string());
@@ -1377,6 +1407,9 @@ fn validate_structured_memory_extraction(
         issues.push("possible_ungrounded_extraction".to_string());
     }
 
+    // Fusion/browser seeds may refill model-rejected intent/action fields. Check
+    // against the exact model input snapshot, not the differently cleaned OCR.
+    issues.extend(validate_source_evidence(extraction, source_text));
     extraction.confidence = extraction.confidence.clamp(0.0, 1.0);
     (grounding_confidence, issues)
 }
@@ -1427,12 +1460,9 @@ fn pick_semantic_center(
     }
     let spans = text_cleanup::rank_salient_spans(clean_text, app_name);
     if let Some(top) = spans.first() {
-        let trimmed = top
-            .text
-            .split_terminator(['.', '!', '?', '\n'])
-            .next()
-            .unwrap_or(&top.text)
-            .trim();
+        let trimmed = crate::summariser::sentences::first_sentence(
+            top.text.lines().next().unwrap_or(&top.text),
+        );
         if !trimmed.is_empty() {
             return trimmed.chars().take(120).collect::<String>();
         }
@@ -1887,6 +1917,57 @@ pub fn spawn_capture_loop(state: Arc<AppState>) {
 }
 
 /// Run the main capture loop
+/// Accessibility text is used instead of OCR when it has at least this many
+/// characters (VS-16); shorter reads fall back to OCR as before.
+const AX_TEXT_MIN_CHARS: usize = 200;
+/// Bound for stored Accessibility text, kept for chunking.
+const AX_TEXT_MAX_CHARS: usize = 20_000;
+
+fn prefer_ax_text(char_count: usize) -> bool {
+    char_count >= AX_TEXT_MIN_CHARS
+}
+
+/// `FNDR_AX_TEXT=0` turns Accessibility-first capture off.
+fn ax_text_enabled() -> bool {
+    std::env::var("FNDR_AX_TEXT")
+        .map(|value| value != "0")
+        .unwrap_or(true)
+}
+
+#[cfg(debug_assertions)]
+fn dedupe_evidence(verdict: &DedupeVerdict) -> serde_json::Value {
+    json!({
+        "threshold": verdict.threshold,
+        "match_kind": verdict.match_kind.as_str(),
+        "hash_distance": verdict.hash_distance,
+        "rgb_distance": verdict.rgb_distance,
+    })
+}
+
+#[cfg(debug_assertions)]
+fn finish_memory_journey_skip(
+    state: &AppState,
+    journey_id: Option<&str>,
+    outcome: &str,
+    privacy_blocked: bool,
+    dedupe: Option<&DedupeVerdict>,
+) {
+    let Some(journey_id) = journey_id else {
+        return;
+    };
+    let mut details = json!({ "privacy_blocked": privacy_blocked });
+    if let Some(verdict) = dedupe {
+        details["dedupe"] = dedupe_evidence(verdict);
+    }
+    if let Err(error) = state
+        .memory_journey
+        .finish_skipped_with(journey_id, outcome, details)
+    {
+        tracing::debug!("Could not finish skipped Memory Journey: {error}");
+    }
+    state.emit_memory_journey_status();
+}
+
 pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Initializing capture pipeline...");
 
@@ -1997,6 +2078,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 batch.retain(|_| keep_iter.next().unwrap_or(false));
             }
             if batch.is_empty() {
+                #[cfg(debug_assertions)]
+                {
+                    let _ = state
+                        .memory_journey
+                        .fail_active_storage("filtered_before_flush", 0);
+                    state.emit_memory_journey_status();
+                }
                 purge_capture_artifacts(state.store.frames_dir());
                 last_flush = Instant::now();
                 continue;
@@ -2032,6 +2120,34 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     state.invalidate_memory_derived_caches();
                     let flush_ms = flush_start.elapsed().as_millis() as u64;
                     runtime_metrics::record_ms("capture.flush_ms", flush_ms);
+                    #[cfg(debug_assertions)]
+                    {
+                        if let Some(memory_id) = state.memory_journey.active_memory_id() {
+                            if let Some(record) = batch.iter().find(|record| record.id == memory_id)
+                            {
+                                let persisted = state
+                                    .store
+                                    .get_memory_by_id(&record.id)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .is_some();
+                                let chunk_count = state
+                                    .store
+                                    .list_chunks_for_memory(&record.id)
+                                    .await
+                                    .map(|chunks| chunks.len())
+                                    .unwrap_or(0);
+                                let _ = state.memory_journey.complete_storage(
+                                    record,
+                                    persisted,
+                                    chunk_count,
+                                    flush_ms,
+                                );
+                            }
+                        }
+                        state.emit_memory_journey_status();
+                    }
                     if inserted_count > 0 {
                         tracing::info!(
                             "Flushed: attempted {} records, inserted {} in {:?}",
@@ -2048,6 +2164,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 }
                 Err(e) => {
                     tracing::error!("Failed to flush batch: {}", e);
+                    #[cfg(debug_assertions)]
+                    {
+                        let _ = state.memory_journey.fail_active_storage(
+                            "storage_error",
+                            flush_start.elapsed().as_millis() as u64,
+                        );
+                        state.emit_memory_journey_status();
+                    }
                 }
             }
             batch.clear();
@@ -2073,6 +2197,15 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
+        // An armed Memory Journey waits for the person to bring the target
+        // forward. Frames seen meanwhile would seed dedupe history with the
+        // target itself, so the ordinary tick is skipped until the arm starts.
+        #[cfg(debug_assertions)]
+        if state.memory_journey.defers_ordinary_capture() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+
         // Calculate sleep duration based on FPS
         let fps = sampler.get_current_fps(&config);
         if fps <= 0.0 {
@@ -2091,6 +2224,28 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let app_name = app_context.app_name.clone();
         let window_title = app_context.window_title.clone();
         runtime_metrics::since_ms("capture.context_ms", context_started);
+        #[cfg(debug_assertions)]
+        let mut memory_journey_id = {
+            let target_app_class = if app_context.browser_url.is_some() {
+                "browser"
+            } else if app_context.bundle_id.as_deref() == Some("com.fndr.app") {
+                "fndr"
+            } else {
+                "desktop_app"
+            };
+            match state.memory_journey.begin_capture_attempt(target_app_class) {
+                Ok(id) => {
+                    if id.is_some() {
+                        state.emit_memory_journey_status();
+                    }
+                    id
+                }
+                Err(error) => {
+                    tracing::warn!("Could not start armed Memory Journey: {error}");
+                    None
+                }
+            }
+        };
 
         // A missing text embedder blocks the frame instead of letting
         // zero-vector memory rows reach storage; periodic re-init lets capture
@@ -2117,6 +2272,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::EmbedderUnavailable, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "embedder_unavailable",
+                false,
+                None,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2140,6 +2303,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state.screen_guide_capture_epoch.load(Ordering::SeqCst),
             state.screen_guide_capture_generation.load(Ordering::SeqCst),
         ) {
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "screen_guide_active",
+                true,
+                None,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2166,6 +2337,17 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 tracing::debug!(reason = ?reason, "Skipping capture before content processing");
             }
             state.capture_stats.record_skip(reason, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                reason.as_str(),
+                matches!(
+                    reason,
+                    crate::SkipReason::SensitiveContext | crate::SkipReason::SelfApp
+                ),
+                None,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2195,6 +2377,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::SurfacePolicy, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "surface_policy",
+                true,
+                None,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2214,6 +2404,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state
                     .capture_stats
                     .record_skip(crate::SkipReason::SemanticDup, &app_name);
+                #[cfg(debug_assertions)]
+                finish_memory_journey_skip(
+                    state.as_ref(),
+                    memory_journey_id.as_deref(),
+                    "semantic_duplicate",
+                    false,
+                    None,
+                );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
             }
@@ -2315,8 +2513,47 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state.screen_guide_capture_epoch.load(Ordering::SeqCst),
                 screen_guide_generation_after,
             ) {
+                #[cfg(debug_assertions)]
+                finish_memory_journey_skip(
+                    state.as_ref(),
+                    memory_journey_id.as_deref(),
+                    "screen_guide_active",
+                    true,
+                    None,
+                );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
+            }
+            #[cfg(debug_assertions)]
+            if let Some(journey_id) = memory_journey_id.as_deref() {
+                let _ = state.memory_journey.record_stage(
+                    journey_id,
+                    crate::memory_journey::MemoryJourneyStageRecord {
+                        name: "text_source".to_string(),
+                        status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                        observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        duration_ms: None,
+                        outcome: "url_only".to_string(),
+                        details: json!({ "source": "browser_url_metadata" }),
+                        artifact_ids: Vec::new(),
+                    },
+                );
+                let _ = state.memory_journey.record_stage(
+                    journey_id,
+                    crate::memory_journey::MemoryJourneyStageRecord {
+                        name: "extraction".to_string(),
+                        status: crate::memory_journey::MemoryJourneyStageStatus::Skipped,
+                        observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        duration_ms: None,
+                        outcome: "not_required_for_url_only".to_string(),
+                        details: json!(null),
+                        artifact_ids: Vec::new(),
+                    },
+                );
+                let _ = state
+                    .memory_journey
+                    .attach_memory_id(journey_id, &record.id);
+                state.emit_memory_journey_status();
             }
             batch.push(record);
             batch_outcomes.push(crate::StoreOutcome::UrlOnly);
@@ -2358,6 +2595,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::AppSwitchedDuringCapture, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "app_switched_during_capture",
+                true,
+                None,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2369,11 +2614,21 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         if capture_is_suppressed_by_screen_guide(
             state.screen_guide_capture_generation.load(Ordering::SeqCst),
         ) {
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "screen_guide_active",
+                true,
+                None,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
         let pixels_started = Instant::now();
         let capture_result = macos::capture_screen();
+        #[cfg(debug_assertions)]
+        let pixels_duration_ms = pixels_started.elapsed().as_millis() as u64;
         runtime_metrics::since_ms("capture.pixels_ms", pixels_started);
         let image_data = match capture_result {
             Ok(data) => data,
@@ -2382,6 +2637,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state
                     .capture_stats
                     .record_skip(crate::SkipReason::ScreenCaptureFailed, &app_name);
+                #[cfg(debug_assertions)]
+                finish_memory_journey_skip(
+                    state.as_ref(),
+                    memory_journey_id.as_deref(),
+                    "screen_capture_failed",
+                    false,
+                    None,
+                );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
             }
@@ -2397,13 +2660,36 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             screen_guide_generation_after,
         ) {
             drop(image_data);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "screen_guide_overlap",
+                true,
+                None,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
 
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            if let Err(error) =
+                state
+                    .memory_journey
+                    .record_frame(journey_id, &image_data, pixels_duration_ms)
+            {
+                tracing::warn!("Memory Journey frame recording stopped: {error}");
+                memory_journey_id = None;
+            } else {
+                state.emit_memory_journey_status();
+            }
+        }
+
         // Deduplication check
         let dedupe_started = Instant::now();
-        let is_duplicate = hasher.is_duplicate(&image_data, config.dedupe_threshold);
+        let dedupe_verdict = hasher.check(&image_data, config.dedupe_threshold);
+        let is_duplicate = dedupe_verdict.is_duplicate;
         runtime_metrics::since_ms("capture.dedupe_ms", dedupe_started);
 
         if is_duplicate && !force_capture {
@@ -2411,8 +2697,38 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::PerceptualDup, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "perceptual_duplicate",
+                false,
+                Some(&dedupe_verdict),
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
+        }
+
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "admission".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: Some(dedupe_started.elapsed().as_millis() as u64),
+                    outcome: "allowed".to_string(),
+                    details: json!({
+                        "target_app_class": if app_context.browser_url.is_some() { "browser" } else { "desktop_app" },
+                        "privacy_decision": "allowed",
+                        "surface_decision": "allowed",
+                        "dedupe_decision": if force_capture { "forced" } else { "novel" },
+                    "dedupe": dedupe_evidence(&dedupe_verdict),
+                    }),
+                    artifact_ids: Vec::new(),
+                },
+            );
         }
 
         tracing::info!("Processing new frame from {}", app_name);
@@ -2446,15 +2762,59 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state
                     .capture_stats
                     .record_skip(crate::SkipReason::SurfacePolicy, &app_name);
+                #[cfg(debug_assertions)]
+                finish_memory_journey_skip(
+                    state.as_ref(),
+                    memory_journey_id.as_deref(),
+                    "browser_semantic_low_signal",
+                    false,
+                    None,
+                );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
             }
         }
         let mut source_kind = "ocr";
         let mut source_low_signal = false;
+        #[cfg(debug_assertions)]
+        let mut memory_journey_positioned_line_count: Option<usize> = None;
         let ocr_start = Instant::now();
+        // VS-16: exact Accessibility text beats OCR when the window exposes
+        // enough of it. Browser semantic content keeps priority (it already
+        // gives page text); privacy gates above have run for this frame.
+        let ax_candidate =
+            if semantic_page.as_ref().is_some_and(|page| page.has_signal()) || !ax_text_enabled() {
+                None
+            } else {
+                let ax_started = Instant::now();
+                let found = crate::accessibility::frontmost_focused_text(AX_TEXT_MAX_CHARS);
+                runtime_metrics::since_ms("capture.ax_ms", ax_started);
+                found.filter(|ax| prefer_ax_text(ax.text.chars().count()))
+            };
         let (text, qwen_cleaned_text, capture_quality, observed_confidence, observed_block_count) =
-            if let Some(semantic) = semantic_page.as_ref().filter(|page| page.has_signal()) {
+            if let Some(ax) = ax_candidate {
+                source_kind = "ax";
+                runtime_metrics::bump("capture.text_source_ax");
+                let high_signal = text_cleanup::build_high_signal_text_for_app(&app_name, &ax.text);
+                let mut stats = high_signal.stats;
+                if stats.total_lines == 0 {
+                    stats.total_lines = 1;
+                }
+                if stats.kept_lines == 0 && !high_signal.text.trim().is_empty() {
+                    stats.kept_lines = 1;
+                }
+                stats.low_conf_lines = 0;
+                // Accessibility text is exact, not recognized: no OCR confidence.
+                stats.avg_line_score = 0.9;
+                let kept = high_signal.stats.kept_lines.max(1);
+                (
+                    high_signal.text.clone(),
+                    high_signal.text,
+                    stats,
+                    0.95,
+                    kept,
+                )
+            } else if let Some(semantic) = semantic_page.as_ref().filter(|page| page.has_signal()) {
                 source_kind = "browser_semantic";
                 let semantic_text = semantic.content_text();
                 let high_signal =
@@ -2487,11 +2847,39 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         state
                             .capture_stats
                             .record_skip(crate::SkipReason::OcrFailed, &app_name);
+                        #[cfg(debug_assertions)]
+                        finish_memory_journey_skip(
+                            state.as_ref(),
+                            memory_journey_id.as_deref(),
+                            "ocr_failed",
+                            false,
+                            None,
+                        );
                         tokio::time::sleep(sleep_duration).await;
                         continue;
                     }
                 };
                 runtime_metrics::since_ms("capture.ocr_ms", ocr_stage_started);
+                runtime_metrics::bump("capture.text_source_ocr");
+                #[cfg(debug_assertions)]
+                if let Some(journey_id) = memory_journey_id.as_deref() {
+                    memory_journey_positioned_line_count =
+                        Some(ocr_result.debug_positioned_lines.len());
+                    let lines = serde_json::to_vec_pretty(&ocr_result.debug_positioned_lines)
+                        .unwrap_or_default();
+                    let _ = state.memory_journey.record_artifact(
+                        journey_id,
+                        "ocr",
+                        "positioned-lines.json",
+                        &lines,
+                    );
+                    let _ = state.memory_journey.record_artifact(
+                        journey_id,
+                        "ocr",
+                        "vision-normalized.txt",
+                        ocr_result.text.as_bytes(),
+                    );
+                }
                 // DEBUG: Log OCR pipeline filtering to diagnose zero-confidence issues
                 tracing::debug!(
                     "OCR raw result [{}]: confidence={:.3}, blocks={}, text_len={}, stats={{kept_lines={}, dropped={}, low_conf={}}}",
@@ -2524,6 +2912,93 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             observed_confidence,
             observed_block_count
         );
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "text_source".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: Some(ocr_latency.as_millis() as u64),
+                    outcome: source_kind.to_string(),
+                    details: json!({ "source": source_kind }),
+                    artifact_ids: Vec::new(),
+                },
+            );
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "ocr".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: Some(ocr_latency.as_millis() as u64),
+                    outcome: "recognized".to_string(),
+                    details: json!({
+                        "confidence": observed_confidence,
+                        "block_count": observed_block_count,
+                        "positioned_line_count": memory_journey_positioned_line_count,
+                        "positioned_lines_available": memory_journey_positioned_line_count.is_some(),
+                    }),
+                    artifact_ids: Vec::new(),
+                },
+            );
+            let _ = state.memory_journey.record_artifact(
+                journey_id,
+                "ocr",
+                "recognized.txt",
+                qwen_cleaned_text.as_bytes(),
+            );
+            let raw_chars = qwen_cleaned_text.chars().count();
+            let clean_chars = text.chars().count();
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "cleanup".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: None,
+                    outcome: "cleaned".to_string(),
+                    details: json!({
+                        "raw_chars": raw_chars,
+                        "clean_chars": clean_chars,
+                        "preservation_ratio": if raw_chars == 0 { 0.0 } else { clean_chars as f64 / raw_chars as f64 },
+                        "total_lines": capture_quality.total_lines,
+                        "kept_lines": capture_quality.kept_lines,
+                        "low_conf_lines": capture_quality.low_conf_lines,
+                        "dropped_noise_lines": capture_quality.dropped_noise_lines,
+                        "dropped_low_signal_lines": capture_quality.dropped_low_signal_lines,
+                    }),
+                    artifact_ids: Vec::new(),
+                },
+            );
+            let _ = state.memory_journey.record_artifact(
+                journey_id,
+                "cleanup",
+                "cleaned.txt",
+                text.as_bytes(),
+            );
+            let raw_lines = qwen_cleaned_text.lines().collect::<Vec<_>>();
+            let clean_lines = text.lines().collect::<Vec<_>>();
+            let cleanup_diff = serde_json::to_vec_pretty(&json!({
+                "removed_lines": raw_lines
+                    .iter()
+                    .filter(|line| !clean_lines.contains(line))
+                    .collect::<Vec<_>>(),
+                "added_lines": clean_lines
+                    .iter()
+                    .filter(|line| !raw_lines.contains(line))
+                    .collect::<Vec<_>>(),
+            }))
+            .unwrap_or_default();
+            let _ = state.memory_journey.record_artifact(
+                journey_id,
+                "cleanup",
+                "cleanup-diff.json",
+                &cleanup_diff,
+            );
+            state.emit_memory_journey_status();
+        }
 
         // Metadata-only checks run before pixels are captured. Secret
         // patterns can only be found after transient OCR/semantic extraction,
@@ -2543,6 +3018,16 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::SensitiveContext, &app_name);
+            #[cfg(debug_assertions)]
+            if let Some(journey_id) = memory_journey_id.as_deref() {
+                if let Err(error) = state
+                    .memory_journey
+                    .redact_and_finish_privacy_skip(journey_id, "sensitive_transient_text")
+                {
+                    tracing::debug!("Could not finish privacy-blocked Memory Journey: {error}");
+                }
+                state.emit_memory_journey_status();
+            }
             drop(image_data);
             tokio::time::sleep(sleep_duration).await;
             continue;
@@ -2570,7 +3055,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     // Same invariant as the OCR pipeline above.
                     let _visual_guard = state.model_pipeline_lock.lock().await;
                     let semantic_started = Instant::now();
-                    let visual_compose_result = compose_visual_capture_record(
+                    let visual_compose_future = compose_visual_capture_record(
                         state.as_ref(),
                         text_embedder.as_ref(),
                         &mut embedding_memo,
@@ -2585,11 +3070,40 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                         observed_confidence,
                         observed_block_count,
                         novelty,
-                    )
-                    .await;
+                    );
+                    #[cfg(debug_assertions)]
+                    let visual_compose_result = if let Some(journey_id) = memory_journey_id.clone()
+                    {
+                        crate::telemetry::llm_trace::with_memory_journey(
+                            state.memory_journey.clone(),
+                            journey_id,
+                            visual_compose_future,
+                        )
+                        .await
+                    } else {
+                        visual_compose_future.await
+                    };
+                    #[cfg(not(debug_assertions))]
+                    let visual_compose_result = visual_compose_future.await;
                     runtime_metrics::since_ms("capture.semantic_ms", semantic_started);
                     match visual_compose_result {
                         Ok(record) => {
+                            #[cfg(debug_assertions)]
+                            if let Some(journey_id) = memory_journey_id.as_deref() {
+                                let _ = state.memory_journey.record_vector_contracts(
+                                    journey_id,
+                                    &record.embedding_model,
+                                    (&record.embedding, &record.embedding_text),
+                                    (&record.snippet_embedding, &record.snippet),
+                                    (&record.support_embedding, &record.memory_context),
+                                    (&record.image_embedding, "captured_frame"),
+                                    semantic_started.elapsed().as_millis() as u64,
+                                );
+                                let _ = state
+                                    .memory_journey
+                                    .attach_memory_id(journey_id, &record.id);
+                                state.emit_memory_journey_status();
+                            }
                             visual_tracker.admit(
                                 image_vec,
                                 config.capture_pipeline.visual_novelty_ring_capacity,
@@ -2644,6 +3158,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                             state
                                 .capture_stats
                                 .record_skip(crate::SkipReason::VisualComposeFailed, &app_name);
+                            #[cfg(debug_assertions)]
+                            finish_memory_journey_skip(
+                                state.as_ref(),
+                                memory_journey_id.as_deref(),
+                                "visual_compose_failed",
+                                false,
+                                None,
+                            );
                         }
                     }
                 }
@@ -2663,6 +3185,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     state
                         .capture_stats
                         .record_skip(crate::SkipReason::VisualSmall, &app_name);
+                    #[cfg(debug_assertions)]
+                    finish_memory_journey_skip(
+                        state.as_ref(),
+                        memory_journey_id.as_deref(),
+                        "visual_too_small",
+                        false,
+                        None,
+                    );
                 }
                 VisualAdmissionOutcome::SkippedNovelty { novelty, threshold } => {
                     emit_capture_quality_signal(
@@ -2680,6 +3210,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     state
                         .capture_stats
                         .record_skip(crate::SkipReason::VisualNovelty, &app_name);
+                    #[cfg(debug_assertions)]
+                    finish_memory_journey_skip(
+                        state.as_ref(),
+                        memory_journey_id.as_deref(),
+                        "visual_low_novelty",
+                        false,
+                        None,
+                    );
                 }
                 VisualAdmissionOutcome::Failed(err) => {
                     if warn_interval_elapsed(
@@ -2710,6 +3248,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                     state
                         .capture_stats
                         .record_skip(crate::SkipReason::VisualComposeFailed, &app_name);
+                    #[cfg(debug_assertions)]
+                    finish_memory_journey_skip(
+                        state.as_ref(),
+                        memory_journey_id.as_deref(),
+                        "visual_admission_failed",
+                        false,
+                        None,
+                    );
                 }
             }
             tokio::time::sleep(sleep_duration).await;
@@ -2746,6 +3292,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::LowSignalText, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "low_signal_text",
+                false,
+                None,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2773,6 +3327,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             state
                 .capture_stats
                 .record_skip(crate::SkipReason::Noise, &app_name);
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                "ocr_noise",
+                false,
+                None,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -2800,6 +3362,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 state
                     .capture_stats
                     .record_skip(crate::SkipReason::SemanticDup, &app_name);
+                #[cfg(debug_assertions)]
+                finish_memory_journey_skip(
+                    state.as_ref(),
+                    memory_journey_id.as_deref(),
+                    "semantic_duplicate",
+                    false,
+                    None,
+                );
                 tokio::time::sleep(sleep_duration).await;
                 continue;
             }
@@ -2836,9 +3406,21 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         let structure_started = Instant::now();
         let mut structured_memory = if let Some(engine) = engine.as_ref() {
-            let mut s = engine
-                .extract_structured_memory(&app_name, &window_title, &qwen_cleaned_text)
-                .await;
+            let extraction_future =
+                engine.extract_structured_memory(&app_name, &window_title, &qwen_cleaned_text);
+            #[cfg(debug_assertions)]
+            let mut s = if let Some(journey_id) = memory_journey_id.clone() {
+                crate::telemetry::llm_trace::with_memory_journey(
+                    state.memory_journey.clone(),
+                    journey_id,
+                    extraction_future,
+                )
+                .await
+            } else {
+                extraction_future.await
+            };
+            #[cfg(not(debug_assertions))]
+            let mut s = extraction_future.await;
             if let Some(ref mut extraction) = s {
                 if extraction.synthesis_branch.is_empty() {
                     extraction.synthesis_branch = "llm".to_string();
@@ -2878,11 +3460,51 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let validate_started = Instant::now();
         let (mut extraction_grounding_confidence, mut extraction_issues) =
             if let Some(memory) = structured_memory.as_mut() {
-                validate_structured_memory_extraction(memory, &app_name, &window_title, &text)
+                validate_structured_memory_extraction(
+                    memory,
+                    &app_name,
+                    &window_title,
+                    &text,
+                    &qwen_cleaned_text,
+                )
             } else {
                 (0.0, vec!["structured_extraction_unavailable".to_string()])
             };
         runtime_metrics::since_ms("mem.validate_ms", validate_started);
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            let extraction_json = serde_json::to_vec_pretty(&json!({
+                "structured_memory": structured_memory,
+                "grounding_confidence": extraction_grounding_confidence,
+                "issues": extraction_issues,
+                "browser_seed_used": browser_structured_seed.is_some(),
+            }))
+            .unwrap_or_default();
+            let _ = state.memory_journey.record_artifact(
+                journey_id,
+                "extraction",
+                "validated-extraction.json",
+                &extraction_json,
+            );
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "extraction".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: Some(structure_started.elapsed().as_millis() as u64),
+                    outcome: if structured_memory.is_some() { "parsed" } else { "fallback" }.to_string(),
+                    details: json!({
+                        "parse_result": if structured_memory.is_some() { "parsed" } else { "unavailable" },
+                        "validator_result": if extraction_issues.is_empty() { "ok" } else { "warnings" },
+                        "unsupported_field_warnings": extraction_issues,
+                        "fallback": structured_memory.is_none(),
+                    }),
+                    artifact_ids: Vec::new(),
+                },
+            );
+            state.emit_memory_journey_status();
+        }
         let mut semantic_fusion_diagnostics = json!({
             "applied": false,
             "reason": null,
@@ -2910,7 +3532,13 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 );
                 let validate_started = Instant::now();
                 let validated = if let Some(memory) = structured_memory.as_mut() {
-                    validate_structured_memory_extraction(memory, &app_name, &window_title, &text)
+                    validate_structured_memory_extraction(
+                        memory,
+                        &app_name,
+                        &window_title,
+                        &text,
+                        &qwen_cleaned_text,
+                    )
                 } else {
                     (0.0, vec!["structured_extraction_unavailable".to_string()])
                 };
@@ -3062,6 +3690,18 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 },
                 &app_name,
             );
+            #[cfg(debug_assertions)]
+            finish_memory_journey_skip(
+                state.as_ref(),
+                memory_journey_id.as_deref(),
+                if drop_due_to_stacked_issues {
+                    "stacked_extraction_issues"
+                } else {
+                    "grounding_gate"
+                },
+                false,
+                None,
+            );
             tokio::time::sleep(sleep_duration).await;
             continue;
         }
@@ -3079,12 +3719,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         // be dead code and has been removed.
         let (final_snippet, summary_source) = if let Some(ref mem) = structured_memory {
             let candidate = if !mem.memory_context.trim().is_empty() {
-                mem.memory_context
-                    .split_terminator(['.', '!', '?'])
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string()
+                crate::summariser::sentences::first_sentence(&mem.memory_context).to_string()
             } else {
                 mem.topic.trim().to_string()
             };
@@ -3270,7 +3905,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             user_intent: structured_memory
                 .as_ref()
                 .map(|m| {
-                    if m.user_intent.trim().is_empty() {
+                    if m.source_evidence.is_some() {
+                        String::new()
+                    } else if m.user_intent.trim().is_empty() {
                         m.activity_type.clone()
                     } else {
                         m.user_intent.clone()
@@ -3372,6 +4009,41 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             compose_memory_embedding_document(&embedding_seed, Some(&config.chunking));
         runtime_metrics::since_ms("mem.compose_ms", compose_started);
         let primary_embed_input = embedding_document.primary_text.clone();
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            let document_json = serde_json::to_vec_pretty(&json!({
+                "primary": embedding_document.primary_text,
+                "snippet": embedding_document.snippet_text,
+                "support": embedding_document.support_texts,
+                "chunk_source": embedding_document.chunk_source_text,
+                "visual_semantic": embedding_document.visual_semantic_text,
+            }))
+            .unwrap_or_default();
+            let _ = state.memory_journey.record_stage(
+                journey_id,
+                crate::memory_journey::MemoryJourneyStageRecord {
+                    name: "embedding_document".to_string(),
+                    status: crate::memory_journey::MemoryJourneyStageStatus::Observed,
+                    observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    duration_ms: Some(compose_started.elapsed().as_millis() as u64),
+                    outcome: "composed".to_string(),
+                    details: json!({
+                        "primary_chars": embedding_document.primary_text.chars().count(),
+                        "snippet_chars": embedding_document.snippet_text.chars().count(),
+                        "support_count": embedding_document.support_texts.len(),
+                        "chunk_source_chars": embedding_document.chunk_source_text.chars().count(),
+                        "visual_semantic_available": embedding_document.visual_semantic_text.is_some(),
+                    }),
+                    artifact_ids: Vec::new(),
+                },
+            );
+            let _ = state.memory_journey.record_artifact(
+                journey_id,
+                "embedding_document",
+                "embedding-document.json",
+                &document_json,
+            );
+        }
 
         let embedding_inputs = embedding_document.text_embedding_inputs();
         let semantic_embeddings_available = semantic_embeddings_enabled(text_embedder.as_ref());
@@ -3460,6 +4132,22 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 }
             }
         };
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            let _ = state.memory_journey.record_vector_contracts(
+                journey_id,
+                "all-MiniLM-L6-v2",
+                (&text_embedding, &embedding_document.primary_text),
+                (&snippet_embedding, &embedding_document.snippet_text),
+                (
+                    &support_embedding,
+                    &embedding_document.support_texts.join("\n"),
+                ),
+                (&image_embedding, "captured_frame"),
+                embed_latency.as_millis() as u64,
+            );
+            state.emit_memory_journey_status();
+        }
         let host_supports_qwen_vlm =
             crate::telemetry::system_metrics::host_supports_lightweight_vlm();
         let (vlm_pressure_skip, vlm_pressure_reason) =
@@ -3603,6 +4291,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 },
                 "raw_pixels_persisted": false,
             },
+            "source_evidence": structured_memory.as_ref().and_then(|m| m.source_evidence.as_ref()),
             "extraction_grounding_confidence": extraction_grounding_confidence,
             "extraction_issues": extraction_issues.clone(),
             "primary_embed_input": primary_embed_input.chars().take(900).collect::<String>(),
@@ -3675,7 +4364,9 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             user_intent: structured_memory
                 .as_ref()
                 .map(|m| {
-                    if m.user_intent.trim().is_empty() {
+                    if m.source_evidence.is_some() {
+                        String::new()
+                    } else if m.user_intent.trim().is_empty() {
                         m.activity_type.clone()
                     } else {
                         m.user_intent.clone()
@@ -3870,6 +4561,16 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 record
             }
         };
+        #[cfg(debug_assertions)]
+        if let Some(journey_id) = memory_journey_id.as_deref() {
+            if let Err(error) = state
+                .memory_journey
+                .attach_memory_id(journey_id, &merged_or_new.id)
+            {
+                tracing::debug!("Could not attach Memory Journey storage candidate: {error}");
+            }
+            state.emit_memory_journey_status();
+        }
         if merged_or_new.id != incoming_record_id {
             emit_extraction_quality_anomaly(
                 state.as_ref(),
@@ -3897,8 +4598,16 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             });
         }
 
-        if let Err(err) =
-            maybe_create_tasks_from_memory(state.as_ref(), &merged_or_new, engine.as_ref()).await
+        // A capture merged into an earlier memory was already asked once.
+        let is_new_memory = merged_or_new.id == incoming_record_id;
+        if let Err(err) = maybe_create_tasks_from_memory(
+            state.as_ref(),
+            &merged_or_new,
+            engine.as_ref(),
+            text_embedder.as_ref(),
+            is_new_memory,
+        )
+        .await
         {
             tracing::debug!("Auto task extraction skipped: {}", err);
         }
@@ -3966,6 +4675,7 @@ fn embed_text_inputs_with_memo(
     let mut missing = Vec::new();
     let mut missing_positions = Vec::new();
     let mut missing_dedup: HashMap<String, usize> = HashMap::new();
+    let mut structured_keys: HashSet<String> = HashSet::new();
     let app_key = app_name.trim().to_lowercase();
     let title_key = window_title.trim().to_lowercase();
 
@@ -3975,7 +4685,15 @@ fn embed_text_inputs_with_memo(
             out[idx] = Some(vec![0.0; EMBEDDING_DIM]);
             continue;
         }
-        let key = format!("{app_key}|||{title_key}|||{text_key}");
+        let structured = idx < 2;
+        let key = if structured {
+            format!("structured|||{text_key}")
+        } else {
+            format!("{app_key}|||{title_key}|||{text_key}")
+        };
+        if structured {
+            structured_keys.insert(key.clone());
+        }
 
         if let Some(cached) = memo.get(&key) {
             out[idx] = Some(cached);
@@ -3994,9 +4712,20 @@ fn embed_text_inputs_with_memo(
     }
 
     if !missing.is_empty() {
+        // The first two inputs are the composed primary and snippet texts.
+        // They are embedded plain: the screen-text chunker (title line and
+        // screen-noise cleanup) is for OCR and made memories from one app look
+        // alike (docs/evidence/W04/vs-85-known-item-search.md). Support
+        // texts are screen text and keep their app and window context.
         let contextual_inputs = missing
             .iter()
-            .map(|(_, text)| (app_name.to_string(), window_title.to_string(), text.clone()))
+            .map(|(key, text)| {
+                if structured_keys.contains(key) {
+                    (String::new(), String::new(), text.clone())
+                } else {
+                    (app_name.to_string(), window_title.to_string(), text.clone())
+                }
+            })
             .collect::<Vec<_>>();
         if let Ok(vectors) = text_embedder.embed_batch_with_context(&contextual_inputs) {
             for ((memo_key, _), vector) in missing.iter().cloned().zip(vectors.iter().cloned()) {
@@ -4049,7 +4778,10 @@ async fn merge_or_append_memory_record(
 
     if let Some(anchor) = incoming_anchor.as_ref() {
         if let Some(anchor_id) = continuity_index.get(anchor).cloned() {
-            if let Some(batch_idx) = batch.iter().position(|record| record.id == anchor_id) {
+            if let Some(batch_idx) = batch
+                .iter()
+                .position(|record| record.id == anchor_id && !record.is_agent_note())
+            {
                 let merge_write_started = Instant::now();
                 let merged = merge_memory_records(
                     batch[batch_idx].clone(),
@@ -4081,7 +4813,7 @@ async fn merge_or_append_memory_record(
                 .await
                 .map_err(|e| e.to_string())?;
             runtime_metrics::since_ms("mem.merge_search_ms", merge_search_started);
-            if let Some(existing) = existing {
+            if let Some(existing) = existing.filter(|record| !record.is_agent_note()) {
                 let merge_write_started = Instant::now();
                 let merged =
                     merge_memory_records(existing.clone(), incoming.clone(), text_embedder, engine)
@@ -4300,12 +5032,16 @@ pub async fn replay_memory_records(
 }
 
 pub(crate) fn eligible_for_story_merge(record: &MemoryRecord) -> bool {
-    record.clean_text.trim().len() >= 36 || record.snippet.trim().len() >= 18
+    !record.is_agent_note()
+        && (record.clean_text.trim().len() >= 36 || record.snippet.trim().len() >= 18)
 }
 
 fn best_batch_merge_target(batch: &[MemoryRecord], incoming: &MemoryRecord) -> Option<usize> {
     let mut best: Option<(usize, MergeScore)> = None;
     for (index, candidate) in batch.iter().enumerate() {
+        if candidate.is_agent_note() {
+            continue;
+        }
         let scored = score_memory_candidate(incoming, candidate);
         if incoming.app_name != candidate.app_name
             && !allows_cross_app_merge_from_memory(incoming, candidate, scored)
@@ -4333,6 +5069,9 @@ fn best_batch_lexical_merge_target(
 ) -> Option<usize> {
     let mut best: Option<(usize, MergeScore)> = None;
     for (index, candidate) in batch.iter().enumerate() {
+        if candidate.is_agent_note() {
+            continue;
+        }
         if incoming.app_name != candidate.app_name {
             continue;
         }
@@ -4372,6 +5111,7 @@ async fn best_persisted_merge_target(
 
     let best_same_app = same_app_candidates
         .iter()
+        .filter(|candidate| !candidate.is_agent_note())
         .filter(|candidate| candidate.id != incoming.id)
         .filter_map(|candidate| {
             let scored = score_search_candidate(incoming, candidate);
@@ -4398,6 +5138,7 @@ async fn best_persisted_merge_target(
 
     let best_cross_app = cross_app_candidates
         .iter()
+        .filter(|candidate| !candidate.is_agent_note())
         .filter(|candidate| candidate.id != incoming.id)
         .filter(|candidate| candidate.app_name != incoming.app_name)
         .filter_map(|candidate| {
@@ -4439,6 +5180,7 @@ async fn best_persisted_lexical_merge_target(
 
     let best = candidates
         .iter()
+        .filter(|candidate| !candidate.is_agent_note())
         .filter(|candidate| candidate.id != incoming.id)
         .filter_map(|candidate| {
             let scored = score_search_candidate_lexical(incoming, candidate);
@@ -4477,6 +5219,25 @@ pub(crate) async fn merge_memory_records_with_policy(
     recompute_embedding: bool,
     allow_llm_summary: bool,
 ) -> MemoryRecord {
+    let raw_evidence = merge_text_source_evidence(&existing.raw_evidence, &incoming.raw_evidence);
+    let source_backed = has_source_evidence(&raw_evidence);
+    // Historical model guesses must not become pending work merely because a
+    // source-backed observation merges into an older record (in either order).
+    let user_intent = if source_backed {
+        String::new()
+    } else {
+        prefer_non_empty(&incoming.user_intent, &existing.user_intent)
+    };
+    let todos = if source_backed {
+        Vec::new()
+    } else {
+        merge_string_lists(&existing.todos, &incoming.todos)
+    };
+    let next_steps = if source_backed {
+        Vec::new()
+    } else {
+        merge_string_lists(&existing.next_steps, &incoming.next_steps)
+    };
     let merged_clean_text = merge_story_text(&existing.clean_text, &incoming.clean_text, 6400);
     let snippet_fallback = merge_story_text(&existing.snippet, &incoming.snippet, 260);
     let llm_snippet = if allow_llm_summary {
@@ -4551,11 +5312,11 @@ pub(crate) async fn merge_memory_records_with_policy(
         source_type: prefer_non_empty(&incoming.source_type, &existing.source_type),
         topic: prefer_non_empty(&incoming.topic, &existing.topic),
         workflow: prefer_non_empty(&incoming.workflow, &existing.workflow),
-        user_intent: prefer_non_empty(&incoming.user_intent, &existing.user_intent),
+        user_intent: user_intent.clone(),
         memory_context: prefer_non_empty(&incoming.memory_context, &existing.memory_context),
         commands: merge_string_lists(&existing.commands, &incoming.commands),
         blockers: merge_string_lists(&existing.blockers, &incoming.blockers),
-        todos: merge_string_lists(&existing.todos, &incoming.todos),
+        todos: todos.clone(),
         open_questions: merge_string_lists(&existing.open_questions, &incoming.open_questions),
         results: merge_string_lists(&existing.results, &incoming.results),
         search_aliases: merge_string_lists(&existing.search_aliases, &incoming.search_aliases),
@@ -4567,7 +5328,7 @@ pub(crate) async fn merge_memory_records_with_policy(
         entities: merge_string_lists(&existing.entities, &incoming.entities),
         decisions: merge_string_lists(&existing.decisions, &incoming.decisions),
         errors: merge_string_lists(&existing.errors, &incoming.errors),
-        next_steps: merge_string_lists(&existing.next_steps, &incoming.next_steps),
+        next_steps: next_steps.clone(),
         outcome: prefer_non_empty(&incoming.outcome, &existing.outcome),
         extraction_confidence: existing
             .extraction_confidence
@@ -4682,7 +5443,6 @@ pub(crate) async fn merge_memory_records_with_policy(
     let entities = merge_string_lists(&existing.entities, &incoming.entities);
     let decisions = merge_string_lists(&existing.decisions, &incoming.decisions);
     let errors = merge_string_lists(&existing.errors, &incoming.errors);
-    let next_steps = merge_string_lists(&existing.next_steps, &incoming.next_steps);
     let git_stats = incoming.git_stats.clone().or(existing.git_stats.clone());
     let outcome = prefer_non_empty(&incoming.outcome, &existing.outcome);
     let extraction_confidence = existing
@@ -4736,7 +5496,6 @@ pub(crate) async fn merge_memory_records_with_policy(
         .insight_card_confidence
         .max(incoming.insight_card_confidence);
     let raw_evidence = {
-        let raw = prefer_non_empty(&incoming.raw_evidence, &existing.raw_evidence);
         if recompute_embedding {
             let manifest = build_embedding_manifest(
                 &merge_embedding_document,
@@ -4744,9 +5503,9 @@ pub(crate) async fn merge_memory_records_with_policy(
                 image_embedding_status(&incoming.image_embedding),
                 VisualSemanticSource::TextCapture,
             );
-            upsert_embedding_manifest(&raw, &manifest)
+            upsert_embedding_manifest(&raw_evidence, &manifest)
         } else {
-            raw
+            raw_evidence
         }
     };
     let reopen = crate::memory::reopen::merge_reopen_targets(
@@ -4797,10 +5556,10 @@ pub(crate) async fn merge_memory_records_with_policy(
         source_type: prefer_non_empty(&incoming.source_type, &existing.source_type),
         topic: prefer_non_empty(&incoming.topic, &existing.topic),
         workflow: prefer_non_empty(&incoming.workflow, &existing.workflow),
-        user_intent: prefer_non_empty(&incoming.user_intent, &existing.user_intent),
-        intent_analysis: if incoming.intent_analysis.confidence
-            >= existing.intent_analysis.confidence
-        {
+        user_intent,
+        intent_analysis: if source_backed {
+            crate::storage::IntentAnalysis::default()
+        } else if incoming.intent_analysis.confidence >= existing.intent_analysis.confidence {
             incoming.intent_analysis.clone()
         } else {
             existing.intent_analysis.clone()
@@ -4808,7 +5567,7 @@ pub(crate) async fn merge_memory_records_with_policy(
         memory_context: prefer_non_empty(&incoming.memory_context, &existing.memory_context),
         commands: merge_string_lists(&existing.commands, &incoming.commands),
         blockers: merge_string_lists(&existing.blockers, &incoming.blockers),
-        todos: merge_string_lists(&existing.todos, &incoming.todos),
+        todos,
         open_questions: merge_string_lists(&existing.open_questions, &incoming.open_questions),
         results: merge_string_lists(&existing.results, &incoming.results),
         related_tools: merge_string_lists(&existing.related_tools, &incoming.related_tools),
@@ -4942,6 +5701,62 @@ fn prefer_non_empty(incoming: &str, existing: &str) -> String {
     } else {
         existing.trim().to_string()
     }
+}
+
+fn merge_text_source_evidence(existing: &str, incoming: &str) -> String {
+    let preferred = prefer_non_empty(incoming, existing);
+    let mut evidence = serde_json::from_str::<serde_json::Value>(&preferred)
+        .ok()
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    let mut kinds = crate::memory_quality::text_source_kinds_from_raw_evidence(existing);
+    kinds.extend(crate::memory_quality::text_source_kinds_from_raw_evidence(
+        incoming,
+    ));
+    evidence["source_kind"] = json!(if kinds.len() > 1 {
+        "mixed"
+    } else {
+        kinds.first().copied().unwrap_or("unknown")
+    });
+    evidence["text_source_kinds"] = json!(kinds);
+    // References remain relative to each original snapshot; merging text must
+    // never reinterpret an older line number against the concatenated record.
+    // Latest metadata wins for a repeated hash, including rejected statements.
+    let mut snapshots = source_evidence_sets_from_raw(incoming);
+    snapshots.extend(source_evidence_sets_from_raw(existing));
+    let mut seen = HashSet::new();
+    snapshots.retain(|snapshot| seen.insert(snapshot.source_sha256.clone()));
+    snapshots.truncate(4);
+    let incoming_raw = serde_json::from_str::<serde_json::Value>(incoming).unwrap_or_default();
+    let existing_raw = serde_json::from_str::<serde_json::Value>(existing).unwrap_or_default();
+    // Keep an unsupported current contract as current, rather than silently
+    // substituting a parsed historical snapshot or reverting to legacy fields.
+    let current_marker = [&incoming_raw, &existing_raw]
+        .into_iter()
+        .find_map(|raw| raw.get("source_evidence").filter(|value| value.is_object()));
+    if let Some(current) = current_marker {
+        evidence["source_evidence"] = current.clone();
+        if let Some(hash) = current
+            .get("source_sha256")
+            .and_then(|value| value.as_str())
+        {
+            snapshots.retain(|snapshot| snapshot.source_sha256 != hash);
+        }
+        snapshots.truncate(3);
+        evidence["source_evidence_history"] = json!(snapshots);
+    } else if let Some(current) = snapshots.first() {
+        evidence["source_evidence"] = json!(current);
+        evidence["source_evidence_history"] = json!(&snapshots[1..]);
+    } else if let Some(history) = [&incoming_raw, &existing_raw].into_iter().find_map(|raw| {
+        raw.get("source_evidence_history")
+            .and_then(|value| value.as_array())
+            .filter(|values| !values.is_empty())
+    }) {
+        // Even unreadable historical evidence is a managed-record marker. Do
+        // not remove that boundary just because no quotes can be exposed.
+        evidence["source_evidence_history"] = json!(history.iter().take(3).collect::<Vec<_>>());
+    }
+    evidence.to_string()
 }
 
 fn merge_string_lists(existing: &[String], incoming: &[String]) -> Vec<String> {
@@ -5305,6 +6120,9 @@ fn same_domain(left: Option<&str>, right: Option<&str>) -> bool {
 }
 
 pub(crate) fn continuity_anchor_for_memory(record: &MemoryRecord) -> Option<String> {
+    if record.is_agent_note() {
+        return None;
+    }
     continuity_anchor(
         &record.app_name,
         record.url.as_deref(),
@@ -5521,96 +6339,115 @@ fn purge_capture_artifacts(frames_dir: PathBuf) {
     let _ = std::fs::create_dir_all(frames_dir);
 }
 
+/// The screen text a task must be quoted from. Never the model's summary.
+const TASK_EVIDENCE_CHARS: usize = 1500;
+const MIN_TASK_EVIDENCE_CHARS: usize = 40;
+/// How far back, and against how many tasks, a new suggestion is compared.
+const TASK_REPEAT_LOOKBACK_MS: i64 = 14 * 24 * 60 * 60 * 1000;
+const MAX_TASKS_COMPARED: usize = 200;
+
+fn task_extraction_gate() -> &'static std::sync::Mutex<crate::tasks::suggest::ExtractionGate> {
+    static GATE: std::sync::OnceLock<std::sync::Mutex<crate::tasks::suggest::ExtractionGate>> =
+        std::sync::OnceLock::new();
+    GATE.get_or_init(Default::default)
+}
+
+/// Turn checked suggestions into tasks for `record`, leaving out any whose
+/// title is already on the list in any state, so a dismissed task does not
+/// come back.
+fn tasks_from_suggestions(
+    suggestions: Vec<crate::tasks::suggest::Suggestion>,
+    record: &MemoryRecord,
+    existing: &[Task],
+) -> Vec<Task> {
+    let mut known: HashSet<String> = existing
+        .iter()
+        .map(|task| crate::tasks::normalize_task_text(&task.title))
+        .collect();
+    suggestions
+        .into_iter()
+        .filter(|suggestion| known.insert(crate::tasks::normalize_task_text(&suggestion.title)))
+        .map(|suggestion| Task {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: suggestion.title,
+            // The words on screen that state the task, shown as its reason.
+            description: suggestion.quote,
+            source_app: format!("Memory:{}", record.app_name),
+            source_memory_id: Some(record.id.clone()),
+            created_at: record.timestamp,
+            due_date: None,
+            is_completed: false,
+            is_dismissed: false,
+            task_type: suggestion.task_type,
+            linked_urls: record.url.clone().map(|u| vec![u]).unwrap_or_default(),
+            linked_memory_ids: vec![record.id.clone()],
+        })
+        .collect()
+}
+
 async fn maybe_create_tasks_from_memory(
     state: &AppState,
     record: &MemoryRecord,
     engine: Option<&Arc<crate::inference::InferenceEngine>>,
+    text_embedder: Option<&Embedder>,
+    is_new_memory: bool,
 ) -> Result<(), String> {
-    // Only run task extraction for summarized memories to keep precision high.
-    if !record.summary_source.eq_ignore_ascii_case("llm") {
-        return Ok(());
-    }
+    use crate::tasks::suggest::{drop_repeats, is_task_source, parse_suggestions, surface_of};
 
     let Some(engine) = engine else {
         return Ok(());
     };
-
-    if record.snippet.trim().len() < 16 {
+    // Ask once per memory, only where a person's own tasks appear, and only
+    // when there is enough screen text to quote from.
+    if !is_new_memory
+        || !record.summary_source.eq_ignore_ascii_case("llm")
+        || !is_task_source(&record.app_name, record.url.as_deref())
+        || record.clean_text.trim().chars().count() < MIN_TASK_EVIDENCE_CHARS
+    {
+        return Ok(());
+    }
+    let admitted = task_extraction_gate()
+        .lock()
+        .map(|mut gate| gate.admit(&record.app_name, record.timestamp))
+        .unwrap_or(false);
+    if !admitted {
         return Ok(());
     }
 
-    let extraction_input = format!(
-        "APP: {}\nWINDOW: {}\nSUMMARY: {}\nTEXT: {}",
-        record.app_name,
+    let evidence = format!(
+        "{}\n{}",
         record.window_title,
-        record.snippet,
-        record.clean_text.chars().take(800).collect::<String>()
+        record
+            .clean_text
+            .chars()
+            .take(TASK_EVIDENCE_CHARS)
+            .collect::<String>()
     );
-    let raw = engine.extract_todos(&extraction_input).await;
-    if raw.trim().is_empty() {
-        return Ok(());
-    }
-
-    let mut parsed = parse_tasks_from_llm_response(&raw, &record.app_name);
-    if parsed.is_empty() {
+    let raw = engine.suggest_tasks(&evidence).await;
+    let surface = surface_of(&record.app_name, record.url.as_deref());
+    let suggestions = parse_suggestions(&raw, &evidence, surface);
+    if suggestions.is_empty() {
         return Ok(());
     }
 
     let mut all_tasks = state.store.list_tasks().await.map_err(|e| e.to_string())?;
-    let mut active_keys: HashSet<(String, String)> = all_tasks
+    // The model words one task differently each time. Compare by meaning
+    // with recent tasks in any state, so a dismissed one stays dismissed.
+    let recent_titles: Vec<String> = all_tasks
         .iter()
-        .filter(|task| !task.is_completed && !task.is_dismissed)
-        .map(|task| {
-            (
-                task.title.trim().to_lowercase(),
-                task_type_key(&task.task_type).to_string(),
-            )
-        })
+        .filter(|task| record.timestamp - task.created_at <= TASK_REPEAT_LOOKBACK_MS)
+        .rev()
+        .take(MAX_TASKS_COMPARED)
+        .map(|task| task.title.clone())
         .collect();
-
-    let source_app = format!("Memory:{}", record.app_name);
-    let mut changed = false;
-    for task in parsed.iter_mut() {
-        let normalized_title = task.title.trim().to_lowercase();
-        if normalized_title.len() < 4 {
-            continue;
-        }
-
-        let type_key = task_type_key(&task.task_type).to_string();
-        let dedupe_key = (normalized_title, type_key);
-        if active_keys.contains(&dedupe_key) {
-            continue;
-        }
-        active_keys.insert(dedupe_key);
-
-        task.id = uuid::Uuid::new_v4().to_string();
-        task.created_at = record.timestamp;
-        task.source_app = source_app.clone();
-        task.source_memory_id = Some(record.id.clone());
-        task.linked_memory_ids = vec![record.id.clone()];
-        task.linked_urls = record.url.clone().map(|u| vec![u]).unwrap_or_default();
-
-        all_tasks.push(Task {
-            id: task.id.clone(),
-            title: task.title.clone(),
-            description: task.description.clone(),
-            source_app: task.source_app.clone(),
-            source_memory_id: task.source_memory_id.clone(),
-            created_at: task.created_at,
-            due_date: task.due_date,
-            is_completed: false,
-            is_dismissed: false,
-            task_type: task.task_type.clone(),
-            linked_urls: task.linked_urls.clone(),
-            linked_memory_ids: task.linked_memory_ids.clone(),
-        });
-        changed = true;
-    }
-
-    if !changed {
+    let suggestions = drop_repeats(suggestions, &recent_titles, |texts| {
+        text_embedder.and_then(|embedder| embedder.embed_batch(texts).ok())
+    });
+    let created = tasks_from_suggestions(suggestions, record, &all_tasks);
+    if created.is_empty() {
         return Ok(());
     }
-
+    all_tasks.extend(created.iter().cloned());
     state
         .store
         .upsert_tasks(&all_tasks)
@@ -5618,28 +6455,13 @@ async fn maybe_create_tasks_from_memory(
         .map_err(|e| e.to_string())?;
 
     // Link created tasks into the graph for task-memory navigation.
-    for task in all_tasks.iter().rev().take(8) {
-        if task
-            .source_memory_id
-            .as_ref()
-            .map(|id| id == &record.id)
-            .unwrap_or(false)
-        {
-            if let Err(err) = state.graph.link_task(task).await {
-                tracing::warn!("Failed linking auto-created task in graph: {}", err);
-            }
+    for task in &created {
+        if let Err(err) = state.graph.link_task(task).await {
+            tracing::warn!("Failed linking auto-created task in graph: {}", err);
         }
     }
 
     Ok(())
-}
-
-fn task_type_key(task_type: &TaskType) -> &'static str {
-    match task_type {
-        TaskType::Todo => "todo",
-        TaskType::Reminder => "reminder",
-        TaskType::Followup => "followup",
-    }
 }
 
 fn build_session_key(app_name: &str, window_title: &str, url: Option<&str>) -> String {
@@ -5817,6 +6639,13 @@ fn should_text_heavy_override(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn accessibility_text_replaces_ocr_only_at_two_hundred_characters() {
+        assert!(!super::prefer_ax_text(0));
+        assert!(!super::prefer_ax_text(199));
+        assert!(super::prefer_ax_text(200));
+    }
+
     use super::*;
 
     #[test]
@@ -5857,7 +6686,11 @@ mod tests {
             start + Duration::from_secs(299),
             interval
         ));
-        assert!(warn_interval_elapsed(Some(start), start + interval, interval));
+        assert!(warn_interval_elapsed(
+            Some(start),
+            start + interval,
+            interval
+        ));
     }
 
     #[test]
@@ -5911,9 +6744,7 @@ mod tests {
         assert!(url_has_credential_leak(
             "https://example.com/path?password=secret"
         ));
-        assert!(!url_has_credential_leak(
-            "https://example.com/path?foo=bar"
-        ));
+        assert!(!url_has_credential_leak("https://example.com/path?foo=bar"));
     }
 
     #[test]
@@ -5971,7 +6802,6 @@ mod tests {
             state_store,
             graph,
             None,
-            None,
         );
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -6007,6 +6837,179 @@ mod tests {
                     before + 1
                 );
             });
+    }
+
+    fn assert_capture_keeps_agent_note_separate(persisted: bool, seed_anchor: bool) {
+        let dir = tempfile::tempdir().expect("temporary store");
+        let store = Arc::new(crate::storage::Store::new(dir.path()).expect("store"));
+        let state_store =
+            Arc::new(crate::storage::StateStore::new(dir.path()).expect("state store"));
+        let graph = crate::graph::GraphStore::new(store.clone());
+        let state = AppState::new(
+            dir.path().to_path_buf(),
+            crate::config::Config::default(),
+            store.clone(),
+            state_store,
+            graph,
+            None,
+        );
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(async {
+                let mut note = merge_test_record("agent-note");
+                note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string();
+                note.timestamp = chrono::Utc::now().timestamp_millis();
+                note.raw_evidence = r#"{"added_by":"test-agent","source_kind":"unknown"}"#.into();
+                let mut incoming = merge_test_record("screen-capture");
+                incoming.timestamp = note.timestamp + 1;
+                incoming.raw_evidence = r#"{"source_kind":"ax"}"#.into();
+                let mut batch = Vec::new();
+                if persisted {
+                    store.add_batch(&[note.clone()]).await.expect("seed note");
+                    note = store.get_memory_by_id(&note.id).await.unwrap().unwrap();
+                } else {
+                    batch.push(note.clone());
+                }
+                let note_before = serde_json::to_value(&note).unwrap();
+                let mut continuity_index = HashMap::new();
+                if seed_anchor {
+                    // Exercise stale or externally seeded indexes, independently
+                    // of whether agent notes now generate anchors themselves.
+                    let anchor = continuity_anchor_for_memory(&incoming).expect("screen anchor");
+                    continuity_index.insert(anchor, note.id.clone());
+                } else if persisted {
+                    assert!(best_persisted_merge_target(&state, &incoming)
+                        .await
+                        .unwrap()
+                        .is_none());
+                    assert!(best_persisted_lexical_merge_target(&state, &incoming)
+                        .await
+                        .unwrap()
+                        .is_none());
+                } else {
+                    assert_eq!(best_batch_merge_target(&batch, &incoming), None);
+                    assert_eq!(best_batch_lexical_merge_target(&batch, &incoming), None);
+                }
+                let result = merge_or_append_memory_record(
+                    &state,
+                    &mut batch,
+                    &mut continuity_index,
+                    incoming.clone(),
+                    None,
+                    None,
+                )
+                .await
+                .expect("capture decision");
+                assert_eq!(
+                    result.id, incoming.id,
+                    "screen must stay separate from agent note"
+                );
+                assert!(!result.is_agent_note());
+                if !persisted {
+                    assert_eq!(serde_json::to_value(&batch[0]).unwrap(), note_before);
+                }
+                store
+                    .add_batch(&batch)
+                    .await
+                    .expect("persist separate screen");
+                let preserved = store.get_memory_by_id(&note.id).await.unwrap().unwrap();
+                if persisted {
+                    assert_eq!(serde_json::to_value(&preserved).unwrap(), note_before);
+                }
+                assert!(preserved.is_agent_note());
+                assert!(store
+                    .get_memory_by_id(&incoming.id)
+                    .await
+                    .unwrap()
+                    .is_some());
+            });
+    }
+
+    #[test]
+    fn capture_keeps_agent_notes_out_of_batch_merge_candidates() {
+        assert_capture_keeps_agent_note_separate(false, false);
+    }
+
+    #[test]
+    fn capture_keeps_agent_notes_out_of_persisted_merge_candidates() {
+        assert_capture_keeps_agent_note_separate(true, false);
+    }
+
+    #[test]
+    fn capture_keeps_agent_notes_separate_from_batch_continuity_anchor() {
+        assert_capture_keeps_agent_note_separate(false, true);
+    }
+
+    #[test]
+    fn capture_keeps_agent_notes_separate_from_persisted_continuity_anchor() {
+        assert_capture_keeps_agent_note_separate(true, true);
+    }
+
+    #[test]
+    fn committed_capture_fixtures_match_the_pre_frame_privacy_gate() {
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            id: String,
+            app_class: String,
+            #[serde(default)]
+            app_name: Option<String>,
+            #[serde(default)]
+            bundle_id: Option<String>,
+            window_title: String,
+            #[serde(default)]
+            url: Option<String>,
+            expected_outcome: String,
+        }
+
+        let manifest = include_str!("../../tests/fixtures/screens/manifest.json");
+        let fixtures: Vec<Fixture> =
+            serde_json::from_str(manifest).expect("fixture manifest parses");
+        let default_blocklist = crate::config::Config::default().blocklist;
+        let mut checked = 0;
+        println!("fixture | expected admission | actual admission");
+
+        for fixture in fixtures {
+            if fixture.app_class != "privacy_negative" && fixture.expected_outcome != "store" {
+                continue;
+            }
+            let app_name =
+                fixture
+                    .app_name
+                    .as_deref()
+                    .unwrap_or_else(|| match fixture.bundle_id.as_deref() {
+                        Some("com.microsoft.VSCode") => "Visual Studio Code",
+                        Some("com.apple.Terminal") => "Terminal",
+                        Some("com.google.Chrome") => "Google Chrome",
+                        Some("com.tinyspeck.slackmacgap") => "Slack",
+                        Some("com.apple.Preview") => "Preview",
+                        _ => "Unknown",
+                    });
+            let actual = super::capture_admission_skip_reason(
+                app_name,
+                fixture.bundle_id.as_deref(),
+                &fixture.window_title,
+                fixture.url.as_deref(),
+                None,
+                &default_blocklist,
+            )
+            .map(|reason| format!("skip:{}", reason.as_str()))
+            .unwrap_or_else(|| "store".to_string());
+
+            println!("{} | {} | {}", fixture.id, fixture.expected_outcome, actual);
+            assert_eq!(
+                actual, fixture.expected_outcome,
+                "fixture {} must match the real pre-frame gate",
+                fixture.id
+            );
+            checked += 1;
+        }
+
+        assert_eq!(
+            checked, 30,
+            "all committed store and privacy fixtures are checked"
+        );
     }
 
     #[test]
@@ -6302,6 +7305,187 @@ Activity patterns and insights dashboard
         assert!(entities.iter().any(|e| e.eq_ignore_ascii_case("Obsidian")));
     }
 
+    fn source_evidence_fixture(index: u8) -> serde_json::Value {
+        json!({
+            "version": 1,
+            "source_sha256": format!("{index:064x}"),
+            "statements": [{"kind": "action", "line": 2, "quote": format!("Alex: please review item {index}.")}],
+            "issues": []
+        })
+    }
+
+    #[tokio::test]
+    async fn source_backed_merge_does_not_resurrect_legacy_intent_or_actions() {
+        for source_first in [false, true] {
+            let mut sourced = merge_test_record("sourced");
+            sourced.raw_evidence = json!({
+                "source_kind": "ax",
+                "source_evidence": source_evidence_fixture(1),
+            })
+            .to_string();
+            sourced.user_intent.clear();
+            sourced.todos.clear();
+            sourced.next_steps.clear();
+            let mut legacy = merge_test_record("legacy");
+            legacy.user_intent = "Invented launch strategy".into();
+            legacy.intent_analysis.intent_label = "Invented launch strategy".into();
+            legacy.intent_analysis.confidence = 0.99;
+            legacy.todos = vec!["Invented deploy obligation".into()];
+            legacy.next_steps = vec!["Invented funding action".into()];
+            let (existing, incoming) = if source_first {
+                (sourced, legacy)
+            } else {
+                (legacy, sourced)
+            };
+            let merged =
+                merge_memory_records_with_policy(existing, incoming, None, None, true, false).await;
+            assert!(merged.user_intent.is_empty(), "source_first={source_first}");
+            assert!(merged.todos.is_empty());
+            assert!(merged.next_steps.is_empty());
+            assert!(merged.intent_analysis.intent_label.is_empty());
+            assert_eq!(merged.intent_analysis.confidence, 0.0);
+            assert!(!merged.embedding_text.contains("Invented"));
+            let raw: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+            assert_eq!(raw["source_evidence"], source_evidence_fixture(1));
+            assert!(!merged.internal_context.contains("Next:"));
+            assert!(!merged.internal_context.contains("Intent:"));
+        }
+    }
+
+    #[test]
+    fn source_backed_visual_fallback_retains_observation_metadata() {
+        let source = "Alex: please review the parser tests.";
+        let mut extraction = StructuredMemoryExtraction {
+            topic: "Parser tests".into(),
+            memory_context: "The parser test discussion is visible.".into(),
+            ..Default::default()
+        };
+        extraction.source_refs.actions = vec![json!(1)];
+        crate::inference::extraction_evidence::finalize_extraction(&mut extraction, source);
+        let (insight, evidence) = visual_insight_from_structured(&extraction);
+        assert_eq!(
+            serde_json::to_value(evidence).unwrap(),
+            serde_json::to_value(extraction.source_evidence).unwrap()
+        );
+        assert!(insight.actions.is_empty());
+        assert!(!insight.summary_detailed.contains(source));
+        assert_eq!(insight.summary_short, "Parser tests");
+    }
+
+    #[tokio::test]
+    async fn source_backed_merge_keeps_unsupported_contract_protected() {
+        for with_history in [false, true] {
+            let mut protected = merge_test_record("protected");
+            let unsupported = json!({"version": 99, "source_sha256": format!("{:064x}", 7)});
+            protected.raw_evidence = json!({
+                "source_evidence": unsupported,
+                "source_evidence_history": if with_history { vec![source_evidence_fixture(1)] } else { Vec::new() },
+            }).to_string();
+            let mut legacy = merge_test_record("legacy");
+            legacy.raw_evidence = json!({"source_kind": "ocr"}).to_string();
+            legacy.user_intent = "Invented intent".into();
+            legacy.next_steps = vec!["Invented next step".into()];
+            let merged =
+                merge_memory_records_with_policy(protected, legacy, None, None, false, false).await;
+            assert!(has_source_evidence(&merged.raw_evidence));
+            assert!(merged.user_intent.is_empty());
+            assert!(merged.next_steps.is_empty());
+            let raw: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+            assert_eq!(raw["source_evidence"], unsupported);
+            if with_history {
+                assert_eq!(
+                    raw["source_evidence_history"],
+                    json!([source_evidence_fixture(1)])
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn source_backed_merge_preserves_bounded_original_snapshots() {
+        let mut raw = json!({"source_evidence": source_evidence_fixture(1)}).to_string();
+        for index in 2..=6 {
+            let incoming = json!({"source_evidence": source_evidence_fixture(index)}).to_string();
+            raw = merge_text_source_evidence(&raw, &incoming);
+            // Repeated observations must not consume the bounded history again.
+            raw = merge_text_source_evidence(&raw, &incoming);
+        }
+        let evidence: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(evidence["source_evidence"], source_evidence_fixture(6));
+        let history = evidence["source_evidence_history"].as_array().unwrap();
+        assert_eq!(history.len(), 3);
+        for index in 3..=5 {
+            assert!(
+                history.contains(&source_evidence_fixture(index)),
+                "missing original snapshot {index}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn merge_preserves_text_source_lineage_across_repeated_merges() {
+        let mut existing = merge_test_record("existing");
+        existing.clean_text = "Accessibility captured the original parser implementation.".into();
+        existing.raw_evidence = r#"{"source_kind":"ax"}"#.into();
+        let mut incoming = merge_test_record("incoming");
+        incoming.clean_text = "OCR captured the regression test and its failure output.".into();
+        incoming.raw_evidence = r#"{"source_kind":"ocr","ocr_quality":{"kept_lines":4},"embedding_manifest":{"marker":"preserve"}}"#.into();
+
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+        assert!(merged.clean_text.contains("original parser"));
+        assert!(merged.clean_text.contains("regression test"));
+        let evidence: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+        assert_eq!(evidence["source_kind"], "mixed");
+        assert_eq!(evidence["text_source_kinds"], json!(["ax", "ocr"]));
+        assert_eq!(evidence["ocr_quality"]["kept_lines"], 4);
+        assert_eq!(evidence["embedding_manifest"]["marker"], "preserve");
+
+        let mut later = merge_test_record("later");
+        later.raw_evidence = r#"{"source_kind":"ax"}"#.into();
+        let merged = merge_memory_records_with_policy(merged, later, None, None, true, false).await;
+        let evidence: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+        assert_eq!(evidence["source_kind"], "mixed");
+        assert_eq!(evidence["text_source_kinds"], json!(["ax", "ocr"]));
+        assert!(evidence["embedding_manifest"].is_object());
+    }
+
+    #[tokio::test]
+    async fn merge_text_source_lineage_never_guesses_a_legacy_extraction_method() {
+        for raw in [
+            "",
+            "not json",
+            "[]",
+            "{}",
+            r#"{"source_kind":"visual_capture"}"#,
+            r#"{"source_kind":"private arbitrary label"}"#,
+        ] {
+            let mut existing = merge_test_record("existing");
+            existing.raw_evidence = raw.into();
+            let mut incoming = merge_test_record("incoming");
+            incoming.raw_evidence = r#"{"source_kind":"ocr"}"#.into();
+            let merged =
+                merge_memory_records_with_policy(existing, incoming, None, None, false, false)
+                    .await;
+            let evidence: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+            assert_eq!(evidence["source_kind"], "mixed", "{raw}");
+            assert_eq!(
+                evidence["text_source_kinds"],
+                json!(["ocr", "unknown"]),
+                "{raw}"
+            );
+        }
+
+        let mut existing = merge_test_record("existing");
+        existing.raw_evidence = r#"{"source_kind":"browser_semantic"}"#.into();
+        let incoming = existing.clone();
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+        let evidence: serde_json::Value = serde_json::from_str(&merged.raw_evidence).unwrap();
+        assert_eq!(evidence["source_kind"], "browser_semantic");
+        assert_eq!(evidence["text_source_kinds"], json!(["browser_semantic"]));
+    }
+
     #[tokio::test]
     async fn merge_preserves_v2_metadata_when_incoming_is_sparse() {
         let mut existing = merge_test_record("existing");
@@ -6368,7 +7552,9 @@ Activity patterns and insights dashboard
 
         assert_eq!(merged.id, "existing-id");
         assert!(
-            merged.consolidated_from.contains(&"incoming-id".to_string()),
+            merged
+                .consolidated_from
+                .contains(&"incoming-id".to_string()),
             "consolidated_from should carry the dropped id, got {:?}",
             merged.consolidated_from
         );
@@ -6507,6 +7693,123 @@ Activity patterns and insights dashboard
     }
 
     #[test]
+    fn a_suggestion_becomes_a_task_once_and_carries_its_quote() {
+        use crate::tasks::suggest::Suggestion;
+        let record = MemoryRecord {
+            id: "mem-mail".into(),
+            timestamp: 1_790_000_000_000,
+            app_name: "Mail".into(),
+            ..Default::default()
+        };
+        let suggest = |title: &str| Suggestion {
+            task_type: crate::storage::TaskType::Todo,
+            title: title.into(),
+            quote: "can you send me the draft report by Friday".into(),
+        };
+        let created = tasks_from_suggestions(vec![suggest("Send the draft report")], &record, &[]);
+        assert_eq!(created.len(), 1);
+        assert_eq!(
+            created[0].description,
+            "can you send me the draft report by Friday"
+        );
+        assert_eq!(created[0].source_memory_id.as_deref(), Some("mem-mail"));
+        assert_eq!(created[0].source_app, "Memory:Mail");
+
+        // Already on the list, even dismissed: it does not come back.
+        let mut dismissed = created[0].clone();
+        dismissed.is_dismissed = true;
+        let again = tasks_from_suggestions(
+            vec![suggest("send the draft report."), suggest("Book the room")],
+            &record,
+            &[dismissed],
+        );
+        assert_eq!(
+            again
+                .iter()
+                .map(|task| task.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Book the room"]
+        );
+    }
+
+    #[test]
+    fn validation_drops_prose_from_the_commands_field() {
+        let mut extraction = crate::inference::StructuredMemoryExtraction {
+            commands: vec![
+                "cargo test --lib capture".into(),
+                "Please refactor the capture module so that summaries are never cut".into(),
+            ],
+            ..Default::default()
+        };
+        let (_, issues) = validate_structured_memory_extraction(
+            &mut extraction,
+            "Terminal",
+            "zsh",
+            "cargo test --lib capture",
+            "cargo test --lib capture",
+        );
+        assert_eq!(extraction.commands, vec!["cargo test --lib capture"]);
+        assert!(issues
+            .iter()
+            .any(|issue| issue == "commands_not_command_like"));
+    }
+
+    #[test]
+    fn source_backed_validator_checks_original_snapshot_after_fusion() {
+        use crate::inference::extraction_evidence::finalize_extraction;
+        let original_source = "Alex: please review the parser tests.";
+        let mut extraction = StructuredMemoryExtraction {
+            confidence: 0.95,
+            topic: "parser tests".into(),
+            ..Default::default()
+        };
+        extraction.source_refs.actions = vec![json!(1)];
+        finalize_extraction(&mut extraction, original_source);
+        // A browser/fusion seed can fill fields after model finalization.
+        extraction.user_intent = "review the parser tests".into();
+        extraction.todos = vec!["review the parser tests".into()];
+        extraction.next_steps = vec!["review the parser tests".into()];
+        let (_, issues) = validate_structured_memory_extraction(
+            &mut extraction,
+            "Editor",
+            "parser tests",
+            "parser tests cleaned differently",
+            original_source,
+        );
+        assert!(extraction.user_intent.is_empty());
+        assert!(extraction.todos.is_empty() && extraction.next_steps.is_empty());
+        assert_eq!(
+            extraction
+                .source_evidence
+                .as_ref()
+                .unwrap()
+                .statements
+                .len(),
+            1
+        );
+        assert!(!issues
+            .iter()
+            .any(|issue| issue == "source_evidence_hash_mismatch"));
+
+        let (_, issues) = validate_structured_memory_extraction(
+            &mut extraction,
+            "Editor",
+            "parser tests",
+            original_source,
+            "A changed model source snapshot.",
+        );
+        assert!(issues
+            .iter()
+            .any(|issue| issue == "source_evidence_hash_mismatch"));
+        assert!(extraction
+            .source_evidence
+            .as_ref()
+            .unwrap()
+            .statements
+            .is_empty());
+    }
+
+    #[test]
     fn extraction_validator_strips_unsupported_fields_when_low_confidence() {
         let mut extraction = StructuredMemoryExtraction {
             confidence: 0.42,
@@ -6524,6 +7827,7 @@ Activity patterns and insights dashboard
             "Google Chrome",
             "Random docs page",
             "Navigation links and generic toolbar labels",
+            "",
         );
 
         assert!(grounding < 0.55);
@@ -6562,6 +7866,7 @@ Activity patterns and insights dashboard
             "Codex",
             "memory_cards.rs",
             "Improved memory card search ranking quality in src-tauri/src/search/memory_cards.rs using MemoryCardSynthesizer",
+            "",
         );
 
         assert!(grounding > 0.80);
@@ -6805,6 +8110,7 @@ Activity patterns and insights dashboard
             "Chrome",
             "title",
             "valid topic appeared in evidence",
+            "",
         );
         assert_eq!(extraction.activity_type, "unknown");
         assert!(
@@ -6824,8 +8130,13 @@ Activity patterns and insights dashboard
             user_intent: "intent|other".to_string(),
             ..Default::default()
         };
-        let (_, issues) =
-            validate_structured_memory_extraction(&mut extraction, "App", "Title", "Evidence body");
+        let (_, issues) = validate_structured_memory_extraction(
+            &mut extraction,
+            "App",
+            "Title",
+            "Evidence body",
+            "",
+        );
         assert!(extraction.topic.is_empty());
         assert!(extraction.workflow.is_empty());
         assert!(extraction.user_intent.is_empty());

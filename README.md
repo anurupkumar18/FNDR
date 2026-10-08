@@ -10,9 +10,9 @@ The core runtime is a React + TypeScript UI (`src/`) on top of a Tauri 2 + Rust 
 
 ## Who This Is For
 
-- **People who lose track of what they were doing.** You close a tab, forget a URL, or can't recall which doc had that one number — FNDR lets you search or ask for it instead of reconstructing it from memory.
+- **People who lose track of what they were doing.** You close a tab, forget a URL, or can't recall which doc had that one number; FNDR lets you search or ask for it instead of reconstructing it from memory.
 - **Developers and agent builders** who want a local, inspectable memory layer to plug into their own tools over MCP, without shipping raw personal activity to a cloud service to get it.
-- **Privacy-conscious users** who want the benefit of an "AI that remembers your screen" without a third party holding that data — everything here runs and stays on-device by default.
+- **Privacy-conscious users** who want the benefit of an "AI that remembers your screen" without a third party holding that data: everything here runs and stays on-device by default.
 
 It is not a screen-recording surveillance tool, a cloud memory service, or a general-purpose screenshot archive.
 
@@ -22,11 +22,11 @@ It is not a screen-recording surveillance tool, a cloud memory service, or a gen
 
 FNDR captures desktop activity and converts it into structured memory records. A memory record includes cleaned text, app/window/url metadata, retrieval fields, embeddings, and insight fields used to improve recall quality.
 
-Search is hybrid by design: semantic vector retrieval and lexical retrieval run together, then get fused and reranked. This avoids the common failure mode where pure vector search loses exact identifiers and pure keyword search misses paraphrases.
+Every search surface ranks through one function, `context_runtime::retrieve` (`src-tauri/src/context_runtime/retrieve.rs`): the Search screen, Ask, the raw search commands, autofill, and the MCP search tools other than `memory.search_raw`. It plans the query, runs vector retrieval and BM25 keyword retrieval (LanceDB full-text indexes over seven text columns) side by side, adds a temporal route when the query names a time and an entity route when it names a project or entity (`route_selection` in `query_plan.rs`), adds the routes' scores with per-intent weights, and drops low-signal captures and FNDR's own windows. Time and app phrases in a query ("yesterday", "in Slack") become filters. Running vector and keyword retrieval together avoids the common failure where pure vector search loses exact identifiers and pure keyword search misses paraphrases. Ties break by score, then newest, then id, so the same query returns the same results.
 
 FNDR also supports retrieval-grounded answering (`fndr_answer`) through a context runtime that plans retrieval routes, composes evidence, and returns cited answers. The same local memory can be exposed to external tools through an MCP server with explicit local/tunnel/public deployment modes.
 
-Knowledge graph support exists in two forms: a legacy graph and an insight graph persisted in LanceDB (`graph_nodes`, `graph_edges`) for typed entities/relations and graph-aware recall workflows.
+Knowledge graph support exists in two forms: a legacy graph and an insight graph persisted in LanceDB (`graph_nodes`, `graph_edges`) for typed entities and relations. Retrieval does not use either graph yet. `retrieve_fused` (`src-tauri/src/context_runtime/mod.rs`) does not load the insight graph, so it plans no graph route (VS-33), and the entity route, which reads graph nodes, finds nothing.
 
 Privacy is a first-class system constraint: data stays local by default, capture can be paused, blocklists are enforced, and destructive deletion operations are implemented in source.
 
@@ -55,15 +55,18 @@ FNDR addresses this by building a local, inspectable memory layer:
 | OCR and context extraction | Apple Vision OCR + structured memory synthesis | Stable |
 | Metadata extraction | App name, window title, URL/domain, session/event fields in `MemoryRecord` | Stable |
 | Memory cards / Memory Vault | UI surfaces under `src/domains/memory-vault/` | Stable |
-| Semantic embeddings | Local ONNX embedder (`all-MiniLM-L6-v2`, 384-d) | Stable |
-| Hybrid retrieval | Semantic + keyword fusion and reranking (`src-tauri/src/search/`) | Stable |
+| Semantic embeddings | Local ONNX embedder (`all-MiniLM-L6-v2`, 384-d), one resident ONNX session per asset directory and contract. ADR 019 (Proposed) recommends EmbeddingGemma: its vectors match the reference implementation (VS-47), but its contract is not active, so every search still uses MiniLM | Stable |
+| One retrieval path | `retrieve`: vector + BM25 keyword routes, weighted fusion, time and app phrase filters (`src-tauri/src/context_runtime/retrieve.rs`, `retrieval_routes.rs`, `fusion.rs`) | Stable |
+| Chunk retrieval | BM25 over chunk text plus BGE-large (1024-d) chunk vectors, rolled up to their memory; behind `search.use_chunk_first_retrieval`, off by default until chunks are written at capture (`context_runtime/chunk_route.rs`) | Experimental |
+| "No strong matches" | `retrieve` reports `strong_match`; Search folds weak results behind a button (`retrieve.rs`, `src/domains/timeline/Timeline.tsx`) | Experimental |
 | Retrieval-grounded Q&A | `fndr_answer` / context runtime pipeline (`src-tauri/src/context_runtime/`) | Stable |
 | Screen Guide | Hold-to-talk, on-device screen guidance and scoped filename lookup, with local speech, a click-through answer overlay, and fixed-state notch/menu-bar feedback | Experimental |
 | Local vector store | LanceDB-backed memory + graph tables | Stable |
-| Visual similarity retrieval | CLIP-based `image_embedding` + `find_visually_similar_memories` | Stable |
-| Insight knowledge graph | Typed node/edge tables + graph UI hooks | Stable |
+| Visual similarity retrieval | CLIP `image_embedding` (512-d) + `find_visually_similar_memories`, reached from a Memory Vault card's visually-similar button; Search and Ask never use image vectors (go or no-go in VS-52) | Experimental |
+| Insight knowledge graph | Typed node/edge tables + graph UI hooks; not used for ranking yet | Stable |
 | MCP server for agents | `src-tauri/src/mcp/`, MCP deployment modes + auth/tls controls | Stable |
 | Agent-oriented tools/prompts | `agent.*`, `memory.*`, prompt/resources in MCP | Stable |
+| Agent notes (`fndr.remember`) | An assistant saves a note over MCP as its own labeled memory (`source_type = agent`): token required, off by default (`agent_notes_enabled`), rate-limited, secrets refused, never merged or reviewed (`src-tauri/src/mcp/remember.rs`, `docs/mcp.md`) | Experimental |
 | Manual photo import (Meta glasses flow) | `import_meta_glasses_photo` pipeline | Experimental |
 | Some graph-RAG subgraph APIs | `fndr_get_memory_subgraph` currently returns bounded empty descriptor | Experimental |
 
@@ -81,7 +84,7 @@ flowchart LR
     D --> G["LanceDB Memory Tables"]
     E --> G
     F --> G
-    G --> H["Hybrid Retrieval (Vector + Keyword + Rerank)"]
+    G --> H["retrieve (Vector + BM25 Keyword, optional Chunks, weighted fusion)"]
     H --> I["Memory Cards / Memory Vault UI"]
     H --> J["Context Runtime (fndr_search / fndr_answer)"]
     G --> K["Insight Graph (graph_nodes / graph_edges)"]
@@ -97,8 +100,8 @@ flowchart LR
 | `src-tauri/src/ocr/` | OCR extraction and metadata |
 | `src-tauri/src/embedding/` | Text and image embedding utilities |
 | `src-tauri/src/storage/lance_store/` | LanceDB schema, normalization, persistence, retrieval IO |
-| `src-tauri/src/search/` | Hybrid search, scoring, reranking, memory card shaping |
-| `src-tauri/src/context_runtime/` | Retrieval planning, evidence composition, grounded answering |
+| `src-tauri/src/search/` | Query parsing, memory card shaping, and the older hybrid searcher (still used by the companion, the legacy graph, and `memory.search_raw`) |
+| `src-tauri/src/context_runtime/` | The one retrieval function (`retrieve`), its routes and fusion, evidence composition, grounded answering |
 | `src-tauri/src/graph/` | Insight graph entities/edges/store/pathing |
 | `src-tauri/src/mcp/` | MCP transport, auth/origin controls, tool/resource/prompt handlers |
 | `src/domains/*` | Search, Memory Vault, timeline, command palette, workspace UI |
@@ -107,7 +110,7 @@ flowchart LR
 
 - Default text embedding contract in current code: `384` dimensions (`all-MiniLM-L6-v2`).
 - Image embedding contract: `512` dimensions (CLIP column for visual similarity retrieval).
-- Hybrid ranking combines semantic and lexical branches, then reranks with quality and relevance signals.
+- Ranking: each route scores its hits, fusion adds the scores with per-intent weights, and every route draws at least 50 candidates (`ROUTE_CANDIDATE_POOL`), more only for a page larger than 50, so a short page is the start of a long one. Keyword scores are 0.86 × bm25 / (bm25 + 2) plus 0.14 × recency, with recency counted in whole minutes. The memory table's BM25 indexes are built when rows are written; a vault upgraded without new writes, and the chunk index, still build theirs on the first search.
 - Insight fields (for example `memory_context`, `insight_what_happened`, `insight_why_mattered`) are persisted and reused during retrieval/composition.
 
 ---
@@ -116,9 +119,9 @@ flowchart LR
 
 ### Install from a release (recommended)
 
-1. Download the latest DMG from [GitHub Releases](https://github.com/anurupkumar18/FNDR/releases).
+1. Download the latest DMG from the [FNDR website](https://anurupkumar18.github.io/FNDR/) or [GitHub Releases](https://github.com/anurupkumar18/FNDR/releases).
 2. Drag FNDR into Applications.
-3. First launch only: right-click the app and choose **Open** (builds are ad-hoc signed, not notarized).
+3. Open FNDR. Developer ID releases are notarized and should open normally. If macOS says it cannot verify the developer, the release was ad-hoc signed: open **System Settings → Privacy & Security**, scroll to the FNDR message, and choose **Open Anyway**.
 4. Onboarding downloads the required search embedding model in-app; the multimodal Qwen model is optional.
 5. Later releases install automatically through Settings → Updates.
 
@@ -176,12 +179,16 @@ Implemented controls include:
 - App/site blocklist management (`get_blocklist`, `set_blocklist`, `add_to_blocklist`)
 - Retention and deletion (`delete_older_than`, `delete_all_data`)
 - Sensitive-context safety checks and private/incognito title heuristics (`src-tauri/src/privacy/`)
-- MCP auth/origin policies for non-local deployment modes
+- MCP bearer auth for every tool call by default (only the loopback `initialize`/`tools/list` handshake is exempt) and origin policies; in `tunnel` and `public` mode the auth opt-outs are ignored (VS-61)
+- Assistant notes (`fndr.remember`) and decision-ledger writes (`fndr_remember_decision`) require enabled MCP token checks, a valid token, **Let assistants add notes** enabled in Settings → Trust, and actions enabled. `fndr.remember` also refuses text the capture secret detector flags; the older decision-ledger tool retains its existing content rules (see `docs/mcp.md`).
 
 FNDR is local-first by default. Optional environment variables can enable external integrations; review `.env.example` before enabling them.
 
-Screen Guide does not persist its audio, transcript, screen turn, filename
-query, or file matches. Its explicit file route uses macOS metadata only inside
+Normal Screen Guide use does not persist its audio, transcript, screen turn,
+filename query, or file matches. An explicit **Save next turn** troubleshooting
+control can retain one safety-approved display turn briefly in private app data;
+that diagnostic is bounded, deletable, never indexed or uploaded, and is not
+Memory history. The explicit file route uses macOS metadata only inside
 Documents, Desktop, and Downloads; it does not read file contents, scan the full
 home directory, or require Full Disk Access.
 
@@ -195,12 +202,13 @@ FNDR includes an MCP server with:
 - Deployment modes: `local`, `tunnel`, `public`
 - Optional TLS, plus bearer auth (required by default in every mode, including `local`, per ADR-017) and allowed-origin controls
 - Memory + agent tool surfaces (`memory.*`, `fndr.*`, `agent.*`)
+- Assistant writes: `fndr.remember` and the older `fndr_remember_decision`, both off by default behind the same token and Settings gates (see `docs/mcp.md`)
 
 Key environment variables:
 
 - `FNDR_MCP_MODE`
-- `FNDR_MCP_REQUIRE_AUTH`
-- `FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS`
+- `FNDR_MCP_REQUIRE_AUTH` (`local` mode only; writes are refused while it is off)
+- `FNDR_MCP_ALLOW_LOOPBACK_AUTH_BYPASS` (`local` mode only)
 - `FNDR_MCP_ENABLE_TLS`
 - `FNDR_MCP_ALLOWED_ORIGINS`
 - `FNDR_MCP_PUBLIC_BASE_URL`
@@ -232,7 +240,21 @@ Runs:
 
 - `npm run typecheck`
 - `npm test`
+- `npm run build`
 - `cd src-tauri && cargo test`
+
+### Retrieval quality gate
+
+macOS only (it seeds a profile under `~/Library/Application Support` and builds the app's helpers):
+
+```bash
+make qa-retrieval-check                          # knowledge-worker persona
+make qa-retrieval-check PERSONA=office-pm
+make qa-retrieval-check PERSONA=software-engineer
+make recall-chart                                # rebuild the Beta recall chart
+```
+
+Seeds a synthetic profile, runs every query through Search, Ask, and `retrieve`, and fails if Recall@5 drops more than 0.05 on any path or any query a path found in its top ten becomes a miss. CI runs the same gate on `macos-26` (`.github/workflows/retrieval-gate.yml`).
 
 ### Useful maintenance commands
 
@@ -248,7 +270,9 @@ make clean-all-generated
 ## 11. Known Limitations / Experimental Surfaces
 
 - Quality still depends on OCR fidelity and capture signal quality.
-- Some graph-oriented retrieval interfaces are still partial (for example bounded subgraph descriptor paths).
+- Some graph-oriented retrieval interfaces are still partial (for example bounded subgraph descriptor paths), and ranking uses no graph route yet.
+- Chunk retrieval is off by default, and image vectors are not searched.
+- The retrieval gate's personas are small and synthetic; real-vault quality is measured in manual QA.
 - Manual photo import and some multimodal paths are still evolving and should be treated as experimental.
 - Meeting diarization and adjacent speech workflows are not fully hardened.
 

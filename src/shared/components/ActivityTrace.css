@@ -1,0 +1,193 @@
+.activity-trace {
+    width: 100%;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--surface) 90%, transparent);
+    color: var(--fg);
+    overflow: hidden;
+}
+
+.activity-trace-summary {
+    min-height: 48px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px 8px 12px;
+}
+
+.activity-trace--summary-only .activity-trace-summary {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.activity-trace-announcement {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+}
+
+.activity-trace-pulse,
+.activity-trace-step-marker {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--accent);
+    flex: 0 0 auto;
+}
+
+.activity-trace[data-status="running"] .activity-trace-pulse,
+.activity-trace[data-status="waiting"] .activity-trace-pulse {
+    animation: activityTracePulse 1.6s ease-in-out infinite;
+}
+
+.activity-trace[data-status="failed"] .activity-trace-pulse,
+.activity-trace-step[data-status="failed"] .activity-trace-step-marker {
+    background: var(--alarm);
+}
+
+.activity-trace[data-status="completed"] .activity-trace-pulse,
+.activity-trace-step[data-status="completed"] .activity-trace-step-marker {
+    background: var(--accent-2);
+}
+
+.activity-trace-summary-copy,
+.activity-trace-step-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.activity-trace-current {
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    font-weight: 650;
+}
+
+.activity-trace-owner,
+.activity-trace-step-copy span,
+.activity-trace-step time,
+.activity-trace-privacy {
+    color: var(--fg-3);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.activity-trace-state {
+    color: var(--fg-2);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.activity-trace-toggle {
+    min-width: 58px;
+    min-height: 32px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--film-radius-pill);
+    background: transparent;
+    color: var(--fg-2);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.activity-trace-toggle:hover {
+    border-color: var(--hairline-strong);
+    color: var(--fg);
+    background: var(--surface-hover);
+}
+
+.activity-trace-toggle:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+.activity-trace-details {
+    border-top: 1px solid var(--hairline);
+    padding: 10px 12px 12px;
+}
+
+.activity-trace-list {
+    list-style: none;
+    display: grid;
+    gap: 9px;
+    margin: 0;
+    padding: 0;
+}
+
+.activity-trace-step {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 9px;
+}
+
+.activity-trace-step-marker {
+    width: 6px;
+    height: 6px;
+    margin-top: 5px;
+    opacity: 0.8;
+}
+
+.activity-trace-step-copy strong {
+    color: var(--fg);
+    font-size: 12px;
+    font-weight: 620;
+}
+
+.activity-trace-step-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 5px 8px;
+}
+
+.activity-trace-step-state {
+    color: var(--fg-2);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.activity-trace-step time {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.activity-trace-privacy {
+    margin: 10px 0 0 15px;
+}
+
+@keyframes activityTracePulse {
+    0%, 100% { opacity: 0.45; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1); }
+}
+
+@media (max-width: 600px) {
+    .activity-trace-announcement {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+
+    .activity-trace-state {
+        grid-column: 2 / -1;
+        grid-row: 2;
+    }
+
+    .activity-trace-step {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .activity-trace-step time {
+        grid-column: 2;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .activity-trace[data-status="running"] .activity-trace-pulse,
+    .activity-trace[data-status="waiting"] .activity-trace-pulse {
+        animation: none;
+    }
+}

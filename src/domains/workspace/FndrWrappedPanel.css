@@ -89,6 +89,15 @@
     line-height: 1.5;
 }
 
+.wrapped-activity-trace {
+    margin: 20px 0 0;
+    text-align: left;
+}
+
+.wrapped-results-body > .wrapped-activity-trace {
+    margin: 0 0 18px;
+}
+
 .wrapped-month-tabs {
     width: min(280px, 100%);
     margin: 26px auto 0;

@@ -9,6 +9,12 @@ import {
 } from "@/shared/ipc/tauri";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 import { Icon } from "@/shared/components/atoms";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+} from "@/shared/activity/activityTrace";
 import "./PrivacyPanel.css";
 
 interface PrivacyPanelProps {
@@ -28,6 +34,7 @@ export function PrivacyPanel({
 }: PrivacyPanelProps) {
     const [alerts, setAlerts] = useState<PrivacyAlert[]>([]);
     const [loading, setLoading] = useState(false);
+    const [privacyActivity, setPrivacyActivity] = useState<ActivityTraceSnapshot | null>(null);
 
     const refreshAlerts = useCallback(async (isMounted: () => boolean = () => true) => {
         try {
@@ -54,6 +61,23 @@ export function PrivacyPanel({
     });
 
     const handleAddBlocklist = async (site: string) => {
+        const startedAtMs = Date.now();
+        const startedTrace = recordActivityStep(
+            beginActivityTrace({
+                id: `privacy-cleanup-${startedAtMs}`,
+                title: "Privacy cleanup activity",
+                startedAtMs,
+            }),
+            {
+                id: "block-and-delete",
+                label: "Applying blocklist and local cleanup",
+                actor: "FNDR privacy service",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        );
+        setPrivacyActivity(startedTrace);
         setLoading(true);
         try {
             await addSiteToBlocklist(site);
@@ -62,11 +86,31 @@ export function PrivacyPanel({
                 refreshAlerts(),
             ]);
             onBlocklistChange?.(nextBlocklist);
+            const finishedAtMs = Date.now();
+            setPrivacyActivity(recordActivityStep(startedTrace, {
+                id: "block-and-delete",
+                label: "Blocklist and local cleanup completed",
+                actor: "FNDR privacy service",
+                status: "completed",
+                evidence: "result-metadata",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }));
             if (alerts.length <= 1) {
                 onClose(); // auto close if it was the last one
             }
         } catch (err) {
             console.error("Failed to add to blocklist:", err);
+            const failedAtMs = Date.now();
+            setPrivacyActivity(recordActivityStep(startedTrace, {
+                id: "block-and-delete",
+                label: "Blocklist and local cleanup failed",
+                actor: "FNDR privacy service",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: failedAtMs,
+                durationMs: failedAtMs - startedAtMs,
+            }));
         } finally {
             setLoading(false);
         }
@@ -99,6 +143,7 @@ export function PrivacyPanel({
             </header>
 
             <div className="privacy-content">
+                {privacyActivity && <ActivityTrace trace={privacyActivity} />}
                 {alerts.length === 0 ? (
                     <div className="empty-alerts">
                         <span className="empty-icon"><Icon name="shield" size={32} /></span>

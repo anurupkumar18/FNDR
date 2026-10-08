@@ -1213,10 +1213,10 @@ function OverviewView({
                     dotClass={hermes?.configured ? "ap-dot-ready" : "ap-dot-off"}
                 />
                 <MetricCard
-                    label="Context sync"
-                    value={hermes?.context_ready ? "Synced" : "Pending"}
-                    detail={formatTimestamp(hermes?.last_synced_at ?? null)}
-                    dotClass={hermes?.context_ready ? "ap-dot-ready" : "ap-dot-off"}
+                    label="Gateway"
+                    value={hermes?.gateway_state ?? "stopped"}
+                    detail={hermes?.gateway_restarts ? `Restarted ${hermes.gateway_restarts}×` : "Memories go with each message"}
+                    dotClass={hermes?.gateway_state === "running" ? "ap-dot-ready" : "ap-dot-off"}
                 />
                 <MetricCard
                     label="Runtime pack"
@@ -1514,7 +1514,10 @@ function HermesView(props: HermesViewProps) {
 
                             {providerKind === "codex" ? (
                                 <div className="ap-codex-slot">
-                                    <CodexAccountCard onStatusChange={onCodexStatusChange} />
+                                    <CodexAccountCard
+                                        onStatusChange={onCodexStatusChange}
+                                        reconnect={hermes?.reconnect_chatgpt ?? false}
+                                    />
                                 </div>
                             ) : (
                             <div className="ap-provider-note">

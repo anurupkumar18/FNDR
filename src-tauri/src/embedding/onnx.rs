@@ -1,5 +1,6 @@
 //! Local text embedding backend via native ONNX Runtime.
 
+use super::admission::{AdmissionGate, EmbeddingPriority};
 use super::{chunk_screen_text, TextChunker};
 use crate::config::{
     ChunkingConfig, DEFAULT_EMBEDDING_CACHE_CAPACITY, DEFAULT_EMBEDDING_MODEL_NAME,
@@ -16,7 +17,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 /// Authoritative text embedding dimension for the primary semantic index.
 pub const EMBEDDING_DIM: usize = DEFAULT_TEXT_EMBEDDING_DIM;
@@ -27,6 +28,18 @@ const EMBEDDING_CACHE_CAPACITY: usize = DEFAULT_EMBEDDING_CACHE_CAPACITY;
 pub enum EmbeddingBackend {
     Real,
     Mock,
+}
+
+/// Raw, unprompted text for role-aware embedding. Document context is composed
+/// before the model-specific prompt is added to each chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EmbeddingInput<'a> {
+    Query(&'a str),
+    Document {
+        text: &'a str,
+        app_name: &'a str,
+        window_title: &'a str,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,18 +152,34 @@ pub fn embedding_runtime_status() -> EmbeddingRuntimeStatus {
     }
 }
 
-/// Embedder with pluggable backend.
+/// Cloneable request handle. Clones share this wrapper's cache and fallback state;
+/// separately constructed wrappers retain their own policy and preprocessing.
+#[derive(Clone)]
 pub struct Embedder {
     contract: TextEmbeddingContract,
     chunker: TextChunker,
     backend: Backend,
-    degraded_to_mock: AtomicBool,
+    degraded_to_mock: Arc<AtomicBool>,
     allow_mock_fallback: bool,
-    embedding_cache: Mutex<EmbeddingCache>,
+    embedding_cache: Arc<Mutex<EmbeddingCache>>,
 }
 
+pub(crate) fn cached_embedder(
+    cell: &OnceLock<Embedder>,
+    initialize: impl FnOnce() -> Result<Embedder, String>,
+) -> Result<&Embedder, String> {
+    if let Some(embedder) = cell.get() {
+        return Ok(embedder);
+    }
+    // Cache only success so a model installed mid-session can recover. Racing
+    // initializers share the real backend; retain the first published wrapper.
+    let _ = cell.set(initialize()?);
+    Ok(cell.get().expect("successful initialization published"))
+}
+
+#[derive(Clone)]
 enum Backend {
-    Real(RealEmbedder),
+    Real(Arc<RealEmbedder>),
     Mock(MockEmbedder),
 }
 
@@ -191,6 +220,12 @@ impl EmbeddingCache {
 }
 
 impl Embedder {
+    #[cfg(test)]
+    pub(crate) fn with_embedding_cache_locked_for_test(&self, f: impl FnOnce()) {
+        let _guard = self.embedding_cache.lock().expect("embedding cache");
+        f();
+    }
+
     pub fn new() -> Result<Self, String> {
         Self::with_chunking_config(&ChunkingConfig::default())
     }
@@ -237,9 +272,11 @@ impl Embedder {
                     contract,
                     chunker,
                     backend: Backend::Real(real),
-                    degraded_to_mock: AtomicBool::new(false),
+                    degraded_to_mock: Arc::new(AtomicBool::new(false)),
                     allow_mock_fallback,
-                    embedding_cache: Mutex::new(EmbeddingCache::new(EMBEDDING_CACHE_CAPACITY)),
+                    embedding_cache: Arc::new(Mutex::new(EmbeddingCache::new(
+                        EMBEDDING_CACHE_CAPACITY,
+                    ))),
                 })
             }
             Err(err) => {
@@ -256,9 +293,11 @@ impl Embedder {
                         contract,
                         chunker,
                         backend: Backend::Mock(MockEmbedder::new(contract.dimensions)),
-                        degraded_to_mock: AtomicBool::new(true),
+                        degraded_to_mock: Arc::new(AtomicBool::new(true)),
                         allow_mock_fallback,
-                        embedding_cache: Mutex::new(EmbeddingCache::new(EMBEDDING_CACHE_CAPACITY)),
+                        embedding_cache: Arc::new(Mutex::new(EmbeddingCache::new(
+                            EMBEDDING_CACHE_CAPACITY,
+                        ))),
                     })
                 } else {
                     set_runtime_state_for_contract(
@@ -279,8 +318,29 @@ impl Embedder {
         }
     }
 
+    /// The feature-hashing mock with the active contract, for tests that need
+    /// non-zero vectors without the model on disk.
+    #[cfg(test)]
+    pub(crate) fn mock_for_tests() -> Self {
+        let contract = active_embedding_contract();
+        Self {
+            contract,
+            chunker: TextChunker::new(),
+            backend: Backend::Mock(MockEmbedder::new(contract.dimensions)),
+            degraded_to_mock: Arc::new(AtomicBool::new(false)),
+            allow_mock_fallback: false,
+            embedding_cache: Arc::new(Mutex::new(EmbeddingCache::new(EMBEDDING_CACHE_CAPACITY))),
+        }
+    }
+
     pub fn dimension(&self) -> usize {
         self.contract.dimensions
+    }
+
+    /// The contract this embedder writes and searches under; it decides the
+    /// query and document prompts (`embedding::prefixes`).
+    pub fn contract(&self) -> TextEmbeddingContract {
+        self.contract
     }
 
     pub fn backend(&self) -> EmbeddingBackend {
@@ -315,6 +375,23 @@ impl Embedder {
 
     /// Generate embeddings for a batch of texts.
     pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        self.embed_batch_with_priority(texts, EmbeddingPriority::Background)
+    }
+
+    /// Legacy query text is already composed/prefixed by its caller. Admission
+    /// changes scheduling only; it must not change v4/v5 query prompts.
+    pub fn embed_query(&self, text: &str) -> Result<Vec<f32>, String> {
+        self.embed_batch_with_priority(&[text.to_string()], EmbeddingPriority::Foreground)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "Embedder returned no query vector".into())
+    }
+
+    fn embed_batch_with_priority(
+        &self,
+        texts: &[String],
+        priority: EmbeddingPriority,
+    ) -> Result<Vec<Vec<f32>>, String> {
         let chunk_groups = texts
             .iter()
             .map(|text| {
@@ -326,7 +403,58 @@ impl Embedder {
                 }
             })
             .collect::<Vec<_>>();
-        self.embed_chunk_groups(chunk_groups)
+        self.embed_chunk_groups(chunk_groups, priority)
+    }
+
+    /// Prepare the exact prompted chunks used by `embed_inputs`, without
+    /// inference or cache writes. Exposed for tokenizer/budget measurements.
+    /// Like the legacy wrappers, fall back to raw text when chunking drops it;
+    /// the embedding low-signal check still runs before prompting.
+    pub fn prepare_input_chunks(&self, input: EmbeddingInput<'_>) -> Vec<String> {
+        use super::prefixes::{document_text_for, query_text_for};
+        let (text, mut chunks) = match input {
+            EmbeddingInput::Query(text) => (text, self.chunk_text(text)),
+            EmbeddingInput::Document {
+                text,
+                app_name,
+                window_title,
+            } => (
+                text,
+                self.chunk_text_with_context(app_name, window_title, text),
+            ),
+        };
+        if chunks.is_empty() && !text.trim().is_empty() {
+            chunks.push(text.to_string());
+        }
+        chunks
+            .into_iter()
+            .filter(|chunk| !is_embedding_low_signal(chunk))
+            .map(|chunk| match input {
+                EmbeddingInput::Query(_) => query_text_for(self.contract, &chunk),
+                EmbeddingInput::Document { .. } => document_text_for(self.contract, &chunk),
+            })
+            .collect()
+    }
+
+    /// Embed mixed raw query/document inputs in order. Prefix every chunk after
+    /// context composition. Query-only calls receive foreground admission;
+    /// document/mixed calls yield between chunks. Vector pooling is unchanged.
+    pub fn embed_inputs(&self, inputs: &[EmbeddingInput<'_>]) -> Result<Vec<Vec<f32>>, String> {
+        let priority = if inputs
+            .iter()
+            .all(|input| matches!(input, EmbeddingInput::Query(_)))
+        {
+            EmbeddingPriority::Foreground
+        } else {
+            EmbeddingPriority::Background
+        };
+        self.embed_chunk_groups(
+            inputs
+                .iter()
+                .map(|input| self.prepare_input_chunks(*input))
+                .collect(),
+            priority,
+        )
     }
 
     /// Generate embeddings for texts while preserving app/window context during chunking.
@@ -345,7 +473,7 @@ impl Embedder {
                 }
             })
             .collect::<Vec<_>>();
-        self.embed_chunk_groups(chunk_groups)
+        self.embed_chunk_groups(chunk_groups, EmbeddingPriority::Background)
     }
 
     /// Product-named wrapper for the capture -> chunking -> embedding boundary.
@@ -365,7 +493,11 @@ impl Embedder {
         .ok_or_else(|| "Embedder returned no vector for memory chunk".to_string())
     }
 
-    fn embed_chunks_cached(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    fn embed_chunks_cached(
+        &self,
+        texts: &[String],
+        priority: EmbeddingPriority,
+    ) -> Result<Vec<Vec<f32>>, String> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
@@ -417,9 +549,15 @@ impl Embedder {
 
         if !missing_unique.is_empty() {
             let mut computed = Vec::with_capacity(missing_unique.len());
-            for chunk in missing_unique.chunks(self.contract.max_batch_size.max(1)) {
+            // Yield after each background chunk so a newly queued query need
+            // not wait for a padded multi-document ONNX batch to finish.
+            let batch_size = match priority {
+                EmbeddingPriority::Background => 1,
+                EmbeddingPriority::Foreground => self.contract.max_batch_size.max(1),
+            };
+            for chunk in missing_unique.chunks(batch_size) {
                 let batch = chunk.to_vec();
-                let vectors = self.backend_embed_batch(&batch)?;
+                let vectors = self.backend_embed_batch(&batch, priority)?;
                 computed.extend(vectors);
             }
 
@@ -453,7 +591,11 @@ impl Embedder {
             .collect())
     }
 
-    fn embed_chunk_groups(&self, chunk_groups: Vec<Vec<String>>) -> Result<Vec<Vec<f32>>, String> {
+    fn embed_chunk_groups(
+        &self,
+        chunk_groups: Vec<Vec<String>>,
+        priority: EmbeddingPriority,
+    ) -> Result<Vec<Vec<f32>>, String> {
         if chunk_groups.is_empty() {
             return Ok(Vec::new());
         }
@@ -472,7 +614,7 @@ impl Embedder {
             return Ok(vec![vec![0.0; self.dimension()]; ranges.len()]);
         }
 
-        let chunk_embeddings = self.embed_chunks_cached(&flattened_chunks)?;
+        let chunk_embeddings = self.embed_chunks_cached(&flattened_chunks, priority)?;
         if chunk_embeddings.len() != flattened_chunks.len() {
             return Err(format!(
                 "Embedding backend returned {} vectors for {} chunks",
@@ -494,14 +636,18 @@ impl Embedder {
         Ok(merged)
     }
 
-    fn backend_embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    fn backend_embed_batch(
+        &self,
+        texts: &[String],
+        priority: EmbeddingPriority,
+    ) -> Result<Vec<Vec<f32>>, String> {
         match &self.backend {
             Backend::Real(real) => {
                 if self.degraded_to_mock.load(Ordering::Relaxed) {
                     return Ok(MockEmbedder::new(self.dimension()).embed_batch(texts));
                 }
 
-                match real.embed_batch(texts) {
+                match real.embed_scheduled(texts, priority) {
                     Ok(vectors) => Ok(vectors),
                     Err(err) => {
                         if self.allow_mock_fallback && allow_mock_embedder() {
@@ -546,6 +692,7 @@ impl Default for Embedder {
 }
 
 struct RealEmbedder {
+    admission: AdmissionGate,
     contract: TextEmbeddingContract,
     session: Mutex<Session>,
     tokenizer: tokenizers::Tokenizer,
@@ -553,11 +700,53 @@ struct RealEmbedder {
     output_name: String,
 }
 
+struct ResidentTextModel {
+    contract: TextEmbeddingContract,
+    model_dir: PathBuf,
+    model: Weak<RealEmbedder>,
+}
+
+static RESIDENT_TEXT_MODELS: OnceLock<Mutex<Vec<ResidentTextModel>>> = OnceLock::new();
+
 impl RealEmbedder {
-    fn new(contract: TextEmbeddingContract) -> Result<Self, String> {
+    fn new(contract: TextEmbeddingContract) -> Result<Arc<Self>, String> {
         let model_dir = resolve_model_dir(contract)
             .ok_or_else(|| "Could not determine model directory".to_string())?;
+        Self::shared_from_dir(contract, model_dir)
+    }
 
+    fn shared_from_dir(
+        contract: TextEmbeddingContract,
+        model_dir: PathBuf,
+    ) -> Result<Arc<Self>, String> {
+        let model_dir = model_dir.canonicalize().map_err(|e| e.to_string())?;
+        let mut residents = RESIDENT_TEXT_MODELS
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .map_err(|e| format!("Text model registry lock poisoned: {e}"))?;
+        residents.retain(|entry| entry.model.strong_count() > 0);
+        for entry in residents.iter() {
+            if entry.contract == contract && entry.model_dir == model_dir {
+                if let Some(model) = entry.model.upgrade() {
+                    return Ok(model);
+                }
+            }
+        }
+
+        // Serialize initialization so racing callers cannot load duplicate
+        // weights. Publish only after the real model passes its dimension probe;
+        // failures remain retryable. Weak ownership permits release when the last
+        // wrapper drops, while chunking/cache/fallback stay local to each wrapper.
+        let model = Arc::new(Self::load(contract, &model_dir)?);
+        residents.push(ResidentTextModel {
+            contract,
+            model_dir,
+            model: Arc::downgrade(&model),
+        });
+        Ok(model)
+    }
+
+    fn load(contract: TextEmbeddingContract, model_dir: &std::path::Path) -> Result<Self, String> {
         let onnx_path = model_dir.join(contract.model_filename);
         let tokenizer_path = model_dir.join(contract.tokenizer_filename);
 
@@ -603,10 +792,19 @@ impl RealEmbedder {
                 ));
             }
         }
+        // A model that exports its own sentence vector (EmbeddingGemma's applies
+        // pooling, two dense layers, and normalization) must be read there;
+        // mean-pooling its hidden states would skip the dense layers (VS-47).
         let output_name = session
             .outputs()
             .iter()
-            .find(|output| output.name() == "last_hidden_state")
+            .find(|output| output.name() == "sentence_embedding")
+            .or_else(|| {
+                session
+                    .outputs()
+                    .iter()
+                    .find(|output| output.name() == "last_hidden_state")
+            })
             .or_else(|| {
                 session
                     .outputs()
@@ -636,6 +834,7 @@ impl RealEmbedder {
             "Native ort text embedder initialized"
         );
         let embedder = Self {
+            admission: AdmissionGate::default(),
             contract,
             session: Mutex::new(session),
             tokenizer,
@@ -665,6 +864,39 @@ impl RealEmbedder {
             return Err("Embedding probe returned an all-zero vector".to_string());
         }
         Ok(embedder)
+    }
+
+    fn embed_scheduled(
+        &self,
+        texts: &[String],
+        priority: EmbeddingPriority,
+    ) -> Result<Vec<Vec<f32>>, String> {
+        let queued = std::time::Instant::now();
+        let _permit = self.admission.enter(priority)?;
+        let queue_ms = queued.elapsed().as_secs_f64() * 1000.0;
+        let started = std::time::Instant::now();
+        let result = self.embed_batch(texts);
+        let service_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let (queue_op, service_op) = match priority {
+            EmbeddingPriority::Foreground => (
+                "embedding.foreground_queue_ms",
+                "embedding.foreground_service_ms",
+            ),
+            EmbeddingPriority::Background => (
+                "embedding.background_queue_ms",
+                "embedding.background_service_ms",
+            ),
+        };
+        crate::telemetry::runtime_metrics::record_ms(queue_op, queue_ms as u64);
+        crate::telemetry::runtime_metrics::record_ms(service_op, service_ms as u64);
+        tracing::debug!(
+            ?priority,
+            queue_ms,
+            service_ms,
+            chunks = texts.len(),
+            "embedding admission completed"
+        );
+        result
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
@@ -755,21 +987,29 @@ impl RealEmbedder {
             [_, _, dim] => *dim,
             _ => 0,
         };
-        if actual_dim != self.contract.dimensions {
+        let truncating =
+            self.contract.supports_truncation() && actual_dim > self.contract.dimensions;
+        if actual_dim != self.contract.dimensions && !truncating {
             return Err(format!(
                 "Unexpected hidden state dim {actual_dim}, expected {} for {}",
                 self.contract.dimensions, self.contract.model_id
             ));
         }
+        if self.contract.supports_truncation() && shape_dims.len() == 3 {
+            return Err(format!(
+                "{} needs the model's sentence_embedding output; mean-pooling its hidden \
+                 states would skip its dense layers",
+                self.contract.model_id
+            ));
+        }
 
         let mut embeddings = Vec::with_capacity(batch_size);
         match shape_dims.as_slice() {
-            [actual_batch, actual_dim] if *actual_dim == self.contract.dimensions => {
+            [actual_batch, output_dim] => {
                 for i in 0..batch_size.min(*actual_batch) {
-                    let offset = i * self.contract.dimensions;
-                    let mut embedding = data[offset..offset + self.contract.dimensions].to_vec();
-                    normalize(&mut embedding);
-                    embeddings.push(embedding);
+                    let offset = i * output_dim;
+                    let embedding = data[offset..offset + output_dim].to_vec();
+                    embeddings.push(truncate_and_normalize(embedding, self.contract.dimensions));
                 }
             }
             [actual_batch, actual_seq, actual_dim] if *actual_dim == self.contract.dimensions => {
@@ -818,7 +1058,7 @@ impl RealEmbedder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MockEmbedder {
     dimensions: usize,
 }
@@ -845,10 +1085,14 @@ impl MockEmbedder {
             vector[idx] += 1.0;
 
             if token.len() > 4 {
-                let prefix = &token[..3];
-                let suffix = &token[token.len() - 3..];
-                vector[stable_hash(prefix) % self.dimensions] += 0.4;
-                vector[stable_hash(suffix) % self.dimensions] += 0.4;
+                // Three characters, not bytes: a chunk can start mid-word.
+                let chars = token.chars().collect::<Vec<_>>();
+                let prefix = chars.iter().take(3).collect::<String>();
+                let suffix = chars[chars.len().saturating_sub(3)..]
+                    .iter()
+                    .collect::<String>();
+                vector[stable_hash(&prefix) % self.dimensions] += 0.4;
+                vector[stable_hash(&suffix) % self.dimensions] += 0.4;
             }
         }
 
@@ -1104,6 +1348,15 @@ fn stable_hash_bytes(input: &[u8]) -> usize {
     hash as usize
 }
 
+/// Keeps the first `dimensions` values and renormalizes: how a Matryoshka
+/// model's vector is shortened (EmbeddingGemma's 768 to 256, VS-47). A vector
+/// already `dimensions` long is only normalized.
+fn truncate_and_normalize(mut embedding: Vec<f32>, dimensions: usize) -> Vec<f32> {
+    embedding.truncate(dimensions);
+    normalize(&mut embedding);
+    embedding
+}
+
 fn mean_pool(vectors: &[Vec<f32>], dimensions: usize) -> Vec<f32> {
     if vectors.is_empty() {
         return vec![0.0; dimensions];
@@ -1138,6 +1391,331 @@ fn normalize(vec: &mut [f32]) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn query_admission_preserves_legacy_text_and_cloned_handle_state() {
+        for contract in [active_embedding_contract(), embedding_v5_contract()] {
+            let mut original = Embedder::mock_for_tests();
+            original.contract = contract;
+            original.backend = Backend::Mock(MockEmbedder::new(contract.dimensions));
+            let text = super::super::prefixes::query_text_for(contract, "Find release validation");
+            let expected = original.embed_batch(&[text.clone()]).unwrap().remove(0);
+            let handle = original.clone();
+            assert_eq!(handle.embed_query(&text).unwrap(), expected);
+            assert!(Arc::ptr_eq(
+                &handle.embedding_cache,
+                &original.embedding_cache
+            ));
+            handle.degraded_to_mock.store(true, Ordering::Relaxed);
+            assert!(original.degraded_to_mock.load(Ordering::Relaxed));
+            let independent = Embedder::mock_for_tests();
+            assert!(!independent.degraded_to_mock.load(Ordering::Relaxed));
+            assert!(!Arc::ptr_eq(
+                &independent.embedding_cache,
+                &original.embedding_cache
+            ));
+        }
+    }
+
+    #[test]
+    fn cached_embedder_retries_missing_assets_then_reuses_success() {
+        let cell = OnceLock::new();
+        assert_eq!(
+            cached_embedder(&cell, || Err("model missing".into()))
+                .err()
+                .as_deref(),
+            Some("model missing")
+        );
+        assert_eq!(
+            cached_embedder(&cell, || Err("tokenizer missing".into()))
+                .err()
+                .as_deref(),
+            Some("tokenizer missing")
+        );
+        let ready = cached_embedder(&cell, || Ok(Embedder::mock_for_tests()))
+            .expect("recover after install");
+        let reused =
+            cached_embedder(&cell, || panic!("must reuse successful initialization")).unwrap();
+        assert!(std::ptr::eq(ready, reused));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[ignore = "requires pinned real MiniLM assets via FNDR_EMBED_MODEL_DIR"]
+    fn real_model_registry_retries_isolates_and_releases() {
+        let contract = active_embedding_contract();
+        let source =
+            PathBuf::from(std::env::var_os("FNDR_EMBED_MODEL_DIR").expect("pinned assets"))
+                .canonicalize()
+                .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let first_dir = temp.path().join("first");
+        let second_dir = temp.path().join("second");
+        std::fs::create_dir(&first_dir).unwrap();
+        assert!(RealEmbedder::shared_from_dir(contract, first_dir.clone()).is_err());
+        std::fs::create_dir(&second_dir).unwrap();
+        for dir in [&first_dir, &second_dir] {
+            for file in [contract.model_filename, contract.tokenizer_filename] {
+                std::os::unix::fs::symlink(source.join(file), dir.join(file)).unwrap();
+            }
+        }
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let path = first_dir.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    RealEmbedder::shared_from_dir(contract, path).unwrap()
+                })
+            })
+            .collect();
+        let models: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert!(models.iter().all(|model| Arc::ptr_eq(model, &models[0])));
+        let alias_dir = temp.path().join("alias");
+        std::os::unix::fs::symlink(&first_dir, &alias_dir).unwrap();
+        let alias = RealEmbedder::shared_from_dir(contract, alias_dir).unwrap();
+        assert!(Arc::ptr_eq(&models[0], &alias));
+        let other_path = RealEmbedder::shared_from_dir(contract, second_dir).unwrap();
+        assert!(!Arc::ptr_eq(&models[0], &other_path));
+        let mut other_contract = contract;
+        other_contract.max_sequence_length /= 2;
+        let other_model = RealEmbedder::shared_from_dir(other_contract, first_dir.clone()).unwrap();
+        assert!(!Arc::ptr_eq(&models[0], &other_model));
+        let released = Arc::downgrade(&models[0]);
+        drop(models);
+        assert!(released.upgrade().is_some());
+        drop(alias);
+        assert!(
+            released.upgrade().is_none(),
+            "registry must not keep idle weights alive"
+        );
+        let reloaded = RealEmbedder::shared_from_dir(contract, first_dir).unwrap();
+        let text = ["Find the release validation checklist".to_string()];
+        assert_eq!(
+            reloaded.embed_batch(&text).unwrap(),
+            other_path.embed_batch(&text).unwrap()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires pinned real MiniLM assets via FNDR_EMBED_MODEL_DIR"]
+    fn real_model_session_is_shared_without_changing_chunking() {
+        let contract = active_embedding_contract();
+        let narrow = ChunkingConfig {
+            max_tokens: 32,
+            overlap_tokens: 4,
+            min_tokens: 1,
+            ..Default::default()
+        };
+        let capture = Embedder::with_contract_and_chunking_config(contract, &narrow, false)
+            .expect("real capture embedder");
+        let search = Embedder::with_contract_and_chunking_config(
+            contract,
+            &ChunkingConfig::default(),
+            false,
+        )
+        .expect("real search embedder");
+        let (Backend::Real(capture_model), Backend::Real(search_model)) =
+            (&capture.backend, &search.backend)
+        else {
+            panic!("real model required")
+        };
+        assert!(
+            Arc::ptr_eq(capture_model, search_model),
+            "capture and search must share the resident model session"
+        );
+        let text = "The release checklist documents validation and deployment steps. ".repeat(24);
+        assert!(capture.chunk_text(&text).len() > search.chunk_text(&text).len());
+        let query = vec!["Find the release validation checklist".to_string()];
+        assert_eq!(
+            capture.embed_batch(&query).unwrap(),
+            search.embed_batch(&query).unwrap()
+        );
+    }
+
+    #[test]
+    fn role_prompt_reaches_every_long_document_chunk() {
+        use crate::embedding::prefixes::EMBEDDING_GEMMA_DOCUMENT_PREFIX;
+        let mut embedder = Embedder::mock_for_tests();
+        embedder.contract = crate::inference::model_config::embedding_v6_contract(256).unwrap();
+        embedder.backend = Backend::Mock(MockEmbedder::new(256));
+        let text = (0..500)
+            .map(|i| format!("Section {i}: the migration keeps cited source passages and the rollback checkpoint. "))
+            .collect::<String>();
+        embedder
+            .embed_inputs(&[EmbeddingInput::Document {
+                text: &text,
+                app_name: "",
+                window_title: "",
+            }])
+            .unwrap();
+        let cache = embedder.embedding_cache.lock().unwrap();
+        assert!(
+            cache.values.len() >= 3,
+            "exercise later chunks, not just the first"
+        );
+        assert!(
+            cache
+                .values
+                .keys()
+                .all(|chunk| chunk.starts_with(EMBEDDING_GEMMA_DOCUMENT_PREFIX)),
+            "every model input, including the final chunk, needs the document prompt"
+        );
+    }
+
+    #[test]
+    fn role_inputs_preserve_order_context_and_cache_identity() {
+        use crate::embedding::prefixes::{
+            EMBEDDING_GEMMA_DOCUMENT_PREFIX, EMBEDDING_GEMMA_QUERY_PREFIX,
+        };
+        let mut embedder = Embedder::mock_for_tests();
+        embedder.contract = crate::inference::model_config::embedding_v6_contract(256).unwrap();
+        embedder.backend = Backend::Mock(MockEmbedder::new(256));
+        let text = "The release checkpoint includes migration notes and rollback steps.";
+        let inputs = [
+            EmbeddingInput::Query(text),
+            EmbeddingInput::Document {
+                text,
+                app_name: "Editor",
+                window_title: "Release checklist",
+            },
+            EmbeddingInput::Query("  "),
+            EmbeddingInput::Document {
+                text,
+                app_name: "",
+                window_title: "",
+            },
+            EmbeddingInput::Query(text),
+        ];
+        let vectors = embedder.embed_inputs(&inputs).unwrap();
+        assert_eq!(vectors.len(), inputs.len());
+        for (input, vector) in inputs.iter().zip(&vectors) {
+            assert_eq!(
+                embedder.embed_inputs(&[*input]).unwrap(),
+                vec![vector.clone()]
+            );
+        }
+        assert_eq!(vectors[0], vectors[4]);
+        assert_ne!(vectors[0], vectors[3], "roles need distinct model inputs");
+        assert!(vectors[2].iter().all(|value| *value == 0.0));
+        let cache = embedder.embedding_cache.lock().unwrap();
+        assert_eq!(
+            cache.values.len(),
+            3,
+            "blank input creates no prompt and duplicate queries reuse cache"
+        );
+        assert!(cache
+            .values
+            .contains_key(&format!("{EMBEDDING_GEMMA_QUERY_PREFIX}{text}")));
+        assert!(cache
+            .values
+            .contains_key(&format!("{EMBEDDING_GEMMA_DOCUMENT_PREFIX}{text}")));
+        assert!(
+            cache.values.keys().any(|chunk| chunk.starts_with(&format!(
+                "{EMBEDDING_GEMMA_DOCUMENT_PREFIX}Release checklist\n"
+            )) && chunk.ends_with(text)),
+            "document prompt must precede title and body"
+        );
+    }
+
+    #[test]
+    fn role_prompt_reaches_every_long_query_chunk() {
+        use crate::embedding::prefixes::EMBEDDING_GEMMA_QUERY_PREFIX;
+        let mut embedder = Embedder::mock_for_tests();
+        embedder.contract = crate::inference::model_config::embedding_v6_contract(256).unwrap();
+        embedder.backend = Backend::Mock(MockEmbedder::new(256));
+        let text = (0..100).map(|i| format!("Find context for question {i} about the index migration and rollback evidence. ")).collect::<String>();
+        let vectors = embedder
+            .embed_inputs(&[EmbeddingInput::Query(&text)])
+            .unwrap();
+        assert_eq!(vectors.len(), 1);
+        assert!(vectors[0].iter().any(|value| *value != 0.0));
+        let cache = embedder.embedding_cache.lock().unwrap();
+        assert!(cache.values.len() >= 3);
+        assert!(cache
+            .values
+            .keys()
+            .all(|chunk| chunk.starts_with(EMBEDDING_GEMMA_QUERY_PREFIX)
+                && chunk.matches(EMBEDDING_GEMMA_QUERY_PREFIX).count() == 1));
+    }
+
+    #[test]
+    fn role_prompts_do_not_turn_low_signal_into_content() {
+        let mut embedder = Embedder::mock_for_tests();
+        embedder.contract = crate::inference::model_config::embedding_v6_contract(256).unwrap();
+        embedder.backend = Backend::Mock(MockEmbedder::new(256));
+        for text in ["", " \n ", "!!!", "ab"] {
+            let vectors = embedder
+                .embed_inputs(&[
+                    EmbeddingInput::Query(text),
+                    EmbeddingInput::Document {
+                        text,
+                        app_name: "",
+                        window_title: "",
+                    },
+                ])
+                .unwrap();
+            assert_eq!(vectors, vec![vec![0.0; 256]; 2]);
+        }
+        assert!(embedder.embedding_cache.lock().unwrap().values.is_empty());
+    }
+
+    #[test]
+    fn legacy_embedding_wrappers_keep_unprompted_inputs() {
+        for contract in [
+            crate::inference::model_config::embedding_v4_contract(),
+            embedding_v5_contract(),
+        ] {
+            let mut embedder = Embedder::mock_for_tests();
+            embedder.contract = contract;
+            embedder.backend = Backend::Mock(MockEmbedder::new(contract.dimensions));
+            let text = "The source passages include the release checkpoint and rollback steps.";
+            let plain = embedder.embed_batch(&[text.into()]).unwrap();
+            assert_eq!(
+                plain,
+                embedder
+                    .embed_batch_with_context(&[("".into(), "".into(), text.into())])
+                    .unwrap()
+            );
+            let cache = embedder.embedding_cache.lock().unwrap();
+            assert_eq!(cache.values.len(), 1);
+            assert!(cache.values.contains_key(text));
+        }
+    }
+
+    #[test]
+    fn a_matryoshka_vector_is_cut_then_renormalized() {
+        let full = vec![3.0, 4.0, 12.0];
+        let cut = truncate_and_normalize(full.clone(), 2);
+        assert_eq!(cut.len(), 2);
+        assert!((cut[0] - 0.6).abs() < 1e-6 && (cut[1] - 0.8).abs() < 1e-6);
+        let same = truncate_and_normalize(full, 3);
+        assert_eq!(same.len(), 3);
+        assert!((same.iter().map(|v| v * v).sum::<f32>() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn only_embeddinggemma_may_be_truncated() {
+        use crate::inference::model_config::{
+            embedding_v4_contract, embedding_v5_contract, embedding_v6_contract,
+        };
+        let short = embedding_v6_contract(256).expect("supported dimension");
+        assert!(short.supports_truncation());
+        assert_eq!(short.dimensions, 256);
+        assert_eq!(short.table_name, "memories_v6_embeddinggemma_256");
+        assert_eq!(
+            embedding_v6_contract(768)
+                .expect("supported dimension")
+                .dimensions,
+            768
+        );
+        assert!(!embedding_v4_contract().supports_truncation());
+        assert!(!embedding_v5_contract().supports_truncation());
+    }
 
     fn cosine(a: &[f32], b: &[f32]) -> f32 {
         a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
@@ -1195,6 +1773,26 @@ mod tests {
     }
 
     #[test]
+    fn mock_embeds_multibyte_words_without_panicking() {
+        // VS-68 corpus case an-008: a chunk that starts mid-word gave the token
+        // "ot\u{e9}e", and byte slicing split its accented 'e'.
+        let mock = MockEmbedder::new(EMBEDDING_DIM);
+        let vectors = mock.embed_batch(&["ot\u{e9}e, caf\u{e9}".to_string()]);
+        assert!(vectors[0].iter().any(|value| *value != 0.0));
+        // ASCII words keep the vectors they had.
+        let ascii = mock.embed_single("parser");
+        let mut expected = vec![0.0f32; EMBEDDING_DIM];
+        expected[stable_hash("parser") % EMBEDDING_DIM] += 1.0;
+        expected[stable_hash("par") % EMBEDDING_DIM] += 0.4;
+        expected[stable_hash("ser") % EMBEDDING_DIM] += 0.4;
+        for window in b"parser".windows(3) {
+            expected[stable_hash_bytes(window) % EMBEDDING_DIM] += 0.05;
+        }
+        normalize(&mut expected);
+        assert_eq!(ascii, expected);
+    }
+
+    #[test]
     fn mock_embedding_vectors_match_schema_dimension() {
         let vectors =
             MockEmbedder::new(EMBEDDING_DIM).embed_batch(&["dimension probe".to_string()]);
@@ -1212,9 +1810,9 @@ mod tests {
                 contract: embedding_v5_contract(),
                 chunker: TextChunker::new(),
                 backend: Backend::Mock(MockEmbedder::new(embedding_v5_contract().dimensions)),
-                degraded_to_mock: AtomicBool::new(false),
+                degraded_to_mock: Arc::new(AtomicBool::new(false)),
                 allow_mock_fallback: false,
-                embedding_cache: Mutex::new(EmbeddingCache::new(8)),
+                embedding_cache: Arc::new(Mutex::new(EmbeddingCache::new(8))),
             })
         };
 

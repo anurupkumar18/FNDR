@@ -10,6 +10,12 @@ import "./FndrWrappedPanel.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+} from "@/shared/activity/activityTrace";
 
 interface FndrWrappedPanelProps {
     isVisible: boolean;
@@ -152,10 +158,12 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
     const [wrapped, setWrapped] = useState<WeeklyWrapped | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [wrappedActivity, setWrappedActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [exporting, setExporting] = useState(false);
     const [exportedPdfPath, setExportedPdfPath] = useState<string | null>(null);
     const dialogRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
+    const loadGenerationRef = useRef(0);
 
     useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
 
@@ -179,27 +187,73 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
     };
 
     useLayoutEffect(() => {
+        loadGenerationRef.current += 1;
         if (!isVisible) return;
         setScreen("selection");
         setMonthScope("current");
         setSelectedWeek(currentWeek(localDateString()));
         setWrapped(null);
+        setLoading(false);
         setError(null);
         setExportedPdfPath(null);
+        setWrappedActivity(null);
     }, [isVisible]);
 
     const loadWrapped = useCallback(async () => {
+        const loadGeneration = ++loadGenerationRef.current;
+        const startedAtMs = Date.now();
+        const startedTrace = recordActivityStep(
+            beginActivityTrace({
+                id: `weekly-wrapped-${startedAtMs}`,
+                title: "FNDR Wrapped activity",
+                startedAtMs,
+            }),
+            {
+                id: "wrapped-request",
+                label: "Building weekly recap",
+                actor: "Wrapped aggregator",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        );
         setLoading(true);
         setError(null);
         setWrapped(null);
+        setWrappedActivity(startedTrace);
         try {
             const recap = await getWeeklyWrapped(selectedWeek.startDate, selectedWeek.endDate);
+            if (loadGenerationRef.current !== loadGeneration) return;
             setWrapped(recap);
             setScreen("results");
+            const finishedAtMs = Date.now();
+            setWrappedActivity(recordActivityStep(startedTrace, {
+                id: "wrapped-request",
+                label: "Weekly recap ready",
+                actor: "Wrapped aggregator",
+                status: "completed",
+                evidence: "result-metadata",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+                detail: `${recap.total_captures.toLocaleString()} captures across ${recap.active_days.toLocaleString()} active ${recap.active_days === 1 ? "day" : "days"}`,
+            }));
         } catch (err) {
+            if (loadGenerationRef.current !== loadGeneration) return;
             setError(err instanceof Error ? err.message : "Unable to build FNDR Wrapped.");
+            const finishedAtMs = Date.now();
+            setWrappedActivity(recordActivityStep(startedTrace, {
+                id: "wrapped-request",
+                label: "Weekly recap unavailable",
+                actor: "Wrapped aggregator",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }));
         } finally {
-            setLoading(false);
+            if (loadGenerationRef.current === loadGeneration) {
+                setLoading(false);
+            }
         }
     }, [selectedWeek]);
 
@@ -216,12 +270,48 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
 
     const handleExport = async () => {
         if (!wrapped || exporting) return;
+        const startedAtMs = Date.now();
+        setWrappedActivity((current) => recordActivityStep(
+            current ?? beginActivityTrace({
+                id: `wrapped-export-${startedAtMs}`,
+                title: "FNDR Wrapped activity",
+                startedAtMs,
+            }),
+            {
+                id: "pdf-export",
+                label: "Exporting weekly recap PDF",
+                actor: "Local PDF exporter",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        ));
         setExporting(true);
         setError(null);
         try {
             setExportedPdfPath(await exportWeeklyWrappedPdf(wrapped.start_date, wrapped.end_date, recapText));
+            const finishedAtMs = Date.now();
+            setWrappedActivity((current) => current ? recordActivityStep(current, {
+                id: "pdf-export",
+                label: "Weekly recap PDF saved locally",
+                actor: "Local PDF exporter",
+                status: "completed",
+                evidence: "result-metadata",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }) : current);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Unable to export recap.");
+            const failedAtMs = Date.now();
+            setWrappedActivity((current) => current ? recordActivityStep(current, {
+                id: "pdf-export",
+                label: "Weekly recap PDF export failed",
+                actor: "Local PDF exporter",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: failedAtMs,
+                durationMs: failedAtMs - startedAtMs,
+            }) : current);
         } finally {
             setExporting(false);
         }
@@ -236,12 +326,41 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
 
     const handleOpenExport = async () => {
         if (!exportedPdfPath) return;
+        const startedAtMs = Date.now();
+        setWrappedActivity((current) => current ? recordActivityStep(current, {
+            id: "pdf-open",
+            label: "Opening exported recap",
+            actor: "macOS workspace",
+            status: "running",
+            evidence: "ipc-boundary",
+            atMs: startedAtMs,
+        }) : current);
         setError(null);
         try {
             await openExportedPdf(exportedPdfPath);
             setExportedPdfPath(null);
+            const finishedAtMs = Date.now();
+            setWrappedActivity((current) => current ? recordActivityStep(current, {
+                id: "pdf-open",
+                label: "Exported recap opened",
+                actor: "macOS workspace",
+                status: "completed",
+                evidence: "result-metadata",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }) : current);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Unable to open the exported recap.");
+            const failedAtMs = Date.now();
+            setWrappedActivity((current) => current ? recordActivityStep(current, {
+                id: "pdf-open",
+                label: "Exported recap could not be opened",
+                actor: "macOS workspace",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: failedAtMs,
+                durationMs: failedAtMs - startedAtMs,
+            }) : current);
         }
     };
 
@@ -312,7 +431,13 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                             })}
                         </fieldset>
                         {error && <p className="wrapped-selection-error" role="alert">{error}</p>}
-                        {loading && <span className="sr-only" role="status">Building the selected weekly recap.</span>}
+                        {wrappedActivity && (
+                            <ActivityTrace
+                                trace={wrappedActivity}
+                                className="wrapped-activity-trace"
+                                announce={!error}
+                            />
+                        )}
                         <button type="button" className="wrapped-start-btn" onClick={() => void loadWrapped()} disabled={loading}>
                             {loading ? "Building recap…" : "Start Wrapped"}
                         </button>
@@ -352,6 +477,13 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                     </header>
 
                     <main className="wrapped-results-body">
+                        {wrappedActivity && (
+                            <ActivityTrace
+                                trace={wrappedActivity}
+                                className="wrapped-activity-trace"
+                                announce={!error}
+                            />
+                        )}
                         {error && <p className="wrapped-results-error" role="alert">{error}</p>}
                         {!wrapped && loading && (
                             <div className="wrapped-state">

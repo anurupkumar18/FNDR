@@ -20,6 +20,13 @@ export function StatusBar({ status }: StatusBarProps) {
     const reelDate = useMemo(() => formatReelDate(new Date()), []);
     const frameCount = status?.frames_captured ?? 0;
     const indexing = (status?.is_capturing ?? false) && !(status?.is_paused ?? false);
+    const captureLabel = status?.is_incognito
+        ? "PRIVATE"
+        : indexing
+            ? "INDEXING"
+            : status?.is_paused
+                ? "PAUSED"
+                : "IDLE";
 
     return (
         <footer className="fndr-status-bar" role="status" aria-live="polite">
@@ -29,7 +36,7 @@ export function StatusBar({ status }: StatusBarProps) {
                     aria-hidden="true"
                 />
                 <span className="fndr-status-text">
-                    {indexing ? "INDEXING" : status?.is_paused ? "PAUSED" : "IDLE"}
+                    {captureLabel}
                 </span>
                 <span className="fndr-status-sep" aria-hidden="true">
                     ·

@@ -44,12 +44,17 @@
             "app"
         ],
         "resources": {
+            "binaries/FNDR Speech Helper.app/": "FNDR Speech Helper.app/",
             "target/hermes-agent-bundle/": "hermes-agent/",
             "sidecars/parakeet_runner.py": "sidecars/parakeet_runner.py",
             "sidecars/whisper_gguf_runner.py": "sidecars/whisper_gguf_runner.py",
             "sidecars/orpheus_tts_runner.py": "sidecars/orpheus_tts_runner.py",
             "sidecars/laya_decide_runner.py": "sidecars/laya_decide_runner.py"
         },
+        "externalBin": [
+            "binaries/fndr-speech",
+            "binaries/fndr-auth"
+        ],
         "icon": [
             "icons/icon.png",
             "icons/icon.icns"

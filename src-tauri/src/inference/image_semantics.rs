@@ -1029,9 +1029,7 @@ fn rank_salient_spans(text: &str, max_spans: usize) -> Vec<String> {
     }
     let mut spans: Vec<(usize, usize, String)> = Vec::new();
     for (idx, raw_line) in scrubbed.lines().enumerate() {
-        for chunk in raw_line
-            .split(['|', '\t', '·', '•', '◦', '↑', '↓', '→', '←'])
-        {
+        for chunk in raw_line.split(['|', '\t', '·', '•', '◦', '↑', '↓', '→', '←']) {
             let trimmed = chunk.trim();
             if trimmed.len() < 6 || trimmed.len() > 90 {
                 continue;
@@ -1158,11 +1156,19 @@ struct MtmdVlmRuntime {
 }
 
 /// [`LlamaContext`] is not `Send` in the Rust bindings, but this runtime is only used behind
-/// `Arc` + [`Mutex`] from blocking import tasks (same pattern as [`super::VlmEngine`]).
+/// `Arc` + [`Mutex`] from blocking import tasks (same pattern as [`super::InferenceEngine`]).
 unsafe impl Send for MtmdVlmRuntime {}
 unsafe impl Sync for MtmdVlmRuntime {}
 
 static IMPORT_VISION: OnceLock<Mutex<Option<Arc<MtmdVlmRuntime>>>> = OnceLock::new();
+
+/// True when the pixel runtime (Qwen3-VL with its projector) is resident.
+/// A held lock means the runtime is loading or in use, which counts as loaded.
+pub fn pixel_vlm_loaded() -> bool {
+    IMPORT_VISION
+        .get()
+        .is_some_and(|slot| slot.try_lock().map_or(true, |runtime| runtime.is_some()))
+}
 
 impl MtmdVlmRuntime {
     fn instance(app_data_dir: &Path) -> Result<Arc<MtmdVlmRuntime>, String> {
@@ -1277,7 +1283,7 @@ impl MtmdVlmRuntime {
         llama.clear_kv_cache();
 
         let marker = mtmd_default_marker();
-        let system = VISION_SYSTEM_PROMPT;
+        let system = super::prompts::VISION_SYSTEM;
         let user_body = format!(
             "Imported file name (metadata only, not part of the image): {filename}\n\n\
              Analyze the **image pixels** and respond with **JSON only** per your instructions."
@@ -1353,30 +1359,6 @@ impl MtmdVlmRuntime {
         parse_vision_json(&out, self.model_family.model_id_str())
     }
 }
-
-const VISION_SYSTEM_PROMPT: &str = r#"You are FNDR's local visual memory extractor. Analyze the imported photo **from pixels** and return **compact JSON only** (no markdown fences, no commentary).
-
-Rules:
-- Do **not** identify people by name or guess private identities.
-- Describe **roles** only (presenter, audience member, teammate, reviewer, student, mentor, participant, etc.).
-- Prefer **searchable retrieval terms** over artistic prose.
-- If uncertain, lower `confidence` and list a few possible `topics` / `scene_type` values rather than inventing specifics.
-
-Required JSON schema (all string arrays may be empty):
-{
-  "summary_short": "one sentence",
-  "summary_detailed": "2-5 sentences",
-  "scene_type": "short label",
-  "setting": "optional",
-  "activity_type": "optional short machine-friendly label e.g. presentation, meeting, project_demo, feedback_session",
-  "user_intent": "optional short phrase",
-  "people_roles": [],
-  "visible_objects": [],
-  "actions": [],
-  "topics": [],
-  "search_aliases": [],
-  "confidence": 0.0
-}"#;
 
 /// JSON blob stored in `MemoryRecord::raw_evidence` for imports (extended fields).
 ///
@@ -1811,6 +1793,8 @@ mod tests {
     #[test]
     fn insight_from_structured_maps_topic_and_entities() {
         let structured = crate::inference::StructuredMemoryExtraction {
+            source_refs: Default::default(),
+            source_evidence: None,
             session_key: String::new(),
             activity_type: "coding".to_string(),
             project: String::new(),

@@ -5,9 +5,18 @@ const eventMocks = vi.hoisted(() => ({
     listen: vi.fn(),
 }));
 
+const coreMocks = vi.hoisted(() => ({
+    invoke: vi.fn(),
+}));
+
+const onboardingMocks = vi.hoisted(() => ({
+    openSystemSettings: vi.fn(),
+}));
+
 const ipcMocks = vi.hoisted(() => ({
     NOTCH_HUD_HOVER_EVENT: "notch-hud://hover",
     NOTCH_HUD_GEOMETRY_EVENT: "notch-hud://geometry",
+    NOTCH_HUD_SUMMON_EVENT: "notch-hud://summon",
     getNotchHudGeometry: vi.fn(),
     setNotchHudHitRect: vi.fn(),
     setNotchHudKeyboard: vi.fn(),
@@ -18,13 +27,17 @@ const ipcMocks = vi.hoisted(() => ({
     transcribeVoiceInput: vi.fn(),
     COMPUTER_USE_EVENT: "computer-use://event",
     computerUseStatus: vi.fn(),
-    computerUseSay: vi.fn(),
-    computerUseInterrupt: vi.fn(),
+    computerUsePlan: vi.fn(),
+    computerUseStart: vi.fn(),
     computerUseRespond: vi.fn(),
     computerUseStop: vi.fn(),
+    codexLoginStart: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => eventMocks);
+vi.mock("@tauri-apps/api/core", () => coreMocks);
+vi.mock("@/shared/ipc/onboarding", () => onboardingMocks);
+vi.mock("@/shared/utils/openExternalUrl", () => ({ openExternalUrl: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/shared/ipc/tauri", () => ipcMocks);
 
 import type { MemoryCard } from "@/shared/ipc/tauri";
@@ -67,13 +80,19 @@ if (typeof Blob.prototype.arrayBuffer !== "function") {
 }
 
 class FakeMediaRecorder {
+    static instances: FakeMediaRecorder[] = [];
     static isTypeSupported(): boolean {
         return true;
     }
     ondataavailable: ((event: { data: Blob }) => void) | null = null;
     onstop: (() => void) | null = null;
     mimeType = "audio/webm";
-    start(): void {
+    startArgs: unknown[] | null = null;
+    constructor() {
+        FakeMediaRecorder.instances.push(this);
+    }
+    start(...args: unknown[]): void {
+        this.startArgs = args;
         this.ondataavailable?.({ data: new Blob(["audio"], { type: this.mimeType }) });
     }
     stop(): void {
@@ -82,6 +101,16 @@ class FakeMediaRecorder {
 }
 
 const handlers = new Map<string, (event: { payload: unknown }) => void>();
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
 
 /** Fire a backend event the way the Rust side emits it. */
 function emit(event: string, payload: unknown) {
@@ -100,6 +129,7 @@ async function openPanel() {
 describe("NotchHud", () => {
     beforeEach(() => {
         handlers.clear();
+        FakeMediaRecorder.instances = [];
         Object.defineProperty(globalThis, "MediaRecorder", {
             value: FakeMediaRecorder,
             configurable: true,
@@ -131,18 +161,25 @@ describe("NotchHud", () => {
         ipcMocks.computerUseStatus.mockResolvedValue({
             enabled: false,
             codexReady: true,
-            openComputerUsePath: "/opt/homebrew/bin/open-computer-use",
-            active: false,
+            backend: "codex_computer_use",
+            backendPath: "/x/computer-use-client-launcher",
+            activeRun: null,
         });
-        ipcMocks.computerUseSay.mockResolvedValue(undefined);
-        ipcMocks.computerUseInterrupt.mockResolvedValue(undefined);
+        ipcMocks.computerUsePlan.mockResolvedValue("r1");
+        ipcMocks.computerUseStart.mockResolvedValue(undefined);
         ipcMocks.computerUseRespond.mockResolvedValue(undefined);
         ipcMocks.computerUseStop.mockResolvedValue(undefined);
+        ipcMocks.codexLoginStart.mockResolvedValue({ loginId: "l1", authUrl: "https://auth.openai.com/x" });
+        let voiceSession = 0;
+        coreMocks.invoke.mockImplementation((command: string) =>
+            Promise.resolve(command === "voice_start" ? { sessionId: `v${++voiceSession}` } : undefined),
+        );
     });
 
     afterEach(() => {
         cleanup();
         vi.clearAllMocks();
+        window.localStorage.clear();
     });
 
     it("reports the drawn panel's frame so the window can stay click-through", async () => {
@@ -228,6 +265,64 @@ describe("NotchHud", () => {
         expect(ipcMocks.fndrAnswer).not.toHaveBeenCalled();
     });
 
+    it("traces typed memory search from debounce through a verified count without exposing the query", async () => {
+        const pending = deferred<MemoryCard[]>();
+        ipcMocks.searchMemoryCards.mockReturnValueOnce(pending.promise);
+        render(<NotchHud />);
+        const input = await openPanel();
+
+        fireEvent.change(input, { target: { value: "private roadmap term" } });
+
+        expect(await screen.findByText("Waiting for typing to settle")).toBeInTheDocument();
+        await screen.findByText("Requesting local memory matches");
+        const trace = screen.getByRole("region", { name: "Notch memory search activity" });
+        expect(trace).not.toHaveTextContent("private roadmap term");
+
+        pending.resolve([card]);
+        await screen.findByText("Memory search returned 1 match");
+        fireEvent.click(screen.getByRole("button", { name: "Show Notch memory search activity details" }));
+        expect(screen.getByText("Typing settled").closest("li")).toHaveTextContent("Completed");
+        expect(screen.getByText("Memory search request completed").closest("li")).toHaveTextContent(
+            "Completed",
+        );
+        expect(trace).not.toHaveTextContent(card.title);
+    });
+
+    it("traces a typed FNDR answer without exposing the question, answer, or raw failure", async () => {
+        const pending = deferred<Awaited<ReturnType<typeof ipcMocks.fndrAnswer>>>();
+        ipcMocks.fndrAnswer.mockReturnValueOnce(pending.promise);
+        render(<NotchHud />);
+        const input = await openPanel();
+
+        fireEvent.change(input, { target: { value: "private question about payroll" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        await screen.findByText("Requesting an answer from FNDR");
+        const trace = screen.getByRole("region", { name: "Notch answer activity" });
+        expect(trace).not.toHaveTextContent("private question about payroll");
+
+        pending.resolve({
+            query: "private question about payroll",
+            answer: "private answer from a memory",
+            evidence: {},
+            cards: [card],
+            verify_outcome: {},
+            surfacing_reasons: [],
+        });
+        await screen.findByText("Answer ready with 1 memory source");
+        expect(trace).not.toHaveTextContent("private answer from a memory");
+
+        const failed = deferred<Awaited<ReturnType<typeof ipcMocks.fndrAnswer>>>();
+        ipcMocks.fndrAnswer.mockReturnValueOnce(failed.promise);
+        fireEvent.change(input, { target: { value: "another private question" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        failed.reject(new Error("/private/tmp/raw-backend-secret.log"));
+        await screen.findByText("Answer request failed");
+        expect(screen.getByRole("region", { name: "Notch answer activity" })).not.toHaveTextContent(
+            "raw-backend-secret",
+        );
+    });
+
     it("speaks to FNDR: records, transcribes, and asks what was said", async () => {
         render(<NotchHud />);
         await openPanel();
@@ -236,6 +331,9 @@ describe("NotchHud", () => {
         const clock = vi.spyOn(Date, "now").mockReturnValue(started);
         fireEvent.click(screen.getByLabelText("Speak to FNDR"));
         await screen.findByLabelText("Stop and send");
+        expect(FakeMediaRecorder.instances[0]?.startArgs).toEqual([]);
+        expect(screen.getByText("Recording voice input")).toBeInTheDocument();
+        expect(screen.getByRole("region", { name: "Voice input activity" })).toBeInTheDocument();
         // Past the minimum hold, so the clip isn't discarded as a stray tap.
         clock.mockReturnValue(started + 1500);
         fireEvent.click(screen.getByLabelText("Stop and send"));
@@ -245,6 +343,29 @@ describe("NotchHud", () => {
         await waitFor(() =>
             expect(ipcMocks.fndrAnswer).toHaveBeenCalledWith("what did I read about vLLM", 3)
         );
+        expect(screen.getByText("Transcript ready")).toBeInTheDocument();
+        expect(screen.queryByText("what did I read about vLLM", {
+            selector: ".activity-trace *",
+        })).not.toBeInTheDocument();
+    });
+
+    it("categorizes microphone failures without exposing raw errors", async () => {
+        Object.defineProperty(navigator, "mediaDevices", {
+            value: {
+                getUserMedia: vi.fn().mockRejectedValue(new Error("/private/tmp/secret.wav")),
+            },
+            configurable: true,
+        });
+        render(<NotchHud />);
+        await openPanel();
+
+        fireEvent.click(screen.getByLabelText("Speak to FNDR"));
+
+        await screen.findByText("Microphone access failed");
+        expect(screen.getByRole("region", { name: "Voice input activity" })).toHaveTextContent(
+            "Failed",
+        );
+        expect(screen.queryByText(/secret\.wav/)).not.toBeInTheDocument();
     });
 
     it("backs out one layer at a time on Escape", async () => {
@@ -286,112 +407,198 @@ describe("NotchHud", () => {
     });
 
     describe("Do mode: spoken computer use", () => {
-        let recognition: FakeRecognition | null = null;
+        const REQUEST = "open Spotify, play Blinding Lights, then open the browser and look up looped transformers";
 
-        class FakeRecognition {
-            continuous = false;
-            interimResults = false;
-            lang = "";
-            onresult: ((event: unknown) => void) | null = null;
-            onend: (() => void) | null = null;
-            onerror: ((event: unknown) => void) | null = null;
-            constructor() {
-                recognition = this;
-            }
-            start(): void {}
-            stop(): void {}
-            abort(): void {}
-            /** The system recognizer finishing a phrase. */
-            hear(transcript: string): void {
-                act(() => {
-                    this.onresult?.({ resultIndex: 0, results: [Object.assign([{ transcript }], { isFinal: true })] });
-                });
-            }
+        /** What the native voice owner emits for the session it last started.
+         *  Terminal states are followed by idle, as `emit_terminal` does. */
+        function voice(state: { kind: string } & Record<string, unknown>) {
+            const starts = coreMocks.invoke.mock.calls.filter(([command]) => command === "voice_start").length;
+            const event = (s: unknown) => ({ version: 1, sessionId: `v${starts}`, surface: "notch_do", state: s });
+            emit("voice://state", event(state));
+            if (["final", "unavailable", "error"].includes(state.kind)) emit("voice://state", event({ kind: "idle" }));
+        }
+
+        function planned(autoStart = true) {
+            emit("computer-use://event", {
+                kind: "planned",
+                runId: "r1",
+                autoStart,
+                steps: [
+                    { label: "Open Spotify", action: "open_app", app: "Spotify" },
+                    { label: "Play Blinding Lights", action: "operate", app: "Spotify" },
+                    { label: "Search looped transformers", action: "open_url", app: "" },
+                ],
+            });
+        }
+
+        async function openDo() {
+            render(<NotchHud />);
+            await openPanel();
+            await waitFor(() =>
+                expect(coreMocks.invoke).toHaveBeenCalledWith("voice_start", { surface: "notch_do", mode: "toggle" }),
+            );
         }
 
         beforeEach(() => {
-            recognition = null;
-            Object.defineProperty(window, "webkitSpeechRecognition", {
-                value: FakeRecognition,
-                configurable: true,
-                writable: true,
-            });
             ipcMocks.computerUseStatus.mockResolvedValue({
                 enabled: true,
                 codexReady: true,
-                openComputerUsePath: "/opt/homebrew/bin/open-computer-use",
-                active: false,
+                backend: "codex_computer_use",
+                backendPath: "/x/computer-use-client-launcher",
+                activeRun: null,
             });
         });
 
-        afterEach(() => {
-            delete (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
+        it("Alt+N opens the panel and starts listening; pressing it again closes it", async () => {
+            // Even after the person last used Ask, the shortcut opens Do.
+            window.localStorage.setItem("fndr.notch.mode", "ask");
+            render(<NotchHud />);
+            await waitFor(() => expect(handlers.has("notch-hud://summon")).toBe(true));
+            emit("notch-hud://summon", true);
+            await waitFor(() =>
+                expect(coreMocks.invoke).toHaveBeenCalledWith("voice_start", { surface: "notch_do", mode: "toggle" }),
+            );
+            expect(ipcMocks.setNotchHudKeyboard).toHaveBeenCalledWith(true);
+
+            emit("notch-hud://summon", false);
+            await waitFor(() => expect(ipcMocks.setNotchHudKeyboard).toHaveBeenCalledWith(false));
+            await waitFor(() => expect(coreMocks.invoke).toHaveBeenCalledWith("voice_cancel", { sessionId: "v1" }));
         });
 
         it("keeps Do hidden until Operate my Mac is on", async () => {
             ipcMocks.computerUseStatus.mockResolvedValue({
                 enabled: false,
                 codexReady: true,
-                openComputerUsePath: null,
-                active: false,
+                backend: null,
+                backendPath: null,
+                activeRun: null,
             });
             render(<NotchHud />);
             await openPanel();
             await waitFor(() => expect(ipcMocks.computerUseStatus).toHaveBeenCalled());
             expect(screen.queryByRole("button", { name: "Do" })).not.toBeInTheDocument();
+            expect(coreMocks.invoke).not.toHaveBeenCalledWith("voice_start", expect.anything());
         });
 
-        it("sends spoken instructions, asks before acting, and stops on command", async () => {
-            render(<NotchHud />);
-            await openPanel();
-            fireEvent.click(await screen.findByRole("button", { name: "Do" }));
-            await waitFor(() => expect(recognition).not.toBeNull());
-
-            recognition!.hear("open Notes and start a new note");
-            await waitFor(() =>
-                expect(ipcMocks.computerUseSay).toHaveBeenCalledWith("open Notes and start a new note"),
-            );
-
-            emit("computer-use://event", { kind: "message", text: "I'll open Notes.", final: false });
-            expect(await screen.findByText("I'll open Notes.")).toBeInTheDocument();
-
-            emit("computer-use://event", {
-                kind: "approval",
-                requestKey: "req-1",
-                tool: "click",
-                summary: "click \"New Note\" in Notes",
+        it("listens on open, ends the utterance after a pause, plans it and starts after the countdown", async () => {
+            await openDo();
+            voice({ kind: "listening", level: 0.2 });
+            voice({ kind: "partial", text: "open Spotify play" });
+            expect(await screen.findByText("open Spotify play")).toBeInTheDocument();
+            await waitFor(() => expect(coreMocks.invoke).toHaveBeenCalledWith("voice_stop", { sessionId: "v1" }), {
+                timeout: 2500,
             });
-            expect(await screen.findByRole("alertdialog", { name: "Approve action" })).toHaveTextContent(
-                'Okay to click "New Note" in Notes?',
-            );
 
-            recognition!.hear("yes");
-            await waitFor(() => expect(ipcMocks.computerUseRespond).toHaveBeenCalledWith("req-1", true));
-            expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+            voice({ kind: "final", text: REQUEST });
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalledWith(REQUEST));
+            planned();
+            const plan = await screen.findByRole("list", { name: "Plan" });
+            expect(plan).toHaveTextContent("Open Spotify");
+            expect(plan).toHaveTextContent("Search looped transformers");
+            expect(ipcMocks.computerUseStart).not.toHaveBeenCalled();
+            await waitFor(() => expect(ipcMocks.computerUseStart).toHaveBeenCalledWith("r1"), { timeout: 2500 });
 
-            recognition!.hear("stop");
-            await waitFor(() => expect(ipcMocks.computerUseInterrupt).toHaveBeenCalled());
-            expect(ipcMocks.computerUseSay).toHaveBeenCalledTimes(1);
+            emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 1, attempt: 1 });
+            expect(screen.getByText("Play Blinding Lights").closest("li")).toHaveAttribute("aria-current", "step");
+            emit("computer-use://event", { kind: "stepDone", runId: "r1", index: 1, ok: true, detail: "Playing Blinding Lights" });
+            expect(await screen.findByText("Playing Blinding Lights")).toBeInTheDocument();
+            emit("computer-use://event", { kind: "finished", runId: "r1", ok: true, summary: "Done: Open Spotify, Play Blinding Lights, Search looped transformers." });
+            expect(await screen.findByText(/^Done: Open Spotify/)).toBeInTheDocument();
         });
 
-        it("answers an approval with a tap and accepts typed instructions", async () => {
-            render(<NotchHud />);
-            await openPanel();
-            fireEvent.click(await screen.findByRole("button", { name: "Do" }));
+        it("waits for a tap when a step in the plan could need a yes", async () => {
+            await openDo();
+            voice({ kind: "final", text: REQUEST });
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
+            planned(false);
+            expect(await screen.findByText(/Ready\. Tap Start/)).toBeInTheDocument();
+            await new Promise((resolve) => setTimeout(resolve, 1800));
+            expect(ipcMocks.computerUseStart).not.toHaveBeenCalled();
 
+            fireEvent.click(screen.getByRole("button", { name: "Start" }));
+            await waitFor(() => expect(ipcMocks.computerUseStart).toHaveBeenCalledWith("r1"));
+        });
+
+        it("saying stop mid-run kills the run before the utterance ends", async () => {
+            await openDo();
+            voice({ kind: "final", text: REQUEST });
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
+            planned();
+            emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 0, attempt: 1 });
+            await waitFor(() => expect(coreMocks.invoke.mock.calls.filter(([c]) => c === "voice_start").length).toBe(2));
+
+            voice({ kind: "partial", text: "stop" });
+            await waitFor(() => expect(ipcMocks.computerUseStop).toHaveBeenCalled());
+            expect(await screen.findByText("Stopped.")).toBeInTheDocument();
+        });
+
+        it("holds mid-run speech as a redirect and cancels the plan card on Cancel", async () => {
+            await openDo();
+            voice({ kind: "final", text: REQUEST });
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
+            planned();
+            fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+            await waitFor(() => expect(ipcMocks.computerUseStop).toHaveBeenCalled());
+            expect(ipcMocks.computerUseStart).not.toHaveBeenCalled();
+        });
+
+        it("answers an approval with a tap and plans typed requests", async () => {
+            await openDo();
+            voice({ kind: "final", text: REQUEST });
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
+            planned();
+            emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 1, attempt: 1 });
             emit("computer-use://event", {
                 kind: "approval",
+                runId: "r1",
                 requestKey: "req-2",
                 tool: "type_text",
                 summary: "type \"hello\" in Notes",
             });
-            fireEvent.click(await screen.findByRole("button", { name: "Don't" }));
+            expect(await screen.findByRole("alertdialog", { name: "Approve action" })).toHaveTextContent(
+                'Okay to type "hello" in Notes?',
+            );
+            fireEvent.click(screen.getByRole("button", { name: "Don't" }));
             await waitFor(() => expect(ipcMocks.computerUseRespond).toHaveBeenCalledWith("req-2", false));
 
+            emit("computer-use://event", {
+                kind: "blocked",
+                runId: "r1",
+                index: 1,
+                tool: "click",
+                summary: "click \"Buy Premium\" in Spotify",
+                reason: "sending, deleting and buying are not allowed",
+            });
+            expect(await screen.findByText('Refused: click "Buy Premium" in Spotify')).toBeInTheDocument();
+
+            emit("computer-use://event", { kind: "finished", runId: "r1", ok: true, summary: "Done." });
             const typed = screen.getByLabelText("Instruction for FNDR");
             fireEvent.change(typed, { target: { value: "close the window" } });
             fireEvent.submit(typed.closest("form") as HTMLFormElement);
-            await waitFor(() => expect(ipcMocks.computerUseSay).toHaveBeenCalledWith("close the window"));
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalledWith("close the window"));
+        });
+
+        it("names a denied microphone and offers its settings", async () => {
+            await openDo();
+            voice({
+                kind: "unavailable",
+                reason: "permission_denied",
+                message: "Allow the microphone in System Settings.",
+                permission: "microphone",
+                settingsPane: "microphone",
+            });
+            expect(await screen.findByText("FNDR can't use the microphone.")).toBeInTheDocument();
+            fireEvent.click(screen.getByRole("button", { name: "Open Microphone Settings" }));
+            expect(onboardingMocks.openSystemSettings).toHaveBeenCalledWith("microphone");
+        });
+
+        it("offers Reconnect ChatGPT when the sign-in is gone", async () => {
+            await openDo();
+            voice({ kind: "final", text: REQUEST });
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
+            emit("computer-use://event", { kind: "failed", runId: "r1", error: "Sign in with ChatGPT to use Notch Do.", reconnect: true });
+            fireEvent.click(await screen.findByRole("button", { name: "Reconnect ChatGPT" }));
+            await waitFor(() => expect(ipcMocks.codexLoginStart).toHaveBeenCalled());
         });
     });
 });

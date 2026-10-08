@@ -11,6 +11,7 @@ import { EngineMetricsPanel } from "@/domains/workspace/EngineMetricsPanel";
 import { PrivacyProofPanel } from "@/domains/privacy-proof/PrivacyProof";
 import { AgentWorkspace } from "@/domains/workspace/AgentWorkspace";
 import { AppToasts } from "./AppToasts";
+import { McpApprovalPrompt } from "./McpApprovalPrompt";
 import { PanelPresence } from "./PanelPresence";
 import { PanelErrorBoundary } from "./PanelErrorBoundary";
 import type { AppToast } from "./types";
@@ -21,6 +22,7 @@ interface AppPanelsProps {
     appNames: string[];
     appToasts: AppToast[];
     isCapturePaused: boolean;
+    isPrivateMode: boolean;
     query: string;
     selectedResult: MemoryCard | null;
     showCommandPalette: boolean;
@@ -47,6 +49,7 @@ export function AppPanels({
     appNames,
     appToasts,
     isCapturePaused,
+    isPrivateMode,
     query,
     selectedResult,
     showCommandPalette,
@@ -121,7 +124,11 @@ export function AppPanels({
             <PanelPresence open={activePanel === "screenGuide"}>
                 {(present) => (
                     <PanelErrorBoundary panelName="Screen Guide" onClose={onClosePanel}>
-                        <ScreenGuidePanel isVisible={present} onClose={onClosePanel} />
+                        <ScreenGuidePanel
+                            isVisible={present}
+                            isPrivateMode={isPrivateMode}
+                            onClose={onClosePanel}
+                        />
                     </PanelErrorBoundary>
                 )}
             </PanelPresence>
@@ -163,6 +170,7 @@ export function AppPanels({
                 }}
             />
             <AppToasts toasts={appToasts} onAction={onToastAction} onDismiss={onDismissToast} />
+            <McpApprovalPrompt />
         </>
     );
 }

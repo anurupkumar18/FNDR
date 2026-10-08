@@ -1,10 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+export type CaptureTextSource = "ax" | "ocr" | "browser_semantic" | "mixed" | "unknown";
+
 export interface SearchResult {
     id: string;
     timestamp: number;
     app_name: string;
+    text_source?: CaptureTextSource;
+    source_type?: string;
+    added_by?: string;
     bundle_id?: string;
     window_title: string;
     session_id: string;
@@ -30,7 +35,7 @@ export interface SearchResult {
     reviewed_at_ms?: number;
     /** Monotonic counter incremented on each successful review pass. */
     reviewer_generation?: number;
-    /** Coarse persisted gate outcome — "enriched_memory_card",
+    /** Coarse persisted gate outcome: "enriched_memory_card",
      *  "visual_semantics_failed", "metadata_only", etc. */
     storage_outcome?: string;
 }
@@ -57,6 +62,9 @@ export interface MemoryCard {
     context: string[];
     timestamp: number;
     app_name: string;
+    text_source?: CaptureTextSource;
+    source_type?: string;
+    added_by?: string;
     window_title: string;
     url?: string;
     score: number;
@@ -65,8 +73,9 @@ export interface MemoryCard {
     raw_snippets: string[];
     evidence_ids?: string[];
     confidence?: number;
+    low_confidence?: boolean;
     anchor_coverage_score?: number;
-    /** High-level activity category — content-derived, never tied to an app name. */
+    /** High-level activity category: content-derived, never tied to an app name. */
     activity_type?: string;
     /** File paths or code symbols touched in this session */
     files_touched?: string[];
@@ -98,12 +107,14 @@ export interface MemoryCard {
     topic_categories?: string[];
     /** Semantic search aliases / synonyms */
     search_aliases?: string[];
+    /** True when no result for the query reached the strong-match bar (VS-12). */
+    weak_match?: boolean;
     matched_routes?: string[];
     matched_chunk_ids?: string[];
     chunk_evidence?: MatchedChunkEvidence[];
     embedding_provenance?: SearchEmbeddingProvenance;
     embedding_reason_labels?: string[];
-    /** Phase 3 — deterministic "Why this surfaced" attached by the
+    /** Phase 3: deterministic "Why this surfaced" attached by the
      *  agentic-graph-rag composer. Absent on legacy code paths. */
     surfacing_reason?: SurfacingReason;
     /** Post-capture review lifecycle:
@@ -113,7 +124,7 @@ export interface MemoryCard {
     reviewed_at_ms?: number;
     /** Monotonic counter incremented on each successful review pass. */
     reviewer_generation?: number;
-    /** Coarse persisted gate outcome — "enriched_memory_card",
+    /** Coarse persisted gate outcome: "enriched_memory_card",
      *  "visual_semantics_failed", "metadata_only", etc. */
     storage_outcome?: string;
 }
@@ -195,6 +206,14 @@ export interface ErrorRef { error: string; memory_ids: string[] }
 export interface TaskRef { task: string; memory_ids: string[] }
 export interface UrlRef { url: string; memory_ids: string[] }
 
+export interface SourceStatementRef {
+    memory_ids: string[];
+    kind: string;
+    quote: string;
+    source_sha256: string;
+    line: number;
+}
+
 export interface EvidencePack {
     files: FileRef[];
     commands: CommandRef[];
@@ -202,6 +221,7 @@ export interface EvidencePack {
     errors: ErrorRef[];
     todos: TaskRef[];
     urls: UrlRef[];
+    source_statements?: SourceStatementRef[];
 }
 
 export type VerifyOutcome =
@@ -248,6 +268,10 @@ export async function fndrGetRelatedMemories(
     return invoke("fndr_get_related_memories", { memoryId, limit });
 }
 
+export async function fndrGetMemorySourceStatements(memoryId: string): Promise<SourceStatementRef[]> {
+    return invoke("fndr_get_memory_source_statements", { memoryId });
+}
+
 export async function fndrGetMemorySubgraph(
     seedIds: string[],
     maxHops = 2,
@@ -260,6 +284,26 @@ export async function fndrTimeline(args?: {
     project?: string;
 }): Promise<Array<{ memory_id: string; timestamp: number; snippet: string }>> {
     return invoke("fndr_timeline", args ?? {});
+}
+
+export interface ResumeThread {
+    title: string;
+    app_name?: string;
+    last_state: string;
+    age_minutes: number;
+    next_steps: string[];
+    suggested_next_steps: Array<{ title: string; source_memory_id: string; confidence: number }>;
+    evidence: string[];
+    pack: {
+        items: Array<{ memory_id: string; text: string; ts_ms: number }>;
+        dropped_for_budget: number;
+        estimated_tokens: number;
+    };
+}
+
+/** Recent observed work, with source citations; does not execute actions. */
+export async function resumeWork(): Promise<ResumeThread[]> {
+    return invoke("resume_work", { hours: 24, budgetTokens: 800 });
 }
 
 export async function fndrQualityStatus(): Promise<{
@@ -314,6 +358,11 @@ export interface MemoryDebugInspector {
     };
     storage_outcome: string;
     quality_gate_reason: string;
+    review_backlog: {
+        pending: number;
+        pending_visual_semantics: number;
+        review_failed: number;
+    };
     query_match_reasons: string[];
     related_knowledge_pages: unknown[];
 }
@@ -402,7 +451,7 @@ export interface RetrievalEvalReport {
  *
  * Mirrors `crate::ipc::commands::stats::CapturePipelineBreakdown` (Rust).
  * Every terminal branch in the capture loop bumps exactly one counter, so
- * `stored_total + skipped_total` accounts for every evaluated frame —
+ * `stored_total + skipped_total` accounts for every evaluated frame:
  * unlike the legacy `frames_captured` / `frames_dropped` numbers which
  * only counted successful stores and dedup drops.
  */
@@ -466,6 +515,15 @@ export interface McpServerStatus {
     require_auth: boolean;
     auth_mode: string;
     last_error?: string | null;
+}
+
+export const MCP_APPROVAL_EVENT = "mcp-approval://request";
+
+export interface McpApprovalPrompt {
+    request_id: string;
+    tool: string;
+    arguments: Record<string, unknown>;
+    expires_at_ms: number;
 }
 
 export interface EvidenceRef {
@@ -1316,6 +1374,10 @@ export async function stopMcpServer(): Promise<McpServerStatus> {
     return invoke<McpServerStatus>("stop_mcp_server");
 }
 
+export async function resolveMcpApproval(requestId: string, approved: boolean): Promise<boolean> {
+    return invoke<boolean>("resolve_mcp_approval", { requestId, approved });
+}
+
 export async function getContextRuntimeStatus(): Promise<ContextRuntimeStatus> {
     return invoke<ContextRuntimeStatus>("get_context_runtime_status");
 }
@@ -1484,6 +1546,14 @@ export async function resumeCapture(): Promise<void> {
 }
 
 // Privacy
+export async function getAgentNotesEnabled(): Promise<boolean> {
+    return invoke<boolean>("get_agent_notes_enabled");
+}
+
+export async function setAgentNotesEnabled(enabled: boolean): Promise<void> {
+    return invoke("set_agent_notes_enabled", { enabled });
+}
+
 export async function getBlocklist(): Promise<string[]> {
     return invoke<string[]>("get_blocklist");
 }
@@ -1520,6 +1590,18 @@ export interface PrivacyProof {
     skipped_by_reason: Record<string, number>;
     egress_requests: number;
     egress_hosts: string[];
+    /** Cloud model requests this session: feature, host and bytes FNDR sent. No content. */
+    model_requests?: ModelRequest[];
+}
+
+export interface ModelRequest {
+    atMs: number;
+    /** `notch_do_plan`, `notch_do_step`, `notch_do_screen_text` or `hermes_chat`. */
+    feature: string;
+    host: string;
+    bytesSent: number;
+    /** Kinds of context sent along: `memories`, `screen_text`, `screenshot`. */
+    included?: string[];
 }
 
 export async function getPrivacyProof(): Promise<PrivacyProof> {
@@ -1810,6 +1892,10 @@ export interface HermesBridgeStatus {
     ollama_reachable: boolean;
     ollama_models: string[];
     ollama_base_url: string;
+    /** The saved provider answers on this Mac. */
+    provider_is_local?: boolean;
+    /** FNDR adds memories it finds itself to each message for this provider. */
+    related_memories?: boolean;
     codex_cli_installed: boolean;
     codex_logged_in: boolean;
     codex_auth_path: string;
@@ -1817,12 +1903,17 @@ export interface HermesBridgeStatus {
     focus_task: string | null;
     recent_memory_count: number;
     open_task_count: number;
-    /** True when Ollama is configured and reachable — chat works without the Hermes CLI. */
+    /** True when Ollama is configured and reachable: chat works without the Hermes CLI. */
     direct_ollama_ready: boolean;
     top_apps: HermesAppContext[];
     recent_memories: HermesMemoryDigest[];
     last_error: string | null;
     install_command: string;
+    /** `stopped`, `starting`, `running`, `restarting` or `crashed`. */
+    gateway_state: string;
+    gateway_restarts: number;
+    /** The ChatGPT sign-in could not be used or refreshed. */
+    reconnect_chatgpt: boolean;
 }
 
 export interface HermesSetupPayload {
@@ -1843,12 +1934,16 @@ export async function startAgentTask(
     contextUrls?: string[],
     contextNotes?: string[]
 ): Promise<AgentStatus> {
+    /** Also send memories FNDR finds on its own to a provider that is not on this Mac. */
+    related_memories?: boolean;
     return invoke<AgentStatus>("start_agent_task", { taskTitle, contextUrls, contextNotes });
 }
 
 export async function getAgentStatus(): Promise<AgentStatus> {
     return invoke<AgentStatus>("get_agent_status");
 }
+    /** Memories FNDR added on its own to the message this answers. */
+    auto_memories?: AttachedMemory[];
 
 export async function stopAgent(): Promise<AgentStatus> {
     return invoke<AgentStatus>("stop_agent");
@@ -1888,6 +1983,11 @@ export async function sendHermesMessage(
     return invoke<HermesChatReply>("send_hermes_message", { conversationId, input, memoryIds });
 }
 
+/** Stops waiting for the reply to the message this chat has in flight. */
+export async function cancelHermesMessage(conversationId: string): Promise<void> {
+    return invoke<void>("cancel_hermes_message", { conversationId });
+}
+
 export interface AttachedMemory {
     id: string;
     title: string;
@@ -1900,6 +2000,8 @@ export interface AgentChatMessage {
     content: string;
     at: number;
     memories: AttachedMemory[];
+    /** The send failed; Hermes never answered this message. */
+    failed?: boolean;
 }
 
 export interface AgentChat {
@@ -1913,6 +2015,8 @@ export interface AgentChat {
 export interface AgentChatSummary {
     id: string;
     title: string;
+    /** Memories FNDR added on its own to this message. */
+    autoMemories?: AttachedMemory[];
     updatedAt: number;
     messageCount: number;
 }
@@ -2001,7 +2105,7 @@ export async function quickSetupOllama(): Promise<HermesBridgeStatus> {
 }
 
 /**
- * Send a message directly to Ollama — no Hermes CLI required.
+ * Send a message directly to Ollama: no Hermes CLI required.
  * messages is the prior conversation in OpenAI format: [{role, content}].
  */
 export async function sendDirectChat(
@@ -2202,6 +2306,30 @@ export interface ScreenGuideSettings {
     operate_computer?: boolean;
 }
 
+export interface ScreenGuideDiagnosticStatus {
+    armed: boolean;
+    expiresInMs: number | null;
+    bundleCount: number;
+    partialCount: number;
+    totalBytes: number;
+    lastResult: ScreenGuideDiagnosticResult | null;
+}
+
+export interface ScreenGuideDiagnosticResult {
+    kind: "saved" | "error" | "deleted" | "cancelled";
+    code:
+        | "bundle_saved"
+        | "storage_unavailable"
+        | "bundle_too_large"
+        | "diagnostics_deleted"
+        | "private_mode_disarmed"
+        | "privacy_settings_disarmed";
+    /** Bounded backend-owned copy; never a path, prompt, OCR text, or raw error. */
+    message: string;
+    screenshotSaved: boolean;
+    ocrSaved: boolean;
+}
+
 export interface ScreenGuideHistoryEntry {
     role: "user" | "assistant";
     content: string;
@@ -2235,10 +2363,27 @@ export type ScreenGuidePhase =
     | "answer"
     | "error";
 
+export type ScreenGuideActivityStage =
+    | "preparing"
+    | "searching_file_names"
+    | "hiding_fndr"
+    | "verifying_target"
+    | "capturing"
+    | "reading_text"
+    | "checking_on_device_model"
+    | "answering_on_device"
+    | "using_grounded_fallback"
+    | "answering_chat_gpt"
+    | "speech_started";
+
 export interface ScreenGuideStateEvent {
     phase: ScreenGuidePhase;
     message?: string | null;
     generation: number;
+    /** Closed, privacy-safe progress vocabulary. Never contains captured content. */
+    activity_stage?: ScreenGuideActivityStage | null;
+    /** Process display name only; never a title, URL, path, prompt, or OCR text. */
+    target_app?: string | null;
 }
 
 export interface ScreenGuideShortcutEvent {
@@ -2263,6 +2408,23 @@ export async function setScreenGuideSettings(
     settings: ScreenGuideSettings,
 ): Promise<ScreenGuideSettings> {
     return invoke<ScreenGuideSettings>("set_screen_guide_settings", { settings });
+}
+
+export async function getScreenGuideDiagnosticStatus(): Promise<ScreenGuideDiagnosticStatus> {
+    return invoke<ScreenGuideDiagnosticStatus>("get_screen_guide_diagnostic_status");
+}
+
+export async function armScreenGuideDiagnostic(): Promise<ScreenGuideDiagnosticStatus> {
+    return invoke<ScreenGuideDiagnosticStatus>("arm_screen_guide_diagnostic");
+}
+
+export async function deleteScreenGuideDiagnostics(): Promise<ScreenGuideDiagnosticStatus> {
+    return invoke<ScreenGuideDiagnosticStatus>("delete_screen_guide_diagnostics");
+}
+
+/** Reveal the backend-owned diagnostics directory without accepting a renderer path. */
+export async function revealScreenGuideDiagnostics(): Promise<ScreenGuideDiagnosticStatus> {
+    return invoke<ScreenGuideDiagnosticStatus>("reveal_screen_guide_diagnostics");
 }
 
 export async function screenGuidePress(): Promise<number> {
@@ -2604,10 +2766,12 @@ export async function companionRevokeDevice(deviceId: string): Promise<boolean> 
     return invoke<boolean>("companion_revoke_device", { deviceId });
 }
 
-// Notch HUD — the panel parked on the display's camera housing.
+// Notch HUD: the panel parked on the display's camera housing.
 
 export const NOTCH_HUD_HOVER_EVENT = "notch-hud://hover";
 export const NOTCH_HUD_GEOMETRY_EVENT = "notch-hud://geometry";
+/** Alt+N: `true` opens the panel, `false` closes it. */
+export const NOTCH_HUD_SUMMON_EVENT = "notch-hud://summon";
 
 /** Logical points, as measured from the display the HUD is parked on. */
 export interface NotchHudGeometry {
@@ -2638,7 +2802,7 @@ export async function setNotchHudHitRect(rect: {
     return invoke("set_notch_hud_hit_rect", { rect });
 }
 
-/** Take or release the keyboard — the HUD is not focusable at rest. */
+/** Take or release the keyboard: the HUD is not focusable at rest. */
 export async function setNotchHudKeyboard(active: boolean): Promise<void> {
     return invoke("set_notch_hud_keyboard", { active });
 }
@@ -2656,45 +2820,104 @@ export async function notchHudOpenMemory(memoryId: string): Promise<void> {
 }
 
 
-// Computer use — the notch operates the Mac through open-computer-use.
+// Notch Do: a spoken request is planned, shown, then run step by step.
 
 export const COMPUTER_USE_EVENT = "computer-use://event";
 
+export type ComputerUseStepAction = "open_app" | "open_url" | "operate";
+export type ComputerUseRisk = "runs" | "confirm" | "never";
+
 export type ComputerUseEvent =
-    | { kind: "ready" }
-    | { kind: "message"; text: string; final: boolean }
-    | { kind: "action"; itemId: string; tool: string; summary: string }
-    | { kind: "actionDone"; itemId: string; tool: string; ok: boolean }
-    | { kind: "approval"; requestKey: string; tool: string; summary: string }
-    | { kind: "approvalResolved"; requestKey: string }
-    | { kind: "turnDone"; status: string; error: string | null }
-    | { kind: "ended"; error: string | null };
+    | { kind: "planning"; runId: string; usedMemories: number }
+    | {
+          kind: "planned";
+          runId: string;
+          steps: { label: string; action: ComputerUseStepAction; app: string }[];
+          /** No step can need a yes, so the plan may start by itself. */
+          autoStart?: boolean;
+      }
+    | { kind: "stepStarted"; runId: string; index: number; attempt: number }
+    | { kind: "action"; runId: string; index: number; itemId: string; tool: string; summary: string; risk?: ComputerUseRisk }
+    | { kind: "actionDone"; runId: string; itemId: string; ok: boolean }
+    | { kind: "approval"; runId: string; requestKey: string; tool: string; summary: string }
+    | { kind: "approvalResolved"; runId: string; requestKey: string }
+    | { kind: "blocked"; runId: string; index: number; tool: string; summary: string; reason: string }
+    | { kind: "stepDone"; runId: string; index: number; ok: boolean; detail: string }
+    | { kind: "finished"; runId: string; ok: boolean; summary: string }
+    | { kind: "stopped"; runId: string }
+    | { kind: "failed"; runId: string; error: string; reconnect: boolean };
 
 export interface ComputerUseStatus {
-    /** Screen Guide's "Operate my Mac" setting. */
+    /** The "Operate my Mac" opt-in. */
     enabled: boolean;
     codexReady: boolean;
-    openComputerUsePath: string | null;
-    active: boolean;
+    /** `codex_computer_use` or `open_computer_use`; null when neither is installed. */
+    backend: string | null;
+    backendPath: string | null;
+    activeRun: string | null;
 }
 
 export async function computerUseStatus(): Promise<ComputerUseStatus> {
     return invoke<ComputerUseStatus>("computer_use_status");
 }
 
-/** Starts a conversation if needed; mid-task words redirect the current turn. */
-export async function computerUseSay(text: string): Promise<void> {
-    return invoke("computer_use_say", { text });
+/** Plans a request and returns the run id. Stops any run in progress first. */
+export async function computerUsePlan(text: string): Promise<string> {
+    return invoke<string>("computer_use_plan", { text });
 }
 
-export async function computerUseInterrupt(): Promise<void> {
-    return invoke("computer_use_interrupt");
+/** Starts a planned run (the plan card's countdown, "go", or a tap). */
+export async function computerUseStart(runId: string): Promise<void> {
+    return invoke("computer_use_start", { runId });
 }
 
 export async function computerUseRespond(requestKey: string, approve: boolean): Promise<void> {
     return invoke("computer_use_respond", { requestKey, approve });
 }
 
+export interface OperatorPermissions {
+    accessibility: boolean;
+    screenRecording: boolean;
+    /** Spotify or Music answered; null when neither is running. */
+    automationMedia: boolean | null;
+    backend: string | null;
+    /** The computer-use server answered; null until probed. */
+    backendReady: boolean | null;
+    backendDetail: string | null;
+}
+
+/** Live permission checks for Notch Do. `probe` starts Computer Use once. */
+export async function computerUsePermissions(probe: boolean): Promise<OperatorPermissions> {
+    return invoke<OperatorPermissions>("computer_use_permissions", { probe });
+}
+
+/** Kills the run at once, including an action in flight. */
 export async function computerUseStop(): Promise<void> {
     return invoke("computer_use_stop");
 }
+
+// Setup center: what FNDR depends on, and installing or updating it from the app.
+
+export type SetupComponentState = "ready" | "missing" | "error";
+export type SetupComponentAction = "install" | "sign_in" | "open_url";
+
+export interface SetupComponent {
+    id: string;
+    name: string;
+    purpose: string;
+    required: boolean;
+    state: SetupComponentState;
+    version: string | null;
+    detail: string | null;
+    action: SetupComponentAction | null;
+    url: string | null;
+}
+
+export async function setupComponents(): Promise<SetupComponent[]> {
+    return invoke<SetupComponent[]>("setup_components");
+}
+
+export async function installComponent(id: string): Promise<void> {
+    return invoke("install_component", { id });
+}
+

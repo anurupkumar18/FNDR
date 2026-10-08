@@ -18,7 +18,9 @@ use crate::context_runtime::chunk_route::ChunkRoute;
 use crate::context_runtime::query_plan::{plan, PlanHints};
 use crate::context_runtime::retrieval_routes::{RetrievalRoute, RouteCtx};
 use crate::embedding::prefixes::prefix_document_for_index;
-use crate::embedding::{select_salient_memory_chunks, shared_bge_v5_query_embedder, Embedder, EmbeddingBackend};
+use crate::embedding::{
+    select_salient_memory_chunks, shared_bge_v5_query_embedder, Embedder, EmbeddingBackend,
+};
 use crate::inference::model_config::{embedding_v5_contract, BGE_V5_DIMENSIONS};
 use crate::storage::{MemoryChunkRecord, MemoryRecord, Store};
 use sha2::{Digest, Sha256};
@@ -27,16 +29,12 @@ use std::sync::Arc;
 
 fn default_bge_model_dir() -> PathBuf {
     dirs::home_dir()
-        .map(|home| {
-            home.join("Library/Application Support/com.fndr.app/models-bge")
-        })
+        .map(|home| home.join("Library/Application Support/com.fndr.app/models-bge"))
         .unwrap_or_else(|| PathBuf::from("models-bge"))
 }
 
 fn ensure_bge_model_dir() {
-    if std::env::var("FNDR_EMBED_MODEL_DIR").is_err()
-        && std::env::var("FNDR_MODEL_DIR").is_err()
-    {
+    if std::env::var("FNDR_EMBED_MODEL_DIR").is_err() && std::env::var("FNDR_MODEL_DIR").is_err() {
         let dir = default_bge_model_dir();
         if dir.join(embedding_v5_contract().model_filename).exists() {
             std::env::set_var("FNDR_EMBED_MODEL_DIR", &dir);
@@ -66,8 +64,12 @@ async fn seed_real_bge_index(
         app_name: "Terminal".to_string(),
         window_title: "BGE index smoke".to_string(),
         session_id: "bge-smoke".to_string(),
-        text: "BGE chunk index lazy initialization stores child embeddings for chunk-first retrieval.".to_string(),
-        clean_text: "BGE chunk index lazy initialization stores child embeddings for chunk-first retrieval.".to_string(),
+        text:
+            "BGE chunk index lazy initialization stores child embeddings for chunk-first retrieval."
+                .to_string(),
+        clean_text:
+            "BGE chunk index lazy initialization stores child embeddings for chunk-first retrieval."
+                .to_string(),
         snippet: "BGE chunk index lazy initialization".to_string(),
         content_hash: "bge-smoke-content".to_string(),
         ..Default::default()
@@ -141,7 +143,8 @@ mod tests {
         assert_eq!(reindex.dimension(), BGE_V5_DIMENSIONS);
 
         let first: Arc<Embedder> = shared_bge_v5_query_embedder().expect("lazy BGE query embedder");
-        let second: Arc<Embedder> = shared_bge_v5_query_embedder().expect("cached BGE query embedder");
+        let second: Arc<Embedder> =
+            shared_bge_v5_query_embedder().expect("cached BGE query embedder");
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(first.backend(), EmbeddingBackend::Real);
         assert_eq!(first.dimension(), BGE_V5_DIMENSIONS);
@@ -156,7 +159,10 @@ mod tests {
             .await
             .expect("seed real BGE chunk index");
         assert!(
-            store.has_chunk_retrieval_index().await.expect("index probe"),
+            store
+                .has_chunk_retrieval_index()
+                .await
+                .expect("index probe"),
             "chunk table should be populated"
         );
 
@@ -184,9 +190,7 @@ mod tests {
 
         println!(
             "BGE v5 index smoke OK: parent={} chunk={} top_score={:.3}",
-            parent.id,
-            chunk.id,
-            hits.hits[0].score
+            parent.id, chunk.id, hits.hits[0].score
         );
     }
 }

@@ -54,6 +54,18 @@ body,
     opacity: 1;
 }
 
+.omnibar-activity {
+    width: auto;
+    margin: 8px 10px 0;
+    --hairline: var(--hairline-2, rgba(255, 255, 255, 0.08));
+    --surface: var(--bg-3, rgba(255, 255, 255, 0.06));
+}
+
+.omnibar-activity .activity-trace-summary {
+    min-height: 42px;
+    padding-block: 6px;
+}
+
 .omnibar-surface-toggle {
     display: flex;
     gap: 2px;

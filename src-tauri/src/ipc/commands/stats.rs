@@ -204,10 +204,16 @@ pub async fn fndr_unsubscribe(
 /// Start MCP server (optional custom port)
 #[tauri::command]
 pub async fn start_mcp_server(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     port: Option<u16>,
 ) -> Result<McpServerStatus, String> {
-    mcp::start(state.inner().clone(), None, port).await
+    mcp::start(Some(app), state.inner().clone(), None, port).await
+}
+
+#[tauri::command]
+pub async fn resolve_mcp_approval(request_id: String, approved: bool) -> bool {
+    mcp::resolve_approval(&request_id, approved)
 }
 
 /// Stop MCP server
@@ -244,13 +250,21 @@ pub async fn pause_capture(state: State<'_, Arc<AppState>>) -> Result<(), String
 /// Resume capture
 #[tauri::command]
 pub async fn resume_capture(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    let result = set_capture_paused_for_user(state.inner(), false);
+    let result = resume_capture_for_user(state.inner());
     emit_capture_status(state.inner());
     result
 }
 
 fn set_capture_paused_for_user(state: &AppState, paused: bool) -> Result<(), String> {
     state.set_user_capture_paused(paused)
+}
+
+fn resume_capture_for_user(state: &AppState) -> Result<(), String> {
+    state.set_user_capture_paused(false)?;
+    if state.is_incognito.swap(false, Ordering::SeqCst) {
+        tracing::info!("Private mode cleared by desktop resume");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -289,7 +303,6 @@ mod capture_pause_persistence_tests {
                 self.store.clone(),
                 self.state_store.clone(),
                 GraphStore::new(self.store.clone()),
-                None,
                 None,
             )
         }
@@ -335,6 +348,18 @@ mod capture_pause_persistence_tests {
         let relaunched = fixture.app_state();
         assert!(!relaunched.is_paused.load(Ordering::SeqCst));
         assert!(relaunched.is_capturing());
+    }
+
+    #[test]
+    fn explicit_capture_resume_exits_private_mode() {
+        let fixture = StateFixture::new();
+        let state = fixture.app_state();
+        state.is_incognito.store(true, Ordering::SeqCst);
+
+        resume_capture_for_user(&state).expect("resume capture and exit private mode");
+
+        assert!(!state.is_incognito.load(Ordering::SeqCst));
+        assert!(state.is_capturing());
     }
 
     #[test]
@@ -416,7 +441,12 @@ pub async fn set_retention_days(state: State<'_, Arc<AppState>>, days: u32) -> R
 /// Get unique app names for filter dropdown
 #[tauri::command]
 pub async fn get_app_names(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
-    let app_state = state.inner();
+    cached_app_names(state.inner()).await
+}
+
+/// Stored app names minus FNDR's own, cached like the other derived stats.
+/// Also used by retrieval to recognize "in Slack" in a query (VS-13).
+pub(crate) async fn cached_app_names(app_state: &AppState) -> Result<Vec<String>, String> {
     if let Some((apps, computed_at_ms)) = app_state.app_names_cache.read().clone() {
         if cache_is_fresh(computed_at_ms) {
             return Ok(apps);
@@ -589,7 +619,10 @@ pub(crate) fn build_daily_activity_summary(records: &[SearchResult], day_label: 
 /// Daily summaries are another reader of persisted memories, so they must
 /// honor the same low-signal admission policy as Search, Vault, and Ask.
 pub(crate) fn surfaceable_daily_records(records: Vec<SearchResult>) -> Vec<SearchResult> {
-    let (surfaceable, _low_signal) = partition_surfaceable(strip_internal_fndr_results(records));
+    let (mut surfaceable, _low_signal) =
+        partition_surfaceable(strip_internal_fndr_results(records));
+    // A notification banner or a login prompt is not an app the person used.
+    surfaceable.retain(|record| !crate::tasks::suggest::is_system_surface(&record.app_name));
     surfaceable
 }
 
@@ -647,9 +680,13 @@ fn daily_cluster_bullet(cluster: &DailyActivityCluster) -> String {
         )
     };
 
+    // The topic is often the first words of the sample. Saying both reads
+    // as the same sentence twice.
+    let topic_stem = cluster.label.trim_end_matches('.').to_lowercase();
     let sample = cluster
         .samples
         .first()
+        .filter(|value| !value.to_lowercase().starts_with(&topic_stem))
         .map(|value| format!(", including \"{value}\""))
         .unwrap_or_default();
 
@@ -765,7 +802,7 @@ fn format_overview_duration(duration_ms: i64) -> String {
     }
 }
 
-fn build_daily_summary_overview(records: &[SearchResult], open_followups: usize) -> String {
+fn build_daily_summary_overview(records: &[SearchResult], open_tasks: usize) -> String {
     if records.is_empty() {
         return String::new();
     }
@@ -833,13 +870,11 @@ fn build_daily_summary_overview(records: &[SearchResult], open_followups: usize)
         })
         .unwrap_or_default();
 
-    let followup_sentence = if open_followups == 0 {
-        "You have no open follow-ups to carry into tomorrow.".to_string()
-    } else {
-        format!(
-            "You have {open_followups} open follow-up{} to carry into tomorrow.",
-            if open_followups == 1 { "" } else { "s" }
-        )
+    // Nothing open is not news, so it gets no sentence.
+    let followup_sentence = match open_tasks {
+        0 => String::new(),
+        1 => "You have 1 open task to carry into tomorrow.".to_string(),
+        count => format!("You have {count} open tasks to carry into tomorrow."),
     };
 
     [activity_sentence, most_time_sentence, followup_sentence]
@@ -856,16 +891,14 @@ fn build_daily_summary_overview(records: &[SearchResult], open_followups: usize)
 pub async fn get_daily_summary_followups(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<Task>, String> {
-    Ok(state
+    // Only what the person added, accepted or took from a meeting. A
+    // suggestion they never accepted is not work they are carrying.
+    state
         .store
         .list_tasks()
         .await
-        .map_err(|err| err.to_string())?
-        .into_iter()
-        .filter(|task| {
-            task.task_type == TaskType::Followup && !task.is_completed && !task.is_dismissed
-        })
-        .collect())
+        .map(crate::tasks::suggest::open_commitments)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -947,18 +980,11 @@ pub async fn get_daily_summary_overview(
         return Ok(String::new());
     }
 
-    let open_followups = state
-        .store
-        .list_tasks()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|task| {
-            task.task_type == TaskType::Followup && !task.is_completed && !task.is_dismissed
-        })
-        .count();
+    let open_tasks =
+        crate::tasks::suggest::open_commitments(state.store.list_tasks().await.unwrap_or_default())
+            .len();
 
-    Ok(build_daily_summary_overview(&records, open_followups))
+    Ok(build_daily_summary_overview(&records, open_tasks))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1060,7 +1086,9 @@ pub async fn get_weekly_wrapped(
         None => expected_end_day,
     };
     if end_day != expected_end_day {
-        return Err("Wrapped weeks must end on Sunday, or today for the current week so far.".to_string());
+        return Err(
+            "Wrapped weeks must end on Sunday, or today for the current week so far.".to_string(),
+        );
     }
     let start = start_day
         .and_hms_opt(0, 0, 0)
@@ -1079,7 +1107,12 @@ pub async fn get_weekly_wrapped(
         chrono::Local
             .from_local_datetime(&next_day_start)
             .earliest()
-            .unwrap_or_else(|| chrono::Local.from_local_datetime(&next_day_start).latest().unwrap())
+            .unwrap_or_else(|| {
+                chrono::Local
+                    .from_local_datetime(&next_day_start)
+                    .latest()
+                    .unwrap()
+            })
             .timestamp_millis()
             - 1
     };
@@ -1131,8 +1164,14 @@ pub async fn get_weekly_wrapped(
             }
         }
 
-        if let Some(local_timestamp) = chrono::Local.timestamp_millis_opt(record.timestamp).single() {
-            let day = local_timestamp.date_naive().format("%a, %b %-d").to_string();
+        if let Some(local_timestamp) = chrono::Local
+            .timestamp_millis_opt(record.timestamp)
+            .single()
+        {
+            let day = local_timestamp
+                .date_naive()
+                .format("%a, %b %-d")
+                .to_string();
             *day_counts.entry(day).or_insert(0) += 1;
             *hour_counts.entry(local_timestamp.hour() as u8).or_insert(0) += 1;
         }
@@ -1191,8 +1230,8 @@ pub async fn get_weekly_wrapped(
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|task| !task.is_completed && !task.is_dismissed)
         .collect::<Vec<_>>();
+    let open_tasks = crate::tasks::suggest::open_commitments(open_tasks);
     let open_followups = open_tasks
         .iter()
         .filter(|task| task.task_type == TaskType::Followup)
@@ -1344,7 +1383,7 @@ pub async fn set_focus_task(
     // Always clear embedding first so the capture loop never sees a stale
     // embedding paired with a new task (or vice-versa). The brief window where
     // embedding is None means the loop skips drift detection for at most one
-    // capture cycle — an acceptable trade-off for consistency.
+    // capture cycle, an acceptable trade-off for consistency.
     *state.focus_task_embedding.write() = None;
     *state.focus_task.write() = task.clone();
     state.focus_drift_count.store(0, Ordering::Relaxed);
@@ -1432,4 +1471,89 @@ pub async fn get_runtime_metrics(
     state: State<'_, Arc<AppState>>,
 ) -> Result<crate::telemetry::runtime_metrics::RuntimeMetricsSnapshot, String> {
     Ok(current_runtime_snapshot(state.inner()))
+}
+
+#[cfg(test)]
+mod daily_summary_wording_tests {
+    use super::*;
+
+    fn capture(app: &str, title: &str, summary: &str, minute: i64) -> SearchResult {
+        SearchResult {
+            id: format!("{app}-{minute}"),
+            app_name: app.to_string(),
+            window_title: title.to_string(),
+            snippet: summary.to_string(),
+            display_summary: summary.to_string(),
+            clean_text: format!("{summary} More detail follows so the capture is not thin."),
+            timestamp: 1_790_000_000_000 + minute * 60_000,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_overview_counts_open_tasks_and_says_nothing_when_there_are_none() {
+        let records = vec![capture(
+            "Mail",
+            "Inbox",
+            "Replied to the lab report thread.",
+            0,
+        )];
+        let none = build_daily_summary_overview(&records, 0);
+        assert!(!none.to_lowercase().contains("open"), "{none}");
+        assert!(build_daily_summary_overview(&records, 1).contains("You have 1 open task to carry"));
+        assert!(
+            build_daily_summary_overview(&records, 3).contains("You have 3 open tasks to carry")
+        );
+    }
+
+    #[test]
+    fn a_bullet_does_not_say_the_same_sentence_twice() {
+        let repeated = DailyActivityCluster {
+            app_name: "Claude".to_string(),
+            label: "Reviewing a rule refinement process involving search results, labelings,...".to_string(),
+            first_ts: 1_790_000_000_000,
+            last_ts: 1_790_000_000_000,
+            count: 1,
+            samples: vec![
+                "Reviewing a rule refinement process involving search results, labelings, and QA profiles.".to_string(),
+            ],
+        };
+        let bullet = daily_cluster_bullet(&repeated);
+        assert_eq!(
+            bullet.matches("Reviewing a rule refinement").count(),
+            1,
+            "{bullet}"
+        );
+
+        let distinct = DailyActivityCluster {
+            label: "Lab 4 report".to_string(),
+            samples: vec!["Replied to Priya about the draft.".to_string()],
+            ..repeated
+        };
+        assert!(daily_cluster_bullet(&distinct).contains("including \"Replied to Priya"));
+    }
+
+    #[test]
+    fn system_processes_are_left_out_of_the_day() {
+        let kept = surfaceable_daily_records(vec![
+            capture(
+                "UserNotificationCenter",
+                "Notification",
+                "A banner about a calendar event appeared.",
+                0,
+            ),
+            capture(
+                "Mail",
+                "Inbox - Lab 4 report",
+                "Replied to the lab report thread with the draft.",
+                1,
+            ),
+        ]);
+        assert_eq!(
+            kept.iter()
+                .map(|record| record.app_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Mail"]
+        );
+    }
 }

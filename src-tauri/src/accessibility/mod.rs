@@ -4,7 +4,10 @@
 //! 1. Identify the currently focused input field's label in any app
 //! 2. Inject text directly into that field without requiring keyboard focus
 
+mod text_tree;
+
 use crate::ocr::{OcrConfig, OcrEngine};
+use objc2_app_kit::NSWorkspace;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -547,53 +550,270 @@ pub(crate) struct FocusedWindowSnapshot {
     pub document_url: Option<String>,
 }
 
+/// The focused app's pid and window, read through Accessibility. Unlike
+/// `NSWorkspace.frontmostApplication`, this does not depend on the main run
+/// loop having processed activation notifications.
+pub(crate) fn ax_frontmost() -> Option<(PidT, FocusedWindowSnapshot)> {
+    if !has_accessibility_permission() {
+        return None;
+    }
+    unsafe {
+        let pid = frontmost_pid()?;
+        let application = AXUIElementCreateApplication(pid);
+        if application.is_null() {
+            return None;
+        }
+        let snapshot = window_snapshot_for_application(application);
+        CFRelease(application);
+        Some((pid, snapshot))
+    }
+}
+
+fn workspace_frontmost_pid() -> Option<PidT> {
+    unsafe {
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|app| app.processIdentifier())
+            .filter(|pid| *pid > 0)
+    }
+}
+
+fn accessibility_text_target_allowed(pid: PidT, own_pid: PidT) -> bool {
+    pid > 0 && own_pid > 0 && pid != own_pid
+}
+
+fn expected_pid_remained_frontmost(
+    expected_pid: PidT,
+    before_snapshot: Option<PidT>,
+    after_snapshot: Option<PidT>,
+) -> bool {
+    expected_pid > 0
+        && before_snapshot == Some(expected_pid)
+        && after_snapshot == Some(expected_pid)
+}
+
+unsafe fn window_snapshot_for_application(application: AXUIElementRef) -> FocusedWindowSnapshot {
+    let (window_title, window_document_url) = ax_copy_attr_value(application, "AXFocusedWindow")
+        .ok()
+        .map(|window| {
+            let title = ax_string_attr(window, "AXTitle");
+            let document_url = ax_string_attr(window, "AXDocument");
+            CFRelease(window);
+            (title, document_url)
+        })
+        .unwrap_or_default();
+    let title = window_title.or_else(|| ax_string_attr(application, "AXTitle"));
+    let document_url = window_document_url.or_else(|| ax_string_attr(application, "AXDocument"));
+
+    FocusedWindowSnapshot {
+        title,
+        document_url,
+    }
+}
+
 /// Read the active window title and document URL without launching a helper process.
-/// With an expected process ID, that app is queried directly: the system-wide
-/// `AXFocusedApplication` lookup can fail with `kAXErrorCannotComplete` even
-/// when Accessibility is granted, and querying by PID cannot hit a stale focus target.
+/// An expected process ID prevents a stale Accessibility focus target from being used.
 pub(crate) fn focused_window_snapshot(expected_pid: Option<PidT>) -> Option<FocusedWindowSnapshot> {
     if !has_accessibility_permission() {
         return None;
     }
 
     unsafe {
-        let focused_app = match expected_pid {
-            Some(pid) if pid > 0 => AXUIElementCreateApplication(pid),
-            Some(_) => return None,
-            None => {
-                let system_el = AXUIElementCreateSystemWide();
-                if system_el.is_null() {
-                    return None;
-                }
-                let focused_app = ax_copy_attr_value(system_el, "AXFocusedApplication");
+        if let Some(expected_pid) = expected_pid {
+            let before_snapshot = workspace_frontmost_pid();
+            if before_snapshot != Some(expected_pid) || expected_pid <= 0 {
+                return None;
+            }
+
+            // Query the known application directly. In some host environments the
+            // system-wide AXFocusedApplication lookup returns kAXErrorCannotComplete
+            // even though the frontmost application's own AX tree is available.
+            let application = AXUIElementCreateApplication(expected_pid);
+            if application.is_null() {
+                return None;
+            }
+            let snapshot = window_snapshot_for_application(application);
+            CFRelease(application);
+
+            let after_snapshot = workspace_frontmost_pid();
+            return expected_pid_remained_frontmost(expected_pid, before_snapshot, after_snapshot)
+                .then_some(snapshot);
+        }
+
+        let system_el = AXUIElementCreateSystemWide();
+        if system_el.is_null() {
+            return None;
+        }
+        let focused_app = match ax_copy_attr_value(system_el, "AXFocusedApplication") {
+            Ok(focused_app) => focused_app,
+            Err(_) => {
                 CFRelease(system_el);
-                focused_app.ok()?
+                return None;
             }
         };
+        CFRelease(system_el);
         if focused_app.is_null() {
             return None;
         }
 
-        let (window_title, window_document_url) =
-            ax_copy_attr_value(focused_app, "AXFocusedWindow")
-                .ok()
-                .map(|window| {
-                    let title = ax_string_attr(window, "AXTitle");
-                    let document_url = ax_string_attr(window, "AXDocument");
-                    CFRelease(window);
-                    (title, document_url)
-                })
-                .unwrap_or_default();
-        let title = window_title.or_else(|| ax_string_attr(focused_app, "AXTitle"));
-        let document_url =
-            window_document_url.or_else(|| ax_string_attr(focused_app, "AXDocument"));
+        let mut pid: PidT = 0;
+        let pid_matches = AXUIElementGetPid(focused_app, &mut pid) == K_AX_ERROR_SUCCESS && pid > 0;
+        if !pid_matches {
+            CFRelease(focused_app);
+            return None;
+        }
+
+        let snapshot = window_snapshot_for_application(focused_app);
         CFRelease(focused_app);
 
-        Some(FocusedWindowSnapshot {
-            title,
-            document_url,
-        })
+        Some(snapshot)
     }
+}
+
+// ── Focused window text (VS-15) ───────────────────────────────────────────────
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, seconds: f32) -> AXError;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
+    fn CFArrayGetCount(array: CFTypeRef) -> CFIndex;
+    fn CFArrayGetValueAtIndex(array: CFTypeRef, idx: CFIndex) -> CFTypeRef;
+    fn CFArrayGetTypeID() -> usize;
+    static kCFBooleanTrue: CFTypeRef;
+}
+
+/// Chromium and Electron apps build their Accessibility tree only after a
+/// client asks for it. AXManualAccessibility is the documented opt-in that
+/// does not change what the person sees (unlike AXEnhancedUserInterface).
+unsafe fn enable_manual_accessibility(application: AXUIElementRef) {
+    for name in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
+        let attr = str_to_cfstring(name);
+        if !attr.is_null() {
+            let _ = AXUIElementSetAttributeValue(application, attr, kCFBooleanTrue);
+            CFRelease(attr);
+        }
+    }
+}
+
+/// An owned AXUIElement reference, released on drop.
+struct AxElement(AXUIElementRef);
+
+impl Drop for AxElement {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { CFRelease(self.0) };
+        }
+    }
+}
+
+struct AxTextTree;
+
+impl text_tree::TextTree for AxTextTree {
+    type Node = AxElement;
+
+    fn role(&self, node: &AxElement) -> Option<String> {
+        unsafe { ax_string_attr(node.0, "AXRole") }
+    }
+
+    fn subrole(&self, node: &AxElement) -> Option<String> {
+        unsafe { ax_string_attr(node.0, "AXSubrole") }
+    }
+
+    fn text(&self, node: &AxElement) -> Option<String> {
+        unsafe {
+            ax_string_attr(node.0, "AXValue")
+                .filter(|text| !text.trim().is_empty())
+                .or_else(|| ax_string_attr(node.0, "AXTitle"))
+        }
+    }
+
+    fn children(&self, node: &AxElement) -> Vec<AxElement> {
+        unsafe {
+            let Ok(array) = ax_copy_attr_value(node.0, "AXChildren") else {
+                return Vec::new();
+            };
+            if array.is_null() {
+                return Vec::new();
+            }
+            let mut children = Vec::new();
+            if CFGetTypeID(array) == CFArrayGetTypeID() {
+                for index in 0..CFArrayGetCount(array) {
+                    let child = CFArrayGetValueAtIndex(array, index);
+                    if !child.is_null() {
+                        children.push(AxElement(CFRetain(child)));
+                    }
+                }
+            }
+            CFRelease(array);
+            children
+        }
+    }
+}
+
+/// Text read from the focused window's Accessibility tree, counts included so
+/// callers can log without keeping content.
+#[derive(Debug, Clone)]
+pub struct FocusedText {
+    pub text: String,
+    pub nodes_visited: usize,
+    pub secure_fields_skipped: usize,
+    pub from_web_area: bool,
+    pub role_counts: std::collections::BTreeMap<String, usize>,
+    pub truncated: bool,
+    pub elapsed_ms: u64,
+}
+
+/// `focused_text` for whichever process is frontmost right now.
+pub fn frontmost_focused_text(max_chars: usize) -> Option<FocusedText> {
+    focused_text(workspace_frontmost_pid()?, max_chars)
+}
+
+/// Read the focused window's on-screen text for process `pid` (reading order,
+/// at most `max_chars`, at most 50 ms or 4,000 nodes). Returns `None` without
+/// permission, when `pid` is not the frontmost process before and after the
+/// read, or when the window exposes no text. Secure text fields are never read.
+/// Callers run the capture privacy gates before calling this.
+pub fn focused_text(pid: i32, max_chars: usize) -> Option<FocusedText> {
+    if !accessibility_text_target_allowed(pid, std::process::id() as PidT)
+        || !has_accessibility_permission()
+        || workspace_frontmost_pid() != Some(pid)
+    {
+        return None;
+    }
+    let started = std::time::Instant::now();
+    let outcome = unsafe {
+        let application = AxElement(AXUIElementCreateApplication(pid));
+        if application.0.is_null() {
+            return None;
+        }
+        AXUIElementSetMessagingTimeout(application.0, 0.05);
+        enable_manual_accessibility(application.0);
+        let window = AxElement(ax_copy_attr_value(application.0, "AXFocusedWindow").ok()?);
+        if window.0.is_null() {
+            return None;
+        }
+        AXUIElementSetMessagingTimeout(window.0, 0.05);
+        text_tree::collect_text(&AxTextTree, &window, text_tree::Budget::new(max_chars))
+    };
+    if !expected_pid_remained_frontmost(pid, Some(pid), workspace_frontmost_pid()) {
+        return None;
+    }
+    if outcome.text.trim().is_empty() && outcome.nodes_visited == 0 {
+        return None;
+    }
+    Some(FocusedText {
+        role_counts: outcome.role_counts,
+        truncated: outcome.stop != text_tree::StopReason::Complete,
+        text: outcome.text,
+        nodes_visited: outcome.nodes_visited,
+        secure_fields_skipped: outcome.secure_fields_skipped,
+        from_web_area: outcome.from_web_area,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    })
 }
 
 /// Capture the focused input field's context from the currently frontmost application.
@@ -857,5 +1077,36 @@ fn inject_text_into_target(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{accessibility_text_target_allowed, expected_pid_remained_frontmost};
+
+    #[test]
+    fn accessibility_text_skips_fndr_own_webview_pid() {
+        assert!(!accessibility_text_target_allowed(42, 42));
+        assert!(accessibility_text_target_allowed(7, 42));
+        assert!(!accessibility_text_target_allowed(0, 42));
+    }
+
+    #[test]
+    fn direct_pid_snapshot_requires_same_frontmost_process_before_and_after() {
+        assert!(expected_pid_remained_frontmost(42, Some(42), Some(42)));
+    }
+
+    #[test]
+    fn direct_pid_snapshot_rejects_stale_or_changed_frontmost_process() {
+        assert!(!expected_pid_remained_frontmost(42, Some(7), Some(42)));
+        assert!(!expected_pid_remained_frontmost(42, Some(42), Some(7)));
+        assert!(!expected_pid_remained_frontmost(42, None, Some(42)));
+        assert!(!expected_pid_remained_frontmost(42, Some(42), None));
+    }
+
+    #[test]
+    fn direct_pid_snapshot_rejects_invalid_expected_pid() {
+        assert!(!expected_pid_remained_frontmost(0, Some(0), Some(0)));
+        assert!(!expected_pid_remained_frontmost(-1, Some(-1), Some(-1)));
     }
 }

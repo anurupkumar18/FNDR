@@ -1,6 +1,6 @@
 //! Tauri command handlers
 
-mod common;
+pub(crate) mod common;
 pub mod search;
 
 pub use search::{
@@ -23,7 +23,7 @@ pub use export::*;
 mod privacy;
 pub use privacy::*;
 
-mod stats;
+pub(crate) mod stats;
 pub use stats::*;
 
 mod autofill;
@@ -57,7 +57,10 @@ pub(crate) mod openclicky_bridge;
 pub use openclicky_bridge::*;
 
 mod computer_use;
+mod hermes_codex;
+mod setup_center;
 pub use computer_use::*;
+pub use setup_center::*;
 
 mod agent;
 pub use agent::*;
@@ -76,8 +79,9 @@ pub use debug::{get_memory_timeline_thread, inspect_memory_pipeline};
 
 pub mod retrieval;
 pub use retrieval::{
-    fndr_answer, fndr_build_context_pack, fndr_get_memory_subgraph, fndr_get_related_memories,
-    fndr_quality_status, fndr_search, fndr_timeline,
+    fndr_answer, fndr_build_context_pack, fndr_get_memory_source_statements,
+    fndr_get_memory_subgraph, fndr_get_related_memories, fndr_quality_status, fndr_search,
+    fndr_timeline,
 };
 
 mod companion;
@@ -85,6 +89,19 @@ pub use companion::*;
 
 mod screen_guide;
 pub use screen_guide::*;
+
+mod screen_guide_diagnostics;
+pub use screen_guide_diagnostics::*;
+
+#[cfg(debug_assertions)]
+mod memory_journey;
+#[cfg(debug_assertions)]
+pub use memory_journey::*;
+
+#[cfg(debug_assertions)]
+mod quality_lab;
+#[cfg(debug_assertions)]
+pub use quality_lab::*;
 
 // Privacy proof IPC command
 pub use crate::privacy_proof::*;

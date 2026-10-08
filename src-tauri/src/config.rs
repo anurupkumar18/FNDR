@@ -621,8 +621,9 @@ pub struct ScreenGuideConfig {
     /// (127.0.0.1:32123) instead of FNDR's own overlay cursor.
     #[serde(default)]
     pub openclicky_bridge: bool,
-    /// Let FNDR click, type and press keys through open-computer-use when
-    /// asked in the notch. Every action still needs an explicit approval.
+    /// Let FNDR click, type and press keys through a computer-use helper when
+    /// asked in the notch. `operator::policy` decides per action whether it
+    /// runs, waits for a tap, or is refused (ADR-022 amendment, ADR 024).
     #[serde(default)]
     pub operate_computer: bool,
 }
@@ -731,6 +732,13 @@ pub struct Config {
     /// Click-through, local-only Screen Guide configuration.
     #[serde(default)]
     pub screen_guide: ScreenGuideConfig,
+    /// Kill switch: every command-surface action is refused while true.
+    #[serde(default)]
+    pub actions_kill_switch: bool,
+    /// "Let assistants add notes": `fndr.remember` stores nothing while false
+    /// (VS-68). Off by default, because it widens what memory holds.
+    #[serde(default)]
+    pub agent_notes_enabled: bool,
     /// Authoritative local embedding model contract.
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -1111,6 +1119,8 @@ impl Default for Config {
             decay_half_life_days: 21,
             autofill: AutofillConfig::default(),
             screen_guide: ScreenGuideConfig::default(),
+            actions_kill_switch: false,
+            agent_notes_enabled: false,
             embedding: EmbeddingConfig::default(),
             chunking: ChunkingConfig::default(),
             search: SearchConfig::default(),
@@ -1293,7 +1303,10 @@ mod tests {
             ..ScreenGuideConfig::default()
         }
         .normalized();
-        assert!(!stale.send_screenshot_to_codex, "screenshot opt-in needs the ChatGPT model");
+        assert!(
+            !stale.send_screenshot_to_codex,
+            "screenshot opt-in needs the ChatGPT model"
+        );
 
         let legacy: ScreenGuideConfig =
             serde_json::from_str(r#"{"enabled":true,"shortcut":"Control+Alt+Space"}"#).unwrap();

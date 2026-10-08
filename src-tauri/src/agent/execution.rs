@@ -41,6 +41,21 @@ fn is_blocked(cmd: &str, args: &[&str]) -> Option<String> {
                     return Some(format!("git subcommand not allowed: {}", sub));
                 }
             }
+            // diff, log, and show can write a file (`--output`), read any
+            // file outside the repository (`--no-index`), or run commands
+            // the repository's config names (`--ext-diff`, `--textconv`).
+            if args.iter().any(|arg| {
+                *arg == "--output"
+                    || arg.starts_with("--output=")
+                    || ["--no-index", "--ext-diff", "--textconv"].contains(arg)
+            }) {
+                return Some(format!("git option not allowed: {}", args.join(" ")));
+            }
+            if args.first() == Some(&"branch") {
+                if let Some(reason) = branch_writes(&args[1..]) {
+                    return Some(reason);
+                }
+            }
         }
         "cargo" => {
             let allowed = ["check", "test"];
@@ -64,6 +79,53 @@ fn is_blocked(cmd: &str, args: &[&str]) -> Option<String> {
         _ => {}
     }
 
+    None
+}
+
+/// `git branch` may only list. A bare name creates a branch, and -d, -m,
+/// -c, -f, and the upstream options delete, rename, copy, move, or retarget
+/// one. Names are allowed only as patterns after `--list`/`-l` or as the
+/// commit after `--contains`, `--merged`, `--no-merged`, or `--points-at`.
+fn branch_writes(args: &[&str]) -> Option<String> {
+    const LIST_LONG: [&str; 10] = [
+        "--all",
+        "--remotes",
+        "--verbose",
+        "--list",
+        "--show-current",
+        "--no-color",
+        "--color",
+        "--ignore-case",
+        "--omit-empty",
+        "--no-abbrev",
+    ];
+    const TAKES_COMMIT: [&str; 4] = ["--contains", "--merged", "--no-merged", "--points-at"];
+    const LIST_PREFIXES: [&str; 4] = ["--sort=", "--format=", "--color=", "--abbrev="];
+    let refuse = || Some("git branch may only list branches".to_string());
+    let mut listing = false;
+    let mut expect_commit = false;
+    for arg in args {
+        if expect_commit {
+            expect_commit = false;
+            continue;
+        }
+        if TAKES_COMMIT.contains(arg) {
+            expect_commit = true;
+        } else if LIST_LONG.contains(arg) || LIST_PREFIXES.iter().any(|p| arg.starts_with(p)) {
+            listing |= *arg == "--list";
+        } else if let Some(short) = arg.strip_prefix('-').filter(|rest| !rest.starts_with('-')) {
+            if short.is_empty()
+                || !short
+                    .chars()
+                    .all(|c| matches!(c, 'a' | 'r' | 'v' | 'l' | 'i'))
+            {
+                return refuse();
+            }
+            listing |= short.contains('l');
+        } else if arg.starts_with('-') || !listing {
+            return refuse();
+        }
+    }
     None
 }
 

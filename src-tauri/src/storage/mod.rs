@@ -6,9 +6,9 @@ mod state_store;
 
 pub use lance_store::{
     generate_search_aliases_public, normalize_record_for_index, pollution_ratio_score,
-    salience_concentration_score, topic_clarity_score, Store,
-    ACTIVITY_EVENTS_TABLE, CONTEXT_DELTAS_TABLE, CONTEXT_PACKS_TABLE, DECISION_LEDGER_TABLE,
-    EDGES_TABLE, ENTITY_ALIASES_TABLE, GRAPH_EDGES_TABLE, GRAPH_NODES_TABLE, KNOWLEDGE_PAGES_TABLE,
+    salience_concentration_score, topic_clarity_score, Store, ACTIVITY_EVENTS_TABLE,
+    CONTEXT_DELTAS_TABLE, CONTEXT_PACKS_TABLE, DECISION_LEDGER_TABLE, EDGES_TABLE,
+    ENTITY_ALIASES_TABLE, GRAPH_EDGES_TABLE, GRAPH_NODES_TABLE, KNOWLEDGE_PAGES_TABLE,
     MEETINGS_TABLE, MEMORIES_TABLE, MEMORIES_V5_PARENT_TABLE, MEMORY_CHUNKS_TABLE, NODES_TABLE,
     PROJECT_CONTEXTS_TABLE, SEGMENTS_TABLE, TASKS_TABLE,
 };
@@ -21,5 +21,6 @@ pub use schema::{
     MatchedChunkEvidence, MeetingBreakdown, MeetingSegment, MeetingSession, MemoryActionItem,
     MemoryChunkRecord, MemoryChunkSearchResult, MemoryRecord, NodeType, PrivacyClass,
     ProjectContext, RelevantFile, SearchResult, Stats, Task, TaskType, WorkingState,
+    AGENT_NOTE_SESSION_PREFIX, AGENT_NOTE_SOURCE_TYPE,
 };
 pub use state_store::StateStore;

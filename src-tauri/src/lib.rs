@@ -5,6 +5,7 @@
 
 pub mod accessibility;
 pub mod agent;
+pub mod briefing;
 pub mod capture;
 pub mod companion;
 pub mod config;
@@ -24,10 +25,13 @@ pub mod memory;
 pub mod memory_compaction;
 pub mod memory_embedding_document;
 pub mod memory_insight;
+#[cfg(debug_assertions)]
+pub mod memory_journey;
 pub mod memory_quality;
 pub mod memory_review;
 pub mod models;
 pub mod ocr;
+pub mod operator;
 pub mod privacy;
 pub mod privacy_proof;
 pub mod resume;
@@ -40,11 +44,12 @@ pub mod system_resources;
 pub mod tasks;
 pub mod telemetry;
 pub mod timeline;
+pub mod voice;
 pub mod wiki;
 
 use config::Config;
 use graph::GraphStore;
-use inference::{InferenceEngine, VlmEngine};
+use inference::InferenceEngine;
 use parking_lot::{Mutex, RwLock};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -65,7 +70,6 @@ pub struct PendingGraphUpdate {
 
 pub struct LoadedAiEngines {
     pub inference: Option<Arc<InferenceEngine>>,
-    pub vlm: Option<Arc<VlmEngine>>,
 }
 
 /// A proactive suggestion surfaced when the current screen matches a past memory.
@@ -371,6 +375,10 @@ impl CapturePipelineStats {
 /// Application state shared across threads
 pub struct AppState {
     pub app_data_dir: PathBuf,
+    /// Explicit, debug-build-only one-shot pipeline evidence recorder. Release
+    /// builds do not contain this field, its commands, or its raw-artifact UI.
+    #[cfg(debug_assertions)]
+    pub memory_journey: Arc<memory_journey::MemoryJourneyRecorder>,
     pub config: RwLock<Config>,
     pub store: Arc<Store>,
     pub state_store: Arc<StateStore>,
@@ -395,8 +403,6 @@ pub struct AppState {
     /// compatibility but only reflect a subset of paths.
     pub capture_stats: CapturePipelineStats,
     pub inference: RwLock<Option<Arc<InferenceEngine>>>,
-    /// Vision Language Model for intelligent screen analysis (optional)
-    pub vlm: RwLock<Option<Arc<VlmEngine>>>,
     inference_init: AsyncMutex<()>,
     /// One-frame-at-a-time gate. Any code path that drives the LLM, VLM,
     /// MTMD, BGE batch embedding, or CLIP batch embedding must hold this
@@ -456,9 +462,12 @@ impl AppState {
         state_store: Arc<StateStore>,
         graph: GraphStore,
         inference: Option<Arc<InferenceEngine>>,
-        vlm: Option<Arc<VlmEngine>>,
     ) -> Self {
         let (proactive_tx, proactive_rx) = tokio::sync::watch::channel(None);
+        #[cfg(debug_assertions)]
+        let memory_journey = Arc::new(memory_journey::MemoryJourneyRecorder::new(
+            app_data_dir.join("developer-memory-journeys"),
+        ));
         let capture_paused = match state_store.load_json::<bool>(USER_CAPTURE_PAUSED_STATE_KEY) {
             Ok(Some(paused)) => paused,
             Ok(None) => false,
@@ -472,6 +481,8 @@ impl AppState {
         };
         Self {
             app_data_dir,
+            #[cfg(debug_assertions)]
+            memory_journey,
             config: RwLock::new(config),
             store,
             state_store,
@@ -486,7 +497,6 @@ impl AppState {
             last_capture_time: AtomicU64::new(0),
             capture_stats: CapturePipelineStats::default(),
             inference: RwLock::new(inference),
-            vlm: RwLock::new(vlm),
             inference_init: AsyncMutex::new(()),
             model_pipeline_lock: AsyncMutex::new(()),
             stats_cache: RwLock::new(None),
@@ -582,6 +592,17 @@ impl AppState {
         *self.app_handle.write() = Some(handle);
     }
 
+    #[cfg(debug_assertions)]
+    pub fn emit_memory_journey_status(&self) {
+        use tauri::Emitter;
+        let Ok(status) = self.memory_journey.status() else {
+            return;
+        };
+        if let Some(handle) = self.app_handle.read().as_ref() {
+            let _ = handle.emit("memory-journey://status", status);
+        }
+    }
+
     /// Pause capture for transient internal work without changing the user's
     /// relaunch preference.
     pub fn pause(&self) {
@@ -635,10 +656,6 @@ impl AppState {
         self.inference.read().clone()
     }
 
-    pub fn vlm_engine(&self) -> Option<Arc<VlmEngine>> {
-        self.vlm.read().clone()
-    }
-
     pub fn ai_model_loaded(&self) -> bool {
         self.inference.read().is_some()
     }
@@ -670,13 +687,8 @@ impl AppState {
             .map(|engine| engine.model_id().to_string())
     }
 
-    pub fn replace_ai_engines(
-        &self,
-        inference: Option<Arc<InferenceEngine>>,
-        vlm: Option<Arc<VlmEngine>>,
-    ) {
+    pub fn replace_ai_engines(&self, inference: Option<Arc<InferenceEngine>>) {
         *self.inference.write() = inference;
-        *self.vlm.write() = vlm;
     }
 
     pub fn invalidate_memory_derived_caches(&self) {
@@ -731,10 +743,8 @@ pub async fn load_ai_engines(app_data_dir: &Path, config: &Config) -> LoadedAiEn
             }
         };
 
-    tracing::info!("Skipping eager VLM warm-up; VLM loads on demand.");
-    let vlm = None;
-
-    LoadedAiEngines { inference, vlm }
+    // The pixel runtime in `inference::image_semantics` loads on first use.
+    LoadedAiEngines { inference }
 }
 
 #[cfg(test)]

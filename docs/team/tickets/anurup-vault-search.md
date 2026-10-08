@@ -18,7 +18,7 @@ Measurements from 2026-09-23 on the owner's profile: 29 memories in 5 active day
 **Do.**
 1. Land Phase 0 Tasks 5 and 6 if not already merged.
 2. `make qa-seed && make qa-retrieval`, then `make vault-health` on your real profile.
-3. Save both outputs under `docs/evidence/W02/` and add a JSON copy of the retrieval scores (`--json` output, see VS-04).
+3. Save both outputs under `docs/evidence/W02/` and emit the versioned JSON retrieval report with `--json`; VS-04 owns comparing later runs against it.
 
 **Done when.** Both files are committed and the Friday scoreboard quotes them.
 
@@ -73,8 +73,8 @@ Measurements from 2026-09-23 on the owner's profile: 29 memories in 5 active day
 **Why.** Search quality silently regressed before because nothing checked it.
 
 **Do.**
-1. Add `--json <path>` to `retrieval_qa` that writes per-path Recall@5, MRR@10, per-kind recall, and per-query ranks.
-2. Commit `docs/evidence/retrieval-baseline.json` as the reference.
+1. Consume the VS-01 schema-v1 JSON output and compare later runs by per-path Recall@5, MRR@10, per-kind recall, and per-query ranks.
+2. Promote the accepted VS-01 JSON evidence to the canonical retrieval reference.
 3. Add `make qa-retrieval-check` that reruns and fails when any path's Recall@5 drops more than 0.05 or any previously found query becomes a miss.
 4. Add one line to `docs/team/TEAM.md`: search, capture-text, chunking, and embedding merge requests paste this output.
 
@@ -475,3 +475,89 @@ Measurements from 2026-09-23 on the owner's profile: 29 memories in 5 active day
 **Done when.** Every claim in the README search rows maps to code.
 
 **Evidence.** The diff.
+
+## VS-27 Record one memory journey through the real pipeline
+- assignee: anurupkumar
+- labels: area::vault-search, type::feature, prio::p0
+- milestone: W02-Measure
+- estimate: 8h
+- depends: none
+
+**Why.** Aggregate dashboards cannot explain why one real screen became a bad
+memory. A deliberately armed, bounded trace must connect the actual capture,
+OCR, cleanup, extraction, embeddings, storage, and presentation boundaries.
+
+**Today.** Activity traces and the Pipeline Inspector report safe aggregate
+state or separate searches; neither reconstructs one capture end to end.
+
+**Do.**
+1. Add a debug-only one-shot recorder and typed, owner-only, bounded bundle with
+   explicit export and deletion.
+2. Instrument the production capture and storage boundaries, including scoped
+   model evidence and vector contracts, without adding a second pipeline.
+3. Render event-backed stages and artifact metadata under Engine Diagnostics;
+   compile all raw commands and UI out of release builds.
+4. Publish findings relevant to VS-14, EM-11, and PX-07 by linking evidence,
+   without duplicating those tickets.
+
+**Done when.** Focused lifecycle/privacy/parity tests and `make test` pass, a
+production build contains no Memory Journey UI or command strings, and native
+QA can export and delete one safe bundle.
+
+**Evidence.** `docs/evidence/W04/memory-journey-baseline.md`, automated output,
+and one sanitized native inspector screenshot or private bundle review.
+
+## VS-28 Establish the six-journey human and agent baseline
+- assignee: anurupkumar
+- labels: area::vault-search, type::research, prio::p0
+- milestone: W02-Measure
+- estimate: 6h
+- depends: VS-27
+
+**Why.** Synthetic retrieval scores do not prove that FNDR preserves useful
+facts from real work or grounds answers safely. Six varied, approved cases make
+capture, human usefulness, and agent grounding separately reviewable.
+
+**Do.**
+1. Run Search and Ask through their unchanged production paths while recording
+   plans, expansions, route timing/candidates, fusion, rerank deltas,
+   exclusions, cards, citations, and refusal outcomes.
+2. Record the six authored cases in the Memory Journey contract, with exact and
+   paraphrase queries, grounded questions, and one unsupported question.
+3. Keep pipeline integrity, human usefulness, and agent grounding as separate
+   scorecards; have the user approve expected facts, forbidden claims, relevant
+   IDs, and labels before treating them as gold.
+4. Link the approved retrieval evidence for VS-04 rather than creating another
+   recurring evaluator.
+
+**Done when.** Six private bundles have reviewed labels, the sanitized baseline
+report is complete, and normal/explained Search and Ask produce identical
+production outputs.
+
+**Evidence.** `docs/evidence/W04/memory-journey-baseline.md` plus private bundle
+review receipts containing no captured content.
+
+## VS-29 Stage approved pipeline quality checks as merge gates
+- assignee: anurupkumar
+- labels: area::vault-search, type::qa, prio::p1
+- milestone: W04-Prove
+- estimate: 6h
+- depends: VS-28, VS-04
+
+**Why.** A baseline becomes useful only when approved invariants catch a later
+regression without converting machine-specific noise or draft labels into
+false blockers.
+
+**Do.**
+1. Block immediately on approved privacy, vector dimension/non-zero/finite,
+   parse, storage-integrity, citation, and refusal invariants.
+2. Compare retrieval only against the frozen, human-approved six-case baseline;
+   leave performance advisory until repeated runs establish stable thresholds.
+3. Emit a deterministic regression report with the changed case, stage,
+   audience scorecard, and evidence reference.
+
+**Done when.** CI demonstrates one passing baseline replay and one intentional
+failure for each blocking invariant, with no real captures or private bundles
+committed.
+
+**Evidence.** CI output and the sanitized regression report linked from VS-04.

@@ -73,19 +73,40 @@ impl PerceptualHasher {
     /// Check if the image is a duplicate of the last one
     /// Returns true if duplicate (below threshold), false if new
     pub fn is_duplicate(&mut self, image_data: &[u8], threshold: u32) -> bool {
+        self.check(image_data, threshold).is_duplicate
+    }
+
+    /// Same decision as `is_duplicate`, with the evidence behind it so a
+    /// duplicate verdict can be explained (threshold, match kind, distances).
+    pub fn check(&mut self, image_data: &[u8], threshold: u32) -> DedupeVerdict {
         let bytes_fingerprint = stable_bytes_fingerprint(image_data);
         if self
             .last_bytes_fingerprint
             .map(|previous| previous == bytes_fingerprint)
             .unwrap_or(false)
         {
-            return true;
+            return DedupeVerdict {
+                is_duplicate: true,
+                match_kind: DedupeMatchKind::BytesIdentical,
+                threshold,
+                hash_distance: Some(0),
+                rgb_distance: Some(0),
+            };
         }
 
         // Decode image
         let image = match image::load_from_memory(image_data) {
             Ok(img) => img,
-            Err(_) => return false, // Can't decode = treat as new
+            Err(_) => {
+                // Can't decode = treat as new
+                return DedupeVerdict {
+                    is_duplicate: false,
+                    match_kind: DedupeMatchKind::Undecodable,
+                    threshold,
+                    hash_distance: None,
+                    rgb_distance: None,
+                };
+            }
         };
 
         // Compute hash
@@ -93,22 +114,39 @@ impl PerceptualHasher {
         let average_rgb = average_rgb(&image);
 
         // Compare with last hash
-        let mut is_dup = if let (Some(ref last), Some(last_average_rgb)) =
-            (&self.last_hash, self.last_average_rgb)
-        {
-            let distance = hash.dist(last);
-            distance < threshold && rgb_distance(average_rgb, last_average_rgb) <= 24
-        } else {
-            false
+        let mut verdict = DedupeVerdict {
+            is_duplicate: false,
+            match_kind: DedupeMatchKind::Novel,
+            threshold,
+            hash_distance: None,
+            rgb_distance: None,
         };
+        if let (Some(ref last), Some(last_average_rgb)) = (&self.last_hash, self.last_average_rgb) {
+            let distance = hash.dist(last);
+            let rgb = rgb_distance(average_rgb, last_average_rgb);
+            verdict.hash_distance = Some(distance);
+            verdict.rgb_distance = Some(rgb);
+            if distance < threshold && rgb <= 24 {
+                verdict.is_duplicate = true;
+                verdict.match_kind = DedupeMatchKind::Consecutive;
+            }
+        }
 
         // Detect short alternating loops (A -> B -> A), not just exact consecutive duplicates.
-        if !is_dup {
-            is_dup = self.recent_hashes.iter().any(|(prev_hash, prev_rgb)| {
-                let distance = hash.dist(prev_hash);
-                distance < threshold.saturating_sub(1).max(1)
-                    && rgb_distance(average_rgb, *prev_rgb) <= 20
-            });
+        if !verdict.is_duplicate {
+            let loop_threshold = threshold.saturating_sub(1).max(1);
+            if let Some((distance, rgb)) =
+                self.recent_hashes.iter().find_map(|(prev_hash, prev_rgb)| {
+                    let distance = hash.dist(prev_hash);
+                    let rgb = rgb_distance(average_rgb, *prev_rgb);
+                    (distance < loop_threshold && rgb <= 20).then_some((distance, rgb))
+                })
+            {
+                verdict.is_duplicate = true;
+                verdict.match_kind = DedupeMatchKind::RecentLoop;
+                verdict.hash_distance = Some(distance);
+                verdict.rgb_distance = Some(rgb);
+            }
         }
 
         // Update last hash
@@ -120,8 +158,41 @@ impl PerceptualHasher {
             self.recent_hashes.pop_front();
         }
 
-        is_dup
+        verdict
     }
+}
+
+/// Why a frame was or was not treated as a duplicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DedupeMatchKind {
+    BytesIdentical,
+    Consecutive,
+    RecentLoop,
+    Novel,
+    Undecodable,
+}
+
+impl DedupeMatchKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BytesIdentical => "bytes_identical",
+            Self::Consecutive => "consecutive_hash",
+            Self::RecentLoop => "recent_loop_hash",
+            Self::Novel => "novel",
+            Self::Undecodable => "undecodable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DedupeVerdict {
+    pub is_duplicate: bool,
+    pub match_kind: DedupeMatchKind,
+    pub threshold: u32,
+    /// Hash distance to the frame that decided the verdict (the previous
+    /// frame when the frame was novel); `None` when there was no history.
+    pub hash_distance: Option<u32>,
+    pub rgb_distance: Option<u32>,
 }
 
 fn stable_bytes_fingerprint(bytes: &[u8]) -> u64 {

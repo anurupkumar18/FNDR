@@ -1,0 +1,54 @@
+.voice-preview {
+    min-height: 100vh;
+    padding: clamp(1.5rem, 4vw, 4rem);
+    color: var(--fg, #f5f5f7);
+    background: var(--bg, #111113);
+}
+
+.voice-preview__header {
+    max-width: 62rem;
+    margin: 0 auto 2rem;
+}
+
+.voice-preview__header > p:first-child {
+    margin: 0 0 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 750;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.voice-preview__header h1 {
+    margin: 0;
+    font-size: clamp(2rem, 6vw, 4rem);
+}
+
+.voice-preview__controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+}
+
+.voice-preview__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+    gap: 1rem;
+    max-width: 62rem;
+    margin: 0 auto;
+}
+
+.voice-preview__card {
+    min-height: 9rem;
+    padding: 1.25rem;
+    border: 1px solid var(--hairline-2, color-mix(in srgb, currentColor 20%, transparent));
+    border-radius: 1rem;
+    background: var(--bg-2, color-mix(in srgb, currentColor 5%, transparent));
+}
+
+.voice-preview__card h2 {
+    margin: 0 0 1rem;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}

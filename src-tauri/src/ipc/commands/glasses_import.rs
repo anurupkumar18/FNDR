@@ -111,6 +111,18 @@ pub async fn import_meta_glasses_photo(
         .ok_or_else(|| "No file selected".to_string())?,
     };
 
+    import_meta_glasses_photo_at_path(state.inner().clone(), resolved_path, None).await
+}
+
+/// Shared image-import implementation used by the picker command and the
+/// debug-only Quality Lab fixture replay. The replay caller validates that its
+/// path is one of the committed synthetic fixtures and that the active data
+/// directory is a marked Quality Lab profile before calling this function.
+pub(crate) async fn import_meta_glasses_photo_at_path(
+    state: Arc<AppState>,
+    resolved_path: std::path::PathBuf,
+    quality_lab_fixture_id: Option<&str>,
+) -> Result<String, String> {
     if !resolved_path.is_file() {
         return Err(format!("Not a file: {}", resolved_path.display()));
     }
@@ -420,6 +432,9 @@ pub async fn import_meta_glasses_photo(
     } else {
         "low_quality_evidence"
     });
+    if let Some(fixture_id) = quality_lab_fixture_id {
+        raw_evidence_json["quality_lab_fixture_id"] = json!(fixture_id);
+    }
     raw_evidence_json["clip_embedding_status"] =
         json!(if image_embedding.iter().all(|v| *v == 0.0) {
             "zero_vector"
@@ -439,7 +454,7 @@ pub async fn import_meta_glasses_photo(
     );
     let raw_evidence = upsert_embedding_manifest(&raw_evidence_json.to_string(), &manifest);
 
-    let internal_context = json!({
+    let mut internal_context = json!({
         "import_pipeline": "visual_semantics_mtmd",
         "vision_model_id": insight.model_id,
         "semantic_confidence": insight.confidence,
@@ -457,8 +472,11 @@ pub async fn import_meta_glasses_photo(
         } else {
             "clip_metadata_fallback"
         },
-    })
-    .to_string();
+    });
+    if let Some(fixture_id) = quality_lab_fixture_id {
+        internal_context["quality_lab_fixture_id"] = json!(fixture_id);
+    }
+    let internal_context = internal_context.to_string();
 
     let now = Local::now();
     let mut record = MemoryRecord {

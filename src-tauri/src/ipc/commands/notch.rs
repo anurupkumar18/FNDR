@@ -25,6 +25,8 @@ pub const NOTCH_HUD_SHORTCUT: &str = "Alt+N";
 const NOTCH_HUD_HOVER_EVENT: &str = "notch-hud://hover";
 /// Display configuration changed; the webview should re-read the geometry.
 const NOTCH_HUD_GEOMETRY_EVENT: &str = "notch-hud://geometry";
+/// `true` opens the panel, `false` closes it (the Alt+N shortcut).
+const NOTCH_HUD_SUMMON_EVENT: &str = "notch-hud://summon";
 
 // MARK: - Metrics (mirrored in notchMetrics.ts)
 
@@ -346,16 +348,34 @@ pub fn hide_notch_hud<R: tauri::Runtime>(app: &AppHandle<R>) {
     });
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ShortcutAction {
+    ShowAndOpen,
+    Open,
+    Close,
+}
+
+/// The shortcut opens the panel (listening starts there in Do mode), showing
+/// the notch first if needed; pressed again with the panel open, it closes it.
+fn shortcut_action(visible: bool, panel_open: bool) -> ShortcutAction {
+    match (visible, panel_open) {
+        (false, _) => ShortcutAction::ShowAndOpen,
+        (true, false) => ShortcutAction::Open,
+        (true, true) => ShortcutAction::Close,
+    }
+}
+
 fn toggle_notch_hud_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     let visible = app
         .get_webview_window(NOTCH_HUD_LABEL)
         .and_then(|window| window.is_visible().ok())
         .unwrap_or(false);
-    if visible {
-        hide_notch_hud(app);
-    } else {
+    let action = shortcut_action(visible, KEYBOARD_ACTIVE.load(Ordering::SeqCst));
+    if action == ShortcutAction::ShowAndOpen {
         show_notch_hud(app);
     }
+    let open = action != ShortcutAction::Close;
+    let _ = app.emit_to(NOTCH_HUD_LABEL, NOTCH_HUD_SUMMON_EVENT, open);
 }
 
 /// Register the HUD-owned shortcut without accepting another feature's
@@ -534,6 +554,14 @@ pub async fn notch_hud_open_memory(app: AppHandle, memory_id: String) -> Result<
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_shortcut_opens_the_panel_and_a_second_press_closes_it() {
+        assert_eq!(shortcut_action(false, false), ShortcutAction::ShowAndOpen);
+        assert_eq!(shortcut_action(true, false), ShortcutAction::Open);
+        assert_eq!(shortcut_action(true, true), ShortcutAction::Close);
+    }
+
     use super::*;
 
     fn rect() -> NotchHitRect {

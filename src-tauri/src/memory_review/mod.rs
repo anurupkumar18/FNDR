@@ -30,6 +30,7 @@ mod daily;
 mod inference_provider;
 mod pipeline;
 mod queue;
+mod repair_truncated;
 mod worker;
 
 pub use backfill::{backfill_memory_review_in_range, BackfillReviewSummary};
@@ -43,6 +44,10 @@ pub use pipeline::{
     ReviewProvider, ReviewWriteMode, ReviewedMemory, SameDayCandidate,
 };
 pub use queue::{MemoryReviewJob, MemoryReviewQueue};
+pub use repair_truncated::{
+    relabel_activity, repair_record, repair_truncated_summaries, reword_narration, RepairExample,
+    RepairSummary,
+};
 pub use worker::{
     spawn as spawn_worker, status as worker_status, tick_once, DeferReason,
     MemoryReviewWorkerStatus, TickOutcome,
@@ -93,6 +98,11 @@ pub fn allows_memory_review_worker(state: &AppState) -> bool {
 /// text reviewer. Sending them through the reviewer turns an expected
 /// low-evidence condition into a scary `review_failed` lifecycle state.
 pub fn review_skip_reason(record: &crate::storage::MemoryRecord) -> Option<&'static str> {
+    // An assistant's note never sits in a prompt whose output writes to
+    // memory (VS-68).
+    if record.is_agent_note() {
+        return Some("agent_note");
+    }
     if crate::memory_quality::is_visual_semantics_failed_record(record) {
         return Some("visual_semantics_failed");
     }

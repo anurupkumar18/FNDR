@@ -194,6 +194,11 @@
     animation: errorShake 0.35s var(--ease-spring);
 }
 
+.biometric-lock-activity {
+    margin-bottom: 18px;
+    text-align: left;
+}
+
 @keyframes errorShake {
 
     0%,
@@ -588,6 +593,17 @@
     gap: 0;
 }
 
+.app-main.search-centered.has-resume {
+    justify-content: flex-start;
+    overflow-y: auto;
+    padding-top: 72px;
+    padding-bottom: 28px;
+}
+
+.has-resume .home-hero-stage {
+    flex-shrink: 0;
+}
+
 .search-shell {
     display: flex;
     flex: 0 0 auto;
@@ -739,6 +755,14 @@
 
 .main-column {
     min-width: 0;
+}
+
+.search-activity-trace-wrap {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 0 20px;
+    box-sizing: border-box;
 }
 
 /* ===== Error banner ===== */

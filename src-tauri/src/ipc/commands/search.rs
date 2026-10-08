@@ -1,12 +1,14 @@
 //! Search-related Tauri commands and helpers.
 
-use super::common::{shared_embedder, strip_internal_fndr_results, truncate_chars};
+use super::common::truncate_chars;
+use crate::context_runtime::retrieve::{
+    authorize_related_memory_ids, memory_is_permitted, memory_is_visible,
+};
+use crate::context_runtime::{retrieve_search_results, RetrieveRequest};
 use crate::graph::graph_store::GraphStore;
 use crate::memory_quality::{partition_surfaceable, LowSignalReason};
 use crate::privacy::Blocklist;
-use crate::search::{
-    rerank_results, HybridSearcher, MemoryCard, MemoryCardSynthesizer, QueryContext,
-};
+use crate::search::{anchor_coverage_score, MemoryCard, MemoryCardSynthesizer, QueryContext};
 use crate::storage::SearchResult;
 use crate::AppState;
 use std::collections::HashSet;
@@ -18,6 +20,8 @@ const SYNTHESIS_TIMEOUT: Duration = Duration::from_millis(2400);
 const MEMORY_GRAPH_LIMIT: usize = 1_500;
 const MEMORY_DERIVED_CACHE_TTL_MS: i64 = 30_000;
 
+/// Ranked rows for the raw `search` commands, autofill, and quality checks:
+/// the same `retrieve` that Search, Ask, and agents use (VS-25).
 pub(super) async fn run_search_query(
     state: &AppState,
     query: &str,
@@ -25,69 +29,104 @@ pub(super) async fn run_search_query(
     app_filter: Option<&str>,
     limit: usize,
 ) -> Result<Vec<SearchResult>, String> {
-    let limit = limit.clamp(1, 50);
+    let request = RetrieveRequest {
+        query: query.to_string(),
+        time: time_filter.map(str::to_string),
+        app: app_filter.map(str::to_string),
+        limit: limit.clamp(1, 50),
+    };
+    let (_, results) = retrieve_search_results(state, &request).await?;
+    Ok(results)
+}
 
-    if !state
-        .store
-        .has_memories()
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        return Ok(Vec::new());
+/// The ranked retrieval stage Search uses before card synthesis: the one
+/// retrieval function (`context_runtime::retrieve`, VS-10), so Search ranks
+/// exactly what Ask and agents rank. Public so `examples/retrieval_qa.rs`
+/// measures what users see.
+pub async fn search_ranked_results(
+    state: &AppState,
+    query: &str,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+    raw_limit: usize,
+) -> Result<Vec<SearchResult>, String> {
+    let (results, _, _) =
+        search_ranked_results_internal(state, query, time_filter, app_filter, raw_limit, false)
+            .await?;
+    Ok(results)
+}
+
+async fn search_ranked_results_internal(
+    state: &AppState,
+    query: &str,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+    raw_limit: usize,
+    explain: bool,
+) -> Result<(Vec<SearchResult>, Option<serde_json::Value>, bool), String> {
+    let started = Instant::now();
+    let request = RetrieveRequest {
+        query: query.to_string(),
+        time: time_filter.map(str::to_string),
+        app: app_filter.map(str::to_string),
+        limit: raw_limit.clamp(1, 50),
+    };
+    let (retrieved, mut results) = retrieve_search_results(state, &request).await?;
+    // Card grouping reads how many query words each row covers; this no
+    // longer reorders anything.
+    let query_context = QueryContext::from_query(query);
+    for result in &mut results {
+        result.anchor_coverage_score = anchor_coverage_score(&query_context, result);
     }
+    let explanation = explain.then(|| {
+        serde_json::json!({
+            "production_retrieval": {
+                "path": "retrieve",
+                "filters": retrieved.filters,
+                "hits": retrieved.hits,
+                "latency_ms": started.elapsed().as_millis() as u64,
+            },
+            "final_ranks": results.iter().enumerate().map(|(index, result)| serde_json::json!({
+                "rank": index + 1,
+                "memory_id": result.id,
+                "score": result.score,
+                "anchor_coverage": result.anchor_coverage_score,
+                "matched_routes": result.matched_routes,
+                "embedding_reasons": result.embedding_reason_labels,
+            })).collect::<Vec<_>>(),
+        })
+    });
+    Ok((results, explanation, retrieved.strong_match))
+}
 
-    let search_config = {
-        let config = state.config.read();
-        config.search.clone()
-    };
+#[cfg(debug_assertions)]
+/// Ranked results plus whether the best one is a strong match. Search never
+/// returns nothing for an unrelated query; it returns the nearest memories
+/// and marks them weak, which the cards show.
+pub async fn search_ranked_results_with_strength(
+    state: &AppState,
+    query: &str,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+    raw_limit: usize,
+) -> Result<(Vec<SearchResult>, bool), String> {
+    let (results, _, strong_match) =
+        search_ranked_results_internal(state, query, time_filter, app_filter, raw_limit, false)
+            .await?;
+    Ok((results, strong_match))
+}
 
-    // When an InferenceEngine is loaded, route through the expansion variant
-    // so abstract concept queries ("sport", "design") can semantically reach
-    // domain-specific captures that don't contain the literal query term.
-    let engine_arc = state.inference_engine();
-    let engine_ref = engine_arc.as_deref();
-
-    let results = match shared_embedder() {
-        Ok(embedder) => match HybridSearcher::search_with_expansion(
-            &state.store,
-            embedder,
-            engine_ref,
-            query,
-            limit,
-            time_filter,
-            app_filter,
-            &search_config,
-        )
-        .await
-        .map_err(|err| err.to_string())
-        {
-            Ok(results) => results,
-            Err(err) => {
-                tracing::warn!(
-                    "Hybrid search failed; falling back to keyword-only search: {}",
-                    err
-                );
-                state
-                    .store
-                    .keyword_search(query, limit, time_filter, app_filter)
-                    .await
-                    .map_err(|e| e.to_string())?
-            }
-        },
-        Err(err) => {
-            tracing::warn!(
-                "Semantic embedder unavailable for raw search; falling back to keyword-only: {}",
-                err
-            );
-            state
-                .store
-                .keyword_search(query, limit, time_filter, app_filter)
-                .await
-                .map_err(|e| e.to_string())?
-        }
-    };
-
-    Ok(strip_internal_fndr_results(results))
+pub async fn search_ranked_results_explained(
+    state: &AppState,
+    query: &str,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+    raw_limit: usize,
+) -> Result<(Vec<SearchResult>, serde_json::Value), String> {
+    let (results, explanation, _) =
+        search_ranked_results_internal(state, query, time_filter, app_filter, raw_limit, true)
+            .await?;
+    Ok((results, explanation.unwrap_or_default()))
 }
 
 pub(super) fn cache_is_fresh(computed_at_ms: i64) -> bool {
@@ -245,6 +284,9 @@ async fn enrich_insight_kg_node_counts(
 }
 
 pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
+    if result.is_agent_note() {
+        return crate::search::memory_cards::build_fallback_card("", &result);
+    }
     let memory_id = result.id.clone();
     let score = result.score;
     let app_name = result.app_name.clone();
@@ -306,6 +348,9 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         context,
         timestamp: result.timestamp,
         app_name,
+        source_type: result.source_type.clone(),
+        added_by: result.added_by.clone(),
+        text_source: result.text_source.clone(),
         window_title,
         url,
         score,
@@ -314,6 +359,7 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         raw_snippets: vec![fallback_snippet],
         evidence_ids: vec![memory_id],
         confidence: card_confidence(&result),
+        low_confidence: false,
         anchor_coverage_score: result.anchor_coverage_score.clamp(0.0, 1.0),
         activity_type: result.activity_type.clone(),
         files_touched: result.files_touched.clone(),
@@ -363,6 +409,7 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         matched_routes: result.matched_routes.clone(),
         matched_chunk_ids: result.matched_chunk_ids.clone(),
         chunk_evidence: result.chunk_evidence.clone(),
+        weak_match: false,
         enrichment_status,
         reviewed_at_ms: result.reviewed_at_ms,
         reviewer_generation: result.reviewer_generation,
@@ -478,7 +525,24 @@ pub async fn search_memory_cards(
     app_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<MemoryCard>, String> {
-    let limit = limit.unwrap_or(20).clamp(1, 50);
+    search_memory_cards_inner(
+        state.inner(),
+        &query,
+        time_filter.as_deref(),
+        app_filter.as_deref(),
+        limit.unwrap_or(20),
+    )
+    .await
+}
+
+pub(super) async fn search_memory_cards_inner(
+    state: &AppState,
+    query: &str,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+    limit: usize,
+) -> Result<Vec<MemoryCard>, String> {
+    let limit = limit.clamp(1, 50);
     let started = Instant::now();
     tracing::info!(
         query = %query,
@@ -498,63 +562,55 @@ pub async fn search_memory_cards(
         return Ok(Vec::new());
     }
 
+    let raw_limit = limit.max(18).min(50);
+    let (raw_results, _, strong_match) =
+        search_ranked_results_internal(state, query, time_filter, app_filter, raw_limit, false)
+            .await?;
+    let mut cards = synthesize_memory_cards_from_ranked(state, query, raw_results, limit).await;
+    // "No strong matches" (VS-12): the whole query is judged by its best
+    // result, because a right answer can rank below a wrong one near the bar.
+    for card in &mut cards {
+        card.weak_match = !strong_match;
+    }
+    tracing::info!(
+        total_ms = started.elapsed().as_millis(),
+        cards = cards.len(),
+        "search_memory_cards:complete"
+    );
+    Ok(cards)
+}
+
+pub(super) async fn synthesize_memory_cards_from_ranked(
+    state: &AppState,
+    query: &str,
+    raw_results: Vec<SearchResult>,
+    limit: usize,
+) -> Vec<MemoryCard> {
     let memory_card_config = {
         let config = state.config.read();
         config.memory_cards.clone()
     };
     let fallback_cards = |raw_results: &[SearchResult]| {
         MemoryCardSynthesizer::deterministic_from_results(
-            &query,
+            query,
             raw_results,
             limit.min(memory_card_config.max_groups),
         )
     };
 
-    let raw_limit = limit.max(18).min(50);
-    let mut raw_results = run_search_query(
-        state.inner(),
-        &query,
-        time_filter.as_deref(),
-        app_filter.as_deref(),
-        raw_limit,
-    )
-    .await?;
-    raw_results.truncate(raw_limit);
-    let (raw_results, low_signal) = partition_surfaceable(raw_results);
-    if !low_signal.is_empty() {
-        tracing::info!(
-            hidden = low_signal.len(),
-            "search_memory_cards:low_signal_hidden"
-        );
-    }
-    let query_context = QueryContext::from_query(&query);
-    let (reranked, rerank_stats) = rerank_results(&query_context, raw_results);
-    let mut raw_results = reranked;
-    if rerank_stats.excluded_for_coverage > 0 {
-        tracing::info!(
-            excluded_for_coverage = rerank_stats.excluded_for_coverage,
-            query = %query_context.raw_query,
-            "search_memory_cards:coverage_gate"
-        );
-    }
-    raw_results.truncate(raw_limit);
     tracing::info!(count = raw_results.len(), "search_memory_cards:rerank:done");
     if raw_results.is_empty() {
-        tracing::info!(
-            "search_memory_cards:complete total_ms={} cards=0",
-            started.elapsed().as_millis()
-        );
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
     // Never block live search on model loading. If inference isn't already warm,
     // synthesis falls back to deterministic card generation immediately.
-    let inference = state.inner().inference_engine();
+    let inference = state.inference_engine();
 
     tracing::info!("search_memory_cards:synthesis:start");
     let synthesis_future = MemoryCardSynthesizer::from_results_with_policy(
         inference.as_deref(),
-        &query,
+        query,
         &raw_results,
         memory_card_config.max_groups,
         memory_card_config.max_llm_groups,
@@ -584,12 +640,32 @@ pub async fn search_memory_cards(
     cards.retain(|card| !Blocklist::is_internal_app(&card.app_name, None));
     cards.truncate(limit);
     enrich_insight_kg_node_counts(state.store.clone(), &mut cards).await;
-    tracing::info!(
-        total_ms = started.elapsed().as_millis(),
-        cards = cards.len(),
-        "search_memory_cards:complete"
-    );
-    Ok(cards)
+    cards
+}
+
+/// Authorize projections against current durable records, preserving rank/order.
+async fn authorize_direct_results(
+    state: &AppState,
+    mut rows: Vec<SearchResult>,
+    include_low_signal: bool,
+) -> Result<Vec<SearchResult>, String> {
+    let ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+    let records = state
+        .store
+        .get_memories_by_ids(&ids)
+        .await
+        .map_err(|e| e.to_string())?;
+    let blocklist = state.config.read().blocklist.clone();
+    rows.retain(|row| {
+        records.get(&row.id).is_some_and(|record| {
+            if include_low_signal {
+                memory_is_permitted(record, &blocklist)
+            } else {
+                memory_is_visible(record, &blocklist)
+            }
+        })
+    });
+    Ok(rows)
 }
 
 /// List memory cards in newest→oldest order for browsing.
@@ -599,16 +675,23 @@ pub async fn list_memory_cards(
     app_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<MemoryCard>, String> {
+    list_memory_cards_for_state(&state, app_filter.as_deref(), limit).await
+}
+
+async fn list_memory_cards_for_state(
+    state: &AppState,
+    app_filter: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<MemoryCard>, String> {
     let limit = limit.unwrap_or(MEMORY_GRAPH_LIMIT).clamp(1, 2_000);
     let results = state
-        .inner()
         .store
-        .list_recent_results(limit, app_filter.as_deref())
+        .list_recent_results(limit, app_filter)
         .await
         .map_err(|e| e.to_string())?;
 
-    let (surfaced, _low_signal) = partition_surfaceable(strip_internal_fndr_results(results));
-    let mut cards: Vec<MemoryCard> = surfaced.into_iter().map(memory_card_from_result).collect();
+    let results = authorize_direct_results(state, results, false).await?;
+    let mut cards: Vec<MemoryCard> = results.into_iter().map(memory_card_from_result).collect();
     refine_memory_card_titles(&mut cards);
     enrich_insight_kg_node_counts(state.store.clone(), &mut cards).await;
     Ok(cards)
@@ -629,14 +712,21 @@ pub async fn list_needs_signal_memory_cards(
     state: State<'_, Arc<AppState>>,
     limit: Option<usize>,
 ) -> Result<Vec<NeedsSignalCard>, String> {
+    list_needs_signal_cards_for_state(&state, limit).await
+}
+
+async fn list_needs_signal_cards_for_state(
+    state: &AppState,
+    limit: Option<usize>,
+) -> Result<Vec<NeedsSignalCard>, String> {
     let limit = limit.unwrap_or(200).clamp(1, 1_000);
     let results = state
-        .inner()
         .store
         .list_recent_results(MEMORY_GRAPH_LIMIT.max(limit), None)
         .await
         .map_err(|e| e.to_string())?;
-    let (_surfaced, low_signal) = partition_surfaceable(strip_internal_fndr_results(results));
+    let results = authorize_direct_results(state, results, true).await?;
+    let (_surfaced, low_signal) = partition_surfaceable(results);
     Ok(low_signal
         .into_iter()
         .take(limit)
@@ -676,17 +766,45 @@ pub async fn find_visually_similar_memories(
     time_filter: Option<String>,
     app_filter: Option<String>,
 ) -> Result<Vec<SearchResult>, String> {
+    visually_similar_for_state(
+        &state,
+        &seed_memory_id,
+        limit,
+        time_filter.as_deref(),
+        app_filter.as_deref(),
+    )
+    .await
+}
+
+async fn visually_similar_for_state(
+    state: &AppState,
+    seed_memory_id: &str,
+    limit: Option<usize>,
+    time_filter: Option<&str>,
+    app_filter: Option<&str>,
+) -> Result<Vec<SearchResult>, String> {
     let clamped = limit.unwrap_or(8).clamp(1, 50);
-    state
+    let Some(seed) = state
         .store
-        .similar_by_image_embedding(
-            &seed_memory_id,
-            clamped,
-            time_filter.as_deref(),
-            app_filter.as_deref(),
-        )
+        .get_memory_by_id(seed_memory_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(Vec::new());
+    };
+    let blocklist = state.config.read().blocklist.clone();
+    if !memory_is_visible(&seed, &blocklist) {
+        return Ok(Vec::new());
+    }
+    let results = state
+        .store
+        .similar_by_image_embedding(&seed.id, clamped, time_filter, app_filter)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut results = authorize_direct_results(state, results, false).await?;
+    let blocklist = state.config.read().blocklist.clone();
+    authorize_related_memory_ids(&mut results, &state.store, &blocklist).await;
+    Ok(results)
 }
 
 /// Summarize search results using AI
@@ -911,4 +1029,310 @@ fn build_grounded_search_summary(query: &str, evidence: &[SummaryEvidence]) -> S
     }
 
     summary
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, DEFAULT_IMAGE_EMBEDDING_DIM};
+    use crate::embedding::{Embedder, EMBEDDING_DIM};
+    use crate::graph::GraphStore;
+    use crate::storage::{MemoryRecord, StateStore, Store};
+
+    fn direct_read_state(path: &std::path::Path) -> AppState {
+        let store = Arc::new(Store::new(path).unwrap());
+        let state_store = Arc::new(StateStore::new(path).unwrap());
+        let graph = GraphStore::new(store.clone());
+        AppState::new(
+            path.to_path_buf(),
+            Config::default(),
+            store,
+            state_store,
+            graph,
+            None,
+        )
+    }
+
+    fn direct_read_record(id: &str, timestamp: i64) -> MemoryRecord {
+        let mut image_embedding = vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM];
+        image_embedding[0] = 1.0;
+        MemoryRecord {
+            id: id.into(),
+            timestamp,
+            app_name: "Editor".into(),
+            window_title: "Atlas release checklist".into(),
+            clean_text:
+                "Reviewed the Atlas release checklist and deployment verification evidence.".into(),
+            snippet: "Reviewed Atlas deployment evidence.".into(),
+            image_embedding,
+            ..Default::default()
+        }
+    }
+
+    fn direct_read_low_signal(id: &str, timestamp: i64) -> MemoryRecord {
+        MemoryRecord {
+            clean_text: String::new(),
+            snippet: "Screen capture (visual)".into(),
+            display_summary: "Screen capture (visual)".into(),
+            synthesis_branch: "visual_metadata_fallback".into(),
+            enrichment_status: "visual_metadata_fallback".into(),
+            ..direct_read_record(id, timestamp)
+        }
+    }
+
+    #[test]
+    fn direct_vault_reads_authorize_current_records_preserving_order_and_filter() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = direct_read_state(dir.path());
+        rt.block_on(async {
+            let mut app = direct_read_record("PRIVATE_APP", 8);
+            app.app_name = "PrivateWorkspace".into();
+            let mut url = direct_read_record("PRIVATE_URL", 7);
+            url.url = Some("https://private.example/docs".into());
+            let mut title = direct_read_record("PRIVATE_TITLE", 6);
+            title.window_title = "ConfidentialRoadmap".into();
+            let mut deleted = direct_read_record("PRIVATE_DELETED", 5);
+            deleted.is_soft_deleted = true;
+            let mut internal = direct_read_record("PRIVATE_INTERNAL", 4);
+            internal.bundle_id = Some("com.fndr.app".into());
+            internal.app_name = "FNDR".into();
+            let mut other = direct_read_record("other", 1);
+            other.app_name = "Browser".into();
+            state
+                .store
+                .add_batch_preserving_ids(&[
+                    app,
+                    url,
+                    title,
+                    deleted,
+                    internal,
+                    direct_read_record("newer", 3),
+                    direct_read_record("older", 2),
+                    other,
+                ])
+                .await
+                .unwrap();
+            state.config.write().blocklist = vec![
+                "PrivateWorkspace".into(),
+                "private.example".into(),
+                "ConfidentialRoadmap".into(),
+            ];
+            let cards = list_memory_cards_for_state(&state, None, Some(20))
+                .await
+                .unwrap();
+            assert_eq!(
+                cards.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+                ["newer", "older", "other"]
+            );
+            let filtered = list_memory_cards_for_state(&state, Some("Editor"), Some(20))
+                .await
+                .unwrap();
+            assert_eq!(
+                filtered.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+                ["newer", "older"]
+            );
+        });
+    }
+
+    #[test]
+    fn direct_needs_signal_reads_keep_diagnostics_but_hide_private_records() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = direct_read_state(dir.path());
+        rt.block_on(async {
+            let mut blocked = direct_read_low_signal("PRIVATE_BLOCKED", 4);
+            blocked.url = Some("https://private.example/docs".into());
+            let mut deleted = direct_read_low_signal("PRIVATE_DELETED", 3);
+            deleted.is_soft_deleted = true;
+            let mut internal = direct_read_low_signal("PRIVATE_INTERNAL", 2);
+            internal.app_name = "FNDR".into();
+            state
+                .store
+                .add_batch_preserving_ids(&[
+                    blocked,
+                    deleted,
+                    internal,
+                    direct_read_low_signal("diagnostic", 1),
+                    direct_read_record("normal", 0),
+                ])
+                .await
+                .unwrap();
+            state.config.write().blocklist = vec!["private.example".into()];
+            let cards = list_needs_signal_cards_for_state(&state, Some(20))
+                .await
+                .unwrap();
+            assert_eq!(
+                cards.iter().map(|c| c.card.id.as_str()).collect::<Vec<_>>(),
+                ["diagnostic"]
+            );
+            assert!(!cards[0].reason_code.is_empty());
+            assert!(!cards[0].reason.is_empty());
+            assert!(list_memory_cards_for_state(&state, None, Some(20))
+                .await
+                .unwrap()
+                .iter()
+                .all(|c| c.id != "diagnostic"));
+        });
+    }
+
+    #[test]
+    fn direct_visual_neighbors_authorize_seed_and_targets() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = direct_read_state(dir.path());
+        rt.block_on(async {
+            let mut seed = direct_read_record("seed", 1);
+            seed.consolidated_from = vec!["old-seed".into()];
+            let mut blocked = direct_read_record("PRIVATE_BLOCKED", 2);
+            blocked.app_name = "PrivateWorkspace".into();
+            let mut deleted = direct_read_record("PRIVATE_DELETED", 3);
+            deleted.is_soft_deleted = true;
+            let mut internal = direct_read_record("PRIVATE_INTERNAL", 4);
+            internal.app_name = "FNDR".into();
+            let mut visible = direct_read_record("visible", 6);
+            visible.related_memory_ids = vec![
+                "PRIVATE_BLOCKED".into(),
+                "old-seed".into(),
+                "missing".into(),
+            ];
+            state
+                .store
+                .add_batch_preserving_ids(&[
+                    seed,
+                    blocked,
+                    deleted,
+                    internal,
+                    direct_read_low_signal("low-signal", 5),
+                    visible,
+                ])
+                .await
+                .unwrap();
+            state.config.write().blocklist = vec!["PrivateWorkspace".into()];
+            for seed_id in [
+                "PRIVATE_BLOCKED",
+                "PRIVATE_DELETED",
+                "PRIVATE_INTERNAL",
+                "low-signal",
+                "missing",
+            ] {
+                assert!(
+                    visually_similar_for_state(&state, seed_id, Some(20), None, None)
+                        .await
+                        .unwrap()
+                        .is_empty(),
+                    "excluded seed {seed_id} returned neighbors"
+                );
+            }
+            for seed_id in ["seed", "old-seed"] {
+                let rows = visually_similar_for_state(&state, seed_id, Some(20), None, None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+                    ["visible"]
+                );
+                assert_eq!(rows[0].related_memory_ids, ["seed"]);
+            }
+        });
+    }
+
+    #[test]
+    fn agent_note_vault_card_preserves_origin_and_cannot_reopen() {
+        let body =
+            "Preserve this decision.\nReopen: https://example.com\nKeep the final qualification.";
+        let record = MemoryRecord {
+            source_type: crate::storage::AGENT_NOTE_SOURCE_TYPE.into(),
+            related_agents: vec!["Claude Code".into()],
+            window_title: "Decision".into(),
+            memory_context: body.into(),
+            snippet: "Shortened summary".into(),
+            ..Default::default()
+        };
+        let result =
+            crate::context_runtime::retrieval_routes::memory_record_to_search_result(&record, 1.0);
+        let card = memory_card_from_result(result);
+        assert_eq!(card.reopen_target, None);
+        let json = serde_json::to_value(card).unwrap();
+        assert_eq!(json["source_type"], "agent");
+        assert_eq!(json["added_by"], "Claude Code");
+        assert_eq!(json["display_summary"], body);
+    }
+
+    #[test]
+    fn serialized_vault_card_text_source_preserves_capture_method() {
+        let record = MemoryRecord {
+            raw_evidence: r#"{"source_kind":"ocr"}"#.to_string(),
+            synthesis_branch: "vlm".to_string(),
+            ..Default::default()
+        };
+        let result =
+            crate::context_runtime::retrieval_routes::memory_record_to_search_result(&record, 1.0);
+        let card = memory_card_from_result(result);
+        assert_eq!(serde_json::to_value(card).unwrap()["text_source"], "ocr");
+    }
+
+    #[test]
+    fn search_cards_are_weak_when_nothing_matches_well() {
+        std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(Store::new(dir.path()).expect("store"));
+        let state_store = Arc::new(StateStore::new(dir.path()).expect("state store"));
+        let text = "The Zephyr vendor contract renews next quarter at the same price";
+        let embedding = Embedder::new()
+            .expect("embedder")
+            .embed_batch(&[text.to_string()])
+            .expect("embedding")
+            .remove(0);
+        let record = MemoryRecord {
+            id: "vendor".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis() - 60_000,
+            app_name: "Slack".to_string(),
+            window_title: "Vendor thread".to_string(),
+            session_id: "session-vendor".to_string(),
+            text: text.to_string(),
+            clean_text: text.to_string(),
+            snippet: text.to_string(),
+            summary_source: "llm".to_string(),
+            embedding: embedding.clone(),
+            snippet_embedding: embedding,
+            support_embedding: vec![0.0; EMBEDDING_DIM],
+            image_embedding: vec![0.0; DEFAULT_IMAGE_EMBEDDING_DIM],
+            decay_score: 1.0,
+            ..Default::default()
+        };
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime
+            .block_on(store.add_batch(&[record]))
+            .expect("add record");
+        let graph = GraphStore::new(store.clone());
+        // Budgets lifted: under ~900 parallel lib tests a production keyword
+        // budget can drop the hit this test is about.
+        let mut config = Config::default();
+        config.search.semantic_timeout_ms = 10_000;
+        config.search.snippet_timeout_ms = 10_000;
+        config.search.keyword_timeout_ms = 10_000;
+        config.search.keyword_variant_timeout_ms = 5_000;
+        let state = AppState::new(
+            dir.path().to_path_buf(),
+            config,
+            store,
+            state_store,
+            graph,
+            None,
+        );
+        let cards = |query: &str| {
+            runtime
+                .block_on(search_memory_cards_inner(&state, query, None, None, 10))
+                .expect("search")
+        };
+
+        let related = cards("zephyr vendor contract");
+        assert!(!related.is_empty());
+        assert!(related.iter().all(|card| !card.weak_match));
+        // Without a model the unrelated query finds nothing at all.
+        assert!(cards("dentist appointment reminder")
+            .iter()
+            .all(|card| card.weak_match));
+    }
 }

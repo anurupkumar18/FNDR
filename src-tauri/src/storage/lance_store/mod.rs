@@ -23,15 +23,18 @@ use crate::memory_quality::{
     is_supported_dedup_fingerprint, quality_gate_reason as shared_quality_gate_reason,
 };
 use arrow_array::{
-    Array, Float32Array, Int64Array, RecordBatch,
-    RecordBatchIterator, RecordBatchReader, StringArray,
+    Array, Float32Array, Int64Array, RecordBatch, RecordBatchIterator, RecordBatchReader,
+    StringArray,
 };
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use futures::TryStreamExt;
-use lancedb::index::scalar::BTreeIndexBuilder;
+use lancedb::index::scalar::{BTreeIndexBuilder, FtsIndexBuilder, FullTextSearchQuery};
 use lancedb::index::Index;
+use lancedb::index::IndexType;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
-use lancedb::table::{AddDataMode, CompactionOptions, OptimizeAction, OptimizeStats};
+use lancedb::table::{
+    AddDataMode, CompactionOptions, OptimizeAction, OptimizeOptions, OptimizeStats,
+};
 use lancedb::Table;
 
 /// Dataset version count for a Lance table (MEM-08). Fragment count is not
@@ -44,6 +47,7 @@ pub struct MemoriesTableScaleStats {
 use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 /// Active LanceDB table for memory records.
@@ -54,6 +58,8 @@ use std::sync::Arc;
 pub const MEMORIES_TABLE: &str = crate::inference::model_config::MEMORIES_V4_TABLE;
 pub const MEMORIES_V5_PARENT_TABLE: &str = MEMORIES_V5_TABLE;
 pub const MEMORY_CHUNKS_TABLE: &str = "memory_chunks_v1_bge_1024";
+/// The chunk column `chunk_keyword_search` indexes (VS-18).
+const CHUNK_FTS_COLUMN: &str = "text";
 pub const TASKS_TABLE: &str = "tasks";
 pub const MEETINGS_TABLE: &str = "meetings";
 pub const SEGMENTS_TABLE: &str = "segments";
@@ -70,6 +76,8 @@ pub const KNOWLEDGE_PAGES_TABLE: &str = "knowledge_pages";
 pub const GRAPH_NODES_TABLE: &str = "graph_nodes";
 pub const GRAPH_EDGES_TABLE: &str = "graph_edges";
 const SEARCH_RESULT_COLUMNS: &[&str] = &[
+    "source_type",
+    "related_agents",
     "id",
     "timestamp",
     "app_name",
@@ -136,6 +144,24 @@ const IMAGE_EMBED_DIM: i32 = DEFAULT_IMAGE_EMBEDDING_DIM as i32;
 const VECTOR_QUERY_MULTIPLIER: usize = DEFAULT_STORE_VECTOR_QUERY_MULTIPLIER;
 const KEYWORD_QUERY_MULTIPLIER: usize = DEFAULT_STORE_KEYWORD_QUERY_MULTIPLIER;
 const MAX_KEYWORD_SCAN: usize = DEFAULT_STORE_MAX_KEYWORD_SCAN;
+/// Text columns behind the BM25 keyword index (VS-07): one inverted index
+/// per column, queried together. Tokenizer defaults: lowercase, English
+/// stemming, stop words removed, ASCII folding.
+const FTS_COLUMNS: [&str; 7] = [
+    "window_title",
+    "clean_text",
+    "snippet",
+    "memory_context",
+    "lexical_shadow",
+    "url",
+    "app_name",
+];
+/// LanceDB searches rows written after the index was built with a flat scan,
+/// so results are always current; folding them into the index only keeps
+/// queries fast. Fold after this many new rows.
+const FTS_OPTIMIZE_AFTER_ROWS: usize = 256;
+/// Name of the BM25 score column LanceDB adds to full-text results.
+const FTS_SCORE_COLUMN: &str = "_score";
 const INDEX_NOISE_HOSTS: &[&str] = &[
     "accounts.google.com",
     "auth.openai.com",
@@ -148,6 +174,7 @@ const INDEX_NOISE_HOSTS: &[&str] = &[
 pub struct Store {
     data_dir: PathBuf,
     table: Table,
+    rows_since_fts_optimize: AtomicUsize,
     memories_v5_table: Table,
     memory_chunks_table: Table,
     tasks_table: Table,
@@ -181,10 +208,17 @@ pub use normalize_embed_migrate::{
     salience_concentration_score, topic_clarity_score,
 };
 
+async fn fold_new_rows_into_indexes(table: &Table) -> lancedb::Result<()> {
+    table
+        .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+        .await
+        .map(|_| ())
+}
+
 impl Store {
     /// Open (or create) the LanceDB store at `data_dir`.
     ///
-    /// This is synchronous — it spins up a temporary Tokio runtime for
+    /// This is synchronous: it spins up a temporary Tokio runtime for
     /// initialization so it can be called from non-async contexts (e.g.
     /// the Tauri `setup()` callback).
     pub fn new(data_dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
@@ -251,6 +285,7 @@ impl Store {
         Ok(Self {
             data_dir,
             table,
+            rows_since_fts_optimize: AtomicUsize::new(0),
             memories_v5_table,
             memory_chunks_table,
             tasks_table,
@@ -1001,7 +1036,7 @@ impl Store {
         Ok(())
     }
 
-    /// Return the data directory (sync — no DB access).
+    /// Return the data directory (sync, no DB access).
     pub fn data_dir(&self) -> PathBuf {
         self.data_dir.clone()
     }
@@ -1072,10 +1107,13 @@ impl Store {
     }
 
     /// Replace a single memory row in the v4 parent table, preserving its id
-    /// and any linked memory chunks. Used by the memory_review worker after
-    /// validation succeeds; callers must not pass partial records — the full
-    /// `MemoryRecord` is required because the underlying table replace pattern
-    /// is delete-then-insert.
+    /// and any linked memory chunks. Used by review, repair and re-embedding;
+    /// callers must pass the full `MemoryRecord`.
+    ///
+    /// This is one merge-insert keyed on `id`, so it lands as a single table
+    /// version. It used to be a delete followed by an insert, and a crash
+    /// between the two lost the memory (VS-90). A row with a new id is
+    /// inserted.
     pub async fn replace_memory_preserving_chunks(
         &self,
         record: &MemoryRecord,
@@ -1083,12 +1121,23 @@ impl Store {
         if record.id.trim().is_empty() {
             return Err("Refusing to replace a memory with empty id".into());
         }
-        let id = sql_escape(&record.id);
-        self.table.delete(&format!("id = '{id}'")).await?;
-        // Note: deliberately not calling delete_chunks_for_memory — children
-        // outlive a parent review pass.
+        // Note: deliberately not touching memory chunks: children outlive a
+        // parent review pass.
         let normalized = normalize_record_for_index(record);
-        self.insert_memory_batch(&[normalized]).await
+        let batch = records_to_batch(&[normalized])?;
+        let schema = Arc::new(memory_schema());
+        let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        let mut merge = self.table.merge_insert(&["id"]);
+        merge
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all();
+        merge
+            .execute(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+            .await?;
+        self.rows_since_fts_optimize
+            .fetch_add(1, AtomicOrdering::Relaxed);
+        self.build_fts_indexes_after_write().await;
+        Ok(())
     }
 
     pub async fn add_v5_batch_preserving_ids(
@@ -1118,23 +1167,15 @@ impl Store {
         }
         validate_memory_chunk_vectors(chunks)?;
 
-        let ids = chunks
-            .iter()
-            .map(|chunk| chunk.id.clone())
-            .collect::<Vec<_>>();
-        for id_chunk in ids.chunks(128) {
-            if let Some(filter) = build_string_match_filter("id", id_chunk) {
-                self.memory_chunks_table.delete(&filter).await?;
-            }
-        }
-
         let batch = memory_chunks_to_batch(chunks, BGE_V5_DIMENSIONS as i32)?;
         let schema = Arc::new(memory_chunk_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
-        self.memory_chunks_table
-            .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
-            .mode(AddDataMode::Append)
-            .execute()
+        let mut merge = self.memory_chunks_table.merge_insert(&["id"]);
+        merge
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all();
+        merge
+            .execute(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
             .await?;
         Ok(())
     }
@@ -1217,9 +1258,7 @@ impl Store {
     /// ship an index nothing ever queries through; that rewrite is
     /// follow-up work, not this ticket's scope, since it changes live
     /// search behavior and needs its own dedicated verification.
-    pub async fn create_memories_scale_indexes(
-        &self,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn create_memories_scale_indexes(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.table
             .create_index(&["id"], Index::BTree(BTreeIndexBuilder::default()))
             .execute()
@@ -1256,9 +1295,7 @@ impl Store {
         let stats = self
             .table
             .optimize(OptimizeAction::Prune {
-                older_than: Some(
-                    chrono::Duration::try_days(older_than_days).unwrap_or_default(),
-                ),
+                older_than: Some(chrono::Duration::try_days(older_than_days).unwrap_or_default()),
                 delete_unverified: Some(true),
                 error_if_tagged_old_versions: Some(false),
             })
@@ -1314,6 +1351,80 @@ impl Store {
             chunks.extend(batch_to_memory_chunk_search_results(batch));
         }
         Ok(chunks)
+    }
+
+    /// BM25 over chunk text (VS-18): the chunk holding the words a person
+    /// remembers ranks first, whatever the rest of its memory says. Scores are
+    /// bm25 / (bm25 + 2), as in `keyword_search`. The index is built on first
+    /// use; chunks written later are still found (by a flat scan) until
+    /// `optimize_fts_indexes` folds them in.
+    pub async fn chunk_keyword_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryChunkSearchResult>, Box<dyn std::error::Error>> {
+        if keyword_terms(query).is_empty() || self.memory_chunks_table.count_rows(None).await? == 0
+        {
+            return Ok(Vec::new());
+        }
+        self.ensure_chunk_fts_index().await?;
+        let fts = FullTextSearchQuery::new(query.to_string())
+            .with_columns(&[CHUNK_FTS_COLUMN.to_string()])?
+            .limit(Some(limit.max(1) as i64));
+        let batches: Vec<RecordBatch> = self
+            .memory_chunks_table
+            .query()
+            .full_text_search(fts)
+            .limit(limit.max(1))
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
+        let mut hits = Vec::new();
+        for batch in &batches {
+            let bm25 = batch
+                .column_by_name(FTS_SCORE_COLUMN)
+                .and_then(|column| column.as_any().downcast_ref::<Float32Array>())
+                .ok_or("chunk full-text results are missing the BM25 score column")?;
+            for (row, chunk) in batch_to_memory_chunks(batch).into_iter().enumerate() {
+                let score = bm25.value(row);
+                hits.push(MemoryChunkSearchResult {
+                    chunk,
+                    score: score / (score + 2.0),
+                    distance: 0.0,
+                });
+            }
+        }
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.chunk.id.cmp(&b.chunk.id))
+        });
+        Ok(hits)
+    }
+
+    async fn ensure_chunk_fts_index(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let indexed = self
+            .memory_chunks_table
+            .list_indices()
+            .await?
+            .into_iter()
+            .any(|index| {
+                index.index_type == IndexType::FTS
+                    && index
+                        .columns
+                        .iter()
+                        .any(|column| column == CHUNK_FTS_COLUMN)
+            });
+        if !indexed {
+            self.memory_chunks_table
+                .create_index(&[CHUNK_FTS_COLUMN], Index::FTS(FtsIndexBuilder::default()))
+                .execute()
+                .await?;
+            tracing::info!("lancedb:chunk_fts_index_created");
+        }
+        Ok(())
     }
 
     pub async fn has_chunk_retrieval_index(&self) -> Result<bool, Box<dyn std::error::Error>> {
@@ -1437,6 +1548,7 @@ impl Store {
             .execute()
             .await
             .map_err(|e| e.to_string())?;
+        self.build_fts_indexes_after_write().await;
         Ok(())
     }
 
@@ -1595,6 +1707,9 @@ impl Store {
             .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
             .execute()
             .await?;
+        self.rows_since_fts_optimize
+            .fetch_add(records.len(), AtomicOrdering::Relaxed);
+        self.build_fts_indexes_after_write().await;
         Ok(())
     }
 
@@ -1691,6 +1806,10 @@ impl Store {
     }
 
     /// Full-scan keyword search using SQL LIKE predicates.
+    /// BM25 keyword search over the text columns in `FTS_COLUMNS` (VS-07).
+    /// Rare words count more than common ones, every matching row is scored
+    /// before the limit applies, and English word forms match by stemming.
+    /// Scores are bm25 / (bm25 + 2), blended with recency.
     pub async fn keyword_search(
         &self,
         query: &str,
@@ -1699,68 +1818,136 @@ impl Store {
         app_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
         let terms = keyword_terms(query);
-        if terms.is_empty() {
+        if terms.is_empty() || !self.has_memories().await? {
             return Ok(Vec::new());
         }
+        self.ensure_fts_indexes().await?;
+        self.optimize_fts_indexes_if_due();
+
         let base_limit = limit.max(1);
-        let retrieval_limit = if base_limit >= MAX_KEYWORD_SCAN {
-            base_limit
-        } else {
-            base_limit
-                .saturating_mul(KEYWORD_QUERY_MULTIPLIER)
-                .min(MAX_KEYWORD_SCAN)
-        };
+        let retrieval_limit = base_limit
+            .saturating_mul(KEYWORD_QUERY_MULTIPLIER)
+            .min(MAX_KEYWORD_SCAN)
+            .max(base_limit);
+        let columns = FTS_COLUMNS.map(str::to_string);
+        let fts = FullTextSearchQuery::new(query.to_string())
+            .with_columns(&columns)?
+            .limit(Some(retrieval_limit as i64));
+        let mut search = self
+            .table
+            .query()
+            .full_text_search(fts)
+            .limit(retrieval_limit);
+        if let Some(filter) = build_filter(time_filter, app_filter) {
+            search = search.only_if(filter);
+        }
+        let batches: Vec<RecordBatch> = search.execute().await?.try_collect().await?;
+
         let mut results = Vec::new();
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let per_term_limit = (retrieval_limit / terms.len().max(1))
-            .max(base_limit)
-            .min(retrieval_limit);
-
-        for term in &terms {
-            let escaped = sql_escape(&term.to_lowercase());
-            let term_clauses = [
-                format!("LOWER(text) LIKE '%{escaped}%'"),
-                format!("LOWER(clean_text) LIKE '%{escaped}%'"),
-                format!("LOWER(snippet) LIKE '%{escaped}%'"),
-                format!("LOWER(lexical_shadow) LIKE '%{escaped}%'"),
-                format!("LOWER(window_title) LIKE '%{escaped}%'"),
-                format!("LOWER(app_name) LIKE '%{escaped}%'"),
-                format!("LOWER(url) LIKE '%{escaped}%'"),
-            ];
-            let keyword_pred = format!("({})", term_clauses.join(" OR "));
-            let filter = match build_filter(time_filter, app_filter) {
-                Some(f) => format!("{keyword_pred} AND {f}"),
-                None => keyword_pred,
-            };
-
-            let batches: Vec<RecordBatch> = self
-                .table
-                .query()
-                .only_if(filter)
-                .limit(per_term_limit)
-                .execute()
-                .await?
-                .try_collect()
-                .await?;
-
-            for batch in &batches {
-                let mut batch_results = batch_to_search_results(batch);
-                // Keyword branch gets a lexical relevance score before hybrid fusion.
-                for r in &mut batch_results {
-                    let lexical = lexical_keyword_score(&terms, r);
-                    let recency = recency_score(now_ms, r.timestamp);
-                    r.score = (lexical * 0.86 + recency * 0.14).clamp(0.0, 1.0);
-                }
-                results.extend(batch_results);
+        for batch in &batches {
+            let bm25 = batch
+                .column_by_name(FTS_SCORE_COLUMN)
+                .and_then(|column| column.as_any().downcast_ref::<Float32Array>())
+                .ok_or("full-text results are missing the BM25 score column")?;
+            for (row, mut result) in batch_to_search_results(batch).into_iter().enumerate() {
+                result.score = bm25.value(row);
+                results.push(result);
             }
+        }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for result in &mut results {
+            let lexical = result.score / (result.score + 2.0);
+            let recency = recency_score(now_ms, result.timestamp);
+            result.score = (lexical * 0.86 + recency * 0.14).clamp(0.0, 1.0);
         }
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| b.timestamp.cmp(&a.timestamp))
+                .then_with(|| a.id.cmp(&b.id))
         });
         Ok(dedup_search_results(results, limit))
+    }
+
+    /// Build missing BM25 indexes when rows are written, so no search pays for
+    /// it: built lazily, they cost the first search 94 to 228 ms of a 320 ms
+    /// per-variant budget, and an overrun dropped that variant. A failure
+    /// leaves the write intact; `keyword_search` tries again.
+    async fn build_fts_indexes_after_write(&self) {
+        if let Err(error) = self.ensure_fts_indexes().await {
+            tracing::warn!(%error, "lancedb:fts_index_build_failed");
+        }
+    }
+
+    /// Create the BM25 index on each `FTS_COLUMNS` column that lacks one.
+    /// Idempotent and cheap once the indexes exist (one manifest read); an
+    /// overwrite of the table drops indexes, so this runs before every query.
+    async fn ensure_fts_indexes(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let indexed = self
+            .table
+            .list_indices()
+            .await?
+            .into_iter()
+            .filter(|index| index.index_type == IndexType::FTS)
+            .flat_map(|index| index.columns)
+            .collect::<HashSet<_>>();
+        let mut created = false;
+        for column in FTS_COLUMNS {
+            if indexed.contains(column) {
+                continue;
+            }
+            self.table
+                .create_index(&[column], Index::FTS(FtsIndexBuilder::default()))
+                .execute()
+                .await?;
+            tracing::info!(column, "lancedb:fts_index_created");
+            created = true;
+        }
+        if created {
+            // A freshly built index already covers every row.
+            self.rows_since_fts_optimize
+                .store(0, AtomicOrdering::Relaxed);
+        }
+        Ok(())
+    }
+
+    /// Fold rows written since the indexes were built into them. Until then
+    /// LanceDB still finds those rows with a flat scan, only more slowly.
+    pub async fn optimize_fts_indexes(&self) -> Result<(), Box<dyn std::error::Error>> {
+        fold_new_rows_into_indexes(&self.table).await?;
+        fold_new_rows_into_indexes(&self.memory_chunks_table).await?;
+        Ok(())
+    }
+
+    /// Run `optimize_fts_indexes` in the background once
+    /// `FTS_OPTIMIZE_AFTER_ROWS` rows have accumulated, so no query waits on it.
+    fn optimize_fts_indexes_if_due(&self) {
+        let pending = self.rows_since_fts_optimize.load(AtomicOrdering::Relaxed);
+        if pending < FTS_OPTIMIZE_AFTER_ROWS {
+            return;
+        }
+        // Only the caller that claims the count starts a fold; a concurrent
+        // fold would fail its commit.
+        if self
+            .rows_since_fts_optimize
+            .compare_exchange(pending, 0, AtomicOrdering::AcqRel, AtomicOrdering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let table = self.table.clone();
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            match fold_new_rows_into_indexes(&table).await {
+                Ok(()) => tracing::info!(
+                    folded_rows = pending,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "lancedb:fts_index_optimized"
+                ),
+                Err(error) => tracing::warn!(%error, "lancedb:fts_index_optimize_failed"),
+            }
+        });
     }
 
     /// Returns whether at least one memory row exists.
@@ -2213,7 +2400,14 @@ impl Store {
 
     /// Return sorted list of unique app names.
     pub async fn get_app_names(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let batches: Vec<RecordBatch> = self.table.query().execute().await?.try_collect().await?;
+        let batches: Vec<RecordBatch> = self
+            .table
+            .query()
+            .select(Select::columns(&["app_name"]))
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
 
         let mut names = std::collections::HashSet::new();
         for batch in &batches {
@@ -2303,6 +2497,37 @@ impl Store {
     }
 
     /// Fetch a single record by id.
+    /// Fetch many memories with one `id IN (...)` scan per 200 ids. Ids that
+    /// are not stored are absent from the map; unlike `get_memory_by_id` this
+    /// does not follow merged-away ids, so pass ids read from current rows.
+    pub async fn get_memories_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<HashMap<String, MemoryRecord>, Box<dyn std::error::Error>> {
+        let mut found = HashMap::with_capacity(ids.len());
+        for chunk in ids.chunks(200) {
+            let list = chunk
+                .iter()
+                .map(|id| format!("'{}'", sql_escape(id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let batches: Vec<RecordBatch> = self
+                .table
+                .query()
+                .only_if(format!("id IN ({list})"))
+                .execute()
+                .await?
+                .try_collect()
+                .await?;
+            for batch in &batches {
+                for record in batch_to_memory_records(batch) {
+                    found.insert(record.id.clone(), record);
+                }
+            }
+        }
+        Ok(found)
+    }
+
     pub async fn get_memory_by_id(
         &self,
         memory_id: &str,

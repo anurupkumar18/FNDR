@@ -5,8 +5,7 @@
  * Design spec: docs/superpowers/specs/2026-05-18-hero-parallax-design.md
  *
  * Wires into the existing search flow via `onHeroSearch(query)` callback —
- * no duplicate state. Voice transcription reuses `transcribeVoiceInput` from
- * the shared IPC layer, same as SearchBar.tsx.
+ * no duplicate state. Voice input uses the shared native voice session.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -16,9 +15,10 @@ import {
     useSpring,
     useTransform,
 } from "framer-motion";
-import { transcribeVoiceInput } from "@/shared/ipc/tauri";
 import { useReducedMotionSafe } from "@/shared/motion/useReducedMotionSafe";
-import { VOICE_RECORDING } from "@/shared/utils/config";
+import { VoiceButton } from "@/shared/voice/VoiceButton";
+import { VoiceStatus } from "@/shared/voice/VoiceStatus";
+import { useVoice } from "@/shared/voice/useVoice";
 import { Liquid } from "liquid-gooey";
 import "./HomeHero.css";
 
@@ -65,161 +65,6 @@ function getTimePlaceholder(now: Date): string {
     if (h < 17) return "What shall we uncover this afternoon?";
     if (h < 21) return "What happened today?";
     return "What shall we uncover tonight?";
-}
-
-// ─── Voice hook ───────────────────────────────────────────────────────────────
-
-function chooseRecorderOptions(): MediaRecorderOptions | undefined {
-    const candidates = [
-        "audio/webm;codecs=opus",
-        "audio/mp4",
-        "audio/ogg;codecs=opus",
-        "audio/webm",
-    ];
-    for (const mimeType of candidates) {
-        if (MediaRecorder.isTypeSupported(mimeType)) {
-            return { mimeType, audioBitsPerSecond: VOICE_RECORDING.audioBitsPerSecond };
-        }
-    }
-    return undefined;
-}
-
-function stopStream(s: MediaStream | null) {
-    s?.getTracks().forEach((t) => t.stop());
-}
-
-function microphoneFailureMessage(error: unknown): string {
-    const name = error instanceof DOMException
-        ? error.name
-        : typeof error === "object" && error && "name" in error
-          ? String(error.name)
-          : "";
-
-    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-        return "Microphone permission wasn't granted. Type your search instead.";
-    }
-    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-        return "No microphone was found. Type your search instead.";
-    }
-    return "Couldn't start the microphone. Type your search instead.";
-}
-
-/** Extracts voice recording + Whisper transcription in a self-contained hook. */
-function useHeroVoice(onTranscript: (text: string) => void) {
-    const [isRecording, setIsRecording] = useState(false);
-    const [isPreparing, setIsPreparing] = useState(false);
-    const [isTranscribing, setIsTranscribing] = useState(false);
-    const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
-
-    const recorderRef = useRef<MediaRecorder | null>(null);
-    const streamRef = useRef<MediaStream | null>(null);
-    const chunksRef = useRef<Blob[]>([]);
-    const mimeTypeRef = useRef("audio/webm");
-    const startedAtRef = useRef(0);
-
-    useEffect(
-        () => () => {
-            stopStream(streamRef.current);
-            streamRef.current = null;
-        },
-        []
-    );
-
-    async function transcribeChunks(chunks: Blob[], mimeType: string) {
-        if (chunks.length === 0) {
-            setVoiceStatus("No input captured.");
-            return;
-        }
-        setIsTranscribing(true);
-        setVoiceStatus("Transcribing…");
-        try {
-            const blob = new Blob(chunks, { type: mimeType });
-            const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
-            const result = await transcribeVoiceInput(bytes, mimeType);
-            const text = result.text.trim();
-            if (text) {
-                onTranscript(text);
-                setVoiceStatus("Transcript ready. Review it, then press Enter to search.");
-            } else {
-                setVoiceStatus("Didn't catch that. Try again.");
-            }
-        } catch {
-            setVoiceStatus("Transcription failed.");
-        } finally {
-            setIsTranscribing(false);
-        }
-    }
-
-    async function toggle() {
-        if (isRecording) {
-            recorderRef.current?.stop();
-            return;
-        }
-
-        if (
-            !navigator.mediaDevices?.getUserMedia ||
-            typeof MediaRecorder === "undefined"
-        ) {
-            setVoiceStatus("Microphone isn't available here. Type your search instead.");
-            return;
-        }
-
-        setIsPreparing(true);
-        setVoiceStatus("Waiting for microphone permission…");
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    channelCount: VOICE_RECORDING.channelCount,
-                    sampleRate: VOICE_RECORDING.sampleRate,
-                },
-            });
-            const options = chooseRecorderOptions();
-            const recorder = options
-                ? new MediaRecorder(stream, options)
-                : new MediaRecorder(stream);
-
-            streamRef.current = stream;
-            recorderRef.current = recorder;
-            chunksRef.current = [];
-            mimeTypeRef.current = recorder.mimeType || options?.mimeType || "audio/webm";
-            startedAtRef.current = Date.now();
-
-            recorder.ondataavailable = (e) => {
-                if (e.data.size > 0) chunksRef.current.push(e.data);
-            };
-            recorder.onstop = () => {
-                const chunks = [...chunksRef.current];
-                chunksRef.current = [];
-                const dur = Date.now() - startedAtRef.current;
-                stopStream(streamRef.current);
-                streamRef.current = null;
-                recorderRef.current = null;
-                setIsRecording(false);
-                if (dur < VOICE_RECORDING.minDurationMs) {
-                    setVoiceStatus("Hold the mic a bit longer.");
-                    return;
-                }
-                void transcribeChunks(chunks, mimeTypeRef.current);
-            };
-
-            recorder.start(VOICE_RECORDING.timesliceMs);
-            setIsRecording(true);
-            setVoiceStatus("Listening… tap again to stop.");
-        } catch (error) {
-            setVoiceStatus(microphoneFailureMessage(error));
-            stopStream(streamRef.current);
-            streamRef.current = null;
-            recorderRef.current = null;
-            setIsRecording(false);
-        } finally {
-            setIsPreparing(false);
-        }
-    }
-
-    return { isRecording, isPreparing, isTranscribing, voiceStatus, toggle };
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -300,10 +145,17 @@ export function HomeHero({
     const searchY = useTransform(sy, [-1, 1], reduced ? [0, 0] : [-10.5, 10.5]);
 
     // Voice.
-    const voice = useHeroVoice((text) => {
+    const voice = useVoice({
+        surface: "home_search",
+        mode: "toggle",
+        onPartial: updateVoiceDraft,
+        onFinal: updateVoiceDraft,
+    });
+
+    function updateVoiceDraft(text: string) {
         setDraft(text);
         window.requestAnimationFrame(() => inputRef.current?.focus());
-    });
+    }
 
     function handleSubmit(value?: string) {
         const q = (value ?? draft).replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
@@ -350,7 +202,7 @@ export function HomeHero({
                 style={{ x: searchX, y: searchY }}
             >
                 <div
-                    className={`home-hero__search-pill${voice.isRecording ? " is-recording" : ""}`}
+                    className={`home-hero__search-pill${voice.isActive ? " is-recording" : ""}`}
                     role="search"
                 >
                     {/* Search icon */}
@@ -381,7 +233,7 @@ export function HomeHero({
                             }
                         }}
                         aria-label="Search your memories"
-                        aria-describedby={voice.voiceStatus
+                        aria-describedby={voice.state.kind !== "idle"
                             ? "home-search-help home-voice-status"
                             : "home-search-help"}
                         autoComplete="off"
@@ -403,56 +255,14 @@ export function HomeHero({
                         x={hasDraft ? 0 : ACTION_SLOT_PX}
                         transition={actionTransition}
                     >
-                    <button
-                        type="button"
-                        className={`home-hero__voice-btn${voice.isRecording ? " is-recording" : ""}${voice.isTranscribing ? " is-transcribing" : ""}`}
-                        onClick={() => void voice.toggle()}
-                        aria-label={
-                            voice.isRecording
-                                ? "Stop voice recording"
-                                : voice.isPreparing
-                                  ? "Waiting for microphone permission"
-                                  : voice.isTranscribing
-                                    ? "Transcribing voice recording"
-                                : "Start voice recording"
-                        }
-                        title={voice.isRecording
-                            ? "Stop voice recording"
-                            : voice.isPreparing
-                              ? "Waiting for microphone permission"
-                              : voice.isTranscribing
-                                ? "Transcribing voice recording"
-                                : "Speak"}
-                        disabled={voice.isPreparing || voice.isTranscribing}
-                    >
-                        {voice.isRecording ? (
-                            // Pulsing waveform when recording
-                            <span className="home-hero__voice-wave" aria-hidden="true">
-                                <span />
-                                <span />
-                                <span />
-                            </span>
-                        ) : (
-                            <svg
-                                viewBox="0 0 24 24"
-                                fill="currentColor"
-                                aria-hidden="true"
-                            >
-                                <rect x="5" y="8" width="2.5" height="10" rx="1.2" />
-                                <rect x="10.75" y="5" width="2.5" height="14" rx="1.2" />
-                                <rect x="16.5" y="9" width="2.5" height="8" rx="1.2" />
-                            </svg>
-                        )}
-                        <span className="home-hero__voice-label">
-                            {voice.isRecording
-                                ? "Stop"
-                                : voice.isPreparing
-                                  ? "Waiting"
-                                  : voice.isTranscribing
-                                    ? "Working"
-                                    : "Speak"}
-                        </span>
-                    </button>
+                    <VoiceButton
+                        mode={voice.mode}
+                        state={voice.state}
+                        isActive={voice.isActive}
+                        onStart={voice.start}
+                        onStop={voice.stop}
+                        className={`home-hero__voice-btn${voice.isActive ? " is-recording" : ""}`}
+                    />
                     </Liquid.Item>
 
                     <Liquid.Item
@@ -484,15 +294,18 @@ export function HomeHero({
                 </div>
 
                 {/* Voice status */}
-                {voice.voiceStatus && (
-                    <p
+                {voice.state.kind !== "idle" && (
+                    <div
                         id="home-voice-status"
                         className="home-hero__voice-status"
-                        role="status"
-                        aria-live="polite"
                     >
-                        {voice.voiceStatus}
-                    </p>
+                        <VoiceStatus
+                            state={voice.state}
+                            level={voice.level}
+                            onRetry={voice.retry}
+                            onCancel={voice.cancel}
+                        />
+                    </div>
                 )}
                 <p id="home-search-help" className="home-hero__search-help">
                     Search saved memories by topic, app, person, or time.

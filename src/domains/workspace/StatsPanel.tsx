@@ -6,6 +6,12 @@ import "./StatsPanel.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+} from "@/shared/activity/activityTrace";
 
 interface StatsPanelProps {
     isVisible: boolean;
@@ -174,6 +180,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
     const [stats, setStats] = useState<Stats | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [statsActivity, setStatsActivity] = useState<ActivityTraceSnapshot | null>(null);
     const hasLoadedStatsRef = useRef(false);
     const dialogRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -185,19 +192,59 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
 
     const loadStats = useCallback(async (isMounted: () => boolean) => {
         const showLoading = !hasLoadedStatsRef.current;
+        const startedAtMs = Date.now();
+        const startedTrace = recordActivityStep(
+            beginActivityTrace({
+                id: `activity-stats-${startedAtMs}`,
+                title: "Activity stats refresh",
+                startedAtMs,
+            }),
+            {
+                id: "stats-snapshot",
+                label: "Refreshing local activity stats",
+                actor: "Stats store",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        );
         if (showLoading) {
             setLoading(true);
         }
         setError(null);
+        setStatsActivity(startedTrace);
         try {
             const snapshot = await getStats();
             if (isMounted()) {
                 hasLoadedStatsRef.current = true;
                 setStats(snapshot);
+                const finishedAtMs = Date.now();
+                setStatsActivity(recordActivityStep(startedTrace, {
+                    id: "stats-snapshot",
+                    label: "Activity stats refreshed",
+                    actor: "Stats store",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: finishedAtMs,
+                    durationMs: finishedAtMs - startedAtMs,
+                    detail: `${snapshot.total_records.toLocaleString()} captures counted`,
+                }));
             }
         } catch (err) {
             if (isMounted()) {
                 setError(err instanceof Error ? err.message : "Unable to load stats.");
+                const finishedAtMs = Date.now();
+                setStatsActivity(recordActivityStep(startedTrace, {
+                    id: "stats-snapshot",
+                    label: hasLoadedStatsRef.current
+                        ? "Stats refresh failed; previous snapshot remains"
+                        : "Activity stats unavailable",
+                    actor: "Stats store",
+                    status: hasLoadedStatsRef.current ? "degraded" : "failed",
+                    evidence: "ipc-boundary",
+                    atMs: finishedAtMs,
+                    durationMs: finishedAtMs - startedAtMs,
+                }));
             }
         } finally {
             if (isMounted()) {
@@ -573,8 +620,15 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
             />
 
             <div className="stats-page-body">
+                {statsActivity && (
+                    <ActivityTrace
+                        trace={statsActivity}
+                        className="stats-activity-trace"
+                        announce={false}
+                    />
+                )}
                 {loading && !stats && (
-                    <div className="stats-page-state" role="status">
+                    <div className="stats-page-state">
                         <ThinkingIndicator state="working" size="md" />
                         <p>Loading stats...</p>
                     </div>

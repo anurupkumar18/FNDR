@@ -71,6 +71,42 @@ body,
     overflow-wrap: anywhere;
 }
 
+.sg-overlay-activity {
+    --hairline: rgba(116, 183, 255, 0.32);
+    --surface: rgba(8, 18, 31, 0.68);
+    --surface-hover: rgba(21, 42, 67, 0.82);
+    --fg: #ecf6ff;
+    --fg-2: #c9def0;
+    --fg-3: #a7bfd3;
+    --accent: #76baff;
+    --accent-2: #7ed6b2;
+    --alarm: #ff8585;
+    --focus-ring: rgba(118, 186, 255, 0.6);
+    --film-radius-pill: 999px;
+    margin: 0 0 7px;
+}
+
+.sg-overlay-activity .activity-trace-summary {
+    min-height: 38px;
+    padding: 6px 9px;
+}
+
+.sg-overlay-activity .activity-trace-current {
+    font-size: 0.78rem;
+}
+
+.sg-overlay-activity .activity-trace-owner,
+.sg-overlay-activity .activity-trace-state {
+    font-size: 0.62rem;
+}
+
+.sg-overlay-detail {
+    display: block;
+    color: rgba(215, 234, 250, 0.72);
+    font-size: 0.68rem;
+    line-height: 1.35;
+}
+
 .sg-overlay-eyebrow {
     display: block;
     margin-bottom: 5px;

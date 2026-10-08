@@ -1,7 +1,11 @@
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef } from "react";
+import { lazy, Suspense, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef } from "react";
 import { EngineMetricsCard } from "./EngineMetricsCard";
 import "./PipelineInspectorPanel.css";
 import { PanelHeader } from "@/shared/components/PanelHeader";
+
+const MemoryJourneyInspector = import.meta.env.DEV
+    ? lazy(() => import("./MemoryJourneyInspector"))
+    : null;
 
 interface EngineMetricsPanelProps {
     isVisible: boolean;
@@ -78,6 +82,12 @@ export function EngineMetricsPanel({ isVisible, onClose, onOpenPipelineInspector
 
             <div className="pipeline-body">
                 <EngineMetricsCard enabled={isVisible} title="Live engine snapshot" />
+
+                {MemoryJourneyInspector && (
+                    <Suspense fallback={<p className="pipeline-muted">Loading private developer evidence…</p>}>
+                        <MemoryJourneyInspector />
+                    </Suspense>
+                )}
 
                 {onOpenPipelineInspector && (
                     <section className="pipeline-panel-card pipeline-deep-dive-card">

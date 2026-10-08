@@ -1,12 +1,12 @@
 //! POST /v1/memories/search — mobile memory search endpoint.
 //!
-//! Uses the same hybrid retrieval boundary as desktop search to keep ranking
-//! and filtering semantics aligned with "Mac as the brain".
+//! Calls the same retrieval function as desktop Search, so ranking and
+//! filtering are identical on the phone and the Mac.
 
 use crate::companion::dto::{MemorySearchRequest, MemorySearchResponse};
 use crate::companion::errors::{CompanionError, CompanionResult};
-use crate::embedding::Embedder;
-use crate::search::{HybridSearcher, MemoryCardSynthesizer};
+use crate::ipc::commands::search::search_ranked_results;
+use crate::search::MemoryCardSynthesizer;
 use crate::AppState;
 use axum::extract::State;
 use axum::Json;
@@ -34,21 +34,17 @@ pub async fn search_memories(
 
     let started = Instant::now();
 
-    let embedder = Embedder::new()
-        .map_err(|e| CompanionError::Internal(format!("embedder init failed: {e}")))?;
-    let search_config = app_state.config.read().search.clone().normalized();
-
-    let mut results = HybridSearcher::search_hybrid_memories(
-        &app_state.store,
-        &embedder,
+    // The one retrieval function Search, Ask and agents use, so the phone
+    // ranks exactly what the Mac ranks.
+    let mut results = search_ranked_results(
+        &app_state,
         &query,
-        limit,
         time_filter.as_deref(),
         app_filter.as_deref(),
-        &search_config,
+        limit,
     )
     .await
-    .map_err(|e| CompanionError::Internal(format!("search_hybrid_memories failed: {e}")))?;
+    .map_err(|e| CompanionError::Internal(format!("search failed: {e}")))?;
 
     if let Some(project) = project_filter.as_deref() {
         results.retain(|row| row.project.trim().eq_ignore_ascii_case(project));

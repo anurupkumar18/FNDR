@@ -60,6 +60,14 @@
     overflow: hidden;
     position: relative;
     z-index: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.stats-activity-trace {
+    width: calc(100% - 48px);
+    flex: 0 0 auto;
+    margin: 12px 24px 0;
 }
 
 .stats-page-state {

@@ -12,6 +12,13 @@ import {
     setAutofillOverlayReady,
     takePendingAutofillPayload,
 } from "@/shared/ipc/tauri";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+    type ActivityTraceStep,
+} from "@/shared/activity/activityTrace";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
 
 const SUCCESS_TOAST_MS = 900;
 const ERROR_TOAST_MS = 6000;
@@ -141,11 +148,40 @@ export function AutofillOverlay() {
     const [phase, setPhase] = useState<Phase>({ kind: "idle" });
     const [query, setQuery] = useState("");
     const [overlayVisible, setOverlayVisible] = useState(false);
+    const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const contextRef = useRef<FieldContext | null>(null);
     const queryInputRef = useRef<HTMLInputElement>(null);
     const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const resolveTokenRef = useRef(0);
     const activeRequestRef = useRef<number | null>(null);
+    const fieldScanRequestRef = useRef<number | null>(null);
+    const activityTraceIdRef = useRef<string | null>(null);
+    const activitySequenceRef = useRef(0);
+
+    function beginAutofillActivity(traceId: string, step: ActivityTraceStep) {
+        activityTraceIdRef.current = traceId;
+        setActivityTrace(recordActivityStep(
+            beginActivityTrace({
+                id: traceId,
+                title: "Autofill activity",
+                startedAtMs: step.atMs,
+            }),
+            step,
+        ));
+    }
+
+    function recordAutofillActivity(step: ActivityTraceStep) {
+        const traceId = activityTraceIdRef.current;
+        if (!traceId) return;
+        setActivityTrace((current) => current?.id === traceId
+            ? recordActivityStep(current, step)
+            : current);
+    }
+
+    function clearAutofillActivity() {
+        activityTraceIdRef.current = null;
+        setActivityTrace(null);
+    }
 
     function clearDismissTimer() {
         if (dismissTimer.current) {
@@ -168,9 +204,11 @@ export function AutofillOverlay() {
         clearDismissTimer();
         resolveTokenRef.current += 1;
         activeRequestRef.current = null;
+        fieldScanRequestRef.current = null;
         setOverlayVisible(false);
         setPhase({ kind: "idle" });
         setQuery("");
+        clearAutofillActivity();
         hideOverlay(expectedRequest);
     }
 
@@ -201,6 +239,27 @@ export function AutofillOverlay() {
         clearDismissTimer();
         resolveTokenRef.current += 1;
         setOverlayVisible(true);
+        const operation = ++activitySequenceRef.current;
+        const requestedAt = Date.now();
+        if (!activityTraceIdRef.current) {
+            beginAutofillActivity(`autofill-${requestId}-${operation}`, {
+                id: `insertion-${operation}`,
+                label: "Requesting insertion into the focused field",
+                actor: "macOS Accessibility",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: requestedAt,
+            });
+        } else {
+            recordAutofillActivity({
+                id: `insertion-${operation}`,
+                label: "Requesting insertion into the focused field",
+                actor: "macOS Accessibility",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: requestedAt,
+            });
+        }
 
         try {
             setPhase({ kind: "injecting", label, candidate });
@@ -209,12 +268,32 @@ export function AutofillOverlay() {
                 return;
             }
             setPhase({ kind: "done", label, candidate });
+            const finishedAt = Date.now();
+            recordAutofillActivity({
+                id: `insertion-${operation}`,
+                label: "Insertion completed",
+                actor: "macOS Accessibility",
+                status: "completed",
+                evidence: "ipc-boundary",
+                atMs: finishedAt,
+                durationMs: finishedAt - requestedAt,
+            });
             scheduleDismiss(SUCCESS_TOAST_MS);
         } catch (error) {
             if (activeRequestRef.current !== requestId) {
                 return;
             }
             setPhase({ kind: "error", ...autofillErrorCopy(error) });
+            const failedAt = Date.now();
+            recordAutofillActivity({
+                id: `insertion-${operation}`,
+                label: "Insertion failed",
+                actor: "macOS Accessibility",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: failedAt,
+                durationMs: failedAt - requestedAt,
+            });
             scheduleDismiss(ERROR_TOAST_MS);
         }
     }
@@ -232,6 +311,23 @@ export function AutofillOverlay() {
 
         const token = resolveTokenRef.current + 1;
         resolveTokenRef.current = token;
+        const requestId = activeRequestRef.current;
+        const traceId = activityTraceIdRef.current
+            ?? `autofill-${requestId ?? "pending"}-${++activitySequenceRef.current}`;
+        const requestedAt = Date.now();
+        const requestStep: ActivityTraceStep = {
+            id: `resolution-${token}`,
+            label: "Searching local memory for field matches",
+            actor: "Autofill resolver",
+            status: "running",
+            evidence: "ipc-boundary",
+            atMs: requestedAt,
+        };
+        if (activityTraceIdRef.current) {
+            recordAutofillActivity(requestStep);
+        } else {
+            beginAutofillActivity(traceId, requestStep);
+        }
 
         setPhase({
             kind: "searching",
@@ -249,11 +345,50 @@ export function AutofillOverlay() {
 
             const label = resolution.query || pendingLabel;
             setQuery(label);
+            const finishedAt = Date.now();
 
             if (resolution.candidates.length === 0) {
+                recordAutofillActivity({
+                    id: `resolution-${token}`,
+                    label: "Local field-match search completed",
+                    actor: "Autofill resolver",
+                    status: "completed",
+                    evidence: "ipc-boundary",
+                    atMs: finishedAt,
+                    durationMs: finishedAt - requestedAt,
+                });
+                recordAutofillActivity({
+                    id: `resolution-${token}-result`,
+                    label: "Memory search returned no candidate matches",
+                    actor: "Autofill resolver",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: finishedAt,
+                    durationMs: finishedAt - requestedAt,
+                });
                 showManual(context, `No strong matches for "${pendingLabel}" yet. Refine the search and press Enter again.`);
                 return;
             }
+
+            const candidateCount = resolution.candidates.length;
+            recordAutofillActivity({
+                id: `resolution-${token}`,
+                label: "Local field-match search completed",
+                actor: "Autofill resolver",
+                status: "completed",
+                evidence: "ipc-boundary",
+                atMs: finishedAt,
+                durationMs: finishedAt - requestedAt,
+            });
+            recordAutofillActivity({
+                id: `resolution-${token}-result`,
+                label: `Ranked ${candidateCount} candidate ${candidateCount === 1 ? "match" : "matches"}`,
+                actor: "Autofill resolver",
+                status: "completed",
+                evidence: "result-metadata",
+                atMs: finishedAt,
+                durationMs: finishedAt - requestedAt,
+            });
 
             const topCandidate = resolution.candidates[0];
             if (
@@ -278,12 +413,37 @@ export function AutofillOverlay() {
                 return;
             }
             setPhase({ kind: "error", ...autofillErrorCopy(error) });
+            const failedAt = Date.now();
+            recordAutofillActivity({
+                id: `resolution-${token}`,
+                label: "Field-match search failed",
+                actor: "Autofill resolver",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: failedAt,
+                durationMs: failedAt - requestedAt,
+            });
             scheduleDismiss(ERROR_TOAST_MS);
         }
     }
 
     async function syncPendingPayload(showFallback = false) {
         setOverlayVisible(true);
+        const operation = ++activitySequenceRef.current;
+        const traceId = `autofill-pending-${operation}`;
+        const requestedAt = Date.now();
+        const shouldTracePendingCheck = showFallback && activeRequestRef.current === null;
+        if (shouldTracePendingCheck) {
+            beginAutofillActivity(traceId, {
+                id: "pending-request",
+                label: "Checking for a focused-field request",
+                actor: "Autofill handoff",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: requestedAt,
+            });
+        }
+        let requestCheckFailed = false;
         try {
             const pending = await takePendingAutofillPayload();
             if (pending) {
@@ -292,6 +452,19 @@ export function AutofillOverlay() {
             }
         } catch {
             // Keep the overlay visible even if the payload fetch fails once.
+            requestCheckFailed = true;
+            if (shouldTracePendingCheck && activityTraceIdRef.current === traceId) {
+                const failedAt = Date.now();
+                recordAutofillActivity({
+                    id: "pending-request",
+                    label: "Focused-field request check failed",
+                    actor: "Autofill handoff",
+                    status: "failed",
+                    evidence: "ipc-boundary",
+                    atMs: failedAt,
+                    durationMs: failedAt - requestedAt,
+                });
+            }
         }
 
         if (showFallback) {
@@ -300,6 +473,22 @@ export function AutofillOverlay() {
                     ? { kind: "waiting" }
                     : current,
             );
+            if (
+                shouldTracePendingCheck
+                && !requestCheckFailed
+                && activityTraceIdRef.current === traceId
+            ) {
+                const finishedAt = Date.now();
+                recordAutofillActivity({
+                    id: "pending-request",
+                    label: "No focused-field request received",
+                    actor: "Autofill handoff",
+                    status: "waiting",
+                    evidence: "result-metadata",
+                    atMs: finishedAt,
+                    durationMs: finishedAt - requestedAt,
+                });
+            }
         }
 
         return false;
@@ -313,8 +502,10 @@ export function AutofillOverlay() {
         if (activeRequest !== event.requestId) {
             resolveTokenRef.current += 1;
             contextRef.current = null;
+            fieldScanRequestRef.current = null;
             setPhase({ kind: "idle" });
             setQuery("");
+            clearAutofillActivity();
         }
         activeRequestRef.current = event.requestId;
         clearDismissTimer();
@@ -322,6 +513,19 @@ export function AutofillOverlay() {
         const payload: AutofillOverlayPayload = event.payload;
 
         if (isScanningPayload(payload)) {
+            const startedAt = Date.now();
+            fieldScanRequestRef.current = event.requestId;
+            beginAutofillActivity(
+                `autofill-${event.requestId}-${++activitySequenceRef.current}`,
+                {
+                    id: "field-scan",
+                    label: "Reading focused-field context",
+                    actor: "macOS Accessibility",
+                    status: "running",
+                    evidence: "backend-event",
+                    atMs: startedAt,
+                },
+            );
             setPhase({
                 kind: "searching",
                 label: payload.message || "Searching memories",
@@ -334,18 +538,72 @@ export function AutofillOverlay() {
         }
 
         if (isErrorPayload(payload)) {
+            const failedAt = Date.now();
+            if (
+                fieldScanRequestRef.current === event.requestId
+                && activityTraceIdRef.current
+            ) {
+                recordAutofillActivity({
+                    id: "field-scan",
+                    label: "Focused-field request failed",
+                    actor: "macOS Accessibility",
+                    status: "failed",
+                    evidence: "backend-event",
+                    atMs: failedAt,
+                });
+            } else {
+                beginAutofillActivity(
+                    `autofill-${event.requestId}-${++activitySequenceRef.current}`,
+                    {
+                    id: "request-failure",
+                    label: "Focused-field request failed",
+                    actor: "Autofill handoff",
+                    status: "failed",
+                    evidence: "backend-event",
+                    atMs: failedAt,
+                    },
+                );
+            }
+            fieldScanRequestRef.current = null;
             setPhase({ kind: "error", ...autofillErrorCopy(payload.error) });
             scheduleDismiss(ERROR_TOAST_MS);
             return;
         }
 
         const context = payload;
+        if (
+            fieldScanRequestRef.current === event.requestId
+            && activityTraceIdRef.current
+        ) {
+            const observedAt = Date.now();
+            recordAutofillActivity({
+                id: "field-scan",
+                label: "Focused-field context received",
+                actor: "macOS Accessibility",
+                status: "completed",
+                evidence: "backend-event",
+                atMs: observedAt,
+            });
+            fieldScanRequestRef.current = null;
+        }
         contextRef.current = context;
 
         const seededQuery = labelFromContext(context);
         setQuery(seededQuery);
 
         if (!seededQuery && !context.screen_context.trim()) {
+            const observedAt = Date.now();
+            beginAutofillActivity(
+                `autofill-${event.requestId}-${++activitySequenceRef.current}`,
+                {
+                    id: "missing-search-phrase",
+                    label: "Focused field needs a search phrase",
+                    actor: "Autofill resolver",
+                    status: "waiting",
+                    evidence: "result-metadata",
+                    atMs: observedAt,
+                },
+            );
             showManual(context);
             return;
         }
@@ -616,6 +874,14 @@ export function AutofillOverlay() {
                         </span>
                     </div>
 
+                    {activityTrace && (
+                        <ActivityTrace
+                            trace={activityTrace}
+                            className="af-activity"
+                            showDetails={false}
+                        />
+                    )}
+
                     {(showBootstrapSurface || phase.kind === "searching" || phase.kind === "waiting") && (
                         <>
                             <div className="af-searching-panel">
@@ -768,8 +1034,8 @@ export function AutofillOverlay() {
             {(phase.kind === "injecting" || phase.kind === "done" || phase.kind === "error") && (
                 <div
                     className={`af-card af-inline-card ${phase.kind}`}
-                    role={phase.kind === "error" ? "alert" : "status"}
-                    aria-live={phase.kind === "error" ? "assertive" : "polite"}
+                    role={phase.kind === "error" ? "alert" : undefined}
+                    aria-live={phase.kind === "error" ? "assertive" : undefined}
                 >
                     {phase.kind === "injecting" ? (
                         <span className="af-spinner" aria-hidden />
@@ -778,18 +1044,28 @@ export function AutofillOverlay() {
                             {phase.kind === "done" ? "✓" : "!"}
                         </span>
                     )}
-                    <div className="af-inline-copy">
-                        <span className="af-inline-label">
-                            {phase.kind === "injecting" && "Inserting into active field"}
-                            {phase.kind === "done" && "Filled field"}
-                            {phase.kind === "error" && phase.title}
-                        </span>
-                        <span className="af-inline-value">
-                            {phase.kind === "injecting" && phase.candidate.value}
-                            {phase.kind === "done"
-                                && `${phase.label} from ${phase.candidate.source_window_title || phase.candidate.source_app}`}
-                            {phase.kind === "error" && phase.message}
-                        </span>
+                    <div className="af-inline-stack">
+                        {activityTrace && (
+                            <ActivityTrace
+                                trace={activityTrace}
+                                className="af-activity af-inline-activity"
+                                showDetails={false}
+                                announce={phase.kind !== "error"}
+                            />
+                        )}
+                        <div className="af-inline-copy">
+                            <span className="af-inline-label">
+                                {phase.kind === "injecting" && "Inserting into active field"}
+                                {phase.kind === "done" && "Filled field"}
+                                {phase.kind === "error" && phase.title}
+                            </span>
+                            <span className="af-inline-value">
+                                {phase.kind === "injecting" && phase.candidate.value}
+                                {phase.kind === "done"
+                                    && `${phase.label} from ${phase.candidate.source_window_title || phase.candidate.source_app}`}
+                                {phase.kind === "error" && phase.message}
+                            </span>
+                        </div>
                     </div>
                     <button className="af-close" onClick={() => resetAndHide()} aria-label="Dismiss Autofill" type="button">
                         ×
@@ -846,6 +1122,22 @@ export function AutofillOverlay() {
                         var(--shadow-medium, 0 18px 44px rgba(0, 0, 0, 0.28));
                 }
 
+                .af-activity {
+                    --hairline: var(--af-border);
+                    --surface: var(--af-raised);
+                    --radius-md: 14px;
+                    --fg: var(--af-text);
+                    --fg-2: var(--af-text-secondary);
+                    --fg-3: var(--af-text-muted);
+                    --accent: var(--af-accent);
+                    --accent-2: var(--af-success);
+                }
+
+                .af-activity .activity-trace-summary {
+                    min-height: 42px;
+                    padding-block: 6px;
+                }
+
                 .af-inline-card {
                     display: flex;
                     align-items: center;
@@ -864,6 +1156,19 @@ export function AutofillOverlay() {
                     box-shadow:
                         0 22px 56px rgba(0, 0, 0, 0.52),
                         inset 0 1px 0 rgba(255, 255, 255, 0.04);
+                }
+
+                .af-inline-stack {
+                    display: flex;
+                    flex: 1;
+                    min-width: 0;
+                    flex-direction: column;
+                    gap: 8px;
+                }
+
+                .af-inline-activity {
+                    border-color: transparent;
+                    background: color-mix(in srgb, var(--af-text) 4%, transparent);
                 }
 
                 .af-inline-card.done {

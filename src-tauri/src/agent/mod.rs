@@ -6,7 +6,9 @@ pub mod evals;
 pub mod execution;
 pub mod policy;
 pub mod prompts;
+pub mod risk_policy;
 pub mod skills;
+pub mod tools;
 
 pub use actions::{
     policy_for_action, ActionPolicyDecision, ActionResult, AgentAction, AgentActionKind,
@@ -24,4 +26,6 @@ pub use evals::AgentEvalCase;
 pub use execution::validate_command;
 pub use policy::{policy_for_mode, AgentMode, PermissionScope, RiskLevel, ToolPolicy};
 pub use prompts::{get_agent_prompt, list_agent_prompts, AgentPrompt};
+pub use risk_policy::{decide, decide_for_tool, Caller, Decision, RefuseReason};
 pub use skills::AgentSkillCandidate;
+pub use tools::{october_registry, Tool, ToolError, ToolOutput, ToolRegistry, ToolRisk, ToolSpec};

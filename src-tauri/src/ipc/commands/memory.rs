@@ -288,6 +288,9 @@ fn app_is_installed(_bundle_id: &str) -> bool {
 }
 
 fn resolve_reopen_target(record: &crate::storage::MemoryRecord) -> Option<ResolvedReopenTarget> {
+    if record.is_agent_note() {
+        return None;
+    }
     let typed = match &record.reopen_kind {
         ReopenKind::BrowserUrl => record
             .reopen_url
@@ -595,6 +598,44 @@ mod tests {
                 .any(|e| e.source == "memory:mem-1" || e.target == "memory:mem-1"),
             "no edge should still reference memory:mem-1, got {edges_after:?}"
         );
+    }
+
+    #[test]
+    fn agent_note_never_resolves_any_reopen_target() {
+        for marker in [
+            "https://example.com",
+            "file:///tmp/note.txt",
+            "slack://channel",
+        ] {
+            let record = crate::storage::MemoryRecord {
+                source_type: crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string(),
+                memory_context: format!("Reopen: {marker}"),
+                ..Default::default()
+            };
+            assert_eq!(resolve_reopen_target(&record), None, "legacy {marker}");
+        }
+        for kind in [
+            ReopenKind::BrowserUrl,
+            ReopenKind::FilePath,
+            ReopenKind::AppDeepLink,
+            ReopenKind::AppBundle,
+        ] {
+            let record = crate::storage::MemoryRecord {
+                source_type: crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string(),
+                reopen_kind: kind,
+                reopen_url: Some("https://example.com".into()),
+                reopen_file_path: Some("/tmp/note.txt".into()),
+                reopen_app_deep_link: Some("slack://channel".into()),
+                reopen_app_bundle_id: Some("com.apple.TextEdit".into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                resolve_reopen_target(&record),
+                None,
+                "typed {:?}",
+                record.reopen_kind
+            );
+        }
     }
 
     #[test]

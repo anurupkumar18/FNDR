@@ -5,13 +5,10 @@ use crate::privacy::Blocklist;
 use crate::storage::SearchResult;
 use std::sync::OnceLock;
 
-static SHARED_EMBEDDER: OnceLock<Result<Embedder, String>> = OnceLock::new();
+static SHARED_EMBEDDER: OnceLock<Embedder> = OnceLock::new();
 
-pub(super) fn shared_embedder() -> Result<&'static Embedder, String> {
-    match SHARED_EMBEDDER.get_or_init(Embedder::new) {
-        Ok(embedder) => Ok(embedder),
-        Err(err) => Err(err.clone()),
-    }
+pub(crate) fn shared_embedder() -> Result<&'static Embedder, String> {
+    crate::embedding::cached_embedder(&SHARED_EMBEDDER, Embedder::new)
 }
 
 pub(super) fn shared_real_embedder() -> Result<&'static Embedder, String> {

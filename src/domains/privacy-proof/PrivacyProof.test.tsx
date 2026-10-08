@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PrivacyProof, PrivacyProofPanel } from "./PrivacyProof";
 
 vi.mock("@/shared/ipc/tauri", () => ({
@@ -49,6 +49,33 @@ describe("PrivacyProof", () => {
         expect(screen.getByText(/2 FNDR network requests recorded this app session/i)).toBeInTheDocument();
         expect(screen.getByText(/huggingface\.co/)).toBeInTheDocument();
     });
+
+    it("lists cloud model requests by feature, host and size, without content", () => {
+        render(
+            <PrivacyProof
+                proof={{
+                    ...proof,
+                    model_requests: [
+                        { atMs: Date.now(), feature: "notch_do_plan", host: "chatgpt.com", bytesSent: 1300 },
+                        { atMs: Date.now(), feature: "hermes_chat", host: "chatgpt.com", bytesSent: 420 },
+                        {
+                            atMs: Date.now(),
+                            feature: "screen_guide_answer",
+                            host: "chatgpt.com",
+                            bytesSent: 900,
+                            included: ["screen_text", "screenshot"],
+                        },
+                    ],
+                }}
+            />,
+        );
+        const list = screen.getByRole("list", { name: "Cloud model requests" });
+        expect(list).toHaveTextContent("Notch Do planned a request · chatgpt.com");
+        expect(list).toHaveTextContent("1.3 KB");
+        expect(list).toHaveTextContent("Hermes chat message");
+        expect(list).toHaveTextContent("420 B");
+        expect(list).toHaveTextContent(/Screen Guide asked ChatGPT · chatgpt\.com · .* · with on-screen text and a screenshot/);
+    });
 });
 
 describe("PrivacyProofPanel", () => {
@@ -72,6 +99,39 @@ describe("PrivacyProofPanel", () => {
         expect(screen.getByText("10")).toBeInTheDocument();
         expect(screen.getByText(/1 FNDR network request recorded this app session/i)).toBeInTheDocument();
         await waitFor(() => expect(getPrivacyProof).toHaveBeenCalled());
+
+        const trace = screen.getByRole("region", { name: "Privacy activity refresh" });
+        expect(within(trace).getByText("Privacy activity refreshed")).toBeInTheDocument();
+        fireEvent.click(within(trace).getByRole("button", { name: "Show Privacy activity refresh details" }));
+        expect(within(trace).getByText(/10 evaluated · 4 stored · 2 not stored · 1 recorded request/i)).toBeInTheDocument();
+        expect(within(trace).queryByText("Running")).not.toBeInTheDocument();
+        expect(within(trace).queryByText(/huggingface\.co/i)).not.toBeInTheDocument();
+    });
+
+    it("shows the real request while privacy counters are loading", async () => {
+        vi.mocked(getPrivacyProof).mockReturnValue(new Promise(() => {}));
+
+        render(<PrivacyProofPanel isVisible onClose={() => {}} />);
+
+        const trace = await screen.findByRole("region", { name: "Privacy activity refresh" });
+        expect(within(trace).getByText("Requesting privacy activity")).toBeInTheDocument();
+        expect(within(trace).getByText("Running")).toBeInTheDocument();
+    });
+
+    it("renders a bounded refresh failure without exposing the native error", async () => {
+        vi.mocked(getPrivacyProof).mockRejectedValue(
+            new Error("/Users/person/private.db via private.example"),
+        );
+
+        render(<PrivacyProofPanel isVisible onClose={() => {}} />);
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Privacy activity could not be refreshed",
+        );
+        const trace = screen.getByRole("region", { name: "Privacy activity refresh" });
+        expect(within(trace).getByText("Privacy activity refresh failed")).toBeInTheDocument();
+        expect(within(trace).getByText("Failed")).toBeInTheDocument();
+        expect(screen.queryByText(/private\.db|private\.example/)).not.toBeInTheDocument();
     });
 
     it("owns modal focus, closes on Escape, traps focus, and restores the invoking control", async () => {
