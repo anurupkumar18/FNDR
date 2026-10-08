@@ -664,6 +664,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             product_strength.2 += 1;
             product_strength.3 += usize::from(!retrieved.strong_match);
+            if !retrieved.strong_match {
+                let why = retrieved.hits.first().map(|hit| {
+                    format!(
+                        "{}; words found: {}",
+                        hit.why.routes.join("+"),
+                        hit.why.matched_terms.join(" ")
+                    )
+                });
+                eprintln!(
+                    "real query marked weak: {:?} (routes of the top result: {})",
+                    case.query,
+                    why.unwrap_or_default()
+                );
+            }
         }
         let retrieve_ranked = retrieved
             .hits

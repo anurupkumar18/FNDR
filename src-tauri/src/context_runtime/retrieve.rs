@@ -507,9 +507,13 @@ pub(crate) async fn retrieve_with_fused(
 ///
 /// One case is taken back out. The keyword route also scores rows that hold
 /// few or none of the query's whole words, which lifted unrelated queries
-/// over the bar. When under a third of the words are there, no time or
-/// entity route found the hit, and it is not close in meaning either
+/// over the bar. When under a third of the words are there, the entity
+/// route did not find the hit, and it is not close in meaning either
 /// (`vector` under `STRONG_MATCH_MIN_VECTOR`), the hit is weak.
+///
+/// The time route is not evidence here. It finds every memory in the time
+/// the query names, so "probate documents yesterday" would otherwise be a
+/// strong match for whatever was on screen yesterday.
 fn is_strong_match(hit: &RetrieveHit, terms: &[String], vector: f32) -> bool {
     let words = terms
         .iter()
@@ -530,7 +534,6 @@ fn is_strong_match(hit: &RetrieveHit, terms: &[String], vector: f32) -> bool {
     };
     let only_loose_keyword_support = found_by("keyword")
         && !found_by("chunk")
-        && !found_by("temporal")
         && !found_by("entity")
         && matched * 3 < words.len()
         && vector < STRONG_MATCH_MIN_VECTOR;
@@ -903,9 +906,9 @@ mod tests {
             &words,
             0.18
         ));
-        // The time or entity route also found it.
+        // The entity route also found it.
         assert!(is_strong_match(
-            &found_by(&["vector", "keyword", "temporal"], 0.30, &[]),
+            &found_by(&["vector", "keyword", "entity"], 0.30, &[]),
             &words,
             0.18
         ));
@@ -914,6 +917,27 @@ mod tests {
             &found_by(&routes, 0.20, &["estate", "probate", "trust", "documents"]),
             &words,
             0.0
+        ));
+    }
+
+    #[test]
+    fn being_in_the_named_time_is_not_evidence_of_the_topic() {
+        // "estate probate trust documents yesterday": the time route finds
+        // every memory from yesterday, whatever it is about.
+        let words = terms(&["estate", "probate", "trust", "documents"]);
+        let routes = ["vector", "keyword", "temporal"];
+        assert!(!is_strong_match(
+            &found_by(&routes, 0.40, &[]),
+            &words,
+            0.18
+        ));
+        // A query that is only a time has no topic words to miss.
+        assert!(is_strong_match(&found_by(&routes, 0.40, &[]), &[], 0.18));
+        // The topic is there as well.
+        assert!(is_strong_match(
+            &found_by(&routes, 0.40, &["estate", "probate"]),
+            &words,
+            0.18
         ));
     }
 
