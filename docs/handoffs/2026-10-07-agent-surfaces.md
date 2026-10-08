@@ -6,7 +6,18 @@ Date: 2026-10-07. Written at the owner's request when the session ran low on con
 
 The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
 
-## Update 6, 2026-10-07 (read this first)
+## Update 7, 2026-10-07 (read this first)
+
+A9.6 is built and pushed: `tools_used_in` in `hermes_agent.rs` reads `function_call` items from the gateway response, `tool_use_label` puts them in words, and the Agent page shows "Hermes searched FNDR memories." under the answer and keeps it in history. The MCP tool name prefix Hermes uses for FNDR's tools was not observed live (the live check ran without an MCP server); the label matches on "fndr" or "memory" so either form works, and an unknown tool shows by name.
+
+Open, in order of value:
+
+1. Owner decision: install `open-computer-use` so Notch Do can run on this Mac at all, then its live checks (pages README, task set, quit and halt).
+2. Checks that need clicking in the FNDR window: quit with the gateway up, Agent Stop, Screen Guide's ChatGPT path.
+3. C13.3 a list of past Notch Do runs; B7.5 Screen Guide falls back to local when ChatGPT is unavailable; A6.6 related memories skip excluded apps.
+4. Cleanup A12.1 and A12.2: remove the unmounted `AgentPanel.tsx` and `ResearchPanel.tsx` and the commands only they call.
+
+## Update 6, 2026-10-07
 
 Live checks run with the owner's approval; results are at the end of the phase 1 evidence.
 
