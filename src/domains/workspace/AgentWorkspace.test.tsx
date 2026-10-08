@@ -11,6 +11,7 @@ const ipc = vi.hoisted(() => ({
     sendHermesMessage: vi.fn(),
     cancelHermesMessage: vi.fn(),
     listMemoryCards: vi.fn(),
+    reopenMemory: vi.fn(),
     searchMemoryCards: vi.fn(),
 }));
 
@@ -111,6 +112,30 @@ describe("AgentWorkspace", () => {
 
         const added = await screen.findByLabelText("Memories FNDR added");
         expect(added).toHaveTextContent("Quarterly review deck");
+    });
+
+    it("opens the memory an answer cites, counting FNDR's own before the attached ones", async () => {
+        ipc.reopenMemory.mockResolvedValue(true);
+        ipc.getHermesBridgeStatus.mockResolvedValue({ ...hermes(true), related_memories: true });
+        ipc.sendHermesMessage.mockResolvedValue({
+            response_id: "r1",
+            conversation_id: "c",
+            content: "The deck says Q3 [1], and the notes agree [2]. Nothing backs [7].",
+            auto_memories: [{ id: "m9", title: "Quarterly review deck", appName: "Keynote", timestamp: 1 }],
+        });
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+        const input = await screen.findByLabelText("Message Hermes");
+        await waitFor(() => expect(input).toBeEnabled());
+        fireEvent.click(screen.getByRole("button", { name: "Memories" }));
+        fireEvent.click(await screen.findByRole("option", { name: /Chunking paper notes/ }));
+        fireEvent.change(input, { target: { value: "What did I decide?" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        fireEvent.click(await screen.findByRole("button", { name: "Open memory 2: Chunking paper notes" }));
+        expect(ipc.reopenMemory).toHaveBeenCalledWith("mem-1");
+        fireEvent.click(screen.getByRole("button", { name: "Open memory 1: Quarterly review deck" }));
+        expect(ipc.reopenMemory).toHaveBeenCalledWith("m9");
+        expect(screen.queryByRole("button", { name: /Open memory 7/ })).not.toBeInTheDocument();
     });
 
     it("names the one missing step in the header chip", async () => {
