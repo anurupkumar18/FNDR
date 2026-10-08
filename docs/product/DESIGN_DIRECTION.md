@@ -33,7 +33,6 @@ FNDR is a **local-first, privacy-focused memory assistant** for macOS. It contin
 ├─────────────────────────────────────────────┤
 │          Python Sidecars (Optional)         │
 │  whisper_gguf_runner.py │ orpheus_tts.py    │
-│  agent_runner.py                            │
 └─────────────────────────────────────────────┘
 ```
 
@@ -128,23 +127,11 @@ Screen Capture → Deduplication → OCR → VLM Analysis → LLM Summary
 ## Agent System
 
 ### Architecture
-- **Hermes runtime**: Primary native agent path surfaced in the FNDR Agent panel.
-- **agent_runner.py**: Legacy Anthropic subprocess fallback for local tool-use experiments.
-- **Communication**: JSON over stdin/stdout from Tauri subprocess where the fallback is used.
+- **Hermes runtime**: the one agent path, surfaced on the Agent page. FNDR runs a pinned Hermes gateway as a child process and talks to it over a local port.
+- The legacy `agent_runner.py` subprocess and its commands were removed on 2026-10-08.
 
 ### Available Tools
-| Tool | Purpose | Risk |
-|---|---|---|
-| `read_file` | Read local files | Low |
-| `write_file` | Create/edit files | Medium |
-| `run_command` | Execute shell commands | High |
-| `web_search` | Search the web | Low |
-| `report_critical_point` | Human-in-the-loop gate | None |
-
-### Safety Model
-- **Critical Points**: Agent must stop and report before purchases, form submissions, emails, or data deletion
-- **Timeout**: Commands have a 30-second timeout
-- **Output Truncation**: All tool outputs are truncated to prevent context overflow
+Hermes started by FNDR gets FNDR's read-only memory tools over MCP and its own `todo` tool, and nothing else: no terminal, file or browser tools. See ADR 024.
 
 ---
 

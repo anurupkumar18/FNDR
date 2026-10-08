@@ -608,6 +608,7 @@ Files: `src/domains/workspace/AgentWorkspace.tsx`, `CodexAccountCard.tsx`,
 - Found: `start_agent_task`, `get_agent_status`, `stop_agent`, `send_direct_chat`, `quick_setup_ollama`, `sync_hermes_bridge_context`, `start_hermes_gateway`, `stop_hermes_gateway` are used only by the unmounted panels. (C by grep)
 - Do: remove them and the `agent_runner.py` sidecar if nothing else uses it; unregister in `main.rs`.
 - Done when: `cargo check` passes and `hermes_agent.rs` is shorter.
+- Status: done 2026-10-08. The eight commands, their wrappers and preview stubs, `agent_runner.py` and its `anthropic` requirement are removed; `hermes_agent.rs` is 316 lines shorter.
 
 ### A12.3 Split `hermes_agent.rs`
 - kind: cleanup   size: M   needs: A12.2

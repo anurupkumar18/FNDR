@@ -102,7 +102,6 @@ These also shape what a model writes or does, and are not in the trace file.
 
 | Instruction | Location | Reaches |
 |---|---|---|
-| Direct Ollama chat system string | `ipc/commands/hermes_agent.rs` (`send_direct_chat`) | no mounted caller since the Agent page became Hermes chat |
 | `SERVER_INSTRUCTIONS`, tool descriptions, prompt templates | `mcp/mod.rs`, `agent/prompts.rs`, `agent/tools.rs` | every external agent that connects to FNDR |
 | Embedding query and document prompts | `embedding/prefixes.rs` | every vector written or searched. The live route takes its query prompt from the embedder's contract (`query_text_for`): none for MiniLM v4. BGE v5 call sites still add their prefixes themselves (`prefix_query_for_search`, `prefix_document_for_index`), and those differ from the BGE model card; see ADR 019 |
 

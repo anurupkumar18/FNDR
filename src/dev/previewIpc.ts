@@ -1342,8 +1342,6 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     logs: [],
                     updated_at_ms: previewNow,
                 };
-            case "get_agent_status":
-                return { is_running: false, task_title: null, last_message: null, status: "idle" };
             case "get_context_runtime_status":
                 return {
                     status: "ready",
@@ -1361,7 +1359,6 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             case "fndr_unsubscribe":
                 return true;
             case "get_hermes_bridge_status":
-            case "sync_hermes_bridge_context":
                 return previewHermesStatus(codexSignedIn, hermesConfigured);
             case "save_hermes_setup":
                 hermesConfigured = true;

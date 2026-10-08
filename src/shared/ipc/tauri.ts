@@ -1860,14 +1860,7 @@ export async function updateTodo(
     return invoke<Task>("update_todo", { taskId, title, taskType });
 }
 
-// ========== Agent SDK Functions ==========
-
-export interface AgentStatus {
-    is_running: boolean;
-    task_title: string | null;
-    last_message: string | null;
-    status: "idle" | "running" | "completed" | "error";
-}
+// ========== Hermes Agent Functions ==========
 
 export interface HermesAppContext {
     app_name: string;
@@ -1947,22 +1940,6 @@ export interface HermesChatReply {
     tools_used?: string[];
 }
 
-export async function startAgentTask(
-    taskTitle: string,
-    contextUrls?: string[],
-    contextNotes?: string[]
-): Promise<AgentStatus> {
-    return invoke<AgentStatus>("start_agent_task", { taskTitle, contextUrls, contextNotes });
-}
-
-export async function getAgentStatus(): Promise<AgentStatus> {
-    return invoke<AgentStatus>("get_agent_status");
-}
-
-export async function stopAgent(): Promise<AgentStatus> {
-    return invoke<AgentStatus>("stop_agent");
-}
-
 export async function getHermesBridgeStatus(): Promise<HermesBridgeStatus> {
     return invoke<HermesBridgeStatus>("get_hermes_bridge_status");
 }
@@ -1973,18 +1950,6 @@ export async function installHermesBridge(): Promise<HermesBridgeStatus> {
 
 export async function saveHermesSetup(payload: HermesSetupPayload): Promise<HermesBridgeStatus> {
     return invoke<HermesBridgeStatus>("save_hermes_setup", { payload });
-}
-
-export async function syncHermesBridgeContext(): Promise<HermesBridgeStatus> {
-    return invoke<HermesBridgeStatus>("sync_hermes_bridge_context");
-}
-
-export async function startHermesGateway(): Promise<HermesBridgeStatus> {
-    return invoke<HermesBridgeStatus>("start_hermes_gateway");
-}
-
-export async function stopHermesGateway(): Promise<HermesBridgeStatus> {
-    return invoke<HermesBridgeStatus>("stop_hermes_gateway");
 }
 
 /** Sends a message to Hermes. `memoryIds` attach FNDR memories as reference
@@ -2114,21 +2079,6 @@ export async function codexLoginCancel(loginId: string): Promise<void> {
 
 export async function codexLogout(): Promise<CodexAccountStatus> {
     return invoke<CodexAccountStatus>("codex_logout");
-}
-
-export async function quickSetupOllama(): Promise<HermesBridgeStatus> {
-    return invoke<HermesBridgeStatus>("quick_setup_ollama");
-}
-
-/**
- * Send a message directly to Ollama: no Hermes CLI required.
- * messages is the prior conversation in OpenAI format: [{role, content}].
- */
-export async function sendDirectChat(
-    messages: Array<{ role: string; content: string }>,
-    input: string
-): Promise<string> {
-    return invoke<string>("send_direct_chat", { messages, input });
 }
 
 export async function summarizeSearch(query: string, snippets: string[]): Promise<string> {

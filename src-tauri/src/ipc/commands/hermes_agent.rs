@@ -1,4 +1,4 @@
-//! Hermes bridge, gateway, and agent task Tauri commands.
+//! Hermes bridge, gateway, and chat Tauri commands.
 
 use crate::http_util::{llm_http_client, local_service_client, post_json_response};
 use crate::search::MemoryCard;
@@ -16,14 +16,6 @@ use tokio::time::{Duration, Instant};
 
 use super::common::{strip_internal_fndr_results, truncate_chars};
 use super::search::{memory_card_from_result, refine_memory_card_titles};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentStatus {
-    pub is_running: bool,
-    pub task_title: Option<String>,
-    pub last_message: Option<String>,
-    pub status: String, // "idle" | "running" | "completed" | "error"
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HermesAppContext {
@@ -149,24 +141,6 @@ fn tools_used_in(response: &serde_json::Value) -> Vec<String> {
         }
     }
     used
-}
-
-static AGENT_PROCESS: AgentOnceLock<AgentMutex<Option<Child>>> = AgentOnceLock::new();
-static AGENT_STATUS: AgentOnceLock<AgentMutex<AgentStatus>> = AgentOnceLock::new();
-
-fn get_agent_process() -> &'static AgentMutex<Option<Child>> {
-    AGENT_PROCESS.get_or_init(|| AgentMutex::new(None))
-}
-
-fn get_agent_status_store() -> &'static AgentMutex<AgentStatus> {
-    AGENT_STATUS.get_or_init(|| {
-        AgentMutex::new(AgentStatus {
-            is_running: false,
-            task_title: None,
-            last_message: None,
-            status: "idle".to_string(),
-        })
-    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1491,13 +1465,6 @@ pub async fn get_hermes_bridge_status(
 }
 
 #[tauri::command]
-pub async fn sync_hermes_bridge_context(
-    state: State<'_, Arc<AppState>>,
-) -> Result<HermesBridgeStatus, String> {
-    sync_hermes_bridge_files(state.inner()).await
-}
-
-#[tauri::command]
 pub async fn install_hermes_bridge(
     state: State<'_, Arc<AppState>>,
 ) -> Result<HermesBridgeStatus, String> {
@@ -1569,93 +1536,6 @@ pub async fn save_hermes_setup(
     stop_hermes_gateway_process();
     *get_hermes_gateway_error_store().lock() = None;
     sync_hermes_bridge_files(state.inner()).await
-}
-
-#[tauri::command]
-pub async fn start_hermes_gateway(
-    state: State<'_, Arc<AppState>>,
-) -> Result<HermesBridgeStatus, String> {
-    ensure_hermes_gateway_ready(state.inner(), 12_000).await
-}
-
-#[tauri::command]
-pub async fn stop_hermes_gateway(
-    state: State<'_, Arc<AppState>>,
-) -> Result<HermesBridgeStatus, String> {
-    stop_hermes_gateway_process();
-    *get_hermes_gateway_error_store().lock() = None;
-    build_hermes_bridge_status(state.inner()).await
-}
-
-/// Direct chat with an Ollama model — no Hermes CLI required.
-/// Works with any OpenAI-compatible base URL (Ollama's /v1 endpoint).
-#[tauri::command]
-pub async fn send_direct_chat(
-    state: State<'_, Arc<AppState>>,
-    messages: Vec<serde_json::Value>,
-    input: String,
-) -> Result<String, String> {
-    let _ = sync_hermes_bridge_files(state.inner()).await?;
-    let setup = read_hermes_setup_record(state.inner())
-        .ok_or_else(|| "Configure a provider in FNDR's Agent page first.".to_string())?;
-
-    let base_url = if setup.provider_kind == "ollama" {
-        setup
-            .base_url
-            .clone()
-            .filter(|u| !u.trim().is_empty())
-            .unwrap_or_else(|| OLLAMA_BASE_URL.to_string())
-    } else {
-        return Err(
-            "Direct chat is only available for Ollama. Use the Hermes gateway for other providers."
-                .to_string(),
-        );
-    };
-
-    // Memories retrieved for this message, never a stored snapshot.
-    let snippets = crate::operator::memory::snippets(state.inner(), input.trim()).await;
-    let system_content = format!(
-        "You are a helpful assistant embedded in FNDR, a privacy-first local memory app.{}",
-        memory_context(&snippets)
-    );
-
-    let mut all_messages: Vec<serde_json::Value> =
-        vec![serde_json::json!({ "role": "system", "content": system_content })];
-    all_messages.extend(messages);
-    all_messages.push(serde_json::json!({ "role": "user", "content": input.trim() }));
-
-    let request = serde_json::json!({
-        "model": setup.model_name,
-        "messages": all_messages,
-        "stream": false,
-    });
-
-    let client = llm_http_client().map_err(|e| format!("HTTP client: {e}"))?;
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let (status_code, json) = post_json_response(&client, &url, &request, None)
-        .await
-        .map_err(|e| format!("Could not reach Ollama at {base_url}: {e}"))?;
-
-    if !status_code.is_success() {
-        return Err(json
-            .get("error")
-            .and_then(|v| v.get("message").or(Some(v)))
-            .and_then(|v| v.as_str())
-            .unwrap_or("Ollama request failed.")
-            .to_string());
-    }
-
-    let content = json
-        .get("choices")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|msg| msg.get("content"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    Ok(content)
 }
 
 /// The memory block for one chat message: the evidence preamble and up to
@@ -1934,151 +1814,6 @@ async fn deliver_hermes_message(
     })
 }
 
-/// Start the agent to execute a task
-#[tauri::command]
-pub async fn start_agent_task(
-    task_title: String,
-    context_urls: Option<Vec<String>>,
-    context_notes: Option<Vec<String>>,
-) -> Result<AgentStatus, String> {
-    let mut process_guard = get_agent_process().lock();
-
-    // Kill existing process if any
-    if let Some(ref mut child) = *process_guard {
-        let _ = child.kill();
-    }
-
-    // Find the agent runner script
-    let sidecar_path = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .parent()
-        .ok_or("No parent dir")?
-        .join("../Resources/sidecars/agent_runner.py");
-
-    let script_path = if sidecar_path.exists() {
-        sidecar_path
-    } else {
-        // Fallback for development
-        std::path::PathBuf::from("src-tauri/sidecars/agent_runner.py")
-    };
-
-    // Find the python executable in the virtual environment
-    let venv_python = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .parent()
-        .ok_or("No parent dir")?
-        .join("../.venv/bin/python3");
-
-    let python_exe = if venv_python.exists() {
-        venv_python
-    } else {
-        // Fallback for development (assuming project root relative to execution)
-        std::path::PathBuf::from(".venv/bin/python3")
-    };
-
-    let mut task_prompt = task_title.clone();
-    if let Some(urls) = context_urls {
-        if !urls.is_empty() {
-            let url_context = urls
-                .into_iter()
-                .take(6)
-                .map(|u| format!("- {}", u))
-                .collect::<Vec<_>>()
-                .join("\n");
-            task_prompt.push_str("\n\nGround-truth URLs from memory graph:\n");
-            task_prompt.push_str(&url_context);
-        }
-    }
-    if let Some(notes) = context_notes {
-        if !notes.is_empty() {
-            task_prompt.push_str("\n\nMemory graph notes:\n");
-            task_prompt.push_str(
-                &notes
-                    .into_iter()
-                    .take(5)
-                    .map(|n| format!("- {}", n))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
-        }
-    }
-
-    // Start the agent process
-    let child = Command::new(python_exe)
-        .arg(&script_path)
-        .arg(&task_prompt)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to start agent: {}", e))?;
-
-    *process_guard = Some(child);
-
-    // Update status
-    let mut status = get_agent_status_store().lock();
-    *status = AgentStatus {
-        is_running: true,
-        task_title: Some(task_title),
-        last_message: Some("Agent started...".to_string()),
-        status: "running".to_string(),
-    };
-
-    Ok(status.clone())
-}
-
-/// Get current agent status
-#[tauri::command]
-pub async fn get_agent_status() -> Result<AgentStatus, String> {
-    let mut process_guard = get_agent_process().lock();
-    let mut status = get_agent_status_store().lock();
-
-    if let Some(ref mut child) = *process_guard {
-        // Check if process is still running
-        match child.try_wait() {
-            Ok(Some(exit_status)) => {
-                status.is_running = false;
-                status.status = if exit_status.success() {
-                    "completed".to_string()
-                } else {
-                    "error".to_string()
-                };
-            }
-            Ok(None) => {
-                // Still running, try to read output
-                status.is_running = true;
-            }
-            Err(e) => {
-                status.is_running = false;
-                status.status = "error".to_string();
-                status.last_message = Some(format!("Error: {}", e));
-            }
-        }
-    }
-
-    Ok(status.clone())
-}
-
-/// Stop the agent
-#[tauri::command]
-pub async fn stop_agent() -> Result<AgentStatus, String> {
-    let mut process_guard = get_agent_process().lock();
-
-    if let Some(ref mut child) = *process_guard {
-        let _ = child.kill();
-    }
-    *process_guard = None;
-
-    let mut status = get_agent_status_store().lock();
-    *status = AgentStatus {
-        is_running: false,
-        task_title: status.task_title.clone(),
-        last_message: Some("Agent stopped by user".to_string()),
-        status: "idle".to_string(),
-    };
-
-    Ok(status.clone())
-}
-
 /// Generate a smart daily briefing paragraph using the local LLM.
 /// `mode`: "morning" (actionable: what to focus on) or "evening" (recap + tomorrow).
 /// Defaults to time-of-day detection when None.
@@ -2126,60 +1861,6 @@ pub fn get_fun_greeting(name: Option<String>) -> Result<String, String> {
     let random_suffix = fun_suffixes.choose(&mut rng).unwrap_or(&"");
 
     Ok(format!("{}, {}! {}", prefix, base_name, random_suffix))
-}
-
-#[tauri::command]
-pub async fn quick_setup_ollama(
-    state: State<'_, Arc<AppState>>,
-) -> Result<HermesBridgeStatus, String> {
-    let (installed, reachable, models) = detect_ollama_state().await;
-    if !installed {
-        return Err("Ollama is not installed on this Mac.".to_string());
-    }
-    if !reachable {
-        return Err(
-            "FNDR could not reach Ollama. Make sure Ollama is running (`ollama serve`)."
-                .to_string(),
-        );
-    }
-    if models.is_empty() {
-        return Err(
-            "No Ollama models found. Pull a model first: `ollama pull llama3.2` or `ollama pull qwen2.5-coder`.".to_string(),
-        );
-    }
-
-    let best_model = models
-        .iter()
-        .find(|m| {
-            let l = m.to_lowercase();
-            l.contains("llama3")
-                || l.contains("llama-3")
-                || l.contains("qwen2.5")
-                || l.contains("mistral")
-                || l.contains("gemma")
-        })
-        .or_else(|| models.first())
-        .cloned()
-        .unwrap_or_else(|| models[0].clone());
-
-    let payload = HermesSetupPayload {
-        provider_kind: "ollama".to_string(),
-        model_name: best_model,
-        api_key: None,
-        base_url: Some(OLLAMA_BASE_URL.to_string()),
-        related_memories: false,
-    };
-
-    persist_hermes_setup_files(state.inner(), &payload)?;
-    {
-        let mut process_guard = get_hermes_gateway_process().lock();
-        if let Some(child) = process_guard.as_mut() {
-            let _ = child.kill();
-        }
-        *process_guard = None;
-    }
-    *get_hermes_gateway_error_store().lock() = None;
-    sync_hermes_bridge_files(state.inner()).await
 }
 
 #[cfg(test)]

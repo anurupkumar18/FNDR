@@ -14,7 +14,7 @@ Loop goal set by the owner: build the next slices (A6.6, B7.5, C13.3), each with
 - **Also done this round:** the unmounted `AgentPanel.tsx` and `ResearchPanel.tsx` are removed (3,804 lines).
 - **B7.5 done and pushed** (see FR9a in `docs/product/screen-guide.md`; `with_on_device_note`). The fallback path itself is covered only by the note's test; a live check with ChatGPT signed out is still owed. Original note: In `screen_guide.rs` the ChatGPT answer and the local answer are the two arms of one `if`; a fallback means letting the ChatGPT arm fall through to the local one on a failure that is not a cancellation, and saying so in the answer. Upstream changed this file on 2026-10-07, so re-read it first.
 - **C13.3 done and pushed.** `operator::journal::summarize_runs` counts each run's outcomes; they ride along in `get_privacy_proof` as `operator_runs` (no new command) and show in Privacy as "Recent Notch Do runs". The loop's goal (A6.6, B7.5, C13.3) is met. Original note: Needs a read command over `operator/journal.jsonl` (register it in `main.rs`, a shared file), a type in `tauri.ts`, and a small list in Privacy or the notch.
-- Left from cleanup: the Tauri commands only the removed panels called (`start_agent_task`, `get_agent_status`, `stop_agent`, `send_direct_chat`, `quick_setup_ollama`, `sync_hermes_bridge_context`, `start_hermes_gateway`, `stop_hermes_gateway`) and their `tauri.ts` wrappers.
+- Done 2026-10-08 (A12.2): the eight Tauri commands only the removed panels called, their `tauri.ts` wrappers and preview stubs, and the `agent_runner.py` sidecar are removed.
 
 ## Update 7, 2026-10-07
 
