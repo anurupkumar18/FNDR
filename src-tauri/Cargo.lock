@@ -2893,6 +2893,7 @@ dependencies = [
  "once_cell",
  "ort",
  "parking_lot",
+ "plist",
  "rand 0.10.1",
  "rcgen",
  "regex",
