@@ -49,6 +49,9 @@ pub struct AgentChatMessage {
     /// everything that went with it.
     #[serde(default)]
     pub auto_memories: Vec<AttachedMemory>,
+    /// On an answer: what Hermes did on the way to it.
+    #[serde(default)]
+    pub tools_used: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -383,6 +386,7 @@ mod tests {
             memories: Vec::new(),
             failed: true,
             auto_memories: Vec::new(),
+            tools_used: Vec::new(),
         };
 
         append_messages(&path, "c9", vec![failed.clone()]).unwrap();
@@ -424,6 +428,7 @@ mod tests {
             memories: Vec::new(),
             failed: false,
             auto_memories: Vec::new(),
+            tools_used: Vec::new(),
         };
 
         assert!(read_chats(&path).is_empty());

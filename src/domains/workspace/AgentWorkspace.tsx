@@ -280,7 +280,13 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                         ? { ...message, autoMemories: reply.auto_memories ?? [] }
                         : message,
                 ),
-                { role: "assistant", content: reply.content, at: Date.now(), memories: [] },
+                {
+                    role: "assistant",
+                    content: reply.content,
+                    at: Date.now(),
+                    memories: [],
+                    toolsUsed: reply.tools_used ?? [],
+                },
             ]);
             setActivityTrace((current) => {
                 if (!current || current.id !== `agent-request-${requestStartedAt}`) return current;
@@ -464,6 +470,9 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                                 ) : (
                                     <p className="aw-bubble">{message.content}</p>
                                 )}
+                                {message.toolsUsed && message.toolsUsed.length > 0 ? (
+                                    <p className="aw-tools-used">Hermes {message.toolsUsed.join(", ")}.</p>
+                                ) : null}
                                 {message.failed ? <p className="aw-not-sent">Not sent</p> : null}
                             </div>
                         ))}

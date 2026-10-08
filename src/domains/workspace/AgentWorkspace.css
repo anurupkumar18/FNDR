@@ -677,3 +677,9 @@
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     font-size: 0.92em;
 }
+
+.aw-tools-used {
+    margin: 4px 0 0;
+    font-size: 12px;
+    opacity: 0.7;
+}

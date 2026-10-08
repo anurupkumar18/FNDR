@@ -113,6 +113,42 @@ pub struct HermesChatReply {
     /// Memories FNDR added on its own to the message this answers.
     #[serde(default)]
     pub auto_memories: Vec<super::agent_chats::AttachedMemory>,
+    /// What Hermes did on the way to this answer, in order, once each.
+    #[serde(default)]
+    pub tools_used: Vec<String>,
+}
+
+/// What a Hermes tool call was, in words for the person. The name of a tool
+/// FNDR does not know is shown as it is, so nothing Hermes does is hidden.
+fn tool_use_label(name: &str) -> String {
+    let lower = name.to_lowercase();
+    if lower.contains("fndr") || lower.contains("memory.") || lower.contains("memory_") {
+        "searched FNDR memories".to_string()
+    } else if lower == "todo" {
+        "kept a planning list".to_string()
+    } else {
+        format!("used {name}")
+    }
+}
+
+/// The tool calls in a gateway response: `function_call` items come before
+/// the final message, each with the tool's name.
+fn tools_used_in(response: &serde_json::Value) -> Vec<String> {
+    let mut used: Vec<String> = Vec::new();
+    let calls = response
+        .get("output")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(|value| value.as_str()) == Some("function_call"))
+        .filter_map(|item| item.get("name").and_then(|value| value.as_str()));
+    for name in calls {
+        let label = tool_use_label(name);
+        if !used.contains(&label) {
+            used.push(label);
+        }
+    }
+    used
 }
 
 static AGENT_PROCESS: AgentOnceLock<AgentMutex<Option<Child>>> = AgentOnceLock::new();
@@ -1696,6 +1732,7 @@ pub async fn send_hermes_message(
                     memories,
                     failed: true,
                     auto_memories: Vec::new(),
+                    tools_used: Vec::new(),
                 },
             );
             if let Err(err) = failed {
@@ -1824,6 +1861,7 @@ async fn deliver_hermes_message(
         .unwrap_or_default()
         .to_string();
 
+    let tools_used = tools_used_in(&json);
     let content = json
         .get("output")
         .and_then(|value| value.as_array())
@@ -1870,6 +1908,7 @@ async fn deliver_hermes_message(
             memories,
             failed: false,
             auto_memories: auto_memories.clone(),
+            tools_used: Vec::new(),
         },
         super::agent_chats::AgentChatMessage {
             role: "assistant".to_string(),
@@ -1878,6 +1917,7 @@ async fn deliver_hermes_message(
             memories: Vec::new(),
             failed: false,
             auto_memories: Vec::new(),
+            tools_used: tools_used.clone(),
         },
     );
     if let Err(err) = history {
@@ -1890,6 +1930,7 @@ async fn deliver_hermes_message(
         conversation_id,
         content,
         auto_memories,
+        tools_used,
     })
 }
 
@@ -2160,6 +2201,32 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn an_answer_reports_what_hermes_did_on_the_way_once_each_in_order() {
+        // The shape the pinned gateway returned in the 2026-10-07 live check.
+        let response = serde_json::json!({ "output": [
+            { "type": "function_call", "name": "mcp_fndr_memory_search_full_context", "arguments": "{}", "call_id": "a" },
+            { "type": "function_call_output", "call_id": "a", "output": "..." },
+            { "type": "function_call", "name": "todo", "arguments": "{}", "call_id": "b" },
+            { "type": "function_call_output", "call_id": "b", "output": "..." },
+            { "type": "function_call", "name": "mcp_fndr_memory_timeline", "arguments": "{}", "call_id": "c" },
+            { "type": "function_call", "name": "terminal", "arguments": "{}", "call_id": "d" },
+            { "type": "message", "content": [{ "type": "output_text", "text": "Done." }] }
+        ]});
+        assert_eq!(
+            tools_used_in(&response),
+            [
+                "searched FNDR memories",
+                "kept a planning list",
+                "used terminal"
+            ]
+        );
+        assert!(
+            tools_used_in(&serde_json::json!({ "output": [{ "type": "message" }] })).is_empty()
+        );
+        assert!(tools_used_in(&serde_json::json!({})).is_empty());
+    }
 
     #[test]
     fn a_leftover_gateway_is_stopped_only_when_its_id_is_still_a_gateway() {

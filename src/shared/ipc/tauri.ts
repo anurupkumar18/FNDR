@@ -1931,6 +1931,8 @@ export interface HermesChatReply {
     content: string;
     /** Memories FNDR added on its own to the message this answers. */
     auto_memories?: AttachedMemory[];
+    /** What Hermes did on the way to this answer, in words, once each. */
+    tools_used?: string[];
 }
 
 export async function startAgentTask(
@@ -2004,6 +2006,8 @@ export interface AgentChatMessage {
     failed?: boolean;
     /** Memories FNDR added on its own to this message. */
     autoMemories?: AttachedMemory[];
+    /** On an answer: what Hermes did on the way to it. */
+    toolsUsed?: string[];
 }
 
 export interface AgentChat {

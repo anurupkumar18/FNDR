@@ -138,6 +138,22 @@ describe("AgentWorkspace", () => {
         expect(screen.queryByRole("button", { name: /Open memory 7/ })).not.toBeInTheDocument();
     });
 
+    it("says when Hermes searched memories on the way to an answer", async () => {
+        ipc.sendHermesMessage.mockResolvedValue({
+            response_id: "r1",
+            conversation_id: "c",
+            content: "You decided on Q3.",
+            tools_used: ["searched FNDR memories", "kept a planning list"],
+        });
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+        const input = await screen.findByLabelText("Message Hermes");
+        await waitFor(() => expect(input).toBeEnabled());
+        fireEvent.change(input, { target: { value: "What did I decide?" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        expect(await screen.findByText("Hermes searched FNDR memories, kept a planning list.")).toBeInTheDocument();
+    });
+
     it("names the one missing step in the header chip", async () => {
         ipc.getHermesBridgeStatus.mockResolvedValue({ ...hermes(false), codex_logged_in: true });
         const { unmount } = render(<AgentWorkspace isVisible onClose={vi.fn()} />);
