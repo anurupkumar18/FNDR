@@ -17,6 +17,20 @@ Every sentence FNDR shows is a finished, neutral, past-tense statement backed by
 - The machine has 8 GB. A hook blocks shell commands under critical memory pressure. Do not load the local model while FNDR is running.
 - Tools refuse the real profile without `--allow-real-profile`. Rewriting the real vault needs FNDR closed and a backup first.
 
+## Session of 2026-10-08
+
+All committed and on both remotes.
+
+- **Strong match: a time phrase is not topic evidence.** Unrelated queries with "yesterday" or "last week" added were marked strong 9 times in 24; now once. One real query of 98 became weak. `docs/evidence/W04/strong-match.md`.
+- **The agent review label needs an assistant on screen** (`inference::activity_for_evidence`). On a copy, 57 rows carried it; 41 were ChatGPT or Claude windows and stay, 14 of the other 16 go to unknown. `docs/evidence/W04/vs-89-labels-and-intent.md`.
+- **A card line that only repeats the window title** now reads "Viewed {title}.". `docs/evidence/W04/voice-and-fallback.md`.
+- **Second review pass** on the repaired copy: visible weak rows 18 to 14. `docs/evidence/W04/vs-91-weak-summaries.md`.
+- The retrieval gate fails on every "yesterday" query when run with `QA_SKIP_SEED=1` on a profile seeded on an earlier day. Reseed first.
+
+Open items 1, 3 and 4 below are done. Item 2 is the owner's call: the remaining "The ... is ..." summaries are the model following the extraction prompt's "Describe what is visible". Asking it for a past-tense action instead invites it to invent one.
+
+The repair tool now changes 16 more rows on a copy (labels only, vectors kept). Not applied to the real vault.
+
 ## Evening session, 2026-10-07 (after the first handoff)
 
 All committed and on both remotes at `9b5f0b5`.
