@@ -28,6 +28,7 @@ import {
 } from "@/shared/activity/activityTrace";
 import type { ActivityTraceSnapshot } from "@/shared/activity/activityTrace";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
+import { AgentReply } from "./AgentReply";
 import { CodexAccountCard } from "./CodexAccountCard";
 import "./AgentWorkspace.css";
 
@@ -103,28 +104,6 @@ export function citedBy(messages: AgentChatMessage[], answerIndex: number): Atta
         if (message.role === "user") return [...(message.autoMemories ?? []), ...message.memories];
     }
     return [];
-}
-
-/** Turns `[2]` in an answer into a button that reopens that memory. A number
- *  with no memory behind it stays as plain text. */
-function withCitations(content: string, cited: AttachedMemory[]) {
-    if (cited.length === 0) return content;
-    return content.split(/(\[\d{1,2}\])/g).map((part, index) => {
-        const memory = /^\[\d{1,2}\]$/.test(part) ? cited[Number(part.slice(1, -1)) - 1] : undefined;
-        if (!memory) return part;
-        return (
-            <button
-                key={`${index}-${memory.id}`}
-                type="button"
-                className="aw-citation"
-                title={memory.title}
-                aria-label={`Open memory ${part.slice(1, -1)}: ${memory.title}`}
-                onClick={() => void reopenMemory(memory.id).catch(() => undefined)}
-            >
-                {part}
-            </button>
-        );
-    });
 }
 
 function relativeTime(ms: number): string {
@@ -476,11 +455,15 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                                         ))}
                                     </div>
                                 ) : null}
-                                <p className="aw-bubble">
-                                    {message.role === "assistant"
-                                        ? withCitations(message.content, citedBy(messages, index))
-                                        : message.content}
-                                </p>
+                                {message.role === "assistant" ? (
+                                    <AgentReply
+                                        content={message.content}
+                                        cited={citedBy(messages, index)}
+                                        onOpenMemory={(memory) => void reopenMemory(memory.id).catch(() => undefined)}
+                                    />
+                                ) : (
+                                    <p className="aw-bubble">{message.content}</p>
+                                )}
                                 {message.failed ? <p className="aw-not-sent">Not sent</p> : null}
                             </div>
                         ))}
