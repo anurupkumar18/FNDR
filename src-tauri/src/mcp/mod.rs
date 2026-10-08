@@ -2049,7 +2049,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "memory.graph_query",
-                "description": "Query the local FNDR graph entities and edges by keyword.",
+                "description": "Query current, visible memory-backed graph nodes by keyword. Unattributed legacy entities are omitted.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -2061,7 +2061,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "memory.graph_context",
-                "description": "Insight Lance graph context: top project nodes, high-confidence edges, conflicts, optional wiki stub, and optional BFS neighborhood from `start_node_id` (UUID). For legacy string-id graph rows, use `memory.graph_query`.",
+                "description": "Insight Lance graph context: top project nodes, high-confidence edges, conflicts, optional wiki stub, and optional BFS neighborhood from `start_node_id` (UUID). For current memory-backed legacy nodes, use `memory.graph_query`.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -4368,12 +4368,40 @@ async fn run_memory_graph_query(
         });
     }
     let limit = args.limit.clamp(1, 200);
-    let mut nodes = app_state
+    let legacy_nodes = app_state
         .store
         .get_all_nodes()
         .await
-        .map_err(internal_tool_error)?
+        .map_err(internal_tool_error)?;
+    let source_ids = legacy_nodes
+        .iter()
+        .filter_map(|node| {
+            (node.node_type == crate::storage::NodeType::Memory)
+                .then(|| node.id.strip_prefix("memory:"))
+                .flatten()
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    let visible = context_runtime::context_source_memories(&app_state, &source_ids)
+        .await
+        .map_err(internal_tool_error)?;
+    let mut nodes = legacy_nodes
         .into_iter()
+        .filter_map(|node| {
+            if node.node_type != crate::storage::NodeType::Memory {
+                return None;
+            }
+            let memory_id = node.id.strip_prefix("memory:")?;
+            let current = visible.get(memory_id)?;
+            let narrative = if current.memory_context.trim().is_empty() {
+                current.snippet.clone()
+            } else {
+                current.memory_context.clone()
+            };
+            Some(crate::graph::graph_node_for_memory_record(
+                current, node.id, narrative,
+            ))
+        })
         .filter(|node| {
             node.id.to_ascii_lowercase().contains(&query)
                 || node.label.to_ascii_lowercase().contains(&query)
@@ -4396,7 +4424,15 @@ async fn run_memory_graph_query(
         .await
         .map_err(internal_tool_error)?
         .into_iter()
-        .filter(|edge| node_ids.contains(&edge.source) || node_ids.contains(&edge.target))
+        .filter(|edge| {
+            node_ids.contains(&edge.source)
+                && node_ids.contains(&edge.target)
+                && (edge.metadata.is_null()
+                    || edge
+                        .metadata
+                        .as_object()
+                        .is_some_and(serde_json::Map::is_empty))
+        })
         .take(limit.saturating_mul(2))
         .collect::<Vec<_>>();
 
@@ -7160,6 +7196,106 @@ mod tests {
         .expect("source evidence arguments");
 
         assert!(!args.include_raw);
+    }
+
+    #[test]
+    fn legacy_graph_query_only_returns_current_visible_memory_content() {
+        use crate::config::Config;
+        use crate::storage::{
+            EdgeType, GraphEdge, GraphNode, MemoryRecord, NodeType, StateStore, Store,
+        };
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::new(dir.path()).unwrap());
+        let state_store = Arc::new(StateStore::new(dir.path()).unwrap());
+        let graph = crate::graph::GraphStore::new(store.clone());
+        let state = Arc::new(crate::AppState::new(
+            dir.path().to_path_buf(),
+            Config::default(),
+            store.clone(),
+            state_store,
+            graph,
+            None,
+        ));
+        let source = |id: &str, app: &str| MemoryRecord {
+            id: id.into(),
+            app_name: app.into(),
+            window_title: format!("Current {id}"),
+            snippet: format!("Current {id} note"),
+            text: format!("Current {id} note"),
+            clean_text: format!("Current {id} note"),
+            ..Default::default()
+        };
+        runtime
+            .block_on(store.add_batch_preserving_ids(&[
+                source("visible", "Editor"),
+                source("hidden", "PrivateWorkspace"),
+            ]))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+        runtime
+            .block_on(store.upsert_nodes(&[
+                GraphNode {
+                    id: "memory:visible".into(),
+                    node_type: NodeType::Memory,
+                    label: "PRIVATE_STALE_LABEL".into(),
+                    created_at: 1,
+                    metadata: json!({"memory_context": "PRIVATE_STALE_CONTEXT"}),
+                },
+                GraphNode {
+                    id: "memory:hidden".into(),
+                    node_type: NodeType::Memory,
+                    label: "PRIVATE_HIDDEN_LABEL".into(),
+                    created_at: 1,
+                    metadata: json!({"memory_context": "PRIVATE_HIDDEN_CONTEXT"}),
+                },
+                GraphNode {
+                    id: "session:old".into(),
+                    node_type: NodeType::Entity,
+                    label: "PRIVATE_SESSION".into(),
+                    created_at: 1,
+                    metadata: json!({"note": "PRIVATE_SESSION_CONTEXT"}),
+                },
+            ]))
+            .unwrap();
+        runtime
+            .block_on(store.upsert_edges(&[GraphEdge {
+                id: "private-edge".into(),
+                source: "memory:visible".into(),
+                target: "memory:hidden".into(),
+                edge_type: EdgeType::MentionedIn,
+                timestamp: 1,
+                metadata: json!({"note": "PRIVATE_EDGE_CONTEXT"}),
+            }]))
+            .unwrap();
+
+        let response = runtime
+            .block_on(run_memory_graph_query(
+                state.clone(),
+                GraphQueryArgs {
+                    query: "current".into(),
+                    limit: 20,
+                },
+            ))
+            .unwrap();
+        let rows = response["structuredContent"]["nodes"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], "memory:visible");
+        assert_eq!(response["structuredContent"]["edges"], json!([]));
+        assert!(!response.to_string().contains("PRIVATE_"));
+        for query in ["private", "stale", "private_session"] {
+            let response = runtime
+                .block_on(run_memory_graph_query(
+                    state.clone(),
+                    GraphQueryArgs {
+                        query: query.into(),
+                        limit: 20,
+                    },
+                ))
+                .unwrap();
+            assert_eq!(response["structuredContent"]["nodes"], json!([]), "{query}");
+        }
     }
 
     #[test]

@@ -460,7 +460,7 @@ fn memory_node_id(memory_id: &str) -> String {
     format!("memory:{memory_id}")
 }
 
-fn graph_node_for_memory_record(
+pub(crate) fn graph_node_for_memory_record(
     record: &MemoryRecord,
     memory_node_id: String,
     narrative: String,

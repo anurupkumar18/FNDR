@@ -11,6 +11,7 @@ pub mod traversal;
 
 mod legacy;
 
+pub(crate) use legacy::graph_node_for_memory_record;
 pub use legacy::{compress_node_label, GraphStore, MemoryCard};
 
 // Graph projection layer for 3D visualization
