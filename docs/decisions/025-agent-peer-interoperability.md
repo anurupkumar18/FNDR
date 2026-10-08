@@ -37,7 +37,7 @@ A person can ask FNDR to hand a bounded piece of work to a configured peer agent
 
 Each part must be usable or verifiable before the next. Part 1 is implemented: the localhost MCP boundary test and 39 MCP server tests passed on 2026-10-08; the other rows remain open.
 
-The internal Part 2 Card validator and bounded fetch are implemented in `agent/peer.rs`. They are not yet connected to a saved peer choice or Agent UI, so Part 2 remains open. The Card's chosen endpoint and authentication requirement must be revalidated for each later task request; a validated Card alone does not authorize task egress.
+Part 2 now includes the Card validator and bounded fetch in `agent/peer.rs`, a local saved-peer directory, and a person-entered Card URL in the Agent UI. The native build, focused Rust and frontend tests, and a synthetic browser-preview add/remove flow passed on 2026-10-08. The preview fixture does not contact a remote peer. Bearer credentials are not configured, and an independent real-peer interoperability check remains open, so Part 2 is not accepted yet. The Card's chosen endpoint and authentication requirement must be revalidated for each later task request; a saved Card alone does not authorize task egress.
 
 ## Rejected shortcuts
 

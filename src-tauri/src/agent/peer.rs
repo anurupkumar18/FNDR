@@ -9,6 +9,7 @@ const MAX_CARD_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
 pub struct ValidatedCard {
+    pub card_url: Url,
     pub name: String,
     pub endpoint: Url,
     pub requires_bearer: bool,
@@ -75,6 +76,7 @@ pub fn validate_card(card_url: &str, bytes: &[u8]) -> Result<ValidatedCard, Stri
         .ok_or("Agent Card needs a same-origin HTTPS JSONRPC 1.0 interface")?;
     let requires_bearer = bearer_requirement(&card)?;
     Ok(ValidatedCard {
+        card_url: configured,
         name: name.to_string(),
         endpoint,
         requires_bearer,

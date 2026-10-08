@@ -30,6 +30,7 @@ import type { ActivityTraceSnapshot } from "@/shared/activity/activityTrace";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { AgentReply } from "./AgentReply";
 import { CodexAccountCard } from "./CodexAccountCard";
+import { PeerDirectory } from "./PeerDirectory";
 import "./AgentWorkspace.css";
 
 type Provider = "codex" | "ollama" | "openrouter" | "custom";
@@ -140,6 +141,7 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
     const [error, setError] = useState<string | null>(null);
     const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [setupOpen, setSetupOpen] = useState(false);
+    const [peerOpen, setPeerOpen] = useState(false);
     /** Why Hermes status could not be read; setup still opens with a Retry. */
     const [statusError, setStatusError] = useState<string | null>(null);
     const [pickerOpen, setPickerOpen] = useState(false);
@@ -198,6 +200,7 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
         setError(null);
         setActivityTrace(null);
         setSetupOpen(false);
+        setPeerOpen(false);
     };
 
     const openChat = async (id: string) => {
@@ -207,6 +210,7 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
         setActivityTrace(null);
         setError(null);
         setSetupOpen(false);
+        setPeerOpen(false);
         try {
             const chat = await getAgentChat(id);
             if (requestGenerationRef.current !== loadGeneration) return;
@@ -395,22 +399,29 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                             : "Hermes, with the FNDR memories you attach."
                     }
                     actions={
-                        <button
-                            type="button"
-                            className={`aw-model-chip${configured ? "" : " is-unset"}`}
-                            onClick={() => setSetupOpen((open) => !open)}
-                            aria-expanded={showSetup}
-                        >
-                            <span className={`aw-status-dot${hermes?.api_server_ready ? " is-ready" : ""}`} aria-hidden="true" />
-                            {modelLabel}
-                        </button>
+                        <>
+                            <button type="button" className="aw-peer-nav" onClick={() => { setPeerOpen((open) => !open); setSetupOpen(false); }}>
+                                {peerOpen ? "Chat" : "Peers"}
+                            </button>
+                            <button
+                                type="button"
+                                className={`aw-model-chip${configured ? "" : " is-unset"}`}
+                                onClick={() => { setPeerOpen(false); setSetupOpen((open) => !open); }}
+                                aria-expanded={showSetup && !peerOpen}
+                            >
+                                <span className={`aw-status-dot${hermes?.api_server_ready ? " is-ready" : ""}`} aria-hidden="true" />
+                                {modelLabel}
+                            </button>
+                        </>
                     }
                     closeLabel="Close Agent"
                     closeRef={closeButtonRef}
                     onClose={onClose}
                 />
 
-                {statusError && !hermes ? (
+                {peerOpen ? (
+                    <PeerDirectory onBack={() => setPeerOpen(false)} />
+                ) : statusError && !hermes ? (
                     <div className="aw-setup">
                         <h3>Hermes isn&apos;t reachable yet</h3>
                         <p className="aw-error" role="alert">{statusError}</p>

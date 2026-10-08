@@ -68,6 +68,9 @@ pub use setup_center::*;
 mod agent;
 pub use agent::*;
 
+mod peer;
+pub use peer::*;
+
 mod graph;
 pub use graph::*;
 

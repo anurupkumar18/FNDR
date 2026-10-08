@@ -3,6 +3,7 @@ import { CAPTURE_STATUS_EVENT, CODEX_LOGIN_COMPLETED_EVENT, SCREEN_GUIDE_STATE_E
 import type {
     CaptureStatus,
     CodexAccountStatus,
+    ConfiguredPeer,
     HermesBridgeStatus,
     ComposedAnswer,
     MemoryCard,
@@ -778,6 +779,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     let previewPrivacyAlerts: PrivacyAlert[] = [];
     let codexSignedIn = false;
     let agentChats: Array<{ id: string; title: string; createdAt: number; updatedAt: number; messages: Array<{ role: string; content: string; at: number; memories: Array<{ id: string; title: string; appName: string; timestamp: number }> }> }> = [];
+    let configuredPeers: ConfiguredPeer[] = [];
     let hermesConfigured = false;
     let codexLoginSeq = 0;
     let pendingCodexLogin: { loginId: string; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -1363,6 +1365,31 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             case "save_hermes_setup":
                 hermesConfigured = true;
                 return previewHermesStatus(codexSignedIn, hermesConfigured);
+            case "list_configured_peers":
+                return clonePreview(configuredPeers);
+            case "add_configured_peer": {
+                const cardUrl = String(payloadRecord(payload)?.cardUrl ?? "");
+                const parsed = new URL(cardUrl);
+                if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) {
+                    throw new Error("Peer URL must be HTTPS without credentials, query or fragment");
+                }
+                const saved: ConfiguredPeer = {
+                    id: configuredPeers.find((peer) => peer.card_url === cardUrl)?.id ?? `preview-peer-${configuredPeers.length + 1}`,
+                    card_url: cardUrl,
+                    name: "Preview research peer",
+                    endpoint: `${parsed.origin}/a2a`,
+                    requires_bearer: false,
+                    verified_at_ms: Date.now(),
+                };
+                configuredPeers = [...configuredPeers.filter((peer) => peer.id !== saved.id), saved];
+                return clonePreview(saved);
+            }
+            case "remove_configured_peer": {
+                const id = String(payloadRecord(payload)?.id ?? "");
+                const before = configuredPeers.length;
+                configuredPeers = configuredPeers.filter((peer) => peer.id !== id);
+                return configuredPeers.length !== before;
+            }
             case "computer_use_status":
                 return { enabled: false, codexReady: true, openComputerUsePath: null, active: false };
             case "openclicky_bridge_status":

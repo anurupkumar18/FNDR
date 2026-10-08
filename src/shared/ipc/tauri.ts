@@ -1862,6 +1862,28 @@ export async function updateTodo(
 
 // ========== Hermes Agent Functions ==========
 
+export interface ConfiguredPeer {
+    id: string;
+    card_url: string;
+    name: string;
+    endpoint: string;
+    requires_bearer: boolean;
+    verified_at_ms: number;
+}
+
+export async function listConfiguredPeers(): Promise<ConfiguredPeer[]> {
+    return invoke<ConfiguredPeer[]>("list_configured_peers");
+}
+
+/** Verifies the person-entered Agent Card before saving its URL and display details. */
+export async function addConfiguredPeer(cardUrl: string): Promise<ConfiguredPeer> {
+    return invoke<ConfiguredPeer>("add_configured_peer", { cardUrl });
+}
+
+export async function removeConfiguredPeer(id: string): Promise<boolean> {
+    return invoke<boolean>("remove_configured_peer", { id });
+}
+
 export interface HermesAppContext {
     app_name: string;
     memory_count: number;
