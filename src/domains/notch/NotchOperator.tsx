@@ -22,6 +22,7 @@ import {
     doRunReducer,
     initialDoState,
     isStopPhrase,
+    resultNote,
     type DoState,
 } from "./doRun";
 
@@ -317,6 +318,10 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                 <div className="notch-operator-countdown" aria-hidden="true">
                     <span style={{ animationDuration: `${AUTO_START_MS}ms` }} />
                 </div>
+            ) : null}
+
+            {state.phase === "finished" && resultNote(state.steps) ? (
+                <p className="notch-operator-heard">{resultNote(state.steps)}</p>
             ) : null}
 
             {state.phase === "running" && state.actions.length > 0 ? (

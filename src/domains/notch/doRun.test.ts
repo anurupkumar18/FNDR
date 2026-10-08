@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyUtterance, doRunReducer, initialDoState, isStopPhrase, type DoState } from "./doRun";
+import { classifyUtterance, doRunReducer, initialDoState, isStopPhrase, resultNote, type DoState } from "./doRun";
 import type { ComputerUseEvent } from "@/shared/ipc/tauri";
 
 const PLANNED: ComputerUseEvent = {
@@ -93,6 +93,23 @@ describe("doRunReducer", () => {
         expect(heard.runId).toBeNull();
         expect(classifyUtterance("go", { awaitingStart: true })).toEqual({ kind: "go" });
         expect(doRunReducer(heard, { type: "stopped" }).phase).toBe("stopped");
+    });
+
+    it("says how many steps FNDR saw for itself, and that nothing is undone for the person", () => {
+        const step = (checked: boolean) => ({
+            label: "x",
+            action: "operate" as const,
+            app: "Spotify",
+            status: "done" as const,
+            attempt: 1,
+            checked,
+        });
+        expect(resultNote([step(true), step(true)])).toBe("FNDR checked every step. Nothing here is undone automatically.");
+        expect(resultNote([step(true), step(false), step(false)])).toBe(
+            "FNDR checked 1 of 3 steps; the rest are as the model reported. Nothing here is undone automatically.",
+        );
+        expect(resultNote([step(false)])).toMatch(/^FNDR could not check these steps/);
+        expect(resultNote([])).toBe("");
     });
 
     it("ignores events from a run that was replaced", () => {

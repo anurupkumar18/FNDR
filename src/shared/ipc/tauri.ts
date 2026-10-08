@@ -2841,7 +2841,7 @@ export type ComputerUseEvent =
     | { kind: "approval"; runId: string; requestKey: string; tool: string; summary: string }
     | { kind: "approvalResolved"; runId: string; requestKey: string }
     | { kind: "blocked"; runId: string; index: number; tool: string; summary: string; reason: string }
-    | { kind: "stepDone"; runId: string; index: number; ok: boolean; detail: string }
+    | { kind: "stepDone"; runId: string; index: number; ok: boolean; detail: string; checked?: boolean }
     | { kind: "finished"; runId: string; ok: boolean; summary: string }
     | { kind: "stopped"; runId: string }
     | { kind: "failed"; runId: string; error: string; reconnect: boolean };

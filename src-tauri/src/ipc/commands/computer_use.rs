@@ -115,6 +115,8 @@ pub enum ComputerUseEvent {
         index: usize,
         ok: bool,
         detail: String,
+        /// FNDR saw the result itself; false means it is the model's report.
+        checked: bool,
     },
     Finished {
         run_id: String,
@@ -1183,6 +1185,7 @@ async fn run_with_snippets(
             index,
             ok: verdict.ok,
             detail: verdict.detail.clone(),
+            checked: plan::checked_by_fndr(&plan.steps[index], &verdict),
         });
         if !verdict.ok {
             (ctx.emit)(ComputerUseEvent::Finished {
@@ -2261,11 +2264,12 @@ mod tests {
             index: 1,
             ok: true,
             detail: "Playing".into(),
+            checked: true,
         })
         .unwrap();
         assert_eq!(
             done,
-            json!({ "kind": "stepDone", "runId": "r", "index": 1, "ok": true, "detail": "Playing" })
+            json!({ "kind": "stepDone", "runId": "r", "index": 1, "ok": true, "detail": "Playing", "checked": true })
         );
         let failed = serde_json::to_value(ComputerUseEvent::Failed {
             run_id: "r".into(),

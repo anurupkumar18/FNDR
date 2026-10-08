@@ -291,6 +291,15 @@ fn verdict(ok: bool, detail: impl Into<String>) -> Verdict {
 
 /// Whether a step landed, judged from what FNDR saw rather than what the
 /// operator says, except where FNDR has no reading of its own.
+const REPORTED_ONLY: &str = "Playback could not be read; went by the operator's report";
+
+/// Whether FNDR itself saw the step's result, as opposed to taking the
+/// model's word that it was done. Only a frontmost app, playing media and an
+/// open page can be seen; every other step is a report.
+pub fn checked_by_fndr(step: &PlanStep, verdict: &Verdict) -> bool {
+    verdict.ok && step.check != StepCheck::None && verdict.detail != REPORTED_ONLY
+}
+
 pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
     match step.check {
         StepCheck::Frontmost => {
@@ -320,10 +329,7 @@ pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
                 true,
                 format!("{} shows {}", step.app, seen.window_title.trim()),
             ),
-            None => verdict(
-                seen.reported_done == Some(true),
-                "Playback could not be read; went by the operator's report",
-            ),
+            None => verdict(seen.reported_done == Some(true), REPORTED_ONLY),
         },
         StepCheck::PageLoaded => {
             if !is_browser(seen) {
@@ -359,6 +365,32 @@ pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_step_counts_as_checked_only_when_fndr_saw_its_result() {
+        let step = |check: &str| -> PlanStep {
+            serde_json::from_str(&format!(
+                r#"{{"action":"operate","label":"x","app":"Spotify","url":"","goal":"g","check":"{check}"}}"#
+            ))
+            .unwrap()
+        };
+        let ok = |detail: &str| Verdict {
+            ok: true,
+            detail: detail.to_string(),
+        };
+        assert!(checked_by_fndr(
+            &step("media_playing"),
+            &ok("Playing Blinding Lights")
+        ));
+        assert!(checked_by_fndr(&step("frontmost"), &ok("Spotify is open")));
+        assert!(!checked_by_fndr(&step("none"), &ok("Done")));
+        assert!(!checked_by_fndr(&step("media_playing"), &ok(REPORTED_ONLY)));
+        let failed = Verdict {
+            ok: false,
+            detail: "Nothing is playing".to_string(),
+        };
+        assert!(!checked_by_fndr(&step("media_playing"), &failed));
+    }
 
     #[test]
     fn only_links_the_persons_words_account_for_open_without_asking() {

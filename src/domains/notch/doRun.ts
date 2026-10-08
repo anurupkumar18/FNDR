@@ -39,6 +39,8 @@ export interface DoStep {
     status: StepStatus;
     attempt: number;
     detail?: string;
+    /** FNDR saw this step's result itself; false means the model reported it. */
+    checked?: boolean;
 }
 
 export interface DoAction {
@@ -152,7 +154,11 @@ function applyEvent(state: DoState, event: ComputerUseEvent): DoState {
         case "stepDone":
             return {
                 ...state,
-                steps: updateStep(state.steps, event.index, { status: event.ok ? "done" : "failed", detail: event.detail }),
+                steps: updateStep(state.steps, event.index, {
+                    status: event.ok ? "done" : "failed",
+                    detail: event.detail,
+                    checked: event.checked === true,
+                }),
             };
         case "finished":
             return { ...state, phase: "finished", approval: null, current: null, result: { ok: event.ok, summary: event.summary } };
@@ -198,6 +204,22 @@ export function doRunReducer(state: DoState, input: DoInput): DoState {
         case "error":
             return { ...state, phase: "failed", error: input.message };
     }
+}
+
+/** What a finished run can honestly claim: how many steps FNDR saw for
+ *  itself, and that nothing it did is undone automatically. */
+export function resultNote(steps: DoStep[]): string {
+    const done = steps.filter((step) => step.status === "done");
+    if (done.length === 0) return "";
+    const checked = done.filter((step) => step.checked).length;
+    const reported = done.length - checked;
+    const seen =
+        reported === 0
+            ? "FNDR checked every step."
+            : checked === 0
+              ? "FNDR could not check these steps; they are as the model reported."
+              : `FNDR checked ${checked} of ${done.length} steps; the rest are as the model reported.`;
+    return `${seen} Nothing here is undone automatically.`;
 }
 
 // MARK: - What a spoken phrase means
