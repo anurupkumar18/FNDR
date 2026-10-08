@@ -36,6 +36,8 @@ ADR-018 itself is still Proposed.
 
 ### What controls an action
 
+The Hermes column below records the 2026-10-07 pre-fix audit. The later config restrictions and server-enforced four-tool read grant are recorded in ADR 025; the row claiming access to every MCP tool is no longer current.
+
 | | Hermes Agent | Notch Do |
 | --- | --- | --- |
 | Where the limit lives | Sentences in `SOUL.md`, `.hermes.md` and the request instructions. FNDR writes no tool restrictions into Hermes's config (default tool list to confirm) | `operator/policy.rs`, per call, from the tool, its arguments and the observed element |

@@ -18,7 +18,7 @@ Hermes answers only. Started by FNDR it has two kinds of tools and no others:
 - its own `todo` planning list
 - FNDR's read-only memory tools over MCP: `memory.search_full_context`, `memory.get_context_pack`, `memory.timeline`, `memory.source_evidence`
 
-It has no terminal, file, code, browser or schedule tools. The limit is written into the Hermes config FNDR generates (`hermes_codex.rs`: `HERMES_TOOLS_YAML`, `HERMES_MCP_TOOLS`) and was checked on a live gateway (`docs/evidence/W03/agent-surfaces-phase1.md`).
+It has no terminal, file, code, browser or schedule tools. FNDR writes that limit into the Hermes config (`hermes_codex.rs`: `HERMES_TOOLS_YAML`, `HERMES_MCP_TOOLS`) and enforces the four memory reads again at the MCP server with a separate bearer token. The config was checked on a live gateway (`docs/evidence/W03/agent-surfaces-phase1.md`); the server grant was checked with a real localhost MCP test (ADR 025). The token is scoped to this embedded Hermes connection, not to every process running as the Mac owner.
 
 ### Providers
 
