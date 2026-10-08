@@ -2489,6 +2489,17 @@ async fn call_tool(
             params.name
         )));
     }
+    if request.scope == McpScope::HermesReadOnly
+        && matches!(
+            params.name.as_str(),
+            "memory.search_full_context" | "memory.source_evidence"
+        )
+        && params.arguments["include_raw"] == true
+    {
+        return Ok(tool_error(
+            "raw evidence is outside this token's grant".to_string(),
+        ));
+    }
 
     if let Some(policy) = mcp_action_policy(params.name.as_str()) {
         let kill_switch = app_state.config.read().actions_kill_switch;
@@ -7320,6 +7331,16 @@ mod tests {
                 .json(&call("resources/read", json!({"uri":"fndr://private"})))
                 .send().await.unwrap().json().await.unwrap();
             assert_eq!(resource["error"]["code"], -32601);
+            for (name, arguments) in [
+                ("memory.search_full_context", json!({"query":"test","include_raw":true})),
+                ("memory.source_evidence", json!({"memory_id":"missing","include_raw":true})),
+            ] {
+                let raw: Value = client.post(&status.endpoint)
+                    .bearer_auth(&read_token)
+                    .json(&call("tools/call", json!({"name":name,"arguments":arguments})))
+                    .send().await.unwrap().json().await.unwrap();
+                assert!(raw.to_string().contains("raw evidence is outside this token's grant"), "{name}: {raw}");
+            }
 
             std::fs::write(&setup_path, r#"{"provider_kind":"codex","model_name":"test","related_memories":false}"#).unwrap();
             let revoked = client.post(&status.endpoint)
@@ -7333,6 +7354,11 @@ mod tests {
                 .json(&call("tools/list", json!({})))
                 .send().await.unwrap().json().await.unwrap();
             assert!(full["result"]["tools"].as_array().unwrap().len() > names.len());
+            let full_raw: Value = client.post(&status.endpoint)
+                .bearer_auth(&status.token)
+                .json(&call("tools/call", json!({"name":"memory.search_full_context","arguments":{"query":"test","include_raw":true}})))
+                .send().await.unwrap().json().await.unwrap();
+            assert!(!full_raw.to_string().contains("raw evidence is outside this token's grant"));
             let _ = stop().await;
             assert!(hermes_read_token().is_none());
             let restarted = start(None, app_state, None, Some(0))

@@ -28,7 +28,7 @@ A person can ask FNDR to hand a bounded piece of work to a configured peer agent
 
 | Order | Part | Existing seam | Proof before moving on |
 | --- | --- | --- | --- |
-| 1 | Server-issued Hermes read grant | `mcp` HTTP auth and `hermes_codex` config | Real localhost MCP test: only four tools listed/callable, write/execute/resource methods refused, full token unchanged, grant inaccessible on stop or after consent is turned off. |
+| 1 | Server-issued Hermes read grant | `mcp` HTTP auth and `hermes_codex` config | Real localhost MCP test: only four tools listed/callable, raw opt-in refused, write/execute/resource methods refused, full token unchanged, grant inaccessible on stop or after consent is turned off. |
 | 2 | Configured peer and Card validation | Existing bounded HTTP client in `http_util` | Local fixture and negative tests for HTTPS/origin/redirect/IP, Card version/interface/auth/size, no network on invalid input. |
 | 3 | Delegation draft and source check | `context_runtime::context_source_memories` | Hidden, deleted, alias, stale and missing sources block or refresh before bytes leave; payload preview equals sent bytes. |
 | 4 | Outbound Send/Get/Cancel | New small `agent/peer` module, existing `AgentAuditRecord` links | Mock A2A 1.0 peer exercises completed, input-required, auth-required, failed, uncertain send, cancel pending and cancel confirmed. No invented IDs. |
