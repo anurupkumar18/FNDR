@@ -122,6 +122,35 @@ The R36 card (`app_bundle` with a stray `en.wikipedia.org/wiki/Nitrogen` file pa
 
 Unit tests: `cd src-tauri && cargo test --lib reopen` (44 passed) and `cargo test --lib merge` (18 passed). `make test`: typecheck, 353 frontend tests, and 818 Rust lib tests pass. The only failure is `capture_fixtures::ocr_plus_cleanup_stays_within_each_fixtures_cer_budget`, an OCR accuracy budget unrelated to reopen that also failed before this change.
 
+## RE-07 follow-up (2026-10-05)
+
+`reopen_memory` now returns a tagged `ReopenOutcome` instead of `bool` / a thrown string. Before opening, `plan_reopen` checks the stored target:
+
+| Outcome | When |
+|---|---|
+| `opened` | http(s) URL, allowed deep link, or a file that is still at the stored path (including an iCloud placeholder) |
+| `opened_moved` | Stored file is gone; Spotlight `mdfind -name` found an exact-name match (Trash skipped; longest shared folder prefix, then newest mtime) |
+| `missing` | File gone, no usable Spotlight hit, or a relative path |
+| `drive_not_connected` | Path is under `/Volumes/<name>` and that volume folder is gone |
+| `app_only` | Bundle id is installed (`NSWorkspace`); FNDR still opens the app |
+| `app_missing` | Bundle id is not installed; nothing is launched |
+| `blocked` | `javascript:`, `data:`, `file:`, `about:`, `chrome:`, `edge:`, `brave:` |
+| `no_target` | Nothing to resolve |
+
+The Vault expanded card shows that one line under **Open source**. The stored path is not rewritten on `opened_moved`.
+
+Live checks (synthetic files only; no memory text):
+
+| Row | Stimulus | Result |
+|---|---|---|
+| R21 | Unique `fndr-re07-*.txt` on Desktop, then moved to Documents | Spotlight indexed the Desktop copy, then the Documents copy after the move. Exact-name pick would open the Documents file and report `opened_moved`. |
+| R22 | Temp file deleted | Path does not exist; `plan_reopen` returns `missing` with no lookup success. |
+| R23 | 5 MB APFS disk image volume `FndrRe07Vol`, file on it, then `hdiutil detach` | `/Volumes/FndrRe07Vol` gone; `drive_not_connected` with volume `FndrRe07Vol`. |
+| R24 | New file in iCloud Drive, `brctl evict` | brctl refused (`NSFileProviderErrorDomain -2008`, file cannot be evicted). File still existed on disk, so reopen is `opened` (same as a placeholder: `exists()` is true and `open` can materialize). |
+| R29 | `NSWorkspace` lookup | `com.apple.Preview` installed; `com.fndr.re07.missingapp` not installed → `app_missing`. |
+
+Unit tests: `cd src-tauri && cargo test --lib reopen`; frontend `npx vitest run src/shared/reopenOutcome.test.ts` and `ExpandedMemoryCard.test.tsx`.
+
 ## Matrix
 
 | Row | Scenario | Expected target | Expected reopen | Stored target | Reopen result | Build | Date | Notes |
@@ -146,15 +175,15 @@ Unit tests: `cd src-tauri && cargo test --lib reopen` (44 passed) and `cargo tes
 | R18 | Unsaved TextEdit document | App only, labeled unsaved | App opens, honest label | `file_path` `re-01_reopen_qa_matrix_….plan.md` (relative, not the unsaved doc); no unsaved label | wrong | `123cd75` | 2026-09-28 | LLM `files_touched` beat an honest app-only/unsaved target. `build_reopen_target` then `open` would hit `canonicalize_relaxed` “no longer exists.” |
 | R19 | VS Code file | File path (and `vscode://file/...:line` if derivable) | File opens in VS Code | Capture context: title `re03-notes.txt`, no `AXDocument` | app only | `a569e48`+RE-03 | 2026-10-01 | VS Code does not expose `AXDocument`; title has the file name only. Moved to RE-10 (not an RE-03 row). |
 | R20 | Finder window | Folder path | Folder revealed | `file_path` same relative plan filename, not the folder | wrong | `123cd75` | 2026-09-28 | Snippet mentioned the fixtures folder; stored reopen path did not. |
-| R21 | File moved after capture | Found again by name | Opens from new location, UI says moved | No durable absolute path to move | error | `123cd75` | 2026-09-28 | `reopen_memory` has no Spotlight lookup. Missing path → `File path no longer exists` (`memory.rs` `canonicalize_relaxed`). |
-| R22 | File deleted after capture | Stored path | Clear "no longer exists," memory still readable | Relative junk path | error | `123cd75` | 2026-09-28 | IPC can error; UI `handleReopen` only `console.warn`. Memory row would remain. |
-| R23 | File on an unmounted external drive | Stored path | Clear "drive not connected" | | not available | `123cd75` | 2026-09-28 | No external drive in this run |
-| R24 | iCloud file evicted from the Mac | Stored path | Opens and downloads, or clear message | | not available | `123cd75` | 2026-09-28 | No iCloud eviction fixture |
+| R21 | File moved after capture | Found again by name | Opens from new location, UI says moved | Absolute path that is then moved | opened_moved | RE-07 | 2026-10-05 | Spotlight exact-name lookup; UI: "File was moved. Opened it from …". See RE-07 section. |
+| R22 | File deleted after capture | Stored path | Clear "no longer exists," memory still readable | Absolute path then deleted | missing | RE-07 | 2026-10-05 | Outcome `missing`; Vault status line; memory is not deleted. Relative paths are also `missing` and skip Spotlight. |
+| R23 | File on an unmounted external drive | Stored path | Clear "drive not connected" | `/Volumes/FndrRe07Vol/doc.pdf` after detach | drive_not_connected | RE-07 | 2026-10-05 | Synthetic APFS disk image stood in for an external drive. UI: "Connect the drive FndrRe07Vol to open this file." |
+| R24 | iCloud file evicted from the Mac | Stored path | Opens and downloads, or clear message | iCloud Drive file still on disk | opened (placeholder / unevictable new file) | RE-07 | 2026-10-05 | `brctl evict` refused a brand-new file. Present iCloud/placeholder files `exists()` and reopen as `opened`. |
 | R25 | Path with spaces, accents, emoji | Stored exactly | Opens | `file_path` `…/re03-fixtures/café 📁/report (2) ✨.pdf` (decomposed accent, as macOS reports it) | exact | `a569e48`+RE-03 | 2026-10-01 | Preview. Stored path exists and opens. Full `tauri dev` capture, see RE-03 section. |
 | R26 | Slack channel | App, or deep link if derivable | App or channel | | not available | `123cd75` | 2026-09-28 | Slack not in this run's target list |
 | R27 | Notion desktop page | Notion URL or `notion://` | Same page | | not available | `123cd75` | 2026-09-28 | Notion desktop not in this run's target list |
 | R28 | Zoom call | App only | App, UI says no specific target | | not available | `123cd75` | 2026-09-28 | Zoom not in this run's target list |
-| R29 | App uninstalled after capture | Stored bundle id | Clear error | Not uninstalled | n/a | `123cd75` | 2026-09-28 | Did not uninstall an app. `open_app_bundle` would `open -b` and error if the bundle is gone; UI still has no typed `AppMissing`. |
+| R29 | App uninstalled after capture | Stored bundle id | Clear error | Bundle id with `NSWorkspace` check | app_missing when gone | RE-07 | 2026-10-05 | Preview is installed → `app_only`. Fake `com.fndr.re07.missingapp` → `app_missing`, UI: "<app> is no longer installed." Nothing launched. |
 | R30 | Chrome download of a PDF | File path, source URL, link to the page memory | PDF opens | `summary_source=tracker` Finder `app_bundle` `com.apple.finder`; snippet `Downloaded: fndr-re01-sample.pdf`; no `reopen_file_path`, no source URL, no related id | app only | `123cd75` | 2026-09-28 | `downloads.rs` `inject_download_memory` (~141) never sets `reopen_*`. Watcher used a copied PDF (same inject path as a Chrome download). |
 | R31 | Safari download that auto-unzips | Record what lands in Downloads | The extracted item or the archive, documented | Tracker memory for `fndr-re01-safari-unzip.zip` (archive), `app_bundle` Finder | app only | `123cd75` | 2026-09-28 | Copied zip into Downloads; Safari auto-unzip not triggered. Watcher stored the archive, not an extracted item. |
 | R32 | Download still in progress (`.crdownload`, `.download`, `.part`) | No memory until complete; exactly one after | Opens once complete | No `.crdownload` row; one tracker row after rename to `.pdf` | app only | `123cd75` | 2026-09-28 | `is_temp_file` in `downloads.rs` ignored the partial. Reopen still Finder app only. |
@@ -177,5 +206,5 @@ Unit tests: `cd src-tauri && cargo test --lib reopen` (44 passed) and `cargo tes
 | PDF page not stored | Preview title is total-only (`– 1 page`) or browser URL is not `.pdf`; page parsers live in `memory/reopen.rs` |
 | Download cannot reopen the file | `downloads.rs` `inject_download_memory` leaves `reopen_*` default |
 | Kind vs file disagree after merge | `capture/mod.rs` ~4795 field-wise `or` |
-| Missing file is a thrown string, not typed UI | `ipc/commands/memory.rs` `canonicalize_relaxed` + Vault `console.warn` |
+| Missing file is a thrown string, not typed UI | Fixed in RE-07: `plan_reopen` + Vault status line |
 | Surfaces disagree | Vault vs Timeline vs omnibar vs MCP as in R41 |

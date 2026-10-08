@@ -1,12 +1,16 @@
 //! Single-memory Tauri commands.
 
 use crate::graph::GraphStore;
-use crate::memory::reopen::{url_with_pdf_page, url_with_text_anchor, ReopenKind};
+use crate::memory::reopen::{
+    is_blocked_scheme, pick_moved_file, url_with_pdf_page, url_with_text_anchor, volume_is_disconnected,
+    volume_root, ReopenKind, ReopenOutcome,
+};
 use crate::storage::Store;
 use crate::AppState;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::State;
 
 /// Deletes one memory and everything it owns: the row, its chunks (inside
@@ -77,7 +81,7 @@ pub async fn delete_memory(
 pub async fn reopen_memory(
     state: State<'_, Arc<AppState>>,
     memory_id: String,
-) -> Result<bool, String> {
+) -> Result<ReopenOutcome, String> {
     let record = state
         .inner()
         .store
@@ -86,12 +90,37 @@ pub async fn reopen_memory(
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?
         .ok_or_else(|| format!("Memory not found: {}", memory_id))?;
 
-    let Some(target) = resolve_reopen_target(&record) else {
-        return Ok(false);
+    let target = resolve_reopen_target(&record);
+    let app_name = record
+        .reopen_app_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            let trimmed = record.app_name.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        });
+    let needs_lookup = matches!(
+        &target,
+        Some(ResolvedReopenTarget::FilePath(path)) if file_needs_moved_lookup(path)
+    );
+    let moved_candidates = if let (true, Some(ResolvedReopenTarget::FilePath(path))) =
+        (needs_lookup, &target)
+    {
+        find_moved_file_candidates(path).await
+    } else {
+        Vec::new()
     };
 
-    open_reopen_target(target)?;
-    Ok(true)
+    let plan = plan_reopen(
+        target,
+        app_name,
+        |_| moved_candidates.clone(),
+        app_is_installed,
+    );
+    if let Some(action) = plan.action {
+        open_reopen_target(action)?;
+    }
+    Ok(plan.outcome)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -100,6 +129,163 @@ enum ResolvedReopenTarget {
     FilePath(PathBuf),
     AppBundle(String),
     AppDeepLink(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ReopenPlan {
+    action: Option<ResolvedReopenTarget>,
+    outcome: ReopenOutcome,
+}
+
+const REOPEN_MDFIND_TIMEOUT: Duration = Duration::from_secs(2);
+const REOPEN_MDFIND_BYTES: usize = 64 * 1024;
+const REOPEN_MDFIND_MAX_CANDIDATES: usize = 64;
+
+fn file_needs_moved_lookup(path: &Path) -> bool {
+    path.is_absolute() && !path.exists() && !volume_is_disconnected(path)
+}
+
+fn plan_reopen(
+    target: Option<ResolvedReopenTarget>,
+    app_name: Option<&str>,
+    mut find_moved: impl FnMut(&Path) -> Vec<PathBuf>,
+    mut app_installed: impl FnMut(&str) -> bool,
+) -> ReopenPlan {
+    let app_name = app_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    match target {
+        None => ReopenPlan {
+            action: None,
+            outcome: ReopenOutcome::NoTarget,
+        },
+        Some(ResolvedReopenTarget::BrowserUrl(url)) => {
+            if is_blocked_scheme(&url) || !is_http_url(&url) {
+                ReopenPlan {
+                    action: None,
+                    outcome: ReopenOutcome::Blocked { target: url },
+                }
+            } else {
+                ReopenPlan {
+                    action: Some(ResolvedReopenTarget::BrowserUrl(url)),
+                    outcome: ReopenOutcome::Opened,
+                }
+            }
+        }
+        Some(ResolvedReopenTarget::AppDeepLink(link)) => {
+            if is_blocked_scheme(&link) {
+                ReopenPlan {
+                    action: None,
+                    outcome: ReopenOutcome::Blocked { target: link },
+                }
+            } else {
+                ReopenPlan {
+                    action: Some(ResolvedReopenTarget::AppDeepLink(link)),
+                    outcome: ReopenOutcome::Opened,
+                }
+            }
+        }
+        Some(ResolvedReopenTarget::AppBundle(bundle_id)) => {
+            if app_installed(&bundle_id) {
+                ReopenPlan {
+                    action: Some(ResolvedReopenTarget::AppBundle(bundle_id)),
+                    outcome: ReopenOutcome::AppOnly { app_name },
+                }
+            } else {
+                ReopenPlan {
+                    action: None,
+                    outcome: ReopenOutcome::AppMissing {
+                        bundle_id,
+                        app_name,
+                    },
+                }
+            }
+        }
+        Some(ResolvedReopenTarget::FilePath(path)) => plan_file_reopen(path, &mut find_moved),
+    }
+}
+
+fn plan_file_reopen(
+    path: PathBuf,
+    find_moved: &mut impl FnMut(&Path) -> Vec<PathBuf>,
+) -> ReopenPlan {
+    let path_string = path.display().to_string();
+    if !path.is_absolute() {
+        return ReopenPlan {
+            action: None,
+            outcome: ReopenOutcome::Missing { path: path_string },
+        };
+    }
+    if path.exists() {
+        return ReopenPlan {
+            action: Some(ResolvedReopenTarget::FilePath(path)),
+            outcome: ReopenOutcome::Opened,
+        };
+    }
+    if let Some(root) = volume_root(&path) {
+        if !root.exists() {
+            let volume = root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("external drive")
+                .to_string();
+            return ReopenPlan {
+                action: None,
+                outcome: ReopenOutcome::DriveNotConnected {
+                    volume,
+                    path: path_string,
+                },
+            };
+        }
+    }
+    let candidates = find_moved(&path);
+    if let Some(new_path) = pick_moved_file(&path, &candidates) {
+        return ReopenPlan {
+            action: Some(ResolvedReopenTarget::FilePath(new_path.clone())),
+            outcome: ReopenOutcome::OpenedMoved {
+                new_path: new_path.display().to_string(),
+            },
+        };
+    }
+    ReopenPlan {
+        action: None,
+        outcome: ReopenOutcome::Missing { path: path_string },
+    }
+}
+
+async fn find_moved_file_candidates(original: &Path) -> Vec<PathBuf> {
+    let Some(name) = original.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+    let output = tokio::time::timeout(
+        REOPEN_MDFIND_TIMEOUT,
+        crate::spotlight::run_mdfind_name(name, None, REOPEN_MDFIND_BYTES),
+    )
+    .await;
+    let Ok(Ok(bytes)) = output else {
+        return Vec::new();
+    };
+    crate::spotlight::parse_mdfind_nul_paths(&bytes)
+        .take(REOPEN_MDFIND_MAX_CANDIDATES)
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn app_is_installed(bundle_id: &str) -> bool {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::NSString;
+
+    unsafe {
+        NSWorkspace::sharedWorkspace()
+            .URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))
+            .is_some()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn app_is_installed(_bundle_id: &str) -> bool {
+    true
 }
 
 fn resolve_reopen_target(record: &crate::storage::MemoryRecord) -> Option<ResolvedReopenTarget> {
@@ -111,14 +297,18 @@ fn resolve_reopen_target(record: &crate::storage::MemoryRecord) -> Option<Resolv
             .reopen_url
             .as_deref()
             .map(str::trim)
-            .filter(|value| is_http_url(value))
+            .filter(|value| !value.is_empty())
             .map(|value| {
-                let url = match record.reopen_page {
-                    Some(page) => url_with_pdf_page(value, page),
-                    None => match record.reopen_text_anchor.as_deref() {
-                        Some(anchor) => url_with_text_anchor(value, anchor),
-                        None => value.to_string(),
-                    },
+                let url = if is_http_url(value) {
+                    match record.reopen_page {
+                        Some(page) => url_with_pdf_page(value, page),
+                        None => match record.reopen_text_anchor.as_deref() {
+                            Some(anchor) => url_with_text_anchor(value, anchor),
+                            None => value.to_string(),
+                        },
+                    }
+                } else {
+                    value.to_string()
                 };
                 ResolvedReopenTarget::BrowserUrl(url)
             }),
@@ -597,23 +787,23 @@ mod tests {
     fn resolve_reopen_target_rejects_invalid_typed_values() {
         assert_reopen_cases(vec![
             (
-                "javascript browser url",
+                "javascript browser url is kept for plan_reopen to block",
                 Rec {
                     reopen_kind: ReopenKind::BrowserUrl,
                     reopen_url: s("javascript:alert(1)"),
                     ..Default::default()
                 },
-                None,
+                Some(R::BrowserUrl("javascript:alert(1)".into())),
             ),
             (
-                "data browser url falls back to bundle",
+                "data browser url is kept instead of falling back to the app",
                 Rec {
                     reopen_kind: ReopenKind::BrowserUrl,
                     reopen_url: s("data:text/html,hi"),
                     bundle_id: s("com.google.Chrome"),
                     ..Default::default()
                 },
-                Some(R::AppBundle("com.google.Chrome".into())),
+                Some(R::BrowserUrl("data:text/html,hi".into())),
             ),
             (
                 "https is not a deep link",
@@ -721,9 +911,10 @@ mod tests {
         ]);
     }
 
-    // `chrome:` pages must never be a reopen target or be opened.
+    // `chrome:` pages must never be opened (R14). resolve still types them so
+    // plan_reopen can return Blocked instead of falling back to the browser app.
     #[test]
-    fn resolve_reopen_target_accepts_chrome_scheme_as_deep_link_flips_r14() {
+    fn resolve_reopen_target_keeps_chrome_scheme_for_blocked_plan_r14() {
         assert_reopen_cases(vec![
             (
                 "typed deep link",
@@ -885,5 +1076,202 @@ mod tests {
                 Some(R::BrowserUrl("https://example.com/article#section".into())),
             ),
         ]);
+    }
+
+    fn plan(
+        target: Option<ResolvedReopenTarget>,
+        app_name: Option<&str>,
+        find_moved: impl FnMut(&Path) -> Vec<PathBuf>,
+        app_installed: impl FnMut(&str) -> bool,
+    ) -> ReopenPlan {
+        plan_reopen(target, app_name, find_moved, app_installed)
+    }
+
+    #[test]
+    fn plan_reopen_opens_an_existing_temp_file_without_lookup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("doc.pdf");
+        std::fs::write(&path, b"hi").unwrap();
+        let mut lookups = 0;
+        let result = plan(
+            Some(R::FilePath(path.clone())),
+            None,
+            |_| {
+                lookups += 1;
+                vec![]
+            },
+            |_| true,
+        );
+        assert_eq!(lookups, 0);
+        assert_eq!(result.outcome, ReopenOutcome::Opened);
+        assert_eq!(result.action, Some(R::FilePath(path)));
+    }
+
+    #[test]
+    fn plan_reopen_picks_the_moved_file_and_skips_trash_and_similar_names() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let original = dir.path().join("original").join("gone.pdf");
+        let found = dir.path().join("original").join("moved").join("gone.pdf");
+        let farther = dir.path().join("elsewhere").join("gone.pdf");
+        let trash = dir.path().join(".Trash").join("gone.pdf");
+        let similar = dir.path().join("gone (1).pdf");
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(found.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(farther.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(trash.parent().unwrap()).unwrap();
+        std::fs::write(&found, b"found").unwrap();
+        std::fs::write(&farther, b"far").unwrap();
+        std::fs::write(&trash, b"trash").unwrap();
+        std::fs::write(&similar, b"similar").unwrap();
+        let mut seen = None;
+        let result = plan(
+            Some(R::FilePath(original.clone())),
+            None,
+            |path| {
+                seen = Some(path.to_path_buf());
+                vec![
+                    trash.clone(),
+                    similar.clone(),
+                    farther.clone(),
+                    found.clone(),
+                ]
+            },
+            |_| true,
+        );
+        assert_eq!(seen.as_ref(), Some(&original));
+        assert_eq!(
+            result.outcome,
+            ReopenOutcome::OpenedMoved {
+                new_path: found.display().to_string(),
+            }
+        );
+        assert_eq!(result.action, Some(R::FilePath(found)));
+    }
+
+    #[test]
+    fn plan_reopen_missing_file_with_no_candidates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let original = dir.path().join("gone.pdf");
+        let result = plan(
+            Some(R::FilePath(original.clone())),
+            None,
+            |_| vec![],
+            |_| true,
+        );
+        assert_eq!(
+            result.outcome,
+            ReopenOutcome::Missing {
+                path: original.display().to_string(),
+            }
+        );
+        assert_eq!(result.action, None);
+    }
+
+    #[test]
+    fn plan_reopen_relative_path_is_missing_and_skips_lookup() {
+        let mut lookups = 0;
+        let result = plan(
+            Some(R::FilePath(PathBuf::from("plan.md"))),
+            None,
+            |_| {
+                lookups += 1;
+                vec![]
+            },
+            |_| true,
+        );
+        assert_eq!(lookups, 0);
+        assert_eq!(
+            result.outcome,
+            ReopenOutcome::Missing {
+                path: "plan.md".into(),
+            }
+        );
+        assert_eq!(result.action, None);
+    }
+
+    #[test]
+    fn plan_reopen_disconnected_volume_skips_lookup() {
+        let path = PathBuf::from("/Volumes/FndrRe07MissingVol/doc.pdf");
+        assert!(
+            !Path::new("/Volumes/FndrRe07MissingVol").exists(),
+            "test volume must be absent"
+        );
+        let mut lookups = 0;
+        let result = plan(
+            Some(R::FilePath(path.clone())),
+            None,
+            |_| {
+                lookups += 1;
+                vec![]
+            },
+            |_| true,
+        );
+        assert_eq!(lookups, 0);
+        assert_eq!(
+            result.outcome,
+            ReopenOutcome::DriveNotConnected {
+                volume: "FndrRe07MissingVol".into(),
+                path: path.display().to_string(),
+            }
+        );
+        assert_eq!(result.action, None);
+    }
+
+    #[test]
+    fn plan_reopen_app_installed_is_app_only_missing_is_app_missing() {
+        let installed = plan(
+            Some(R::AppBundle("com.apple.Preview".into())),
+            Some("Preview"),
+            |_| vec![],
+            |_| true,
+        );
+        assert_eq!(
+            installed.outcome,
+            ReopenOutcome::AppOnly {
+                app_name: Some("Preview".into()),
+            }
+        );
+        assert_eq!(
+            installed.action,
+            Some(R::AppBundle("com.apple.Preview".into()))
+        );
+
+        let missing = plan(
+            Some(R::AppBundle("com.example.Gone".into())),
+            Some("Gone"),
+            |_| vec![],
+            |_| false,
+        );
+        assert_eq!(
+            missing.outcome,
+            ReopenOutcome::AppMissing {
+                bundle_id: "com.example.Gone".into(),
+                app_name: Some("Gone".into()),
+            }
+        );
+        assert_eq!(missing.action, None);
+    }
+
+    #[test]
+    fn plan_reopen_blocks_chrome_and_javascript_r14() {
+        for target in [
+            R::AppDeepLink("chrome://settings".into()),
+            R::BrowserUrl("javascript:alert(1)".into()),
+        ] {
+            let result = plan(Some(target.clone()), None, |_| vec![], |_| true);
+            let expected = match target {
+                R::AppDeepLink(value) | R::BrowserUrl(value) => ReopenOutcome::Blocked { target: value },
+                other => panic!("unexpected {other:?}"),
+            };
+            assert_eq!(result.outcome, expected);
+            assert_eq!(result.action, None);
+        }
+    }
+
+    #[test]
+    fn plan_reopen_empty_record_is_no_target() {
+        let result = plan(None, None, |_| vec![], |_| true);
+        assert_eq!(result.outcome, ReopenOutcome::NoTarget);
+        assert_eq!(result.action, None);
     }
 }

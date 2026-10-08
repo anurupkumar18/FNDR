@@ -114,7 +114,7 @@ describe("development UI preview IPC", () => {
         });
         await expect(
             invoke("reopen_memory", { memoryId: "memory-accessibility-notes" }),
-        ).resolves.toBe(true);
+        ).resolves.toEqual({ kind: "opened" });
         await expect(
             invoke("delete_memory", { memoryId: "memory-design-review" }),
         ).resolves.toBe(true);
