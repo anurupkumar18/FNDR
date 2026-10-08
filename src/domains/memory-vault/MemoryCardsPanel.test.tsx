@@ -334,6 +334,29 @@ describe("MemoryCardsPanel", () => {
         expect(await screen.findByLabelText("Session time range")).toHaveTextContent(/to/);
     });
 
+    it("says how long a session ran and shows its most detailed earlier moment", async () => {
+        vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
+        const earlier = "Measured the parallel loop with four threads and recorded a speedup of 3.1.";
+        vi.mocked(listMemoryCards).mockResolvedValue([
+            { ...card(1), title: "Latest moment", timestamp: VAULT_NOW - 10 * 60 * 1000 },
+            {
+                ...card(2),
+                title: "Second moment",
+                insight_what_happened: earlier,
+                timestamp: VAULT_NOW - 35 * 60 * 1000,
+            },
+            { ...card(3), title: "First moment", timestamp: VAULT_NOW - 52 * 60 * 1000 },
+        ]);
+
+        renderVault();
+
+        expect(await screen.findByRole("button", { name: /^2 more moments/ })).toHaveTextContent(
+            "3 moments over 42 min",
+        );
+        expect(screen.getByText(earlier)).toBeInTheDocument();
+        expect(screen.getByText("Earlier in this session")).toBeInTheDocument();
+    });
+
     it("reopens a row's source in one click and a folded duplicate's source in two", async () => {
         vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
         vi.mocked(listMemoryCards).mockResolvedValue([

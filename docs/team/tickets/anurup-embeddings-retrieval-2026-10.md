@@ -142,6 +142,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 **Do.** When a session goes quiet, write one session record from its moments: what was worked on, what was decided, where it stopped. Keep the moments as evidence beneath it. Stop adding a new card when a new moment adds no new fact. Link sessions across apps that share a project within minutes.
 
+**Progress, 2026-10-08.** Decided: the session summary is composed from the session's own moments and no model writes it. The on-device model was measured on the same kind of job for the briefing and invented advice, copied its notes, and reported an open task as done. `sessionDigest` (`src/domains/memory-vault/sessionDigest.ts`) gives a session row its moments, its length in minutes, its distinct files, and the most detailed earlier sentence when that says something the row's own line does not. Nothing is stored, so it covers every past session and can never disagree with its moments. Still to do: counts of decisions, next steps and errors (the card does not carry them yet), and linking sessions across apps.
+
 **Done when.** The Vault session row shows the session's own summary with counts of decisions, next steps and errors, and the moments still open individually.
 
 ## VS-93 Stop prose landing in the commands field, and explain the short clean text

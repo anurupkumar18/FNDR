@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
 import type { MemoryCard } from "@/shared/ipc/tauri";
 import { Icon, type IconName } from "@/shared/components/atoms";
-import { MemoryCard as MemoryCardComponent, reopenButtonLabel } from "./MemoryCard";
+import { MemoryCard as MemoryCardComponent, pickPreviewText, reopenButtonLabel } from "./MemoryCard";
+import { sessionDigest, sessionDigestLabel, type SessionDigest } from "./sessionDigest";
 import { vaultSourceKind, type VaultDay, type VaultRow, type VaultSourceKind } from "./vaultGrouping";
 
 const SOURCE_LABELS: Record<VaultSourceKind, string> = {
@@ -99,7 +100,7 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
         });
     };
 
-    const renderLine = (card: MemoryCard, row?: VaultRow, similarOpen = false) => (
+    const renderLine = (card: MemoryCard, row?: VaultRow, similarOpen = false, digest: SessionDigest | null = null) => (
         <div className="vault-row">
             <MemoryCardComponent
                 card={card}
@@ -132,10 +133,15 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
                         aria-label={`${row.similar.length} more ${row.similar.length === 1 ? "moment" : "moments"} from this session: ${card.title}`}
                         onClick={() => toggleSimilar(card.id)}
                     >
-                        {row.similar.length + 1} moments
+                        {digest ? sessionDigestLabel(digest) : `${row.similar.length + 1} moments`}
                     </button>
                 )}
             </div>
+            {digest?.earlier && (
+                <p className="vault-row-earlier">
+                    <span className="vault-row-earlier-label">Earlier in this session</span> {digest.earlier}
+                </p>
+            )}
         </div>
     );
 
@@ -163,7 +169,7 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
                                         row.similar.some((card) => card.id === focusMemoryId);
                                     return (
                                         <li key={row.lead.id}>
-                                            {renderLine(row.lead, row, similarOpen)}
+                                            {renderLine(row.lead, row, similarOpen, sessionDigest(row, pickPreviewText))}
                                             {similarOpen && (
                                                 <ul className="vault-rows vault-rows--similar">
                                                     {row.similar.map((card) => (

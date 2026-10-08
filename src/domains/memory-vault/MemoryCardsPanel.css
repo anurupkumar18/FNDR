@@ -474,7 +474,7 @@
 
 .vault-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 112px;
+    grid-template-columns: minmax(0, 1fr) 132px;
     align-items: center;
     gap: 8px;
 }
@@ -985,4 +985,22 @@
     border-bottom: 0;
     padding-top: 6px;
     padding-bottom: 6px;
+}
+
+/* The most detailed earlier moment of a session, under the row's own line. */
+.vault-row-earlier {
+    grid-column: 1 / -1;
+    margin: -4px 0 6px;
+    padding: 0 16px 0 18px;
+    color: var(--text-secondary);
+    font-family: var(--film-font-ui);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.vault-row-earlier-label {
+    margin-right: 6px;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }

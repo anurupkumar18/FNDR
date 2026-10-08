@@ -459,7 +459,8 @@ function isReviewed(card: MemoryCardData): boolean {
     );
 }
 
-function pickPreviewText(card: MemoryCardData): string {
+/** The line a card shows. */
+export function pickPreviewText(card: MemoryCardData): string {
     if (card.source_type === "agent") {
         return card.display_summary || card.internal_context || card.summary;
     }
