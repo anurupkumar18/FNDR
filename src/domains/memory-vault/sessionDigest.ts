@@ -10,6 +10,10 @@ export interface SessionDigest {
     minutes: number;
     /** Distinct files across the moments. */
     files: number;
+    /** Decisions, errors and next steps the moments record, added up. */
+    decisions: number;
+    errors: number;
+    nextSteps: number;
     /** The most detailed sentence of an earlier moment, when it says something
      *  the row's own line does not. */
     earlier?: string;
@@ -54,6 +58,9 @@ export function sessionDigest(row: VaultRow, lineOf: (card: MemoryCard) => strin
     for (const card of moments) for (const file of card.files_touched ?? []) files.add(file.trim().toLowerCase());
     files.delete("");
 
+    const total = (count: (card: MemoryCard) => number | undefined) =>
+        moments.reduce((sum, card) => sum + (count(card) ?? 0), 0);
+
     const shown = words(`${row.lead.title} ${lineOf(row.lead)}`);
     let earlier: string | undefined;
     let most = 0;
@@ -71,14 +78,25 @@ export function sessionDigest(row: VaultRow, lineOf: (card: MemoryCard) => strin
         moments: moments.length,
         minutes: Math.round((Math.max(...times) - Math.min(...times)) / 60_000),
         files: files.size,
+        decisions: total((card) => card.decision_count),
+        errors: total((card) => card.error_count),
+        nextSteps: total((card) => card.next_step_count),
         earlier,
     };
 }
 
-/** "11 moments over 42 min, 3 files" */
+/** "11 moments over 42 min": short enough for the row's button. */
 export function sessionDigestLabel(digest: SessionDigest): string {
-    const parts = [`${digest.moments} moments`];
-    if (digest.minutes >= 1) parts[0] += ` over ${digest.minutes} min`;
-    if (digest.files > 0) parts.push(`${digest.files} ${digest.files === 1 ? "file" : "files"}`);
-    return parts.join(", ");
+    return digest.minutes >= 1 ? `${digest.moments} moments over ${digest.minutes} min` : `${digest.moments} moments`;
+}
+
+/** "3 files, 2 decisions, 1 next step, 1 error", or "" when the session records none. */
+export function sessionDigestFacts(digest: SessionDigest): string {
+    const some = (count: number, one: string, many: string) => (count > 0 ? [`${count} ${count === 1 ? one : many}`] : []);
+    return [
+        ...some(digest.files, "file", "files"),
+        ...some(digest.decisions, "decision", "decisions"),
+        ...some(digest.nextSteps, "next step", "next steps"),
+        ...some(digest.errors, "error", "errors"),
+    ].join(", ");
 }

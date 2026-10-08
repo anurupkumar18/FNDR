@@ -474,7 +474,7 @@
 
 .vault-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 132px;
+    grid-template-columns: minmax(0, 1fr) 148px;
     align-items: center;
     gap: 8px;
 }

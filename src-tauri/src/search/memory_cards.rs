@@ -61,6 +61,14 @@ pub struct MemoryCard {
     /// Approximate session duration in minutes (0 if single capture)
     #[serde(default)]
     pub session_duration_mins: u32,
+    /// How many decisions, errors and next steps the memory records. Set
+    /// for the Vault list, where a session row adds them up; 0 elsewhere.
+    #[serde(default)]
+    pub decision_count: u32,
+    #[serde(default)]
+    pub error_count: u32,
+    #[serde(default)]
+    pub next_step_count: u32,
     /// Short id of the prior card this one continues from, parsed out of
     /// the durable `memory_context` "Continues from <short_id>" marker.
     /// Never persisted on its own; derived from `memory_context` metadata.
@@ -332,6 +340,9 @@ impl MemoryCardSynthesizer {
                 activity_type,
                 files_touched,
                 session_duration_mins,
+                decision_count: 0,
+                error_count: 0,
+                next_step_count: 0,
                 continuation_of,
                 reopen_target,
                 reopen_page: anchor.reopen_page,
@@ -902,6 +913,9 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
         activity_type,
         files_touched,
         session_duration_mins: 0,
+        decision_count: 0,
+        error_count: 0,
+        next_step_count: 0,
         continuation_of,
         reopen_target,
         reopen_page: result.reopen_page,

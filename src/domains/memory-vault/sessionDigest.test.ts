@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MemoryCard } from "@/shared/ipc/tauri";
-import { sessionDigest, sessionDigestLabel } from "./sessionDigest";
+import { sessionDigest, sessionDigestFacts, sessionDigestLabel } from "./sessionDigest";
 
 const MINUTE = 60_000;
 
@@ -47,7 +47,8 @@ describe("sessionDigest", () => {
         expect(digest.minutes).toBe(42);
         expect(digest.files).toBe(2);
         expect(digest.earlier).toBeUndefined();
-        expect(sessionDigestLabel(digest)).toBe("3 moments over 42 min, 2 files");
+        expect(sessionDigestLabel(digest)).toBe("3 moments over 42 min");
+        expect(sessionDigestFacts(digest)).toBe("2 files");
     });
 
     it("surfaces the most detailed earlier sentence that adds something", () => {
@@ -78,6 +79,20 @@ describe("sessionDigest", () => {
         expect(digest.earlier).toBeUndefined();
     });
 
+    it("adds up the decisions, next steps and errors its moments record", () => {
+        const counted = (id: string, minutesAgo: number, counts: object) =>
+            ({ ...card(id, minutesAgo, "Wrote the conclusion."), ...counts }) as MemoryCard;
+        const digest = sessionDigest(
+            {
+                lead: counted("a", 0, { decision_count: 1, error_count: 1 }),
+                similar: [counted("b", 10, { decision_count: 1, next_step_count: 1 }), card("c", 20, "Wrote the conclusion.")],
+            },
+            lineOf,
+        )!;
+        expect([digest.decisions, digest.nextSteps, digest.errors]).toEqual([2, 1, 1]);
+        expect(sessionDigestFacts(digest)).toBe("2 decisions, 1 next step, 1 error");
+    });
+
     it("leaves out the minutes of a session shorter than one", () => {
         const digest = sessionDigest(
             {
@@ -87,5 +102,6 @@ describe("sessionDigest", () => {
             lineOf,
         )!;
         expect(sessionDigestLabel(digest)).toBe("2 moments");
+        expect(sessionDigestFacts(digest)).toBe("");
     });
 });

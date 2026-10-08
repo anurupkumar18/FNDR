@@ -345,7 +345,7 @@ describe("MemoryCardsPanel", () => {
                 insight_what_happened: earlier,
                 timestamp: VAULT_NOW - 35 * 60 * 1000,
             },
-            { ...card(3), title: "First moment", timestamp: VAULT_NOW - 52 * 60 * 1000 },
+            { ...card(3), title: "First moment", decision_count: 2, timestamp: VAULT_NOW - 52 * 60 * 1000 },
         ]);
 
         renderVault();
@@ -353,6 +353,7 @@ describe("MemoryCardsPanel", () => {
         expect(await screen.findByRole("button", { name: /^2 more moments/ })).toHaveTextContent(
             "3 moments over 42 min",
         );
+        expect(screen.getByLabelText("Recorded in this session")).toHaveTextContent("2 decisions");
         expect(screen.getByText(earlier)).toBeInTheDocument();
         expect(screen.getByText("Earlier in this session")).toBeInTheDocument();
     });

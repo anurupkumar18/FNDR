@@ -81,6 +81,11 @@ export interface MemoryCard {
     files_touched?: string[];
     /** Approximate session duration in minutes (0 if single capture) */
     session_duration_mins?: number;
+    /** How many decisions, errors and next steps the memory records. Set by
+     *  the Vault list only. */
+    decision_count?: number;
+    error_count?: number;
+    next_step_count?: number;
     /** Short id of the prior card this one continues from, derived from
      *  the durable memory_context "Continues from <short_id>" marker. */
     continuation_of?: string;

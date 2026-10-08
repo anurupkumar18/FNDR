@@ -283,6 +283,28 @@ async fn enrich_insight_kg_node_counts(
     }
 }
 
+/// Counts of what each memory records, for the Vault's session rows. The
+/// lists live on the stored record, not on a search result.
+async fn enrich_fact_counts(store: &crate::storage::Store, cards: &mut [MemoryCard]) {
+    let ids = cards.iter().map(|card| card.id.clone()).collect::<Vec<_>>();
+    let Ok(records) = store.get_memories_by_ids(&ids).await else {
+        return;
+    };
+    for card in cards {
+        if let Some(record) = records.get(&card.id) {
+            set_fact_counts(card, record);
+        }
+    }
+}
+
+pub(super) fn set_fact_counts(card: &mut MemoryCard, record: &crate::storage::MemoryRecord) {
+    let count =
+        |items: &[String]| items.iter().filter(|item| !item.trim().is_empty()).count() as u32;
+    card.decision_count = count(&record.decisions);
+    card.error_count = count(&record.errors);
+    card.next_step_count = count(&record.next_steps);
+}
+
 pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
     if result.is_agent_note() {
         return crate::search::memory_cards::build_fallback_card("", &result);
@@ -364,6 +386,9 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         activity_type: result.activity_type.clone(),
         files_touched: result.files_touched.clone(),
         session_duration_mins: result.session_duration_mins,
+        decision_count: 0,
+        error_count: 0,
+        next_step_count: 0,
         continuation_of,
         reopen_target,
         reopen_page: result.reopen_page,
@@ -694,6 +719,7 @@ async fn list_memory_cards_for_state(
     let mut cards: Vec<MemoryCard> = results.into_iter().map(memory_card_from_result).collect();
     refine_memory_card_titles(&mut cards);
     enrich_insight_kg_node_counts(state.store.clone(), &mut cards).await;
+    enrich_fact_counts(&state.store, &mut cards).await;
     Ok(cards)
 }
 

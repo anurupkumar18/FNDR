@@ -112,6 +112,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (mut placeholder, mut narrated, mut cut, mut no_why, mut zero_vec, mut same_vec, mut session_noise) = (0, 0, 0, 0, 0, 0, 0);
         let (mut by_source, mut by_status, mut by_intent, mut by_model, mut by_activity) =
             (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        // How many memories carry a decision, an error or a next step at all?
+        let (mut with_decisions, mut with_errors, mut with_next_steps) = (0usize, 0usize, 0usize);
         // Which apps carry the label the model reaches for most?
         let mut agent_review_by_app = BTreeMap::new();
         for row in &rows {
@@ -130,6 +132,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tally(&mut by_intent, &row.intent_analysis.intent_label);
             tally(&mut by_model, &format!("{} / {}", row.embedding_model, row.embedding_dim));
             tally(&mut by_activity, &row.activity_type);
+            with_decisions += usize::from(!row.decisions.is_empty());
+            with_errors += usize::from(!row.errors.is_empty());
+            with_next_steps += usize::from(!row.next_steps.is_empty());
             if row.activity_type == "reviewing_agent_output" {
                 tally(&mut agent_review_by_app, &row.app_name);
             }
@@ -491,6 +496,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "voice": { "stored": voice_stored, "shown_after_cleanup": voice_shown, "first_words_not_past_tense": common_other },
             "weak_summaries": weak_summaries,
             "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity, "reviewing_agent_output_by_app": agent_review_by_app },
+            "extracted_lists": { "with_decisions": pct(with_decisions), "with_errors": pct(with_errors), "with_next_steps": pct(with_next_steps) },
             "search_dedup": dedup,
             "vector_freshness": freshness,
             "unrelated_queries": unrelated,

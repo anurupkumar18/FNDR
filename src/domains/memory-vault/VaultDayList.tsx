@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { MemoryCard } from "@/shared/ipc/tauri";
 import { Icon, type IconName } from "@/shared/components/atoms";
 import { MemoryCard as MemoryCardComponent, pickPreviewText, reopenButtonLabel } from "./MemoryCard";
-import { sessionDigest, sessionDigestLabel, type SessionDigest } from "./sessionDigest";
+import { sessionDigest, sessionDigestFacts, sessionDigestLabel, type SessionDigest } from "./sessionDigest";
 import { vaultSourceKind, type VaultDay, type VaultRow, type VaultSourceKind } from "./vaultGrouping";
 
 const SOURCE_LABELS: Record<VaultSourceKind, string> = {
@@ -137,6 +137,11 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
                     </button>
                 )}
             </div>
+            {digest && sessionDigestFacts(digest) && (
+                <p className="vault-row-earlier" aria-label="Recorded in this session">
+                    <span className="vault-row-earlier-label">In this session</span> {sessionDigestFacts(digest)}
+                </p>
+            )}
             {digest?.earlier && (
                 <p className="vault-row-earlier">
                     <span className="vault-row-earlier-label">Earlier in this session</span> {digest.earlier}

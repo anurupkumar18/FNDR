@@ -349,6 +349,34 @@ mod daily_summary_tests {
     }
 
     #[test]
+    fn a_vault_card_counts_what_its_memory_records() {
+        let mut card = memory_card_from_result(result(
+            "list-2",
+            chrono::Utc::now().timestamp_millis(),
+            "Figma",
+            "Vault cards",
+            "Chose the smaller cards for the Vault",
+            None,
+        ));
+        assert_eq!(
+            (card.decision_count, card.error_count, card.next_step_count),
+            (0, 0, 0)
+        );
+
+        let record = MemoryRecord {
+            decisions: vec!["Use the smaller cards".to_string(), "  ".to_string()],
+            errors: vec!["build failed on lint".to_string()],
+            next_steps: Vec::new(),
+            ..Default::default()
+        };
+        super::search::set_fact_counts(&mut card, &record);
+        assert_eq!(
+            (card.decision_count, card.error_count, card.next_step_count),
+            (1, 1, 0)
+        );
+    }
+
+    #[test]
     fn api_storage_classifier_matches_shared_classifier() {
         let config = crate::memory_quality::default_memory_quality_config();
         let record = MemoryRecord {
