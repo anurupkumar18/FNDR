@@ -83,6 +83,7 @@ struct McpRuntime {
     public_endpoint: Option<String>,
     public_sse_endpoint: Option<String>,
     token: String,
+    hermes_token: String,
     use_tls: bool,
     require_auth: bool,
     shutdown: Option<oneshot::Sender<()>>,
@@ -103,6 +104,7 @@ impl Default for McpRuntime {
             public_endpoint: None,
             public_sse_endpoint: None,
             token: String::new(),
+            hermes_token: String::new(),
             use_tls: false,
             require_auth: false,
             shutdown: None,
@@ -120,6 +122,7 @@ struct HttpState {
     app_handle: Option<AppHandle>,
     approvals: Arc<McpApprovalBroker>,
     token: String,
+    hermes_token: String,
     mode: McpDeploymentMode,
     require_auth: bool,
     allow_loopback_auth_bypass: bool,
@@ -175,7 +178,22 @@ struct McpRequest {
     /// token came with the request, else the refusal to answer with.
     writer: Result<remember::WriteCaller, remember::Refusal>,
     approval: Option<McpApprovalContext>,
+    scope: McpScope,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpScope {
+    Full,
+    HermesReadOnly,
+}
+
+/// FNDR's server-enforced grant for its embedded Hermes runtime.
+pub(crate) const HERMES_READ_TOOLS: &[&str] = &[
+    "memory.search_full_context",
+    "memory.get_context_pack",
+    "memory.timeline",
+    "memory.source_evidence",
+];
 
 const MCP_APPROVAL_EVENT: &str = "mcp-approval://request";
 const MCP_APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -293,6 +311,7 @@ impl McpRequest {
                 "FNDR takes notes only from a client that sends the MCP token, and token checks are off. Turn them back on to let assistants add notes.",
             )),
             approval: None,
+            scope: McpScope::Full,
         }
     }
 }
@@ -677,6 +696,7 @@ fn default_true() -> bool {
 // ---------------------------------------------------------------------------
 
 static MCP_RUNTIME: OnceLock<Mutex<McpRuntime>> = OnceLock::new();
+static HERMES_PROCESS_TOKEN: OnceLock<String> = OnceLock::new();
 const LOOPBACK_HOST: &str = "127.0.0.1";
 
 fn runtime() -> &'static Mutex<McpRuntime> {
@@ -772,6 +792,7 @@ pub fn status() -> McpServerStatus {
                 rt.running = false;
                 rt.shutdown = None;
                 rt.task = None;
+                rt.hermes_token.clear();
                 if let Some(approvals) = rt.approvals.take() {
                     approvals.close();
                 }
@@ -783,6 +804,13 @@ pub fn status() -> McpServerStatus {
     }
 
     to_status(&rt)
+}
+
+/// Process-lifetime token used only by the embedded Hermes MCP connection.
+pub(crate) fn hermes_read_token() -> Option<String> {
+    let rt = runtime().lock();
+    (rt.running && rt.task.as_ref().is_some_and(|task| !task.is_finished()))
+        .then(|| rt.hermes_token.clone())
 }
 
 pub async fn start(
@@ -823,6 +851,9 @@ pub async fn start(
 
     // Load (or generate) the bearer token
     let tok = token::load_or_create();
+    let hermes_token = HERMES_PROCESS_TOKEN
+        .get_or_init(|| uuid::Uuid::new_v4().to_string())
+        .clone();
 
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
@@ -884,6 +915,7 @@ pub async fn start(
         app_handle,
         approvals: approvals.clone(),
         token: tok.clone(),
+        hermes_token: hermes_token.clone(),
         mode,
         require_auth,
         allow_loopback_auth_bypass,
@@ -938,6 +970,7 @@ pub async fn start(
     rt.public_endpoint = public_endpoint;
     rt.public_sse_endpoint = public_sse_endpoint;
     rt.token = tok;
+    rt.hermes_token = hermes_token;
     rt.use_tls = use_tls;
     rt.require_auth = require_auth;
     rt.shutdown = Some(shutdown_tx);
@@ -961,6 +994,7 @@ pub async fn stop() -> McpServerStatus {
     let (shutdown, server_handle, task, approvals) = {
         let mut rt = runtime().lock();
         rt.running = false;
+        rt.hermes_token.clear();
         (
             rt.shutdown.take(),
             rt.server_handle.take(),
@@ -999,6 +1033,16 @@ fn check_auth(headers: &HeaderMap, expected_token: &str) -> bool {
     auth_header
         .and_then(|v| v.strip_prefix("Bearer "))
         .is_some_and(|t| tokens_match(t, expected_token))
+}
+
+fn authenticated_scope(headers: &HeaderMap, full: &str, hermes: &str) -> Option<McpScope> {
+    if check_auth(headers, full) {
+        Some(McpScope::Full)
+    } else if check_auth(headers, hermes) {
+        Some(McpScope::HermesReadOnly)
+    } else {
+        None
+    }
 }
 
 /// Compares in time that does not depend on where the first wrong byte is,
@@ -1302,6 +1346,7 @@ async fn mcp_handler(
     }
 
     let rpc_method = jsonrpc_method_hint(&payload);
+    let authenticated = authenticated_scope(&headers, &state.token, &state.hermes_token);
     if should_bypass_http_auth(
         peer_addr,
         state.allow_loopback_auth_bypass,
@@ -1314,29 +1359,45 @@ async fn mcp_handler(
             "localhost auth disabled"
         };
         log_auth_bypass(peer_addr, &uri, rpc_method, reason);
-    } else if !check_auth(&headers, &state.token) {
+    } else if authenticated.is_none() {
         return unauthorized_jsonrpc_response(&payload);
     }
 
+    let scope = authenticated.unwrap_or(McpScope::Full);
+    if scope == McpScope::HermesReadOnly
+        && !crate::ipc::commands::hermes_memory_search_enabled(&state.app_state)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Hermes memory sharing is off"})),
+        )
+            .into_response();
+    }
     let (client, new_session) = request_client(&state, &headers, &payload);
-    let approval = state.app_handle.as_ref().map(|app_handle| McpApprovalContext {
-        app_handle: app_handle.clone(),
-        broker: state.approvals.clone(),
-    });
-    let request = if state.require_auth && check_auth(&headers, &state.token) {
-        McpRequest {
-            writer: Ok(remember::WriteCaller {
-                client,
-                limiter: state.note_limiter.clone(),
-                embedder: state.note_embedder.clone(),
-            }),
-            approval,
-        }
-    } else {
-        let mut request = McpRequest::without_writes();
-        request.approval = approval;
-        request
-    };
+    let approval = (scope == McpScope::Full)
+        .then(|| state.app_handle.as_ref())
+        .flatten()
+        .map(|app_handle| McpApprovalContext {
+            app_handle: app_handle.clone(),
+            broker: state.approvals.clone(),
+        });
+    let request =
+        if scope == McpScope::Full && state.require_auth && check_auth(&headers, &state.token) {
+            McpRequest {
+                writer: Ok(remember::WriteCaller {
+                    client,
+                    limiter: state.note_limiter.clone(),
+                    embedder: state.note_embedder.clone(),
+                }),
+                approval,
+                scope,
+            }
+        } else {
+            let mut request = McpRequest::without_writes();
+            request.approval = approval;
+            request.scope = scope;
+            request
+        };
     let app_state = state.app_state.clone();
     let handled = tokio::task::spawn_blocking(move || {
         let handle = tokio::runtime::Handle::current();
@@ -1398,10 +1459,21 @@ async fn sse_handler_inner(
         None,
     ) {
         log_auth_bypass(peer_addr, &uri, Some("sse"), "localhost auth disabled");
-    } else if !check_auth(&headers, &state.token) {
+    } else if authenticated_scope(&headers, &state.token, &state.hermes_token).is_none() {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": "Unauthorized: valid Bearer token required"})),
+        )
+            .into_response();
+    }
+
+    if authenticated_scope(&headers, &state.token, &state.hermes_token)
+        == Some(McpScope::HermesReadOnly)
+        && !crate::ipc::commands::hermes_memory_search_enabled(&state.app_state)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Hermes memory sharing is off"})),
         )
             .into_response();
     }
@@ -1494,8 +1566,37 @@ async fn handle_single_request(
         ));
     }
 
+    if request.scope == McpScope::HermesReadOnly
+        && !matches!(
+            req.method.as_str(),
+            "initialize"
+                | "notifications/initialized"
+                | "notifications.initialized"
+                | "ping"
+                | "tools/list"
+                | "tools.list"
+                | "tools/call"
+                | "tools.call"
+        )
+    {
+        return Some(error_response(
+            id,
+            -32601,
+            "Method unavailable to this token".to_string(),
+        ));
+    }
+
     let response = match req.method.as_str() {
-        "initialize" => Ok(initialize_result(req.params)),
+        "initialize" => {
+            let mut result = initialize_result(req.params);
+            if request.scope == McpScope::HermesReadOnly {
+                if let Some(capabilities) = result["capabilities"].as_object_mut() {
+                    capabilities.remove("resources");
+                    capabilities.remove("prompts");
+                }
+            }
+            Ok(result)
+        }
         "notifications/initialized" | "notifications.initialized" => {
             if is_notification {
                 return None;
@@ -1503,7 +1604,7 @@ async fn handle_single_request(
             Ok(json!({}))
         }
         "ping" => Ok(json!({})),
-        "tools/list" | "tools.list" => Ok(tools_list_result()),
+        "tools/list" | "tools.list" => Ok(tools_list_for_scope(request.scope)),
         "tools/call" | "tools.call" => call_tool(req.params, app_state, request).await,
         "resources/list" | "resources.list" => Ok(resources_list_result()),
         "resources/read" | "resources.read" => read_resource(req.params, app_state).await,
@@ -1693,6 +1794,20 @@ async fn read_resource(
             }
         ]
     }))
+}
+
+fn tools_list_for_scope(scope: McpScope) -> Value {
+    let mut result = tools_list_result();
+    if scope == McpScope::HermesReadOnly {
+        if let Some(tools) = result["tools"].as_array_mut() {
+            tools.retain(|tool| {
+                tool["name"]
+                    .as_str()
+                    .is_some_and(|name| HERMES_READ_TOOLS.contains(&name))
+            });
+        }
+    }
+    result
 }
 
 fn tools_list_result() -> Value {
@@ -2365,6 +2480,15 @@ async fn call_tool(
             code: -32602,
             message: format!("Invalid tools/call params: {err}"),
         })?;
+
+    if request.scope == McpScope::HermesReadOnly
+        && !HERMES_READ_TOOLS.contains(&params.name.as_str())
+    {
+        return Ok(tool_error(format!(
+            "{} is outside this token's tool grant.",
+            params.name
+        )));
+    }
 
     if let Some(policy) = mcp_action_policy(params.name.as_str()) {
         let kill_switch = app_state.config.read().actions_kill_switch;
@@ -7127,6 +7251,95 @@ mod tests {
                 ]
             );
 
+            let _ = stop().await;
+        });
+    }
+
+    #[test]
+    fn hermes_token_is_limited_by_the_server_to_its_four_read_tools() {
+        let dir = tempdir().expect("temporary profile");
+        let app_state = related_test_state(dir.path());
+        let setup_path = app_state.app_data_dir.join("hermes-home/fndr_setup.json");
+        std::fs::create_dir_all(setup_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &setup_path,
+            r#"{"provider_kind":"codex","model_name":"test","related_memories":true}"#,
+        )
+        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        runtime.block_on(async move {
+            let _ = stop().await;
+            let status = start(None, app_state.clone(), None, Some(0))
+                .await
+                .expect("start mcp");
+            let read_token = hermes_read_token().expect("Hermes token while MCP runs");
+            assert_ne!(read_token, status.token);
+            let base_url = format!("http://{}:{}/", status.host, status.port);
+            wait_for_server(&base_url).await;
+            let client = reqwest::Client::new();
+
+            let call = |method: &str, params: Value| {
+                json!({"jsonrpc":"2.0","id":1,"method":method,"params":params})
+            };
+            let init: Value = client.post(&status.endpoint)
+                .bearer_auth(&read_token)
+                .json(&call("initialize", json!({"protocolVersion":"2024-11-05"})))
+                .send().await.unwrap().json().await.unwrap();
+            assert!(init["result"]["capabilities"]["tools"].is_object());
+            assert!(init["result"]["capabilities"]["resources"].is_null());
+            assert!(init["result"]["capabilities"]["prompts"].is_null());
+            let list: Value = client.post(&status.endpoint)
+                .bearer_auth(&read_token)
+                .json(&call("tools/list", json!({})))
+                .send().await.unwrap().json().await.unwrap();
+            let names = list["result"]["tools"].as_array().unwrap().iter()
+                .filter_map(|tool| tool["name"].as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(names, vec![
+                "memory.search_full_context", "memory.get_context_pack",
+                "memory.timeline", "memory.source_evidence",
+            ]);
+
+            let denied: Value = client.post(&status.endpoint)
+                .bearer_auth(&read_token)
+                .json(&call("tools/call", json!({"name":"agent.rate_result","arguments":{}})))
+                .send().await.unwrap().json().await.unwrap();
+            assert!(denied.to_string().contains("outside this token's tool grant"));
+            let action: Value = client.post(&status.endpoint)
+                .bearer_auth(&read_token)
+                .json(&call("tools/call", json!({"name":"agent.run","arguments":{}})))
+                .send().await.unwrap().json().await.unwrap();
+            assert!(action.to_string().contains("outside this token's tool grant"));
+            let allowed: Value = client.post(&status.endpoint)
+                .bearer_auth(&read_token)
+                .json(&call("tools/call", json!({"name":"memory.search_full_context","arguments":{}})))
+                .send().await.unwrap().json().await.unwrap();
+            assert!(!allowed.to_string().contains("outside this token's tool grant"));
+            let resource: Value = client.post(&status.endpoint)
+                .bearer_auth(&read_token)
+                .json(&call("resources/read", json!({"uri":"fndr://private"})))
+                .send().await.unwrap().json().await.unwrap();
+            assert_eq!(resource["error"]["code"], -32601);
+
+            std::fs::write(&setup_path, r#"{"provider_kind":"codex","model_name":"test","related_memories":false}"#).unwrap();
+            let revoked = client.post(&status.endpoint)
+                .bearer_auth(&read_token)
+                .json(&call("tools/call", json!({"name":"memory.search_full_context","arguments":{}})))
+                .send().await.unwrap();
+            assert_eq!(revoked.status(), reqwest::StatusCode::FORBIDDEN);
+
+            let full: Value = client.post(&status.endpoint)
+                .bearer_auth(&status.token)
+                .json(&call("tools/list", json!({})))
+                .send().await.unwrap().json().await.unwrap();
+            assert!(full["result"]["tools"].as_array().unwrap().len() > names.len());
+            let _ = stop().await;
+            assert!(hermes_read_token().is_none());
+            let restarted = start(None, app_state, None, Some(0))
+                .await
+                .expect("restart mcp");
+            assert!(restarted.running);
+            assert_eq!(hermes_read_token().as_deref(), Some(read_token.as_str()));
             let _ = stop().await;
         });
     }

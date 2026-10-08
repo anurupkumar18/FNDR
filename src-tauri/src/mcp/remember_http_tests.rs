@@ -63,6 +63,7 @@ async fn serve(app_state: Arc<AppState>, require_auth: bool, embedder: NoteEmbed
         app_handle: None,
         approvals: Arc::new(McpApprovalBroker::default()),
         token: TOKEN.to_string(),
+        hermes_token: "test-hermes-read-token".to_string(),
         mode: McpDeploymentMode::Local,
         require_auth,
         allow_loopback_auth_bypass: true,

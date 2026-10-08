@@ -176,15 +176,9 @@ pub(crate) fn hermes_mcp_yaml(endpoint: &str, token: &str) -> String {
     )
 }
 
-/// The only FNDR tools Hermes is given: ones that read memory. Hermes holds
-/// FNDR's own token, so without this list it could call every tool,
-/// including ones that write or act.
-pub(crate) const HERMES_MCP_TOOLS: &[&str] = &[
-    "memory.search_full_context",
-    "memory.get_context_pack",
-    "memory.timeline",
-    "memory.source_evidence",
-];
+/// The only FNDR tools Hermes is given: ones that read memory. The MCP server
+/// enforces the same list for Hermes's scoped token.
+pub(crate) const HERMES_MCP_TOOLS: &[&str] = crate::mcp::HERMES_READ_TOOLS;
 
 /// Hermes's own tools for chats that arrive through FNDR. Without this block
 /// its API server enables a terminal, file writes, code execution, browser

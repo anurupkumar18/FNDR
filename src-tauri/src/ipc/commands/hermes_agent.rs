@@ -719,6 +719,13 @@ fn read_hermes_setup_record(state: &AppState) -> Option<HermesSetupRecord> {
     serde_json::from_str::<HermesSetupRecord>(&raw).ok()
 }
 
+/// Current consent for the embedded Hermes MCP grant, rechecked on each request.
+pub(crate) fn hermes_memory_search_enabled(state: &AppState) -> bool {
+    read_hermes_setup_record(state)
+        .as_ref()
+        .is_some_and(sends_related_memories)
+}
+
 /// A YAML double-quoted scalar. JSON string syntax is valid YAML, so this
 /// quotes and escapes model names and URLs safely. (This used to go through
 /// `toml::to_string`, which rejects a bare string with "unsupported rust type"
@@ -1221,10 +1228,9 @@ fn write_hermes_mcp_config(state: &AppState) {
     let mcp = crate::mcp::status();
     // Searching memory is another way for memories to reach the provider.
     if sends_related_memories(&record) && mcp.running && !mcp.endpoint.is_empty() {
-        config.push_str(&super::hermes_codex::hermes_mcp_yaml(
-            &mcp.endpoint,
-            &mcp.token,
-        ));
+        if let Some(token) = crate::mcp::hermes_read_token() {
+            config.push_str(&super::hermes_codex::hermes_mcp_yaml(&mcp.endpoint, &token));
+        }
     }
     if let Err(error) = write_private(&hermes_config_path(state), &config) {
         tracing::warn!(%error, "hermes:mcp_config_write_failed");
