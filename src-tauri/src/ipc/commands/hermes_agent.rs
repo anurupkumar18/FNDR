@@ -1767,7 +1767,7 @@ async fn deliver_hermes_message(
     let input = format!(
         "{}{}{}",
         memory_context(&snippets).trim_start(),
-        super::agent_chats::memory_context_block(&attached),
+        super::agent_chats::memory_context_block(&attached, snippets.len()),
         user_text
     );
 

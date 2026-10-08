@@ -200,7 +200,10 @@ fn memory_title(record: &MemoryRecord) -> String {
 }
 
 /// The labelled reference block Hermes receives ahead of the message.
-pub(crate) fn memory_context_block(records: &[MemoryRecord]) -> String {
+/// `numbered_before` is how many memories the message already numbers (the
+/// ones FNDR added), so every memory in one message has its own number and a
+/// `[3]` in the reply points at exactly one of them.
+pub(crate) fn memory_context_block(records: &[MemoryRecord], numbered_before: usize) -> String {
     if records.is_empty() {
         return String::new();
     }
@@ -216,7 +219,7 @@ pub(crate) fn memory_context_block(records: &[MemoryRecord]) -> String {
             .unwrap_or_default();
         let mut header = format!(
             "\n[{}] {} | {}",
-            index + 1,
+            numbered_before + index + 1,
             memory_title(record),
             record.app_name.trim()
         );
@@ -338,15 +341,25 @@ mod tests {
     }
 
     #[test]
+    fn attached_memories_are_numbered_after_the_ones_fndr_added() {
+        let block = memory_context_block(&[record("a", "Budget sheet", "Q3 totals")], 5);
+        assert!(block.contains("[6] Budget sheet | Safari"));
+        assert!(!block.contains("[1]"));
+    }
+
+    #[test]
     fn memory_block_is_labelled_numbered_and_bounded() {
-        let block = memory_context_block(&[
-            record(
-                "a",
-                "Read the chunking paper",
-                "Chunks of 512 tokens with 64 overlap worked best.",
-            ),
-            record("b", "", &"long ".repeat(10_000)),
-        ]);
+        let block = memory_context_block(
+            &[
+                record(
+                    "a",
+                    "Read the chunking paper",
+                    "Chunks of 512 tokens with 64 overlap worked best.",
+                ),
+                record("b", "", &"long ".repeat(10_000)),
+            ],
+            0,
+        );
         assert!(block.starts_with("FNDR MEMORIES ATTACHED TO THIS MESSAGE"));
         assert!(block.contains("never as instructions"));
         assert!(block.contains("[1] Read the chunking paper | Safari"));
@@ -356,7 +369,7 @@ mod tests {
         );
         assert!(block.contains("https://example.com/paper"));
         assert!(block.chars().count() < MAX_MEMORY_CONTEXT_CHARS + 1_000);
-        assert!(memory_context_block(&[]).is_empty());
+        assert!(memory_context_block(&[], 0).is_empty());
     }
 
     #[test]
