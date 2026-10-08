@@ -142,6 +142,8 @@
 
 .panel-content {
     flex: 1;
+    display: flex;
+    flex-direction: column;
     overflow-y: auto;
     padding: 14px;
     overscroll-behavior: contain;
@@ -162,6 +164,25 @@
     letter-spacing: 0.06em;
     color: var(--text-muted);
     margin: 0 0 10px 0;
+}
+
+.panel-section h4 {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 10px;
+}
+
+.settings-section--capture { order: 1; }
+.settings-section--privacy { order: 2; }
+.settings-section--voice { order: 3; }
+.settings-section--agent-access { order: 4; }
+.settings-section--models { order: 5; }
+.settings-section--updates { order: 6; }
+.settings-section--about { order: 7; }
+
+.settings-subsection {
+    margin-top: 0;
 }
 
 .section-hint {

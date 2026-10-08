@@ -219,7 +219,7 @@ describe("ControlPanel", () => {
 
         expect(settingsButton).toHaveAttribute("aria-expanded", "true");
         expect(screen.getByRole("dialog", { name: /^settings$/i })).toBe(settingsPanel);
-        expect(screen.getByRole("heading", { name: /profile/i })).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: /about/i })).toBeInTheDocument();
     });
 
     it("uses the alert badge without forcing settings open over the current task", async () => {
@@ -321,11 +321,11 @@ describe("ControlPanel", () => {
         const settingsButton = screen.getByRole("button", { name: /open settings/i });
         fireEvent.click(settingsButton);
 
-        expect(await screen.findByRole("heading", { name: /profile/i })).toBeInTheDocument();
+        expect(await screen.findByRole("heading", { name: /about/i })).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: /^capture$/i })).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: /privacy alerts/i })).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: /blocked apps & sites/i })).toBeInTheDocument();
-        expect(screen.getByRole("heading", { name: /local models/i })).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: /^models$/i })).toBeInTheDocument();
         expect(await screen.findByText(/no recent apps or sites need your review/i)).toBeInTheDocument();
         expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
         expect(screen.queryByText(/danger zone/i)).toBeNull();
@@ -333,6 +333,28 @@ describe("ControlPanel", () => {
         expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
         expect(screen.queryByText(/auto-fill/i)).toBeNull();
         expect(screen.queryByText(/mcp server/i)).toBeNull();
+    });
+
+    it("groups settings under the seven people-first sections", async () => {
+        render(<ControlPanel status={null} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const sections = [
+            ["Capture", "settings-section--capture", /control when fndr may process/i],
+            ["Privacy", "settings-section--privacy", /review sensitive activity/i],
+            ["Voice", "settings-section--voice", /microphone controls/i],
+            ["Agent access", "settings-section--agent-access", /choose whether connected assistants/i],
+            ["Models", "settings-section--models", /intelligence is available locally/i],
+            ["Updates", "settings-section--updates", /components ready to use/i],
+            ["About", "settings-section--about", /personalize fndr/i],
+        ] as const;
+
+        for (const [name, className, description] of sections) {
+            const heading = await screen.findByRole("heading", { name, level: 3 });
+            const section = heading.closest("section");
+            expect(section).toHaveClass(className);
+            expect(within(section as HTMLElement).getByText(description)).toBeInTheDocument();
+        }
     });
 
     it("shows a read-only warning when capture cannot use its embedding model", async () => {
@@ -384,7 +406,7 @@ describe("ControlPanel", () => {
 
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
 
-        expect(await screen.findByRole("heading", { name: /local models/i })).toBeInTheDocument();
+        expect(await screen.findByRole("heading", { name: /^models$/i })).toBeInTheDocument();
         expect(screen.queryByText(/capture is paused until the embedding model/i)).toBeNull();
     });
 });

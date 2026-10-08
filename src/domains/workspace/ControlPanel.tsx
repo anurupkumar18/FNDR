@@ -508,9 +508,9 @@ export function ControlPanel({
                                 </p>
                             )}
 
-                            <section className="panel-section" aria-labelledby="settings-profile-title">
-                                <h3 id="settings-profile-title">Profile</h3>
-                                <p className="section-hint">Who FNDR greets on the Home screen.</p>
+                            <section className="panel-section settings-section--about" aria-labelledby="settings-profile-title">
+                                <h3 id="settings-profile-title">About</h3>
+                                <p className="section-hint">Personalize FNDR and its appearance on this Mac.</p>
                                 <label className="settings-field-label" htmlFor="fndr-profile-name">Display name</label>
                                 <div className="profile-row">
                                     <input
@@ -552,8 +552,8 @@ export function ControlPanel({
                                 )}
                             </section>
 
-                            <section className="panel-section" aria-labelledby="settings-appearance-title">
-                                <h3 id="settings-appearance-title">Appearance</h3>
+                            <section className="panel-section settings-subsection settings-section--about" aria-labelledby="settings-appearance-title">
+                                <h4 id="settings-appearance-title">Appearance</h4>
                                 <SegmentedControl
                                     ariaLabel="Theme"
                                     value={theme}
@@ -613,9 +613,13 @@ export function ControlPanel({
                                 </div>
                             </section>
 
-                            <SetupCenter />
+                            <section className="panel-section settings-section--updates" aria-labelledby="settings-updates-title">
+                                <h3 id="settings-updates-title">Updates</h3>
+                                <p className="section-hint">Keep FNDR and its required components ready to use.</p>
+                                <SetupCenter embedded />
+                            </section>
 
-                            <section className="panel-section" aria-labelledby="settings-capture-title">
+                            <section className="panel-section settings-section--capture" aria-labelledby="settings-capture-title">
                                 <h3 id="settings-capture-title">Capture</h3>
                                 <p className="section-hint">
                                     Control when FNDR may process new screen context on this Mac.
@@ -657,8 +661,14 @@ export function ControlPanel({
                                 )}
                             </section>
 
-                            <section className="panel-section" aria-labelledby="settings-trust-title">
-                                <h3 id="settings-trust-title">Trust</h3>
+                            <section className="panel-section settings-section--voice" aria-labelledby="settings-voice-title">
+                                <h3 id="settings-voice-title">Voice</h3>
+                                <p className="section-hint">Use the microphone controls in Home and Search when you want to speak to FNDR.</p>
+                            </section>
+
+                            <section className="panel-section settings-section--agent-access" aria-labelledby="settings-trust-title">
+                                <h3 id="settings-trust-title">Agent access</h3>
+                                <p className="section-hint">Choose whether connected assistants can save notes on this Mac.</p>
                                 <label className="settings-switch-row">
                                     <span>Let assistants add notes</span>
                                     <input
@@ -686,7 +696,9 @@ export function ControlPanel({
                                 )}
                             </section>
 
-                            <section className="panel-section">
+                            <section className="panel-section settings-section--privacy" aria-labelledby="settings-privacy-title">
+                                <h3 id="settings-privacy-title">Privacy</h3>
+                                <p className="section-hint">Review sensitive activity and control what FNDR captures.</p>
                                 <PrivacyPanel
                                     isVisible={true}
                                     onClose={() => undefined}
@@ -696,8 +708,8 @@ export function ControlPanel({
                                 />
                             </section>
 
-                            <section className="panel-section" aria-labelledby="settings-blocklist-title">
-                                <h3 id="settings-blocklist-title">Blocked apps &amp; sites</h3>
+                            <section className="panel-section settings-subsection settings-section--privacy" aria-labelledby="settings-blocklist-title">
+                                <h4 id="settings-blocklist-title">Blocked apps &amp; sites</h4>
                                 <p className="section-hint">
                                     Matching apps and websites are excluded from future capture.
                                 </p>
@@ -760,8 +772,8 @@ export function ControlPanel({
                                 )}
                             </section>
 
-                            <section className="panel-section" aria-labelledby="settings-models-title">
-                                <h3 id="settings-models-title">Local models</h3>
+                            <section className="panel-section settings-section--models" aria-labelledby="settings-models-title">
+                                <h3 id="settings-models-title">Models</h3>
                                 <p className="section-hint">
                                     What intelligence is available locally, and why a feature may be limited.
                                 </p>
