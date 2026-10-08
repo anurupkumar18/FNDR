@@ -6,7 +6,17 @@ Date: 2026-10-07. Written at the owner's request when the session ran low on con
 
 The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
 
-## Update 7, 2026-10-07 (read this first)
+## Update 8, 2026-10-07 (read this first)
+
+Loop goal set by the owner: build the next slices (A6.6, B7.5, C13.3), each with a test, and push.
+
+- **A6.6 done.** Read and confirmed: related memories use `retrieve_search_results`, the same path as Search, which drops excluded apps, FNDR's own windows and low-signal records. The gap was attached memories, loaded by id with no check. `permitted_attachments` in `agent_chats.rs` now applies `memory_is_permitted`; test added. Pushed.
+- **Also done this round:** the unmounted `AgentPanel.tsx` and `ResearchPanel.tsx` are removed (3,804 lines).
+- **B7.5 not started.** In `screen_guide.rs` the ChatGPT answer and the local answer are the two arms of one `if`; a fallback means letting the ChatGPT arm fall through to the local one on a failure that is not a cancellation, and saying so in the answer. Upstream changed this file on 2026-10-07, so re-read it first.
+- **C13.3 not started.** Needs a read command over `operator/journal.jsonl` (register it in `main.rs`, a shared file), a type in `tauri.ts`, and a small list in Privacy or the notch.
+- Left from cleanup: the Tauri commands only the removed panels called (`start_agent_task`, `get_agent_status`, `stop_agent`, `send_direct_chat`, `quick_setup_ollama`, `sync_hermes_bridge_context`, `start_hermes_gateway`, `stop_hermes_gateway`) and their `tauri.ts` wrappers.
+
+## Update 7, 2026-10-07
 
 A9.6 is built and pushed: `tools_used_in` in `hermes_agent.rs` reads `function_call` items from the gateway response, `tool_use_label` puts them in words, and the Agent page shows "Hermes searched FNDR memories." under the answer and keeps it in history. The MCP tool name prefix Hermes uses for FNDR's tools was not observed live (the live check ran without an MCP server); the label matches on "fndr" or "memory" so either form works, and an unknown tool shows by name.
 
