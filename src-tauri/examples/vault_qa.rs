@@ -146,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if lower.starts_with("the user") || lower.starts_with("you ") || lower.starts_with("user ") {
                 "narrator (the user, you)"
             } else if lower.starts_with("the ") || lower.starts_with("a ") || lower.starts_with("an ") || lower.starts_with("in ") {
-                "describes a thing (the, a, in)"
+                "states what the screen held (the, a, in)"
             } else if matches!(first, "has" | "have" | "had" | "is" | "was" | "are" | "were") {
                 "dangling verb (has, is)"
             } else if first.ends_with("ing") {
@@ -171,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 row.timestamp,
             );
             tally(&mut voice_shown, opening(&shown));
-            if matches!(opening(&shown), "other" | "-ing word" | "describes a thing (the, a, in)") {
+            if matches!(opening(&shown), "other" | "-ing word") {
                 // Four words show the sentence pattern without quoting the memory.
                 let opener = shown.split_whitespace().take(4).collect::<Vec<_>>().join(" ").to_lowercase();
                 tally(&mut other_first_words, &opener);
