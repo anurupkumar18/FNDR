@@ -973,24 +973,17 @@ fn merge_unique_strings(existing: &mut Vec<String>, incoming: impl IntoIterator<
     }
 }
 
-fn infer_review_activity(clean_text: &str) -> (&'static str, &'static str, &'static str) {
+/// What a capture summarized without a model may claim about the activity.
+/// Error text beside file names is debugging. Anything else is unknown: the
+/// screen text alone does not say what the person was doing, and until
+/// 2026-10-07 this returned "reviewing" for everything, which stored a third
+/// of the vault as `reviewing_agent_output`.
+fn infer_fallback_activity(clean_text: &str, has_files: bool) -> &'static str {
     let lower = clean_text.to_ascii_lowercase();
-    if lower.contains("error") || lower.contains("failed") || lower.contains("debug") {
-        ("debugging", "debugging", "debugging visible issue context")
-    } else if lower.contains("todo")
-        || lower.contains("planned")
-        || lower.contains("roadmap")
-        || lower.contains("implemented")
-        || lower.contains("docs")
-        || lower.contains("design")
-    {
-        (
-            "reviewing",
-            "reviewing",
-            "reviewing implementation status and supporting context",
-        )
+    if has_files && (lower.contains("error") || lower.contains("failed")) {
+        "debugging"
     } else {
-        ("reviewing", "reviewing", "reviewing visible screen context")
+        "unknown"
     }
 }
 
@@ -1048,42 +1041,45 @@ fn build_low_ram_semantic_fusion(
         app_name.trim().chars().take(120).collect::<String>()
     };
 
-    let (activity, workflow, user_intent) = infer_review_activity(text);
-    let subject = if !files.is_empty() {
+    let activity = infer_fallback_activity(text, !files.is_empty());
+
+    // Say only what is known: which files or which window, in which app. A
+    // line of body text is not the subject, and no goal is on the screen.
+    let app = app_name.trim();
+    let title = if semantic_title.trim().is_empty() {
+        window_title.trim()
+    } else {
+        semantic_title.trim()
+    };
+    let mut sentences = Vec::new();
+    sentences.push(if !files.is_empty() {
         format!(
-            "visible files {}",
+            "Viewed {} in {app}.",
             files.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
         )
-    } else if !topic.trim().is_empty() {
-        topic.clone()
+    } else if title.is_empty() || title.eq_ignore_ascii_case(app) {
+        format!("Used {app}.")
     } else {
-        window_title.trim().to_string()
-    };
-
-    let mut sentences = Vec::new();
-    let surface = if !window_title.trim().is_empty() {
-        format!("{} in {}", app_name.trim(), window_title.trim())
-    } else {
-        app_name.trim().to_string()
-    };
-    sentences.push(format!("You were reviewing {subject} on {surface}."));
+        format!("Viewed {} in {app}.", title.trim_end_matches('.'))
+    });
     if let Some(domain) = url.and_then(extract_domain) {
-        sentences.push(format!("The visible page was from {domain}."));
+        sentences.push(format!("The page was on {domain}."));
     }
     if !semantic_title.trim().is_empty() && !sentences.join(" ").contains(&semantic_title) {
         sentences.push(format!("Browser context: {semantic_title}."));
     }
-    let lower_text = text.to_ascii_lowercase();
-    if lower_text.contains("planned")
-        || lower_text.contains("implemented")
-        || lower_text.contains("roadmap")
-        || lower_text.contains("design")
-        || lower_text.contains("docs")
+    // The strongest line of text helps the memory be found again.
+    if let Some(span) = salient
+        .first()
+        .filter(|span| !sentences[0].contains(span.as_str()))
     {
-        sentences.push(
-            "The visible context was about implementation status, docs, or roadmap items."
-                .to_string(),
-        );
+        sentences.push(format!(
+            "Text on screen included: {}.",
+            span.chars()
+                .take(140)
+                .collect::<String>()
+                .trim_end_matches('.')
+        ));
     }
 
     let keep_ratio = if capture_quality.total_lines == 0 {
@@ -1133,8 +1129,8 @@ fn build_low_ram_semantic_fusion(
             project: String::new(),
             topic,
             memory_context: sentences.join(" "),
-            workflow: workflow.to_string(),
-            user_intent: user_intent.to_string(),
+            workflow: String::new(),
+            user_intent: String::new(),
             files_touched: files,
             entities,
             search_aliases: aliases,
@@ -7272,10 +7268,17 @@ Activity patterns and insights dashboard
             .extraction
             .memory_context
             .contains("DESIGN_DIRECTION.md"));
-        assert!(fusion
-            .extraction
-            .user_intent
-            .contains("implementation status"));
+        // No goal is stated on screen, so none is written.
+        assert!(fusion.extraction.user_intent.is_empty());
+        assert_eq!(fusion.extraction.activity_type, "unknown");
+        assert!(
+            fusion
+                .extraction
+                .memory_context
+                .starts_with("Viewed README.md"),
+            "{}",
+            fusion.extraction.memory_context
+        );
         assert!(!fusion.extraction.memory_context.starts_with("Topic:"));
         assert!(!fusion
             .extraction
@@ -7292,6 +7295,58 @@ Activity patterns and insights dashboard
             .files_touched
             .iter()
             .any(|file| file == "DESIGN_DIRECTION.md"));
+    }
+
+    #[test]
+    fn the_model_free_summary_states_only_what_it_knows() {
+        let quality = text_cleanup::CaptureQualityStats {
+            total_lines: 10,
+            kept_lines: 9,
+            low_conf_lines: 0,
+            dropped_noise_lines: 0,
+            dropped_low_signal_lines: 1,
+            avg_line_score: 0.6,
+        };
+        // A page with a title and ordinary prose: no files, no stated goal.
+        let page = "Preserved the on-disk format so older vaults still open. For example, if a row has no vector it is skipped. The planned roadmap lists three more changes to the design of the index.";
+        let fusion = build_low_ram_semantic_fusion(
+            "Google Chrome",
+            "Storage notes - Google Docs",
+            Some("https://docs.google.com/document/d/1"),
+            page,
+            None,
+            &quality,
+            "ocr",
+        )
+        .expect("enough text to build from");
+        let context = &fusion.extraction.memory_context;
+        // The title names the capture. A line of body text is not its subject.
+        assert!(
+            context.starts_with("Viewed Storage notes - Google Docs in Google Chrome."),
+            "{context}"
+        );
+        for banned in [
+            "You were",
+            "reviewing",
+            "Reviewing",
+            "The visible context was about",
+        ] {
+            assert!(!context.contains(banned), "{banned}: {context}");
+        }
+        // Nothing here says what the person was doing or why.
+        assert_eq!(fusion.extraction.activity_type, "unknown");
+        assert!(fusion.extraction.user_intent.is_empty());
+        assert!(fusion.extraction.workflow.is_empty());
+
+        // The window title is the app's own name: say so plainly.
+        let bare =
+            build_low_ram_semantic_fusion("Notes", "Notes", None, page, None, &quality, "ocr")
+                .expect("enough text");
+        assert!(
+            bare.extraction.memory_context.starts_with("Used Notes."),
+            "{}",
+            bare.extraction.memory_context
+        );
     }
 
     #[test]

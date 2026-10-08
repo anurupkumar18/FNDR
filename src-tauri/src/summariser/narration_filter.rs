@@ -20,6 +20,12 @@ static BANNED_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         // "In a Google Chrome window titled 'X' and has been prompted ..."
         // describes the window, not what happened in it.
         r"(?i)^in an? [^.]{0,60}\bwindow titled\b",
+        // A sentence about the window, the capture or the OCR is about the
+        // screen, not about the work: "The Finder window displays ...",
+        // "A screen capture of ...", "The OCR text extracted from ...".
+        r"(?i)^(?:the|a|an) [\w. ]{0,40}\bwindow (?:contains|displays|shows|is showing|is open)\b",
+        r"(?i)^an? screen ?(?:capture|shot) (?:of|showing)\b",
+        r"(?i)^the ocr text\b",
     ]
     .iter()
     .map(|pattern| Regex::new(pattern).expect("valid narration filter regex"))
@@ -140,6 +146,14 @@ static NARRATOR_POSSESSIVE: Lazy<Regex> = Lazy::new(|| {
 });
 
 fn past_tense_lead(text: &str) -> String {
+    // "Debugging: the capture test" opens with a category label, not a verb.
+    let opens_with_a_label = text
+        .split_whitespace()
+        .take(4)
+        .any(|word| word.ends_with(':'));
+    if opens_with_a_label {
+        return text.to_string();
+    }
     let first = text.split_whitespace().next().unwrap_or("");
     match PAST_TENSE
         .iter()
@@ -169,7 +183,10 @@ pub fn neutral_voice(text: &str) -> String {
     let tidied = DANGLING_END.replace(&opened, ".").into_owned();
     let had_person = LEADING_PERSON.is_match(&tidied) || LEADING_BARE_USER.is_match(&tidied);
     if tidied == text && !had_person {
-        return text.to_string();
+        // No narrator, but a summary that opens "Reviewing ..." still names
+        // an activity in progress. 35 of 132 visible summaries on the owner
+        // vault opened that way (2026-10-07).
+        return past_tense_lead(text);
     }
     let rest = if let Some(found) = LEADING_PERSON.find(&tidied) {
         &tidied[found.end()..]
@@ -439,10 +456,23 @@ mod tests {
 
     #[test]
     fn verbs_the_cleanup_does_not_know_and_neutral_text_are_left_alone() {
-        // No narrator: nothing to change, including a leading -ing noun.
+        // No narrator, but a listed activity verb still goes to the past tense.
         assert_eq!(
             neutral_voice("Reviewing guidelines for lab safety."),
-            "Reviewing guidelines for lab safety."
+            "Reviewed guidelines for lab safety."
+        );
+        assert_eq!(
+            neutral_voice("Meeting notes for the capstone."),
+            "Meeting notes for the capstone."
+        );
+        // A category label is not a verb.
+        assert_eq!(
+            neutral_voice("Debugging: the capture test fails on merge."),
+            "Debugging: the capture test fails on merge."
+        );
+        assert_eq!(
+            neutral_voice("Reviewing agent output: Fix retrieval ranking."),
+            "Reviewing agent output: Fix retrieval ranking."
         );
         assert_eq!(
             neutral_voice("Their team shipped the fix."),
@@ -453,6 +483,27 @@ mod tests {
             neutral_voice("The user is triaging the inbox."),
             "Triaging the inbox."
         );
+    }
+
+    #[test]
+    fn sentences_about_the_window_the_capture_or_the_ocr_are_narration() {
+        for line in [
+            "The Finder window displays various app folders and recent files.",
+            "A Google Chrome window shows the course page for CS 4500.",
+            "The Spotify app window is open on a playlist.",
+            "A screen capture of the settings page.",
+            "The OCR text extracted from the page lists three grades.",
+            "The OCR text shows a login form.",
+        ] {
+            assert!(narration_filter_hits(line), "{line}");
+        }
+        for line in [
+            "The window function in the SQL query was rewritten.",
+            "Fixed the window resize bug in the notch.",
+            "The capstone demo is scheduled for Thursday.",
+        ] {
+            assert!(!narration_filter_hits(line), "{line}");
+        }
     }
 
     #[test]

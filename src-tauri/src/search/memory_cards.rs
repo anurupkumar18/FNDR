@@ -1941,7 +1941,11 @@ mod tests {
         assert!(!fallback.summary.is_empty());
         assert!(fallback.confidence > 0.0);
         assert_eq!(fallback.insight_what_changed, "");
-        assert_eq!(fallback.insight_what_happened, result.insight_what_happened);
+        // Shown in the past tense, whatever tense it was stored in.
+        assert_eq!(
+            fallback.insight_what_happened,
+            "Listened to James Blake perform Death of Love live on YouTube."
+        );
         assert_eq!(
             fallback.insight_why_mattered,
             "Listened to a live performance."

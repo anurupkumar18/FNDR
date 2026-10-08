@@ -2041,7 +2041,7 @@ mod tests {
     #[test]
     fn cleans_common_summary_preambles() {
         let cleaned = clean_summary_output("Summary: The screen shows reviewing PR comments");
-        assert_eq!(cleaned, "reviewing PR comments");
+        assert_eq!(cleaned, "Reviewed PR comments");
     }
 
     #[test]

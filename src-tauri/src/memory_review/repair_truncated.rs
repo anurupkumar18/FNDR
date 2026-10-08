@@ -164,7 +164,14 @@ pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
 /// a label was retired keep it until something rewrites them. Returns whether
 /// the label changed.
 pub fn relabel_activity(record: &mut MemoryRecord) -> bool {
-    let current = crate::inference::normalize_activity_type(&record.activity_type);
+    let mut current = crate::inference::normalize_activity_type(&record.activity_type);
+    // Until 2026-10-07 the model-free summary called every capture
+    // "reviewing", which normalizes to this label. It never knew the activity.
+    let written_without_a_model = record.synthesis_branch.eq_ignore_ascii_case("fallback")
+        || record.summary_source.eq_ignore_ascii_case("fallback");
+    if written_without_a_model && current == "reviewing_agent_output" {
+        current = "unknown".to_string();
+    }
     let changed = current != record.activity_type;
     record.activity_type = current;
     changed
@@ -182,7 +189,11 @@ fn narrates(text: &str) -> bool {
 /// cleaned line while the stored text, and so its vector, kept the narration.
 /// Returns the before and after when the summary changed.
 pub fn reword_narration(record: &mut MemoryRecord) -> Option<RepairExample> {
-    if record.is_agent_note() || !narrates(&record.display_summary) {
+    // Any summary the display cleanup would change is stored as it is shown,
+    // so the text and its vector say the same thing. That includes a
+    // narrator ("The user is ...") and an activity left in progress
+    // ("Reviewing ...").
+    if record.is_agent_note() {
         return None;
     }
     let before = record.display_summary.clone();
@@ -317,6 +328,21 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_activity_in_progress_is_stored_as_it_is_shown() {
+        let mut row = narrated_row("Reviewing the grades and feedback for the capstone report.");
+        let change = reword_narration(&mut row).expect("reworded");
+        assert_eq!(
+            change.after,
+            "Reviewed the grades and feedback for the capstone report."
+        );
+        assert_eq!(row.snippet, change.after);
+        assert!(
+            reword_narration(&mut row).is_none(),
+            "second pass changes nothing"
+        );
+    }
+
+    #[test]
     fn rewording_leaves_neutral_rows_and_assistant_notes_alone() {
         let mut neutral = narrated_row("Reviewed the Q3 forecast with margins by region.");
         assert!(reword_narration(&mut neutral).is_none());
@@ -442,6 +468,16 @@ mod tests {
         row.activity_type = "debugging".into();
         assert!(!relabel_activity(&mut row));
         assert_eq!(row.activity_type, "debugging");
+
+        // A summary written without a model never knew it was a review.
+        row.activity_type = "reviewing_agent_output".into();
+        row.summary_source = "fallback".into();
+        assert!(relabel_activity(&mut row));
+        assert_eq!(row.activity_type, "unknown");
+        // The model chose the label: it stays.
+        row.activity_type = "reviewing_agent_output".into();
+        row.summary_source = "llm".into();
+        assert!(!relabel_activity(&mut row));
     }
 
     #[tokio::test]

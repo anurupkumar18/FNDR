@@ -88,6 +88,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rows.sort_by_key(|row| std::cmp::Reverse(row.timestamp));
         let total = rows.len().max(1);
 
+        // `--row <id prefix>`: one row's shape (lengths, flags, vector norms),
+        // never its text, for comparing the same row across two copies.
+        if let Some(prefix) = arg("--row") {
+            for row in rows.iter().filter(|row| row.id.starts_with(&prefix)) {
+                let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+                let title_vector = embedder.as_ref().and_then(|e| e.embed_query(&row.window_title).ok());
+                eprintln!(
+                    "ROW {} app={} title_chars={} summary_chars={} snippet_chars={} clean_chars={} embedding_text_chars={} lexical_shadow_chars={} status={} source={} branch={} outcome={} activity={} low_signal={:?} norm={:.3} snippet_norm={:.3} support_norm={:.3} title_vs_primary={:.3} title_vs_snippet={:.3} embedding_text_has_title={} ",
+                    &row.id[..8], row.app_name, row.window_title.chars().count(), row.display_summary.chars().count(),
+                    row.snippet.chars().count(), row.clean_text.chars().count(), row.embedding_text.chars().count(),
+                    row.lexical_shadow.chars().count(), row.enrichment_status, row.summary_source, row.synthesis_branch,
+                    row.storage_outcome, row.activity_type,
+                    fndr_lib::memory_quality::record_low_signal_reason(row).map(|r| r.code()),
+                    norm(&row.embedding), norm(&row.snippet_embedding), norm(&row.support_embedding),
+                    title_vector.as_ref().map_or(0.0, |v| dot(v, &row.embedding)),
+                    title_vector.as_ref().map_or(0.0, |v| dot(v, &row.snippet_embedding)),
+                    row.embedding_text.to_lowercase().contains(&row.window_title.to_lowercase()),
+                );
+            }
+        }
+
         let (mut placeholder, mut narrated, mut cut, mut no_why, mut zero_vec, mut same_vec, mut session_noise) = (0, 0, 0, 0, 0, 0, 0);
         let (mut by_source, mut by_status, mut by_intent, mut by_model, mut by_activity) =
             (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
@@ -108,6 +129,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tally(&mut by_model, &format!("{} / {}", row.embedding_model, row.embedding_dim));
             tally(&mut by_activity, &row.activity_type);
         }
+
+        // How does each card line open, as stored and as shown after the
+        // display cleanup? The voice rule is a finished past-tense sentence.
+        let opening = |text: &str| -> &'static str {
+            let first = text.split_whitespace().next().unwrap_or("").to_lowercase();
+            let first = first.trim_matches(|c: char| !c.is_alphanumeric());
+            let lower = text.trim().to_lowercase();
+            if text.trim().is_empty() || is_placeholder_summary(text) {
+                "placeholder or empty"
+            } else if lower.starts_with("the user") || lower.starts_with("you ") || lower.starts_with("user ") {
+                "narrator (the user, you)"
+            } else if lower.starts_with("the ") || lower.starts_with("a ") || lower.starts_with("an ") || lower.starts_with("in ") {
+                "describes a thing (the, a, in)"
+            } else if matches!(first, "has" | "have" | "had" | "is" | "was" | "are" | "were") {
+                "dangling verb (has, is)"
+            } else if first.ends_with("ing") {
+                "-ing word"
+            } else if first.ends_with("ed") || matches!(first, "read" | "wrote" | "ran" | "saw" | "sent" | "made" | "took" | "built" | "set" | "got" | "found") {
+                "past-tense verb"
+            } else {
+                "other"
+            }
+        };
+        let (mut voice_stored, mut voice_shown): (BTreeMap<String, usize>, BTreeMap<String, usize>) =
+            (BTreeMap::new(), BTreeMap::new());
+        let mut other_first_words: BTreeMap<String, usize> = BTreeMap::new();
+        for row in rows.iter().filter(|row| fndr_lib::memory_quality::record_low_signal_reason(row).is_none()) {
+            tally(&mut voice_stored, opening(&row.display_summary));
+            // The line a card shows: voice cleanup, then a title-based
+            // fallback when the sentence is still about the screen.
+            let (shown, _fell_back) = fndr_lib::summariser::narration_filter::clean_or_fallback_display_summary(
+                &row.display_summary,
+                &row.window_title,
+                row.url.as_deref(),
+                row.timestamp,
+            );
+            tally(&mut voice_shown, opening(&shown));
+            if matches!(opening(&shown), "other" | "-ing word" | "describes a thing (the, a, in)") {
+                // Four words show the sentence pattern without quoting the memory.
+                let opener = shown.split_whitespace().take(4).collect::<Vec<_>>().join(" ").to_lowercase();
+                tally(&mut other_first_words, &opener);
+            }
+        }
+        let mut common_other: Vec<_> = other_first_words.into_iter().collect();
+        common_other.sort_by(|a, b| b.1.cmp(&a.1));
+        common_other.truncate(60);
 
         // Why is each weak summary still weak? Counts only, no memory text.
         let mut weak_summaries: BTreeMap<String, usize> = BTreeMap::new();
@@ -235,6 +302,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut right_scores: Vec<f32> = Vec::new();
             // Right memory first, yet the cards would say "no strong match".
             let mut right_but_weak = 0usize;
+            let mut same_title_top5 = 0usize;
             for row in &candidates {
                 let query = query_of(row);
                 if query.split_whitespace().count() < 2 {
@@ -244,7 +312,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (results, strong) =
                     fndr_lib::ipc::commands::search::search_ranked_results_with_strength(&state, &query, None, None, 10).await?;
                 let rank = results.iter().position(|result| result.id == row.id);
+                // Per-row ranks, ids only, for comparing two runs.
+                if std::env::var("FNDR_QA_RANKS").is_ok() {
+                    eprintln!("RANK\t{label}\t{}\t{}\t{}", row.id, rank.map_or(-1, |r| r as i64), row.embedding_text.len());
+                }
                 right_but_weak += usize::from(rank == Some(0) && !strong);
+                // The same page captured at another time carries the same
+                // title. Finding any of them answers a search by title.
+                same_title_top5 += usize::from(results.iter().take(5).any(|result| {
+                    result.app_name == row.app_name
+                        && result.window_title.trim().eq_ignore_ascii_case(row.window_title.trim())
+                }));
                 h1 += usize::from(rank == Some(0));
                 h5 += usize::from(rank.is_some_and(|rank| rank < 5));
                 if rank == Some(0) {
@@ -275,6 +353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "mean_top_score": if asked > 0 { top_score / asked as f64 } else { 0.0 },
                 "top_score_when_right": when_right,
                 "right_but_marked_weak": rate(right_but_weak),
+                "a_memory_with_the_same_title_in_top5": rate(same_title_top5),
             });
         }
 
@@ -404,6 +483,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "memories": rows.len(),
             "summary_quality": { "placeholder": pct(placeholder), "narrated": pct(narrated), "cut_inside_token": pct(cut), "no_why_it_mattered": pct(no_why) },
             "vector_health": { "zero_primary_vector": pct(zero_vec), "primary_equals_snippet_vector": pct(same_vec), "embedding_text_carries_session_id": pct(session_noise), "model_and_dim": by_model },
+            "voice": { "stored": voice_stored, "shown_after_cleanup": voice_shown, "first_words_not_past_tense": common_other },
             "weak_summaries": weak_summaries,
             "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity },
             "search_dedup": dedup,
