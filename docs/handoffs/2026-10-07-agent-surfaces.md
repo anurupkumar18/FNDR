@@ -6,7 +6,21 @@ Date: 2026-10-07. Written at the owner's request when the session ran low on con
 
 The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
 
-## Update 4, 2026-10-07 (read this first)
+## Update 5, 2026-10-07 (read this first)
+
+All pushed. Usefulness slices built since Update 4, each with tests:
+
+- A11.1: `src/domains/workspace/AgentReply.tsx` renders lists, code, emphasis and http links from text nodes only; citations still open the memory.
+- C11.1, C11.3: `StepDone` carries `checked`; `resultNote` in `doRun.ts` tells the person how many steps FNDR saw itself and that nothing is undone automatically.
+- C9.5: `plan::explain_empty_plan` gives the reason when a request was only something Notch Do never does. It explains after planning; it does not refuse before the cloud request, because a word list would block harmless requests.
+
+Not built: A9.6 (show when Hermes searched memory). It needs the shape of tool calls in the gateway's `/v1/responses` output, which has to be read from a running gateway.
+
+Still waiting on a free machine: the live checks (see Update 4).
+
+Next slices: A9.6 once a gateway is running; C13.3 (a list of past Notch Do runs from `operator/journal.jsonl`); B7.5 (Screen Guide falls back to the local model when ChatGPT is unavailable); A6.6 (confirm related memories skip excluded apps).
+
+## Update 4, 2026-10-07
 
 All pushed; local and remotes in sync. Since Update 3:
 
