@@ -11,6 +11,7 @@ These files are the source of truth for the October board. `scripts/team/gitlab_
 | `kunj-command-skills-models.md` | Kunj | Screen Guide rebuilt as a command surface, skills from what worked, more and better local model use |
 | `felipe-voice-onboarding-tests.md` | Felipe | One voice pipeline for every feature, production-ready onboarding and polish, product-oriented tests |
 | `cross-cutting-reliability.md` | Anurup, Kunj, Minh | Screen Guide reliability, private diagnostics, truthful activity traces, and embedding parity |
+| `agent-output-closeout-2026-10.md` | Anurup | Agent/MCP and output-quality shipped slices with native and real-use follow-ups |
 | `product-decisions.md` | Everyone | Product, research, and decision tickets |
 
 ## Weeks and milestones
