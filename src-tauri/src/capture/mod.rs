@@ -1311,7 +1311,13 @@ fn validate_structured_memory_extraction(
     let mut total = 0usize;
 
     let original_activity_type = extraction.activity_type.clone();
-    extraction.activity_type = crate::inference::normalize_activity_type(&original_activity_type);
+    extraction.activity_type = crate::inference::activity_for_evidence(
+        &original_activity_type,
+        app_name,
+        None,
+        window_title,
+        clean_text,
+    );
     if original_activity_type.contains('|') {
         issues.push("activity_type_multi_option_dump".to_string());
     } else if !original_activity_type.trim().is_empty()

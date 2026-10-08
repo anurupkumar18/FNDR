@@ -112,6 +112,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (mut placeholder, mut narrated, mut cut, mut no_why, mut zero_vec, mut same_vec, mut session_noise) = (0, 0, 0, 0, 0, 0, 0);
         let (mut by_source, mut by_status, mut by_intent, mut by_model, mut by_activity) =
             (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        // Which apps carry the label the model reaches for most?
+        let mut agent_review_by_app = BTreeMap::new();
         for row in &rows {
             let lower = row.display_summary.trim().to_lowercase();
             placeholder += usize::from(is_placeholder_summary(&row.display_summary));
@@ -128,6 +130,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tally(&mut by_intent, &row.intent_analysis.intent_label);
             tally(&mut by_model, &format!("{} / {}", row.embedding_model, row.embedding_dim));
             tally(&mut by_activity, &row.activity_type);
+            if row.activity_type == "reviewing_agent_output" {
+                tally(&mut agent_review_by_app, &row.app_name);
+            }
         }
 
         // How does each card line open, as stored and as shown after the
@@ -485,7 +490,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "vector_health": { "zero_primary_vector": pct(zero_vec), "primary_equals_snippet_vector": pct(same_vec), "embedding_text_carries_session_id": pct(session_noise), "model_and_dim": by_model },
             "voice": { "stored": voice_stored, "shown_after_cleanup": voice_shown, "first_words_not_past_tense": common_other },
             "weak_summaries": weak_summaries,
-            "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity },
+            "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity, "reviewing_agent_output_by_app": agent_review_by_app },
             "search_dedup": dedup,
             "vector_freshness": freshness,
             "unrelated_queries": unrelated,

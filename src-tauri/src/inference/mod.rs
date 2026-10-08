@@ -688,6 +688,46 @@ pub const CANONICAL_ACTIVITY_TYPES: &[&str] = &[
     "unknown",
 ];
 
+/// Names that show an AI assistant or agent is on screen.
+const AGENT_NAMES: &[&str] = &[
+    "claude",
+    "chatgpt",
+    "codex",
+    "copilot",
+    "gemini",
+    "perplexity",
+    "cursor",
+    "agent",
+    "assistant",
+];
+
+/// The activity label a capture may carry, given what was on screen. The
+/// model picks `reviewing_agent_output` for file lists, music players and
+/// settings panes. The label stays only when the app or page is an AI
+/// assistant, or the title or text names one. Otherwise the activity is
+/// unknown.
+pub fn activity_for_evidence(
+    label: &str,
+    app_name: &str,
+    url: Option<&str>,
+    window_title: &str,
+    text: &str,
+) -> String {
+    let label = normalize_activity_type(label);
+    if label != "reviewing_agent_output" || crate::tasks::suggest::is_ai_surface(app_name, url) {
+        return label;
+    }
+    let seen = format!("{window_title} {text}").to_lowercase();
+    let names_an_agent = seen
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|word| AGENT_NAMES.contains(&word));
+    if names_an_agent {
+        label
+    } else {
+        "unknown".to_string()
+    }
+}
+
 pub fn normalize_activity_type(value: &str) -> String {
     let normalized = value.trim().to_ascii_lowercase().replace([' ', '-'], "_");
     if normalized.is_empty() {
@@ -2215,6 +2255,50 @@ mod tests {
         let out = normalize_structured_memory_json(raw);
         let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid json");
         assert_eq!(parsed["entities"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn agent_review_needs_an_agent_on_screen() {
+        let label = "reviewing_agent_output";
+        // An assistant's own app or page.
+        assert_eq!(activity_for_evidence(label, "ChatGPT", None, "", ""), label);
+        assert_eq!(
+            activity_for_evidence(
+                label,
+                "Google Chrome",
+                Some("https://claude.ai/chat/1"),
+                "New chat",
+                ""
+            ),
+            label
+        );
+        // An agent named in the title or the text.
+        assert_eq!(
+            activity_for_evidence(label, "Terminal", None, "claude - zsh", ""),
+            label
+        );
+        assert_eq!(
+            activity_for_evidence(label, "Cursor", None, "main.rs", "Agent finished 3 edits"),
+            label
+        );
+        // Nothing of the kind on screen.
+        for (app, title, text) in [
+            ("Finder", "Downloads", "report.pdf notes.txt"),
+            ("Spotify", "Liked Songs", "Shuffle Play"),
+            ("System Settings", "Privacy & Security", "Screen Recording"),
+            ("Google Chrome", "Agentic workflows weekly", "subscribe"),
+        ] {
+            assert_eq!(
+                activity_for_evidence(label, app, None, title, text),
+                "unknown",
+                "{app}"
+            );
+        }
+        // Other labels pass through, aliases included.
+        assert_eq!(
+            activity_for_evidence("Research", "Finder", None, "", ""),
+            "researching"
+        );
     }
 
     #[test]

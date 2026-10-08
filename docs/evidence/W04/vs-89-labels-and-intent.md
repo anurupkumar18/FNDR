@@ -31,3 +31,19 @@ No variant differs from the shipped text by more than two queries in any cell, a
 
 - The six rules in `infer_intent_analysis` are unchanged. The measurement above says the label does not affect retrieval, so improving the rules would only matter for display, and the label is not shown on the card today.
 - Not measured on the three seeded personas: their memories are seeded with one vector for both roles, so they cannot show an embedding-text effect (see `vs-87-fusion-retune.md`).
+
+## The agent review label needs an agent on screen, 2026-10-08
+
+On a copy of the vault, 57 of 158 memories carried `reviewing_agent_output`. The scorecard now breaks that label down by app: 41 were ChatGPT or Claude windows, where it is right, and 16 were Finder, Google Chrome, Spotify and System Settings.
+
+`inference::activity_for_evidence` keeps the label only when the app or page is an AI assistant, or the window title or screen text names one. Otherwise the activity is unknown. Capture uses it when it checks the model's answer, and the repair tool uses it for stored rows.
+
+| Label on the copy | Before | After the repair |
+|---|---|---|
+| `reviewing_agent_output` | 57 | 41 |
+| of those, outside ChatGPT and Claude | 16 | 2 |
+| `unknown` | 58 | 74 |
+
+The repair changed 16 rows and kept all 16 vectors. The two left outside an assistant's app name an agent in their text. Two of the 16 were assistant windows whose summary was first written without a model: the older rule for those rows took the label off again after a review pass had set it. That is two rows and is noted, not fixed.
+
+Not applied to the real vault.

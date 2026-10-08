@@ -164,7 +164,14 @@ pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
 /// a label was retired keep it until something rewrites them. Returns whether
 /// the label changed.
 pub fn relabel_activity(record: &mut MemoryRecord) -> bool {
-    let mut current = crate::inference::normalize_activity_type(&record.activity_type);
+    // A label the screen does not support goes to unknown as well.
+    let mut current = crate::inference::activity_for_evidence(
+        &record.activity_type,
+        &record.app_name,
+        record.url.as_deref(),
+        &record.window_title,
+        &record.clean_text,
+    );
     // Until 2026-10-07 the model-free summary called every capture
     // "reviewing", which normalizes to this label. It never knew the activity.
     let written_without_a_model = record.synthesis_branch.eq_ignore_ascii_case("fallback")
@@ -474,10 +481,17 @@ mod tests {
         row.summary_source = "fallback".into();
         assert!(relabel_activity(&mut row));
         assert_eq!(row.activity_type, "unknown");
-        // The model chose the label: it stays.
+        // The model chose the label on an assistant's screen: it stays.
         row.activity_type = "reviewing_agent_output".into();
         row.summary_source = "llm".into();
+        row.app_name = "ChatGPT".into();
         assert!(!relabel_activity(&mut row));
+        // The model chose it for a screen with no assistant on it.
+        row.app_name = "Finder".into();
+        row.window_title = "Downloads".into();
+        row.clean_text = "report.pdf notes.txt".into();
+        assert!(relabel_activity(&mut row));
+        assert_eq!(row.activity_type, "unknown");
     }
 
     #[tokio::test]
