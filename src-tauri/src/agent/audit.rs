@@ -332,6 +332,85 @@ pub fn explanation_from_audit(record: &AgentAuditRecord) -> RetrievalExplanation
     }
 }
 
+/// Project a stored audit through today's source policy before it reaches a UI or MCP client.
+pub async fn authorize_audit_record(
+    state: &crate::AppState,
+    mut record: AgentAuditRecord,
+    saved: bool,
+) -> Result<AgentAuditRecord, String> {
+    let ids = record
+        .selected_memories
+        .iter()
+        .map(|memory| memory.memory_id.clone())
+        .chain(record.memories_used.iter().cloned())
+        .chain(record.dropped_context.iter().map(|note| note.id.clone()))
+        .chain(record.redactions_applied.iter().map(|note| note.id.clone()))
+        .chain(
+            record
+                .feedback
+                .iter()
+                .filter_map(|item| item.memory_id.clone()),
+        )
+        .collect::<Vec<_>>();
+    let visible = crate::context_runtime::context_source_memories(state, &ids).await?;
+    record
+        .selected_memories
+        .retain(|memory| visible.contains_key(&memory.memory_id));
+    record.memories_used.retain(|id| visible.contains_key(id));
+    record
+        .dropped_context
+        .retain(|note| visible.contains_key(&note.id));
+    record
+        .redactions_applied
+        .retain(|note| visible.contains_key(&note.id));
+    record.feedback.retain(|item| {
+        item.memory_id
+            .as_ref()
+            .is_none_or(|id| visible.contains_key(id))
+    });
+    if saved {
+        for memory in &mut record.selected_memories {
+            let current = &visible[&memory.memory_id];
+            memory.title = [
+                current.display_summary.as_str(),
+                current.insight_what_happened.as_str(),
+                current.window_title.as_str(),
+            ]
+            .into_iter()
+            .find(|text| !text.trim().is_empty())
+            .unwrap_or_default()
+            .to_string();
+            memory.app_name = current.app_name.clone();
+            memory.url = current.url.clone();
+            memory.timestamp = current.timestamp;
+            memory.confidence = current.confidence_score;
+            memory.matched_reason =
+                "Selected in the saved run; rerun for current ranking reasons.".into();
+            let historical =
+                "Historical signal omitted after the current-source check.".to_string();
+            memory.semantic_relevance = historical.clone();
+            memory.keyword_match = historical.clone();
+            memory.recency = historical.clone();
+            memory.project_match = historical.clone();
+            memory.app_domain_match = historical.clone();
+            memory.workflow_continuity = historical;
+        }
+        for note in record
+            .dropped_context
+            .iter_mut()
+            .chain(record.redactions_applied.iter_mut())
+        {
+            note.reason = "Historical reason omitted after the current-source check.".into();
+        }
+        record.output_summary = "Historical output omitted after the current-source check.".into();
+        if record.error_message.is_some() {
+            record.error_message = Some("Historical error detail omitted.".into());
+        }
+        record.confidence = 0.0;
+    }
+    Ok(record)
+}
+
 fn attach_feedback(records: &mut [AgentAuditRecord], feedback: &[AgentRetrievalFeedback]) {
     for record in records {
         record.feedback = feedback
@@ -498,6 +577,7 @@ fn truncate_for_audit(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn temp_agent_dir(label: &str) -> PathBuf {
         let base = std::env::temp_dir().join(format!(
@@ -559,5 +639,81 @@ mod tests {
 
         assert_eq!(record.feedback.len(), 1);
         assert_eq!(record.feedback[0].memory_id.as_deref(), Some("mem-1"));
+    }
+
+    #[test]
+    fn saved_audit_projection_excludes_hidden_sources_and_stale_output() {
+        use crate::config::Config;
+        use crate::storage::{MemoryRecord, StateStore, Store};
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::new(dir.path()).unwrap());
+        let state_store = Arc::new(StateStore::new(dir.path()).unwrap());
+        let graph = crate::graph::GraphStore::new(store.clone());
+        let state = crate::AppState::new(
+            dir.path().to_path_buf(),
+            Config::default(),
+            store.clone(),
+            state_store,
+            graph,
+            None,
+        );
+        let source = |id: &str, app: &str| MemoryRecord {
+            id: id.into(),
+            app_name: app.into(),
+            window_title: format!("Current {id}"),
+            text: "Reviewed the release checklist.".into(),
+            clean_text: "Reviewed the release checklist.".into(),
+            snippet: "Reviewed the release checklist.".into(),
+            ..Default::default()
+        };
+        runtime
+            .block_on(store.add_batch_preserving_ids(&[
+                source("visible", "Editor"),
+                source("blocked", "PrivateWorkspace"),
+            ]))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+        let record = AgentAuditRecord {
+            run_id: "saved-run".into(),
+            output_summary: "PRIVATE_OUTPUT".into(),
+            error_message: Some("PRIVATE_ERROR".into()),
+            memories_used: vec!["visible".into(), "blocked".into()],
+            selected_memories: vec![
+                MemoryRetrievalExplanation {
+                    memory_id: "visible".into(),
+                    title: "PRIVATE_STALE_TITLE".into(),
+                    ..Default::default()
+                },
+                MemoryRetrievalExplanation {
+                    memory_id: "blocked".into(),
+                    title: "PRIVATE_BLOCKED_TITLE".into(),
+                    ..Default::default()
+                },
+            ],
+            feedback: vec![AgentRetrievalFeedback {
+                feedback_id: "feedback".into(),
+                run_id: "saved-run".into(),
+                memory_id: Some("blocked".into()),
+                rating: RetrievalFeedbackRating::Wrong,
+                note: Some("PRIVATE_FEEDBACK".into()),
+                created_at: 1,
+            }],
+            ..Default::default()
+        };
+        let projected = runtime
+            .block_on(authorize_audit_record(&state, record, true))
+            .unwrap();
+        assert_eq!(projected.memories_used, vec!["visible"]);
+        assert_eq!(projected.selected_memories.len(), 1);
+        assert_eq!(
+            projected.selected_memories[0].title,
+            "Reviewed the release checklist."
+        );
+        assert!(projected.feedback.is_empty());
+        assert!(!serde_json::to_string(&projected)
+            .unwrap()
+            .contains("PRIVATE_"));
     }
 }

@@ -87,7 +87,7 @@ module doc comment), **verdict**.
 - **Raw captured text is opt-in**: `memory.source_evidence` has `include_raw`, which defaults to false. `memory.search_raw` was removed.
 - **Retrieval feedback is a write**: `agent.rate_result` requires a valid MCP token, actions enabled, and assistant notes enabled before it can append feedback.
 - **Task and insight-graph reads check current sources**: `memory.todos` uses the same source and historical-event admission as context packs. `memory.graph_context` filters its UUID neighborhood before traversal, including edge provenance. Legacy `memory.graph_query` and saved context packs still need separate authorization work.
-- **Saved retrieval explanations refresh their source fields**: `agent.explain_retrieval` omits excluded or missing memories from stored runs and replaces historical titles, URLs, ranking prose, and exclusion reasons with current-source data or neutral text.
+- **Saved audit reads refresh their source fields**: MCP `agent.explain_retrieval` and the Agent panel's audit list, detail, and explanation omit excluded or missing memories. Historical titles, URLs, ranking prose, output text, and exclusion reasons are replaced with current-source data or neutral text. Skill/eval draft creation from a saved run still needs its own provenance gate.
 
 ## Proposed target surface
 

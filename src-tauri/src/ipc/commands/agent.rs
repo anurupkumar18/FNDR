@@ -2,9 +2,10 @@ use crate::agent::actions::{policy_for_action, AgentAction, AgentActionKind, Age
 use crate::agent::approvals::is_action_approved;
 use crate::agent::audit::{append_agent_action, get_agent_action_by_id, update_action_status};
 use crate::agent::audit::{
-    append_feedback, explanation_from_audit, get_agent_audit_run as load_agent_audit_run,
-    list_agent_audit_runs as load_agent_audit_runs, AgentAuditRecord, AgentRunStatus,
-    ExplainRetrievalRequest, RateResultRequest, RetrievalExplanation,
+    append_feedback, authorize_audit_record, explanation_from_audit,
+    get_agent_audit_run as load_agent_audit_run, list_agent_audit_runs as load_agent_audit_runs,
+    AgentAuditRecord, AgentRunStatus, ExplainRetrievalRequest, RateResultRequest,
+    RetrievalExplanation,
 };
 use crate::agent::evals::{append_eval_draft, list_eval_drafts, propose_eval_from_audit};
 use crate::agent::execution::execute_action;
@@ -42,12 +43,17 @@ pub async fn list_agent_audit_runs(
     mode: Option<AgentMode>,
     status: Option<AgentRunStatus>,
 ) -> Result<Vec<AgentAuditRecord>, String> {
-    load_agent_audit_runs(
+    let rows = load_agent_audit_runs(
         state.inner().app_data_dir.as_path(),
         limit.unwrap_or(20),
         mode,
         status,
-    )
+    )?;
+    let mut authorized = Vec::with_capacity(rows.len());
+    for row in rows {
+        authorized.push(authorize_audit_record(state.inner(), row, true).await?);
+    }
+    Ok(authorized)
 }
 
 #[tauri::command]
@@ -55,7 +61,12 @@ pub async fn get_agent_audit_run(
     state: State<'_, Arc<AppState>>,
     run_id: String,
 ) -> Result<Option<AgentAuditRecord>, String> {
-    load_agent_audit_run(state.inner().app_data_dir.as_path(), &run_id)
+    match load_agent_audit_run(state.inner().app_data_dir.as_path(), &run_id)? {
+        Some(record) => Ok(Some(
+            authorize_audit_record(state.inner(), record, true).await?,
+        )),
+        None => Ok(None),
+    }
 }
 
 #[tauri::command]
@@ -66,6 +77,7 @@ pub async fn explain_agent_retrieval(
     if let Some(run_id) = request.run_id.as_deref() {
         let record = load_agent_audit_run(state.inner().app_data_dir.as_path(), run_id)?
             .ok_or_else(|| format!("No agent audit run found for {run_id}"))?;
+        let record = authorize_audit_record(state.inner(), record, true).await?;
         return Ok(explanation_from_audit(&record));
     }
 
@@ -87,6 +99,7 @@ pub async fn explain_agent_retrieval(
     .await?;
     let record = load_agent_audit_run(state.inner().app_data_dir.as_path(), &response.run_id)?
         .ok_or_else(|| "Agent run was created but audit detail was unavailable".to_string())?;
+    let record = authorize_audit_record(state.inner(), record, false).await?;
     Ok(explanation_from_audit(&record))
 }
 

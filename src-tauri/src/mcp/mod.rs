@@ -17,8 +17,8 @@ pub mod tls;
 pub mod token;
 
 use crate::agent::audit::{
-    append_feedback, explanation_from_audit, get_agent_audit_run, ExplainRetrievalRequest,
-    RateResultRequest,
+    append_feedback, authorize_audit_record, explanation_from_audit, get_agent_audit_run,
+    ExplainRetrievalRequest, RateResultRequest,
 };
 use crate::agent::{get_agent_prompt, list_agent_prompts, AgentContextRequest};
 use crate::context_runtime::{self, CodeContextRequest, ContextRequest, DecisionProposal};
@@ -3626,8 +3626,11 @@ async fn run_agent_explain_retrieval(
                 code: -32004,
                 message: format!("No agent audit run found for {run_id}"),
             })?;
+        let record = authorize_audit_record(&app_state, record, true)
+            .await
+            .map_err(internal_tool_error)?;
         return Ok(tool_success(json!({
-            "retrieval_explanation": authorized_retrieval_explanation(&app_state, &record, true).await?
+            "retrieval_explanation": explanation_from_audit(&record)
         })));
     }
 
@@ -3654,81 +3657,12 @@ async fn run_agent_explain_retrieval(
             code: -32004,
             message: "Agent run was created but audit detail was unavailable".to_string(),
         })?;
-    Ok(tool_success(json!({
-        "retrieval_explanation": authorized_retrieval_explanation(&app_state, &record, false).await?
-    })))
-}
-
-async fn authorized_retrieval_explanation(
-    app_state: &AppState,
-    record: &crate::agent::audit::AgentAuditRecord,
-    saved: bool,
-) -> Result<crate::agent::audit::RetrievalExplanation, JsonRpcError> {
-    let mut explanation = explanation_from_audit(record);
-    let ids = explanation
-        .selected_memories
-        .iter()
-        .map(|memory| memory.memory_id.clone())
-        .chain(
-            explanation
-                .dropped_context
-                .iter()
-                .map(|note| note.id.clone()),
-        )
-        .chain(
-            explanation
-                .redacted_context
-                .iter()
-                .map(|note| note.id.clone()),
-        )
-        .collect::<Vec<_>>();
-    let visible = context_runtime::context_source_memories(app_state, &ids)
+    let record = authorize_audit_record(&app_state, record, false)
         .await
         .map_err(internal_tool_error)?;
-    explanation
-        .selected_memories
-        .retain(|memory| visible.contains_key(&memory.memory_id));
-    explanation
-        .dropped_context
-        .retain(|note| visible.contains_key(&note.id));
-    explanation
-        .redacted_context
-        .retain(|note| visible.contains_key(&note.id));
-    if saved {
-        for memory in &mut explanation.selected_memories {
-            let current = &visible[&memory.memory_id];
-            memory.title = [
-                current.display_summary.as_str(),
-                current.insight_what_happened.as_str(),
-                current.window_title.as_str(),
-            ]
-            .into_iter()
-            .find(|text| !text.trim().is_empty())
-            .unwrap_or_default()
-            .to_string();
-            memory.app_name = current.app_name.clone();
-            memory.url = current.url.clone();
-            memory.timestamp = current.timestamp;
-            memory.matched_reason =
-                "Selected in the saved run; rerun for current ranking reasons.".into();
-            let historical =
-                "Historical signal omitted after the current-source check.".to_string();
-            memory.semantic_relevance = historical.clone();
-            memory.keyword_match = historical.clone();
-            memory.recency = historical.clone();
-            memory.project_match = historical.clone();
-            memory.app_domain_match = historical.clone();
-            memory.workflow_continuity = historical;
-        }
-        for note in explanation
-            .dropped_context
-            .iter_mut()
-            .chain(explanation.redacted_context.iter_mut())
-        {
-            note.reason = "Historical reason omitted after the current-source check.".into();
-        }
-    }
-    Ok(explanation)
+    Ok(tool_success(json!({
+        "retrieval_explanation": explanation_from_audit(&record)
+    })))
 }
 
 async fn run_agent_rate_result(
