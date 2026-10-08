@@ -6,6 +6,20 @@ Date: 2026-10-07. Written at the owner's request when the session ran low on con
 
 The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
 
+## Update 4, 2026-10-07 (read this first)
+
+All pushed; local and remotes in sync. Since Update 3:
+
+- Tests added for the stale-gateway check and the operate setter. Every piece that shipped untested now has one.
+- Fixed: attached memories are numbered after the ones FNDR added, so a citation points at one memory.
+- Built: a `[2]` in an Agent answer opens that memory (A11.5).
+- Added: four hand-check pages and their expected behavior (`src-tauri/tests/fixtures/operator/pages/`), and the twenty-task set (`docs/evidence/W03/notch-do-task-set.md`).
+- Checked without spending the ChatGPT account: at the pinned Hermes commit, FNDR's config leaves Hermes one tool (`todo`) where the default is 31. Recorded at the end of the phase 1 evidence.
+
+Not done: the live checks that need the app running (quit cleanup, mid-run halt, the hand-check pages, the task set, a write tool refused over MCP). There is no dev build of the app in `target/debug`, another session was compiling, and a full app build on top of that risks the memory-pressure block. Run `npm run tauri dev` when the other sessions are idle, then follow the pages README and the phase 1 list.
+
+Next usefulness slices, in order: A11.1 (render lists, code and links in replies), A9.6 (show when Hermes searched memory), C11.1 and C11.3 (checked versus reported steps, and undo, on Notch Do's result), C9.5 (refuse never-tier requests at the plan card).
+
 ## Update 3, 2026-10-07 (read this first)
 
 - **Pushed.** `main` was merged with upstream (Minh's reopen work) and pushed; local and both remotes are in sync. The "push is blocked" note in Update 2 is no longer true.

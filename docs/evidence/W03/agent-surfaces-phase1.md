@@ -194,3 +194,15 @@ In order, each on the synthetic profile with the owner's go-ahead on the account
 4. Watch for action events before the plan event on five requests (N1).
 5. Part A9.2: a harmless file write and shell command asked directly, then the same hidden in an attached memory.
 6. Sign out from the account card on a Mac where losing the Codex login does not matter (N7).
+
+## Follow-up 2026-10-07: Hermes limits checked at the pinned commit
+
+The pinned Hermes (`b8880f1`) is now installed in the main profile. Its own toolset resolution (`hermes_cli.tools_config._get_platform_tools` for `api_server`) was run with its Python, with no gateway started and no model request made.
+
+| Config | Toolsets | Tools | Tools that act |
+| --- | --- | --- | --- |
+| None (Hermes default) | 13 | 31 | terminal, file write, code execution, eleven browser tools, cron and more |
+| FNDR's `platform_toolsets: api_server: [todo]` | 1 | `todo` | none |
+
+The MCP `tools.include` filter FNDR writes is also honored by the pinned source (`tools/mcp_tool.py`). So decision E4 holds at the pinned version, not only at 0.13. Still to do on a running gateway: confirm a write tool is refused through Hermes's MCP entry.
+
