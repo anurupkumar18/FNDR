@@ -745,9 +745,9 @@ mod tests {
         ]);
     }
 
-    // A merged memory should reopen its most specific target (the file), not the app.
+    // The stored kind is authoritative; merges keep kind and fields consistent.
     #[test]
-    fn resolve_reopen_target_follows_kind_over_disagreeing_file_flips_r36() {
+    fn resolve_reopen_target_follows_stored_kind() {
         let record = Rec {
             reopen_kind: ReopenKind::AppBundle,
             reopen_app_bundle_id: s("com.google.Chrome"),

@@ -1,7 +1,7 @@
 //! Database schema for memory records
 
 use crate::config::{DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_TEXT_EMBEDDING_DIM};
-use crate::memory::reopen::{ReopenKind, ReopenValidationStatus};
+use crate::memory::reopen::{ReopenKind, ReopenTarget, ReopenValidationStatus};
 use crate::memory_embedding_document::SearchEmbeddingProvenance;
 use serde::{Deserialize, Serialize};
 
@@ -509,6 +509,24 @@ pub struct MemoryRecord {
 
 fn default_schema_version() -> u32 {
     2
+}
+
+impl MemoryRecord {
+    pub fn reopen_target(&self) -> ReopenTarget {
+        ReopenTarget {
+            kind: self.reopen_kind.clone(),
+            url: self.reopen_url.clone(),
+            file_path: self.reopen_file_path.clone(),
+            app_bundle_id: self.reopen_app_bundle_id.clone(),
+            app_name: self.reopen_app_name.clone(),
+            app_deep_link: self.reopen_app_deep_link.clone(),
+            captured_at_ms: self.reopen_captured_at_ms,
+            confidence: self.reopen_confidence,
+            validation_status: self.reopen_validation_status.clone(),
+            page: self.reopen_page,
+            text_anchor: self.reopen_text_anchor.clone(),
+        }
+    }
 }
 
 impl Default for MemoryRecord {

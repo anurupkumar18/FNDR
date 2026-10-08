@@ -5508,6 +5508,10 @@ pub(crate) async fn merge_memory_records_with_policy(
             raw_evidence
         }
     };
+    let reopen = crate::memory::reopen::merge_reopen_targets(
+        incoming.reopen_target(),
+        existing.reopen_target(),
+    );
 
     MemoryRecord {
         id: existing.id.clone(),
@@ -5573,57 +5577,17 @@ pub(crate) async fn merge_memory_records_with_policy(
             &incoming.related_projects,
         ),
         raw_evidence,
-        reopen_kind: if incoming.reopen_kind != crate::memory::reopen::ReopenKind::Unknown {
-            incoming.reopen_kind.clone()
-        } else {
-            existing.reopen_kind.clone()
-        },
-        reopen_url: incoming.reopen_url.clone().or(existing.reopen_url.clone()),
-        reopen_file_path: incoming
-            .reopen_file_path
-            .clone()
-            .or(existing.reopen_file_path.clone()),
-        reopen_app_bundle_id: incoming
-            .reopen_app_bundle_id
-            .clone()
-            .or(existing.reopen_app_bundle_id.clone()),
-        reopen_app_name: incoming
-            .reopen_app_name
-            .clone()
-            .or(existing.reopen_app_name.clone()),
-        reopen_app_deep_link: incoming
-            .reopen_app_deep_link
-            .clone()
-            .or(existing.reopen_app_deep_link.clone()),
-        reopen_captured_at_ms: if incoming.reopen_captured_at_ms > 0 {
-            incoming.reopen_captured_at_ms
-        } else {
-            existing.reopen_captured_at_ms
-        },
-        reopen_confidence: existing.reopen_confidence.max(incoming.reopen_confidence),
-        reopen_validation_status: if incoming.reopen_validation_status
-            != crate::memory::reopen::ReopenValidationStatus::Unchecked
-        {
-            incoming.reopen_validation_status.clone()
-        } else {
-            existing.reopen_validation_status.clone()
-        },
-        reopen_page: crate::memory::reopen::merge_reopen_page(
-            incoming.reopen_url.as_deref(),
-            incoming.reopen_file_path.as_deref(),
-            incoming.reopen_page,
-            existing.reopen_url.as_deref(),
-            existing.reopen_file_path.as_deref(),
-            existing.reopen_page,
-        ),
-        reopen_text_anchor: crate::memory::reopen::merge_reopen_text_anchor(
-            incoming.reopen_url.as_deref(),
-            incoming.reopen_file_path.as_deref(),
-            incoming.reopen_text_anchor.as_deref(),
-            existing.reopen_url.as_deref(),
-            existing.reopen_file_path.as_deref(),
-            existing.reopen_text_anchor.as_deref(),
-        ),
+        reopen_kind: reopen.kind,
+        reopen_url: reopen.url,
+        reopen_file_path: reopen.file_path,
+        reopen_app_bundle_id: reopen.app_bundle_id,
+        reopen_app_name: reopen.app_name,
+        reopen_app_deep_link: reopen.app_deep_link,
+        reopen_captured_at_ms: reopen.captured_at_ms,
+        reopen_confidence: reopen.confidence,
+        reopen_validation_status: reopen.validation_status,
+        reopen_page: reopen.page,
+        reopen_text_anchor: reopen.text_anchor,
         search_aliases: merge_string_lists(&existing.search_aliases, &incoming.search_aliases),
         related_memory_ids: merge_string_lists(
             &existing.related_memory_ids,
@@ -7615,6 +7579,84 @@ Activity patterns and insights dashboard
                 merged.consolidated_from
             );
         }
+    }
+
+    #[tokio::test]
+    async fn merge_keeps_browser_target_over_app_with_stray_file_r36() {
+        use crate::memory::reopen::ReopenKind;
+        let mut existing = merge_test_record("existing");
+        existing.reopen_kind = ReopenKind::AppBundle;
+        existing.reopen_app_bundle_id = Some("com.google.Chrome".to_string());
+        existing.reopen_app_name = Some("Google Chrome".to_string());
+        existing.reopen_file_path = Some("en.wikipedia.org/wiki/Nitrogen".to_string());
+        existing.reopen_captured_at_ms = 1;
+        let mut incoming = merge_test_record("incoming");
+        incoming.reopen_kind = ReopenKind::BrowserUrl;
+        incoming.reopen_url = Some("https://en.wikipedia.org/wiki/Nitrogen".to_string());
+        incoming.reopen_app_name = Some("Google Chrome".to_string());
+        incoming.reopen_captured_at_ms = 2;
+
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+
+        assert_eq!(merged.reopen_kind, ReopenKind::BrowserUrl);
+        assert_eq!(
+            merged.reopen_url.as_deref(),
+            Some("https://en.wikipedia.org/wiki/Nitrogen")
+        );
+        assert_eq!(merged.reopen_file_path, None);
+        assert_eq!(merged.reopen_app_bundle_id, None);
+    }
+
+    #[tokio::test]
+    async fn merge_keeps_file_page_over_a_newer_app_target() {
+        use crate::memory::reopen::ReopenKind;
+        let mut existing = merge_test_record("existing");
+        existing.reopen_kind = ReopenKind::FilePath;
+        existing.reopen_file_path = Some("/Users/qa/re04-preview-150.pdf".to_string());
+        existing.reopen_page = Some(112);
+        existing.reopen_captured_at_ms = 1;
+        let mut incoming = merge_test_record("incoming");
+        incoming.reopen_kind = ReopenKind::AppBundle;
+        incoming.reopen_app_bundle_id = Some("com.apple.Preview".to_string());
+        incoming.reopen_captured_at_ms = 2;
+
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+
+        assert_eq!(merged.reopen_kind, ReopenKind::FilePath);
+        assert_eq!(
+            merged.reopen_file_path.as_deref(),
+            Some("/Users/qa/re04-preview-150.pdf")
+        );
+        assert_eq!(merged.reopen_page, Some(112));
+        assert_eq!(merged.reopen_app_bundle_id, None);
+    }
+
+    #[tokio::test]
+    async fn merge_on_the_same_url_keeps_the_existing_passage() {
+        use crate::memory::reopen::ReopenKind;
+        let url = "https://en.wikipedia.org/wiki/Nitrogen";
+        let mut existing = merge_test_record("existing");
+        existing.reopen_kind = ReopenKind::BrowserUrl;
+        existing.reopen_url = Some(url.to_string());
+        existing.reopen_text_anchor =
+            Some("Nitrogen is a chemical element with the symbol N".to_string());
+        existing.reopen_captured_at_ms = 1;
+        let mut incoming = merge_test_record("incoming");
+        incoming.reopen_kind = ReopenKind::BrowserUrl;
+        incoming.reopen_url = Some(url.to_string());
+        incoming.reopen_captured_at_ms = 2;
+
+        let merged =
+            merge_memory_records_with_policy(existing, incoming, None, None, false, false).await;
+
+        assert_eq!(merged.reopen_kind, ReopenKind::BrowserUrl);
+        assert_eq!(merged.reopen_url.as_deref(), Some(url));
+        assert_eq!(
+            merged.reopen_text_anchor.as_deref(),
+            Some("Nitrogen is a chemical element with the symbol N")
+        );
     }
 
     #[tokio::test]
