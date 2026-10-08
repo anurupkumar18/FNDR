@@ -70,6 +70,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 3. The v5 reindex skips memories that already have rows (`should_skip_v5_reindex`), so add a guard that forces a full rebuild when the prompt contract changes. Old and new vectors must never be searched together.
 4. Record after. Ship only if the numbers hold.
 
+**Result, 2026-10-08: deferred, with the cheap half done.** No profile holds BGE rows, the BGE model is not installed on the owner's Mac, and ADR 019 has not chosen the chunk model. Measuring would mean a 1.3 GB download and a full chunk index on an 8 GB machine to tune a path nothing runs, for a model that may be replaced. So: the prefixes stay as they are; both call sites now go through `query_text_for` and `document_text_for`, so there is one place to change; the constants carry the model-card difference and the rule that the v5 tables are cleared before a change; the existing test pins both strings. The rebuild guard and the before and after numbers move to whichever model ADR 019 picks.
+
 **Done when.** Before and after numbers are in the evidence file and a test proves a prompt change invalidates existing BGE rows.
 
 ## VS-89 Make intent and activity labels worth storing
