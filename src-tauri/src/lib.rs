@@ -37,6 +37,7 @@ pub mod privacy_proof;
 pub mod resume;
 pub mod search;
 pub mod speech;
+pub mod spotlight;
 pub mod storage;
 pub mod summariser;
 pub mod system_resources;

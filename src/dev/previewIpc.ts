@@ -1043,9 +1043,10 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                         ? (payload as { memoryId?: unknown }).memoryId
                         : null;
                 // Preview confirms that a target exists but never launches a URL or native app.
-                return previewCards.some(
+                const hasTarget = previewCards.some(
                     (card) => card.id === memoryId && Boolean(card.reopen_target),
                 );
+                return hasTarget ? { kind: "opened" } : { kind: "no_target" };
             }
             case "delete_memory": {
                 const memoryId =

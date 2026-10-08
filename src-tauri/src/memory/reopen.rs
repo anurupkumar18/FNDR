@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ReopenKind {
@@ -306,40 +308,91 @@ fn nonempty_ref(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|v| !v.is_empty())
 }
 
-/// Same URL or same file path. A page or passage from one document must not
-/// land on another.
-fn same_reopen_document(
-    incoming_url: Option<&str>,
-    incoming_path: Option<&str>,
-    existing_url: Option<&str>,
-    existing_path: Option<&str>,
-) -> bool {
-    let same_url = match (nonempty_ref(incoming_url), nonempty_ref(existing_url)) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
-    };
-    let same_path = match (nonempty_ref(incoming_path), nonempty_ref(existing_path)) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
-    };
-    same_url || same_path
+/// How precisely a target reopens what the user saw, from 7 (absolute file at
+/// a page) down to 0 (nothing usable). A kind without its own field ranks 0.
+/// Relative file paths rank 1 because they cannot be opened reliably.
+pub fn reopen_rank(target: &ReopenTarget) -> u8 {
+    match target.kind {
+        ReopenKind::FilePath => match nonempty_ref(target.file_path.as_deref()) {
+            Some(path) if path.starts_with('/') => {
+                if target.page.is_some() {
+                    7
+                } else {
+                    6
+                }
+            }
+            Some(_) => 1,
+            None => 0,
+        },
+        ReopenKind::BrowserUrl => match nonempty_ref(target.url.as_deref()) {
+            Some(url) if is_http_url(url) => {
+                if nonempty_ref(target.text_anchor.as_deref()).is_some() || target.page.is_some() {
+                    5
+                } else {
+                    4
+                }
+            }
+            _ => 0,
+        },
+        ReopenKind::AppDeepLink => {
+            if nonempty_ref(target.app_deep_link.as_deref()).is_some() {
+                3
+            } else {
+                0
+            }
+        }
+        ReopenKind::AppBundle => {
+            if nonempty_ref(target.app_bundle_id.as_deref()).is_some() {
+                2
+            } else {
+                0
+            }
+        }
+        ReopenKind::Unknown => 0,
+    }
 }
 
-/// Keep a page across a merge only when both records name the same URL or the
-/// same file. Otherwise the incoming page wins so a page from one document
-/// cannot land on another.
-pub fn merge_reopen_page(
-    incoming_url: Option<&str>,
-    incoming_path: Option<&str>,
-    incoming_page: Option<u32>,
-    existing_url: Option<&str>,
-    existing_path: Option<&str>,
-    existing_page: Option<u32>,
-) -> Option<u32> {
-    if same_reopen_document(incoming_url, incoming_path, existing_url, existing_path) {
-        incoming_page.or(existing_page)
+impl ReopenTarget {
+    /// Keeps only the fields the kind reopens with, plus app name and metadata.
+    pub fn normalized(self) -> Self {
+        let mut out = ReopenTarget {
+            kind: self.kind.clone(),
+            app_name: self.app_name,
+            captured_at_ms: self.captured_at_ms,
+            confidence: self.confidence,
+            validation_status: self.validation_status,
+            ..Default::default()
+        };
+        match self.kind {
+            ReopenKind::BrowserUrl => {
+                out.url = self.url;
+                out.page = self.page;
+                out.text_anchor = self.text_anchor;
+            }
+            ReopenKind::FilePath => {
+                out.file_path = self.file_path;
+                out.page = self.page;
+            }
+            ReopenKind::AppBundle => out.app_bundle_id = self.app_bundle_id,
+            ReopenKind::AppDeepLink => out.app_deep_link = self.app_deep_link,
+            ReopenKind::Unknown => {}
+        }
+        out
+    }
+}
+
+/// Keeps the whole higher-ranked target so the kind and its fields always come
+/// from the same capture. On a tie the newer capture wins; equal times go to
+/// the incoming target.
+pub fn merge_reopen_targets(incoming: ReopenTarget, existing: ReopenTarget) -> ReopenTarget {
+    let incoming_rank = reopen_rank(&incoming);
+    let existing_rank = reopen_rank(&existing);
+    let keep_existing = existing_rank > incoming_rank
+        || (existing_rank == incoming_rank && existing.captured_at_ms > incoming.captured_at_ms);
+    if keep_existing {
+        existing.normalized()
     } else {
-        incoming_page
+        incoming.normalized()
     }
 }
 
@@ -454,22 +507,182 @@ pub fn url_with_text_anchor(url: &str, anchor: &str) -> String {
     format!("{url}#:~:text={}", encode_text_fragment(anchor))
 }
 
-/// Incoming passage wins. The existing one is kept only for the same URL or file.
-pub fn merge_reopen_text_anchor(
-    incoming_url: Option<&str>,
-    incoming_path: Option<&str>,
-    incoming_anchor: Option<&str>,
-    existing_url: Option<&str>,
-    existing_path: Option<&str>,
-    existing_anchor: Option<&str>,
-) -> Option<String> {
-    let incoming = nonempty_ref(incoming_anchor).map(str::to_string);
-    let existing = nonempty_ref(existing_anchor).map(str::to_string);
-    if same_reopen_document(incoming_url, incoming_path, existing_url, existing_path) {
-        incoming.or(existing)
-    } else {
-        incoming
+/// What happened when FNDR tried to reopen a memory. Shared by IPC, MCP, and
+/// the Vault one-line status so every surface can say the same thing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReopenOutcome {
+    Opened,
+    OpenedMoved {
+        new_path: String,
+    },
+    Missing {
+        path: String,
+    },
+    DriveNotConnected {
+        volume: String,
+        path: String,
+    },
+    AppMissing {
+        bundle_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_name: Option<String>,
+    },
+    AppOnly {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_name: Option<String>,
+    },
+    Blocked {
+        target: String,
+    },
+    NoTarget,
+}
+
+/// External-drive root (`/Volumes/<name>`) when `path` lives on one.
+pub fn volume_root(path: &Path) -> Option<PathBuf> {
+    let mut comps = path.components();
+    match (comps.next(), comps.next(), comps.next()) {
+        (
+            Some(Component::RootDir),
+            Some(Component::Normal(volumes)),
+            Some(Component::Normal(name)),
+        ) if volumes == "Volumes" && !name.is_empty() => Some(PathBuf::from("/Volumes").join(name)),
+        _ => None,
     }
+}
+
+pub fn volume_is_disconnected(path: &Path) -> bool {
+    volume_root(path).is_some_and(|root| !root.exists())
+}
+
+fn is_trash_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component.as_os_str().to_str(), Some(".Trash" | ".Trashes")))
+}
+
+fn shared_component_prefix_len(left: &Path, right: &Path) -> usize {
+    left.components()
+        .zip(right.components())
+        .take_while(|(a, b)| a == b)
+        .count()
+}
+
+/// Exact file-name match, skipping Trash and the original path. Ties go to
+/// the folder that shares the longest prefix with the original parent, then
+/// to the newest modified time.
+pub fn pick_moved_file(original: &Path, candidates: &[PathBuf]) -> Option<PathBuf> {
+    let original_name = original.file_name()?;
+    let original_parent = original.parent().unwrap_or(original);
+    let mut best: Option<(usize, SystemTime, PathBuf)> = None;
+    for candidate in candidates {
+        if candidate == original || is_trash_path(candidate) {
+            continue;
+        }
+        if candidate.file_name() != Some(original_name) || !candidate.is_file() {
+            continue;
+        }
+        let prefix = shared_component_prefix_len(
+            original_parent,
+            candidate.parent().unwrap_or(candidate.as_path()),
+        );
+        let modified = std::fs::metadata(candidate)
+            .and_then(|meta| meta.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let better = match &best {
+            None => true,
+            Some((best_prefix, best_mtime, _)) => {
+                prefix > *best_prefix || (prefix == *best_prefix && modified > *best_mtime)
+            }
+        };
+        if better {
+            best = Some((prefix, modified, candidate.clone()));
+        }
+    }
+    best.map(|(_, _, path)| path)
+}
+
+/// Schemes FNDR must never hand to `open`.
+pub fn is_blocked_scheme(target: &str) -> bool {
+    let scheme = target
+        .trim()
+        .split_once(':')
+        .map(|(head, _)| head)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        scheme.as_str(),
+        "javascript" | "data" | "file" | "about" | "chrome" | "edge" | "brave"
+    )
+}
+
+const REVEAL_ONLY_EXTENSIONS: &[&str] = &["dmg", "pkg", "mpkg", "app", "command"];
+const QUARANTINE_XATTR: &str = "com.apple.quarantine";
+
+/// Installers, app bundles, and quarantined executables must be revealed in
+/// Finder instead of launched (RE-09 / R35).
+pub fn should_reveal_in_finder(path: &Path) -> bool {
+    if extension_is_reveal_only(path) {
+        return true;
+    }
+    has_quarantine_xattr(path) && is_unix_executable(path)
+}
+
+fn extension_is_reveal_only(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| REVEAL_ONLY_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+fn is_unix_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|meta| meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+fn has_quarantine_xattr(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        xattr_exists(path, QUARANTINE_XATTR)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn xattr_exists(path: &Path, name: &str) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let Ok(c_name) = CString::new(name) else {
+        return false;
+    };
+    let size = unsafe {
+        libc::getxattr(
+            c_path.as_ptr(),
+            c_name.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+        )
+    };
+    size > 0
 }
 
 pub fn serialize_reopen_target(target: &ReopenTarget) -> String {
@@ -806,45 +1019,185 @@ mod tests {
         );
     }
 
+    fn target(kind: ReopenKind, captured_at_ms: i64) -> ReopenTarget {
+        ReopenTarget {
+            kind,
+            captured_at_ms,
+            ..Default::default()
+        }
+    }
+
+    fn file_target(path: &str, page: Option<u32>) -> ReopenTarget {
+        ReopenTarget {
+            file_path: Some(path.into()),
+            page,
+            ..target(ReopenKind::FilePath, AT)
+        }
+    }
+
+    fn url_target(url: &str, text_anchor: Option<&str>) -> ReopenTarget {
+        ReopenTarget {
+            url: Some(url.into()),
+            text_anchor: text_anchor.map(str::to_string),
+            ..target(ReopenKind::BrowserUrl, AT)
+        }
+    }
+
+    /// One target per rank, highest first.
+    fn one_target_per_rank() -> Vec<(u8, ReopenTarget)> {
+        vec![
+            (7, file_target("/Users/qa/doc.pdf", Some(112))),
+            (6, file_target("/Users/qa/doc.pdf", None)),
+            (
+                5,
+                url_target("https://example.com/a", Some("a passage on the page")),
+            ),
+            (4, url_target("https://example.com/a", None)),
+            (
+                3,
+                ReopenTarget {
+                    app_deep_link: Some("notion://page/abc".into()),
+                    ..target(ReopenKind::AppDeepLink, AT)
+                },
+            ),
+            (
+                2,
+                ReopenTarget {
+                    app_bundle_id: Some("com.google.Chrome".into()),
+                    ..target(ReopenKind::AppBundle, AT)
+                },
+            ),
+            (1, file_target("plan.md", None)),
+            (0, target(ReopenKind::Unknown, AT)),
+        ]
+    }
+
     #[test]
-    fn merge_reopen_page_keeps_page_only_on_the_same_document() {
+    fn reopen_rank_orders_targets_by_specificity() {
+        for (expected, sample) in one_target_per_rank() {
+            assert_eq!(reopen_rank(&sample), expected, "{sample:?}");
+        }
+        let browser_pdf_page = ReopenTarget {
+            page: Some(3),
+            ..url_target("https://example.com/a.pdf", None)
+        };
+        assert_eq!(reopen_rank(&browser_pdf_page), 5);
         assert_eq!(
-            merge_reopen_page(
-                Some("https://example.com/a.pdf"),
-                None,
-                Some(3),
-                Some("https://example.com/a.pdf"),
-                None,
-                Some(2),
-            ),
-            Some(3)
+            reopen_rank(&file_target("en.wikipedia.org/wiki/Nitrogen", None)),
+            1
         );
+        assert_eq!(reopen_rank(&file_target("   ", None)), 0);
+        assert_eq!(reopen_rank(&target(ReopenKind::BrowserUrl, AT)), 0);
+        assert_eq!(reopen_rank(&url_target("javascript:alert(1)", None)), 0);
+        assert_eq!(reopen_rank(&target(ReopenKind::AppBundle, AT)), 0);
+        assert_eq!(reopen_rank(&target(ReopenKind::AppDeepLink, AT)), 0);
+    }
+
+    #[test]
+    fn merge_reopen_targets_keeps_the_higher_rank_for_every_pair() {
+        let samples = one_target_per_rank();
+        for (incoming_rank, incoming) in &samples {
+            for (existing_rank, existing) in &samples {
+                if incoming_rank == existing_rank {
+                    continue;
+                }
+                let merged = merge_reopen_targets(incoming.clone(), existing.clone());
+                let winner = if incoming_rank > existing_rank {
+                    incoming
+                } else {
+                    existing
+                };
+                let label =
+                    format!("incoming rank {incoming_rank} vs existing rank {existing_rank}");
+                assert_eq!(merged.kind, winner.kind, "{label}");
+                assert_eq!(
+                    reopen_rank(&merged),
+                    (*incoming_rank).max(*existing_rank),
+                    "{label}"
+                );
+                assert_eq!(merged.url, winner.url, "{label}");
+                assert_eq!(merged.file_path, winner.file_path, "{label}");
+                assert_eq!(merged.page, winner.page, "{label}");
+            }
+        }
+    }
+
+    #[test]
+    fn merge_reopen_targets_prefers_the_newer_target_on_a_tie() {
+        let older = ReopenTarget {
+            captured_at_ms: 1,
+            ..url_target("https://example.com/older", None)
+        };
+        let newer = ReopenTarget {
+            captured_at_ms: 2,
+            ..url_target("https://example.com/newer", None)
+        };
+        for (incoming, existing) in [
+            (newer.clone(), older.clone()),
+            (older.clone(), newer.clone()),
+        ] {
+            let merged = merge_reopen_targets(incoming, existing);
+            assert_eq!(merged.url.as_deref(), Some("https://example.com/newer"));
+        }
+
+        let same_time_incoming = url_target("https://example.com/incoming", None);
+        let same_time_existing = url_target("https://example.com/existing", None);
+        let merged = merge_reopen_targets(same_time_incoming, same_time_existing);
+        assert_eq!(merged.url.as_deref(), Some("https://example.com/incoming"));
+    }
+
+    #[test]
+    fn merge_reopen_targets_keeps_the_whole_winner_including_its_passage() {
+        let incoming = url_target("https://example.com/a", None);
+        let existing = url_target("https://example.com/a", Some("existing passage stays here"));
+        let merged = merge_reopen_targets(incoming, existing);
         assert_eq!(
-            merge_reopen_page(
-                Some("https://example.com/a.pdf"),
-                None,
-                None,
-                Some("https://example.com/a.pdf"),
-                None,
-                Some(2),
-            ),
-            Some(2)
+            merged.text_anchor.as_deref(),
+            Some("existing passage stays here")
         );
-        assert_eq!(
-            merge_reopen_page(
-                None,
-                Some("/tmp/a.pdf"),
-                Some(9),
-                None,
-                Some("/tmp/b.pdf"),
-                Some(2),
-            ),
-            Some(9)
-        );
-        assert_eq!(
-            merge_reopen_page(None, None, Some(9), None, None, Some(2)),
-            Some(9)
-        );
+
+        let incoming_app = ReopenTarget {
+            app_bundle_id: Some("com.apple.Preview".into()),
+            ..target(ReopenKind::AppBundle, AT + 10)
+        };
+        let merged =
+            merge_reopen_targets(incoming_app, file_target("/Users/qa/doc.pdf", Some(112)));
+        assert_eq!(merged.kind, ReopenKind::FilePath);
+        assert_eq!(merged.file_path.as_deref(), Some("/Users/qa/doc.pdf"));
+        assert_eq!(merged.page, Some(112));
+        assert_eq!(merged.app_bundle_id, None);
+    }
+
+    #[test]
+    fn merge_reopen_targets_drops_fields_that_do_not_belong_to_the_kind() {
+        let app_with_stray_file = ReopenTarget {
+            app_bundle_id: Some("com.google.Chrome".into()),
+            app_name: Some("Google Chrome".into()),
+            file_path: Some("en.wikipedia.org/wiki/Nitrogen".into()),
+            url: Some("https://stale.example".into()),
+            page: Some(4),
+            text_anchor: Some("stale passage".into()),
+            ..target(ReopenKind::AppBundle, AT)
+        };
+        let merged = merge_reopen_targets(app_with_stray_file, target(ReopenKind::Unknown, AT));
+        assert_eq!(merged.kind, ReopenKind::AppBundle);
+        assert_eq!(merged.app_bundle_id.as_deref(), Some("com.google.Chrome"));
+        assert_eq!(merged.app_name.as_deref(), Some("Google Chrome"));
+        assert_eq!(merged.file_path, None);
+        assert_eq!(merged.url, None);
+        assert_eq!(merged.page, None);
+        assert_eq!(merged.text_anchor, None);
+
+        let file_with_stray_url = ReopenTarget {
+            url: Some("https://stale.example".into()),
+            text_anchor: Some("stale passage".into()),
+            ..file_target("/Users/qa/doc.pdf", Some(2))
+        };
+        let normalized = file_with_stray_url.normalized();
+        assert_eq!(normalized.file_path.as_deref(), Some("/Users/qa/doc.pdf"));
+        assert_eq!(normalized.page, Some(2));
+        assert_eq!(normalized.url, None);
+        assert_eq!(normalized.text_anchor, None);
     }
 
     #[test]
@@ -945,57 +1298,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_reopen_text_anchor_keeps_passage_only_on_the_same_document() {
-        assert_eq!(
-            merge_reopen_text_anchor(
-                Some("https://example.com/a"),
-                None,
-                Some("incoming passage wins here"),
-                Some("https://example.com/a"),
-                None,
-                Some("existing passage stays"),
-            )
-            .as_deref(),
-            Some("incoming passage wins here")
-        );
-        assert_eq!(
-            merge_reopen_text_anchor(
-                Some("https://example.com/a"),
-                None,
-                None,
-                Some("https://example.com/a"),
-                None,
-                Some("existing passage stays"),
-            )
-            .as_deref(),
-            Some("existing passage stays")
-        );
-        assert_eq!(
-            merge_reopen_text_anchor(
-                Some("https://example.com/b"),
-                None,
-                Some("incoming only"),
-                Some("https://example.com/a"),
-                None,
-                Some("existing passage stays"),
-            )
-            .as_deref(),
-            Some("incoming only")
-        );
-        assert_eq!(
-            merge_reopen_text_anchor(
-                Some("https://example.com/b"),
-                None,
-                None,
-                Some("https://example.com/a"),
-                None,
-                Some("existing passage stays"),
-            ),
-            None
-        );
-    }
-
-    #[test]
     fn reopen_target_text_anchor_round_trips() {
         let mut target = build_reopen_target(
             Some("https://example.com/article"),
@@ -1007,5 +1309,234 @@ mod tests {
         target.text_anchor = Some("Nitrogen is a chemical element with the symbol".into());
         let restored = deserialize_reopen_target(&serialize_reopen_target(&target)).expect("json");
         assert_eq!(restored.text_anchor, target.text_anchor);
+    }
+
+    #[test]
+    fn reopen_outcome_serde_shape_is_pinned() {
+        let cases: &[(&str, ReopenOutcome)] = &[
+            (r#"{"kind":"opened"}"#, ReopenOutcome::Opened),
+            (
+                r#"{"kind":"opened_moved","new_path":"/Users/qa/moved.pdf"}"#,
+                ReopenOutcome::OpenedMoved {
+                    new_path: "/Users/qa/moved.pdf".into(),
+                },
+            ),
+            (
+                r#"{"kind":"missing","path":"/Users/qa/gone.pdf"}"#,
+                ReopenOutcome::Missing {
+                    path: "/Users/qa/gone.pdf".into(),
+                },
+            ),
+            (
+                r#"{"kind":"drive_not_connected","volume":"RE07USB","path":"/Volumes/RE07USB/doc.pdf"}"#,
+                ReopenOutcome::DriveNotConnected {
+                    volume: "RE07USB".into(),
+                    path: "/Volumes/RE07USB/doc.pdf".into(),
+                },
+            ),
+            (
+                r#"{"kind":"app_missing","bundle_id":"com.example.Gone"}"#,
+                ReopenOutcome::AppMissing {
+                    bundle_id: "com.example.Gone".into(),
+                    app_name: None,
+                },
+            ),
+            (
+                r#"{"kind":"app_only","app_name":"Preview"}"#,
+                ReopenOutcome::AppOnly {
+                    app_name: Some("Preview".into()),
+                },
+            ),
+            (
+                r#"{"kind":"blocked","target":"chrome://settings"}"#,
+                ReopenOutcome::Blocked {
+                    target: "chrome://settings".into(),
+                },
+            ),
+            (r#"{"kind":"no_target"}"#, ReopenOutcome::NoTarget),
+        ];
+        for (json, value) in cases {
+            assert_eq!(serde_json::to_string(value).expect("ser"), *json, "{json}");
+            assert_eq!(
+                serde_json::from_str::<ReopenOutcome>(json).expect("de"),
+                *value,
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn volume_root_only_matches_external_volumes() {
+        let cases: &[(&str, Option<&str>)] = &[
+            ("/Volumes/RE07USB/docs/a.pdf", Some("/Volumes/RE07USB")),
+            ("/Volumes/RE07USB", Some("/Volumes/RE07USB")),
+            ("/Users/qa/a.pdf", None),
+            ("/Volumes", None),
+            ("report.pdf", None),
+            ("", None),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                volume_root(Path::new(path)).as_deref(),
+                expected.map(Path::new),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_blocked_scheme_rejects_browser_internal_and_script_urls() {
+        let blocked = [
+            "javascript:alert(1)",
+            "DATA:text/html,hi",
+            "file:///Users/qa/page.html",
+            "about:blank",
+            "chrome://settings",
+            " edge://flags ",
+            "brave://settings",
+        ];
+        for target in blocked {
+            assert!(is_blocked_scheme(target), "{target}");
+        }
+        for target in [
+            "https://example.com",
+            "http://example.com",
+            "notion://page/abc",
+        ] {
+            assert!(!is_blocked_scheme(target), "{target}");
+        }
+    }
+
+    #[test]
+    fn pick_moved_file_skips_trash_and_original_and_ranks_by_folder_then_mtime() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let original = root.path().join("original").join("report.pdf");
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::write(&original, b"orig").unwrap();
+
+        let trash = root.path().join(".Trash").join("report.pdf");
+        std::fs::create_dir_all(trash.parent().unwrap()).unwrap();
+        std::fs::write(&trash, b"trash").unwrap();
+
+        let similar = root.path().join("elsewhere").join("report (1).pdf");
+        std::fs::create_dir_all(similar.parent().unwrap()).unwrap();
+        std::fs::write(&similar, b"similar").unwrap();
+
+        let closer = root
+            .path()
+            .join("original")
+            .join("moved")
+            .join("report.pdf");
+        std::fs::create_dir_all(closer.parent().unwrap()).unwrap();
+        std::fs::write(&closer, b"closer").unwrap();
+
+        let farther = root.path().join("elsewhere").join("report.pdf");
+        std::fs::create_dir_all(farther.parent().unwrap()).unwrap();
+        std::fs::write(&farther, b"farther").unwrap();
+
+        let picked = pick_moved_file(
+            &original,
+            &[
+                original.clone(),
+                trash,
+                similar,
+                farther.clone(),
+                closer.clone(),
+            ],
+        );
+        assert_eq!(picked.as_deref(), Some(closer.as_path()));
+
+        let older = root.path().join("tie-a").join("report.pdf");
+        let newer = root.path().join("tie-b").join("report.pdf");
+        std::fs::create_dir_all(older.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(newer.parent().unwrap()).unwrap();
+        std::fs::write(&older, b"older").unwrap();
+        std::fs::write(&newer, b"newer").unwrap();
+        let old_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let new_time = old_time + std::time::Duration::from_secs(60);
+        std::fs::File::open(&older)
+            .unwrap()
+            .set_modified(old_time)
+            .unwrap();
+        std::fs::File::open(&newer)
+            .unwrap()
+            .set_modified(new_time)
+            .unwrap();
+        let original_gone = root.path().join("missing-folder").join("report.pdf");
+        let picked = pick_moved_file(&original_gone, &[older, newer.clone()]);
+        assert_eq!(picked.as_deref(), Some(newer.as_path()));
+    }
+
+    #[test]
+    fn pick_moved_file_returns_none_when_nothing_usable() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let original = root.path().join("gone.pdf");
+        let trash = root.path().join(".Trashes").join("gone.pdf");
+        std::fs::create_dir_all(trash.parent().unwrap()).unwrap();
+        std::fs::write(&trash, b"trash").unwrap();
+        assert_eq!(pick_moved_file(&original, &[trash, original.clone()]), None);
+        assert_eq!(pick_moved_file(&original, &[]), None);
+    }
+
+    #[test]
+    fn should_reveal_installer_and_script_extensions_r35() {
+        for name in [
+            "/tmp/Setup.dmg",
+            "/tmp/Setup.pkg",
+            "/tmp/Setup.mpkg",
+            "/tmp/Setup.PKG",
+            "/tmp/App.app",
+            "/tmp/run.command",
+        ] {
+            assert!(
+                should_reveal_in_finder(Path::new(name)),
+                "expected reveal-only for {name}"
+            );
+        }
+        assert!(!should_reveal_in_finder(Path::new("/tmp/report.pdf")));
+        assert!(!should_reveal_in_finder(Path::new("/tmp/notes.txt")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn should_reveal_quarantined_executable_but_not_quarantined_pdf() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf = dir.path().join("report.pdf");
+        let binary = dir.path().join("installer");
+        std::fs::write(&pdf, b"%PDF").unwrap();
+        std::fs::write(&binary, b"#!/bin/sh\necho hi\n").unwrap();
+        let mut perms = std::fs::metadata(&binary).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&binary, perms).unwrap();
+
+        let quarantine = b"0081;00000000;Chrome;00000000";
+        for path in [&pdf, &binary] {
+            let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+            let c_name = CString::new(QUARANTINE_XATTR).unwrap();
+            let rc = unsafe {
+                libc::setxattr(
+                    c_path.as_ptr(),
+                    c_name.as_ptr(),
+                    quarantine.as_ptr() as *const libc::c_void,
+                    quarantine.len(),
+                    0,
+                    0,
+                )
+            };
+            assert_eq!(rc, 0, "setxattr failed for {}", path.display());
+        }
+
+        assert!(
+            !should_reveal_in_finder(&pdf),
+            "quarantined PDF should still open"
+        );
+        assert!(
+            should_reveal_in_finder(&binary),
+            "quarantined executable should reveal"
+        );
     }
 }

@@ -13,6 +13,7 @@ import {
     type GraphNode,
     type NeedsSignalCard,
 } from "@/shared/ipc/tauri";
+import { reopenOutcomeMessage } from "@/shared/reopenOutcome";
 import "./MemoryCardsPanel.css";
 import { InsightLayers } from "./InsightLayers";
 import { KnowledgeGraph } from "./KnowledgeGraph";
@@ -107,17 +108,6 @@ function matchesFilters(
     return perspectiveFilter === PERSPECTIVE_FILTER_ALL || matchesPerspective(card, perspectiveFilter);
 }
 
-async function handleReopen(memoryId: string) {
-    try {
-        const opened = await reopenMemory(memoryId);
-        if (!opened) {
-            console.warn("No reopen target available for memory", memoryId);
-        }
-    } catch (err) {
-        console.warn("Reopen command failed", err);
-    }
-}
-
 export function MemoryCardsPanel({
     isVisible,
     onClose,
@@ -178,6 +168,7 @@ export function MemoryCardsPanel({
     const [similarActivityById, setSimilarActivityById] = useState<Record<string, ActivityTraceSnapshot>>({});
     /** Currently-expanded card id (one modal at a time). */
     const [openExpandedId, setOpenExpandedId] = useState<string | null>(null);
+    const [reopenStatusById, setReopenStatusById] = useState<Record<string, string>>({});
     const dialogRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
     useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
@@ -407,6 +398,22 @@ export function MemoryCardsPanel({
             return false;
         } finally {
             setDeletingId(null);
+        }
+    };
+
+    const handleReopen = async (memoryId: string) => {
+        try {
+            const outcome = await reopenMemory(memoryId);
+            setReopenStatusById((previous) => ({
+                ...previous,
+                [memoryId]: reopenOutcomeMessage(outcome),
+            }));
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            setReopenStatusById((previous) => ({
+                ...previous,
+                [memoryId]: `Could not open: ${message}`,
+            }));
         }
     };
 
@@ -1143,6 +1150,7 @@ export function MemoryCardsPanel({
                         }}
                         onOpenRelated={(id) => setOpenExpandedId(id)}
                         onReopen={(c) => void handleReopen(c.id)}
+                        reopenStatus={reopenStatusById[expandedCard.id] ?? null}
                     />
                 );
             })()}

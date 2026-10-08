@@ -103,6 +103,79 @@ Opening that Chrome URL with `#:~:text=` scrolls and highlights the passage in C
 
 Unit tests: `cd src-tauri && cargo test --lib reopen` and `cargo test --lib semantic`.
 
+## RE-06 follow-up (2026-10-05)
+
+A merge now keeps one whole reopen target instead of merging each field on its own, so the stored kind and its fields always come from the same capture. The higher rank wins. On a tie the newer `reopen_captured_at_ms` wins, and equal times go to the incoming record. The winner keeps only its own kind's fields plus app name and metadata, so a stray file path cannot ride along on an app target.
+
+| Rank | Target |
+|---|---|
+| 7 | Absolute file path with a page |
+| 6 | Absolute file path |
+| 5 | http(s) URL with a passage or page |
+| 4 | http(s) URL |
+| 3 | App deep link |
+| 2 | App bundle id |
+| 1 | Relative file path |
+| 0 | Unknown, or a kind missing its own field |
+
+The R36 card (`app_bundle` with a stray `en.wikipedia.org/wiki/Nitrogen` file path) merged with a Chrome `browser_url` capture now stores `browser_url` and no file path. A Preview file at page 112 stays a file target when a newer app-only frame merges in. Two captures of the same URL keep the existing passage when the incoming one has none.
+
+Unit tests: `cd src-tauri && cargo test --lib reopen` (44 passed) and `cargo test --lib merge` (18 passed). `make test`: typecheck, 353 frontend tests, and 818 Rust lib tests pass. The only failure is `capture_fixtures::ocr_plus_cleanup_stays_within_each_fixtures_cer_budget`, an OCR accuracy budget unrelated to reopen that also failed before this change.
+
+## RE-07 follow-up (2026-10-05)
+
+`reopen_memory` now returns a tagged `ReopenOutcome` instead of `bool` / a thrown string. Before opening, `plan_reopen` checks the stored target:
+
+| Outcome | When |
+|---|---|
+| `opened` | http(s) URL, allowed deep link, or a file that is still at the stored path (including an iCloud placeholder) |
+| `opened_moved` | Stored file is gone; Spotlight `mdfind -name` found an exact-name match (Trash skipped; longest shared folder prefix, then newest mtime) |
+| `missing` | File gone, no usable Spotlight hit, or a relative path |
+| `drive_not_connected` | Path is under `/Volumes/<name>` and that volume folder is gone |
+| `app_only` | Bundle id is installed (`NSWorkspace`); FNDR still opens the app |
+| `app_missing` | Bundle id is not installed; nothing is launched |
+| `blocked` | `javascript:`, `data:`, `file:`, `about:`, `chrome:`, `edge:`, `brave:` |
+| `no_target` | Nothing to resolve |
+
+The Vault expanded card shows that one line under **Open source**. The stored path is not rewritten on `opened_moved`.
+
+Live checks (synthetic files only; no memory text):
+
+| Row | Stimulus | Result |
+|---|---|---|
+| R21 | Unique `fndr-re07-*.txt` on Desktop, then moved to Documents | Spotlight indexed the Desktop copy, then the Documents copy after the move. Exact-name pick would open the Documents file and report `opened_moved`. |
+| R22 | Temp file deleted | Path does not exist; `plan_reopen` returns `missing` with no lookup success. |
+| R23 | 5 MB APFS disk image volume `FndrRe07Vol`, file on it, then `hdiutil detach` | `/Volumes/FndrRe07Vol` gone; `drive_not_connected` with volume `FndrRe07Vol`. |
+| R24 | New file in iCloud Drive, `brctl evict` | brctl refused (`NSFileProviderErrorDomain -2008`, file cannot be evicted). File still existed on disk, so reopen is `opened` (same as a placeholder: `exists()` is true and `open` can materialize). |
+| R29 | `NSWorkspace` lookup | `com.apple.Preview` installed; `com.fndr.re07.missingapp` not installed → `app_missing`. |
+
+Unit tests: `cd src-tauri && cargo test --lib reopen`; frontend `npx vitest run src/shared/reopenOutcome.test.ts` and `ExpandedMemoryCard.test.tsx`.
+
+## RE-08 follow-up (2026-10-07)
+
+Download memories now store a file reopen target, a credential-stripped source URL from `kMDItemWhereFroms`, and a link to the browser memory from the two minutes before the file settled. The watcher no longer uses a 10 s debounce. A `DownloadSettler` waits until the size is stable for 3 s, no `.crdownload` / `.part` / `.download` sibling remains, and `flush_interval_secs + 15 s` has passed so the page memory is likely flushed. Partial names and zero-byte placeholders never produce a row. `report.pdf` and `report (1).pdf` are separate paths, so each gets its own memory.
+
+Source URL rule: use `kMDItemWhereFroms[1]` (referring page) when it is http(s); otherwise use `[0]` with its query and fragment dropped, then `strip_url_credentials`. Copied files with no WhereFroms stay a file target with no page link.
+
+`normalize_record_for_index` keeps `FilePath` even when `url` is set, so reopen opens the file rather than the page.
+
+Live check (2026-10-07, reopen QA profile, `tauri dev`, Chrome): a synthetic local page (`http://127.0.0.1:8765/notes.html`) auto-downloaded a ~320 KB PDF twice, streamed over ~12 s each time. Results:
+
+- Chrome wrote `Unconfirmed NNNNNN.crdownload` (not `<name>.crdownload`) during the transfer, then renamed it. No row was created for the temp name.
+- Each final file was ingested once, 45 s after it settled: `fndr-re08-live.pdf` and `fndr-re08-live (1).pdf` got separate `tracker` rows with `reopen_kind = file_path`.
+- Both rows store `url` = the referring page (not the PDF URL) and `related_memory_ids` = the Chrome page memory, which was captured 74 s before the first ingest.
+- The Open file / Open source buttons were not clicked in the UI; `plan_reopen` covers that path in unit tests.
+
+Unit tests: `cd src-tauri && cargo test --lib downloads` (18 passed) and `cargo test --lib reopen` / `cargo test --lib plan_reopen`. `make test`: typecheck, 355 frontend tests, and 854 Rust lib tests pass. The only failure is `capture_fixtures::ocr_plus_cleanup_stays_within_each_fixtures_cer_budget`, an OCR accuracy budget unrelated to reopen that also failed before this change.
+
+R31 (Safari auto-unzip) and R34 (rename in Finder) are unchanged and out of scope.
+
+## RE-09 follow-up (2026-10-07)
+
+Landed on the same branch as RE-08 so a `.pkg` / `.dmg` / `.app` / `.command` download is never passed to `open` without `-R`. `should_reveal_in_finder` is true for those extensions (any case) and for a quarantined unix-executable with no installer extension. A quarantined PDF still opens. `open_path_with_system` uses `open -R`. MCP `fndr.open_target` still does not launch; it now returns `reveal_only` so the same rule is visible there until RE-12 routes through `reopen_memory`.
+
+Unit tests: `should_reveal_installer_and_script_extensions_r35`, `should_reveal_quarantined_executable_but_not_quarantined_pdf`, `plan_reopen_existing_pkg_stays_opened_and_is_reveal_only_r35`.
+
 ## Matrix
 
 | Row | Scenario | Expected target | Expected reopen | Stored target | Reopen result | Build | Date | Notes |
@@ -127,22 +200,22 @@ Unit tests: `cd src-tauri && cargo test --lib reopen` and `cargo test --lib sema
 | R18 | Unsaved TextEdit document | App only, labeled unsaved | App opens, honest label | `file_path` `re-01_reopen_qa_matrix_….plan.md` (relative, not the unsaved doc); no unsaved label | wrong | `123cd75` | 2026-09-28 | LLM `files_touched` beat an honest app-only/unsaved target. `build_reopen_target` then `open` would hit `canonicalize_relaxed` “no longer exists.” |
 | R19 | VS Code file | File path (and `vscode://file/...:line` if derivable) | File opens in VS Code | Capture context: title `re03-notes.txt`, no `AXDocument` | app only | `a569e48`+RE-03 | 2026-10-01 | VS Code does not expose `AXDocument`; title has the file name only. Moved to RE-10 (not an RE-03 row). |
 | R20 | Finder window | Folder path | Folder revealed | `file_path` same relative plan filename, not the folder | wrong | `123cd75` | 2026-09-28 | Snippet mentioned the fixtures folder; stored reopen path did not. |
-| R21 | File moved after capture | Found again by name | Opens from new location, UI says moved | No durable absolute path to move | error | `123cd75` | 2026-09-28 | `reopen_memory` has no Spotlight lookup. Missing path → `File path no longer exists` (`memory.rs` `canonicalize_relaxed`). |
-| R22 | File deleted after capture | Stored path | Clear "no longer exists," memory still readable | Relative junk path | error | `123cd75` | 2026-09-28 | IPC can error; UI `handleReopen` only `console.warn`. Memory row would remain. |
-| R23 | File on an unmounted external drive | Stored path | Clear "drive not connected" | | not available | `123cd75` | 2026-09-28 | No external drive in this run |
-| R24 | iCloud file evicted from the Mac | Stored path | Opens and downloads, or clear message | | not available | `123cd75` | 2026-09-28 | No iCloud eviction fixture |
+| R21 | File moved after capture | Found again by name | Opens from new location, UI says moved | Absolute path that is then moved | opened_moved | RE-07 | 2026-10-05 | Spotlight exact-name lookup; UI: "File was moved. Opened it from …". See RE-07 section. |
+| R22 | File deleted after capture | Stored path | Clear "no longer exists," memory still readable | Absolute path then deleted | missing | RE-07 | 2026-10-05 | Outcome `missing`; Vault status line; memory is not deleted. Relative paths are also `missing` and skip Spotlight. |
+| R23 | File on an unmounted external drive | Stored path | Clear "drive not connected" | `/Volumes/FndrRe07Vol/doc.pdf` after detach | drive_not_connected | RE-07 | 2026-10-05 | Synthetic APFS disk image stood in for an external drive. UI: "Connect the drive FndrRe07Vol to open this file." |
+| R24 | iCloud file evicted from the Mac | Stored path | Opens and downloads, or clear message | iCloud Drive file still on disk | opened (placeholder / unevictable new file) | RE-07 | 2026-10-05 | `brctl evict` refused a brand-new file. Present iCloud/placeholder files `exists()` and reopen as `opened`. |
 | R25 | Path with spaces, accents, emoji | Stored exactly | Opens | `file_path` `…/re03-fixtures/café 📁/report (2) ✨.pdf` (decomposed accent, as macOS reports it) | exact | `a569e48`+RE-03 | 2026-10-01 | Preview. Stored path exists and opens. Full `tauri dev` capture, see RE-03 section. |
 | R26 | Slack channel | App, or deep link if derivable | App or channel | | not available | `123cd75` | 2026-09-28 | Slack not in this run's target list |
 | R27 | Notion desktop page | Notion URL or `notion://` | Same page | | not available | `123cd75` | 2026-09-28 | Notion desktop not in this run's target list |
 | R28 | Zoom call | App only | App, UI says no specific target | | not available | `123cd75` | 2026-09-28 | Zoom not in this run's target list |
-| R29 | App uninstalled after capture | Stored bundle id | Clear error | Not uninstalled | n/a | `123cd75` | 2026-09-28 | Did not uninstall an app. `open_app_bundle` would `open -b` and error if the bundle is gone; UI still has no typed `AppMissing`. |
-| R30 | Chrome download of a PDF | File path, source URL, link to the page memory | PDF opens | `summary_source=tracker` Finder `app_bundle` `com.apple.finder`; snippet `Downloaded: fndr-re01-sample.pdf`; no `reopen_file_path`, no source URL, no related id | app only | `123cd75` | 2026-09-28 | `downloads.rs` `inject_download_memory` (~141) never sets `reopen_*`. Watcher used a copied PDF (same inject path as a Chrome download). |
+| R29 | App uninstalled after capture | Stored bundle id | Clear error | Bundle id with `NSWorkspace` check | app_missing when gone | RE-07 | 2026-10-05 | Preview is installed → `app_only`. Fake `com.fndr.re07.missingapp` → `app_missing`, UI: "<app> is no longer installed." Nothing launched. |
+| R30 | Chrome download of a PDF | File path, source URL, link to the page memory | PDF opens | `file_path` plus `url` from WhereFroms page; `related_memory_ids` when a browser memory matches the host in the prior 2 min | exact file (`plan_reopen` → `opened`) | RE-08 | 2026-10-07 | `build_download_record` sets `FilePath` and keeps it through `normalize_record_for_index`. xattr roundtrip stores the referring page, not the signed CDN URL. Live Chrome download (synthetic local page): `file_path` row, `url` = referring page, linked to the Chrome memory; see RE-08 section. |
 | R31 | Safari download that auto-unzips | Record what lands in Downloads | The extracted item or the archive, documented | Tracker memory for `fndr-re01-safari-unzip.zip` (archive), `app_bundle` Finder | app only | `123cd75` | 2026-09-28 | Copied zip into Downloads; Safari auto-unzip not triggered. Watcher stored the archive, not an extracted item. |
-| R32 | Download still in progress (`.crdownload`, `.download`, `.part`) | No memory until complete; exactly one after | Opens once complete | No `.crdownload` row; one tracker row after rename to `.pdf` | app only | `123cd75` | 2026-09-28 | `is_temp_file` in `downloads.rs` ignored the partial. Reopen still Finder app only. |
-| R33 | Second download with the same name (`report (1).pdf`) | Separate memory, its own path | Correct file | Separate tracker rows for `fndr-re01-report.pdf` and `fndr-re01-report (1).pdf`; neither has a file reopen path | app only | `123cd75` | 2026-09-28 | Separate memories yes; reopen cannot pick the file. |
+| R32 | Download still in progress (`.crdownload`, `.download`, `.part`) | No memory until complete; exactly one after | Opens once complete | One `file_path` memory after rename; partials never ingested | exact once complete | RE-08 | 2026-10-07 | Settler: temp extensions ignored; zero-byte + `.part` sibling never ready; growing file waits for stable size; ingest-once per path. Live: Chrome's `Unconfirmed NNNNNN.crdownload` produced no row; one row per finished file. See RE-08 section. |
+| R33 | Second download with the same name (`report (1).pdf`) | Separate memory, its own path | Correct file | Separate `file_path` rows for `report.pdf` and `report (1).pdf` | exact, each path | RE-08 | 2026-10-07 | Ingested set is keyed by the full path. Covered by `settler_duplicate_names_are_separate_paths`. Live: `fndr-re08-live.pdf` and `fndr-re08-live (1).pdf` got separate rows. |
 | R34 | Downloaded file renamed in Finder | Found again | Opens the renamed file | Extra tracker row `fndr-re01-report-renamed.pdf`; old name row remains | wrong | `123cd75` | 2026-09-28 | Watcher treated rename as a new file. No “found again” / `OpenedMoved`. |
-| R35 | `.dmg`, `.pkg`, `.app`, or `.command` download | File path | Revealed in Finder, never opened or run | Tracker `Downloaded: fndr-re01-dummy.pkg`, `app_bundle` Finder | app only | `123cd75` | 2026-09-28 | Did not execute the pkg (`open -b com.apple.finder`). Did not reveal the file. `downloads.rs` has no installer special case. |
-| R36 | Memory merged from frames with different targets | The most specific, newest target | That target | Chrome card: `reopen_kind=app_bundle` **and** `reopen_file_path=en.wikipedia.org/wiki/Nitrogen` | wrong | `123cd75` | 2026-09-28 | Field-wise merge `incoming.or(existing)` at `capture/mod.rs` ~4795. Kind and file disagree. `resolve_reopen_target` follows kind → opens Chrome, ignores the file field. |
+| R35 | `.dmg`, `.pkg`, `.app`, or `.command` download | File path | Revealed in Finder, never opened or run | `file_path` for the installer/script | reveal in Finder (`open -R`); never launched | RE-09 | 2026-10-07 | Extension list plus quarantined unix-executable. Quarantined PDF still opens. MCP returns `reveal_only` and does not launch. See RE-09 section. |
+| R36 | Memory merged from frames with different targets | The most specific, newest target | That target | Merge of the RE-01 Chrome card (`app_bundle` plus a stray file path) with a `browser_url` capture: `browser_url` `https://en.wikipedia.org/wiki/Nitrogen`, no file path | pass: reopens the URL | RE-06 | 2026-10-05 | Whole-target merge by rank (see RE-06 section). Covered by `merge_keeps_browser_target_over_app_with_stray_file_r36`. Unit-test verified, not a live capture. |
 | R37 | Memory captured before this change | Backfilled target or honest "app only" | As stored | | n/a | `123cd75` | 2026-09-28 | Fresh profile has no pre-change rows. Read path: `normalize_embed_migrate.rs` backfills `Unknown` from `url` / `files_touched` / bundle. |
 | R38 | Deleted memory | Nothing | Not reachable | Not deleted in the UI | n/a | `123cd75` | 2026-09-28 | Not exercised live. `reopen_memory` errors `Memory not found` if the id is gone. |
 | R39 | Blocklisted site | Nothing stored | Not applicable | Blocklist not changed in Settings | n/a | `123cd75` | 2026-09-28 | Default blocklist is apps (1Password, Keychain, System Settings). Skip path: `capture_context_skip_reason` + `Blocklist`. |
@@ -156,7 +229,8 @@ Unit tests: `cd src-tauri && cargo test --lib reopen` and `cargo test --lib sema
 | Browser memory is app only, no http URL | `capture/macos.rs` `read_frontmost_app_info` + `normalize_browser_document_url`; `build_reopen_target` |
 | Native doc has no file path | Accessibility not granted to the launching app, or the app exposes no `AXDocument` (VS Code); then `files_touched[0]` |
 | PDF page not stored | Preview title is total-only (`– 1 page`) or browser URL is not `.pdf`; page parsers live in `memory/reopen.rs` |
-| Download cannot reopen the file | `downloads.rs` `inject_download_memory` leaves `reopen_*` default |
+| Download cannot reopen the file | Fixed in RE-08: `build_download_record` sets `FilePath`; settler delay is `flush_interval_secs + 15 s` |
 | Kind vs file disagree after merge | `capture/mod.rs` ~4795 field-wise `or` |
-| Missing file is a thrown string, not typed UI | `ipc/commands/memory.rs` `canonicalize_relaxed` + Vault `console.warn` |
+| Missing file is a thrown string, not typed UI | Fixed in RE-07: `plan_reopen` + Vault status line |
 | Surfaces disagree | Vault vs Timeline vs omnibar vs MCP as in R41 |
+| Installer download is launched | Fixed in RE-09: `should_reveal_in_finder` + `open -R` |
