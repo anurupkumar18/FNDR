@@ -2,8 +2,8 @@
 
 use crate::graph::GraphStore;
 use crate::memory::reopen::{
-    is_blocked_scheme, pick_moved_file, url_with_pdf_page, url_with_text_anchor, volume_is_disconnected,
-    volume_root, ReopenKind, ReopenOutcome,
+    is_blocked_scheme, pick_moved_file, should_reveal_in_finder, url_with_pdf_page,
+    url_with_text_anchor, volume_is_disconnected, volume_root, ReopenKind, ReopenOutcome,
 };
 use crate::storage::Store;
 use crate::AppState;
@@ -103,13 +103,12 @@ pub async fn reopen_memory(
         &target,
         Some(ResolvedReopenTarget::FilePath(path)) if file_needs_moved_lookup(path)
     );
-    let moved_candidates = if let (true, Some(ResolvedReopenTarget::FilePath(path))) =
-        (needs_lookup, &target)
-    {
-        find_moved_file_candidates(path).await
-    } else {
-        Vec::new()
-    };
+    let moved_candidates =
+        if let (true, Some(ResolvedReopenTarget::FilePath(path))) = (needs_lookup, &target) {
+            find_moved_file_candidates(path).await
+        } else {
+            Vec::new()
+        };
 
     let plan = plan_reopen(
         target,
@@ -458,8 +457,11 @@ fn open_with_system(target: &str) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn open_path_with_system(path: &Path) -> Result<(), String> {
-    Command::new("open")
-        .arg(path)
+    let mut cmd = Command::new("open");
+    if should_reveal_in_finder(path) {
+        cmd.arg("-R");
+    }
+    cmd.arg(path)
         .spawn()
         .map_err(|err| format!("Failed to open path '{}': {}", path.display(), err))?;
     Ok(())
@@ -467,11 +469,16 @@ fn open_path_with_system(path: &Path) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn open_path_with_system(path: &Path) -> Result<(), String> {
+    let target = if should_reveal_in_finder(path) {
+        path.parent().unwrap_or(path)
+    } else {
+        path
+    };
     Command::new("cmd")
         .arg("/C")
         .arg("start")
         .arg("")
-        .arg(path)
+        .arg(target)
         .spawn()
         .map_err(|err| format!("Failed to open path '{}': {}", path.display(), err))?;
     Ok(())
@@ -479,8 +486,13 @@ fn open_path_with_system(path: &Path) -> Result<(), String> {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn open_path_with_system(path: &Path) -> Result<(), String> {
+    let target = if should_reveal_in_finder(path) {
+        path.parent().unwrap_or(path)
+    } else {
+        path
+    };
     Command::new("xdg-open")
-        .arg(path)
+        .arg(target)
         .spawn()
         .map_err(|err| format!("Failed to open path '{}': {}", path.display(), err))?;
     Ok(())
@@ -1088,6 +1100,42 @@ mod tests {
     }
 
     #[test]
+    fn plan_reopen_existing_pkg_stays_opened_and_is_reveal_only_r35() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("Setup.pkg");
+        std::fs::write(&path, b"pkg").unwrap();
+        assert!(should_reveal_in_finder(&path));
+        let result = plan(Some(R::FilePath(path.clone())), None, |_| vec![], |_| true);
+        assert_eq!(result.outcome, ReopenOutcome::Opened);
+        assert_eq!(result.action, Some(R::FilePath(path)));
+    }
+
+    #[test]
+    fn plan_reopen_opens_download_file_even_when_source_url_is_set() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("report.pdf");
+        std::fs::write(&path, b"%PDF").unwrap();
+        let path_string = path.display().to_string();
+        let record = Rec {
+            reopen_kind: ReopenKind::FilePath,
+            reopen_file_path: s(&path_string),
+            url: s("https://example.com/article"),
+            bundle_id: s("com.apple.finder"),
+            app_name: "Finder".into(),
+            summary_source: "tracker".into(),
+            ..Default::default()
+        };
+        let result = plan(
+            resolve_reopen_target(&record),
+            Some("Finder"),
+            |_| vec![],
+            |_| true,
+        );
+        assert_eq!(result.outcome, ReopenOutcome::Opened);
+        assert_eq!(result.action, Some(R::FilePath(path)));
+    }
+
+    #[test]
     fn plan_reopen_opens_an_existing_temp_file_without_lookup() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("doc.pdf");
@@ -1260,7 +1308,9 @@ mod tests {
         ] {
             let result = plan(Some(target.clone()), None, |_| vec![], |_| true);
             let expected = match target {
-                R::AppDeepLink(value) | R::BrowserUrl(value) => ReopenOutcome::Blocked { target: value },
+                R::AppDeepLink(value) | R::BrowserUrl(value) => {
+                    ReopenOutcome::Blocked { target: value }
+                }
                 other => panic!("unexpected {other:?}"),
             };
             assert_eq!(result.outcome, expected);
