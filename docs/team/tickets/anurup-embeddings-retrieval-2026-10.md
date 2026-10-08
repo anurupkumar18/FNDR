@@ -17,6 +17,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 2. Classify the misses: summary absent from the embedding text, near-duplicates crowding the top five, keyword route miss, or score under the bar.
 3. Fix the largest class first, test-first, and rerun the scorecard.
 
+**Found 2026-10-07, title search.** Title search on the owner vault was being carried by stale second vectors that equal the window title; refreshing them lowers "a memory with that title in the top five" from 10 to 7 of 11. No stored vector is a vector of the title, and putting the title in the second vector costs first-place hits on summary searches. Ranking now adds a fixed bonus when the query's words are a memory's window title, which restores 10 of 11 on the repaired copy with summary searches unchanged. Evidence: `docs/evidence/W04/second-vector.md` and `voice-and-fallback.md`.
+
 **Done when.** The scorecard shows top-five at 36 of 40 or better on the same copy, the three seeded gates still pass, and the miss classes are written down.
 
 **Evidence.** `docs/evidence/W04/vs-85-known-item-search.md` with the before and after scorecard, counts only.
@@ -85,6 +87,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 **Result, 2026-10-07.** See `docs/evidence/W04/vs-89-labels-and-intent.md`. The stored label list now equals the list the prompts offer, guarded by a test; the repair scan relabels older rows. Removing the intent or workflow segment moved no cell by more than two queries on the vault copy, so the embedded text is unchanged. The intent rules were left alone because the label affects neither retrieval nor the card. The personas were not used: they cannot show an embedding-text effect.
 
+**Found 2026-10-07, the fallback.** The summary written without a model (`build_low_ram_semantic_fusion`) set the activity to "reviewing" for every capture, which stores as `reviewing_agent_output`, and wrote an intent nothing on screen stated. It now leaves the activity unknown and writes no intent; the repair scan relabels the 10 such rows. The model itself still chooses `reviewing_agent_output` for 52 of 158 memories, which is the open half of this ticket.
+
 **Done when.** The scorecard shows no activity label outside the list, and an evidence note says whether intent helps retrieval on the three personas.
 
 ## VS-90 Make memory rewrites safe and clear the review backlog
@@ -120,6 +124,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 **Found 2026-10-07.** Every skip comes from `review_skip_reason`: the row is a visual-only capture with no text for the review to check against. The counts line up with the placeholder rows (17 skips, 18 placeholders) and with the rows VS-90 reports as stuck in `pending_visual_semantics`; confirm row by row before relying on it. If it holds, the placeholder half of the target cannot move until the visual path is fixed.
 
 **Result on a copy, 2026-10-07.** See `docs/evidence/W04/vs-91-weak-summaries.md`. 23 of the 26 narrated rows only needed the wording cleanup the cards already apply; the repair scan now does that to the stored text and re-embeds. Narrated went 26 to 3, and search by the earlier sentences still finds 37 of 40. Of the remaining weak rows, 7 are shown to the person (6 percent of shown rows) and 14 are already hidden as low signal. Applied to the real vault on 2026-10-07 with a backup; the same numbers hold there, and activity labels outside the list went from 7 to 0.
+
+**Found 2026-10-07, how summaries open.** Only 17 of 132 visible summaries opened with a past-tense verb; 35 opened "Reviewing ...". The display cleanup and the repair scan now put a leading activity verb into the past tense and store the summary as shown: 50 of 132 on a repaired copy. Sentences about the window, the capture or the OCR fall back to the title. A second repair pass (56 rows on the copy) is ready and waits for the owner, with FNDR closed and a backup. Evidence: `docs/evidence/W04/voice-and-fallback.md`.
 
 **Done when.** The scorecard shows narrated and placeholder summaries under 10 percent combined and known-item search no worse.
 

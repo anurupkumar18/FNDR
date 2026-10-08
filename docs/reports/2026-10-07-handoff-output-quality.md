@@ -17,24 +17,28 @@ Every sentence FNDR shows is a finished, neutral, past-tense statement backed by
 - The machine has 8 GB. A hook blocks shell commands under critical memory pressure. Do not load the local model while FNDR is running.
 - Tools refuse the real profile without `--allow-real-profile`. Rewriting the real vault needs FNDR closed and a backup first.
 
-## Uncommitted work in progress (finish this first)
+## Evening session, 2026-10-07 (after the first handoff)
 
-The briefing. State of the tree:
+All committed. GitHub has everything; GitLab was behind at the time of writing because a teammate's merge touches `mcp/mod.rs`, which another session held uncommitted.
 
-- `src-tauri/src/briefing.rs`: `plain_briefing` added (deterministic fallback).
-- `src-tauri/src/inference/mod.rs`: `copies_briefing_notes` and its unit test; `generate_daily_briefing` returns an empty string when the model only copies its notes; a by-hand model test `briefing_reports_and_does_not_advise`.
-- `src-tauri/src/inference/prompts.rs`: one more rule in both briefing prompts ("Write new sentences that combine the notes..."), `LLM_PROMPT_VERSION` v8, and new fingerprints for `daily_briefing_evening` and `daily_briefing_morning`. The fingerprints were computed outside the test build with a script whose method was checked against the committed values earlier; confirm with the guard test.
-- `src-tauri/src/ipc/commands/hermes_agent.rs`: the command falls back to `plain_briefing` when the model returns nothing. This file also holds the other session's hunks.
-- `src-tauri/tests/daily_briefing_inputs.rs`: test for `plain_briefing`.
+- **Briefing: no model.** Three prompt versions were measured on the 2B model: invented advice, then a word-for-word copy of its notes, then a false statement that an open task had been submitted. `briefing::briefing_for` now composes it from summaries; the `daily_briefing` prompt and its cleanup are removed. To-dos and the startup notification share it.
+- **The summary written without a model** (`build_low_ram_semantic_fusion`) used to say "You were reviewing {a line of body text} on {app}" with activity "reviewing" and an invented intent. It now says "Viewed {title or files} in {app}".
+- **Voice:** a leading activity verb goes to the past tense with or without a narrator; category labels are left alone; sentences about the window, the capture or the OCR are narration. The scorecard has a `voice` section.
+- **Tasks:** `find_stated_tasks` reads direct asks off mail, chat and notes without the model; capture uses the model and the finder together (`suggestions_for`). `tests/fixtures/task_screens.json` has 30 labeled screens and `task_suggestion_eval` scores them: 30 of 30, 13 suggestions for 13 tasks.
+- **Title search:** ranking adds `TITLE_MATCH_BONUS` when the query's words are a memory's window title. This replaces an accident: stale second vectors that equalled the title.
 
-None of this has been compiled or run since the last edit. Next steps, in order:
+### Waiting for the owner
 
-1. `cargo fmt` the five files, `cargo check --lib`, `cargo test --test daily_briefing_inputs`.
-2. Run the unit tests in a scratch copy (`prompt_changes_require_a_version_bump`, `a_briefing_that_hands_the_notes_back_is_recognized`, `briefing_drops_advice_the_notes_never_gave`).
-3. With FNDR closed, run `cargo test --lib briefing_reports_and_does_not_advise -- --ignored --nocapture` and read the CHECK line. The previous prompt (v7) gave no advice and did not name an app as the actor, but copied the notes back word for word in all three cases. If v8 still copies, the fallback covers it; consider making the plain briefing the default and dropping the model call.
-4. Commit by path (hunk-split `hermes_agent.rs`), update `docs/product/llm-task-catalog.md` and `CHANGELOG.md`, push.
+- **Second summary repair on the real vault.** Ready and measured on a copy (56 rows: 49 reworded and re-embedded, 10 relabelled). It needs FNDR closed and a backup, and it should only be applied with the title bonus in the build, or title search drops from 10 to 7 of 11.
+- **Recall of task suggestions on real mail, chat and notes.** The 30 screens are synthetic and written by the rules' author.
 
-Note: the startup briefing notification in `src-tauri/src/main.rs` builds its own lines in the old format (app in brackets, then title and snippet) and does not use `briefing.rs`. It was left alone because the file holds the other session's edits. It should use `briefing::briefing_lines` and the fallback.
+### Open in this lane
+
+1. The model picks `reviewing_agent_output` for 52 of 158 memories. The label is offered in the prompt and overused.
+2. 32 visible summaries still open with "The" or "A" and 35 with a title or noun phrase: the model's own sentences.
+3. Strong match: a time phrase counts as topic evidence; one fresh negative passed unexplained. Not touched tonight.
+4. Six reviewed placeholder summaries need another review pass.
+5. `vault_qa` first-place counts move by one to three between runs under load; compare top-five and same-title figures.
 
 ## Shipped today, by area
 

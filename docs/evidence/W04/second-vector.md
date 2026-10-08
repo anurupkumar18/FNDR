@@ -12,4 +12,21 @@ No option wins. The title alone recovers title search and costs three first-plac
 
 Two vectors cannot serve both needs. A third vector is already stored per memory (`support_embedding`) and search does not query it. The next step is a title signal of its own, either that third vector as a title branch or a title match in the keyword route, measured against the same table.
 
-Until then the summary repair is not applied to the real vault: it would lower title search from 10 to 7 of 11 by replacing stale second vectors that happen to equal the title (`voice-and-fallback.md`).
+## A title signal in ranking
+
+`context_runtime::fusion` now adds `TITLE_MATCH_BONUS` (0.15) to a memory when at least 80 percent of the query's words are in its window title and the query has two words or more. The second vector stays the summary. On the repaired copy, same 40 memories:
+
+| | Repaired, no title signal | Repaired, with the title signal | Before the repair (stale vectors) |
+|---|---|---|---|
+| Window title, top five | 7 of 11 | 9 of 11 | 10 of 11 |
+| A memory with that title in top five | 7 of 11 | 10 of 11 | 10 of 11 |
+| Summary gist, top five | 34 of 40 | 34 of 40 | 34 of 40 |
+| The summary each row had before, top five | 34 of 40 | 33 of 40 | n/a |
+| Summary words, top five | 33 of 40 | 33 of 40 | 32 of 40 |
+| Unrelated queries marked strong | 0 of 8 | 0 of 8 | 0 of 8 |
+
+Title search is back where it was, now on purpose. The exact row is found for 9 of 11 where it was 10: the same page captured at several times shares a title, and the bonus lifts all of them equally, so which one comes first is decided by the other signals. One earlier-summary query moved out of the top five; with one run each, a difference of one is within what this corpus shows between runs.
+
+The labeled retrieval gate passes on all three personas with the title signal, and the strong-match figures did not move: 3 of 24 no-match queries marked strong and 6 of 98 real queries marked weak, as before it.
+
+The summary repair has not been applied to the real vault. It should be applied only with the title signal in the build.

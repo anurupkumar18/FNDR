@@ -12,9 +12,41 @@ use std::time::Instant;
 
 const MAX_FUSED_HITS: usize = 50;
 
+/// Added to a memory whose window title holds the query's words. People
+/// often search by the name of the page, and no stored vector is a vector of
+/// the title: on the owner vault a title search found a memory of that page
+/// in the top five for 7 of 11 titles, and for 10 only where stale vectors
+/// happened to equal the title (`docs/evidence/W04/second-vector.md`).
+pub const TITLE_MATCH_BONUS: f32 = 0.15;
+/// Share of the query's words the title must hold for it to be the title.
+const TITLE_MATCH_SHARE: f32 = 0.8;
+const TITLE_MATCH_MIN_WORDS: usize = 2;
+
+fn words_of(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.len() > 1)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether the query is, in effect, this window title.
+fn is_title_query(query_words: &[String], title: &str) -> bool {
+    if query_words.len() < TITLE_MATCH_MIN_WORDS {
+        return false;
+    }
+    let title_words = words_of(title);
+    let held = query_words
+        .iter()
+        .filter(|word| title_words.contains(word))
+        .count();
+    held as f32 / query_words.len() as f32 >= TITLE_MATCH_SHARE
+}
+
 pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> Vec<FusedHit> {
     let started = Instant::now();
     let mut agg: HashMap<String, Agg> = HashMap::new();
+    let query_words = words_of(&plan.raw);
 
     for route_hits in &hits {
         let weight = weight_for(weights, route_hits.route);
@@ -38,7 +70,15 @@ pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> 
                 }
             }
             entry.coverage = entry.coverage.max(coverage_from_hit(hit));
+            entry.title_match |= hit
+                .signals
+                .search_result
+                .as_ref()
+                .is_some_and(|result| is_title_query(&query_words, &result.window_title));
         }
+    }
+    for entry in agg.values_mut().filter(|entry| entry.title_match) {
+        entry.score += TITLE_MATCH_BONUS;
     }
 
     let anchor_terms = plan_anchor_terms(plan);
@@ -94,6 +134,8 @@ struct Agg {
     /// Newest timestamp any route reported, for breaking score ties.
     timestamp: i64,
     coverage: f32,
+    /// The query's words are this memory's window title.
+    title_match: bool,
     graph_path: Option<Vec<PathStep>>,
     contributing_routes: Vec<Route>,
     embedding_reason_labels: Vec<String>,
@@ -106,6 +148,7 @@ impl Default for Agg {
             score: 0.0,
             timestamp: i64::MIN,
             coverage: 0.0,
+            title_match: false,
             graph_path: None,
             contributing_routes: Vec::new(),
             embedding_reason_labels: Vec::new(),
@@ -548,6 +591,97 @@ mod tests {
                 "case {case}"
             );
         }
+    }
+
+    fn titled(id: &str, score: f32, branch: RouteBranch, title: &str) -> RouteHit {
+        let mut titled = hit(id, score, branch);
+        titled.signals.search_result = Some(crate::storage::SearchResult {
+            id: id.to_string(),
+            window_title: title.to_string(),
+            ..Default::default()
+        });
+        titled
+    }
+
+    fn plan_for(query: &str) -> QueryPlan {
+        QueryPlan {
+            raw: query.to_string(),
+            ..dummy_plan()
+        }
+    }
+
+    #[test]
+    fn a_query_that_is_a_window_title_lifts_the_memories_with_that_title() {
+        // Typed from memory: the name of the page. Another memory is closer
+        // in meaning to those words but is a different page.
+        let fused = fuse(
+            &plan_for("gamete chromosome count"),
+            vec![RouteHits {
+                route: Route::Vector,
+                hits: vec![
+                    titled(
+                        "other",
+                        0.60,
+                        RouteBranch::Semantic,
+                        "Meiosis and Fertilization - Google Chrome",
+                    ),
+                    titled(
+                        "page",
+                        0.45,
+                        RouteBranch::Semantic,
+                        "Gamete Chromosome Count - Google Chrome",
+                    ),
+                ],
+                elapsed_ms: 1,
+            }],
+            &FusionWeights::default(),
+        );
+        assert_eq!(fused[0].memory_id, "page");
+    }
+
+    #[test]
+    fn a_title_that_shares_only_some_words_gets_no_lift() {
+        let weights = FusionWeights::default();
+        let fused = fuse(
+            &plan_for("chromosome count homework answers"),
+            vec![RouteHits {
+                route: Route::Vector,
+                hits: vec![
+                    titled(
+                        "page",
+                        0.45,
+                        RouteBranch::Semantic,
+                        "Gamete Chromosome Count - Google Chrome",
+                    ),
+                    titled("untitled", 0.45, RouteBranch::Semantic, ""),
+                ],
+                elapsed_ms: 1,
+            }],
+            &weights,
+        );
+        for hit in &fused {
+            assert!(
+                (hit.score - 0.45 * weights.vector).abs() < 1e-6,
+                "{}",
+                hit.memory_id
+            );
+        }
+        // One word is not a title.
+        let fused = fuse(
+            &plan_for("gamete"),
+            vec![RouteHits {
+                route: Route::Vector,
+                hits: vec![titled(
+                    "page",
+                    0.45,
+                    RouteBranch::Semantic,
+                    "Gamete Chromosome Count",
+                )],
+                elapsed_ms: 1,
+            }],
+            &weights,
+        );
+        assert!((fused[0].score - 0.45 * weights.vector).abs() < 1e-6);
     }
 
     #[test]
