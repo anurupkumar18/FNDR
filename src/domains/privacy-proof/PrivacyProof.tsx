@@ -5,7 +5,12 @@ import {
     type ActivityTraceSnapshot,
 } from "@/shared/activity/activityTrace";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
-import { getPrivacyProof, type ModelRequest, type PrivacyProof as PrivacyProofData } from "@/shared/ipc/tauri";
+import {
+    getPrivacyProof,
+    type ModelRequest,
+    type OperatorRunSummary,
+    type PrivacyProof as PrivacyProofData,
+} from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import "../workspace/PipelineInspectorPanel.css";
@@ -18,6 +23,18 @@ interface Proof {
     egress_requests: number;
     egress_hosts: string[];
     model_requests?: ModelRequest[];
+    operator_runs?: OperatorRunSummary[];
+}
+
+/** What became of a run's actions, leaving out the kinds that did not happen. */
+function runOutcome(run: OperatorRunSummary): string {
+    const parts = [
+        `${run.done} done`,
+        run.asked > 0 ? `${run.asked} asked first` : "",
+        run.refused > 0 ? `${run.refused} refused` : "",
+        run.failed > 0 ? `${run.failed} failed` : "",
+    ];
+    return parts.filter(Boolean).join(" · ");
 }
 
 const FEATURE_LABELS: Record<string, string> = {
@@ -119,6 +136,20 @@ export function PrivacyProof({ proof }: { proof: Proof }) {
                                     <strong>{formatBytes(request.bytesSent)}</strong>
                                 </li>
                             ))}
+                    </ul>
+                </>
+            )}
+
+            {proof.operator_runs && proof.operator_runs.length > 0 && (
+                <>
+                    <h4>Recent Notch Do runs</h4>
+                    <ul className="pipeline-skip-reasons" aria-label="Notch Do runs">
+                        {proof.operator_runs.map((run) => (
+                            <li key={run.runId}>
+                                <span>{requestTime(Date.parse(run.startedAt))}</span>
+                                <strong>{runOutcome(run)}</strong>
+                            </li>
+                        ))}
                     </ul>
                 </>
             )}

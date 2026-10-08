@@ -78,6 +78,26 @@ describe("PrivacyProof", () => {
     });
 });
 
+describe("Notch Do runs in PrivacyProof", () => {
+    it("lists recent runs by what became of their actions", () => {
+        render(
+            <PrivacyProof
+                proof={{
+                    ...proof,
+                    operator_runs: [
+                        { runId: "r2", startedAt: new Date().toISOString(), done: 3, asked: 1, refused: 2, failed: 0 },
+                        { runId: "r1", startedAt: new Date().toISOString(), done: 1, asked: 0, refused: 0, failed: 0 },
+                    ],
+                }}
+            />,
+        );
+        const list = screen.getByRole("list", { name: "Notch Do runs" });
+        expect(list).toHaveTextContent("3 done · 1 asked first · 2 refused");
+        expect(list).toHaveTextContent("1 done");
+        expect(list).not.toHaveTextContent("failed");
+    });
+});
+
 describe("PrivacyProofPanel", () => {
     afterEach(() => {
         vi.mocked(getPrivacyProof).mockReset();

@@ -22,6 +22,8 @@ pub struct PrivacyProof {
     /// Recent cloud model requests, newest last (feature, host, bytes). Kept
     /// across restarts, bounded by count and age.
     pub model_requests: Vec<ModelRequest>,
+    /// Recent Notch Do runs, newest first, as counts of what became of their actions.
+    pub operator_runs: Vec<crate::operator::journal::RunSummary>,
 }
 
 /// One request to a cloud model. Carries no content, only its size.
@@ -167,6 +169,7 @@ pub fn build_privacy_proof(stats: &crate::CapturePipelineStats) -> PrivacyProof 
         egress_requests: EGRESS_REQUESTS.load(Ordering::Relaxed),
         egress_hosts: hosts().lock().iter().cloned().collect(),
         model_requests: model_requests().lock().clone(),
+        operator_runs: Vec::new(),
     }
 }
 
@@ -174,7 +177,12 @@ pub fn build_privacy_proof(stats: &crate::CapturePipelineStats) -> PrivacyProof 
 pub async fn get_privacy_proof(
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<PrivacyProof, String> {
-    Ok(build_privacy_proof(&state.capture_stats))
+    let mut proof = build_privacy_proof(&state.capture_stats);
+    proof.operator_runs = crate::operator::journal::Journal::recent_runs(
+        &state.app_data_dir.join("operator").join("journal.jsonl"),
+        10,
+    );
+    Ok(proof)
 }
 
 #[cfg(test)]

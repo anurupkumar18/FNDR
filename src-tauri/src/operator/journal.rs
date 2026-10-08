@@ -87,9 +87,111 @@ impl Journal {
     }
 }
 
+/// One past run, as counts only: when it began and what became of its actions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSummary {
+    pub run_id: String,
+    /// When the run's first action was recorded (RFC 3339).
+    pub started_at: String,
+    /// Actions that ran.
+    pub done: usize,
+    /// Actions the person was asked about (approved or declined).
+    pub asked: usize,
+    /// Actions FNDR refused.
+    pub refused: usize,
+    /// Actions that failed.
+    pub failed: usize,
+}
+
+/// The most recent runs in a journal, newest first. Lines that cannot be
+/// read are skipped; nothing typed or seen on screen is in the journal.
+pub fn summarize_runs(journal: &str, limit: usize) -> Vec<RunSummary> {
+    let mut runs: Vec<RunSummary> = Vec::new();
+    for line in journal.lines() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let (Some(run_id), Some(outcome)) = (
+            entry.get("run_id").and_then(Value::as_str),
+            entry.get("outcome").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let index = match runs.iter().position(|run| run.run_id == run_id) {
+            Some(index) => index,
+            None => {
+                runs.push(RunSummary {
+                    run_id: run_id.to_string(),
+                    started_at: entry
+                        .get("at")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    done: 0,
+                    asked: 0,
+                    refused: 0,
+                    failed: 0,
+                });
+                runs.len() - 1
+            }
+        };
+        let run = &mut runs[index];
+        match outcome {
+            "ok" => run.done += 1,
+            "approved" | "declined" => run.asked += 1,
+            "blocked" => run.refused += 1,
+            "failed" => run.failed += 1,
+            _ => {}
+        }
+    }
+    runs.reverse();
+    runs.truncate(limit);
+    runs
+}
+
+impl Journal {
+    /// The most recent runs recorded in this journal, newest first.
+    pub fn recent_runs(path: &std::path::Path, limit: usize) -> Vec<RunSummary> {
+        summarize_runs(&std::fs::read_to_string(path).unwrap_or_default(), limit)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn past_runs_are_counted_newest_first_without_any_content() {
+        let line = |run: &str, at: &str, outcome: &str| {
+            format!(
+                r#"{{"at":"{at}","run_id":"{run}","step":0,"tool":"click","args":{{}},"risk":"runs","outcome":"{outcome}","detail":null}}"#
+            )
+        };
+        let journal = [
+            line("r1", "2026-10-07T10:00:00Z", "ok"),
+            line("r1", "2026-10-07T10:00:05Z", "blocked"),
+            "not json".to_string(),
+            line("r2", "2026-10-07T11:00:00Z", "ok"),
+            line("r2", "2026-10-07T11:00:02Z", "approved"),
+            line("r2", "2026-10-07T11:00:03Z", "ok"),
+            line("r2", "2026-10-07T11:00:04Z", "declined"),
+            line("r2", "2026-10-07T11:00:05Z", "failed"),
+        ]
+        .join("\n");
+
+        let runs = summarize_runs(&journal, 10);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].run_id, "r2");
+        assert_eq!(
+            (runs[0].done, runs[0].asked, runs[0].refused, runs[0].failed),
+            (2, 2, 0, 1)
+        );
+        assert_eq!(runs[0].started_at, "2026-10-07T11:00:00Z");
+        assert_eq!((runs[1].done, runs[1].refused), (1, 1));
+        assert_eq!(summarize_runs(&journal, 1).len(), 1);
+        assert!(summarize_runs("", 10).is_empty());
+    }
     use serde_json::json;
 
     #[test]

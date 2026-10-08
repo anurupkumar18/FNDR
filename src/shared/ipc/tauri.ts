@@ -1592,6 +1592,18 @@ export interface PrivacyProof {
     egress_hosts: string[];
     /** Cloud model requests this session: feature, host and bytes FNDR sent. No content. */
     model_requests?: ModelRequest[];
+    /** Recent Notch Do runs, newest first. */
+    operator_runs?: OperatorRunSummary[];
+}
+
+/** One past Notch Do run, as counts only. */
+export interface OperatorRunSummary {
+    runId: string;
+    startedAt: string;
+    done: number;
+    asked: number;
+    refused: number;
+    failed: number;
 }
 
 export interface ModelRequest {
