@@ -26,6 +26,7 @@ To make the product better for a person using it, after the checks pass (owner a
 | --- | --- |
 | A11.1 | Agent replies render lists, code and links instead of plain text |
 | A11.5 | A `[2]` in a reply opens that memory |
+| A11.5 first step | Fix the numbering: memories FNDR adds (`operator::memory::format_block`) and attached ones (`agent_chats::memory_context_block`) are both numbered from 1 in the same message, so a `[1]` in a reply is ambiguous. Number attached ones after the added ones |
 | A9.6 | The chat shows when Hermes searched memory, not only the final answer |
 | C11.1, C11.3 | Notch Do's result says which steps FNDR checked and which it took on the model's word, and what can be undone |
 | C13.3 | A list of past Notch Do runs with their outcome, reachable from Privacy |
