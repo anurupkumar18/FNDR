@@ -1132,7 +1132,8 @@ async fn run_with_snippets(
     )
     .await
     .map_err(|_| RunError::Failed("Planning took too long.".to_string()))??;
-    let plan = plan::parse_plan(&plan_text).map_err(RunError::Failed)?;
+    let plan = plan::parse_plan(&plan_text)
+        .map_err(|error| RunError::Failed(plan::explain_empty_plan(error, &ctx.request)))?;
     (ctx.emit)(ComputerUseEvent::Planned {
         run_id: ctx.run_id.clone(),
         auto_start: plan_starts_by_itself(&plan, &ctx.request, &ctx.guards),

@@ -92,11 +92,34 @@ pub fn step_report_schema() -> Value {
 
 /// Parses and validates the planner's answer. A plan that cannot run as
 /// written is refused here, before anything touches the Mac.
+const NOTHING_TO_DO: &str = "Nothing to do in that request.";
+
+/// Says why a request came back with no steps. The planner leaves out
+/// what Notch Do never does, so a request that was only that comes back
+/// empty; the person should hear the reason, not "nothing to do".
+pub fn explain_empty_plan(error: String, request: &str) -> String {
+    if error != NOTHING_TO_DO {
+        return error;
+    }
+    static NEVER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let never = NEVER.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)\b(send|sends|sending|email|message|text|reply|delete|deletes|remove|erase|trash|buy|purchase|pay|order|checkout|password|passcode|sign\s+in|log\s+in|terminal|system\s+settings)\b",
+        )
+        .expect("never-tier pattern compiles")
+    });
+    if never.is_match(request) {
+        "Notch Do does not send, delete, buy, enter passwords or change settings, so there was nothing it could do for that.".to_string()
+    } else {
+        error
+    }
+}
+
 pub fn parse_plan(text: &str) -> Result<Plan, String> {
     let mut plan: Plan =
         serde_json::from_str(text.trim()).map_err(|e| format!("The plan was not readable: {e}"))?;
     if plan.steps.is_empty() {
-        return Err("Nothing to do in that request.".to_string());
+        return Err(NOTHING_TO_DO.to_string());
     }
     if plan.steps.len() > MAX_STEPS {
         return Err(format!("That plan has more than {MAX_STEPS} steps."));
@@ -365,6 +388,31 @@ pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_plan_for_something_notch_do_never_does_says_so() {
+        let empty = parse_plan(r#"{"steps":[]}"#).unwrap_err();
+        for request in [
+            "send this email to Sam",
+            "delete this file",
+            "buy it",
+            "type my password",
+        ] {
+            let said = explain_empty_plan(empty.clone(), request);
+            assert!(
+                said.starts_with("Notch Do does not send, delete, buy"),
+                "{request}: {said}"
+            );
+        }
+        assert_eq!(explain_empty_plan(empty.clone(), "hmm"), NOTHING_TO_DO);
+        assert_eq!(
+            explain_empty_plan(
+                "The plan was not readable: x".to_string(),
+                "send this email"
+            ),
+            "The plan was not readable: x"
+        );
+    }
 
     #[test]
     fn a_step_counts_as_checked_only_when_fndr_saw_its_result() {
