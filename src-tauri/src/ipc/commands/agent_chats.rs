@@ -283,7 +283,18 @@ pub(crate) async fn load_attached_memories(
             }
         }
     }
-    Ok(records)
+    let blocklist = state.config.read().blocklist.clone();
+    Ok(permitted_attachments(records, &blocklist))
+}
+
+/// Drops memories that Search would no longer show: from an app or site
+/// excluded since they were captured, or from FNDR itself. A memory picked
+/// earlier does not leave the Mac after its source was excluded.
+fn permitted_attachments(records: Vec<MemoryRecord>, blocklist: &[String]) -> Vec<MemoryRecord> {
+    records
+        .into_iter()
+        .filter(|record| crate::context_runtime::retrieve::memory_is_permitted(record, blocklist))
+        .collect()
 }
 
 #[tauri::command]
@@ -341,6 +352,16 @@ mod tests {
     fn titles_come_from_the_first_line() {
         assert_eq!(chat_title("\n  Plan my week\nwith details"), "Plan my week");
         assert!(chat_title(&"x".repeat(200)).chars().count() <= TITLE_CHARS + 1);
+    }
+
+    #[test]
+    fn a_memory_from_an_app_excluded_since_it_was_picked_is_not_sent() {
+        let records = vec![
+            record("a", "Budget sheet", "Q3 totals"),
+            record("b", "Notes", "x"),
+        ];
+        assert_eq!(permitted_attachments(records.clone(), &[]).len(), 2);
+        assert!(permitted_attachments(records, &["Safari".to_string()]).is_empty());
     }
 
     #[test]
