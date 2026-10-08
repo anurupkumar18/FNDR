@@ -40,7 +40,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -2881,12 +2881,20 @@ async fn run_fndr_namespace_open_target(
     else {
         return Ok(tool_error(format!("memory not found: {}", args.memory_id)));
     };
+    // Do not launch the target here. RE-12 will route this through
+    // `reopen_memory`, which reveals installers instead of executing them.
+    let reveal_only = record
+        .reopen_file_path
+        .as_deref()
+        .map(Path::new)
+        .is_some_and(crate::memory::reopen::should_reveal_in_finder);
     Ok(tool_success(json!({
         "memory_id": args.memory_id,
         "reopen_url": record.reopen_url,
         "reopen_file_path": record.reopen_file_path,
         "reopen_app_deep_link": record.reopen_app_deep_link,
         "url": record.url,
+        "reveal_only": reveal_only,
     })))
 }
 

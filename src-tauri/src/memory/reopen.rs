@@ -2,8 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ReopenKind {
     BrowserUrl,
     FilePath,
@@ -12,7 +11,6 @@ pub enum ReopenKind {
     #[default]
     Unknown,
 }
-
 
 impl ReopenKind {
     pub fn as_str(&self) -> &'static str {
@@ -36,15 +34,13 @@ impl ReopenKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ReopenValidationStatus {
     Valid,
     Invalid,
     #[default]
     Unchecked,
 }
-
 
 impl ReopenValidationStatus {
     pub fn as_str(&self) -> &'static str {
@@ -198,7 +194,10 @@ fn page_from_label_n_connector_m(value: &str) -> Option<u32> {
 }
 
 fn is_page_connector(word: &str) -> bool {
-    matches!(word.to_ascii_lowercase().as_str(), "of" | "sur" | "von" | "de")
+    matches!(
+        word.to_ascii_lowercase().as_str(),
+        "of" | "sur" | "von" | "de"
+    )
 }
 
 /// Reads `page=N` from a URL fragment (`#page=12` or `#page=12&zoom=100`).
@@ -217,7 +216,10 @@ pub fn page_from_pdf_url(url: &str) -> Option<u32> {
 
 fn url_path_ends_with_pdf(url: &str) -> bool {
     let without_fragment = url.split('#').next().unwrap_or(url);
-    let without_query = without_fragment.split('?').next().unwrap_or(without_fragment);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
     without_query.to_ascii_lowercase().ends_with(".pdf")
 }
 
@@ -232,7 +234,8 @@ pub fn page_from_pdf_viewer_ocr(url: &str, ocr_text: &str) -> Option<u32> {
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(page) = page_from_slash_pair(trimmed).or_else(|| page_from_ocr_n_of_m(trimmed)) {
+        if let Some(page) = page_from_slash_pair(trimmed).or_else(|| page_from_ocr_n_of_m(trimmed))
+        {
             return Some(page);
         }
     }
@@ -264,7 +267,11 @@ fn page_from_ocr_n_of_m(line: &str) -> Option<u32> {
 
 /// File targets use the window title. Browser URLs use `#page=N` first, then
 /// the PDF toolbar OCR. Other kinds never store a page.
-pub fn detect_reopen_page(target: &ReopenTarget, window_title: &str, ocr_text: &str) -> Option<u32> {
+pub fn detect_reopen_page(
+    target: &ReopenTarget,
+    window_title: &str,
+    ocr_text: &str,
+) -> Option<u32> {
     match target.kind {
         ReopenKind::FilePath => page_from_window_title(window_title),
         ReopenKind::BrowserUrl => {
@@ -409,7 +416,10 @@ pub fn text_anchor_from(
     if stored.is_empty() {
         return None;
     }
-    if let Some(preferred) = preferred_passage.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(preferred) = preferred_passage
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         let preferred_norm = normalize_ws(preferred);
         if !preferred_norm.is_empty() && stored.contains(&preferred_norm) {
             if let Some(anchor) = first_anchor_window(preferred) {
@@ -503,9 +513,16 @@ pub fn url_with_text_anchor(url: &str, anchor: &str) -> String {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReopenOutcome {
     Opened,
-    OpenedMoved { new_path: String },
-    Missing { path: String },
-    DriveNotConnected { volume: String, path: String },
+    OpenedMoved {
+        new_path: String,
+    },
+    Missing {
+        path: String,
+    },
+    DriveNotConnected {
+        volume: String,
+        path: String,
+    },
     AppMissing {
         bundle_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -515,7 +532,9 @@ pub enum ReopenOutcome {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         app_name: Option<String>,
     },
-    Blocked { target: String },
+    Blocked {
+        target: String,
+    },
     NoTarget,
 }
 
@@ -527,9 +546,7 @@ pub fn volume_root(path: &Path) -> Option<PathBuf> {
             Some(Component::RootDir),
             Some(Component::Normal(volumes)),
             Some(Component::Normal(name)),
-        ) if volumes == "Volumes" && !name.is_empty() => {
-            Some(PathBuf::from("/Volumes").join(name))
-        }
+        ) if volumes == "Volumes" && !name.is_empty() => Some(PathBuf::from("/Volumes").join(name)),
         _ => None,
     }
 }
@@ -539,12 +556,8 @@ pub fn volume_is_disconnected(path: &Path) -> bool {
 }
 
 fn is_trash_path(path: &Path) -> bool {
-    path.components().any(|component| {
-        matches!(
-            component.as_os_str().to_str(),
-            Some(".Trash" | ".Trashes")
-        )
-    })
+    path.components()
+        .any(|component| matches!(component.as_os_str().to_str(), Some(".Trash" | ".Trashes")))
 }
 
 fn shared_component_prefix_len(left: &Path, right: &Path) -> usize {
@@ -602,6 +615,76 @@ pub fn is_blocked_scheme(target: &str) -> bool {
     )
 }
 
+const REVEAL_ONLY_EXTENSIONS: &[&str] = &["dmg", "pkg", "mpkg", "app", "command"];
+const QUARANTINE_XATTR: &str = "com.apple.quarantine";
+
+/// Installers, app bundles, and quarantined executables must be revealed in
+/// Finder instead of launched (RE-09 / R35).
+pub fn should_reveal_in_finder(path: &Path) -> bool {
+    if extension_is_reveal_only(path) {
+        return true;
+    }
+    has_quarantine_xattr(path) && is_unix_executable(path)
+}
+
+fn extension_is_reveal_only(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| REVEAL_ONLY_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+fn is_unix_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|meta| meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+fn has_quarantine_xattr(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        xattr_exists(path, QUARANTINE_XATTR)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn xattr_exists(path: &Path, name: &str) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let Ok(c_name) = CString::new(name) else {
+        return false;
+    };
+    let size = unsafe {
+        libc::getxattr(
+            c_path.as_ptr(),
+            c_name.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+        )
+    };
+    size > 0
+}
+
 pub fn serialize_reopen_target(target: &ReopenTarget) -> String {
     serde_json::to_string(target).unwrap_or_else(|_| "{}".to_string())
 }
@@ -621,8 +704,16 @@ mod tests {
         let cases = [
             ("http", "http://example.com/a", "http://example.com/a"),
             ("https", "https://example.com/a", "https://example.com/a"),
-            ("uppercase scheme", "HTTPS://EXAMPLE.COM/A", "HTTPS://EXAMPLE.COM/A"),
-            ("surrounding whitespace", "  https://example.com/a \n", "https://example.com/a"),
+            (
+                "uppercase scheme",
+                "HTTPS://EXAMPLE.COM/A",
+                "HTTPS://EXAMPLE.COM/A",
+            ),
+            (
+                "surrounding whitespace",
+                "  https://example.com/a \n",
+                "https://example.com/a",
+            ),
         ];
         for (label, input, expected) in cases {
             let target = build_reopen_target(
@@ -637,7 +728,11 @@ mod tests {
             assert_eq!(target.file_path, None, "{label}");
             assert_eq!(target.app_bundle_id, None, "{label}");
             assert_eq!(target.confidence, 0.95, "{label}");
-            assert_eq!(target.validation_status, ReopenValidationStatus::Valid, "{label}");
+            assert_eq!(
+                target.validation_status,
+                ReopenValidationStatus::Valid,
+                "{label}"
+            );
             assert_eq!(target.captured_at_ms, AT, "{label}");
         }
     }
@@ -683,12 +778,24 @@ mod tests {
             AT,
         );
         assert_eq!(file_over_app.kind, ReopenKind::FilePath);
-        assert_eq!(file_over_app.file_path.as_deref(), Some("/Users/qa/doc.pdf"));
+        assert_eq!(
+            file_over_app.file_path.as_deref(),
+            Some("/Users/qa/doc.pdf")
+        );
         assert_eq!(file_over_app.app_bundle_id, None);
         assert_eq!(file_over_app.confidence, 0.85);
-        assert_eq!(file_over_app.validation_status, ReopenValidationStatus::Unchecked);
+        assert_eq!(
+            file_over_app.validation_status,
+            ReopenValidationStatus::Unchecked
+        );
 
-        let app = build_reopen_target(None, Some("   "), Some(" com.apple.Preview "), " Preview ", AT);
+        let app = build_reopen_target(
+            None,
+            Some("   "),
+            Some(" com.apple.Preview "),
+            " Preview ",
+            AT,
+        );
         assert_eq!(app.kind, ReopenKind::AppBundle);
         assert_eq!(app.app_bundle_id.as_deref(), Some("com.apple.Preview"));
         assert_eq!(app.app_name.as_deref(), Some("Preview"));
@@ -708,7 +815,11 @@ mod tests {
             assert_eq!(target.kind, ReopenKind::Unknown, "{label}");
             assert_eq!(target.app_name, None, "{label}");
             assert_eq!(target.confidence, 0.0, "{label}");
-            assert_eq!(target.validation_status, ReopenValidationStatus::Invalid, "{label}");
+            assert_eq!(
+                target.validation_status,
+                ReopenValidationStatus::Invalid,
+                "{label}"
+            );
         }
 
         let named = build_reopen_target(None, None, None, " Zoom ", AT);
@@ -752,8 +863,8 @@ mod tests {
             "Finder",
             AT,
         );
-        let restored = deserialize_reopen_target(&serialize_reopen_target(&target))
-            .expect("round trip");
+        let restored =
+            deserialize_reopen_target(&serialize_reopen_target(&target)).expect("round trip");
         assert_eq!(restored.kind, target.kind);
         assert_eq!(restored.file_path, target.file_path);
         assert_eq!(restored.captured_at_ms, target.captured_at_ms);
@@ -937,7 +1048,10 @@ mod tests {
         vec![
             (7, file_target("/Users/qa/doc.pdf", Some(112))),
             (6, file_target("/Users/qa/doc.pdf", None)),
-            (5, url_target("https://example.com/a", Some("a passage on the page"))),
+            (
+                5,
+                url_target("https://example.com/a", Some("a passage on the page")),
+            ),
             (4, url_target("https://example.com/a", None)),
             (
                 3,
@@ -968,7 +1082,10 @@ mod tests {
             ..url_target("https://example.com/a.pdf", None)
         };
         assert_eq!(reopen_rank(&browser_pdf_page), 5);
-        assert_eq!(reopen_rank(&file_target("en.wikipedia.org/wiki/Nitrogen", None)), 1);
+        assert_eq!(
+            reopen_rank(&file_target("en.wikipedia.org/wiki/Nitrogen", None)),
+            1
+        );
         assert_eq!(reopen_rank(&file_target("   ", None)), 0);
         assert_eq!(reopen_rank(&target(ReopenKind::BrowserUrl, AT)), 0);
         assert_eq!(reopen_rank(&url_target("javascript:alert(1)", None)), 0);
@@ -985,10 +1102,19 @@ mod tests {
                     continue;
                 }
                 let merged = merge_reopen_targets(incoming.clone(), existing.clone());
-                let winner = if incoming_rank > existing_rank { incoming } else { existing };
-                let label = format!("incoming rank {incoming_rank} vs existing rank {existing_rank}");
+                let winner = if incoming_rank > existing_rank {
+                    incoming
+                } else {
+                    existing
+                };
+                let label =
+                    format!("incoming rank {incoming_rank} vs existing rank {existing_rank}");
                 assert_eq!(merged.kind, winner.kind, "{label}");
-                assert_eq!(reopen_rank(&merged), (*incoming_rank).max(*existing_rank), "{label}");
+                assert_eq!(
+                    reopen_rank(&merged),
+                    (*incoming_rank).max(*existing_rank),
+                    "{label}"
+                );
                 assert_eq!(merged.url, winner.url, "{label}");
                 assert_eq!(merged.file_path, winner.file_path, "{label}");
                 assert_eq!(merged.page, winner.page, "{label}");
@@ -1006,7 +1132,10 @@ mod tests {
             captured_at_ms: 2,
             ..url_target("https://example.com/newer", None)
         };
-        for (incoming, existing) in [(newer.clone(), older.clone()), (older.clone(), newer.clone())] {
+        for (incoming, existing) in [
+            (newer.clone(), older.clone()),
+            (older.clone(), newer.clone()),
+        ] {
             let merged = merge_reopen_targets(incoming, existing);
             assert_eq!(merged.url.as_deref(), Some("https://example.com/newer"));
         }
@@ -1022,13 +1151,17 @@ mod tests {
         let incoming = url_target("https://example.com/a", None);
         let existing = url_target("https://example.com/a", Some("existing passage stays here"));
         let merged = merge_reopen_targets(incoming, existing);
-        assert_eq!(merged.text_anchor.as_deref(), Some("existing passage stays here"));
+        assert_eq!(
+            merged.text_anchor.as_deref(),
+            Some("existing passage stays here")
+        );
 
         let incoming_app = ReopenTarget {
             app_bundle_id: Some("com.apple.Preview".into()),
             ..target(ReopenKind::AppBundle, AT + 10)
         };
-        let merged = merge_reopen_targets(incoming_app, file_target("/Users/qa/doc.pdf", Some(112)));
+        let merged =
+            merge_reopen_targets(incoming_app, file_target("/Users/qa/doc.pdf", Some(112)));
         assert_eq!(merged.kind, ReopenKind::FilePath);
         assert_eq!(merged.file_path.as_deref(), Some("/Users/qa/doc.pdf"));
         assert_eq!(merged.page, Some(112));
@@ -1101,7 +1234,8 @@ mod tests {
     #[test]
     fn text_anchor_from_ignores_a_passage_that_was_not_stored() {
         let stored = "Nitrogen is a chemical element with the symbol N and atomic number seven in the periodic table.";
-        let secret = "the password is hunter2 and this phrase was never written onto the stored page at all";
+        let secret =
+            "the password is hunter2 and this phrase was never written onto the stored page at all";
         let anchor = text_anchor_from(stored, Some(secret), "Chrome").expect("fallback");
         assert!(!anchor.to_ascii_lowercase().contains("hunter2"));
         assert!(!anchor.contains('@'));
@@ -1143,10 +1277,7 @@ mod tests {
             "https://example.com/article#section"
         );
         assert_eq!(
-            url_with_text_anchor(
-                "https://docs.google.com/document/d/abc",
-                "one two three"
-            ),
+            url_with_text_anchor("https://docs.google.com/document/d/abc", "one two three"),
             "https://docs.google.com/document/d/abc"
         );
         assert_eq!(
@@ -1267,7 +1398,11 @@ mod tests {
         for target in blocked {
             assert!(is_blocked_scheme(target), "{target}");
         }
-        for target in ["https://example.com", "http://example.com", "notion://page/abc"] {
+        for target in [
+            "https://example.com",
+            "http://example.com",
+            "notion://page/abc",
+        ] {
             assert!(!is_blocked_scheme(target), "{target}");
         }
     }
@@ -1287,7 +1422,11 @@ mod tests {
         std::fs::create_dir_all(similar.parent().unwrap()).unwrap();
         std::fs::write(&similar, b"similar").unwrap();
 
-        let closer = root.path().join("original").join("moved").join("report.pdf");
+        let closer = root
+            .path()
+            .join("original")
+            .join("moved")
+            .join("report.pdf");
         std::fs::create_dir_all(closer.parent().unwrap()).unwrap();
         std::fs::write(&closer, b"closer").unwrap();
 
@@ -1337,5 +1476,67 @@ mod tests {
         std::fs::write(&trash, b"trash").unwrap();
         assert_eq!(pick_moved_file(&original, &[trash, original.clone()]), None);
         assert_eq!(pick_moved_file(&original, &[]), None);
+    }
+
+    #[test]
+    fn should_reveal_installer_and_script_extensions_r35() {
+        for name in [
+            "/tmp/Setup.dmg",
+            "/tmp/Setup.pkg",
+            "/tmp/Setup.mpkg",
+            "/tmp/Setup.PKG",
+            "/tmp/App.app",
+            "/tmp/run.command",
+        ] {
+            assert!(
+                should_reveal_in_finder(Path::new(name)),
+                "expected reveal-only for {name}"
+            );
+        }
+        assert!(!should_reveal_in_finder(Path::new("/tmp/report.pdf")));
+        assert!(!should_reveal_in_finder(Path::new("/tmp/notes.txt")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn should_reveal_quarantined_executable_but_not_quarantined_pdf() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf = dir.path().join("report.pdf");
+        let binary = dir.path().join("installer");
+        std::fs::write(&pdf, b"%PDF").unwrap();
+        std::fs::write(&binary, b"#!/bin/sh\necho hi\n").unwrap();
+        let mut perms = std::fs::metadata(&binary).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&binary, perms).unwrap();
+
+        let quarantine = b"0081;00000000;Chrome;00000000";
+        for path in [&pdf, &binary] {
+            let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+            let c_name = CString::new(QUARANTINE_XATTR).unwrap();
+            let rc = unsafe {
+                libc::setxattr(
+                    c_path.as_ptr(),
+                    c_name.as_ptr(),
+                    quarantine.as_ptr() as *const libc::c_void,
+                    quarantine.len(),
+                    0,
+                    0,
+                )
+            };
+            assert_eq!(rc, 0, "setxattr failed for {}", path.display());
+        }
+
+        assert!(
+            !should_reveal_in_finder(&pdf),
+            "quarantined PDF should still open"
+        );
+        assert!(
+            should_reveal_in_finder(&binary),
+            "quarantined executable should reveal"
+        );
     }
 }
