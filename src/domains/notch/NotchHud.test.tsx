@@ -484,6 +484,21 @@ describe("NotchHud", () => {
             expect(coreMocks.invoke).not.toHaveBeenCalledWith("voice_start", expect.anything());
         });
 
+        it("keeps Do hidden when it is on but nothing can click and type", async () => {
+            ipcMocks.computerUseStatus.mockResolvedValue({
+                enabled: true,
+                codexReady: true,
+                backend: null,
+                backendPath: null,
+                activeRun: null,
+            });
+            render(<NotchHud />);
+            await openPanel();
+            await waitFor(() => expect(ipcMocks.computerUseStatus).toHaveBeenCalled());
+            expect(screen.queryByRole("button", { name: "Do" })).not.toBeInTheDocument();
+            expect(coreMocks.invoke).not.toHaveBeenCalledWith("voice_start", expect.anything());
+        });
+
         it("listens on open, ends the utterance after a pause, plans it and starts after the countdown", async () => {
             await openDo();
             voice({ kind: "listening", level: 0.2 });

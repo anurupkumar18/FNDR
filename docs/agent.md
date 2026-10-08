@@ -71,7 +71,7 @@ All in `src-tauri/src/inference/prompts.rs`, fingerprinted: `HERMES_CHAT_INSTRUC
 ### Not built
 
 - Hermes cannot act on the Mac. Acting is Notch Do's job, under its own per-call policy (`operator/policy.rs`).
-- Chat history has no size cap yet (waits on PD-09).
+- Chat history keeps the newest 200 chats and 400 messages in each. Nothing expires by age.
 - No streaming: an answer arrives whole.
 
 ## The MCP agent tools

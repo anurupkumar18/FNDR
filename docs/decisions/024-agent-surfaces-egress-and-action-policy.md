@@ -228,6 +228,8 @@ tests; see the breakdown's progress tables.
 | E12 | Agent and Notch Do sit in Labs for Beta until the release gate passes | Built: a Labs group in the sidebar; the full regroup is PX-01 |
 | E13 | Which account QA spends | Owner's account, when the live checks run |
 | E14 | Provider keys stay in a file readable by the owner only; Keychain later | Built |
+| E15 | Chat history is the person's own writing, so it never expires by age; it is bounded by size: the newest 200 chats, 400 messages in each, oldest dropped (2026-10-08, was waiting on PD-09) | Built |
+| E16 | Which helper Notch Do acts through | Decided in [ADR 026](026-notch-do-acts-with-fndrs-own-hands.md) |
 
 One departure from item 10 as written: "next" is not on the browser run
 list, because a Next button on a web page often submits a step of a form. A

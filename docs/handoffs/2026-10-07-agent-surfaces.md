@@ -6,7 +6,19 @@ Date: 2026-10-07. Written at the owner's request when the session ran low on con
 
 The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
 
-## Update 8, 2026-10-07 (read this first)
+## Update 9, 2026-10-08 (read this first)
+
+The owner delegated product and architecture decisions. Three were taken and recorded in `docs/team/decision-log.md`:
+
+- **ADR-018 accepted as a whole.** Rule: a cloud model only on a turn the person starts, on a surface where they chose the provider. Every background task stays local. The master plan and `TEAM.md` constraint lines are edited to match. PD-01 is closed; PD-08's table is not needed.
+- **ADR 026, new.** OpenAI's bundled Computer Use no longer ships the launcher FNDR attached, and its successor is one run-any-code `js` tool the policy cannot gate. Decision: FNDR never attaches it; Beta runs Notch Do only where `open-computer-use` already is; for Final FNDR serves the computer-use tools itself from its own accessibility code. Built now: with no helper, "Operate my Mac" cannot be turned on and says why, and the notch does not offer Do.
+- **Chat history bound (ADR 024, E15).** Newest 200 chats, 400 messages each, no expiry by age. Built with a test.
+
+Next build in this lane: the executor in ADR 026 ("Shape of the executor"). It needs live testing with Accessibility granted to FNDR, so do it when the machine is free. Start with `get_app_state` and `click` against the fixture pages.
+
+Still owed, needing the FNDR window: quit with the gateway up, Agent Stop, Screen Guide fallback with ChatGPT signed out.
+
+## Update 8, 2026-10-07
 
 Loop goal set by the owner: build the next slices (A6.6, B7.5, C13.3), each with a test, and push.
 

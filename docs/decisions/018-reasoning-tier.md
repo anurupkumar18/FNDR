@@ -2,14 +2,7 @@
 
 ## Status
 
-**Accepted in part, 2026-10-07, by the owner:** option B for **Notch Do, Hermes and Screen Guide's ChatGPT answers only**, under the rules in [ADR 024](024-agent-surfaces-egress-and-action-policy.md). (Kunj accepted it for Notch Do and Hermes on 2026-10-06; see the amendment at the end.) Every other task stays local until this ADR is accepted as a whole.
-
-Until this is accepted:
-
-- Every new model path is local only. No captured text goes to a cloud model from new code (`docs/superpowers/plans/2026-10-04-parallel-sessions/README.md`, Global Constraints).
-- The master plan constraint "Strictly local models: no cloud LLM at runtime, not even opt-in" stands as written.
-
-Two inputs are missing: Kunj's PD-08 task table (not in the repo on 2026-10-04) and any measured local versus cloud difference (none exists).
+**Accepted 2026-10-08, by the owner: option B, bounded to turns a person starts.** See "Decision, 2026-10-08" at the end, which replaces the recommendation and the open PD-08 table below. (Accepted in part on 2026-10-07 for Notch Do, Hermes and Screen Guide's ChatGPT answers; Kunj accepted it for Notch Do and Hermes on 2026-10-06.)
 
 ## Question
 
@@ -119,3 +112,32 @@ The owner ratified the amendment above and extended it to Screen Guide's ChatGPT
 - **Memories in Hermes:** FNDR adds related memories, and gives Hermes memory search, only for a provider on this Mac or when the person turns it on for a cloud provider. Attached memories are always sent.
 - **Logging:** Screen Guide's ChatGPT requests are logged too, the log survives a restart, and each row says when memories, on-screen text or a screenshot went along.
 
+## Decision, 2026-10-08
+
+**The rule.** A cloud model is used only on a turn the person starts, on a surface where they chose that provider. Nothing FNDR does by itself in the background ever goes to a cloud model.
+
+That is one sentence a person can check against Privacy Activity, and it does not need a per-task table to explain.
+
+| Task | Decision |
+|---|---|
+| Memory structuring, review, task finding, snippets | Local only, for Beta and Final. They run in the background on everything captured, so the rule forbids them |
+| Embeddings | Local only (unchanged) |
+| Daily brief | No model at all since 2026-10-07 (`briefing.rs`) |
+| Ask and Search answers, the command router | Local only for Beta. May be reopened after Beta, one task at a time, only with a measured row as in "How we measure" above |
+| Agent page (Hermes) | Allowed: the person picked the provider. Rules in ADR 024 |
+| Notch Do | Allowed: the person's ChatGPT plan, opted in by "Operate my Mac". Rules in ADR 022, 024 and 026 |
+| Screen Guide's ChatGPT answer | Allowed when ChatGPT is the chosen model; the screenshot needs its own opt-in. Falls back to this Mac and says so |
+
+Why this and not the staged plan recommended above:
+
+- The staged plan waited on two inputs that never arrived: a per-task table and a measured local versus cloud difference. Nothing in the repo shows a cloud model would fix what is thin locally, and the work since has gone the other way: the briefing, task finding and fallback summaries got better by taking the model out.
+- The background tasks see everything captured. A secret the patterns miss would be sent with no one watching. On a turn the person starts, they can see what they asked and Privacy Activity lists it.
+- It closes PD-01 before the Oct 16 freeze with a rule the Beta demo can state truthfully.
+
+Conditions from option B and where they stand:
+
+- Logged: every cloud request is in Privacy Activity with feature, host, bytes and kinds of content; the log survives a restart. Met.
+- Your own key or sign-in: ChatGPT uses the person's own sign-in and FNDR stores no key. Met. An OpenRouter or custom key is kept in a file only the owner can read, not the Keychain, because Hermes reads it from its own home (ADR 024, E14). Keychain is a Final item.
+- Off until turned on: every one of these is off by default. Met.
+
+PD-08's table is no longer needed for Beta; the table above is the decision. PD-08 becomes "measure Ask, local versus cloud" if anyone reopens it.

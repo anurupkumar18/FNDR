@@ -32,6 +32,9 @@ Seeded on 2026-10-04 from decisions already recorded in the repo as accepted or 
 | 2026-10-06 | Notch Do computer use: tiered per-call policy (runs, one confirmation, never) in code; ADR-022's never tier unchanged. | Approve every click (the 09-24 build) | Kunj (lane owner) | [ADR-022 amendment](../decisions/022-command-bar-actions-policy.md) |
 | 2026-10-07 | Agent surfaces: one egress rule, one consent pattern, a durable request log, and one stop for Hermes, Screen Guide and Notch Do. Related memories to cloud providers off by default; Hermes answers only; approval by tap; browsers ask by default; plans auto-start only when no step can need a yes. | Leave as is; one gateway module; merge the two policy tables | Owner, with Kunj (lane owner) | [ADR 024](../decisions/024-agent-surfaces-egress-and-action-policy.md) |
 | 2026-10-07 | ADR-018 option B ratified for Notch Do, Hermes and Screen Guide's ChatGPT answers only. Everything else stays local. | Accept ADR-018 as a whole; revert the amendment | Owner | [ADR-018 amendment](../decisions/018-reasoning-tier.md) |
+| 2026-10-08 | ADR-018 accepted as a whole: a cloud model only on a turn the person starts, on a surface where they chose the provider (Agent page, Notch Do, Screen Guide's ChatGPT answer). Every background task stays local for Beta and Final; Ask and the router stay local for Beta. | The staged per-task plan waiting on PD-08; local only with the three paths removed | Owner | [ADR-018](../decisions/018-reasoning-tier.md) |
+| 2026-10-08 | Notch Do acts with FNDR's own accessibility code for Final. For Beta it stays in Labs and runs only where open-computer-use is already installed. FNDR never attaches a tool that runs model-written code, which rules out the ChatGPT app's current Computer Use. | Attach the new tool; bundle or install the npm helper | Owner | [ADR 026](../decisions/026-notch-do-acts-with-fndrs-own-hands.md) |
+| 2026-10-08 | Agent chat history is bounded by size, never by age: the newest 200 chats, 400 messages in each. | A 30-day expiry like the request log; no bound | Owner | [ADR 024](../decisions/024-agent-surfaces-egress-and-action-policy.md) |
 | 2026-10-06 | ADR-018 option B for Notch Do and Hermes only, on the ChatGPT sign-in; Codex app-server is the agent loop and the only token refresher. | Hermes as the loop; a token proxy | Kunj (lane owner) | [ADR-018 amendment](../decisions/018-reasoning-tier.md) |
 
 ## Earlier accepted ADRs (background, before this log)
@@ -51,7 +54,6 @@ These carry an "Accepted" status line and still shape the code. They predate the
 
 | Item | State | Where |
 |---|---|---|
-| ADR-018 reasoning tier (opt-in cloud reasoning), beyond Notch Do, Hermes and Screen Guide | Not accepted as a whole. Local models only for every other task. | PD-01, [ADR-018 draft](../decisions/018-reasoning-tier.md) |
 | Team charter: decision rights, disagreements, handoff when away | Draft, pending owner approval and each teammate's acknowledgement | PD-17, `docs/team/TEAM.md` section "Team charter" |
 | Beta date Wed Oct 21 and Final week of Dec 14 | Assumed; confirm with instructors | Master plan D-4, month plan section 12 row 8 |
 | Companion parked until after Final | Assumed | Master plan D-2 |

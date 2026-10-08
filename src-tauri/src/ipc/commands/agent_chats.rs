@@ -23,6 +23,12 @@ pub(crate) const MAX_ATTACHED_MEMORIES: usize = 8;
 /// Budget for the whole attached-memory block.
 const MAX_MEMORY_CONTEXT_CHARS: usize = 8_000;
 const TITLE_CHARS: usize = 60;
+/// Chat history is bounded by size, never by age: it is the person's own
+/// writing, so nothing expires, but the file cannot grow without end
+/// (ADR 024, decided 2026-10-08). The oldest chats and, inside one very long
+/// chat, the oldest messages are the ones dropped.
+const MAX_CHATS: usize = 200;
+const MAX_MESSAGES_PER_CHAT: usize = 400;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -184,7 +190,10 @@ fn append_messages(
     };
     chat.updated_at = last_at;
     chat.messages.extend(messages);
+    let overflow = chat.messages.len().saturating_sub(MAX_MESSAGES_PER_CHAT);
+    chat.messages.drain(..overflow);
     chats.insert(0, chat);
+    chats.truncate(MAX_CHATS);
     write_chats(path, &chats)
 }
 
@@ -435,6 +444,46 @@ mod tests {
         .unwrap();
         let chats = read_chats(&path);
         assert!(!chats[0].messages[0].failed);
+    }
+
+    #[test]
+    fn history_is_bounded_by_size_and_drops_the_oldest() {
+        let dir = std::env::temp_dir().join(format!("fndr-chats-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CHATS_FILE);
+        let message = |text: String, at: i64| AgentChatMessage {
+            role: "user".to_string(),
+            content: text,
+            at,
+            memories: Vec::new(),
+            failed: false,
+            auto_memories: Vec::new(),
+            tools_used: Vec::new(),
+        };
+
+        let long: Vec<AgentChatMessage> = (0..MAX_MESSAGES_PER_CHAT as i64 + 3)
+            .map(|n| message(format!("m{n}"), n))
+            .collect();
+        append_messages(&path, "long", long).unwrap();
+        let chats = read_chats(&path);
+        assert_eq!(chats[0].messages.len(), MAX_MESSAGES_PER_CHAT);
+        assert_eq!(chats[0].messages[0].content, "m3", "the oldest go first");
+
+        let many: Vec<AgentChat> = (0..MAX_CHATS)
+            .map(|n| AgentChat {
+                id: format!("c{n}"),
+                title: String::new(),
+                created_at: 0,
+                updated_at: 0,
+                messages: Vec::new(),
+            })
+            .collect();
+        write_chats(&path, &many).unwrap();
+        append_messages(&path, "newest", vec![message("hi".to_string(), 1)]).unwrap();
+        let chats = read_chats(&path);
+        assert_eq!(chats.len(), MAX_CHATS);
+        assert_eq!(chats[0].id, "newest");
+        assert!(chats.iter().all(|chat| chat.id != format!("c{}", MAX_CHATS - 1)));
     }
 
     #[test]

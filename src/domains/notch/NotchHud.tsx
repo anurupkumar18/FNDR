@@ -140,8 +140,10 @@ export function NotchHud() {
         computerUseStatus()
             .then((status) => {
                 if (!live) return;
-                setOperateEnabled(status.enabled);
-                if (!status.enabled) setModeState("ask");
+                // Without something to click and type with, Do could only fail.
+                const canOperate = status.enabled && Boolean(status.backend);
+                setOperateEnabled(canOperate);
+                if (!canOperate) setModeState("ask");
             })
             .catch(() => live && setOperateEnabled(false));
         return () => {

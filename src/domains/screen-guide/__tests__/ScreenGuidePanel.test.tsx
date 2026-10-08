@@ -322,6 +322,36 @@ describe("ScreenGuidePanel", () => {
         expect(screen.queryByText("Local and read-only")).not.toBeInTheDocument();
     });
 
+    it("cannot turn Operate my Mac on when nothing can click and type, and says why", async () => {
+        mocks.computerUseStatus.mockResolvedValue({
+            enabled: false,
+            codexReady: true,
+            backend: null,
+            backendPath: null,
+            activeRun: null,
+        });
+        render(<ScreenGuidePanel isVisible onClose={() => {}} />);
+
+        expect(await screen.findByText(/cannot be turned on/i)).toBeInTheDocument();
+        expect(screen.getByRole("switch", { name: "Operate my Mac" })).toBeDisabled();
+    });
+
+    it("can still turn Operate my Mac off when the helper has gone", async () => {
+        mocks.computerUseStatus.mockResolvedValue({
+            enabled: true,
+            codexReady: true,
+            backend: null,
+            backendPath: null,
+            activeRun: null,
+        });
+        render(<ScreenGuidePanel isVisible onClose={() => {}} />);
+
+        await screen.findByText(/cannot be turned on/i);
+        await waitFor(() =>
+            expect(screen.getByRole("switch", { name: "Operate my Mac" })).not.toBeDisabled(),
+        );
+    });
+
     it("moves focus into the modal and closes it with Escape", async () => {
         const onClose = vi.fn();
         render(<ScreenGuidePanel isVisible onClose={onClose} />);

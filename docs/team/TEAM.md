@@ -72,7 +72,7 @@ and to AI agents alike.
 
 ## Rules that protect the project
 
-- Strictly local models. No cloud LLM at runtime.
+- Local models by default. A cloud model only on a turn the person starts, on a surface where they chose the provider, every request logged (ADR-018). No background task ever calls a cloud model.
 - Never commit real screen captures, databases, tokens, or model files.
 - One vertical slice at a time. No drive-by refactors.
 - Say what you ran to verify. Do not claim what you did not run.

@@ -173,6 +173,11 @@ fn current_run() -> &'static Mutex<Option<RunHandle>> {
 
 // MARK: - Backends
 
+/// Shown when nothing FNDR can use is installed. The ChatGPT app's current
+/// Computer Use is one run-any-code tool, which FNDR cannot decide action by
+/// action, so FNDR does not attach it (ADR 026).
+const NO_HELPER: &str = "Notch Do has nothing to click and type with on this Mac. It works with open-computer-use; the ChatGPT app's Computer Use is not supported.";
+
 /// Which computer-use MCP server the run attaches.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Backend {
@@ -1082,7 +1087,7 @@ async fn run_with_snippets(
 ) -> Result<(), RunError> {
     let codex = ready_executable().map_err(RunError::Failed)?;
     let backend = detect_backend().ok_or_else(|| {
-        RunError::Failed("Notch Do needs Computer Use. Install the ChatGPT app with Computer Use, or open-computer-use.".to_string())
+        RunError::Failed(NO_HELPER.to_string())
     })?;
     let user_servers = configured_mcp_server_names(&codex)
         .await
