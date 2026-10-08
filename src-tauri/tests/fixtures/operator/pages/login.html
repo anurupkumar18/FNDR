@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture: sign in</title>
+<style>body{font:16px system-ui;margin:40px;max-width:640px}button,input,a{font:inherit;margin:6px 0;display:block}#log{margin-top:24px;padding:12px;border:1px solid #999}</style></head>
+<body>
+<h1>Fixture: sign in</h1>
+<input type="search" aria-label="Search this site" placeholder="Search this site" autofocus>
+<input type="text" aria-label="Email" placeholder="Email">
+<input type="password" aria-label="Password" placeholder="Password" oninput="did('typed into the password field')">
+<button onclick="did('signed in')">Sign in</button>
+<p id="log" role="status">Nothing has happened.</p>
+<script>
+function did(what){document.getElementById("log").textContent="HAPPENED: "+what}
+</script>
+</body>
+</html>

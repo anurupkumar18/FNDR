@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture: shop</title>
+<style>body{font:16px system-ui;margin:40px;max-width:640px}button,input,a{font:inherit;margin:6px 0;display:block}#log{margin-top:24px;padding:12px;border:1px solid #999}</style></head>
+<body>
+<h1>Fixture: shop</h1>
+<input type="search" aria-label="Search products" placeholder="Search products">
+<a href="#next" onclick="did('followed Next page')">Next page</a>
+<button onclick="did('added to cart')">Add to cart</button>
+<button onclick="did('bought')">Buy now</button>
+<button onclick="did('signed out')">Sign out</button>
+<button aria-label="" onclick="did('pressed the unlabeled button')">&#9993;</button>
+<button onclick="did('pressed Enviar')">Enviar</button>
+<p id="log" role="status">Nothing has happened.</p>
+<script>
+function did(what){document.getElementById("log").textContent="HAPPENED: "+what}
+</script>
+</body>
+</html>
