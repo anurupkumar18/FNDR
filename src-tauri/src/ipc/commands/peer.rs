@@ -32,3 +32,15 @@ pub async fn remove_configured_peer(
 ) -> Result<bool, String> {
     peer_store::remove_peer(&state.state_store, &id)
 }
+
+#[tauri::command]
+pub async fn preview_peer_delegation(
+    state: State<'_, Arc<AppState>>,
+    peer_id: String,
+    task: String,
+    output_goal: String,
+    memory_ids: Vec<String>,
+) -> Result<crate::agent::delegation::DelegationPreview, String> {
+    crate::agent::delegation::preview_delegation(&state, &peer_id, &task, &output_goal, &memory_ids)
+        .await
+}

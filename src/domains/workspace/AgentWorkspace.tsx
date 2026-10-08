@@ -420,7 +420,7 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                 />
 
                 {peerOpen ? (
-                    <PeerDirectory onBack={() => setPeerOpen(false)} />
+                    <PeerDirectory onBack={() => setPeerOpen(false)} selectedMemories={attached} />
                 ) : statusError && !hermes ? (
                     <div className="aw-setup">
                         <h3>Hermes isn&apos;t reachable yet</h3>

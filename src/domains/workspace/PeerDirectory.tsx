@@ -2,24 +2,32 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
     addConfiguredPeer,
     listConfiguredPeers,
+    previewPeerDelegation,
     removeConfiguredPeer,
+    type AttachedMemory,
     type ConfiguredPeer,
+    type DelegationPreview,
 } from "@/shared/ipc/tauri";
 import "./PeerDirectory.css";
 
 interface PeerDirectoryProps {
     onBack: () => void;
+    selectedMemories?: AttachedMemory[];
 }
 
 function errorText(reason: unknown): string {
     return reason instanceof Error ? reason.message : String(reason);
 }
 
-export function PeerDirectory({ onBack }: PeerDirectoryProps) {
+export function PeerDirectory({ onBack, selectedMemories = [] }: PeerDirectoryProps) {
     const [peers, setPeers] = useState<ConfiguredPeer[] | null>(null);
     const [url, setUrl] = useState("");
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [selectedPeerId, setSelectedPeerId] = useState("");
+    const [task, setTask] = useState("");
+    const [outputGoal, setOutputGoal] = useState("");
+    const [preview, setPreview] = useState<DelegationPreview | null>(null);
 
     useEffect(() => {
         let mounted = true;
@@ -37,6 +45,7 @@ export function PeerDirectory({ onBack }: PeerDirectoryProps) {
         try {
             const saved = await addConfiguredPeer(url.trim());
             setPeers((current) => [...(current ?? []).filter((peer) => peer.id !== saved.id), saved]);
+            setSelectedPeerId(saved.id);
             setUrl("");
         } catch (reason) {
             setError(errorText(reason));
@@ -56,6 +65,25 @@ export function PeerDirectory({ onBack }: PeerDirectoryProps) {
                 return;
             }
             setPeers((current) => (current ?? []).filter((row) => row.id !== peer.id));
+            if (selectedPeerId === peer.id) setSelectedPeerId("");
+            setPreview(null);
+        } catch (reason) {
+            setError(errorText(reason));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const makePreview = async (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        if (busy) return;
+        const peerId = selectedPeerId || peers?.[0]?.id;
+        if (!peerId) return;
+        setBusy(true);
+        setError(null);
+        setPreview(null);
+        try {
+            setPreview(await previewPeerDelegation(peerId, task, outputGoal, selectedMemories.map((memory) => memory.id)));
         } catch (reason) {
             setError(errorText(reason));
         } finally {
@@ -99,7 +127,29 @@ export function PeerDirectory({ onBack }: PeerDirectoryProps) {
                     ))}
                 </ul>
             )}
-            <p className="aw-peer-note">Task delegation will appear here when source review and task tracking are ready.</p>
+            {peers && peers.length > 0 ? (
+                <section className="aw-peer-draft" aria-label="Peer task draft">
+                    <h3>Draft a peer task</h3>
+                    <p>Preview the exact task text and current memory summaries. Nothing is sent from this draft.</p>
+                    <form onSubmit={(event) => void makePreview(event)}>
+                        <label htmlFor="aw-draft-peer">Peer</label>
+                        <select id="aw-draft-peer" value={selectedPeerId || peers[0].id} onChange={(event) => { setSelectedPeerId(event.target.value); setPreview(null); }}>
+                            {peers.map((peer) => <option key={peer.id} value={peer.id}>{peer.name}</option>)}
+                        </select>
+                        <label htmlFor="aw-draft-task">Task for peer</label>
+                        <textarea id="aw-draft-task" required maxLength={4000} value={task} onChange={(event) => { setTask(event.target.value); setPreview(null); }} />
+                        <label htmlFor="aw-draft-goal">Output goal</label>
+                        <input id="aw-draft-goal" required maxLength={1000} value={outputGoal} onChange={(event) => { setOutputGoal(event.target.value); setPreview(null); }} />
+                        <p className="aw-peer-note">{selectedMemories.length} memories selected in Agent chat. Return to chat to change them.</p>
+                        <button type="submit" disabled={busy}>{busy ? "Checking sources…" : "Preview task"}</button>
+                    </form>
+                    {preview ? <div className="aw-peer-preview" aria-label="Task preview">
+                        <p>Destination: {preview.destination}</p>
+                        <pre>{preview.message_text}</pre>
+                        <p>{preview.attachments.length} current memories included. A send would check them again.</p>
+                    </div> : null}
+                </section>
+            ) : null}
         </div>
     );
 }

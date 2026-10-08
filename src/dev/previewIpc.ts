@@ -1390,6 +1390,17 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 configuredPeers = configuredPeers.filter((peer) => peer.id !== id);
                 return configuredPeers.length !== before;
             }
+            case "preview_peer_delegation": {
+                const args = payloadRecord(payload);
+                const peer = configuredPeers.find((row) => row.id === String(args?.peerId ?? ""));
+                if (!peer) throw new Error("Saved peer was not found");
+                const task = String(args?.task ?? "").trim();
+                const goal = String(args?.outputGoal ?? "").trim();
+                const ids = Array.isArray(args?.memoryIds) ? args.memoryIds : [];
+                if (!task || !goal) throw new Error("Task and output goal are required");
+                if (ids.length > 0) throw new Error("The preview fixture has no durable memory records");
+                return { peer_id: peer.id, destination: peer.endpoint, message_text: `Task:\n${task}\n\nOutput goal:\n${goal}`, attachments: [] };
+            }
             case "computer_use_status":
                 return { enabled: false, codexReady: true, openComputerUsePath: null, active: false };
             case "openclicky_bridge_status":

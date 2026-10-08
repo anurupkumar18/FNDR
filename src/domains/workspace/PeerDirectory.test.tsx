@@ -5,6 +5,7 @@ const ipc = vi.hoisted(() => ({
     listConfiguredPeers: vi.fn(),
     addConfiguredPeer: vi.fn(),
     removeConfiguredPeer: vi.fn(),
+    previewPeerDelegation: vi.fn(),
 }));
 vi.mock("@/shared/ipc/tauri", () => ipc);
 
@@ -18,6 +19,11 @@ beforeEach(() => {
         requires_bearer: false, verified_at_ms: 1,
     });
     ipc.removeConfiguredPeer.mockResolvedValue(true);
+    ipc.previewPeerDelegation.mockResolvedValue({
+        peer_id: "peer-1", destination: "https://peer.example/a2a",
+        message_text: "Task:\nReview the plan\n\nOutput goal:\nBrief report",
+        attachments: [],
+    });
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
@@ -30,7 +36,7 @@ describe("PeerDirectory", () => {
         });
         fireEvent.click(screen.getByRole("button", { name: "Verify and save" }));
         await waitFor(() => expect(ipc.addConfiguredPeer).toHaveBeenCalledWith("https://peer.example/.well-known/agent-card.json"));
-        expect(await screen.findByText("Research peer")).toBeInTheDocument();
+        expect(await screen.findByRole("button", { name: "Remove Research peer" })).toBeInTheDocument();
         expect(screen.getByText("https://peer.example/a2a")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Remove Research peer" }));
         await waitFor(() => expect(ipc.removeConfiguredPeer).toHaveBeenCalledWith("peer-1"));
@@ -61,6 +67,17 @@ describe("PeerDirectory", () => {
         render(<PeerDirectory onBack={vi.fn()} />);
         fireEvent.click(await screen.findByRole("button", { name: "Remove Research peer" }));
         expect(await screen.findByRole("alert")).toHaveTextContent("already removed");
-        expect(screen.getByText("Research peer")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Remove Research peer" })).toBeInTheDocument();
+    });
+
+    it("previews a bounded task for a saved peer without sending it", async () => {
+        ipc.listConfiguredPeers.mockResolvedValue([await ipc.addConfiguredPeer()]);
+        render(<PeerDirectory onBack={vi.fn()} selectedMemories={[{ id: "memory-1", title: "Plan", appName: "Editor", timestamp: 1 }]} />);
+        fireEvent.change(await screen.findByRole("textbox", { name: "Task for peer" }), { target: { value: "Review the plan" } });
+        fireEvent.change(screen.getByRole("textbox", { name: "Output goal" }), { target: { value: "Brief report" } });
+        fireEvent.click(screen.getByRole("button", { name: "Preview task" }));
+        await waitFor(() => expect(ipc.previewPeerDelegation).toHaveBeenCalledWith("peer-1", "Review the plan", "Brief report", ["memory-1"]));
+        await waitFor(() => expect(screen.getByLabelText("Task preview").querySelector("pre")).toHaveTextContent("Task: Review the plan Output goal: Brief report"));
+        expect(screen.queryByRole("button", { name: "Send task" })).not.toBeInTheDocument();
     });
 });

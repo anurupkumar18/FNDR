@@ -22,6 +22,15 @@
 .aw-peer-list li div { display: grid; min-width: 0; gap: 3px; }
 .aw-peer-list li span { overflow-wrap: anywhere; color: var(--fg-2); font-size: 12px; }
 .aw-peer-list li small { color: var(--fg-3); }
+.aw-peer-draft { border-top: 1px solid var(--hairline); margin-top: 32px; }
+.aw-peer-draft form { display: grid; gap: 8px; }
+.aw-peer-draft label { font-size: 13px; font-weight: 600; margin-top: 8px; }
+.aw-peer-draft input, .aw-peer-draft select, .aw-peer-draft textarea { width: 100%; padding: 9px 11px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--bg-2); color: var(--fg); font: inherit; }
+.aw-peer-draft textarea { min-height: 90px; resize: vertical; }
+.aw-peer-draft button { justify-self: start; padding: 9px 12px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--bg-2); color: var(--fg); cursor: pointer; }
+.aw-peer-draft button:disabled { opacity: .55; cursor: default; }
+.aw-peer-preview { margin-top: 18px; padding: 14px; border: 1px solid var(--hairline); border-radius: 10px; }
+.aw-peer-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; color: var(--fg); }
 
 @media (max-width: 640px) {
     .aw-peer-directory { padding: 24px 16px; }

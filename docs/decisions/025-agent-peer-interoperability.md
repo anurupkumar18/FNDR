@@ -39,6 +39,8 @@ Each part must be usable or verifiable before the next. Part 1 is implemented: t
 
 Part 2 now includes the Card validator and bounded fetch in `agent/peer.rs`, a local saved-peer directory, and a person-entered Card URL in the Agent UI. The native build, focused Rust and frontend tests, and a synthetic browser-preview add/remove flow passed on 2026-10-08. The preview fixture does not contact a remote peer. Bearer credentials are not configured, and an independent real-peer interoperability check remains open, so Part 2 is not accepted yet. The Card's chosen endpoint and authentication requirement must be revalidated for each later task request; a saved Card alone does not authorize task egress.
 
+Part 3 has a draft preview that accepts an explicit list of up to eight memories already selected in Agent chat. It resolves aliases and checks today's source visibility, sends only current display summaries in the preview, and rejects missing or newly blocked sources. There is no Send action. Before Part 3 is accepted, the eventual transport must rebuild this preview at send time and prove that the reviewed text matches the bytes sent; draft validation alone is not that proof.
+
 ## Rejected shortcuts
 
 - **Give every peer the current MCP master token.** The token grants the entire tool surface and cannot identify or revoke a peer independently.

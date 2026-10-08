@@ -2,6 +2,7 @@ pub mod actions;
 pub mod approvals;
 pub mod audit;
 pub mod context;
+pub mod delegation;
 pub mod evals;
 pub mod execution;
 pub mod peer;

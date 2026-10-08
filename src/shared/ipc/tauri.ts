@@ -1884,6 +1884,17 @@ export async function removeConfiguredPeer(id: string): Promise<boolean> {
     return invoke<boolean>("remove_configured_peer", { id });
 }
 
+export interface DelegationPreview {
+    peer_id: string;
+    destination: string;
+    message_text: string;
+    attachments: Array<{ memory_id: string; summary: string }>;
+}
+
+export async function previewPeerDelegation(peerId: string, task: string, outputGoal: string, memoryIds: string[]): Promise<DelegationPreview> {
+    return invoke<DelegationPreview>("preview_peer_delegation", { peerId, task, outputGoal, memoryIds });
+}
+
 export interface HermesAppContext {
     app_name: string;
     memory_count: number;

@@ -795,6 +795,7 @@ fn main() {
             ipc::commands::list_configured_peers,
             ipc::commands::add_configured_peer,
             ipc::commands::remove_configured_peer,
+            ipc::commands::preview_peer_delegation,
             ipc::commands::list_agent_chats,
             ipc::commands::get_agent_chat,
             ipc::commands::delete_agent_chat,
