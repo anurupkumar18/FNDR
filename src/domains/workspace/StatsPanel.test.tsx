@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StatsPanel } from "./StatsPanel";
 
 const ipc = vi.hoisted(() => ({
@@ -62,6 +62,17 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("StatsPanel", () => {
+    it("shows when the local stats snapshot was actually refreshed", async () => {
+        render(<StatsPanel isVisible onClose={vi.fn()} />);
+
+        const trace = await screen.findByLabelText("Activity stats refresh");
+        expect(within(trace).getByText("Activity stats refreshed")).toBeInTheDocument();
+        expect(within(trace).queryByRole("status")).not.toBeInTheDocument();
+        fireEvent.click(within(trace).getByRole("button", { name: "Show Activity stats refresh details" }));
+        expect(within(trace).getByText("12 captures counted")).toBeInTheDocument();
+        expect(within(trace).getByText(/verified result/i)).toBeInTheDocument();
+    });
+
     it("does not expose static grid cards as fake buttons", async () => {
         render(<StatsPanel isVisible onClose={vi.fn()} />);
 

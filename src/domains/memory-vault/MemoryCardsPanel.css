@@ -64,6 +64,58 @@
     flex-wrap: wrap;
 }
 
+.memory-cards-overflow {
+    position: relative;
+    margin-left: auto;
+}
+
+.memory-cards-overflow-trigger {
+    min-width: 58px;
+}
+
+.memory-cards-overflow-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 190px;
+    padding: 5px;
+    border: 1px solid var(--hairline-strong);
+    border-radius: var(--radius-md);
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-medium);
+}
+
+.memory-cards-overflow-menu button {
+    min-height: 36px;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--fg-2);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.memory-cards-overflow-menu button:hover,
+.memory-cards-overflow-menu button:focus-visible,
+.memory-cards-overflow-menu button[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    color: var(--accent);
+    outline: none;
+}
+
+.memory-cards-activity-trace {
+    flex: 0 0 auto;
+    padding: 10px 28px;
+    border-bottom: var(--header-border);
+    background: color-mix(in srgb, var(--surface) 54%, transparent);
+}
+
 .memory-cards-filters {
     display: flex;
     flex-wrap: wrap;
@@ -141,7 +193,7 @@
     flex-direction: column;
 }
 
-/* ── Graph mode body — fills remaining height ──────────────────────────── */
+/* ── Graph mode body: fills remaining height ──────────────────────────── */
 .memory-cards-body--graph {
     overflow: hidden;
 }
@@ -340,6 +392,156 @@
        list container width, not the viewport width. */
     container-type: inline-size;
     container-name: memory-stream;
+}
+
+.memory-vault-graph-strip-empty {
+    margin: 0;
+    padding: 16px 28px;
+    color: var(--fg-2);
+    font-family: var(--film-font-ui);
+    font-size: 13px;
+}
+
+/* ── Vault list: day, then thread, then one row per near-duplicate group ── */
+.vault-day {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.vault-day + .vault-day {
+    margin-top: 14px;
+}
+
+/* The stream has 24px top padding; -24px pins the heading flush to its edge. */
+.vault-day-heading {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 0;
+    padding: 6px 0;
+    background: var(--panel-bg);
+    font-family: var(--film-font-ui);
+    font-size: 15px;
+    font-weight: 650;
+    color: var(--text-primary);
+}
+
+.vault-day-count {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.vault-thread {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.vault-thread-heading {
+    margin: 6px 0 0;
+    font-family: var(--film-font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vault-thread-count {
+    font-weight: 500;
+}
+
+.vault-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.vault-rows--similar {
+    margin-top: 6px;
+    padding-left: 20px;
+    border-left: 2px solid var(--hairline);
+}
+
+.vault-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 112px;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Denser rows than the stand-alone compact card: the day heading carries the date. */
+.vault-row .fndr-mc--compact {
+    min-height: 0;
+    padding: 9px 16px 9px 18px;
+}
+
+.vault-row .fndr-mc-c-day {
+    display: none;
+}
+
+.vault-row-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+}
+
+.vault-row-session-range {
+    color: var(--text-secondary);
+    font-family: var(--film-font-ui);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.vault-row-action {
+    min-height: 30px;
+    padding: 4px 10px;
+    font-family: var(--film-font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Out-ranks the themed .ui-action-btn rules, which load after this sheet. */
+.vault-row-actions .vault-row-similar[aria-expanded="true"] {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.vault-source-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+}
+
+@container memory-stream (max-width: 560px) {
+    .vault-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .vault-row-actions {
+        flex-direction: row;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .vault-row-actions:empty {
+        display: none;
+    }
 }
 
 .memory-cards-load-more {
@@ -728,4 +930,59 @@
 
 [data-theme="light"] .memory-browse-url:hover {
     background: rgba(30, 100, 200, 0.1);
+}
+
+/* Compact Vault toolbar: search, filters, count and secondary views on one row. */
+.memory-cards-toolbar {
+    align-items: center;
+    flex-wrap: wrap;
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+
+.memory-cards-filters {
+    order: -1;
+    flex: 1 1 520px;
+    gap: 8px;
+    align-items: center;
+}
+
+.memory-cards-search {
+    flex: 1 1 200px;
+    min-width: 160px;
+    min-height: 36px;
+    border-radius: 10px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+    padding: 6px 12px;
+    font-family: var(--film-font-ui);
+    font-size: 14px;
+}
+
+.memory-cards-search:focus-visible {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+    outline: none;
+}
+
+.memory-cards-filter select {
+    min-width: 132px;
+    min-height: 36px;
+    border-radius: 999px;
+    padding: 6px 30px 6px 12px;
+    font-size: 13px;
+}
+
+.memory-cards-toolbar-top .memory-cards-tab {
+    min-height: 32px;
+    padding: 4px 12px;
+    font-size: 12px;
+}
+
+.memory-cards-activity-trace {
+    border-top: var(--header-border);
+    border-bottom: 0;
+    padding-top: 6px;
+    padding-bottom: 6px;
 }

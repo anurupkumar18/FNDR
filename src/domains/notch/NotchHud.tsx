@@ -7,6 +7,7 @@ import {
     type MemoryCard,
     NOTCH_HUD_GEOMETRY_EVENT,
     NOTCH_HUD_HOVER_EVENT,
+    NOTCH_HUD_SUMMON_EVENT,
     type NotchHudGeometry,
     fndrAnswer,
     getNotchHudGeometry,
@@ -42,10 +43,31 @@ import { VoiceCapture, isVoiceCaptureAvailable } from "./notchVoice";
 import { NotchOperator } from "./NotchOperator";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { computerUseStatus } from "@/shared/ipc/tauri";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+} from "@/shared/activity/activityTrace";
+import {
+    beginVoiceActivityTrace,
+    recordVoiceActivityStep,
+    type VoiceActivityEvent,
+} from "@/shared/activity/voiceActivityTrace";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
 
 const SEARCH_DEBOUNCE_MS = 200;
 /** No row highlighted — Enter asks FNDR instead of opening a memory. */
 const NO_SELECTION = -1;
+
+const NOTCH_MODE_KEY = "fndr.notch.mode";
+
+function readNotchMode(): "ask" | "do" {
+    try {
+        return window.localStorage.getItem(NOTCH_MODE_KEY) === "ask" ? "ask" : "do";
+    } catch {
+        return "do";
+    }
+}
 
 /**
  * FNDR in the notch: a panel that lives on the display's camera housing,
@@ -72,10 +94,11 @@ export function NotchHud() {
     const [voiceStream, setVoiceStream] = useState<MediaStream | null>(null);
     const [transcribing, setTranscribing] = useState(false);
     const [voiceError, setVoiceError] = useState<string | null>(null);
+    const [voiceActivityTrace, setVoiceActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
+    const [notchActivityTrace, setNotchActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [contentHeight, setContentHeight] = useState<number>(notchMetrics.openHeaderHeight);
-    const [mode, setMode] = useState<"ask" | "do">("ask");
+    const [mode, setModeState] = useState<"ask" | "do">(readNotchMode);
     const [operateEnabled, setOperateEnabled] = useState(false);
-    const [operatorStream, setOperatorStream] = useState<MediaStream | null>(null);
 
     const inputRef = useRef<HTMLInputElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
@@ -90,7 +113,27 @@ export function NotchHud() {
     const turnsRef = useRef<ConversationTurn[]>([]);
     turnsRef.current = turns;
 
-    // "Do" appears only once the user has turned on Operate my Mac.
+    const recordVoiceStep = useCallback((
+        event: VoiceActivityEvent,
+        atMs = Date.now(),
+        durationMs?: number,
+    ) => {
+        setVoiceActivityTrace((current) => current
+            ? recordVoiceActivityStep(current, event, atMs, durationMs)
+            : current);
+    }, []);
+
+    const setMode = useCallback((next: "ask" | "do") => {
+        setModeState(next);
+        try {
+            window.localStorage.setItem(NOTCH_MODE_KEY, next);
+        } catch {
+            // Storage can be unavailable; the mode just isn't remembered.
+        }
+    }, []);
+
+    // "Do" appears only once the user has turned on Operate my Mac, and is
+    // where the notch opens until the person picks Ask.
     useEffect(() => {
         if (stage !== "open") return;
         let live = true;
@@ -98,7 +141,7 @@ export function NotchHud() {
             .then((status) => {
                 if (!live) return;
                 setOperateEnabled(status.enabled);
-                if (!status.enabled) setMode("ask");
+                if (!status.enabled) setModeState("ask");
             })
             .catch(() => live && setOperateEnabled(false));
         return () => {
@@ -244,6 +287,9 @@ export function NotchHud() {
         setVoiceStream(null);
         setTranscribing(false);
         setVoiceError(null);
+        setVoiceActivityTrace(null);
+        setNotchActivityTrace(null);
+        searchSeq.current += 1;
         setContentHeight(notchMetrics.openHeaderHeight);
         void setNotchHudKeyboard(false).catch(() => undefined);
     }, []);
@@ -253,6 +299,18 @@ export function NotchHud() {
         void setNotchHudKeyboard(true).catch(() => undefined);
         window.requestAnimationFrame(() => inputRef.current?.focus());
     }, []);
+
+    // Alt+N opens the panel in Do mode, which starts listening (Do shows only
+    // once Operate my Mac is on; otherwise this is Ask), and closes it when
+    // pressed again.
+    useTauriEvent<boolean>(NOTCH_HUD_SUMMON_EVENT, (open) => {
+        if (!open) {
+            closePanel();
+            return;
+        }
+        setModeState("do");
+        openPanel();
+    });
 
     // Peek follows the pointer; the open panel outlives it, since the cursor
     // leaves the moment the user starts typing.
@@ -279,9 +337,59 @@ export function NotchHud() {
         }
         const trimmed = query.trim();
         const seq = ++searchSeq.current;
+        const traceId = `notch-memory-search-${seq}`;
+        const startedAt = Date.now();
         setSearching(true);
+        if (trimmed) {
+            setNotchActivityTrace(recordActivityStep(
+                beginActivityTrace({
+                    id: traceId,
+                    title: "Notch memory search activity",
+                    startedAtMs: startedAt,
+                }),
+                {
+                    id: "debounce",
+                    label: "Waiting for typing to settle",
+                    actor: "Notch search",
+                    status: "waiting",
+                    evidence: "frontend-event",
+                    atMs: startedAt,
+                },
+            ));
+        }
         const timer = window.setTimeout(
             () => {
+                const requestedAt = Date.now();
+                setNotchActivityTrace((current) => {
+                    let next = current?.id === traceId
+                        ? current
+                        : beginActivityTrace({
+                            id: traceId,
+                            title: "Notch memory search activity",
+                            startedAtMs: requestedAt,
+                        });
+                    if (trimmed) {
+                        next = recordActivityStep(next, {
+                            id: "debounce",
+                            label: "Typing settled",
+                            actor: "Notch search",
+                            status: "completed",
+                            evidence: "frontend-event",
+                            atMs: requestedAt,
+                            durationMs: Math.max(0, requestedAt - startedAt),
+                        });
+                    }
+                    return recordActivityStep(next, {
+                        id: "request",
+                        label: trimmed
+                            ? "Requesting local memory matches"
+                            : "Requesting recent memories",
+                        actor: "Memory search",
+                        status: "running",
+                        evidence: "ipc-boundary",
+                        atMs: requestedAt,
+                    });
+                });
                 const request = trimmed
                     ? searchMemoryCards(trimmed, undefined, undefined, notchMetrics.openMaxRows)
                     : listMemoryCards(notchMetrics.openMaxRows);
@@ -293,6 +401,28 @@ export function NotchHud() {
                         setResults(cards.slice(0, notchMetrics.openMaxRows));
                         setSelectedIndex(NO_SELECTION);
                         setSearching(false);
+                        const finishedAt = Date.now();
+                        setNotchActivityTrace((current) => {
+                            if (current?.id !== traceId) return current;
+                            const withRequest = recordActivityStep(current, {
+                                id: "request",
+                                label: "Memory search request completed",
+                                actor: "Memory search",
+                                status: "completed",
+                                evidence: "ipc-boundary",
+                                atMs: finishedAt,
+                                durationMs: Math.max(0, finishedAt - requestedAt),
+                            });
+                            const count = Math.min(cards.length, notchMetrics.openMaxRows);
+                            return recordActivityStep(withRequest, {
+                                id: "result",
+                                label: `Memory search returned ${count} ${count === 1 ? "match" : "matches"}`,
+                                actor: "Memory search",
+                                status: "completed",
+                                evidence: "result-metadata",
+                                atMs: finishedAt,
+                            });
+                        });
                     })
                     .catch(() => {
                         if (searchSeq.current !== seq) {
@@ -300,6 +430,18 @@ export function NotchHud() {
                         }
                         setResults([]);
                         setSearching(false);
+                        const failedAt = Date.now();
+                        setNotchActivityTrace((current) => current?.id === traceId
+                            ? recordActivityStep(current, {
+                                id: "request",
+                                label: "Memory search request failed",
+                                actor: "Memory search",
+                                status: "failed",
+                                evidence: "ipc-boundary",
+                                atMs: failedAt,
+                                durationMs: Math.max(0, failedAt - requestedAt),
+                            })
+                            : current);
                     });
             },
             trimmed ? SEARCH_DEBOUNCE_MS : 0
@@ -327,12 +469,30 @@ export function NotchHud() {
                 return;
             }
             const id = `turn-${++askSeq.current}`;
+            const traceId = `notch-answer-${id}`;
+            const requestedAt = Date.now();
             const priorQuestions = answeredQuestions(turnsRef.current);
+            searchSeq.current += 1;
             setTurns((current) => appendTurn(current, { id, question: asked, status: "thinking" }));
             setQuery("");
             setResults([]);
             setSelectedIndex(NO_SELECTION);
             setSearching(false);
+            setNotchActivityTrace(recordActivityStep(
+                beginActivityTrace({
+                    id: traceId,
+                    title: "Notch answer activity",
+                    startedAtMs: requestedAt,
+                }),
+                {
+                    id: "request",
+                    label: "Requesting an answer from FNDR",
+                    actor: "FNDR answer service",
+                    status: "running",
+                    evidence: "ipc-boundary",
+                    atMs: requestedAt,
+                },
+            ));
 
             fndrAnswer(conversationQuery(priorQuestions, asked), notchMetrics.answerCardLimit)
                 .then((composed) => {
@@ -343,6 +503,28 @@ export function NotchHud() {
                             cards: composed.cards.slice(0, notchMetrics.answerCardLimit),
                         })
                     );
+                    const finishedAt = Date.now();
+                    setNotchActivityTrace((current) => {
+                        if (current?.id !== traceId) return current;
+                        const withRequest = recordActivityStep(current, {
+                            id: "request",
+                            label: "Answer request completed",
+                            actor: "FNDR answer service",
+                            status: "completed",
+                            evidence: "ipc-boundary",
+                            atMs: finishedAt,
+                            durationMs: Math.max(0, finishedAt - requestedAt),
+                        });
+                        const count = composed.cards.length;
+                        return recordActivityStep(withRequest, {
+                            id: "result",
+                            label: `Answer ready with ${count} memory ${count === 1 ? "source" : "sources"}`,
+                            actor: "FNDR answer service",
+                            status: composed.verify_outcome.kind === "grounded" ? "completed" : "degraded",
+                            evidence: "result-metadata",
+                            atMs: finishedAt,
+                        });
+                    });
                 })
                 .catch((error: unknown) => {
                     setTurns((current) =>
@@ -351,6 +533,18 @@ export function NotchHud() {
                             error: error instanceof Error ? error.message : String(error),
                         })
                     );
+                    const failedAt = Date.now();
+                    setNotchActivityTrace((current) => current?.id === traceId
+                        ? recordActivityStep(current, {
+                            id: "request",
+                            label: "Answer request failed",
+                            actor: "FNDR answer service",
+                            status: "failed",
+                            evidence: "ipc-boundary",
+                            atMs: failedAt,
+                            durationMs: Math.max(0, failedAt - requestedAt),
+                        })
+                        : current);
                 });
         },
         []
@@ -362,6 +556,7 @@ export function NotchHud() {
         setVoiceError(null);
         const active = voiceRef.current;
         if (active?.isRecording) {
+            recordVoiceStep("recorder-stop-requested");
             setRecording(false);
             setVoiceStream(null);
             setTranscribing(true);
@@ -369,17 +564,26 @@ export function NotchHud() {
                 const clip = await active.stop();
                 if (!clip) {
                     setVoiceError("Too short — hold the mic a little longer.");
+                    recordVoiceStep("recording-too-short");
                     return;
                 }
+                recordVoiceStep("recording-stopped", Date.now(), clip.durationMs);
+                const transcribingAt = Date.now();
+                recordVoiceStep("transcription-requested", transcribingAt);
                 const result = await transcribeVoiceInput(clip.audioBytes, clip.mimeType);
                 const spoken = result.text?.trim();
                 if (!spoken) {
                     setVoiceError("Nothing came through.");
+                    const completedAt = Date.now();
+                    recordVoiceStep("no-speech", completedAt, completedAt - transcribingAt);
                     return;
                 }
+                const completedAt = Date.now();
+                recordVoiceStep("transcript-ready", completedAt, completedAt - transcribingAt);
                 ask(spoken);
-            } catch (error: unknown) {
-                setVoiceError(error instanceof Error ? error.message : "Transcription failed.");
+            } catch {
+                setVoiceError("Transcription failed.");
+                recordVoiceStep("transcription-failed");
             } finally {
                 setTranscribing(false);
             }
@@ -388,15 +592,21 @@ export function NotchHud() {
 
         const capture = new VoiceCapture();
         voiceRef.current = capture;
+        const requestedAt = Date.now();
+        setNotchActivityTrace(null);
+        setVoiceActivityTrace(beginVoiceActivityTrace("notch", requestedAt));
         try {
             await capture.start();
+            recordVoiceStep("microphone-connected");
             setRecording(true);
             setVoiceStream(capture.mediaStream);
+            recordVoiceStep("recording-started");
         } catch {
             voiceRef.current = null;
             setVoiceError("Microphone access failed.");
+            recordVoiceStep("microphone-failed");
         }
-    }, [ask]);
+    }, [ask, recordVoiceStep]);
 
     // MARK: - Keyboard
 
@@ -510,18 +720,8 @@ export function NotchHud() {
                                     ]}
                                 />
                             ) : null}
-                            {mode === "do" ? (
-                                <VoiceBeam
-                                    stream={operatorStream ?? undefined}
-                                    processing={false}
-                                    theme="dark"
-                                    active={stage === "open"}
-                                >
-                                    <NotchOperator
-                                        active={stage === "open"}
-                                        onStreamChange={setOperatorStream}
-                                    />
-                                </VoiceBeam>
+                            {mode === "do" && operateEnabled ? (
+                                <NotchOperator active={stage === "open"} />
                             ) : (
                             <>
                             <VoiceBeam
@@ -573,9 +773,27 @@ export function NotchHud() {
                             </VoiceBeam>
 
                             {voiceError ? (
-                                <p className="notch-voice-error" role="status">
+                                <p
+                                    className="notch-voice-error"
+                                    role={voiceActivityTrace ? undefined : "status"}
+                                >
                                     {voiceError}
                                 </p>
+                            ) : null}
+
+                            {voiceActivityTrace ? (
+                                <ActivityTrace
+                                    trace={voiceActivityTrace}
+                                    className="notch-voice-trace"
+                                    showDetails={false}
+                                />
+                            ) : null}
+
+                            {notchActivityTrace ? (
+                                <ActivityTrace
+                                    trace={notchActivityTrace}
+                                    className="notch-activity-trace"
+                                />
                             ) : null}
 
                             {conversing ? (

@@ -3,7 +3,6 @@ use super::audit::{
 };
 use super::policy::{policy_for_mode, AgentMode, PermissionScope, RiskLevel, ToolPolicy};
 use crate::context_runtime::{self, ContextRequest};
-use crate::privacy::Blocklist;
 use crate::storage::{
     ContextPack, ContextTask, DecisionSummary, EntityRef, EvidenceRef, FailureSummary,
     ProjectContext, RelevantFile,
@@ -30,6 +29,8 @@ pub struct AgentContextRequest {
     pub domain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_minutes: Option<u32>,
+    /// Restricts memory cards and their derived URLs/workflow; verified project
+    /// context retains its existing broader scope.
     #[serde(default)]
     pub selected_memory_ids: Vec<String>,
     #[serde(default)]
@@ -152,17 +153,35 @@ async fn build_from_context_pack(
 ) -> Result<AgentContextPack, String> {
     let budget_tokens = normalize_budget(request.budget_tokens);
     let privacy_scope = privacy_scope_for_request(state, &request);
-    let mut disallowed_context = pack
-        .excluded
+    let blocklist = state.config.read().blocklist.clone();
+    let private_evidence_ids = pack
+        .evidence
         .iter()
-        .map(|item| RedactionNote {
-            id: item.id.clone(),
-            reason: item.reason.clone(),
-        })
-        .collect::<Vec<_>>();
+        .filter(|evidence| evidence_is_private(evidence))
+        .map(|evidence| evidence.source_id.as_str())
+        .collect::<HashSet<_>>();
+    let mut disallowed_context = Vec::new();
+    for item in &pack.excluded {
+        if private_evidence_ids.contains(item.id.as_str()) {
+            continue;
+        }
+        let Some(memory) = state
+            .store
+            .get_memory_by_id(&item.id)
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            continue;
+        };
+        if context_runtime::context_memory_is_visible(&memory, &blocklist) {
+            disallowed_context.push(RedactionNote {
+                id: memory.id,
+                reason: item.reason.clone(),
+            });
+        }
+    }
     note_unsupported_filters(&request, &mut disallowed_context);
 
-    let blocklist = state.config.read().blocklist.clone();
     let selected: HashSet<&str> = request
         .selected_memory_ids
         .iter()
@@ -172,82 +191,69 @@ async fn build_from_context_pack(
     let mut seen = HashSet::new();
 
     for evidence in &pack.evidence {
-        if !selected.is_empty() && !selected.contains(evidence.source_id.as_str()) {
+        if private_evidence_ids.contains(evidence.source_id.as_str()) {
+            continue;
+        }
+        let Some(memory) = state
+            .store
+            .get_memory_by_id(&evidence.source_id)
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            continue;
+        };
+        // Cached evidence never substitutes for an unavailable or excluded source.
+        // Authorize before selection/limit diagnostics, which also expose IDs.
+        if !context_runtime::context_memory_is_visible(&memory, &blocklist) {
+            continue;
+        }
+        if !selected.is_empty()
+            && !selected.contains(evidence.source_id.as_str())
+            && !selected.contains(memory.id.as_str())
+        {
             disallowed_context.push(RedactionNote {
-                id: evidence.source_id.clone(),
+                id: memory.id,
                 reason: "not selected for this agent context request".to_string(),
             });
             continue;
         }
-        if !seen.insert(evidence.source_id.clone()) {
+        if !seen.insert(memory.id.clone()) {
             continue;
         }
-
-        let memory = state
-            .store
-            .get_memory_by_id(&evidence.source_id)
-            .await
-            .map_err(|err| err.to_string())?;
-        if let Some(memory) = memory {
-            if is_private_memory(
-                &memory.app_name,
-                memory.url.as_deref(),
-                &memory.window_title,
-                &blocklist,
-            ) {
-                disallowed_context.push(RedactionNote {
-                    id: memory.id.clone(),
-                    reason: "excluded by FNDR privacy blocklist or sensitive-context policy"
-                        .to_string(),
-                });
-                continue;
-            }
-            if memory_cards.len() >= DEFAULT_AGENT_MEMORY_LIMIT {
-                disallowed_context.push(RedactionNote {
-                    id: memory.id.clone(),
-                    reason: "dropped after agent memory limit was reached".to_string(),
-                });
-                continue;
-            }
-            memory_cards.push(AgentMemoryCard {
-                memory_id: memory.id.clone(),
-                title: first_non_empty(&[
-                    memory.display_summary.as_str(),
-                    memory.insight_what_happened.as_str(),
-                    memory.window_title.as_str(),
-                    evidence.summary.as_str(),
-                ]),
-                summary: first_non_empty(&[
-                    memory.memory_context.as_str(),
-                    memory.display_summary.as_str(),
-                    evidence.summary.as_str(),
-                    evidence.snippet.as_str(),
-                ]),
-                timestamp: memory.timestamp,
-                app_name: memory.app_name.clone(),
-                window_title: memory.window_title.clone(),
-                url: memory.url.clone(),
-                confidence: memory
-                    .confidence_score
-                    .max(memory.insight_card_confidence)
-                    .max(evidence_confidence_floor(pack.confidence)),
-                match_reason: included_reason_for(&pack, &memory.id),
-                evidence: vec![redact_evidence(evidence, request.include_raw_evidence)],
+        if memory_cards.len() >= DEFAULT_AGENT_MEMORY_LIMIT {
+            disallowed_context.push(RedactionNote {
+                id: memory.id,
+                reason: "dropped after agent memory limit was reached".to_string(),
             });
-        } else {
-            memory_cards.push(AgentMemoryCard {
-                memory_id: evidence.source_id.clone(),
-                title: evidence.summary.clone(),
-                summary: evidence.snippet.clone(),
-                timestamp: evidence.timestamp,
-                app_name: evidence.source_type.clone(),
-                window_title: String::new(),
-                url: None,
-                confidence: evidence_confidence_floor(pack.confidence),
-                match_reason: included_reason_for(&pack, &evidence.source_id),
-                evidence: vec![redact_evidence(evidence, request.include_raw_evidence)],
-            });
+            continue;
         }
+        let mut admitted_evidence = redact_evidence(evidence, request.include_raw_evidence);
+        admitted_evidence.source_id = memory.id.clone();
+        memory_cards.push(AgentMemoryCard {
+            memory_id: memory.id.clone(),
+            title: first_non_empty(&[
+                memory.display_summary.as_str(),
+                memory.insight_what_happened.as_str(),
+                memory.window_title.as_str(),
+                evidence.summary.as_str(),
+            ]),
+            summary: first_non_empty(&[
+                memory.memory_context.as_str(),
+                memory.display_summary.as_str(),
+                evidence.summary.as_str(),
+                evidence.snippet.as_str(),
+            ]),
+            timestamp: memory.timestamp,
+            app_name: memory.app_name.clone(),
+            window_title: memory.window_title.clone(),
+            url: memory.url.clone(),
+            confidence: memory
+                .confidence_score
+                .max(memory.insight_card_confidence)
+                .max(evidence_confidence_floor(pack.confidence)),
+            match_reason: included_reason_for(&pack, &memory.id),
+            evidence: vec![admitted_evidence],
+        });
     }
 
     let files = pack
@@ -258,7 +264,7 @@ async fn build_from_context_pack(
             reason: file.why.clone(),
         })
         .collect();
-    let urls = collect_urls(&memory_cards, &pack.evidence);
+    let urls = collect_urls(&memory_cards);
     let entities = collect_entities_from_cards(&memory_cards);
     let recent_workflow_trace = workflow_trace_from_cards(&memory_cards);
     let commands = collect_command_evidence(&memory_cards);
@@ -373,16 +379,8 @@ fn note_unsupported_filters(request: &AgentContextRequest, notes: &mut Vec<Redac
     }
 }
 
-fn is_private_memory(
-    app_name: &str,
-    url: Option<&str>,
-    window_title: &str,
-    blocklist: &[String],
-) -> bool {
-    Blocklist::is_internal_app(app_name, None)
-        || Blocklist::is_blocked(app_name, blocklist)
-        || Blocklist::is_context_blocked(url, Some(window_title), blocklist)
-        || Blocklist::is_sensitive_context(url, Some(window_title))
+fn evidence_is_private(evidence: &EvidenceRef) -> bool {
+    !context_runtime::context_privacy_is_visible(&evidence.privacy_class)
 }
 
 fn redact_evidence(evidence: &EvidenceRef, include_raw: bool) -> EvidenceRef {
@@ -402,7 +400,7 @@ fn included_reason_for(pack: &ContextPack, id: &str) -> String {
         .unwrap_or_else(|| "selected by FNDR retrieval context pack".to_string())
 }
 
-fn collect_urls(cards: &[AgentMemoryCard], evidence: &[EvidenceRef]) -> Vec<UrlRef> {
+fn collect_urls(cards: &[AgentMemoryCard]) -> Vec<UrlRef> {
     let mut urls = BTreeMap::new();
     for card in cards {
         if let Some(url) = card.url.as_deref().filter(|url| !url.trim().is_empty()) {
@@ -413,7 +411,7 @@ fn collect_urls(cards: &[AgentMemoryCard], evidence: &[EvidenceRef]) -> Vec<UrlR
             });
         }
     }
-    for item in evidence {
+    for item in cards.iter().flat_map(|card| &card.evidence) {
         for url in extract_urls(&item.snippet) {
             urls.entry(url.clone()).or_insert_with(|| UrlRef {
                 url,
@@ -748,6 +746,189 @@ pub struct ProposedAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn conversion_state(path: &std::path::Path) -> AppState {
+        let store = std::sync::Arc::new(crate::storage::Store::new(path).unwrap());
+        let state_store = std::sync::Arc::new(crate::storage::StateStore::new(path).unwrap());
+        let graph = crate::graph::GraphStore::new(store.clone());
+        AppState::new(
+            path.to_path_buf(),
+            crate::config::Config::default(),
+            store,
+            state_store,
+            graph,
+            None,
+        )
+    }
+
+    fn conversion_memory(id: &str) -> crate::storage::MemoryRecord {
+        crate::storage::MemoryRecord {
+            id: id.into(),
+            app_name: "Editor".into(),
+            window_title: "Release verification".into(),
+            clean_text:
+                "Reviewed deployment verification evidence and discussed the release checklist."
+                    .into(),
+            memory_context: "Reviewed release verification.".into(),
+            ..Default::default()
+        }
+    }
+
+    fn conversion_evidence(id: &str) -> EvidenceRef {
+        EvidenceRef {
+            id: format!("evidence:{id}"),
+            source_id: id.into(),
+            source_type: "application".into(),
+            summary: format!("Cached summary for {id}"),
+            snippet: format!("Recorded https://example.test/{id} in release evidence."),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn agent_conversion_rechecks_sources_before_cards_urls_and_redaction_metadata() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = conversion_state(dir.path());
+        let hidden = [
+            "PRIVATE_blocked",
+            "PRIVATE_deleted",
+            "PRIVATE_internal",
+            "PRIVATE_low_signal",
+            "PRIVATE_note",
+            "PRIVATE_sensitive",
+            "PRIVATE_missing",
+            "PRIVATE_class_sensitive",
+            "PRIVATE_class_secret",
+            "PRIVATE_class_blocked",
+            "PRIVATE_class_ephemeral",
+        ];
+        let mut rows = vec![conversion_memory("visible")];
+        for id in hidden.iter().copied().filter(|id| *id != "PRIVATE_missing") {
+            let mut row = conversion_memory(id);
+            match id {
+                "PRIVATE_blocked" => row.app_name = "PrivateWorkspace".into(),
+                "PRIVATE_deleted" => row.is_soft_deleted = true,
+                "PRIVATE_internal" => row.bundle_id = Some("com.fndr.app".into()),
+                "PRIVATE_low_signal" => row.storage_outcome = "visual_semantics_failed".into(),
+                "PRIVATE_note" => row.source_type = "agent".into(),
+                "PRIVATE_sensitive" => row.url = Some("https://chase.com/accounts".into()),
+                "PRIVATE_class_sensitive"
+                | "PRIVATE_class_secret"
+                | "PRIVATE_class_blocked"
+                | "PRIVATE_class_ephemeral" => {}
+                _ => unreachable!(),
+            }
+            rows.push(row);
+        }
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&rows))
+            .unwrap();
+        state.config.write().blocklist = vec!["privateworkspace".into()];
+        let pack = ContextPack {
+            id: "pack-current".into(),
+            evidence: std::iter::once("visible")
+                .chain(hidden)
+                .map(|id| {
+                    let mut evidence = conversion_evidence(id);
+                    evidence.privacy_class = match id {
+                        "PRIVATE_class_sensitive" => crate::storage::PrivacyClass::Sensitive,
+                        "PRIVATE_class_secret" => crate::storage::PrivacyClass::Secret,
+                        "PRIVATE_class_blocked" => crate::storage::PrivacyClass::Blocked,
+                        "PRIVATE_class_ephemeral" => crate::storage::PrivacyClass::Ephemeral,
+                        _ => crate::storage::PrivacyClass::Project,
+                    };
+                    evidence
+                })
+                .collect(),
+            excluded: hidden
+                .into_iter()
+                .map(|id| crate::storage::ExcludedContextItem {
+                    id: id.into(),
+                    reason: format!("Cached exclusion {id}"),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        for include_raw_evidence in [false, true] {
+            let converted = runtime
+                .block_on(build_from_context_pack(
+                    &state,
+                    AgentContextRequest {
+                        include_raw_evidence,
+                        ..Default::default()
+                    },
+                    pack.clone(),
+                ))
+                .unwrap();
+            assert_eq!(
+                converted
+                    .relevant_memories
+                    .iter()
+                    .map(|card| card.memory_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["visible"]
+            );
+            assert!(converted
+                .urls
+                .iter()
+                .any(|url| url.url == "https://example.test/visible"));
+            let serialized = serde_json::to_string(&converted).unwrap();
+            assert!(
+                !serialized.contains("PRIVATE_"),
+                "excluded source leaked: {serialized}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_selected_cards_do_not_reintroduce_unselected_evidence_urls() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = conversion_state(dir.path());
+        runtime
+            .block_on(state.store.add_batch_preserving_ids(&[
+                conversion_memory("selected"),
+                conversion_memory("other-visible"),
+            ]))
+            .unwrap();
+        let pack = ContextPack {
+            id: "pack-current".into(),
+            project: Some("Release".into()),
+            summary: "Verified project context remains available.".into(),
+            relevant_files: vec![RelevantFile {
+                path: "/synthetic/release.md".into(),
+                why: "Verified project evidence".into(),
+            }],
+            evidence: vec![
+                conversion_evidence("selected"),
+                conversion_evidence("other-visible"),
+            ],
+            ..Default::default()
+        };
+        let converted = runtime
+            .block_on(build_from_context_pack(
+                &state,
+                AgentContextRequest {
+                    selected_memory_ids: vec!["selected".into()],
+                    ..Default::default()
+                },
+                pack,
+            ))
+            .unwrap();
+        assert_eq!(converted.relevant_memories.len(), 1);
+        assert_eq!(converted.relevant_memories[0].memory_id, "selected");
+        assert!(converted
+            .urls
+            .iter()
+            .all(|url| url.source_memory_id == "selected"));
+        // Preserve the existing card-only selection scope for already verified project context.
+        assert_eq!(converted.files[0].path, "/synthetic/release.md");
+        assert_eq!(
+            converted.current_project.unwrap().summary,
+            "Verified project context remains available."
+        );
+    }
 
     #[test]
     fn redacts_evidence_snippets_unless_raw_is_requested() {

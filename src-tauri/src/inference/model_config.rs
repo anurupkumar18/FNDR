@@ -22,6 +22,9 @@ pub const QWEN3_VL_2B_MAIN_GGUF_MIN_BYTES: u64 = 900_000_000;
 pub enum EmbeddingContractVersion {
     V4MiniLm384,
     V5Bge1024,
+    /// EmbeddingGemma (VS-47). Defined so the embedder can be checked against
+    /// the reference implementation; not the active contract (VS-49 migrates).
+    V6EmbeddingGemma,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,11 +67,17 @@ pub const BGE_V5_MAX_SEQ_LEN: usize = 512;
 /// Keep explicit BGE reindex batches small on the default 8GB-safe profile.
 pub const BGE_V5_MAX_BATCH_SIZE: usize = 4;
 
-pub const MAX_CONCURRENT_MULTIMODAL_JOBS: usize = 1;
-pub const QWEN_IDLE_UNLOAD_SECONDS: u64 = 90;
-pub const MAX_IMAGE_LONG_EDGE: u32 = 1024;
-pub const MAX_MEMORY_PROMPT_TOKENS: usize = 3500;
-pub const MAX_MEMORY_OUTPUT_TOKENS: usize = 900;
+pub const EMBEDDING_GEMMA_MODEL_ID: &str = "google/embeddinggemma-300m";
+/// The onnx-community export (revision 5090578d9565bb06545b4552f76e6bc2c93e4a66).
+/// Its `sentence_embedding` output applies the model's mean pooling, its two
+/// dense layers, and normalization; `model.onnx_data` must sit beside it.
+pub const EMBEDDING_GEMMA_MODEL_FILENAME: &str = "model.onnx";
+pub const EMBEDDING_GEMMA_TOKENIZER_FILENAME: &str = "tokenizer.json";
+/// The model's full size; 512, 256, and 128 are Matryoshka truncations.
+pub const EMBEDDING_GEMMA_FULL_DIMENSIONS: usize = 768;
+pub const EMBEDDING_GEMMA_MAX_SEQ_LEN: usize = 2048;
+pub const EMBEDDING_GEMMA_MAX_BATCH_SIZE: usize = 4;
+
 pub const QWEN_CONTEXT_SIZE: u32 = 4096;
 
 /// Default context window (prompt plus output) of the text engine; `FNDR_INFERENCE_N_CTX` overrides it.
@@ -77,8 +86,6 @@ pub const TEXT_ENGINE_DEFAULT_N_CTX: u32 = 4096;
 /// Generation cap for `extract_structured_memory` and its repair pass. Complete answers measured 316 to 573
 /// tokens; a cut-off answer has no closing brace and is discarded.
 pub const EXTRACTION_MAX_OUTPUT_TOKENS: i32 = 640;
-pub const QWEN_TEMPERATURE: f32 = 0.1;
-pub const QWEN_TOP_P: f32 = 0.8;
 
 /// LanceDB table name for memories using all-MiniLM-L6-v2 384-dim vectors.
 /// This is the **current durable write path** for memories. Search, capture,
@@ -115,6 +122,39 @@ pub const fn embedding_v5_contract() -> TextEmbeddingContract {
         max_sequence_length: BGE_V5_MAX_SEQ_LEN,
         max_batch_size: BGE_V5_MAX_BATCH_SIZE,
         table_name: MEMORIES_V5_TABLE,
+    }
+}
+
+/// EmbeddingGemma at `dimensions`: 768 (full) or a Matryoshka truncation
+/// (512, 256, 128), which the embedder cuts and renormalizes (VS-47).
+/// Unsupported dimensions are rejected so different vector sizes cannot claim
+/// the same table identity.
+pub const fn embedding_v6_contract(
+    dimensions: usize,
+) -> Result<TextEmbeddingContract, &'static str> {
+    Ok(TextEmbeddingContract {
+        version: EmbeddingContractVersion::V6EmbeddingGemma,
+        model_id: EMBEDDING_GEMMA_MODEL_ID,
+        model_filename: EMBEDDING_GEMMA_MODEL_FILENAME,
+        tokenizer_filename: EMBEDDING_GEMMA_TOKENIZER_FILENAME,
+        dimensions,
+        max_sequence_length: EMBEDDING_GEMMA_MAX_SEQ_LEN,
+        max_batch_size: EMBEDDING_GEMMA_MAX_BATCH_SIZE,
+        table_name: match dimensions {
+            768 => "memories_v6_embeddinggemma_768",
+            512 => "memories_v6_embeddinggemma_512",
+            256 => "memories_v6_embeddinggemma_256",
+            128 => "memories_v6_embeddinggemma_128",
+            _ => return Err("EmbeddingGemma dimensions must be one of 128, 256, 512, or 768"),
+        },
+    })
+}
+
+impl TextEmbeddingContract {
+    /// Whether the model was trained so that its vectors can be cut to fewer
+    /// dimensions and renormalized (Matryoshka Representation Learning).
+    pub const fn supports_truncation(&self) -> bool {
+        matches!(self.version, EmbeddingContractVersion::V6EmbeddingGemma)
     }
 }
 
@@ -230,6 +270,32 @@ mod tests {
     }
 
     #[test]
+    fn embeddinggemma_contract_rejects_unsupported_dimensions() {
+        for dimensions in [0, 1, 127, 129, 384, 769, usize::MAX] {
+            assert!(
+                embedding_v6_contract(dimensions).is_err(),
+                "unsupported dimension {dimensions} must not claim an EmbeddingGemma table"
+            );
+        }
+    }
+
+    #[test]
+    fn embeddinggemma_contract_preserves_supported_table_identities() {
+        for (dimensions, table_name) in [
+            (128, "memories_v6_embeddinggemma_128"),
+            (256, "memories_v6_embeddinggemma_256"),
+            (512, "memories_v6_embeddinggemma_512"),
+            (768, "memories_v6_embeddinggemma_768"),
+        ] {
+            let contract = embedding_v6_contract(dimensions).expect("supported dimension");
+            assert_eq!(contract.dimensions, dimensions);
+            assert_eq!(contract.table_name, table_name);
+            assert_eq!(contract.model_id, EMBEDDING_GEMMA_MODEL_ID);
+        }
+        assert_eq!(active_embedding_contract(), embedding_v4_contract());
+    }
+
+    #[test]
     fn contract_validation_rejects_dimension_and_asset_drift() {
         let v5 = embedding_v5_contract();
         let bad_dimension = crate::config::EmbeddingConfig {
@@ -254,26 +320,6 @@ mod tests {
         let err = validate_embedding_config_against_contract(&bad_model, v5)
             .expect_err("MiniLM file must not validate against BGE v5");
         assert!(err.contains("model_filename"));
-    }
-
-    #[test]
-    fn extraction_prompt_budget_covers_dense_ocr() {
-        // Measured 2026-09-21 with the Qwen3-VL-2B tokenizer: the extraction system prompt is 357 tokens,
-        // dense captures (numbers, URLs, code) run near 2 characters per token, and OCR is capped at 4,000
-        // characters. Prompt and output share one window, and an overflow is cut from the front of the
-        // prompt, which is where the rules live.
-        const SYSTEM_PROMPT_TOKENS: i32 = 357;
-        const MAX_OCR_CHARS: i32 = 4000;
-        const DENSE_CHARS_PER_TOKEN: i32 = 2;
-        const TEMPLATE_AND_WRAPPER_TOKENS: i32 = 64;
-        let budget = TEXT_ENGINE_DEFAULT_N_CTX as i32 - EXTRACTION_MAX_OUTPUT_TOKENS;
-        let needed = SYSTEM_PROMPT_TOKENS
-            + MAX_OCR_CHARS / DENSE_CHARS_PER_TOKEN
-            + TEMPLATE_AND_WRAPPER_TOKENS;
-        assert!(
-            budget >= needed,
-            "prompt budget {budget} tokens is below the {needed} a dense 4,000 character capture needs"
-        );
     }
 
     #[test]

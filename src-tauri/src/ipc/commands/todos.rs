@@ -1,15 +1,15 @@
 //! Todo / task Tauri commands.
 
-use super::common::is_internal_fndr_result;
-use crate::storage::{MeetingSession, SearchResult, Task, TaskType};
+use crate::storage::{MeetingSession, Task, TaskType};
+use crate::tasks::suggest::{
+    accept as accept_suggestion, is_accepted as is_accepted_task, is_offered, is_suggestion,
+};
 use crate::AppState;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tauri::State;
 
-const TASK_LINK_SCAN_LIMIT: usize = 260;
 const TASK_MEETING_LOOKBACK_DAYS: i64 = 14;
-const TASK_MEMORY_BACKFILL_LIMIT: usize = 6;
 
 // ========== Task Commands ==========
 
@@ -102,7 +102,7 @@ fn task_priority_score(task: &Task, now_ms: i64) -> i64 {
     let memory_bonus = (task.linked_memory_ids.len().min(10) as i64) * 4;
     let url_bonus = (task.linked_urls.len().min(6) as i64) * 2;
     let due_bonus = if task.due_date.is_some() { 12 } else { 0 };
-    let source_bonus = if is_manual_task(task) {
+    let source_bonus = if is_manual_task(task) || is_accepted_task(task) {
         22
     } else if is_meeting_task(task) {
         16
@@ -226,184 +226,6 @@ fn backfill_tasks_from_meetings(tasks: &mut Vec<Task>, meetings: &[MeetingSessio
     changed
 }
 
-#[derive(Debug, Clone)]
-struct MemoryTaskCandidate {
-    title: String,
-    task_type: TaskType,
-    score: i64,
-    created_at: i64,
-    source_app: String,
-    source_memory_id: String,
-    linked_urls: Vec<String>,
-}
-
-fn first_sentence(text: &str) -> String {
-    text.split(['.', '!', '?'])
-        .next()
-        .unwrap_or_default()
-        .split_whitespace()
-        .take(18)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn build_memory_task_candidate(memory: &SearchResult) -> Option<MemoryTaskCandidate> {
-    if is_internal_fndr_result(memory) {
-        return None;
-    }
-
-    let mut text = memory.snippet.trim().to_string();
-    if text.is_empty() {
-        text = memory.clean_text.trim().to_string();
-    }
-    if text.is_empty() {
-        text = memory.window_title.trim().to_string();
-    }
-    if text.is_empty() {
-        return None;
-    }
-
-    let sentence = first_sentence(&text);
-    if sentence.is_empty() {
-        return None;
-    }
-
-    let cleaned = sentence
-        .trim()
-        .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`')
-        .trim_start_matches("TODO:")
-        .trim_start_matches("To do:")
-        .trim_start_matches("to do:")
-        .trim()
-        .to_string();
-    if cleaned.is_empty() || is_low_signal_task_title(&cleaned) {
-        return None;
-    }
-
-    let lower = cleaned.to_lowercase();
-    let action_cues = [
-        "need to",
-        "should",
-        "must",
-        "todo",
-        "to do",
-        "action item",
-        "send",
-        "reply",
-        "schedule",
-        "book",
-        "finish",
-        "complete",
-        "prepare",
-        "submit",
-        "review",
-        "update",
-        "fix",
-        "call",
-        "email",
-        "draft",
-        "plan",
-        "confirm",
-        "deploy",
-        "ship",
-        "follow up",
-    ];
-    let action_hits = action_cues
-        .iter()
-        .filter(|cue| lower.contains(*cue))
-        .count() as i64;
-    if action_hits == 0 {
-        return None;
-    }
-
-    let reminder_hits = [
-        "tomorrow",
-        "today",
-        "tonight",
-        "next week",
-        "next month",
-        "deadline",
-        "due ",
-    ]
-    .iter()
-    .filter(|cue| lower.contains(*cue))
-    .count() as i64;
-    let followup_hits = [
-        "follow up",
-        "follow-up",
-        "reply to",
-        "reach out",
-        "check in with",
-    ]
-    .iter()
-    .filter(|cue| lower.contains(*cue))
-    .count() as i64;
-    let score = action_hits * 4 + reminder_hits * 3 + followup_hits * 4;
-    if score < 4 {
-        return None;
-    }
-
-    Some(MemoryTaskCandidate {
-        title: cleaned,
-        task_type: crate::tasks::infer_task_type_from_title(&lower),
-        score,
-        created_at: memory.timestamp,
-        source_app: format!("Memory:{}", memory.app_name),
-        source_memory_id: memory.id.clone(),
-        linked_urls: memory.url.clone().map(|url| vec![url]).unwrap_or_default(),
-    })
-}
-
-fn backfill_tasks_from_memories(tasks: &mut Vec<Task>, recent_memories: &[SearchResult]) -> bool {
-    let mut changed = false;
-    let mut dedupe = tasks
-        .iter()
-        .map(|task| {
-            (
-                normalize_task_text(&task.title),
-                task_type_sort_key(&task.task_type),
-            )
-        })
-        .collect::<HashSet<_>>();
-
-    let mut candidates = recent_memories
-        .iter()
-        .filter_map(build_memory_task_candidate)
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| {
-        right
-            .score
-            .cmp(&left.score)
-            .then_with(|| right.created_at.cmp(&left.created_at))
-    });
-
-    for candidate in candidates.into_iter().take(TASK_MEMORY_BACKFILL_LIMIT) {
-        let type_key = task_type_sort_key(&candidate.task_type);
-        let dedupe_key = (normalize_task_text(&candidate.title), type_key);
-        if !dedupe.insert(dedupe_key) {
-            continue;
-        }
-
-        tasks.push(Task {
-            id: uuid::Uuid::new_v4().to_string(),
-            title: candidate.title,
-            description: String::new(),
-            source_app: candidate.source_app,
-            source_memory_id: Some(candidate.source_memory_id.clone()),
-            created_at: candidate.created_at,
-            due_date: None,
-            is_completed: false,
-            is_dismissed: false,
-            task_type: candidate.task_type.clone(),
-            linked_urls: candidate.linked_urls,
-            linked_memory_ids: vec![candidate.source_memory_id],
-        });
-        changed = true;
-    }
-
-    changed
-}
-
 fn dismiss_low_quality_auto_tasks(tasks: &mut [Task]) -> bool {
     let mut changed = false;
 
@@ -510,11 +332,6 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .list_memory_ids()
         .await
         .map_err(|e| e.to_string())?;
-    let recent_memories = state
-        .store
-        .list_recent_results(TASK_LINK_SCAN_LIMIT, None)
-        .await
-        .map_err(|e| e.to_string())?;
     let meetings = state
         .store
         .list_meetings()
@@ -522,10 +339,11 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .map_err(|e| e.to_string())?;
 
     let prune_changed = prune_tasks_with_deleted_memories(&mut tasks, &valid_memory_ids);
-    let memory_backfill_changed = backfill_tasks_from_memories(&mut tasks, &recent_memories);
+    // Opening the list never invents tasks from memories. Tasks come from
+    // the person, a meeting, or a checked suggestion made at capture time.
     let meeting_backfill_changed = backfill_tasks_from_meetings(&mut tasks, &meetings);
     let cleanup_changed = dismiss_low_quality_auto_tasks(&mut tasks);
-    if prune_changed || memory_backfill_changed || meeting_backfill_changed || cleanup_changed {
+    if prune_changed || meeting_backfill_changed || cleanup_changed {
         state
             .store
             .upsert_tasks(&tasks)
@@ -533,6 +351,20 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
             .map_err(|e| e.to_string())?;
     }
 
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let visible = visible_tasks(tasks, now_ms);
+    Ok(visible)
+}
+
+/// At most this many suggestions are offered at once. A person accepts or
+/// rejects a handful; a long list is ignored whole.
+const MAX_SUGGESTIONS_SHOWN: usize = 5;
+
+/// What the To-dos list shows: the person's open tasks, then up to
+/// `MAX_SUGGESTIONS_SHOWN` suggestions. A suggestion is shown only while it
+/// is offered (`tasks::suggest::is_offered`): quoted from the screen and a
+/// few days old at most. Others stay stored and hidden.
+fn visible_tasks(tasks: Vec<Task>, now_ms: i64) -> Vec<Task> {
     let mut visible = tasks
         .into_iter()
         .filter(|task| !task.is_completed && !task.is_dismissed)
@@ -540,6 +372,7 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
         .filter(|task| {
             is_manual_task(task) || is_meeting_task(task) || task_has_supporting_context(task)
         })
+        .filter(|task| !is_suggestion(task) || is_offered(task, now_ms))
         .collect::<Vec<_>>();
     let mut seen = HashSet::new();
     visible.retain(|task| {
@@ -548,7 +381,6 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
             task_type_sort_key(&task.task_type),
         ))
     });
-    let now_ms = chrono::Utc::now().timestamp_millis();
     visible.sort_by(|left, right| {
         task_priority_score(right, now_ms)
             .cmp(&task_priority_score(left, now_ms))
@@ -557,7 +389,16 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
                 task_type_sort_key(&left.task_type).cmp(&task_type_sort_key(&right.task_type))
             })
     });
-    Ok(visible)
+    let mut suggestions_left = MAX_SUGGESTIONS_SHOWN;
+    visible.retain(|task| {
+        if !is_suggestion(task) {
+            return true;
+        }
+        let keep = suggestions_left > 0;
+        suggestions_left = suggestions_left.saturating_sub(1);
+        keep
+    });
+    visible
 }
 
 /// Dismiss a task
@@ -629,6 +470,7 @@ pub async fn update_todo(
     task_id: String,
     title: String,
     task_type: Option<String>,
+    accept: Option<bool>,
 ) -> Result<Task, String> {
     let trimmed = title.trim();
     if trimmed.is_empty() {
@@ -642,9 +484,14 @@ pub async fn update_todo(
         .find(|task| task.id == task_id)
         .ok_or_else(|| "Task not found".to_string())?;
 
-    task.title = trimmed.to_string();
-    task.task_type = parsed_type;
-    task.created_at = chrono::Utc::now().timestamp_millis();
+    // Accepting a suggestion keeps its wording, type and time as they were.
+    if accept == Some(true) {
+        accept_suggestion(task);
+    } else {
+        task.title = trimmed.to_string();
+        task.task_type = parsed_type;
+        task.created_at = chrono::Utc::now().timestamp_millis();
+    }
     let updated = task.clone();
 
     state
@@ -653,4 +500,89 @@ pub async fn update_todo(
         .await
         .map_err(|e| e.to_string())?;
     Ok(updated)
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use super::*;
+
+    const NOW: i64 = 1_790_000_000_000;
+
+    fn task(id: &str, source_app: &str, quote: &str) -> Task {
+        Task {
+            id: id.to_string(),
+            title: format!("Send the draft report {id}"),
+            description: quote.to_string(),
+            source_app: source_app.to_string(),
+            source_memory_id: (source_app != "manual").then(|| format!("mem-{id}")),
+            created_at: NOW - 60_000,
+            due_date: None,
+            is_completed: false,
+            is_dismissed: false,
+            task_type: TaskType::Todo,
+            linked_urls: Vec::new(),
+            linked_memory_ids: Vec::new(),
+        }
+    }
+
+    fn ids(tasks: &[Task]) -> Vec<&str> {
+        tasks.iter().map(|task| task.id.as_str()).collect()
+    }
+
+    #[test]
+    fn a_suggestion_without_its_quote_is_stored_but_not_shown() {
+        let shown = visible_tasks(
+            vec![
+                task("old", "Memory:ChatGPT", ""),
+                task(
+                    "quoted",
+                    "Memory:Mail",
+                    "can you send me the draft report by Friday",
+                ),
+                task("mine", "manual", ""),
+            ],
+            NOW,
+        );
+        assert_eq!(ids(&shown), vec!["mine", "quoted"]);
+    }
+
+    #[test]
+    fn a_suggestion_nobody_took_stops_being_shown() {
+        let mut stale = task("stale", "Memory:Mail", "please send the report");
+        stale.created_at = NOW - crate::tasks::suggest::SUGGESTION_LIFESPAN_MS - 1;
+        let mut old_but_mine = task("mine", "manual", "");
+        old_but_mine.created_at = stale.created_at;
+        assert_eq!(
+            ids(&visible_tasks(vec![stale, old_but_mine], NOW)),
+            vec!["mine"]
+        );
+    }
+
+    #[test]
+    fn at_most_five_suggestions_are_offered_and_own_tasks_are_never_cut() {
+        let mut tasks: Vec<Task> = (0..9)
+            .map(|n| task(&format!("s{n}"), "Memory:Mail", "please send the report"))
+            .collect();
+        tasks.extend((0..7).map(|n| task(&format!("m{n}"), "manual", "")));
+        let shown = visible_tasks(tasks, NOW);
+        assert_eq!(shown.iter().filter(|task| is_suggestion(task)).count(), 5);
+        assert_eq!(shown.iter().filter(|task| !is_suggestion(task)).count(), 7);
+    }
+
+    #[test]
+    fn accepting_a_suggestion_makes_it_the_persons_task_and_keeps_its_memory() {
+        let mut suggestion = task("s", "Memory:Mail", "please send the report");
+        assert!(is_suggestion(&suggestion));
+        accept_suggestion(&mut suggestion);
+        assert!(!is_suggestion(&suggestion));
+        assert!(is_accepted_task(&suggestion));
+        assert_eq!(suggestion.source_app, "Accepted:Mail");
+        assert_eq!(suggestion.source_memory_id.as_deref(), Some("mem-s"));
+        // It is listed with the person's tasks, ahead of open suggestions.
+        let shown = visible_tasks(
+            vec![task("other", "Memory:Mail", "please reply"), suggestion],
+            NOW,
+        );
+        assert_eq!(ids(&shown), vec!["s", "other"]);
+    }
 }

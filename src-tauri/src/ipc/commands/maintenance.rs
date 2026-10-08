@@ -156,7 +156,10 @@ pub async fn reindex_memories_v5(
     reindex_memories_v5_for_state(state.inner().clone()).await
 }
 
-async fn reindex_memories_v5_for_state(
+/// Write BGE parent rows and chunk rows for every memory that lacks them.
+/// Public so `examples/retrieval_qa.rs --chunks` can index an evaluation
+/// copy before measuring the chunk route (VS-18).
+pub async fn reindex_memories_v5_for_state(
     state: Arc<AppState>,
 ) -> Result<ReindexMemoriesV5Summary, String> {
     if V5_REINDEX_RUNNING.swap(true, Ordering::AcqRel) {
@@ -787,7 +790,8 @@ mod tests {
 
     #[test]
     fn v5_reindex_batch_embeds_multiple_parents_in_shared_calls() {
-        let memory = |id: &str, marker: &str| MemoryRecord {
+        let memory = |id: &str, marker: &str| {
+            MemoryRecord {
             id: id.to_string(),
             content_hash: format!("hash-{id}"),
             app_name: "Code".to_string(),
@@ -799,6 +803,7 @@ mod tests {
             snippet: format!("{marker} BGE batching"),
             memory_context: format!("{marker} BGE batching design"),
             ..MemoryRecord::default()
+        }
         };
         let alpha = memory("alpha", "ALPHA_MARKER");
         let beta = memory("beta", "BETA_MARKER");
@@ -807,14 +812,13 @@ mod tests {
         let mut chunking = crate::config::ChunkingConfig::default();
         chunking.max_chunks_per_memory = 1;
 
-        let outcomes =
-            build_v5_reindex_batch_with(&sources, &chunking, 4, |batch: &[String]| {
-                observed_batches.push(batch.to_vec());
-                Ok(batch
-                    .iter()
-                    .map(|_| vec![1.0; embedding_v5_contract().dimensions])
-                    .collect())
-            });
+        let outcomes = build_v5_reindex_batch_with(&sources, &chunking, 4, |batch: &[String]| {
+            observed_batches.push(batch.to_vec());
+            Ok(batch
+                .iter()
+                .map(|_| vec![1.0; embedding_v5_contract().dimensions])
+                .collect())
+        });
 
         assert_eq!(outcomes.len(), 2);
         assert!(outcomes
@@ -848,16 +852,15 @@ mod tests {
         let mut chunking = crate::config::ChunkingConfig::default();
         chunking.max_chunks_per_memory = 1;
 
-        let outcomes =
-            build_v5_reindex_batch_with(&sources, &chunking, 4, |batch: &[String]| {
-                if batch.iter().any(|text| text.contains("BETA_MARKER")) {
-                    return Err("synthetic beta failure".to_string());
-                }
-                Ok(batch
-                    .iter()
-                    .map(|_| vec![1.0; embedding_v5_contract().dimensions])
-                    .collect())
-            });
+        let outcomes = build_v5_reindex_batch_with(&sources, &chunking, 4, |batch: &[String]| {
+            if batch.iter().any(|text| text.contains("BETA_MARKER")) {
+                return Err("synthetic beta failure".to_string());
+            }
+            Ok(batch
+                .iter()
+                .map(|_| vec![1.0; embedding_v5_contract().dimensions])
+                .collect())
+        });
 
         assert!(matches!(outcomes[0], V5ReindexBuildOutcome::Ready { .. }));
         assert!(matches!(
@@ -1170,7 +1173,9 @@ async fn run_memory_repair_backfill_for_state(
         app_index.entry(normalized_app).or_default().push(index);
         merged_memories.push(incoming);
 
-        if processed.is_multiple_of(heartbeat_count_step) || last_heartbeat.elapsed() >= heartbeat_interval {
+        if processed.is_multiple_of(heartbeat_count_step)
+            || last_heartbeat.elapsed() >= heartbeat_interval
+        {
             tracing::info!(
                 "memory_repair_backfill:progress processed={} total={} merged={} anchor_merges={}",
                 processed,
@@ -1936,7 +1941,9 @@ async fn reclaim_memory_storage_for_state(
         progress.processed = rewritten_memories.len();
         progress.records_rewritten = records_rewritten;
         progress.screenshot_paths_cleared = screenshot_paths_cleared;
-        if progress.processed.is_multiple_of(STORAGE_RECLAIM_HEARTBEAT_ITEM_STEP)
+        if progress
+            .processed
+            .is_multiple_of(STORAGE_RECLAIM_HEARTBEAT_ITEM_STEP)
             || last_heartbeat.elapsed() >= heartbeat_interval
         {
             progress.timestamp_ms = chrono::Utc::now().timestamp_millis();
@@ -2238,8 +2245,8 @@ use crate::inference::model_config::CLEANUP_OLD_MODEL_DIRS;
 #[tauri::command]
 pub async fn models_cleanup_dry_run(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
     use tauri::Manager;
-    let app_data_dir = crate::config::fndr_app_data_dir(app_handle.path())
-        .map_err(|e| e.to_string())?;
+    let app_data_dir =
+        crate::config::fndr_app_data_dir(app_handle.path()).map_err(|e| e.to_string())?;
     let models_dir = app_data_dir.join("models");
     if !models_dir.exists() {
         return Ok(vec!["models/ directory does not exist".to_string()]);
@@ -2273,8 +2280,8 @@ pub async fn models_cleanup_dry_run(app_handle: tauri::AppHandle) -> Result<Vec<
 #[tauri::command]
 pub async fn models_cleanup_confirm(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
     use tauri::Manager;
-    let app_data_dir = crate::config::fndr_app_data_dir(app_handle.path())
-        .map_err(|e| e.to_string())?;
+    let app_data_dir =
+        crate::config::fndr_app_data_dir(app_handle.path()).map_err(|e| e.to_string())?;
     let models_dir = app_data_dir.join("models");
     if !models_dir.exists() {
         return Ok(vec!["models/ directory does not exist".to_string()]);

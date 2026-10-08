@@ -95,6 +95,17 @@ describe("MemoryCard — compact variant (narrow container)", () => {
         expect(previewEl).toBeTruthy();
     });
 
+    it("shows low confidence as a badge without changing the preview sentence", () => {
+        renderCompact(makeCard({
+            summary: "A grounded sentence about the capture.",
+            low_confidence: true,
+        }));
+
+        expect(screen.getByText("Low confidence")).toBeTruthy();
+        expect(screen.getByTitle("A grounded sentence about the capture.")).toBeTruthy();
+        expect(screen.queryByText(/Low confidence: A grounded sentence/)).toBeNull();
+    });
+
     it("does NOT hide critical elements via inline styles", () => {
         const { container } = renderCompact(makeCard());
         const article = container.querySelector("[data-testid='memory-card']") as HTMLElement;
@@ -119,6 +130,12 @@ describe("MemoryCard — compact variant (narrow container)", () => {
         const chip = screen.getByLabelText("activity: coding");
         expect(chip).toBeTruthy();
         expect(chip.textContent).toBe("coding");
+    });
+
+    it("shows a multi-word activity as words, not as an identifier", () => {
+        renderCompact(makeCard({ activity_type: "testing_workflow" }));
+        const chip = screen.getByLabelText("activity: testing workflow");
+        expect(chip.textContent).toBe("testing workflow");
     });
 
     it("does NOT render activity_type chip when value is 'other'", () => {

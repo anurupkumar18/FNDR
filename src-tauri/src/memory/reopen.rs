@@ -2,8 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ReopenKind {
     BrowserUrl,
     FilePath,
@@ -12,7 +11,6 @@ pub enum ReopenKind {
     #[default]
     Unknown,
 }
-
 
 impl ReopenKind {
     pub fn as_str(&self) -> &'static str {
@@ -36,15 +34,13 @@ impl ReopenKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ReopenValidationStatus {
     Valid,
     Invalid,
     #[default]
     Unchecked,
 }
-
 
 impl ReopenValidationStatus {
     pub fn as_str(&self) -> &'static str {
@@ -198,7 +194,10 @@ fn page_from_label_n_connector_m(value: &str) -> Option<u32> {
 }
 
 fn is_page_connector(word: &str) -> bool {
-    matches!(word.to_ascii_lowercase().as_str(), "of" | "sur" | "von" | "de")
+    matches!(
+        word.to_ascii_lowercase().as_str(),
+        "of" | "sur" | "von" | "de"
+    )
 }
 
 /// Reads `page=N` from a URL fragment (`#page=12` or `#page=12&zoom=100`).
@@ -217,7 +216,10 @@ pub fn page_from_pdf_url(url: &str) -> Option<u32> {
 
 fn url_path_ends_with_pdf(url: &str) -> bool {
     let without_fragment = url.split('#').next().unwrap_or(url);
-    let without_query = without_fragment.split('?').next().unwrap_or(without_fragment);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
     without_query.to_ascii_lowercase().ends_with(".pdf")
 }
 
@@ -232,7 +234,8 @@ pub fn page_from_pdf_viewer_ocr(url: &str, ocr_text: &str) -> Option<u32> {
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(page) = page_from_slash_pair(trimmed).or_else(|| page_from_ocr_n_of_m(trimmed)) {
+        if let Some(page) = page_from_slash_pair(trimmed).or_else(|| page_from_ocr_n_of_m(trimmed))
+        {
             return Some(page);
         }
     }
@@ -264,7 +267,11 @@ fn page_from_ocr_n_of_m(line: &str) -> Option<u32> {
 
 /// File targets use the window title. Browser URLs use `#page=N` first, then
 /// the PDF toolbar OCR. Other kinds never store a page.
-pub fn detect_reopen_page(target: &ReopenTarget, window_title: &str, ocr_text: &str) -> Option<u32> {
+pub fn detect_reopen_page(
+    target: &ReopenTarget,
+    window_title: &str,
+    ocr_text: &str,
+) -> Option<u32> {
     match target.kind {
         ReopenKind::FilePath => page_from_window_title(window_title),
         ReopenKind::BrowserUrl => {
@@ -409,7 +416,10 @@ pub fn text_anchor_from(
     if stored.is_empty() {
         return None;
     }
-    if let Some(preferred) = preferred_passage.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(preferred) = preferred_passage
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         let preferred_norm = normalize_ws(preferred);
         if !preferred_norm.is_empty() && stored.contains(&preferred_norm) {
             if let Some(anchor) = first_anchor_window(preferred) {
@@ -621,8 +631,16 @@ mod tests {
         let cases = [
             ("http", "http://example.com/a", "http://example.com/a"),
             ("https", "https://example.com/a", "https://example.com/a"),
-            ("uppercase scheme", "HTTPS://EXAMPLE.COM/A", "HTTPS://EXAMPLE.COM/A"),
-            ("surrounding whitespace", "  https://example.com/a \n", "https://example.com/a"),
+            (
+                "uppercase scheme",
+                "HTTPS://EXAMPLE.COM/A",
+                "HTTPS://EXAMPLE.COM/A",
+            ),
+            (
+                "surrounding whitespace",
+                "  https://example.com/a \n",
+                "https://example.com/a",
+            ),
         ];
         for (label, input, expected) in cases {
             let target = build_reopen_target(
@@ -637,7 +655,11 @@ mod tests {
             assert_eq!(target.file_path, None, "{label}");
             assert_eq!(target.app_bundle_id, None, "{label}");
             assert_eq!(target.confidence, 0.95, "{label}");
-            assert_eq!(target.validation_status, ReopenValidationStatus::Valid, "{label}");
+            assert_eq!(
+                target.validation_status,
+                ReopenValidationStatus::Valid,
+                "{label}"
+            );
             assert_eq!(target.captured_at_ms, AT, "{label}");
         }
     }
@@ -683,12 +705,24 @@ mod tests {
             AT,
         );
         assert_eq!(file_over_app.kind, ReopenKind::FilePath);
-        assert_eq!(file_over_app.file_path.as_deref(), Some("/Users/qa/doc.pdf"));
+        assert_eq!(
+            file_over_app.file_path.as_deref(),
+            Some("/Users/qa/doc.pdf")
+        );
         assert_eq!(file_over_app.app_bundle_id, None);
         assert_eq!(file_over_app.confidence, 0.85);
-        assert_eq!(file_over_app.validation_status, ReopenValidationStatus::Unchecked);
+        assert_eq!(
+            file_over_app.validation_status,
+            ReopenValidationStatus::Unchecked
+        );
 
-        let app = build_reopen_target(None, Some("   "), Some(" com.apple.Preview "), " Preview ", AT);
+        let app = build_reopen_target(
+            None,
+            Some("   "),
+            Some(" com.apple.Preview "),
+            " Preview ",
+            AT,
+        );
         assert_eq!(app.kind, ReopenKind::AppBundle);
         assert_eq!(app.app_bundle_id.as_deref(), Some("com.apple.Preview"));
         assert_eq!(app.app_name.as_deref(), Some("Preview"));
@@ -708,7 +742,11 @@ mod tests {
             assert_eq!(target.kind, ReopenKind::Unknown, "{label}");
             assert_eq!(target.app_name, None, "{label}");
             assert_eq!(target.confidence, 0.0, "{label}");
-            assert_eq!(target.validation_status, ReopenValidationStatus::Invalid, "{label}");
+            assert_eq!(
+                target.validation_status,
+                ReopenValidationStatus::Invalid,
+                "{label}"
+            );
         }
 
         let named = build_reopen_target(None, None, None, " Zoom ", AT);
@@ -752,8 +790,8 @@ mod tests {
             "Finder",
             AT,
         );
-        let restored = deserialize_reopen_target(&serialize_reopen_target(&target))
-            .expect("round trip");
+        let restored =
+            deserialize_reopen_target(&serialize_reopen_target(&target)).expect("round trip");
         assert_eq!(restored.kind, target.kind);
         assert_eq!(restored.file_path, target.file_path);
         assert_eq!(restored.captured_at_ms, target.captured_at_ms);
@@ -1101,7 +1139,8 @@ mod tests {
     #[test]
     fn text_anchor_from_ignores_a_passage_that_was_not_stored() {
         let stored = "Nitrogen is a chemical element with the symbol N and atomic number seven in the periodic table.";
-        let secret = "the password is hunter2 and this phrase was never written onto the stored page at all";
+        let secret =
+            "the password is hunter2 and this phrase was never written onto the stored page at all";
         let anchor = text_anchor_from(stored, Some(secret), "Chrome").expect("fallback");
         assert!(!anchor.to_ascii_lowercase().contains("hunter2"));
         assert!(!anchor.contains('@'));
@@ -1143,10 +1182,7 @@ mod tests {
             "https://example.com/article#section"
         );
         assert_eq!(
-            url_with_text_anchor(
-                "https://docs.google.com/document/d/abc",
-                "one two three"
-            ),
+            url_with_text_anchor("https://docs.google.com/document/d/abc", "one two three"),
             "https://docs.google.com/document/d/abc"
         );
         assert_eq!(

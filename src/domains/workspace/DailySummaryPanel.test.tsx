@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DailySummaryPanel } from "./DailySummaryPanel";
 
 const ipc = vi.hoisted(() => ({
@@ -24,6 +24,18 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("DailySummaryPanel", () => {
+    it("traces the observed summary request and verified result", async () => {
+        render(<DailySummaryPanel isVisible onClose={vi.fn()} onOpenMemoryById={vi.fn()} />);
+
+        fireEvent.click(screen.getByRole("button", { name: /generate summary/i }));
+
+        const trace = await screen.findByLabelText("Daily summary activity");
+        expect(await within(trace).findByText("Daily summary ready")).toBeInTheDocument();
+        fireEvent.click(within(trace).getByRole("button", { name: "Show Daily summary activity details" }));
+        expect(within(trace).getByText(/verified result/i)).toBeInTheDocument();
+        expect(within(trace).queryByText(/summary for 20/i)).toBeNull();
+    });
+
     it("clears content tied to the previous date when the selected date changes", async () => {
         render(<DailySummaryPanel isVisible onClose={vi.fn()} onOpenMemoryById={vi.fn()} />);
 
@@ -47,7 +59,7 @@ describe("DailySummaryPanel", () => {
 
         fireEvent.click(screen.getByRole("button", { name: /generate summary/i }));
 
-        expect(await screen.findByText(/no open follow-ups right now/i)).toBeInTheDocument();
+        expect(await screen.findByText(/no open tasks right now/i)).toBeInTheDocument();
         expect(screen.queryByText(/no open follow-ups for this day/i)).toBeNull();
     });
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const eventMocks = vi.hoisted(() => ({
     handler: null as null | (() => void),
@@ -85,6 +85,39 @@ describe("OmnibarApp", () => {
             "Couldn’t search your memory. Try again.",
         );
         expect(screen.queryByText("No memory matches")).not.toBeInTheDocument();
+        const trace = screen.getByRole("region", { name: "Quick Find activity" });
+        expect(within(trace).getByRole("status")).toHaveTextContent("Memory search failed");
+        expect(trace).not.toHaveTextContent("index offline");
+    });
+
+    it("traces the observed memory-search boundary and result without exposing content", async () => {
+        let finishSearch: (cards: ReturnType<typeof memoryCard>[]) => void = () => {};
+        ipcMocks.searchMemoryCards.mockReturnValue(new Promise((resolve) => {
+            finishSearch = resolve;
+        }));
+        render(<OmnibarApp />);
+
+        fireEvent.change(screen.getByRole("searchbox", { name: "Search your memory" }), {
+            target: { value: "confidential renewal plan" },
+        });
+
+        const trace = await screen.findByRole("region", { name: "Quick Find activity" });
+        expect(within(trace).getByRole("status")).toHaveTextContent("Waiting for typing to settle");
+        expect(trace).not.toHaveTextContent("confidential renewal plan");
+
+        await waitFor(() => expect(ipcMocks.searchMemoryCards).toHaveBeenCalled());
+        expect(within(trace).getByRole("status")).toHaveTextContent("Requesting local memory matches");
+
+        await act(async () => {
+            finishSearch([memoryCard("memory-1", "Private board title")]);
+            await Promise.resolve();
+        });
+
+        await waitFor(() => expect(within(trace).getByRole("status")).toHaveTextContent(
+            "Memory search returned 1 match",
+        ));
+        expect(within(trace).queryByText(/^(Running|Waiting)$/)).not.toBeInTheDocument();
+        expect(trace).not.toHaveTextContent("Private board title");
     });
 
     it("explains an answer failure without clearing the question", async () => {
@@ -130,6 +163,42 @@ describe("OmnibarApp", () => {
 
         expect(await screen.findByText("You chose the local-first option.")).toBeInTheDocument();
         expect(screen.getByText("Grounded in 1 local memory")).toBeInTheDocument();
+    });
+
+    it("traces the answer request and grounding result without exposing the question or answer", async () => {
+        let finishAnswer: (answer: unknown) => void = () => {};
+        ipcMocks.fndrAnswer.mockReturnValue(new Promise((resolve) => {
+            finishAnswer = resolve;
+        }));
+        render(<OmnibarApp />);
+
+        const input = screen.getByRole("searchbox", { name: "Search your memory" });
+        fireEvent.change(input, { target: { value: "What is the confidential decision?" } });
+        fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+
+        const trace = await screen.findByRole("region", { name: "Quick Find activity" });
+        expect(within(trace).getByRole("status")).toHaveTextContent(
+            "Requesting an answer from local memory",
+        );
+        expect(trace).not.toHaveTextContent("confidential decision");
+
+        await act(async () => {
+            finishAnswer({
+                query: "What is the confidential decision?",
+                answer: "Use the private launch plan.",
+                evidence: { files: [], commands: [], decisions: [], errors: [], todos: [], urls: [] },
+                cards: [memoryCard("memory-1", "Private launch plan")],
+                verify_outcome: { kind: "grounded", confidence: 0.91 },
+                surfacing_reasons: [],
+            });
+            await Promise.resolve();
+        });
+
+        await waitFor(() => expect(within(trace).getByRole("status")).toHaveTextContent(
+            "Answer grounded in 1 local memory",
+        ));
+        expect(within(trace).queryByText(/^(Running|Waiting)$/)).not.toBeInTheDocument();
+        expect(trace).not.toHaveTextContent("private launch plan");
     });
 
     it("returns to search when an answered question is edited", async () => {
@@ -198,6 +267,11 @@ describe("OmnibarApp", () => {
             name: "Search clipboard history",
         });
         await screen.findByRole("option", { name: /A long-lived clipboard value/i });
+        const trace = screen.getByRole("region", { name: "Quick Find activity" });
+        expect(within(trace).getByRole("status")).toHaveTextContent(
+            "Clipboard search returned 1 match",
+        );
+        expect(trace).not.toHaveTextContent(clipboardEntry.text);
         fireEvent.keyDown(clipboardSearch, { key: "Enter", metaKey: true });
         expect(ipcMocks.pasteClipboardEntry).toHaveBeenCalledWith(clipboardEntry.text);
     });

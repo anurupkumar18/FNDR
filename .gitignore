@@ -27,6 +27,14 @@ src-tauri/models/*.gguf
 !src-tauri/tests/fixtures/**/*.json
 !docs/team/
 !docs/team/*.json
+!scripts/demo/knowledge-worker-week.json
+!scripts/demo/knowledge-worker-queries.json
+!scripts/demo/office-pm-week.json
+!scripts/demo/office-pm-queries.json
+!docs/evidence/W02/retrieval-baseline-seeded.json
+!scripts/demo/retrieval-reference/*.json
+!docs/evidence/W03/retrieval-baseline-*.json
+!docs/evidence/W03/VS-17-bakeoff-cloud.json
 *.lancedb/
 *.db/
 *.lance/
@@ -57,6 +65,9 @@ apps/ios/FNDRKit/.build/
 
 # Build output
 build/
+src-tauri/binaries/fndr-speech-*
+src-tauri/binaries/fndr-auth-*
+src-tauri/binaries/FNDR Speech Helper.app/
 
 # iOS / Xcode
 apps/ios/Local.xcconfig

@@ -66,11 +66,40 @@
     max-width: 64ch;
 }
 
+.fndr-mc-low-confidence {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg-3));
+    color: var(--fg-2);
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: 0.02em;
+    padding: 2px 7px;
+    vertical-align: middle;
+}
+
+.fndr-mc-c-preview .fndr-mc-low-confidence {
+    margin-right: 6px;
+    white-space: nowrap;
+}
+
+.fndr-mc-preview .fndr-mc-low-confidence {
+    margin-right: 7px;
+}
+
 .fndr-mc-source {
     font-family: var(--font-body);
     font-size: 11px;
     color: var(--fg-3);
     margin-top: 8px;
+}
+
+.fndr-mc--expanded.fndr-mc--agent-note .fndr-mc-preview {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 .fndr-mc-threads {

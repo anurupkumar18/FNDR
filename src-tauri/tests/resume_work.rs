@@ -44,10 +44,14 @@ fn groups_recent_memories_into_cited_threads_and_excludes_stale_ones() {
         .expect("add records");
 
     let threads = runtime
-        .block_on(build_resume_threads(&store, 4, 2000))
+        .block_on(build_resume_threads(&store, 4, 2000, &[]))
         .expect("build resume threads");
 
-    assert_eq!(threads.len(), 2, "expected exactly two threads, got {threads:?}");
+    assert_eq!(
+        threads.len(),
+        2,
+        "expected exactly two threads, got {threads:?}"
+    );
 
     let stored_ids: std::collections::HashSet<&str> =
         records.iter().map(|r| r.id.as_str()).collect();
@@ -101,6 +105,127 @@ fn groups_recent_memories_into_cited_threads_and_excludes_stale_ones() {
 }
 
 #[test]
+fn resume_offers_up_to_three_cited_next_steps_from_the_whole_thread() {
+    std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Store::new(dir.path()).expect("store");
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // One synthetic session. The newest memory names no next step; the
+    // steps worth suggesting are in older memories, and one repeats.
+    let mut changelog = record("parser-0", "Parser", 100, now_ms);
+    changelog.next_steps = vec!["Update the changelog".to_string()];
+    let mut first_test = record("parser-1", "Parser", 90, now_ms);
+    first_test.next_steps = vec!["Write the integration test".to_string()];
+    let mut failure = record("parser-2", "Parser", 60, now_ms);
+    failure.next_steps.clear();
+    failure.errors = vec!["connection refused on port 5432".to_string()];
+    let mut decision = record("parser-3", "Parser", 30, now_ms);
+    decision.next_steps.clear();
+    decision.decisions = vec![
+        "We will ship the parser behind a flag".to_string(),
+        "Picked LanceDB over SQLite".to_string(),
+    ];
+    let mut repeat = record("parser-4", "Parser", 20, now_ms);
+    repeat.next_steps = vec!["write the integration test.".to_string()];
+    let mut latest = record("parser-5", "Parser", 5, now_ms);
+    latest.next_steps.clear();
+    let records = vec![changelog, first_test, failure, decision, repeat, latest];
+
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    runtime
+        .block_on(store.add_batch(&records))
+        .expect("add records");
+    let threads = runtime
+        .block_on(build_resume_threads(&store, 4, 2000, &[]))
+        .expect("build resume threads");
+    let thread = threads
+        .iter()
+        .find(|t| t.title == "Parser")
+        .expect("a Parser thread");
+
+    // The newest memory names no step, so the newest-only list is empty.
+    assert!(thread.next_steps.is_empty(), "{:?}", thread.next_steps);
+    // Newest first, one entry per step, at most three, each citing the
+    // memory it came from. A decision counts only when it states work to do.
+    let steps = thread
+        .suggested_next_steps
+        .iter()
+        .map(|step| (step.title.as_str(), step.source_memory_id.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        steps,
+        vec![
+            ("write the integration test.", "parser-4"),
+            ("We will ship the parser behind a flag", "parser-3"),
+            ("Fix: connection refused on port 5432", "parser-2"),
+        ]
+    );
+    for step in &thread.suggested_next_steps {
+        assert!(thread.evidence.contains(&step.source_memory_id));
+    }
+}
+
+#[test]
+fn resume_applies_current_blocklist_before_thread_state_suggestions_and_evidence() {
+    std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path()).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let visible = record("visible", "Release", 20, now);
+    let mut rows = vec![visible];
+    for kind in ["app", "title", "url", "deleted"] {
+        let mut row = record(&format!("PRIVATE_{kind}"), "Release", 1, now);
+        row.topic = format!("PRIVATE_{kind}");
+        match kind {
+            "app" => row.app_name = "PrivateWorkspace".into(),
+            "title" => row.window_title = "PrivateWorkspace planning".into(),
+            "url" => row.url = Some("https://privateworkspace.example/notes".into()),
+            "deleted" => row.is_soft_deleted = true,
+            _ => unreachable!(),
+        }
+        rows.push(row);
+    }
+    let mut hidden_project = rows[1].clone();
+    hidden_project.id = "PRIVATE_only_project".into();
+    hidden_project.project = "PRIVATE_only_project".into();
+    rows.push(hidden_project);
+    runtime
+        .block_on(store.add_batch_preserving_ids(&rows))
+        .unwrap();
+    // Apply a new exclusion after storing the records, then remove it again.
+    let before = runtime
+        .block_on(build_resume_threads(&store, 4, 2000, &[]))
+        .unwrap();
+    assert!(before
+        .iter()
+        .any(|thread| thread.evidence.contains(&"PRIVATE_app".into())));
+    let excluded = vec!["privateworkspace".to_string()];
+    let after = runtime
+        .block_on(build_resume_threads(&store, 4, 2000, &excluded))
+        .unwrap();
+    assert_eq!(after.len(), 1, "excluded-only project must disappear");
+    assert_eq!(after[0].evidence, ["visible"]);
+    assert_eq!(after[0].last_state, "Memory context for visible");
+    assert_eq!(after[0].age_minutes, 20);
+    assert!(after[0]
+        .suggested_next_steps
+        .iter()
+        .all(|step| step.source_memory_id == "visible"));
+    assert!(!serde_json::to_string(&after).unwrap().contains("PRIVATE_"));
+    let restored = runtime
+        .block_on(build_resume_threads(&store, 4, 2000, &[]))
+        .unwrap();
+    assert!(restored
+        .iter()
+        .any(|thread| thread.evidence.contains(&"PRIVATE_app".into())));
+    assert!(restored
+        .iter()
+        .all(|thread| !thread.evidence.contains(&"PRIVATE_deleted".into())));
+}
+
+#[test]
 fn resume_work_p95_latency_over_50_calls() {
     // Demo-week-scale volume: 10 projects x 20 memories each, spread over a
     // week, all inside the default 24-hour resume window's neighborhood so
@@ -133,7 +258,7 @@ fn resume_work_p95_latency_over_50_calls() {
     for _ in 0..50 {
         let started = std::time::Instant::now();
         let threads = runtime
-            .block_on(build_resume_threads(&store, 24, 2000))
+            .block_on(build_resume_threads(&store, 24, 2000, &[]))
             .expect("build resume threads");
         durations_ms.push(started.elapsed().as_secs_f64() * 1000.0);
         assert!(!threads.is_empty());

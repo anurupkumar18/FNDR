@@ -16,8 +16,8 @@ use crate::memory::reopen::{ReopenKind, ReopenValidationStatus};
 use crate::memory_embedding_document::search_embedding_provenance;
 use crate::storage::schema::{
     ActivityEvent, ContextDelta, ContextPack, DecisionLedgerEntry, EdgeType, EntityAliasRecord,
-    GraphEdge, GraphNode, KnowledgePage, MeetingSegment,
-    MeetingSession, MemoryChunkRecord, MemoryChunkSearchResult, MemoryRecord, NodeType, ProjectContext, SearchResult, Task, TaskType,
+    GraphEdge, GraphNode, KnowledgePage, MeetingSegment, MeetingSession, MemoryChunkRecord,
+    MemoryChunkSearchResult, MemoryRecord, NodeType, ProjectContext, SearchResult, Task, TaskType,
 };
 
 use super::schemas::{
@@ -26,10 +26,7 @@ use super::schemas::{
     meeting_schema, memory_chunk_schema, memory_schema_for_text_dim, node_schema,
     project_context_schema, segment_schema, task_schema,
 };
-use super::{
-    IMAGE_EMBED_DIM,
-    TEXT_EMBED_DIM,
-};
+use super::{IMAGE_EMBED_DIM, TEXT_EMBED_DIM};
 use arrow_array::builder::{Int64Builder, ListBuilder, StringBuilder};
 use sha2::{Digest, Sha256};
 
@@ -87,7 +84,7 @@ pub(super) fn records_to_batch_with_text_dim(
         .collect();
     let urls: Vec<Option<&str>> = records.iter().map(|r| r.url.as_deref()).collect();
 
-    // Text embeddings — flatten all embeddings into one Float32Array.
+    // Text embeddings: flatten all embeddings into one Float32Array.
     let flat_text: Vec<f32> = records
         .iter()
         .flat_map(|r| r.embedding.iter().copied())
@@ -858,6 +855,8 @@ pub(super) fn batch_to_memory_records(batch: &RecordBatch) -> Vec<MemoryRecord> 
 
 pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> {
     let n = batch.num_rows();
+    let source_types = str_col(batch, "source_type");
+    let related_agents = list_str_col(batch, "related_agents");
     let ids = str_col(batch, "id");
     let timestamps = i64_col(batch, "timestamp");
     let app_names = str_col(batch, "app_name");
@@ -947,6 +946,17 @@ pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> 
                 id: get_str(&ids, i),
                 timestamp: timestamps.as_ref().map(|c| c.value(i)).unwrap_or(0),
                 app_name: get_str(&app_names, i),
+                source_type: get_str(&source_types, i),
+                added_by: if get_str(&source_types, i) == crate::storage::AGENT_NOTE_SOURCE_TYPE {
+                    extract_str_list(&related_agents, i).into_iter().next()
+                } else {
+                    None
+                },
+                text_source: crate::memory_quality::text_source_from_raw_evidence(&get_str(
+                    &raw_evidences,
+                    i,
+                ))
+                .to_string(),
                 bundle_id: get_opt_str(&bundle_ids, i),
                 window_title: get_str(&window_titles, i),
                 session_id: get_str(&session_ids, i),
@@ -1068,6 +1078,36 @@ pub(super) fn batch_to_search_results(batch: &RecordBatch) -> Vec<SearchResult> 
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod text_source_tests {
+    use super::*;
+
+    #[test]
+    fn serialized_search_result_text_source_uses_existing_arrow_evidence() {
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "raw_evidence",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                r#"{"source_kind":"ax"}"#,
+                r#"{"source_kind":"ocr","text_source_kinds":["ocr","browser_semantic"]}"#,
+                "{}",
+            ]))],
+        )
+        .unwrap();
+        let results = batch_to_search_results(&batch);
+        for (result, expected) in results.iter().zip(["ax", "mixed", "unknown"]) {
+            assert_eq!(
+                serde_json::to_value(result).unwrap()["text_source"],
+                expected
+            );
+        }
+    }
 }
 
 // ── Arrow column helpers ─────────────────────────────────────────────────────
@@ -2194,7 +2234,14 @@ pub(super) fn time_filter_to_sql(tf: &str) -> Option<String> {
         )),
         "today" => local_day_range_filter(0),
         "yesterday" => local_day_range_filter(1),
-        _ => None,
+        // An explicit window from parsed query phrases (VS-13):
+        // "range:<start_ms>:<end_ms>", half open.
+        other => other.strip_prefix("range:").and_then(|range| {
+            let (start, end) = range.split_once(':')?;
+            let start = start.parse::<i64>().ok()?;
+            let end = end.parse::<i64>().ok()?;
+            (start < end).then(|| format!("timestamp >= {start} AND timestamp < {end}"))
+        }),
     }
 }
 

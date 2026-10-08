@@ -51,6 +51,27 @@ fn memory_chunk(id: &str, memory_id: &str, dim: usize) -> MemoryChunkRecord {
     }
 }
 
+#[tokio::test]
+async fn replacing_memory_chunks_uses_one_atomic_table_version() {
+    let (_dir, store) = keyword_store(vec![]).await;
+    let first = memory_chunk("chunk-1", "memory-1", BGE_V5_DIMENSIONS);
+    store.upsert_memory_chunks(std::slice::from_ref(&first)).await.unwrap();
+    let before = store.memory_chunks_table.list_versions().await.unwrap().len();
+
+    let mut replacement = first;
+    replacement.text = "Updated chunk text for the same parent memory.".into();
+    store
+        .upsert_memory_chunks(std::slice::from_ref(&replacement))
+        .await
+        .unwrap();
+
+    let after = store.memory_chunks_table.list_versions().await.unwrap().len();
+    assert_eq!(after, before + 1, "replacement should be a single merge-insert");
+    let rows = store.list_chunks_for_memory("memory-1").await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].text, replacement.text);
+}
+
 #[test]
 fn normalize_record_for_index_suppresses_auth_urls() {
     let normalized = normalize_record_for_index(&record(
@@ -573,6 +594,103 @@ fn normalize_record_for_index_strips_low_confidence_markers() {
     assert!(!normalized.display_summary.contains("[LOW_CONF]"));
 }
 
+#[tokio::test]
+async fn source_backed_storage_roundtrip_does_not_regenerate_intent_or_actions() {
+    let mut source = record(
+        None,
+        "Draft discussion",
+        "Mira: I will review the draft after approval.",
+    );
+    source.memory_context = "A discussion about the draft and its approval condition.".into();
+    source.decisions = vec!["Wait for approval before review".into()];
+    source.errors = vec!["Approval is unavailable".into()];
+    source.next_steps = vec!["INVENTED_PENDING_TASK".into()];
+    source.todos = vec!["INVENTED_TODO".into()];
+    source.raw_evidence = serde_json::json!({"source_evidence": {
+        "version":1, "source_sha256":"a".repeat(64), "issues":[],
+        "statements":[{"kind":"action", "line":1,
+            "quote":"Mira: I will review the draft after approval."}]
+    }})
+    .to_string();
+    let (_dir, store) = keyword_store(vec![source.clone()]).await;
+    let written = store.get_memory_by_id(&source.id).await.unwrap().unwrap();
+    assert!(
+        written.user_intent.is_empty(),
+        "storage inferred intent: {}",
+        written.user_intent
+    );
+    assert!(written.intent_analysis.intent_label.is_empty());
+    assert_eq!(written.intent_analysis.confidence, 0.0);
+    assert!(written.next_steps.is_empty());
+    assert!(written.todos.is_empty());
+    assert!(written.action_items.is_empty());
+    assert_eq!(written.memory_context, source.memory_context);
+    assert_eq!(written.decisions, source.decisions);
+    assert_eq!(written.errors, source.errors);
+    let evidence =
+        crate::inference::extraction_evidence::source_evidence_sets_from_raw(&written.raw_evidence)
+            .into_iter()
+            .next()
+            .unwrap();
+    assert_eq!(
+        evidence.statements[0].quote,
+        "Mira: I will review the draft after approval."
+    );
+}
+
+#[test]
+fn source_backed_normalization_clears_stale_intent_and_actions_even_with_invalid_marker() {
+    let mut source = record(
+        None,
+        "Draft discussion",
+        "Mira discussed a conditional review.",
+    );
+    source.raw_evidence = r#"{"source_evidence":{"version":99}}"#.into();
+    source.user_intent = "Review draft".into();
+    source.intent_analysis.intent_label = "Review draft".into();
+    source.intent_analysis.confidence = 0.9;
+    source.intent_score = 0.9;
+    source.activity_type = "browsing".into();
+    source.next_steps = vec!["Review draft".into()];
+    source.todos = vec!["Review draft".into()];
+    source.action_items = vec![crate::storage::MemoryActionItem {
+        text: "Review draft".into(),
+        status: "pending".into(),
+        ..Default::default()
+    }];
+    let normalized = normalize_record_for_index(&source);
+    assert!(normalized.user_intent.is_empty());
+    assert!(normalized.intent_analysis.intent_label.is_empty());
+    assert_eq!(normalized.intent_analysis.confidence, 0.0);
+    assert_eq!(normalized.intent_score, 0.0);
+    assert!(!normalized.memory_context.contains("Intent:"));
+    assert!(!normalized.memory_context.contains("Next actions:"));
+    assert!(normalized.next_steps.is_empty());
+    assert!(normalized.todos.is_empty());
+    assert!(normalized.action_items.is_empty());
+}
+
+#[test]
+fn normalize_agent_note_preserves_literal_text_and_formatting() {
+    let body = "Keep this code exactly:\n```python\nif ready:\n    print(\"[LOW_CONF]\")\n```\n\nKeep the final qualification.";
+    let mut note = record(None, "Code note", body);
+    note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.into();
+    note.memory_context = body.into();
+    note.internal_context = body.into();
+    note.display_summary = body.into();
+    let normalized = normalize_record_for_index(&note);
+    for text in [
+        &normalized.text,
+        &normalized.clean_text,
+        &normalized.snippet,
+        &normalized.display_summary,
+        &normalized.memory_context,
+        &normalized.internal_context,
+    ] {
+        assert_eq!(text, body);
+    }
+}
+
 #[test]
 fn normalize_record_for_index_preserves_existing_embedding_text_and_flags_mismatch() {
     let mut source = record(
@@ -868,4 +986,562 @@ async fn get_memory_by_id_redirects_through_consolidated_from_after_a_merge() {
         .await
         .expect("query");
     assert!(missing.is_none());
+}
+
+fn keyword_row(id: &str, timestamp: i64, app: &str, title: &str, text: &str) -> MemoryRecord {
+    let mut row = record(None, title, text);
+    row.id = id.to_string();
+    row.timestamp = timestamp;
+    row.app_name = app.to_string();
+    row.session_id = format!("session-{id}");
+    row
+}
+
+async fn keyword_store(rows: Vec<MemoryRecord>) -> (tempfile::TempDir, Store) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().to_path_buf();
+    let store = tokio::task::spawn_blocking(move || Store::new(&path).map_err(|e| e.to_string()))
+        .await
+        .expect("join")
+        .expect("store");
+    store.add_batch(&rows).await.expect("add rows");
+    (dir, store)
+}
+
+fn hit_ids(hits: &[SearchResult]) -> Vec<&str> {
+    hits.iter().map(|hit| hit.id.as_str()).collect()
+}
+
+#[tokio::test]
+async fn keyword_search_ranks_the_best_match_first_even_when_stored_last() {
+    // VS-06: the old scan stopped at the first rows it found, so a strong
+    // match written after many weak ones was never scored.
+    let mut rows = (0..500)
+        .map(|index| {
+            let text = if index < 250 {
+                "Notes on the weekly report for the team"
+            } else {
+                "Draft report summary for the team"
+            };
+            keyword_row(
+                &format!("weak-{index:03}"),
+                10_000 + index,
+                "Notes",
+                &format!("Team notes {index}"),
+                text,
+            )
+        })
+        .collect::<Vec<_>>();
+    // Every query word, but not as the contiguous phrase.
+    rows.push(keyword_row(
+        "best",
+        1_000,
+        "Docs",
+        "Summary",
+        "Summary of the weekly report: churn is up in SMB",
+    ));
+    let (_dir, store) = keyword_store(rows).await;
+
+    let hits = store
+        .keyword_search("weekly report summary", 10, None, None)
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits).first(), Some(&"best"));
+}
+
+#[tokio::test]
+async fn keyword_search_weights_a_rare_term_above_a_common_one() {
+    let mut rows = (0..20)
+        .map(|index| {
+            // Distinct rows: identical content is merged at insert.
+            keyword_row(
+                &format!("budget-{index:02}"),
+                50_000 + index,
+                "Sheets",
+                &format!("Budget sheet {index}"),
+                &format!("Monthly budget review {index} with budget lines for team {index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.push(keyword_row(
+        "zephyr",
+        1_000,
+        "Docs",
+        "Vendor notes",
+        "The Zephyr vendor contract renews next quarter",
+    ));
+    let (_dir, store) = keyword_store(rows).await;
+
+    let hits = store
+        .keyword_search("zephyr budget", 5, None, None)
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits).first(), Some(&"zephyr"));
+}
+
+#[tokio::test]
+async fn keyword_search_matches_word_forms_by_stemming() {
+    let (_dir, store) = keyword_store(vec![
+        keyword_row(
+            "invoice",
+            1_000,
+            "Mail",
+            "Billing",
+            "Sent the overdue invoice to the client",
+        ),
+        keyword_row(
+            "other",
+            2_000,
+            "Mail",
+            "Lunch",
+            "Ordered lunch for the team",
+        ),
+    ])
+    .await;
+
+    let hits = store
+        .keyword_search("invoices", 5, None, None)
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits), vec!["invoice"]);
+}
+
+#[tokio::test]
+async fn keyword_search_returns_nothing_when_no_word_matches() {
+    let (_dir, store) = keyword_store(vec![keyword_row(
+        "row",
+        1_000,
+        "Mail",
+        "Billing",
+        "Sent the overdue invoice to the client",
+    )])
+    .await;
+
+    let hits = store
+        .keyword_search("dentist appointment", 5, None, None)
+        .await
+        .expect("keyword search");
+
+    assert!(hits.is_empty());
+}
+
+#[tokio::test]
+async fn keyword_search_ranks_a_row_with_every_query_word_above_partial_matches() {
+    let (_dir, store) = keyword_store(vec![
+        keyword_row(
+            "single",
+            3_000,
+            "Docs",
+            "Notes",
+            "A single owner signs off on each release",
+        ),
+        keyword_row(
+            "phrase",
+            1_000,
+            "Docs",
+            "Auth",
+            "Customers asked for single sign-on during onboarding",
+        ),
+        keyword_row("sign", 2_000, "Docs", "Forms", "Please sign the form"),
+    ])
+    .await;
+
+    let hits = store
+        .keyword_search("single sign-on", 5, None, None)
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits).first(), Some(&"phrase"));
+}
+
+#[tokio::test]
+async fn keyword_search_finds_rows_added_after_the_first_search() {
+    let (_dir, store) = keyword_store(vec![keyword_row(
+        "first",
+        1_000,
+        "Mail",
+        "Billing",
+        "Sent the overdue invoice to the client",
+    )])
+    .await;
+    let first = store
+        .keyword_search("invoice", 5, None, None)
+        .await
+        .expect("first search");
+    assert_eq!(hit_ids(&first), vec!["first"]);
+
+    store
+        .add_batch(&[keyword_row(
+            "later",
+            2_000,
+            "Mail",
+            "Vendor payment",
+            "Paid the invoice from the vendor",
+        )])
+        .await
+        .expect("add later row");
+    let second = store
+        .keyword_search("invoice", 5, None, None)
+        .await
+        .expect("second search");
+
+    let mut ids = hit_ids(&second);
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["first", "later"]);
+}
+
+async fn fts_indexed_columns(store: &Store) -> HashSet<String> {
+    store
+        .table
+        .list_indices()
+        .await
+        .expect("list indices")
+        .into_iter()
+        .filter(|index| index.index_type == IndexType::FTS)
+        .flat_map(|index| index.columns)
+        .collect()
+}
+
+#[tokio::test]
+async fn writes_build_the_keyword_indexes_so_no_search_pays_for_them() {
+    // Built lazily, the indexes cost the first search 94 to 228 ms of its
+    // 320 ms per-variant budget; on a loaded macOS runner that dropped the
+    // phrase variant from the first search only (PR #31 CI).
+    let all = FTS_COLUMNS
+        .map(str::to_string)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let (_dir, store) = keyword_store(vec![keyword_row(
+        "first",
+        1_000,
+        "Mail",
+        "Billing",
+        "Sent the overdue invoice to the client",
+    )])
+    .await;
+    assert_eq!(fts_indexed_columns(&store).await, all, "after add_batch");
+
+    // An overwrite drops the indexes; the write puts them back.
+    store
+        .replace_all_memories_preserving_ids(&[keyword_row(
+            "replaced",
+            2_000,
+            "Mail",
+            "Vendor payment",
+            "Paid the invoice from the vendor",
+        )])
+        .await
+        .expect("replace all");
+    assert_eq!(fts_indexed_columns(&store).await, all, "after an overwrite");
+}
+
+#[tokio::test]
+async fn remember_keeps_full_note_text() {
+    // VS-68: an agent note is stored whole, is its own card, and has no
+    // reopen target; capture rows are compacted (text emptied, clean_text
+    // cut to a few hundred characters).
+    let beginning =
+        "Keep this code exactly:\n```python\nif ready:\n    print(\"[LOW_CONF]\")\n```\n\n";
+    let ending = " The last words mention zephyrquartz.";
+    let body = beginning.to_string()
+        + &"a".repeat(4000 - beginning.chars().count() - ending.chars().count())
+        + ending;
+    assert_eq!(body.chars().count(), 4000);
+    let mut note = keyword_row(
+        "note-1",
+        5_000,
+        "Agent note",
+        "Decision from Claude Code",
+        &body,
+    );
+    note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string();
+    note.session_key = format!("{}note-1", crate::storage::AGENT_NOTE_SESSION_PREFIX);
+    note.snippet = "A decision.".to_string();
+    note.memory_context = body.clone();
+    note.internal_context = body.clone();
+    let (_dir, store) = keyword_store(Vec::new()).await;
+    store
+        .add_batch_preserving_ids(std::slice::from_ref(&note))
+        .await
+        .expect("store note");
+
+    let stored = store
+        .get_memory_by_id("note-1")
+        .await
+        .expect("read")
+        .expect("note exists");
+    let kept = |field: &str| format!("{} of 4000 characters", field.chars().count());
+    assert!(stored.text == body, "text: {}", kept(&stored.text));
+    assert!(
+        stored.clean_text == body,
+        "clean_text: {}",
+        kept(&stored.clean_text)
+    );
+    assert_eq!(stored.memory_context, body);
+    assert_eq!(stored.internal_context, body);
+    assert_eq!(stored.session_key, "agent_note:note-1");
+    assert_eq!(
+        stored.reopen_kind,
+        crate::memory::reopen::ReopenKind::Unknown
+    );
+    assert_eq!(stored.reopen_app_name, None);
+    let hits = store
+        .keyword_search("zephyrquartz", 5, None, None)
+        .await
+        .expect("keyword search");
+    assert_eq!(hit_ids(&hits), vec!["note-1"]);
+}
+
+#[tokio::test]
+async fn agent_note_search_projection_preserves_provenance_from_storage() {
+    let mut note = keyword_row(
+        "note-provenance",
+        5_000,
+        "Agent note",
+        "Decision",
+        "zephyrquartz decision",
+    );
+    note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.into();
+    note.related_agents = vec!["Claude Code".into()];
+    note.session_key = "agent_note:note-provenance".into();
+    let (_dir, store) = keyword_store(vec![note]).await;
+    let hits = store
+        .keyword_search("zephyrquartz", 5, None, None)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    let json = serde_json::to_value(&hits[0]).unwrap();
+    assert_eq!(json["source_type"], "agent");
+    assert_eq!(json["added_by"], "Claude Code");
+}
+
+#[tokio::test]
+async fn keyword_search_keeps_agent_notes_separate_from_identical_capture_content() {
+    let mut rows = Vec::new();
+    for (id, source_type) in [
+        ("note-a", "agent"),
+        ("note-b", "agent"),
+        ("screen", "screen"),
+    ] {
+        let mut row = keyword_row(id, 5_000, "Editor", "Decision", "zephyrquartz decision");
+        row.source_type = source_type.into();
+        row.content_hash = "same-content-hash".into();
+        rows.push(row);
+    }
+    let (_dir, store) = keyword_store(Vec::new()).await;
+    store.add_batch_preserving_ids(&rows).await.unwrap();
+    let hits = store
+        .keyword_search("zephyrquartz", 10, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        hit_ids(&hits).into_iter().collect::<HashSet<_>>(),
+        HashSet::from(["note-a", "note-b", "screen"])
+    );
+}
+
+#[tokio::test]
+async fn keyword_search_keeps_the_app_filter() {
+    let (_dir, store) = keyword_store(vec![
+        keyword_row(
+            "slack",
+            1_000,
+            "Slack",
+            "Thread",
+            "The invoice reminder thread",
+        ),
+        keyword_row(
+            "mail",
+            2_000,
+            "Mail",
+            "Billing",
+            "The invoice reminder email",
+        ),
+    ])
+    .await;
+
+    let hits = store
+        .keyword_search("invoice reminder", 5, None, Some("Slack"))
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits), vec!["slack"]);
+}
+
+#[tokio::test]
+async fn get_memories_by_ids_fetches_many_rows_in_one_call_and_skips_unknown_ids() {
+    let (_dir, store) = keyword_store(vec![
+        keyword_row("a", 1_000, "Mail", "First", "First row text"),
+        keyword_row("b'quote", 2_000, "Mail", "Second", "Second row text"),
+        keyword_row("c", 3_000, "Mail", "Third", "Third row text"),
+    ])
+    .await;
+
+    let found = store
+        .get_memories_by_ids(&[
+            "a".to_string(),
+            "b'quote".to_string(),
+            "missing".to_string(),
+        ])
+        .await
+        .expect("batch lookup");
+
+    let mut ids = found.keys().map(String::as_str).collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["a", "b'quote"]);
+    assert_eq!(found["a"].window_title, "First");
+    assert!(store
+        .get_memories_by_ids(&[])
+        .await
+        .expect("empty lookup")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn keyword_search_accepts_an_explicit_time_range() {
+    let (_dir, store) = keyword_store(vec![
+        keyword_row(
+            "old",
+            1_000,
+            "Mail",
+            "Old invoice",
+            "The invoice from last month",
+        ),
+        keyword_row(
+            "new",
+            5_000,
+            "Mail",
+            "New invoice",
+            "The invoice from this week",
+        ),
+    ])
+    .await;
+
+    let hits = store
+        .keyword_search("invoice", 5, Some("range:4000:6000"), None)
+        .await
+        .expect("keyword search");
+
+    assert_eq!(hit_ids(&hits), vec!["new"]);
+}
+
+#[test]
+fn keyword_recency_is_the_same_within_a_minute() {
+    // Two searches a moment apart must score identically (VS-10).
+    let stored = 1_000_000;
+    assert_eq!(
+        recency_score(stored + 90_000, stored),
+        recency_score(stored + 90_900, stored)
+    );
+    assert!(recency_score(stored + 3_600_000, stored) < recency_score(stored + 60_000, stored));
+}
+
+#[tokio::test]
+async fn chunk_keyword_search_finds_the_chunk_that_holds_the_words() {
+    let (_dir, store) = keyword_store(Vec::new()).await;
+    let chunk = |id: &str, memory_id: &str, index: u32, text: &str| MemoryChunkRecord {
+        chunk_index: index,
+        text: text.to_string(),
+        ..memory_chunk(id, memory_id, BGE_V5_DIMENSIONS)
+    };
+    store
+        .upsert_memory_chunks(&[
+            chunk(
+                "lunch-0",
+                "lunch",
+                0,
+                "Team lunch notes and the weekly agenda",
+            ),
+            chunk(
+                "vendor-0",
+                "vendor",
+                0,
+                "Pricing table for the next quarter",
+            ),
+            chunk(
+                "vendor-1",
+                "vendor",
+                1,
+                "The Zephyr vendor contract renews at the same price",
+            ),
+        ])
+        .await
+        .expect("upsert chunks");
+
+    let hits = store
+        .chunk_keyword_search("zephyr contract", 10)
+        .await
+        .expect("chunk keyword search");
+
+    let top = hits.first().expect("a hit");
+    assert_eq!(top.chunk.id, "vendor-1");
+    assert_eq!(top.chunk.memory_id, "vendor");
+    assert!(top.score > 0.0 && top.score < 1.0, "{}", top.score);
+    assert!(hits.iter().all(|hit| hit.chunk.id != "lunch-0"));
+    assert!(store
+        .chunk_keyword_search("dentist appointment", 10)
+        .await
+        .expect("no match")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn replacing_a_memory_updates_it_in_place_and_inserts_an_unknown_id() {
+    let mut first = record(None, "Notes", "First version of the note.");
+    first.embedding = vec![0.1; DEFAULT_TEXT_EMBEDDING_DIM];
+    let (_dir, store) = keyword_store(vec![first.clone()]).await;
+
+    let mut second = first.clone();
+    second.display_summary = "Second version of the note.".to_string();
+    for _ in 0..3 {
+        store
+            .replace_memory_preserving_chunks(&second)
+            .await
+            .unwrap();
+    }
+    let rows = store.list_all_memories().await.unwrap();
+    assert_eq!(rows.len(), 1, "a replace must never add a second row");
+    assert_eq!(rows[0].display_summary, "Second version of the note.");
+
+    let mut other = first.clone();
+    other.id = "memory-2".to_string();
+    other.window_title = "Other notes".to_string();
+    store
+        .replace_memory_preserving_chunks(&other)
+        .await
+        .unwrap();
+    assert_eq!(store.list_all_memories().await.unwrap().len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_memory_is_never_missing_while_it_is_being_replaced() {
+    // VS-90: the replace used to be a delete followed by an insert. A reader
+    // (or a crash) between the two saw no row. A merge-insert is one version.
+    let first = record(None, "Notes", "A note that is rewritten many times.");
+    let (_dir, store) = keyword_store(vec![first.clone()]).await;
+    let store = Arc::new(store);
+
+    let reader_store = store.clone();
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader_done = done.clone();
+    let reader = tokio::spawn(async move {
+        let mut reads = 0usize;
+        while !reader_done.load(std::sync::atomic::Ordering::SeqCst) {
+            let rows = reader_store.list_all_memories().await.unwrap();
+            assert_eq!(rows.len(), 1, "the memory vanished during a replace");
+            reads += 1;
+        }
+        reads
+    });
+
+    for round in 0..25 {
+        let mut next = first.clone();
+        next.display_summary = format!("Version {round}.");
+        store.replace_memory_preserving_chunks(&next).await.unwrap();
+    }
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(reader.await.unwrap() > 0);
 }

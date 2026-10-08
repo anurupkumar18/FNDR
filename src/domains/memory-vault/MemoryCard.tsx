@@ -39,10 +39,13 @@ interface MemoryCardProps {
     className?: string;
     /** Compact-variant override when card has no threads in the topic_categories array. */
     threadCountHint?: number;
+    /** Compact-variant icon shown before the app name (e.g. page, document). */
+    sourceIcon?: ReactNode;
 }
 
 /** Post-capture lifecycle states surfaced on the card. */
 export type LifecycleStatus =
+    | "ADDED"
     | "DEVELOPED"
     | "PENDING"
     | "RAW"
@@ -76,26 +79,32 @@ export function MemoryCard({
     confidential,
     className,
     threadCountHint,
+    sourceIcon,
 }: MemoryCardProps) {
     const [deleteState, setDeleteState] = useState<
         "idle" | "confirming" | "deleting" | "error"
     >("idle");
-    const previewText = pickPreviewText(card);
+    const previewText = withoutTitleEcho(pickPreviewText(card), card.title);
+    const isAgentNote = card.source_type === "agent";
+    const sourceLabel = isAgentNote
+        ? `Agent note${card.added_by ? ` · Added by ${card.added_by}` : ""}`
+        : card.app_name;
     const threads = deriveThreads(card);
     const timeLabel = formatTime(card.timestamp);
     const dayLabel = formatDay(card.timestamp);
-    const status: LifecycleStatus = lifecycleStatus ?? deriveLifecycleStatus(card);
+    const status: LifecycleStatus = isAgentNote ? "ADDED" : lifecycleStatus ?? deriveLifecycleStatus(card);
     const stampMeta = STAMP_META[status];
 
     const cls = [
         "fndr-mc",
         `fndr-mc--${variant}`,
+        isAgentNote ? "fndr-mc--agent-note" : "",
         className ?? "",
     ]
         .filter(Boolean)
         .join(" ");
 
-    // Compact — single row (wide) / two rows (narrow container), click to expand.
+    // Compact: single row (wide) / two rows (narrow container), click to expand.
     if (variant === "compact") {
         return (
             <motion.article
@@ -121,19 +130,25 @@ export function MemoryCard({
                     <span className="fndr-mc-c-title">{card.title}</span>
                     {previewText ? (
                         <span className="fndr-mc-c-preview" title={previewText}>
+                            {card.low_confidence && (
+                                <span className="fndr-mc-low-confidence" aria-label="Low confidence">
+                                    Low confidence
+                                </span>
+                            )}
                             {previewText}
                         </span>
                     ) : null}
                 </div>
                 {/* source area: app name + activity/files chips */}
                 <div className="fndr-mc-c-source" aria-label="Source and activity">
+                    {!isAgentNote && sourceIcon}
                     <em className="fndr-mc-c-source-app">
-                        {card.app_name}
+                        {sourceLabel}
                         {card.reopen_page ? ` · page ${card.reopen_page}` : null}
                     </em>
                     {card.activity_type && card.activity_type !== "other" && (
-                        <span className="fndr-mc-c-chip fndr-mc-c-chip--activity" aria-label={`activity: ${card.activity_type}`}>
-                            {card.activity_type}
+                        <span className="fndr-mc-c-chip fndr-mc-c-chip--activity" aria-label={`activity: ${activityLabel(card.activity_type)}`}>
+                            {activityLabel(card.activity_type)}
                         </span>
                     )}
                     {Array.isArray(card.files_touched) && card.files_touched.length > 0 && (
@@ -203,12 +218,17 @@ export function MemoryCard({
 
             {previewText && (
                 <p className="fndr-mc-preview">
+                    {card.low_confidence && (
+                        <span className="fndr-mc-low-confidence" aria-label="Low confidence">
+                            Low confidence
+                        </span>
+                    )}{" "}
                     &ldquo;{previewText}&rdquo;
                 </p>
             )}
 
             <div className="fndr-mc-source">
-                {card.app_name}
+                {sourceLabel}
                 {card.window_title && variant === "expanded" ? ` · ${card.window_title}` : null}
                 {card.reopen_page ? ` · page ${card.reopen_page}` : null}
             </div>
@@ -270,7 +290,7 @@ export function MemoryCard({
                                 See in graph
                             </Button>
                         )}
-                        {onReopen && card.reopen_target && (
+                        {!isAgentNote && onReopen && card.reopen_target && (
                             <div className="fndr-mc-reopen">
                                 <Button mono variant="secondary" onClick={() => onReopen(card)}>
                                     {reopenButtonLabel(card)}
@@ -358,6 +378,7 @@ export function MemoryCard({
 
 /** Lifecycle stamp metadata: tone + label keyed by status. */
 const STAMP_META: Record<LifecycleStatus, { tone: "developed" | "muted" | "amber" | "alarm"; label: string }> = {
+    ADDED: { tone: "muted", label: "ADDED" },
     DEVELOPED: { tone: "developed", label: "DEVELOPED" },
     PENDING: { tone: "amber", label: "PENDING" },
     RAW: { tone: "muted", label: "RAW" },
@@ -369,6 +390,7 @@ const STAMP_META: Record<LifecycleStatus, { tone: "developed" | "muted" | "amber
  *  `visual_semantics_failed` always wins so the UI doesn't dress a failed
  *  ingest up as a real memory. */
 export function deriveLifecycleStatus(card: MemoryCardData): LifecycleStatus {
+    if (card.source_type === "agent") return "ADDED";
     if (card.storage_outcome === "visual_semantics_failed") {
         return "VISUAL_FAILED";
     }
@@ -402,6 +424,18 @@ const META_OCR_PREFIXES = [
     "i see ",
 ];
 
+/** A preview that only repeats the title adds nothing; show the title alone. */
+export function withoutTitleEcho(preview: string, title: string): string {
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const [p, t] = [norm(preview), norm(title)];
+    return p && t && (p.startsWith(t) || t.startsWith(p)) ? "" : preview;
+}
+
+/** `activity_type` is an identifier such as `testing_workflow`; show it as words. */
+export function activityLabel(activityType: string): string {
+    return activityType.replace(/_/g, " ").trim();
+}
+
 /** Returns true when the text is a meta-narration about OCR / the screenshot
  *  rather than the actual captured content. Such phrasing pollutes the card
  *  preview and must never reach the vault. */
@@ -426,7 +460,10 @@ function isReviewed(card: MemoryCardData): boolean {
 }
 
 function pickPreviewText(card: MemoryCardData): string {
-    // 1. insight_what_happened wins — it's the synthesized, reviewer-grade summary.
+    if (card.source_type === "agent") {
+        return card.display_summary || card.internal_context || card.summary;
+    }
+    // 1. insight_what_happened wins; it's the synthesized, reviewer-grade summary.
     const insight = safeText(card.insight_what_happened);
     if (insight) return insight;
 
@@ -444,7 +481,7 @@ function pickPreviewText(card: MemoryCardData): string {
         return context.length > 220 ? context.slice(0, 220) : context;
     }
 
-    // 4. Unreviewed display_summary / summary — only when not meta narration.
+    // 4. Unreviewed display_summary / summary, only when not meta narration.
     if (!isReviewed(card)) {
         const fallbackSummary = safeText(card.display_summary) || safeText(card.summary);
         if (fallbackSummary) return fallbackSummary;
@@ -460,7 +497,7 @@ function pickPreviewText(card: MemoryCardData): string {
         if (safe) return safe;
     }
 
-    // 6. Safe title / window fallback — never raw OCR.
+    // 6. Safe title / window fallback, never raw OCR.
     const windowTitle = safeText(card.window_title);
     if (windowTitle && windowTitle !== card.title) return windowTitle;
 
@@ -480,7 +517,7 @@ function deriveThreads(card: MemoryCardData): string[] {
     return out.slice(0, 5);
 }
 
-function reopenButtonLabel(card: MemoryCardData): string {
+export function reopenButtonLabel(card: MemoryCardData): string {
     if (!card.reopen_page) {
         return "Open source";
     }
@@ -500,7 +537,7 @@ function formatTime(timestamp: number): string {
 function formatDay(timestamp: number): string {
     const d = new Date(timestamp);
     const now = new Date();
-    // Compare calendar-day distance, not raw 24-hour buckets — a capture
+    // Compare calendar-day distance, not raw 24-hour buckets: a capture
     // from yesterday at 23:00 should read "YESTERDAY", not "TODAY", even if
     // it's less than 24 hours old.
     const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();

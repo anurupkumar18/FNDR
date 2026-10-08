@@ -23,16 +23,11 @@
   overflow-wrap: anywhere;
 }
 
-.summary-loading,
 .summary-text {
   display: flex;
   align-items: center;
   gap: 10px;
   margin: 0;
-}
-
-.summary-loader {
-  margin-right: 2px;
 }
 
 .summary-icon {
@@ -336,6 +331,14 @@
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-light);
+}
+
+.search-voice-trace {
+  margin: 0;
+}
+
+.search-summary-trace {
+  margin: 0;
 }
 
 @media (max-width: 768px) {

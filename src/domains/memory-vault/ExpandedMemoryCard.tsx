@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type {
     EvidencePack,
+    SourceStatementRef,
     MemoryCard as MemoryCardData,
 } from "../../shared/ipc/tauri";
-import { fndrGetMemorySubgraph, fndrGetRelatedMemories } from "../../shared/ipc/tauri";
+import { fndrGetMemorySourceStatements, fndrGetMemorySubgraph, fndrGetRelatedMemories } from "../../shared/ipc/tauri";
 import { CopyForAgentButton } from "./CopyForAgentButton";
 import { SurfacingReason } from "./SurfacingReason";
 import { MemoryCard } from "./MemoryCard";
@@ -50,10 +51,16 @@ export function ExpandedMemoryCard({
     const [subgraph, setSubgraph] = useState<{ node_count: number; edge_count: number } | null>(null);
     const [relatedState, setRelatedState] = useState<"loading" | "ready" | "error">("loading");
     const [subgraphState, setSubgraphState] = useState<"loading" | "ready" | "error">("loading");
+    const [statements, setStatements] = useState<{
+        memoryId: string;
+        status: "loading" | "ready" | "error";
+        items: SourceStatementRef[];
+    }>({ memoryId: card.id, status: "loading", items: [] });
     const closeButtonRef = useRef<HTMLButtonElement>(null);
 
     useEffect(() => {
         let cancelled = false;
+        setStatements({ memoryId: card.id, status: "loading", items: [] });
         setRelated([]);
         setSubgraph(null);
         setRelatedState("loading");
@@ -77,6 +84,13 @@ export function ExpandedMemoryCard({
             })
             .catch(() => {
                 if (!cancelled) setSubgraphState("error");
+            });
+        void fndrGetMemorySourceStatements(card.id)
+            .then((items) => {
+                if (!cancelled) setStatements({ memoryId: card.id, status: "ready", items });
+            })
+            .catch(() => {
+                if (!cancelled) setStatements({ memoryId: card.id, status: "error", items: [] });
             });
         return () => {
             cancelled = true;
@@ -124,6 +138,32 @@ export function ExpandedMemoryCard({
             </section>
         ) : undefined;
 
+    const statementsStatus = statements.memoryId === card.id ? statements.status : "loading";
+    const statementsNode = statementsStatus !== "ready" || statements.items.length > 0 ? (
+        <section>
+            <h4 className="fndr-emc-section-heading">Observed statements</h4>
+            {statementsStatus === "loading" ? (
+                <p className="fndr-emc-meta">Loading observed statements…</p>
+            ) : statementsStatus === "error" ? (
+                <p className="fndr-emc-meta">Observed statements unavailable.</p>
+            ) : (
+                <>
+                    <p className="fndr-emc-meta">Observed statement; ownership and status unverified.</p>
+                    <ul className="fndr-emc-chunks fndr-emc-statements">
+                        {statements.items.map((statement, index) => (
+                            <li key={`${statement.source_sha256}:${statement.line}:${index}`}>
+                                <blockquote>{statement.quote}</blockquote>
+                                <cite title={`Memory ${statement.memory_ids.join(", ")} · line ${statement.line} · snapshot ${statement.source_sha256}`}>
+                                    Memory {statement.memory_ids.join(", ")} · line {statement.line} · snapshot {statement.source_sha256.slice(0, 12)}
+                                </cite>
+                            </li>
+                        ))}
+                    </ul>
+                </>
+            )}
+        </section>
+    ) : null;
+
     const chunkEvidenceNode =
         Array.isArray(card.chunk_evidence) && card.chunk_evidence.length > 0 ? (
             <section>
@@ -168,21 +208,33 @@ export function ExpandedMemoryCard({
                 <p className="fndr-emc-meta">Finding related memories…</p>
             ) : related.length > 0 ? (
                 <ul className="fndr-emc-related">
-                    {related.map((r) => (
-                        <li key={r.id}>
-                            {onOpenRelated ? (
-                                <button
-                                    type="button"
-                                    onClick={() => onOpenRelated(r.id)}
-                                    aria-label={`Open related memory: ${r.title}`}
-                                >
-                                    {r.title}
-                                </button>
-                            ) : (
-                                r.title
-                            )}
-                        </li>
-                    ))}
+                    {related.map((r) => {
+                        const relation = r.surfacing_reason?.routes.includes("stored_link")
+                            ? "Stored link"
+                            : r.surfacing_reason?.headline === "Similar context"
+                            ? "Similar context"
+                            : "";
+                        const author = r.source_type === "agent"
+                            ? `Agent note · Added by ${r.added_by?.trim() || "Unknown client"}`
+                            : "";
+                        const metadata = [relation, author].filter(Boolean).join(" · ");
+                        return (
+                            <li key={r.id}>
+                                {onOpenRelated ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => onOpenRelated(r.id)}
+                                        aria-label={`Open related memory: ${r.title}`}
+                                    >
+                                        {r.title}
+                                    </button>
+                                ) : (
+                                    r.title
+                                )}
+                                {metadata && <p className="fndr-emc-meta">{metadata}</p>}
+                            </li>
+                        );
+                    })}
                 </ul>
             ) : (
                 <p className="fndr-emc-meta">No related memories found.</p>
@@ -201,6 +253,7 @@ export function ExpandedMemoryCard({
         <>
             {chunkEvidenceNode}
             {evidenceNode}
+            {statementsNode}
             {subgraphNode}
             {relatedNode}
         </>

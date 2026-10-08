@@ -188,7 +188,10 @@ mod tests {
 
     #[test]
     fn an_unsure_tier_escalates_and_records_who_was_skipped() {
-        let tiers = vec![tier("rules", 0, 0.60, 0.9), tier("classifier", 1, 0.95, 0.9)];
+        let tiers = vec![
+            tier("rules", 0, 0.60, 0.9),
+            tier("classifier", 1, 0.95, 0.9),
+        ];
         match cascade(&tiers, "x").unwrap() {
             Resolution::Accepted {
                 outcome,

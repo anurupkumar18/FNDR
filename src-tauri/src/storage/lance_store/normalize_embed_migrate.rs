@@ -4,10 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, RecordBatch,
-    RecordBatchIterator, RecordBatchReader, StringArray,
-};
+use arrow_array::{Array, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray};
 use arrow_schema::{ArrowError, DataType, Schema};
 use chrono::TimeZone;
 use futures::TryStreamExt;
@@ -16,6 +13,7 @@ use lancedb::table::{AddDataMode, NewColumnTransform};
 use lancedb::{Connection, Table};
 
 use crate::config::{DEFAULT_EMBEDDING_MODEL_NAME, DEFAULT_TEXT_EMBEDDING_DIM};
+use crate::inference::extraction_evidence::has_source_evidence;
 use crate::memory::reopen::{build_reopen_target, ReopenKind};
 use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
 use crate::memory_embedding_document::{
@@ -30,8 +28,7 @@ use crate::memory_quality::{
     quality_gate_reason as shared_quality_gate_reason, VISUAL_SEMANTICS_FAILED_OUTCOME,
 };
 use crate::storage::schema::{
-    GraphEdge, GraphNode, MeetingSegment,
-    MeetingSession, MemoryRecord, SearchResult, Task,
+    GraphEdge, GraphNode, MeetingSegment, MeetingSession, MemoryRecord, SearchResult, Task,
 };
 
 use super::arrow_and_filters::{
@@ -40,100 +37,20 @@ use super::arrow_and_filters::{
 };
 use super::schemas::*;
 use super::text_kw::{
-    canonicalize_index_url, is_keyword_stop_word,
-    normalize_keyword_text, trim_chars,
+    canonicalize_index_url, is_keyword_stop_word, normalize_keyword_text, trim_chars,
 };
 use super::{
     ACTIVITY_EVENTS_TABLE, CONTEXT_DELTAS_TABLE, CONTEXT_PACKS_TABLE, DECISION_LEDGER_TABLE,
     EDGES_TABLE, ENTITY_ALIASES_TABLE, GRAPH_EDGES_TABLE, GRAPH_NODES_TABLE, IMAGE_EMBED_DIM,
     INDEX_NOISE_HOSTS, KNOWLEDGE_PAGES_TABLE, MEETINGS_TABLE, MEMORIES_TABLE, MEMORY_CHUNKS_TABLE,
-    NODES_TABLE, PROJECT_CONTEXTS_TABLE, SEGMENTS_TABLE, TASKS_TABLE,
-    TEXT_EMBED_DIM,
+    NODES_TABLE, PROJECT_CONTEXTS_TABLE, SEGMENTS_TABLE, TASKS_TABLE, TEXT_EMBED_DIM,
 };
 use crate::inference::model_config::{BGE_V5_DIMENSIONS, MEMORIES_V5_TABLE};
 
-pub(super) fn lexical_keyword_score(terms: &[String], result: &SearchResult) -> f32 {
-    if terms.is_empty() {
-        return 0.0;
-    }
-
-    let title = normalize_keyword_text(&result.window_title);
-    let snippet = normalize_keyword_text(&result.snippet);
-    let memory_context = normalize_keyword_text(&result.memory_context);
-    let lexical_shadow = normalize_keyword_text(&result.lexical_shadow);
-    let alias_blob = normalize_keyword_text(&result.search_aliases.join(" "));
-    let clean = normalize_keyword_text(if !result.clean_text.trim().is_empty() {
-        &result.clean_text
-    } else {
-        &result.text
-    });
-    let app = normalize_keyword_text(&result.app_name);
-    let url = result
-        .url
-        .as_ref()
-        .map(|value| normalize_keyword_text(value))
-        .unwrap_or_default();
-    let merged = format!(
-        "{} {} {} {} {} {} {}",
-        title, snippet, memory_context, clean, lexical_shadow, alias_blob, url
-    );
-
-    let mut matched_terms = 0usize;
-    let mut weighted = 0.0f32;
-
-    for (idx, term) in terms.iter().enumerate() {
-        let mut matched = false;
-        if title.contains(term) {
-            weighted += 1.8;
-            matched = true;
-        }
-        if snippet.contains(term) {
-            weighted += 1.35;
-            matched = true;
-        }
-        if clean.contains(term) {
-            weighted += 1.1;
-            matched = true;
-        }
-        if memory_context.contains(term) {
-            weighted += 1.25;
-            matched = true;
-        }
-        if lexical_shadow.contains(term) {
-            weighted += 1.05;
-            matched = true;
-        }
-        if alias_blob.contains(term) {
-            weighted += 1.0;
-            matched = true;
-        }
-        if app.contains(term) {
-            weighted += 0.75;
-            matched = true;
-        }
-        if !url.is_empty() && url.contains(term) {
-            weighted += 0.95;
-            matched = true;
-        }
-
-        // Reward full sentence/phrase hits for sentence queries.
-        if idx == 0 && term.split_whitespace().count() >= 2 && merged.contains(term) {
-            weighted += 1.1;
-            matched = true;
-        }
-
-        if matched {
-            matched_terms += 1;
-        }
-    }
-
-    let coverage = matched_terms as f32 / terms.len() as f32;
-    let normalized = (weighted / (terms.len() as f32 * 2.8)).min(1.0);
-    (normalized * 0.7 + coverage * 0.3).clamp(0.0, 1.0)
-}
-
 pub(super) fn recency_score(now_ms: i64, timestamp_ms: i64) -> f32 {
-    let age_hours = ((now_ms - timestamp_ms).max(0) as f32 / 3_600_000.0).min(24.0 * 30.0);
+    // Whole minutes, so two searches a moment apart score identically.
+    let age_minutes = (now_ms - timestamp_ms).max(0) / 60_000;
+    let age_hours = (age_minutes as f32 / 60.0).min(24.0 * 30.0);
     (1.0 / (1.0 + age_hours * 0.03)).clamp(0.0, 1.0)
 }
 
@@ -233,12 +150,16 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     if normalized.internal_context.trim().is_empty() {
         normalized.internal_context = normalized.clean_text.clone();
     }
-    normalized.clean_text = strip_low_conf_markers(&normalized.clean_text);
-    normalized.snippet = strip_low_conf_markers(&normalized.snippet);
-    normalized.display_summary = strip_low_conf_markers(&normalized.display_summary);
-    normalized.internal_context = strip_low_conf_markers(&normalized.internal_context);
-    normalized.memory_context = strip_low_conf_markers(&normalized.memory_context);
-    normalized.embedding_text = strip_low_conf_markers(&normalized.embedding_text);
+    // Assistant notes are authored text, so capture cleanup must not change
+    // their indentation, paragraph boundaries, or literal marker strings.
+    if !normalized.is_agent_note() {
+        normalized.clean_text = strip_low_conf_markers(&normalized.clean_text);
+        normalized.snippet = strip_low_conf_markers(&normalized.snippet);
+        normalized.display_summary = strip_low_conf_markers(&normalized.display_summary);
+        normalized.internal_context = strip_low_conf_markers(&normalized.internal_context);
+        normalized.memory_context = strip_low_conf_markers(&normalized.memory_context);
+        normalized.embedding_text = strip_low_conf_markers(&normalized.embedding_text);
+    }
     if normalized.timestamp_start <= 0 {
         normalized.timestamp_start = normalized.timestamp;
     }
@@ -249,7 +170,8 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
         normalized.source_type = infer_source_type(&normalized);
     }
     normalized.activity_type = crate::inference::normalize_activity_type(&normalized.activity_type);
-    if normalized.reopen_kind == ReopenKind::Unknown {
+    // An agent note never becomes an open target (VS-68).
+    if normalized.reopen_kind == ReopenKind::Unknown && !normalized.is_agent_note() {
         let derived = build_reopen_target(
             normalized.url.as_deref(),
             normalized.files_touched.first().map(|value| value.as_str()),
@@ -269,11 +191,23 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     }
     normalize_event_fields(&mut normalized);
 
+    let source_backed = has_source_evidence(&normalized.raw_evidence);
+    if source_backed {
+        // Source quotes describe observations, not ownership or pending work.
+        normalized.user_intent.clear();
+        normalized.intent_analysis = Default::default();
+        normalized.intent_score = 0.0;
+        normalized.next_steps.clear();
+        normalized.todos.clear();
+        normalized.action_items.clear();
+    }
+
     if normalized.memory_context.trim().is_empty() {
         normalized.memory_context = derive_memory_context(&normalized);
     }
-    if normalized.user_intent.trim().is_empty()
-        || normalized.intent_analysis.intent_label.is_empty()
+    if !source_backed
+        && (normalized.user_intent.trim().is_empty()
+            || normalized.intent_analysis.intent_label.is_empty())
     {
         let analysis = infer_intent_analysis(&normalized);
         normalized.user_intent = analysis.intent_label.clone();
@@ -302,7 +236,7 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     if !visual_semantics_failed && normalized.extracted_entities_structured.is_empty() {
         normalized.extracted_entities_structured = derive_structured_entities(&normalized);
     }
-    if !visual_semantics_failed && normalized.action_items.is_empty() {
+    if !source_backed && !visual_semantics_failed && normalized.action_items.is_empty() {
         normalized.action_items = derive_action_items(&normalized);
     }
     if normalized.topic_confidence <= 0.0 {
@@ -550,7 +484,9 @@ pub(super) fn derive_memory_context_with_config(
         parts.push(summary.to_string());
     }
 
-    let intent = if !record.user_intent.trim().is_empty() {
+    let intent = if has_source_evidence(&record.raw_evidence) {
+        String::new()
+    } else if !record.user_intent.trim().is_empty() {
         record.user_intent.trim().to_string()
     } else if !record.activity_type.trim().is_empty() {
         record.activity_type.trim().to_string()
@@ -751,8 +687,14 @@ pub(super) fn infer_intent_analysis(record: &MemoryRecord) -> crate::storage::In
         );
     }
 
+    // Ties are common (two 0.22 signals). Break them by label so the same
+    // record always gets the same intent; hash-map order differs per run.
     let mut ranked = scores.into_iter().collect::<Vec<_>>();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(b.0))
+    });
     let top = ranked.first().copied().unwrap_or(("unknown", 0.0));
     let total: f32 = ranked
         .iter()
@@ -879,7 +821,7 @@ pub(super) fn generate_search_aliases(record: &MemoryRecord) -> Vec<String> {
         // `|` only appears when a structured field leaked an entire enum
         // vocabulary into a label (e.g. "coding|debugging|..."). Acronymizing
         // those produces opaque garbage like "tsapoeacdraorpws", so drop the
-        // phrase outright. Structural rule — no allow/deny lists.
+        // phrase outright. Structural rule: no allow/deny lists.
         if phrase.contains('|') {
             continue;
         }
@@ -906,7 +848,7 @@ pub(super) fn generate_search_aliases(record: &MemoryRecord) -> Vec<String> {
         }
     }
 
-    // Explicit names — entities, files, tags, related tools — surface as-is
+    // Explicit names (entities, files, tags, related tools) surface as-is
     // but never get acronymized, which is the source of the historical
     // `df`/`lco`/`mce` noise.
     for value in record
@@ -1143,7 +1085,7 @@ pub(super) fn estimate_importance_score(record: &MemoryRecord) -> f32 {
 }
 
 /// Top-k span concentration on `clean_text`. Higher means a few dense spans
-/// carry the document's signal — a strong indicator that retrieval against
+/// carry the document's signal, a strong indicator that retrieval against
 /// this record will surface meaningful matches.
 pub(super) fn estimate_salience_concentration(record: &MemoryRecord) -> f32 {
     crate::capture::text_cleanup::salience_concentration(&record.clean_text, &record.app_name)
@@ -1287,7 +1229,11 @@ pub(super) fn sanitize_index_url(url: Option<&str>, title: &str, snippet: &str) 
 }
 
 pub(super) fn build_index_session_key(record: &MemoryRecord) -> String {
-    if record.session_key.starts_with("meeting:") {
+    if record.session_key.starts_with("meeting:")
+        || record
+            .session_key
+            .starts_with(crate::storage::AGENT_NOTE_SESSION_PREFIX)
+    {
         return record.session_key.clone();
     }
 
@@ -1469,6 +1415,9 @@ pub(super) fn dedup_search_results(
 }
 
 pub(super) fn record_insert_dedup_key(record: &MemoryRecord) -> String {
+    if record.is_agent_note() {
+        return format!("{}{}", crate::storage::AGENT_NOTE_SESSION_PREFIX, record.id);
+    }
     if !record.content_hash.trim().is_empty() {
         return record.content_hash.trim().to_string();
     }
@@ -1480,6 +1429,9 @@ pub(super) fn record_insert_dedup_key(record: &MemoryRecord) -> String {
 }
 
 pub(super) fn search_result_dedup_key(result: &SearchResult) -> String {
+    if result.is_agent_note() {
+        return format!("{}{}", crate::storage::AGENT_NOTE_SESSION_PREFIX, result.id);
+    }
     if !result.content_hash.trim().is_empty() {
         return result.content_hash.trim().to_string();
     }
@@ -1819,7 +1771,7 @@ pub(super) async fn ensure_memory_schema_columns(table: &Table) -> Result<(), la
         transforms.push(("lexical_shadow".to_string(), "''".to_string()));
     }
     if !existing.contains("snippet_embedding") {
-        // Placeholder zeros — will be computed properly for new captures.
+        // Placeholder zeros; will be computed properly for new captures.
         transforms.push(("snippet_embedding".to_string(), "embedding".to_string()));
     }
     if !existing.contains("support_embedding") {
@@ -1916,7 +1868,10 @@ pub(super) async fn ensure_memory_schema_columns(table: &Table) -> Result<(), la
         ));
     }
     if !existing.contains("reopen_page") {
-        transforms.push(("reopen_page".to_string(), "CAST(NULL AS bigint)".to_string()));
+        transforms.push((
+            "reopen_page".to_string(),
+            "CAST(NULL AS bigint)".to_string(),
+        ));
     }
     if !existing.contains("reopen_text_anchor") {
         transforms.push(("reopen_text_anchor".to_string(), null_string_sql()));
@@ -2369,6 +2324,25 @@ pub(super) async fn migrate_graph_from_json(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn intent_is_the_same_on_every_run_when_two_signals_tie() {
+        // A url scores "researching" 0.22 and a next step scores
+        // "organizing_information" 0.22. Hash-map order used to pick the winner.
+        let record = MemoryRecord {
+            url: Some("https://example.com/pr/421".into()),
+            next_steps: vec!["reply to the review".into()],
+            ..Default::default()
+        };
+        let labels: std::collections::HashSet<String> = (0..64)
+            .map(|_| super::infer_intent_analysis(&record).intent_label)
+            .collect();
+        assert_eq!(labels.len(), 1, "{labels:?}");
+        assert_eq!(
+            super::infer_workflow(&record),
+            super::infer_intent_analysis(&record).intent_label
+        );
+    }
+
     use super::*;
 
     #[test]

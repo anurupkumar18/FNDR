@@ -10,6 +10,7 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -60,7 +61,6 @@ pub enum OnboardingStep {
     /// Onboarding complete — show main app
     Complete,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OnboardingState {
@@ -196,9 +196,7 @@ pub async fn set_preferred_inference_model(
     let config = state.inner().config.read().clone();
     if models::resolve_model(Some(trimmed.as_str()), Some(app_data_dir.as_path())).is_some() {
         let loaded = load_ai_engines(app_data_dir.as_path(), &config).await;
-        state
-            .inner()
-            .replace_ai_engines(loaded.inference, loaded.vlm);
+        state.inner().replace_ai_engines(loaded.inference);
         Ok(true)
     } else {
         tracing::info!(
@@ -210,45 +208,67 @@ pub async fn set_preferred_inference_model(
 }
 
 // ---------------------------------------------------------------------------
-// Biometrics (Touch ID via local-authentication-rs / osascript fallback)
+// Biometrics (compiled LocalAuthentication helper)
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn request_biometric_auth(reason: String) -> Result<bool, String> {
-    // We leverage Swift to hook directly into the macOS LocalAuthentication framework.
-    // This securely triggers Touch ID natively, gracefully falling back to device password if needed.
-    let safe_reason = reason.replace('"', "\\\"");
-    let script = format!(
-        r#"
-import LocalAuthentication
-import Foundation
-
-let context = LAContext()
-var error: NSError?
-if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {{
-    let sema = DispatchSemaphore(value: 0)
-    context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "{}") {{ success, _ in
-        if success {{ print("authenticated") }}
-        else {{ print("failed") }}
-        sema.signal()
-    }}
-    sema.wait()
-}} else {{
-    print("unavailable")
-}}
-"#,
-        safe_reason
-    );
-
-    let output = tokio::process::Command::new("swift")
-        .arg("-e")
-        .arg(&script)
+pub async fn request_biometric_auth(app: AppHandle, reason: String) -> Result<bool, String> {
+    let helper = biometric_helper_path(&app)?;
+    let output = tokio::process::Command::new(helper)
+        .arg(reason)
+        .stdin(Stdio::null())
         .output()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| format!("Could not launch the native authentication helper: {error}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.trim() == "authenticated")
+    if !output.status.success() {
+        return Err("The native authentication helper did not complete.".to_string());
+    }
+    parse_biometric_helper_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn biometric_helper_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("FNDR_AUTH_HELPER") {
+        return Ok(path.into());
+    }
+    let target = if cfg!(target_arch = "aarch64") {
+        "aarch64-apple-darwin"
+    } else {
+        "x86_64-apple-darwin"
+    };
+    let name = format!("fndr-auth-{target}");
+    let mut candidates = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join(&name));
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            candidates.push(parent.join(&name));
+        }
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(&name),
+    );
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            "The native authentication helper is unavailable. Reinstall FNDR and try again."
+                .to_string()
+        })
+}
+
+fn parse_biometric_helper_output(output: &str) -> Result<bool, String> {
+    #[derive(Deserialize)]
+    struct AuthenticationResult {
+        r#type: String,
+    }
+
+    let result: AuthenticationResult = serde_json::from_str(output.trim())
+        .map_err(|_| "The native authentication helper returned an invalid result.".to_string())?;
+    Ok(result.r#type == "authenticated")
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +295,7 @@ pub async fn check_permissions() -> Result<PermissionsStatus, String> {
     })
 }
 
-fn check_screen_recording_permission() -> bool {
+pub(crate) fn check_screen_recording_permission() -> bool {
     // Use CGPreflightScreenCaptureAccess() — the correct macOS API for checking
     // Screen Recording permission without triggering a system prompt.
     // Previously this used osascript talking to System Events, which only succeeds
@@ -335,19 +355,7 @@ fn check_microphone_permission() -> bool {
 
 #[tauri::command]
 pub async fn open_system_settings(pane: String) -> Result<(), String> {
-    // pane: "screen-recording" | "accessibility" | "microphone"
-    let url = match pane.as_str() {
-        "screen-recording" => {
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-        }
-        "accessibility" => {
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-        }
-        "microphone" => {
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-        }
-        _ => return Err(format!("Unknown settings pane: {}", pane)),
-    };
+    let url = system_settings_url(&pane)?;
 
     tokio::process::Command::new("open")
         .arg(url)
@@ -355,6 +363,27 @@ pub async fn open_system_settings(pane: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+fn system_settings_url(pane: &str) -> Result<&'static str, String> {
+    match pane {
+        "screen-recording" => {
+            Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        }
+        "accessibility" => {
+            Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        }
+        "microphone" => {
+            Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+        }
+        "speech-recognition" => {
+            Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")
+        }
+        "automation" => {
+            Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
+        }
+        _ => Err(format!("Unknown settings pane: {pane}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -379,8 +408,8 @@ pub struct ModelInfo {
 
 #[tauri::command]
 pub async fn list_available_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
-    let app_data_dir = crate::config::fndr_app_data_dir(app.path())
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let app_data_dir =
+        crate::config::fndr_app_data_dir(app.path()).unwrap_or_else(|_| PathBuf::from("."));
 
     Ok(models::catalog()
         .iter()
@@ -640,7 +669,8 @@ async fn download_model_files(
     filename: &str,
 ) -> Result<(), String> {
     if let Some(definition) = models::model_by_id(model_id) {
-        let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
+        let app_data_dir =
+            crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
         let models_dir = models::models_dir(app_data_dir.as_path());
         for extra in definition.extra_files {
             let dest = models_dir.join(extra.filename);
@@ -695,7 +725,7 @@ pub async fn refresh_ai_models(
         .as_ref()
         .map(|engine| engine.model_path().display().to_string());
     let ai_model_loaded = loaded_ai.inference.is_some();
-    let vlm_loaded = loaded_ai.vlm.is_some();
+    let vlm_loaded = crate::inference::pixel_vlm_loaded();
 
     let model_mode = if !config.use_vlm {
         "disabled".to_string()
@@ -715,9 +745,7 @@ pub async fn refresh_ai_models(
 
     let vlm_model_id: Option<String> = None;
 
-    state
-        .inner()
-        .replace_ai_engines(loaded_ai.inference, loaded_ai.vlm);
+    state.inner().replace_ai_engines(loaded_ai.inference);
 
     Ok(AiRuntimeStatus {
         ai_model_available,
@@ -983,7 +1011,7 @@ pub async fn delete_ai_model(
         .map(|engine| engine.model_path() == final_path.as_path())
         .unwrap_or(false);
     if should_unload {
-        state.inner().replace_ai_engines(None, None);
+        state.inner().replace_ai_engines(None);
     }
 
     if final_path.exists() {
@@ -997,4 +1025,30 @@ pub async fn delete_ai_model(
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_biometric_helper_output, system_settings_url};
+
+    #[test]
+    fn resolves_voice_permission_settings_panes() {
+        assert_eq!(
+            system_settings_url("microphone").unwrap(),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        );
+        assert_eq!(
+            system_settings_url("speech-recognition").unwrap(),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
+        );
+        assert!(system_settings_url("unknown").is_err());
+    }
+
+    #[test]
+    fn biometric_helper_only_authenticates_explicit_success() {
+        assert!(parse_biometric_helper_output("{\"type\":\"authenticated\"}\n").unwrap());
+        assert!(!parse_biometric_helper_output("{\"type\":\"cancelled\"}\n").unwrap());
+        assert!(!parse_biometric_helper_output("{\"type\":\"unavailable\"}\n").unwrap());
+        assert!(parse_biometric_helper_output("not-json\n").is_err());
+    }
 }

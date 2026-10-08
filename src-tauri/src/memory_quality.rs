@@ -12,6 +12,56 @@ pub const VISUAL_SEMANTICS_FAILED_OUTCOME: &str = "visual_semantics_failed";
 pub const LOW_EVIDENCE_VISUAL_FALLBACK_REASON: &str =
     "low_evidence_visual_fallback=clip_vector_without_text_or_pixel_vlm_semantics";
 
+fn canonical_text_source(value: &Value) -> &'static str {
+    match value.as_str().map(str::trim) {
+        Some(label) if label.eq_ignore_ascii_case("ax") => "ax",
+        Some(label) if label.eq_ignore_ascii_case("browser_semantic") => "browser_semantic",
+        Some(label) if label.eq_ignore_ascii_case("ocr") => "ocr",
+        _ => "unknown",
+    }
+}
+
+fn text_source_kinds(evidence: &Value) -> std::collections::BTreeSet<&'static str> {
+    if let Some(kinds) = evidence["text_source_kinds"]
+        .as_array()
+        .filter(|kinds| !kinds.is_empty())
+    {
+        kinds.iter().map(canonical_text_source).collect()
+    } else {
+        [canonical_text_source(&evidence["source_kind"])]
+            .into_iter()
+            .collect()
+    }
+}
+
+/// Bounded observation lineage, not attribution of individual stored characters.
+/// Legacy missing sources remain unknown; visual capture does not identify a text method.
+pub(crate) fn text_source_kinds_from_raw_evidence(
+    raw: &str,
+) -> std::collections::BTreeSet<&'static str> {
+    let evidence = serde_json::from_str::<Value>(raw).unwrap_or(Value::Null);
+    text_source_kinds(&evidence)
+}
+
+/// A fixed display/report category; arbitrary raw evidence labels never escape.
+pub fn text_source_from_raw_evidence(raw: &str) -> &'static str {
+    let evidence = serde_json::from_str::<Value>(raw).unwrap_or(Value::Null);
+    let kinds = text_source_kinds(&evidence);
+    let has_lineage = evidence["text_source_kinds"]
+        .as_array()
+        .is_some_and(|kinds| !kinds.is_empty());
+    if kinds.len() > 1
+        || (!has_lineage
+            && evidence["source_kind"]
+                .as_str()
+                .is_some_and(|label| label.trim().eq_ignore_ascii_case("mixed")))
+    {
+        "mixed"
+    } else {
+        kinds.first().copied().unwrap_or("unknown")
+    }
+}
+
 pub fn default_memory_quality_config() -> MemoryQualityConfig {
     MemoryQualityConfig {
         primary_memory_specificity_min: DEFAULT_PRIMARY_MEMORY_SPECIFICITY_MIN,
@@ -109,6 +159,8 @@ pub enum LowSignalReason {
     VisualSemanticsFailed,
     ImageOnly,
     Ungrounded,
+    /// A macOS permission dialog was most of what was on screen.
+    SystemPrompt,
 }
 
 impl LowSignalReason {
@@ -117,6 +169,7 @@ impl LowSignalReason {
             Self::VisualSemanticsFailed => "visual_semantics_failed",
             Self::ImageOnly => "image_only",
             Self::Ungrounded => "ungrounded_summary",
+            Self::SystemPrompt => "system_prompt",
         }
     }
 
@@ -131,6 +184,9 @@ impl LowSignalReason {
             }
             Self::Ungrounded => {
                 "The summary couldn't be matched to on-screen text, so it was kept out of search."
+            }
+            Self::SystemPrompt => {
+                "A system permission prompt, not something you worked on, so it was kept out of search."
             }
         }
     }
@@ -232,7 +288,26 @@ pub fn low_signal_reason(s: &SurfaceSignals<'_>) -> Option<LowSignalReason> {
     if (visual_fallback || filename_summary) && thin_text {
         return Some(LowSignalReason::ImageOnly);
     }
+    if is_mostly_a_permission_prompt(s.clean_text) {
+        return Some(LowSignalReason::SystemPrompt);
+    }
     None
+}
+
+/// Text beyond the dialog's own wording that makes a capture worth keeping.
+const PERMISSION_PROMPT_MAX_CHARS: usize = 400;
+
+/// A macOS permission dialog ("X would like to record this computer's screen
+/// and audio", with its Don't Allow button) and little else. The same dialog
+/// over a page of real content is that page's memory, and a page that only
+/// discusses permissions has no dialog buttons.
+fn is_mostly_a_permission_prompt(clean_text: &str) -> bool {
+    let lower = clean_text.to_lowercase().replace('\u{2019}', "'");
+    let asks = lower.contains("would like to record")
+        || lower.contains("would like to access")
+        || lower.contains("is requesting to bypass");
+    let has_buttons = lower.contains("don't allow") || lower.contains("allow for one month");
+    asks && has_buttons && clean_text.chars().count() <= PERMISSION_PROMPT_MAX_CHARS
 }
 
 pub fn result_low_signal_reason(r: &SearchResult) -> Option<LowSignalReason> {
@@ -582,8 +657,13 @@ fn extraction_grounding_confidence(record: &MemoryRecord) -> Option<f32> {
 
 /// Lifecycle values `MemoryRecord.enrichment_status` may hold (MEM-07
 /// invariant 3).
-const VALID_ENRICHMENT_STATUSES: &[&str] =
-    &["", "pending", "reviewed_local", "reviewed_daily", "review_failed"];
+const VALID_ENRICHMENT_STATUSES: &[&str] = &[
+    "",
+    "pending",
+    "reviewed_local",
+    "reviewed_daily",
+    "review_failed",
+];
 
 /// The finalized-memory contract (MEM-07): every invariant a stored
 /// `MemoryRecord` must satisfy, checkable from the record alone. Invariants
@@ -635,7 +715,11 @@ pub fn assert_memory_contract(record: &MemoryRecord) -> Result<(), String> {
     if is_visual_semantics_failed_record(record) {
         let capped = [
             ("evidence_confidence", record.evidence_confidence, 0.30),
-            ("agent_usefulness_score", record.agent_usefulness_score, 0.25),
+            (
+                "agent_usefulness_score",
+                record.agent_usefulness_score,
+                0.25,
+            ),
             ("retrieval_value_score", record.retrieval_value_score, 0.25),
             ("graph_readiness_score", record.graph_readiness_score, 0.15),
             ("specificity_score", record.specificity_score, 0.15),
@@ -643,7 +727,11 @@ pub fn assert_memory_contract(record: &MemoryRecord) -> Result<(), String> {
             ("confidence_score", record.confidence_score, 0.20),
             ("importance_score", record.importance_score, 0.20),
             ("extraction_confidence", record.extraction_confidence, 0.15),
-            ("insight_card_confidence", record.insight_card_confidence, 0.15),
+            (
+                "insight_card_confidence",
+                record.insight_card_confidence,
+                0.15,
+            ),
         ];
         for (label, value, ceiling) in capped {
             if value > ceiling {
@@ -709,7 +797,9 @@ pub fn assert_memory_contract(record: &MemoryRecord) -> Result<(), String> {
         ("insight_why_mattered", &record.insight_why_mattered),
     ];
     for (label, value) in narration_fields {
-        if !value.trim().is_empty() && crate::summariser::narration_filter::narration_filter_hits(value) {
+        if !value.trim().is_empty()
+            && crate::summariser::narration_filter::narration_filter_hits(value)
+        {
             return Err(format!(
                 "invariant 5 (no meta narration): {label} reads like narration about the capture itself"
             ));
@@ -747,6 +837,54 @@ mod tests {
         build_embedding_manifest, compose_memory_embedding_document, upsert_embedding_manifest,
         EmbeddingStatus, VisualSemanticSource,
     };
+
+    #[test]
+    fn text_source_categories_are_bounded_and_lineage_takes_precedence() {
+        for (raw, expected) in [
+            (r#"{"source_kind":" AX "}"#, "ax"),
+            (r#"{"source_kind":"browser_semantic"}"#, "browser_semantic"),
+            (r#"{"source_kind":"browser_ſemantic"}"#, "unknown"),
+            (
+                r#"{"source_kind":"ax","text_source_kinds":["browser_ſemantic"]}"#,
+                "unknown",
+            ),
+            (
+                r#"{"text_source_kinds":["browser_ſemantic","browser_semantic"]}"#,
+                "mixed",
+            ),
+            (r#"{"source_kind":"ocr"}"#, "ocr"),
+            (r#"{"source_kind":"mixed"}"#, "mixed"),
+            (r#"{"source_kind":"visual_capture"}"#, "unknown"),
+            (r#"{"source_kind":"private label"}"#, "unknown"),
+            (
+                r#"{"source_kind":"ocr","text_source_kinds":["ax","ax"]}"#,
+                "ax",
+            ),
+            (
+                r#"{"source_kind":"ocr","text_source_kinds":["ax",42]}"#,
+                "mixed",
+            ),
+            (
+                r#"{"source_kind":"ocr","text_source_kinds":["private label",null]}"#,
+                "unknown",
+            ),
+            (r#"{"source_kind":"ocr","text_source_kinds":[]}"#, "ocr"),
+            (
+                r#"{"source_kind":"ocr","text_source_kinds":"invalid"}"#,
+                "ocr",
+            ),
+            ("not json", "unknown"),
+            ("[]", "unknown"),
+            ("{}", "unknown"),
+        ] {
+            assert_eq!(text_source_from_raw_evidence(raw), expected, "{raw}");
+        }
+        assert_eq!(
+            text_source_kinds_from_raw_evidence(r#"{"source_kind":"mixed"}"#),
+            ["unknown"].into_iter().collect(),
+            "a mixed label alone cannot reconstruct contributing methods"
+        );
+    }
 
     fn valid_memory_record() -> MemoryRecord {
         let mut record = MemoryRecord {
@@ -863,7 +1001,8 @@ mod tests {
     #[test]
     fn contract_rejects_meta_narration_in_memory_context() {
         let mut record = valid_memory_record();
-        record.memory_context = "The user is viewing a spreadsheet of quarterly numbers.".to_string();
+        record.memory_context =
+            "The user is viewing a spreadsheet of quarterly numbers.".to_string();
         let err = assert_memory_contract(&record).unwrap_err();
         assert!(err.contains("invariant 5"), "{err}");
     }

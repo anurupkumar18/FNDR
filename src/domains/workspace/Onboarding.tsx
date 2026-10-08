@@ -15,8 +15,16 @@ import {
 import { useModelDownloadStatus } from "@/shared/hooks/useModelDownloadStatus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { formatBytes } from "@/shared/utils/format";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+    type ActivityTraceStep,
+} from "@/shared/activity/activityTrace";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import "./Onboarding.css";
 import { Icon, type IconName } from "@/shared/components/atoms/Icon";
+import { observedModelDownloadStep } from "./modelDownloadActivity";
 
 // ── Helper: step index for progress dots ─────────────────────────────────
 const STEPS: OnboardingStep[] = [
@@ -214,18 +222,100 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
 // ── Step 4: Permissions ───────────────────────────────────────────────────
 function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
     const [perms, setPerms] = useState({ screen_recording: false, accessibility: false, microphone: false });
+    const [permissionActivity, setPermissionActivity] = useState<ActivityTraceSnapshot | null>(null);
 
-    const refresh = useCallback(async () => {
+    const refresh = useCallback(async (isMounted: () => boolean = () => true) => {
+        const startedAtMs = Date.now();
+        const startedTrace = recordActivityStep(
+            beginActivityTrace({
+                id: `permission-check-${startedAtMs}`,
+                title: "Permission check activity",
+                startedAtMs,
+            }),
+            {
+                id: "permission-check",
+                label: "Checking macOS permissions",
+                actor: "macOS permission service",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        );
+        if (isMounted()) setPermissionActivity(startedTrace);
         try {
             const p = await checkPermissions();
+            if (!isMounted()) return;
             setPerms(p);
-        } catch {/* ignore */}
+            const finishedAtMs = Date.now();
+            const granted = Object.values(p).filter(Boolean).length;
+            setPermissionActivity(recordActivityStep(startedTrace, {
+                id: "permission-check",
+                label: "macOS permission status checked",
+                actor: "macOS permission service",
+                status: granted === 3 ? "completed" : "degraded",
+                evidence: "result-metadata",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+                detail: `${granted} of 3 permissions granted`,
+            }));
+        } catch {
+            if (!isMounted()) return;
+            const failedAtMs = Date.now();
+            setPermissionActivity(recordActivityStep(startedTrace, {
+                id: "permission-check",
+                label: "macOS permission status unavailable",
+                actor: "macOS permission service",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: failedAtMs,
+                durationMs: failedAtMs - startedAtMs,
+            }));
+        }
     }, []);
 
     usePolling(refresh, 2500);
 
     async function openSettings(pane: Parameters<typeof openSystemSettings>[0]) {
-        await openSystemSettings(pane);
+        const startedAtMs = Date.now();
+        setPermissionActivity((current) => recordActivityStep(
+            current ?? beginActivityTrace({
+                id: `permission-settings-${startedAtMs}`,
+                title: "Permission check activity",
+                startedAtMs,
+            }),
+            {
+                id: "system-settings",
+                label: "Opening the requested System Settings pane",
+                actor: "macOS workspace",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        ));
+        try {
+            await openSystemSettings(pane);
+            const finishedAtMs = Date.now();
+            setPermissionActivity((current) => current ? recordActivityStep(current, {
+                id: "system-settings",
+                label: "System Settings opened",
+                actor: "macOS workspace",
+                status: "completed",
+                evidence: "result-metadata",
+                atMs: finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+            }) : current);
+        } catch {
+            const failedAtMs = Date.now();
+            setPermissionActivity((current) => current ? recordActivityStep(current, {
+                id: "system-settings",
+                label: "System Settings could not be opened",
+                actor: "macOS workspace",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: failedAtMs,
+                durationMs: failedAtMs - startedAtMs,
+            }) : current);
+        }
     }
 
     function handleContinue() {
@@ -247,6 +337,12 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
                 FNDR needs permission to see your screen. Captured memory stays on this Mac by default;
                 model downloads and optional integrations use the network.
             </p>
+
+            {permissionActivity && (
+                <div className="ob-activity-trace">
+                    <ActivityTrace trace={permissionActivity} announce={false} />
+                </div>
+            )}
 
             {[
                 {
@@ -320,7 +416,40 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     const [error, setError] = useState<string | null>(null);
     const [pendingModelId, setPendingModelId] = useState<string | null>(null);
     const [isActivatingModel, setIsActivatingModel] = useState(false);
+    const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const downloadStatus = useModelDownloadStatus();
+    const mountedRef = useRef(true);
+    const activatingModelIdRef = useRef<string | null>(null);
+    const statusGenerationFloorRef = useRef<number | null>(null);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
+
+    const startActivity = useCallback((step: ActivityTraceStep) => {
+        setActivityTrace(recordActivityStep(
+            beginActivityTrace({
+                id: `onboarding-model-${step.atMs}`,
+                title: "Model setup activity",
+                startedAtMs: step.atMs,
+            }),
+            step,
+        ));
+    }, []);
+
+    const recordActivity = useCallback((step: ActivityTraceStep) => {
+        setActivityTrace((current) => recordActivityStep(
+            current ?? beginActivityTrace({
+                id: `onboarding-model-${step.atMs}`,
+                title: "Model setup activity",
+                startedAtMs: step.atMs,
+            }),
+            step,
+        ));
+    }, []);
 
     async function activateModel(modelId: string) {
         const runtime = await refreshAiModels();
@@ -353,20 +482,81 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
             return;
         }
         embedderAutoStartRef.current = true;
+        if (
+            downloadStatus.model_id === embedder.id
+            && ["preparing", "downloading", "finalizing"].includes(downloadStatus.state)
+        ) {
+            const observedStep = observedModelDownloadStep(downloadStatus, embedder.name);
+            statusGenerationFloorRef.current = null;
+            setPendingModelId(embedder.id);
+            if (observedStep) startActivity(observedStep);
+            return;
+        }
+        statusGenerationFloorRef.current = downloadStatus.updated_at_ms;
         setPendingModelId(embedder.id);
-        downloadModel(embedder.id, embedder.download_url, embedder.filename).catch((e: unknown) => {
-            setError(String(e));
-            setPendingModelId(null);
+        startActivity({
+            id: "download",
+            label: `Requesting ${embedder.name}`,
+            actor: "Model download service",
+            status: "running",
+            evidence: "ipc-boundary",
+            atMs: Date.now(),
         });
-    }, [embedder, embedderMissing]);
+        downloadModel(embedder.id, embedder.download_url, embedder.filename).catch(() => {
+            statusGenerationFloorRef.current = null;
+            setError("FNDR could not start the model download. Retry it or check your network connection.");
+            setPendingModelId(null);
+            recordActivity({
+                id: "download",
+                label: "Model download request failed",
+                actor: "Model download service",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: Date.now(),
+            });
+        });
+    }, [downloadStatus, embedder, embedderMissing, recordActivity, startActivity]);
+
+    useEffect(() => {
+        if (
+            pendingModelId
+            || !downloadStatus.model_id
+            || downloadStatus.model_id === embedder?.id
+            || !["preparing", "downloading", "finalizing"].includes(downloadStatus.state)
+        ) {
+            return;
+        }
+        const modelName = models.find((model) => model.id === downloadStatus.model_id)?.name
+            ?? "Local AI model";
+        const observedStep = observedModelDownloadStep(downloadStatus, modelName);
+        if (!observedStep) return;
+        statusGenerationFloorRef.current = null;
+        setPendingModelId(downloadStatus.model_id);
+        startActivity(observedStep);
+    }, [downloadStatus, embedder, models, pendingModelId, startActivity]);
 
     useEffect(() => {
         if (!pendingModelId || downloadStatus.model_id !== pendingModelId) {
             return;
         }
+        if (
+            statusGenerationFloorRef.current !== null
+            && downloadStatus.updated_at_ms <= statusGenerationFloorRef.current
+        ) {
+            return;
+        }
 
-        if (downloadStatus.state === "failed" && downloadStatus.error) {
-            setError(downloadStatus.error);
+        const observedStep = observedModelDownloadStep(
+            downloadStatus,
+            models.find((model) => model.id === pendingModelId)?.name ?? "Local AI model",
+        );
+        if (observedStep) {
+            recordActivity(observedStep);
+        }
+
+        if (downloadStatus.state === "failed") {
+            statusGenerationFloorRef.current = null;
+            setError("The model download failed. Retry it or check your network connection.");
             setPendingModelId(null);
             return;
         }
@@ -378,6 +568,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
         // A finished embedder download refreshes the registry and stays on
         // this step; only the user's chosen model advances onboarding.
         if (embedder && downloadStatus.model_id === embedder.id) {
+            statusGenerationFloorRef.current = null;
             setPendingModelId(null);
             listAvailableModels()
                 .then(setModels)
@@ -385,38 +576,66 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
             return;
         }
 
-        let cancelled = false;
         const completedModelId = downloadStatus.model_id ?? pendingModelId;
+        if (activatingModelIdRef.current === completedModelId) {
+            return;
+        }
+        activatingModelIdRef.current = completedModelId;
+        statusGenerationFloorRef.current = null;
         setPendingModelId(null);
         setIsActivatingModel(true);
         setError(null);
+        recordActivity({
+            id: "activation",
+            label: "Loading the model into FNDR",
+            actor: "Local inference",
+            status: "running",
+            evidence: "ipc-boundary",
+            atMs: Date.now(),
+        });
 
         void (async () => {
             try {
                 await activateModel(completedModelId);
-                if (!cancelled) {
-                    onSave({
-                        ...state,
-                        step: "permissions",
-                        model_downloaded: true,
-                        model_id: completedModelId,
+                if (!mountedRef.current || activatingModelIdRef.current !== completedModelId) {
+                    return;
+                }
+                recordActivity({
+                    id: "activation",
+                    label: "Local model is ready",
+                    actor: "Local inference",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: Date.now(),
+                });
+                onSave({
+                    ...state,
+                    step: "permissions",
+                    model_downloaded: true,
+                    model_id: completedModelId,
+                });
+            } catch {
+                if (mountedRef.current && activatingModelIdRef.current === completedModelId) {
+                    setError("Model download finished, but FNDR could not activate it. Retry loading it or check local model status.");
+                    recordActivity({
+                        id: "activation",
+                        label: "Local model activation failed",
+                        actor: "Local inference",
+                        status: "failed",
+                        evidence: "ipc-boundary",
+                        atMs: Date.now(),
                     });
                 }
-            } catch (refreshError) {
-                if (!cancelled) {
-                    setError(`Model download finished, but FNDR could not activate it: ${String(refreshError)}`);
-                }
             } finally {
-                if (!cancelled) {
+                if (activatingModelIdRef.current === completedModelId) {
+                    activatingModelIdRef.current = null;
+                }
+                if (mountedRef.current) {
                     setIsActivatingModel(false);
                 }
             }
         })();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [downloadStatus.error, downloadStatus.model_id, downloadStatus.state, embedder, onSave, pendingModelId, state]);
+    }, [downloadStatus, embedder, models, onSave, pendingModelId, recordActivity, state]);
 
     const activeDownloadStatus =
         pendingModelId && downloadStatus.model_id === pendingModelId ? downloadStatus : null;
@@ -425,35 +644,69 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
         (activeDownloadStatus !== null &&
             ["preparing", "downloading", "finalizing"].includes(activeDownloadStatus.state));
 
-    // Auto-scroll logs to bottom
-    const logsEndRef = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-        if (logsEndRef.current && activeDownloadStatus) {
-            logsEndRef.current.scrollIntoView({ behavior: "smooth" });
-        }
-    }, [activeDownloadStatus]);
-
     async function handleDownload() {
         if (!selected) return;
         setError(null);
         if (selected.download_url === "already_downloaded") {
+            startActivity({
+                id: "activation",
+                label: `Loading ${selected.name} into FNDR`,
+                actor: "Local inference",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: Date.now(),
+            });
             setIsActivatingModel(true);
             try {
                 await activateModel(selected.id);
+                recordActivity({
+                    id: "activation",
+                    label: "Local model is ready",
+                    actor: "Local inference",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    atMs: Date.now(),
+                });
                 onSave({ ...state, step: "permissions", model_downloaded: true, model_id: selected.id });
-            } catch (refreshError) {
-                setError(`FNDR found the model on disk, but could not activate it: ${String(refreshError)}`);
+            } catch {
+                setError("FNDR found the model on disk, but could not activate it. Retry loading it or check local model status.");
+                recordActivity({
+                    id: "activation",
+                    label: "Local model activation failed",
+                    actor: "Local inference",
+                    status: "failed",
+                    evidence: "ipc-boundary",
+                    atMs: Date.now(),
+                });
             } finally {
                 setIsActivatingModel(false);
             }
             return;
         }
         setPendingModelId(selected.id);
+        statusGenerationFloorRef.current = downloadStatus.updated_at_ms;
+        startActivity({
+            id: "download",
+            label: `Requesting ${selected.name}`,
+            actor: "Model download service",
+            status: "running",
+            evidence: "ipc-boundary",
+            atMs: Date.now(),
+        });
         try {
             await downloadModel(selected.id, selected.download_url, selected.filename);
-        } catch (e: unknown) {
-            setError(String(e));
+        } catch {
+            statusGenerationFloorRef.current = null;
+            setError("FNDR could not start the model download. Retry it or check your network connection.");
             setPendingModelId(null);
+            recordActivity({
+                id: "download",
+                label: "Model download request failed",
+                actor: "Model download service",
+                status: "failed",
+                evidence: "ipc-boundary",
+                atMs: Date.now(),
+            });
         }
     }
 
@@ -546,48 +799,13 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                 </div>
             )}
 
-            {isDownloading && (!activeDownloadStatus || activeDownloadStatus.state !== "downloading") && (
-                <div style={{ marginBottom: 24, padding: "24px 0", textAlign: "center" }}>
-                    <span className="ob-icon pulse" style={{ display: "inline-block", marginBottom: 12 }}><Icon name="settings" size={24} /></span>
-                    <div className="ob-download-title">
-                        {isActivatingModel
-                            ? "Loading model into FNDR..."
-                            : activeDownloadStatus?.state === "finalizing"
-                                ? "Finalizing model file..."
-                                : "Preparing Download..."}
-                    </div>
-                    <div className="ob-download-subtitle">
-                        {activeDownloadStatus?.destination_path
-                            ? activeDownloadStatus.destination_path
-                            : "Connecting to huggingface.co"}
-                    </div>
+            {activityTrace && (
+                <div className="ob-activity-trace">
+                    <ActivityTrace trace={activityTrace} defaultExpanded />
                 </div>
             )}
 
-            {isDownloading && (
-                <div className="ob-download-logs" style={{
-                    background: "rgba(0,0,0,0.2)",
-                    borderRadius: 8,
-                    padding: 12,
-                    fontSize: 11,
-                    fontFamily: "inherit",
-                    color: "rgba(255,255,255,0.7)",
-                    height: 120,
-                    overflowY: "auto",
-                    marginBottom: 24,
-                    textAlign: "left"
-                }}>
-                    <div style={{ color: "var(--accent)" }}>
-                        [Stage: {activeDownloadStatus?.state ?? (isActivatingModel ? "activating" : "pending")} | Logs: {activeDownloadStatus?.logs.length ?? 0}]
-                    </div>
-                    {activeDownloadStatus?.logs.map((L, i) => (
-                        <div key={i} style={{ marginBottom: 4 }}>{L}</div>
-                    ))}
-                    <div ref={logsEndRef} />
-                </div>
-            )}
-
-            {error && <div className="ob-error-box">{error}</div>}
+            {error && <div className="ob-error-box" role="alert">{error}</div>}
 
             {!isDownloading && (
                 <>

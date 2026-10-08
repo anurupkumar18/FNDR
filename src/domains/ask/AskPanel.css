@@ -81,6 +81,10 @@
     align-items: stretch;
 }
 
+.ask-activity-trace {
+    margin-top: 14px;
+}
+
 .ask-input {
     flex: 1;
     resize: none;

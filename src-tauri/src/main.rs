@@ -126,6 +126,9 @@ fn main() {
                     error
                 ),
             }
+            fndr_lib::ipc::commands::start_screen_guide_diagnostic_maintenance(
+                data_dir.clone(),
+            );
             let store = Store::new(&data_dir)?;
             let store_arc = Arc::new(store);
             tracing::info!("Consolidated store initialized at {:?}", data_dir);
@@ -165,9 +168,11 @@ fn main() {
                 state_store,
                 graph,
                 None,
-                None,
             ));
             state.set_app_handle(app.handle().clone());
+            fndr_lib::privacy_proof::init_model_request_log(&data_dir);
+            ipc::commands::sweep_screen_guide_scratch();
+            ipc::commands::reap_stale_hermes_gateway(&data_dir);
 
             // Restore last-session model: if onboarding is complete and the
             // preferred GGUF is on disk, load it eagerly. This means the
@@ -204,7 +209,7 @@ fn main() {
                     );
                     let loaded =
                         fndr_lib::load_ai_engines(restore_data_dir.as_path(), &config).await;
-                    restore_state.replace_ai_engines(loaded.inference, loaded.vlm);
+                    restore_state.replace_ai_engines(loaded.inference);
                 });
             }
 
@@ -273,6 +278,18 @@ fn main() {
             {
                 let daily_state = state.clone();
                 fndr_lib::memory_review::spawn_daily_scheduler(daily_state);
+            }
+
+            // First run: install the pinned Hermes into FNDR's app data so the
+            // agent works without a system install. Off the main thread; a
+            // failure is reported when Hermes is first started.
+            {
+                let hermes_state = state.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(error) = ipc::commands::ensure_pinned_hermes(&hermes_state) {
+                        tracing::warn!(%error, "hermes:pinned_install_failed");
+                    }
+                });
             }
 
             // Demo profile only: queue every stored memory for on-device review
@@ -612,6 +629,7 @@ fn main() {
             }
 
             app.manage(state.clone());
+            app.manage(fndr_lib::voice::VoiceManager::for_app(app.handle().clone()));
 
             // Start the Companion API (iPhone/Watch local-network surface) as a
             // background task so app startup is not blocked on TLS init. The
@@ -692,6 +710,7 @@ fn main() {
             ipc::commands::retrieval::fndr_build_context_pack,
             ipc::commands::retrieval::fndr_get_memory_subgraph,
             ipc::commands::retrieval::fndr_get_related_memories,
+            ipc::commands::retrieval::fndr_get_memory_source_statements,
             ipc::commands::retrieval::fndr_quality_status,
             ipc::commands::retrieval::fndr_timeline,
             ipc::commands::search::find_visually_similar_memories,
@@ -704,6 +723,7 @@ fn main() {
             ipc::commands::get_mcp_server_status,
             ipc::commands::start_mcp_server,
             ipc::commands::stop_mcp_server,
+            ipc::commands::resolve_mcp_approval,
             // Companion API (iPhone / Apple Watch)
             ipc::commands::companion_get_status,
             ipc::commands::companion_get_endpoint,
@@ -729,10 +749,15 @@ fn main() {
             ipc::commands::open_exported_pdf,
             // Voice / Speech
             ipc::commands::transcribe_voice_input,
+            fndr_lib::voice::voice_start,
+            fndr_lib::voice::voice_stop,
+            fndr_lib::voice::voice_cancel,
             // Capture control
             ipc::commands::pause_capture,
             ipc::commands::resume_capture,
             // Privacy & data
+            ipc::commands::get_agent_notes_enabled,
+            ipc::commands::set_agent_notes_enabled,
             ipc::commands::get_blocklist,
             ipc::commands::set_blocklist,
             ipc::commands::delete_all_data,
@@ -804,6 +829,7 @@ fn main() {
             ipc::commands::start_hermes_gateway,
             ipc::commands::stop_hermes_gateway,
             ipc::commands::send_hermes_message,
+            ipc::commands::cancel_hermes_message,
             ipc::commands::list_agent_chats,
             ipc::commands::get_agent_chat,
             ipc::commands::delete_agent_chat,
@@ -813,8 +839,11 @@ fn main() {
             ipc::commands::codex_logout,
             ipc::commands::openclicky_bridge_status,
             ipc::commands::computer_use_status,
-            ipc::commands::computer_use_say,
-            ipc::commands::computer_use_interrupt,
+            ipc::commands::computer_use_plan,
+            ipc::commands::setup_components,
+            ipc::commands::install_component,
+            ipc::commands::computer_use_permissions,
+            ipc::commands::computer_use_start,
             ipc::commands::computer_use_respond,
             ipc::commands::computer_use_stop,
             ipc::commands::send_direct_chat,
@@ -861,6 +890,32 @@ fn main() {
             ipc::commands::ask_screen_guide,
             ipc::commands::get_screen_guide_cursor_position,
             ipc::commands::finish_screen_guide_visual,
+            ipc::commands::arm_screen_guide_diagnostic,
+            ipc::commands::get_screen_guide_diagnostic_status,
+            ipc::commands::delete_screen_guide_diagnostics,
+            ipc::commands::reveal_screen_guide_diagnostics,
+            // Debug-only Memory Journey evidence. These command symbols are
+            // compiled out of release builds together with their recorder.
+            #[cfg(debug_assertions)]
+            ipc::commands::arm_memory_journey,
+            #[cfg(debug_assertions)]
+            ipc::commands::get_memory_journey_status,
+            #[cfg(debug_assertions)]
+            ipc::commands::create_reconstructed_memory_journey,
+            #[cfg(debug_assertions)]
+            ipc::commands::run_memory_journey_query,
+            #[cfg(debug_assertions)]
+            ipc::commands::export_memory_journey,
+            #[cfg(debug_assertions)]
+            ipc::commands::delete_memory_journey,
+            #[cfg(debug_assertions)]
+            ipc::commands::delete_all_memory_journeys,
+            // Synthetic image replay is debug-only and refuses any profile
+            // without the explicit Quality Lab marker.
+            #[cfg(debug_assertions)]
+            ipc::commands::get_quality_lab_fixtures,
+            #[cfg(debug_assertions)]
+            ipc::commands::replay_quality_lab_fixture,
             // Clipboard history
             ipc::commands::get_clipboard_history,
             ipc::commands::copy_clipboard_entry,
@@ -895,6 +950,9 @@ fn main() {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
             ipc::commands::shutdown_screen_guide(app_handle);
+            ipc::commands::shutdown_computer_use();
+            ipc::commands::shutdown_hermes_gateway();
+            fndr_lib::voice::shutdown(app_handle);
             fndr_lib::speech::shutdown_speech();
         }
     });

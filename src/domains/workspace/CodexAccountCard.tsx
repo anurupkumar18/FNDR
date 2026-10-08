@@ -13,17 +13,26 @@ import {
     type CodexUsageWindow,
 } from "@/shared/ipc/tauri";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+    type ActivityTraceStatus,
+} from "@/shared/activity/activityTrace";
 import { useActiveCinematicPalette } from "@/shared/hooks/useActiveCinematicPalette";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 import { openExternalUrl } from "@/shared/utils/openExternalUrl";
 import "./CodexAccountCard.css";
 
-const CODEX_INSTALL_COMMAND = "npm install -g @openai/codex";
+const CODEX_INSTALL_COMMAND = "npm install -g @openai/codex@0.151.0";
 const CODEX_PLAN_HELP_URL = "https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan";
 
 interface CodexAccountCardProps {
     /** Called whenever the account changes, so the panel can offer its models. */
     onStatusChange: (status: CodexAccountStatus) => void;
+    /** Hermes or Notch Do could not use or refresh the sign-in: offer Reconnect. */
+    reconnect?: boolean;
 }
 
 function formatPlan(planType: string | null): string {
@@ -76,37 +85,134 @@ function UsageMeter({ window }: { window: CodexUsageWindow }) {
  * runs the OAuth flow in the user's browser and keeps the tokens; FNDR only
  * shows the result, so the subscription powers Hermes without an API key.
  */
-export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
+export function CodexAccountCard({ onStatusChange, reconnect = false }: CodexAccountCardProps) {
     const [status, setStatus] = useState<CodexAccountStatus | null>(null);
     const [pending, setPending] = useState<CodexLoginStarted | null>(null);
     const [busy, setBusy] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [accountActivity, setAccountActivity] = useState<ActivityTraceSnapshot | null>(null);
+    const [checkedAt, setCheckedAt] = useState<number | null>(null);
     const { mode } = useActiveCinematicPalette();
     const reducedMotion = useReducedMotion() ?? false;
     const onStatusChangeRef = useRef(onStatusChange);
+    const refreshGenerationRef = useRef(0);
+    const pendingLoginIdRef = useRef<string | null>(null);
+    const mountedRef = useRef(true);
     onStatusChangeRef.current = onStatusChange;
 
     const applyStatus = useCallback((next: CodexAccountStatus) => {
         setStatus(next);
+        setCheckedAt(Date.now());
         onStatusChangeRef.current(next);
     }, []);
 
-    const refresh = useCallback(async () => {
-        try {
-            applyStatus(await codexAccountStatus());
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
+    const recordAccountResult = useCallback((input: {
+        id: string;
+        label: string;
+        status: ActivityTraceStatus;
+        evidence: "ipc-boundary" | "backend-event" | "result-metadata";
+        startedAtMs?: number;
+    }) => {
+        const atMs = Date.now();
+        setAccountActivity((current) => {
+            const trace = current ?? beginActivityTrace({
+                id: `codex-account-${atMs}`,
+                title: "ChatGPT account activity",
+                startedAtMs: input.startedAtMs ?? atMs,
+            });
+            return recordActivityStep(trace, {
+                id: input.id,
+                label: input.label,
+                actor: "Codex app server",
+                status: input.status,
+                evidence: input.evidence,
+                atMs,
+                ...(input.startedAtMs === undefined
+                    ? {}
+                    : { durationMs: Math.max(0, atMs - input.startedAtMs) }),
+            });
+        });
+    }, []);
+
+    const refresh = useCallback(async (preserveTrace = false) => {
+        const generation = ++refreshGenerationRef.current;
+        const startedAtMs = Date.now();
+        setRefreshing(true);
+        setError(null);
+        if (!preserveTrace) {
+            setAccountActivity(recordActivityStep(
+                beginActivityTrace({
+                    id: `codex-account-${startedAtMs}`,
+                    title: "ChatGPT account activity",
+                    startedAtMs,
+                }),
+                {
+                    id: "account-status",
+                    label: "Checking ChatGPT account status",
+                    actor: "Codex app server",
+                    status: "running",
+                    evidence: "ipc-boundary",
+                    atMs: startedAtMs,
+                },
+            ));
+        } else {
+            recordAccountResult({
+                id: "account-status",
+                label: "Refreshing ChatGPT account status",
+                status: "running",
+                evidence: "ipc-boundary",
+            });
         }
-    }, [applyStatus]);
+        try {
+            const next = await codexAccountStatus();
+            if (!mountedRef.current || generation !== refreshGenerationRef.current) return;
+            applyStatus(next);
+            recordAccountResult({
+                id: "account-status",
+                label: "ChatGPT account status checked",
+                status: next.usableForHermes ? "completed" : "degraded",
+                evidence: "result-metadata",
+                startedAtMs,
+            });
+        } catch {
+            if (!mountedRef.current || generation !== refreshGenerationRef.current) return;
+            setError("FNDR could not check the ChatGPT account status. Try again.");
+            recordAccountResult({
+                id: "account-status",
+                label: "ChatGPT account status check failed",
+                status: "failed",
+                evidence: "ipc-boundary",
+                startedAtMs,
+            });
+        } finally {
+            if (mountedRef.current && generation === refreshGenerationRef.current) {
+                setRefreshing(false);
+            }
+        }
+    }, [applyStatus, recordAccountResult]);
 
     useEffect(() => {
+        mountedRef.current = true;
         void refresh();
+        return () => {
+            mountedRef.current = false;
+            refreshGenerationRef.current += 1;
+        };
     }, [refresh]);
 
     useTauriEvent<CodexLoginCompleted>(CODEX_LOGIN_COMPLETED_EVENT, (completed) => {
-        setPending((current) => (current?.loginId === completed.loginId ? null : current));
+        if (pendingLoginIdRef.current !== completed.loginId) return;
+        pendingLoginIdRef.current = null;
+        setPending(null);
         if (!completed.success && completed.error) setError(completed.error);
-        void refresh();
+        recordAccountResult({
+            id: "sign-in",
+            label: completed.success ? "Browser sign-in completed" : "Browser sign-in failed",
+            status: completed.success ? "completed" : "failed",
+            evidence: "backend-event",
+        });
+        void refresh(true);
     });
 
     const run = async (action: () => Promise<void>) => {
@@ -121,31 +227,122 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
         }
     };
 
-    const handleSignIn = () =>
-        run(async () => {
-            const started = await codexLoginStart();
-            setPending(started);
-            await openExternalUrl(started.authUrl);
+    const handleSignIn = () => {
+        const startedAtMs = Date.now();
+        setAccountActivity(recordActivityStep(
+            beginActivityTrace({
+                id: `codex-sign-in-${startedAtMs}`,
+                title: "ChatGPT account activity",
+                startedAtMs,
+            }),
+            {
+                id: "sign-in",
+                label: "Requesting browser sign-in",
+                actor: "Codex app server",
+                status: "running",
+                evidence: "ipc-boundary",
+                atMs: startedAtMs,
+            },
+        ));
+        return run(async () => {
+            try {
+                const started = await codexLoginStart();
+                pendingLoginIdRef.current = started.loginId;
+                setPending(started);
+                await openExternalUrl(started.authUrl);
+                recordAccountResult({
+                    id: "sign-in",
+                    label: "Browser sign-in started",
+                    status: "waiting",
+                    evidence: "result-metadata",
+                    startedAtMs,
+                });
+            } catch (reason) {
+                recordAccountResult({
+                    id: "sign-in",
+                    label: "Browser sign-in could not start",
+                    status: "failed",
+                    evidence: "ipc-boundary",
+                    startedAtMs,
+                });
+                throw reason;
+            }
         });
+    };
 
     const handleCancel = () =>
         run(async () => {
-            if (pending) await codexLoginCancel(pending.loginId);
-            setPending(null);
+            const startedAtMs = Date.now();
+            recordAccountResult({
+                id: "sign-in-cancel",
+                label: "Cancelling browser sign-in",
+                status: "running",
+                evidence: "ipc-boundary",
+            });
+            try {
+                if (pending) await codexLoginCancel(pending.loginId);
+                pendingLoginIdRef.current = null;
+                setPending(null);
+                recordAccountResult({
+                    id: "sign-in-cancel",
+                    label: "Browser sign-in cancelled",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    startedAtMs,
+                });
+            } catch (reason) {
+                recordAccountResult({
+                    id: "sign-in-cancel",
+                    label: "Browser sign-in cancellation failed",
+                    status: "failed",
+                    evidence: "ipc-boundary",
+                    startedAtMs,
+                });
+                throw reason;
+            }
         });
 
     const handleSignOut = () =>
         run(async () => {
-            applyStatus(await codexLogout());
+            const startedAtMs = Date.now();
+            recordAccountResult({
+                id: "sign-out",
+                label: "Requesting ChatGPT sign-out",
+                status: "running",
+                evidence: "ipc-boundary",
+            });
+            try {
+                applyStatus(await codexLogout());
+                recordAccountResult({
+                    id: "sign-out",
+                    label: "ChatGPT account signed out",
+                    status: "completed",
+                    evidence: "result-metadata",
+                    startedAtMs,
+                });
+            } catch (reason) {
+                recordAccountResult({
+                    id: "sign-out",
+                    label: "ChatGPT sign-out failed",
+                    status: "failed",
+                    evidence: "ipc-boundary",
+                    startedAtMs,
+                });
+                throw reason;
+            }
         });
 
     if (!status) {
         return (
             <div className="codex-card" aria-busy="true">
-                <div className="codex-card-row">
-                    <ThinkingIndicator state="connecting" size="sm" />
-                    <span className="codex-card-muted">Checking for Codex…</span>
-                </div>
+                {accountActivity
+                    ? <ActivityTrace trace={accountActivity} />
+                    : (
+                        <div className="codex-card-row">
+                            <ThinkingIndicator state="connecting" size="sm" />
+                            <span className="codex-card-muted">Checking for Codex…</span>
+                        </div>
+                    )}
             </div>
         );
     }
@@ -166,9 +363,10 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                     <span className="codex-terminal-prompt">$</span>
                     <span>{CODEX_INSTALL_COMMAND}</span>
                 </div>
+                {accountActivity ? <ActivityTrace trace={accountActivity} /> : null}
                 {broken && status.cliPath && <p className="codex-card-muted">Found at {status.cliPath}</p>}
                 <div className="codex-actions">
-                    <button type="button" className="codex-btn" onClick={() => void refresh()} disabled={busy}>
+                    <button type="button" className="codex-btn" onClick={() => void refresh()} disabled={busy || refreshing}>
                         Check again
                     </button>
                 </div>
@@ -194,14 +392,36 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                     </div>
                 )}
                 <p className="codex-card-muted">
-                    Hermes runs on your subscription and counts against these limits.
+                    These limits cover your whole ChatGPT account. Hermes and Notch Do count against them.
+                    {checkedAt
+                        ? ` Checked ${new Date(checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`
+                        : ""}
                 </p>
+                {accountActivity ? <ActivityTrace trace={accountActivity} /> : null}
                 {error && <p className="codex-card-error" role="alert">{error}</p>}
+                {reconnect ? (
+                    <p className="codex-card-error" role="alert">
+                        The ChatGPT sign-in could not be refreshed. Reconnect to keep Hermes and Notch Do working.
+                    </p>
+                ) : null}
                 <div className="codex-actions">
-                    <button type="button" className="codex-btn" onClick={() => void handleSignOut()} disabled={busy}>
+                    {reconnect ? (
+                        <button
+                            type="button"
+                            className="codex-btn codex-btn-primary"
+                            onClick={() => void handleSignIn()}
+                            disabled={busy || refreshing}
+                        >
+                            Reconnect ChatGPT
+                        </button>
+                    ) : null}
+                    <button type="button" className="codex-btn" onClick={() => void handleSignOut()} disabled={busy || refreshing}>
                         Sign out
                     </button>
                 </div>
+                <p className="codex-card-muted">
+                    FNDR shares this sign-in with Codex. Signing out here signs Codex out on this Mac too.
+                </p>
             </div>
         );
     }
@@ -220,11 +440,12 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                 </p>
             )}
             {pending ? (
-                <div className="codex-card-row" role="status">
+                <div className="codex-card-row">
                     <ThinkingIndicator state="connecting" size="sm" />
                     <span>Finish signing in in your browser…</span>
                 </div>
             ) : null}
+            {accountActivity ? <ActivityTrace trace={accountActivity} /> : null}
             {error && <p className="codex-card-error" role="alert">{error}</p>}
             <div className="codex-actions">
                 {pending ? (
@@ -232,7 +453,7 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                         <button type="button" className="codex-btn" onClick={() => void openExternalUrl(pending.authUrl)}>
                             Open sign-in page
                         </button>
-                        <button type="button" className="codex-btn" onClick={() => void handleCancel()} disabled={busy}>
+                        <button type="button" className="codex-btn" onClick={() => void handleCancel()} disabled={busy || refreshing}>
                             Cancel
                         </button>
                     </>
@@ -242,9 +463,9 @@ export function CodexAccountCard({ onStatusChange }: CodexAccountCardProps) {
                             type="button"
                             className="codex-btn codex-btn-primary"
                             onClick={() => void handleSignIn()}
-                            disabled={busy}
+                            disabled={busy || refreshing}
                         >
-                            Sign in with ChatGPT
+                            {reconnect ? "Reconnect ChatGPT" : "Sign in with ChatGPT"}
                         </button>
                         <button type="button" className="codex-link" onClick={() => void openExternalUrl(CODEX_PLAN_HELP_URL)}>
                             Which plans work?

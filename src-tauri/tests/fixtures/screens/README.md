@@ -9,12 +9,16 @@ external content. This keeps the corpus reproducible in CI (no network
 dependency, no risk of a real page's content changing under us) and
 sidesteps any question about reproducing copyrighted material.
 
-`manifest.json` entries: `{id, file, app_class, bundle_id, window_title,
-expected_outcome, expected_text, cer_budget}`.
+`manifest.json` entries include `{id, file, app_class, bundle_id, window_title,
+expected_outcome, expected_text, cer_budget}`. Admission cases may also provide
+`app_name` and `url` so the pre-frame privacy gate receives the same metadata
+shape as the native capture path.
 
-- `expected_outcome` is `"store"` (should reach OCR + storage) or
-  `"skip:<reason>"` (should be excluded by a privacy/admission gate before
-  pixels reach OCR — see CAP-07).
+- `expected_outcome` is `"store"` (metadata should pass admission) or
+  `"skip:<reason>"` (metadata should be excluded by the production privacy
+  gate before pixels reach OCR — see CAP-07). `scripts/quality_lab.py fixtures`
+  runs these cases through the same deterministic gate called by the native
+  capture loop and checks both blocks and false-positive passes.
 - `expected_text` is the ground-truth text for `store` fixtures only;
   `privacy_negative` fixtures leave it empty since they are never OCR'd.
 - `cer_budget` is the max acceptable character-error-rate for `store`

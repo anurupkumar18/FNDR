@@ -289,6 +289,9 @@ fn app_is_installed(_bundle_id: &str) -> bool {
 }
 
 fn resolve_reopen_target(record: &crate::storage::MemoryRecord) -> Option<ResolvedReopenTarget> {
+    if record.is_agent_note() {
+        return None;
+    }
     let typed = match &record.reopen_kind {
         ReopenKind::BrowserUrl => record
             .reopen_url
@@ -521,8 +524,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_memory_logic_removes_the_memory_graph_node_but_keeps_the_shared_session_node()
-    {
+    async fn delete_memory_logic_removes_the_memory_graph_node_but_keeps_the_shared_session_node() {
         // MEM-07 invariant 10: deleting a memory must not leave its own
         // graph node and edges behind. A session node it shares with other
         // memories is left alone, since deleting one memory should not sever
@@ -536,8 +538,14 @@ mod tests {
         let graph = GraphStore::new(store.clone());
 
         let record = deletable_record("mem-1");
-        store.add_batch(&[record.clone()]).await.expect("add memory");
-        graph.ingest_memory(&record).await.expect("ingest into graph");
+        store
+            .add_batch(&[record.clone()])
+            .await
+            .expect("add memory");
+        graph
+            .ingest_memory(&record)
+            .await
+            .expect("ingest into graph");
 
         let nodes_before = store.get_all_nodes().await.expect("nodes before");
         assert!(
@@ -578,6 +586,44 @@ mod tests {
                 .any(|e| e.source == "memory:mem-1" || e.target == "memory:mem-1"),
             "no edge should still reference memory:mem-1, got {edges_after:?}"
         );
+    }
+
+    #[test]
+    fn agent_note_never_resolves_any_reopen_target() {
+        for marker in [
+            "https://example.com",
+            "file:///tmp/note.txt",
+            "slack://channel",
+        ] {
+            let record = crate::storage::MemoryRecord {
+                source_type: crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string(),
+                memory_context: format!("Reopen: {marker}"),
+                ..Default::default()
+            };
+            assert_eq!(resolve_reopen_target(&record), None, "legacy {marker}");
+        }
+        for kind in [
+            ReopenKind::BrowserUrl,
+            ReopenKind::FilePath,
+            ReopenKind::AppDeepLink,
+            ReopenKind::AppBundle,
+        ] {
+            let record = crate::storage::MemoryRecord {
+                source_type: crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string(),
+                reopen_kind: kind,
+                reopen_url: Some("https://example.com".into()),
+                reopen_file_path: Some("/tmp/note.txt".into()),
+                reopen_app_deep_link: Some("slack://channel".into()),
+                reopen_app_bundle_id: Some("com.apple.TextEdit".into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                resolve_reopen_target(&record),
+                None,
+                "typed {:?}",
+                record.reopen_kind
+            );
+        }
     }
 
     #[test]
@@ -852,7 +898,11 @@ mod tests {
                 Some(R::AppDeepLink("notion://www.notion.so/page-123".into())),
             ),
             ("empty marker", marker("Reopen: "), None),
-            ("javascript marker", marker("Reopen: javascript:alert(1)"), None),
+            (
+                "javascript marker",
+                marker("Reopen: javascript:alert(1)"),
+                None,
+            ),
             (
                 "indented marker after other lines",
                 marker("App: Chrome\n   Reopen: https://legacy.example  "),
@@ -910,7 +960,9 @@ mod tests {
         };
         assert_eq!(
             resolve_reopen_target(&record),
-            Some(R::FilePath(PathBuf::from("/Users/qa/My%20Doc%20caf%C3%A9.pdf")))
+            Some(R::FilePath(PathBuf::from(
+                "/Users/qa/My%20Doc%20caf%C3%A9.pdf"
+            )))
         );
     }
 
@@ -1021,9 +1073,7 @@ mod tests {
                     reopen_text_anchor: s(anchor),
                     ..Default::default()
                 },
-                Some(R::BrowserUrl(
-                    "https://example.com/article#section".into(),
-                )),
+                Some(R::BrowserUrl("https://example.com/article#section".into())),
             ),
         ]);
     }

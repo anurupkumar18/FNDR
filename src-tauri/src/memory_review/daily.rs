@@ -131,7 +131,11 @@ pub async fn run_daily_memory_review(
     let records = store
         .get_memories_in_range(start_ms, end_ms)
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        // Agent notes are never review candidates (VS-68).
+        .filter(|record| !record.is_agent_note())
+        .collect::<Vec<_>>();
 
     let scanned = records.len();
     let mut summary = DailyReviewSummary {
@@ -437,7 +441,6 @@ mod tests {
             state_store,
             graph,
             None,
-            None,
         ));
         (state, store)
     }
@@ -561,6 +564,43 @@ mod tests {
         );
         assert!(written.memory_context.contains("design"));
         assert!(written.reviewed_at_ms >= now_ms);
+    }
+
+    #[tokio::test]
+    async fn daily_review_never_sends_an_agent_note_to_the_model() {
+        let (state, store) = build_state_with_store().await;
+        let day_start = parse_day_range_local("2026-05-20").unwrap().0;
+        let mut note = record("note-1", day_start + 60_000);
+        note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string();
+        store.add_batch_preserving_ids(&[note]).await.unwrap();
+
+        let provider = StubProvider {
+            result: Ok(ReviewedMemory {
+                memory_context: "Rewritten by the model.".to_string(),
+                display_summary: "Rewritten".to_string(),
+                ..ReviewedMemory::default()
+            }),
+        };
+        let (start_ms, end_ms) = parse_day_range_local("2026-05-20").unwrap();
+        let summary = run_daily_memory_review(
+            &state,
+            &store,
+            &provider,
+            None,
+            "2026-05-20",
+            start_ms,
+            end_ms,
+            chrono::Utc::now().timestamp_millis(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(summary.scanned, 0);
+        assert_eq!(summary.changed, 0);
+        let stored = store.get_memory_by_id("note-1").await.unwrap().unwrap();
+        assert_eq!(stored.memory_context, "Original memory context for note-1");
+        assert_eq!(stored.reviewer_generation, 0);
     }
 
     #[tokio::test]

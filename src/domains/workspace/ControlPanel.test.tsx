@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
+    type CaptureStatus,
+    getAgentNotesEnabled,
+    getBlocklist,
     getPrivacyAlerts,
     pauseCapture,
+    resumeCapture,
+    setAgentNotesEnabled,
     setBlocklist,
 } from "@/shared/ipc/tauri";
 import { ControlPanel } from "./ControlPanel";
@@ -30,6 +35,7 @@ vi.mock("@/shared/ipc/tauri", () => ({
         flagged_count: 0,
     }),
     getBlocklist: vi.fn().mockResolvedValue([]),
+    getAgentNotesEnabled: vi.fn().mockResolvedValue(false),
     getAutofillSettings: vi.fn().mockResolvedValue({
         enabled: true,
         shortcut: "Alt+F",
@@ -76,6 +82,7 @@ vi.mock("@/shared/ipc/tauri", () => ({
     reclaimMemoryStorage: vi.fn(),
     runMemoryRepairBackfill: vi.fn(),
     setBlocklist: vi.fn(),
+    setAgentNotesEnabled: vi.fn().mockResolvedValue(undefined),
     setAutofillSettings: vi.fn(),
     setRetentionDays: vi.fn(),
     startMcpServer: vi.fn(),
@@ -116,11 +123,87 @@ afterEach(() => {
     cleanup();
     vi.clearAllMocks();
     vi.mocked(getPrivacyAlerts).mockResolvedValue([]);
+    vi.mocked(getAgentNotesEnabled).mockResolvedValue(false);
     localStorage.clear();
     document.getElementById("cinematic-palette-vars")?.remove();
 });
 
 describe("ControlPanel", () => {
+    it("ignores an earlier settings load after reopening and saving consent", async () => {
+        let finishFirstLoad!: (apps: string[]) => void;
+        vi.mocked(getBlocklist).mockImplementationOnce(() => new Promise<string[]>((resolve) => {
+            finishFirstLoad = resolve;
+        }));
+        render(<ControlPanel status={null} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        await waitFor(() => expect(getAgentNotesEnabled).toHaveBeenCalledTimes(1));
+        fireEvent.click(screen.getByRole("button", { name: /close settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const toggle = screen.getByRole("switch", { name: "Let assistants add notes" });
+        await waitFor(() => expect(toggle).toBeEnabled());
+        fireEvent.click(toggle);
+        await waitFor(() => expect(toggle).toBeChecked());
+
+        finishFirstLoad([]);
+        await waitFor(() => expect(getAgentNotesEnabled).toHaveBeenCalledTimes(2));
+        fireEvent.click(toggle);
+        await waitFor(() => expect(setAgentNotesEnabled).toHaveBeenLastCalledWith(false));
+        expect(toggle).not.toBeChecked();
+    });
+
+    it("changes assistant note consent only after the setting is saved", async () => {
+        let finishSave!: () => void;
+        vi.mocked(setAgentNotesEnabled).mockImplementationOnce(() => new Promise<void>((resolve) => {
+            finishSave = resolve;
+        }));
+        render(<ControlPanel status={null} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const toggle = screen.getByRole("switch", { name: "Let assistants add notes" });
+        expect(toggle).toBeDisabled();
+        await waitFor(() => expect(toggle).toBeEnabled());
+        expect(toggle).not.toBeChecked();
+
+        fireEvent.click(toggle);
+        expect(setAgentNotesEnabled).toHaveBeenCalledWith(true);
+        expect(toggle).toBeDisabled();
+        expect(toggle).not.toBeChecked();
+        finishSave();
+        await waitFor(() => expect(toggle).toBeChecked());
+
+        fireEvent.click(toggle);
+        await waitFor(() => expect(toggle).not.toBeChecked());
+        expect(setAgentNotesEnabled).toHaveBeenLastCalledWith(false);
+    });
+
+    it("keeps the saved assistant note setting when a save fails", async () => {
+        vi.mocked(getAgentNotesEnabled).mockResolvedValue(true);
+        vi.mocked(setAgentNotesEnabled).mockRejectedValueOnce(new Error("config is read-only"));
+        render(<ControlPanel status={null} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        const toggle = screen.getByRole("switch", { name: "Let assistants add notes" });
+        await waitFor(() => expect(toggle).toBeChecked());
+
+        fireEvent.click(toggle);
+
+        expect(await screen.findByRole("alert", { name: /assistant notes update failed/i }))
+            .toHaveTextContent("config is read-only");
+        expect(toggle).toBeChecked();
+        expect(toggle).toBeEnabled();
+    });
+
+    it("keeps assistant note consent disabled when its current setting cannot load", async () => {
+        vi.mocked(getAgentNotesEnabled).mockRejectedValueOnce(new Error("IPC unavailable"));
+        render(<ControlPanel status={null} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        expect(await screen.findByText(/Some settings could not be loaded: assistant notes/))
+            .toBeInTheDocument();
+        expect(screen.getByRole("switch", { name: "Let assistants add notes" })).toBeDisabled();
+        expect(setAgentNotesEnabled).not.toHaveBeenCalled();
+    });
+
     it("keeps the closed settings sheet out of the accessibility tree", () => {
         render(<ControlPanel status={null} compact={true} />);
 
@@ -188,6 +271,18 @@ describe("ControlPanel", () => {
         );
     });
 
+    it("offers a desktop exit when private mode is active", async () => {
+        const status = statusWithEmbedder("real", false);
+        status.is_incognito = true;
+
+        render(<ControlPanel status={status} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        fireEvent.click(await screen.findByRole("button", { name: /exit private mode/i }));
+
+        await waitFor(() => expect(resumeCapture).toHaveBeenCalledTimes(1));
+        expect(screen.getByText(/private mode ended/i)).toBeInTheDocument();
+    });
+
     it("reapplies the active cinematic palette when switching theme", () => {
         localStorage.setItem("fndr-theme", "dark");
         localStorage.setItem("fndr-palette", "system");
@@ -250,6 +345,40 @@ describe("ControlPanel", () => {
         ).toBeInTheDocument();
     });
 
+    it("shows the capture pipeline and model state from the live backend status", async () => {
+        const status = statusWithEmbedder("real", false);
+        status.is_capturing = true;
+        status.frames_captured = 4;
+        status.ai_model_loaded = true;
+        status.loaded_model_id = "qwen3-vl-2b";
+        status.pipeline.stored_total = 3;
+        status.pipeline.skipped_total = 1;
+        render(<ControlPanel status={status} compact={true} />);
+
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const trace = await screen.findByLabelText("Capture pipeline activity");
+        expect(trace).toHaveTextContent("Capture enabled for the next sample");
+        expect(trace).toHaveTextContent("Capture policy");
+        fireEvent.click(within(trace).getByRole("button", { name: "Show Capture pipeline activity details" }));
+        expect(trace).toHaveTextContent("3 stored · 1 skipped");
+        expect(trace).toHaveTextContent("all-MiniLM-L6-v2");
+        expect(trace).toHaveTextContent("qwen3-vl-2b");
+        expect(trace).toHaveTextContent("Backend status");
+    });
+
+    it("surfaces degraded embeddings instead of presenting capture as healthy", async () => {
+        const status = statusWithEmbedder("hash_fallback", true);
+        status.is_capturing = true;
+        render(<ControlPanel status={status} compact={true} />);
+
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const trace = await screen.findByLabelText("Capture pipeline activity");
+        expect(trace).toHaveTextContent("Capture enabled with degraded embeddings");
+        expect(trace).toHaveAttribute("data-status", "degraded");
+    });
+
     it("does not show the capture-paused warning when the embedder is healthy", async () => {
         render(<ControlPanel status={statusWithEmbedder("real", false)} compact={true} />);
 
@@ -260,7 +389,7 @@ describe("ControlPanel", () => {
     });
 });
 
-function statusWithEmbedder(backend: string, degraded: boolean) {
+function statusWithEmbedder(backend: string, degraded: boolean): CaptureStatus {
     return {
         is_capturing: false,
         is_paused: false,

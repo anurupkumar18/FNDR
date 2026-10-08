@@ -12,6 +12,7 @@ capture -> OCR -> chunking -> embedding -> LanceDB storage -> hybrid search -> M
 2. OCR extracts screen text with Apple Vision and applies app-aware cleanup for browser and desktop noise.
 3. Chunking turns cleaned OCR text into high-signal memory chunks with overlap and repeated-line suppression.
 4. Embedding generates 384-dimensional local text vectors (all-MiniLM-L6-v2 via ONNX) for the live full-memory, snippet, and representative support vectors. The embedding contract — model name, file, tokenizer, dimension, and Lance table name — lives in `src-tauri/src/inference/model_config.rs`. The additive BGE 1024-d v5 parent target is available through explicit reindexing, not startup or live search.
+   Text embedder wrappers share successfully initialized ONNX sessions by canonical asset directory and full embedding contract. Chunking settings, result caches and mock-fallback state stay caller-local. Failed initialization remains retryable for Search/MCP and meetings. The registry holds weak references; existing static wrappers still retain their sessions until process exit. Model assets are treated as immutable while resident; in-place replacement requires restart. The shared backend gives queries bounded preference, admits one background chunk at a time, and serves a waiting background call after four foreground admissions. Query initialization/inference runs on blocking workers; an active ONNX call is not preemptible.
 5. LanceDB storage persists compact memory records, metadata, and vector columns for retrieval.
 6. Hybrid search runs semantic vector retrieval and lexical keyword retrieval, then fuses, gates, and reranks candidates.
 7. MemoryCards group related search hits into grounded cards with deterministic fallbacks.
@@ -41,6 +42,10 @@ The code keeps public Tauri command names stable, while internal names make the 
 - `insert_memory_chunk`: product-named LanceDB write boundary for one memory chunk.
 - `search_hybrid_memories`: semantic + keyword retrieval boundary.
 - `build_memory_cards`: search-results to MemoryCards boundary.
+
+Text inference jobs own a cloned `InferenceEngine` handle while running on the blocking executor. Handles share one context mutex and backend; cancelling the waiting future or replacing the app's engine does not free an active job's state. This is lifetime safety, not unloading: model weights remain deliberately leaked, and the cached pixel runtime remains resident. The Qwen worker's idle log reports that residency rather than claiming release.
+
+Text extraction uses model-selected source lines resolved by Rust into exact observed statements. Bounded snapshot evidence remains in `raw_evidence`, survives fusion/merge, and is exposed separately from inferred summaries and pending tasks. Canonical intent/action fields stay unset for this contract through storage and review; legacy extraction and actual pixel inference remain separate paths. Snapshot hashes identify original extraction inputs, not the current merged text. Quotes do not enter embedding prose (ADR 007).
 
 ## Configuration
 

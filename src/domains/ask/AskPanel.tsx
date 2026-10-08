@@ -4,6 +4,12 @@ import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./AskPanel.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 import { PanelHeader } from "@/shared/components/PanelHeader";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+} from "@/shared/activity/activityTrace";
 
 const ANSWER_TIMEOUT_MS = 60_000;
 const TAKEAWAY =
@@ -39,11 +45,16 @@ function sourceTime(card: MemoryCard): string {
     return `${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} · ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
 }
 
+/** Raised only by the renderer's own timer so the trace can tell it apart from
+ *  a backend failure. */
+class ClientAnswerTimeout extends Error {}
+
 /** Ask FNDR: grounded, citation-validated answers from local memories via
  *  `fndr_answer`, with an honest refusal when evidence is missing. */
 export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps) {
     const [draft, setDraft] = useState("");
     const [state, setState] = useState<AskState>({ kind: "idle" });
+    const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const seq = useRef(0);
     const dialogRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -55,18 +66,85 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
         const question = text.trim();
         if (!question) return;
         const id = ++seq.current;
+        const startedAtMs = Date.now();
+        let nextTrace = beginActivityTrace({
+            id: `ask-${id}`,
+            title: "Ask FNDR activity",
+            startedAtMs,
+        });
+        nextTrace = recordActivityStep(nextTrace, {
+            id: "request",
+            label: "Requesting an answer from local memory",
+            actor: "FNDR answer service",
+            status: "running",
+            evidence: "ipc-boundary",
+            atMs: startedAtMs,
+        });
+        setActivityTrace(nextTrace);
         setState({ kind: "asking", question });
         try {
             const result = await Promise.race([
                 fndrAnswer(question),
                 new Promise<never>((_, reject) =>
-                    window.setTimeout(() => reject(new Error("timeout")), ANSWER_TIMEOUT_MS)
+                    window.setTimeout(() => reject(new ClientAnswerTimeout()), ANSWER_TIMEOUT_MS)
                 ),
             ]);
-            if (id === seq.current) setState({ kind: "answer", question, answer: result });
+            if (id === seq.current) {
+                const finishedAtMs = Date.now();
+                const routes = Array.from(new Set(
+                    result.cards.flatMap((card) => card.matched_routes ?? []),
+                )).slice(0, 5);
+                const count = result.cards.length;
+                const resultDetail = [
+                    `${count} ${count === 1 ? "memory" : "memories"}`,
+                    routes.length > 0 ? routes.join(" + ") : null,
+                ].filter(Boolean).join(" · ");
+                setActivityTrace((current) => {
+                    if (!current || current.id !== `ask-${id}`) return current;
+                    const withRequest = recordActivityStep(current, {
+                        id: "request",
+                        label: "Local-memory answer request completed",
+                        actor: "FNDR answer service",
+                        status: "completed",
+                        evidence: "ipc-boundary",
+                        atMs: finishedAtMs,
+                        durationMs: Math.max(0, finishedAtMs - startedAtMs),
+                    });
+                    const resultLabel = result.verify_outcome.kind === "grounded"
+                        ? "Grounded answer returned"
+                        : result.verify_outcome.kind === "partial_answer"
+                            ? "Partial answer returned"
+                            : "Answer returned with limited evidence";
+                    return recordActivityStep(withRequest, {
+                        id: "result",
+                        label: resultLabel,
+                        actor: "FNDR answer service",
+                        status: result.verify_outcome.kind === "grounded" ? "completed" : "degraded",
+                        evidence: "result-metadata",
+                        atMs: finishedAtMs,
+                        detail: resultDetail,
+                    });
+                });
+                setState({ kind: "answer", question, answer: result });
+            }
         } catch (err) {
             if (id !== seq.current) return;
-            const timedOut = err instanceof Error && err.message === "timeout";
+            const timedOut = err instanceof ClientAnswerTimeout;
+            const failedAtMs = Date.now();
+            setActivityTrace((current) => {
+                if (!current || current.id !== `ask-${id}`) return current;
+                return recordActivityStep(current, {
+                    id: "request",
+                    label: timedOut ? "Answer timed out" : "Answer failed",
+                    // A renderer timeout is not a report from the backend.
+                    actor: timedOut ? "Ask FNDR" : "FNDR answer service",
+                    status: "failed",
+                    evidence: timedOut ? "frontend-event" : "ipc-boundary",
+                    atMs: failedAtMs,
+                    durationMs: Math.max(0, failedAtMs - startedAtMs),
+                    detail: timedOut ? "Client timeout" : "Backend request failed",
+                });
+            });
             setState({
                 kind: "error",
                 question,
@@ -122,6 +200,14 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                     </button>
                 </form>
 
+                {activityTrace && (
+                    <ActivityTrace
+                        trace={activityTrace}
+                        className="ask-activity-trace"
+                        announce={state.kind === "asking"}
+                    />
+                )}
+
                 {state.kind === "idle" && (
                     <div className="ask-examples" aria-label="Example questions">
                         {EXAMPLES.map((example) => (
@@ -141,7 +227,7 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                 )}
 
                 {state.kind === "asking" && (
-                    <div className="ask-status" role="status">
+                    <div className="ask-status">
                         <ThinkingIndicator state="searching" size="lg" />
                         <span>Searching and checking your memories…</span>
                     </div>

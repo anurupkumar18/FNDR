@@ -91,6 +91,17 @@ pub struct CodexLoginCompleted {
     pub error: Option<String>,
 }
 
+/// The Codex CLI's home: `$CODEX_HOME`, else `~/.codex`.
+pub(crate) fn codex_home_dir() -> PathBuf {
+    if let Some(value) = std::env::var_os("CODEX_HOME") {
+        return PathBuf::from(value);
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".codex")
+}
+
 /// One JSON-RPC connection to a `codex app-server` child over stdio (JSONL).
 pub(crate) struct AppServer {
     child: Child,
@@ -104,7 +115,10 @@ impl AppServer {
         Self::spawn_with(executable, &[]).await
     }
 
-    pub(crate) async fn spawn_with(executable: &Path, extra_args: &[String]) -> Result<Self, String> {
+    pub(crate) async fn spawn_with(
+        executable: &Path,
+        extra_args: &[String],
+    ) -> Result<Self, String> {
         let mut child = Command::new(executable)
             .args(["app-server", "-c", FILE_CREDENTIAL_STORE])
             .args(extra_args)
@@ -113,11 +127,17 @@ impl AppServer {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true)
+            // Its own process group, so stopping Notch Do can kill the MCP
+            // servers Codex started along with it.
+            .process_group(0)
             .spawn()
             .map_err(|e| format!("Could not start Codex ({}): {e}", executable.display()))?;
 
         let stdin = child.stdin.take().ok_or("Codex app-server has no stdin")?;
-        let stdout = child.stdout.take().ok_or("Codex app-server has no stdout")?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or("Codex app-server has no stdout")?;
         let mut server = Self {
             child,
             stdin,
@@ -141,6 +161,11 @@ impl AppServer {
         Ok(server)
     }
 
+    /// Process id, which is also the process group id (see `spawn_with`).
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     pub(crate) async fn write(&mut self, message: Value) -> Result<(), String> {
         let mut line = message.to_string();
         line.push('\n');
@@ -151,13 +176,15 @@ impl AppServer {
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
-        self.write(json!({ "method": method, "params": params })).await
+        self.write(json!({ "method": method, "params": params }))
+            .await
     }
 
     pub(crate) async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
-        self.write(json!({ "method": method, "id": id, "params": params })).await?;
+        self.write(json!({ "method": method, "id": id, "params": params }))
+            .await?;
 
         tokio::time::timeout(REQUEST_TIMEOUT, async {
             loop {
@@ -166,7 +193,10 @@ impl AppServer {
                     continue;
                 }
                 if let Some(error) = message.get("error") {
-                    let detail = error.get("message").and_then(Value::as_str).unwrap_or("unknown error");
+                    let detail = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown error");
                     return Err(format!("Codex {method} failed: {detail}"));
                 }
                 return Ok(message.get("result").cloned().unwrap_or(Value::Null));
@@ -180,7 +210,9 @@ impl AppServer {
     async fn wait_for_notification(&mut self, method: &str) -> Result<Value, String> {
         loop {
             let message = self.read_message().await?;
-            if message.get("id").is_none() && message.get("method").and_then(Value::as_str) == Some(method) {
+            if message.get("id").is_none()
+                && message.get("method").and_then(Value::as_str) == Some(method)
+            {
                 return Ok(message.get("params").cloned().unwrap_or(Value::Null));
             }
         }
@@ -244,8 +276,14 @@ pub(crate) fn parse_account(result: &Value) -> Option<CodexAccount> {
     let account = result.get("account")?.as_object()?;
     Some(CodexAccount {
         kind: account.get("type")?.as_str()?.to_string(),
-        email: account.get("email").and_then(Value::as_str).map(str::to_string),
-        plan_type: account.get("planType").and_then(Value::as_str).map(str::to_string),
+        email: account
+            .get("email")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        plan_type: account
+            .get("planType")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 
@@ -264,16 +302,28 @@ fn parse_models(result: &Value) -> Vec<CodexModel> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|model| !model.get("hidden").and_then(Value::as_bool).unwrap_or(false))
+        .filter(|model| {
+            !model
+                .get("hidden")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
         .filter_map(|model| {
-            let id = model.get("model").or_else(|| model.get("id"))?.as_str()?.to_string();
+            let id = model
+                .get("model")
+                .or_else(|| model.get("id"))?
+                .as_str()?
+                .to_string();
             Some(CodexModel {
                 display_name: model
                     .get("displayName")
                     .and_then(Value::as_str)
                     .unwrap_or(&id)
                     .to_string(),
-                is_default: model.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
+                is_default: model
+                    .get("isDefault")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 id,
             })
         })
@@ -282,7 +332,7 @@ fn parse_models(result: &Value) -> Vec<CodexModel> {
 
 pub(crate) fn ready_executable() -> Result<PathBuf, String> {
     detect_codex_executable().ok_or_else(|| {
-        "Codex isn't installed. Install it with `brew install codex` or `npm install -g @openai/codex`, then try again."
+        "Codex isn't installed. Install it with `brew install codex` or `npm install -g @openai/codex@0.151.0`, then try again."
             .to_string()
     })
 }
@@ -314,7 +364,10 @@ async fn read_status() -> CodexAccountStatus {
     };
     status.cli_state = CodexCliState::Ready;
 
-    if let Ok(result) = server.request("account/read", json!({ "refreshToken": false })).await {
+    if let Ok(result) = server
+        .request("account/read", json!({ "refreshToken": false }))
+        .await
+    {
         status.account = parse_account(&result);
     }
     status.usable_for_hermes = status.account.as_ref().is_some_and(|a| a.kind == "chatgpt");
@@ -468,6 +521,45 @@ context only. Coordinates must still be copied from the LOC markers, never estim
 /// smaller than a Retina capture.
 const SCREEN_GUIDE_IMAGE_MAX_EDGE: u32 = 1600;
 
+const SCREEN_GUIDE_SCRATCH_PREFIX: &str = "fndr-screen-guide-";
+
+/// Removes screenshots a crashed or killed turn left in `dir`. Run at startup.
+fn sweep_screen_guide_scratch_in(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name
+            .to_string_lossy()
+            .starts_with(SCREEN_GUIDE_SCRATCH_PREFIX)
+            && entry.path().is_dir()
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+pub fn sweep_screen_guide_scratch() {
+    sweep_screen_guide_scratch_in(&std::env::temp_dir());
+}
+
+/// Stages the screenshot Codex attaches, readable by this account only.
+fn stage_private_screenshot(dir: &Path, jpeg: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    let path = dir.join("screen.jpg");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        options.mode(0o600);
+    }
+    options.open(&path)?.write_all(jpeg)?;
+    Ok(path)
+}
+
 /// Removes the per-turn scratch directory (and any screenshot) however the
 /// turn ends.
 struct ScratchDir(PathBuf);
@@ -508,7 +600,9 @@ fn read_only_session_args(mcp_server_names: &[String]) -> Result<Vec<String>, St
 
 pub(crate) async fn configured_mcp_server_names(executable: &Path) -> Result<Vec<String>, String> {
     let mut server = AppServer::spawn(executable).await?;
-    let result = server.request("config/read", json!({ "includeLayers": false })).await;
+    let result = server
+        .request("config/read", json!({ "includeLayers": false }))
+        .await;
     server.shutdown().await;
     let names = result?
         .pointer("/config/mcp_servers")
@@ -519,13 +613,24 @@ pub(crate) async fn configured_mcp_server_names(executable: &Path) -> Result<Vec
 }
 
 fn downscaled_jpeg(png: &[u8]) -> Result<Vec<u8>, String> {
-    let image = image::load_from_memory(png).map_err(|e| format!("Could not read the screenshot: {e}"))?;
+    let image =
+        image::load_from_memory(png).map_err(|e| format!("Could not read the screenshot: {e}"))?;
     let image = image.thumbnail(SCREEN_GUIDE_IMAGE_MAX_EDGE, SCREEN_GUIDE_IMAGE_MAX_EDGE);
     let mut out = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 80)
         .encode_image(&image)
         .map_err(|e| format!("Could not encode the screenshot: {e}"))?;
     Ok(out)
+}
+
+fn ensure_screen_guide_not_cancelled(cancel: &std::sync::atomic::AtomicBool) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+
+    if cancel.load(Ordering::SeqCst) {
+        Err("Screen Guide was cancelled.".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 /// Answers a Screen Guide question with the user's ChatGPT plan. Uses the
@@ -541,19 +646,40 @@ pub(crate) async fn answer_screen_guide_with_codex(
 ) -> Result<String, String> {
     use std::sync::atomic::Ordering;
 
+    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
     let executable = ready_executable()?;
     let mcp_names = configured_mcp_server_names(&executable).await?;
+    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
     let args = read_only_session_args(&mcp_names)?;
+    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
     let mut server = AppServer::spawn_with(&executable, &args).await?;
 
-    let account = server.request("account/read", json!({ "refreshToken": false })).await?;
-    if parse_account(&account).map(|a| a.kind) != Some("chatgpt".to_string()) {
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
         server.shutdown().await;
-        return Err("Sign in with ChatGPT in Hermes Agent settings to use ChatGPT for Screen Guide.".to_string());
+        return Err(error);
     }
 
-    let scratch = ScratchDir(std::env::temp_dir().join(format!("fndr-screen-guide-{}", uuid::Uuid::new_v4())));
-    std::fs::create_dir_all(&scratch.0).map_err(|e| format!("Could not prepare Screen Guide: {e}"))?;
+    let account = server
+        .request("account/read", json!({ "refreshToken": false }))
+        .await?;
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        server.shutdown().await;
+        return Err(error);
+    }
+    if parse_account(&account).map(|a| a.kind) != Some("chatgpt".to_string()) {
+        server.shutdown().await;
+        return Err(
+            "Sign in with ChatGPT in Hermes Agent settings to use ChatGPT for Screen Guide."
+                .to_string(),
+        );
+    }
+
+    let scratch = ScratchDir(std::env::temp_dir().join(format!(
+        "{SCREEN_GUIDE_SCRATCH_PREFIX}{}",
+        uuid::Uuid::new_v4()
+    )));
+    std::fs::create_dir_all(&scratch.0)
+        .map_err(|e| format!("Could not prepare Screen Guide: {e}"))?;
 
     let mut input = vec![json!({
         "type": "text",
@@ -567,13 +693,25 @@ pub(crate) async fn answer_screen_guide_with_codex(
         let jpeg = tokio::task::spawn_blocking(move || downscaled_jpeg(&png))
             .await
             .map_err(|_| "Screenshot preparation stopped unexpectedly.".to_string())??;
-        let path = scratch.0.join("screen.jpg");
-        std::fs::write(&path, jpeg).map_err(|e| format!("Could not stage the screenshot: {e}"))?;
+        if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+            server.shutdown().await;
+            return Err(error);
+        }
+        let path = stage_private_screenshot(&scratch.0, &jpeg)
+            .map_err(|e| format!("Could not stage the screenshot: {e}"))?;
+        if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+            server.shutdown().await;
+            return Err(error);
+        }
         input.push(json!({ "type": "localImage", "path": path }));
         instructions.push(' ');
         instructions.push_str(SCREEN_GUIDE_SCREENSHOT_NOTE);
     }
 
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        server.shutdown().await;
+        return Err(error);
+    }
     let thread = server
         .request(
             "thread/start",
@@ -592,10 +730,21 @@ pub(crate) async fn answer_screen_guide_with_codex(
         .and_then(Value::as_str)
         .ok_or("Codex did not start a thread.")?
         .to_string();
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        server.shutdown().await;
+        return Err(error);
+    }
     let turn = server
-        .request("turn/start", json!({ "threadId": thread_id, "input": input, "effort": "low" }))
+        .request(
+            "turn/start",
+            json!({ "threadId": thread_id, "input": input, "effort": "low" }),
+        )
         .await?;
-    let turn_id = turn.pointer("/turn/id").and_then(Value::as_str).unwrap_or_default().to_string();
+    let turn_id = turn
+        .pointer("/turn/id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
 
     let deadline = tokio::time::Instant::now() + timeout;
     let mut answer = String::new();
@@ -607,21 +756,29 @@ pub(crate) async fn answer_screen_guide_with_codex(
         if remaining.is_zero() {
             break Err("ChatGPT took too long to answer.".to_string());
         }
-        let message = match tokio::time::timeout(remaining.min(Duration::from_millis(200)), server.read_message()).await {
+        let message = match tokio::time::timeout(
+            remaining.min(Duration::from_millis(200)),
+            server.read_message(),
+        )
+        .await
+        {
             Err(_) => continue,
             Ok(message) => message?,
         };
         match message.get("method").and_then(Value::as_str) {
             Some("item/completed") => {
                 let item = message.pointer("/params/item");
-                if item.and_then(|i| i.get("type")).and_then(Value::as_str) == Some("agentMessage") {
+                if item.and_then(|i| i.get("type")).and_then(Value::as_str) == Some("agentMessage")
+                {
                     if let Some(text) = item.and_then(|i| i.get("text")).and_then(Value::as_str) {
                         answer = text.to_string();
                     }
                 }
             }
             Some("turn/completed") => {
-                let status = message.pointer("/params/turn/status").and_then(Value::as_str);
+                let status = message
+                    .pointer("/params/turn/status")
+                    .and_then(Value::as_str);
                 break match status {
                     Some("completed") => Ok(()),
                     _ => Err(message
@@ -637,7 +794,10 @@ pub(crate) async fn answer_screen_guide_with_codex(
 
     if outcome.is_err() && !turn_id.is_empty() {
         let _ = server
-            .request("turn/interrupt", json!({ "threadId": thread_id, "turnId": turn_id }))
+            .request(
+                "turn/interrupt",
+                json!({ "threadId": thread_id, "turnId": turn_id }),
+            )
             .await;
     }
     server.shutdown().await;
@@ -648,6 +808,29 @@ pub(crate) async fn answer_screen_guide_with_codex(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_staged_screenshot_is_private_and_a_leftover_one_is_swept() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let scratch = temp
+            .path()
+            .join(format!("{SCREEN_GUIDE_SCRATCH_PREFIX}abc"));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let other = temp.path().join("someone-elses-folder");
+        std::fs::create_dir_all(&other).unwrap();
+
+        let path = stage_private_screenshot(&scratch, b"jpeg").unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&scratch), 0o700);
+
+        // The turn was killed before its cleanup ran; the next start removes it.
+        sweep_screen_guide_scratch_in(temp.path());
+        assert!(!scratch.exists());
+        assert!(other.exists());
+    }
 
     #[test]
     fn parses_chatgpt_account() {
@@ -674,7 +857,11 @@ mod tests {
         });
         assert_eq!(
             parse_window(limits.get("primary")),
-            Some(CodexUsageWindow { used_percent: 25.0, window_minutes: Some(300), resets_at: Some(1730947200) })
+            Some(CodexUsageWindow {
+                used_percent: 25.0,
+                window_minutes: Some(300),
+                resets_at: Some(1730947200)
+            })
         );
         assert_eq!(parse_window(limits.get("secondary")), None);
     }
@@ -687,7 +874,11 @@ mod tests {
         ]});
         assert_eq!(
             parse_models(&result),
-            vec![CodexModel { id: "gpt-6-sol".into(), display_name: "GPT-6 Sol".into(), is_default: true }]
+            vec![CodexModel {
+                id: "gpt-6-sol".into(),
+                display_name: "GPT-6 Sol".into(),
+                is_default: true
+            }]
         );
     }
 
@@ -695,8 +886,18 @@ mod tests {
     fn read_only_session_disables_acting_features_and_every_mcp_server() {
         let args = read_only_session_args(&["node_repl".into(), "computer-use".into()]).unwrap();
         let joined = args.join(" ");
-        for feature in ["shell_tool", "computer_use", "browser_use", "apps", "plugins", "hooks"] {
-            assert!(joined.contains(&format!("--disable {feature}")), "{feature} left enabled");
+        for feature in [
+            "shell_tool",
+            "computer_use",
+            "browser_use",
+            "apps",
+            "plugins",
+            "hooks",
+        ] {
+            assert!(
+                joined.contains(&format!("--disable {feature}")),
+                "{feature} left enabled"
+            );
         }
         assert!(joined.contains("-c mcp_servers.node_repl.enabled=false"));
         assert!(joined.contains("-c mcp_servers.computer-use.enabled=false"));
@@ -709,16 +910,28 @@ mod tests {
     }
 
     #[test]
+    fn screen_guide_cancellation_is_checked_before_remote_setup() {
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(
+            ensure_screen_guide_not_cancelled(&cancel),
+            Err("Screen Guide was cancelled.".to_string())
+        );
+    }
+
+    #[test]
     fn cancelling_a_stale_login_id_keeps_the_current_one() {
         let (tx, _rx) = oneshot::channel();
-        *pending_login().lock().unwrap() = Some(PendingLogin { login_id: "current".into(), cancel: tx });
+        *pending_login().lock().unwrap() = Some(PendingLogin {
+            login_id: "current".into(),
+            cancel: tx,
+        });
         assert!(take_pending_login(Some("stale")).is_none());
         assert!(take_pending_login(Some("current")).is_some());
     }
 
     /// Talks to the real `codex` on PATH; run with `--ignored` on a dev Mac.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "Requires an installed Codex CLI; run: cargo test --lib live_status_against_installed_codex -- --ignored --nocapture"]
     async fn live_status_against_installed_codex() {
         let status = read_status().await;
         println!(
@@ -736,10 +949,12 @@ mod tests {
     /// Starts a ChatGPT sign-in and cancels it before any browser step, so an
     /// existing login is untouched.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "Starts and cancels a real ChatGPT login via the installed Codex CLI; run: cargo test --lib live_login_start_then_cancel -- --ignored --nocapture"]
     async fn live_login_start_then_cancel() {
         let executable = ready_executable().expect("codex on PATH");
-        let mut server = AppServer::spawn(&executable).await.expect("app-server starts");
+        let mut server = AppServer::spawn(&executable)
+            .await
+            .expect("app-server starts");
         let started = server
             .request("account/login/start", json!({ "type": "chatgpt" }))
             .await
@@ -747,7 +962,10 @@ mod tests {
         let auth_url = started["authUrl"].as_str().expect("auth url");
         let login_id = started["loginId"].as_str().expect("login id").to_string();
         assert!(auth_url.starts_with("https://"), "unexpected auth url");
-        println!("auth host={}", auth_url.split('/').nth(2).unwrap_or_default());
+        println!(
+            "auth host={}",
+            auth_url.split('/').nth(2).unwrap_or_default()
+        );
 
         server
             .request("account/login/cancel", json!({ "loginId": login_id }))
@@ -763,7 +981,7 @@ mod tests {
 
     /// One real ChatGPT turn with synthetic OCR; run with `--ignored`.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "Requires signed-in Codex and makes a live ChatGPT request with synthetic OCR; run: cargo test --lib live_screen_guide_turn_returns_a_point_tag -- --ignored --nocapture"]
     async fn live_screen_guide_turn_returns_a_point_tag() {
         let ocr = "[LOC:0.120,0.050] File  Edit  View\n[LOC:0.850,0.060] Share\n[LOC:0.500,0.500] Untitled document";
         let answer = answer_screen_guide_with_codex(

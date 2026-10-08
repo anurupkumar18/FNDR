@@ -39,7 +39,6 @@ pub struct AgentSkillCandidate {
     pub privacy_notes: Vec<String>,
 }
 
-
 pub fn propose_skill_from_audit(record: &AgentAuditRecord) -> Result<AgentSkillCandidate, String> {
     if record.memories_used.is_empty() {
         return Err("Not enough cited memory context to propose a reusable skill.".to_string());

@@ -1,249 +1,387 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { ThinkingOrb } from "thinking-orbs";
 import {
     COMPUTER_USE_EVENT,
-    computerUseInterrupt,
+    codexLoginStart,
+    computerUsePlan,
     computerUseRespond,
-    computerUseSay,
+    computerUseStart,
     computerUseStop,
     type ComputerUseEvent,
 } from "@/shared/ipc/tauri";
+import { openSystemSettings } from "@/shared/ipc/onboarding";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
-import { DuplexListener, Speaker, classifyUtterance } from "./duplexVoice";
-
-type LogEntry =
-    | { id: string; who: "you"; text: string }
-    | { id: string; who: "fndr"; text: string }
-    | { id: string; who: "action"; text: string; state: "running" | "done" | "failed" };
-
-interface PendingApproval {
-    requestKey: string;
-    summary: string;
-}
-
-type Phase = "starting" | "listening" | "working" | "waiting";
-
-/** Most recent entries kept on screen; the notch is small. */
-const MAX_LOG = 8;
-
-let logSeq = 0;
-const nextId = () => `op-${++logSeq}`;
+import { openExternalUrl } from "@/shared/utils/openExternalUrl";
+import { useVoice } from "@/shared/voice";
+import {
+    AUTO_START_MS,
+    ENDPOINT_MS,
+    SILENCE_MS,
+    classifyUtterance,
+    doRunReducer,
+    initialDoState,
+    isStopPhrase,
+    type DoState,
+} from "./doRun";
 
 interface NotchOperatorProps {
-    /** The notch is open and this mode is showing. */
+    /** The notch is open and Do mode is showing. */
     active: boolean;
-    onStreamChange?: (stream: MediaStream | null) => void;
+}
+
+/** A run is planning, waiting on its plan card, or acting. */
+function runInProgress(state: DoState): boolean {
+    return state.phase === "planning" || state.phase === "plan" || state.phase === "running";
+}
+
+/** Listening continues through a run so "stop" works; it ends with the run. */
+function wantsMicrophone(state: DoState): boolean {
+    return state.phase === "listening" || runInProgress(state);
+}
+
+function message(reason: unknown): string {
+    return reason instanceof Error ? reason.message : String(reason);
 }
 
 /**
- * "Do" mode in the notch: a spoken conversation in which FNDR operates the Mac.
- * The microphone stays open, FNDR narrates each step aloud, every action waits
- * for a spoken or tapped yes, and saying "stop" halts it mid-step.
+ * Notch Do: opening the notch starts listening on FNDR's native voice owner.
+ * When speech ends, the request is planned and shown as a step list that
+ * starts by itself after 1.5 s unless the person says "stop" or taps Cancel.
+ * Saying "stop" or pressing Stop kills the run at any point.
  */
-export function NotchOperator({ active, onStreamChange }: NotchOperatorProps) {
-    const [log, setLog] = useState<LogEntry[]>([]);
-    const [pending, setPending] = useState<PendingApproval | null>(null);
-    const [phase, setPhase] = useState<Phase>("starting");
-    const [partial, setPartial] = useState("");
-    const [error, setError] = useState<string | null>(null);
+export function NotchOperator({ active }: NotchOperatorProps) {
+    const [state, dispatch] = useReducer(doRunReducer, initialDoState);
     const [draft, setDraft] = useState("");
+    const stateRef = useRef(state);
+    stateRef.current = state;
+    const endpointTimer = useRef<number | null>(null);
+    const silenceTimer = useRef<number | null>(null);
+    /** Events that arrived before `computerUsePlan` returned their run id. */
+    const earlyEvents = useRef<ComputerUseEvent[]>([]);
+    const voiceRef = useRef<ReturnType<typeof useVoice> | null>(null);
 
-    const speakerRef = useRef<Speaker | null>(null);
-    const listenerRef = useRef<DuplexListener | null>(null);
-    const pendingRef = useRef<PendingApproval | null>(null);
-    pendingRef.current = pending;
+    const clearTimer = (timer: { current: number | null }) => {
+        if (timer.current !== null) window.clearTimeout(timer.current);
+        timer.current = null;
+    };
 
-    const append = useCallback((entry: LogEntry) => {
-        setLog((current) => [...current, entry].slice(-MAX_LOG));
+    const stopRun = useCallback(async () => {
+        clearTimer(endpointTimer);
+        dispatch({ type: "stopped" });
+        try {
+            await computerUseStop();
+        } catch (reason) {
+            dispatch({ type: "error", message: message(reason) });
+        }
     }, []);
 
-    const speak = useCallback((text: string) => speakerRef.current?.speak(text), []);
+    const plan = useCallback(async (text: string) => {
+        const transcript = text.trim();
+        if (!transcript) return;
+        try {
+            const runId = await computerUsePlan(transcript);
+            dispatch({ type: "planRequested", runId, transcript });
+            const early = earlyEvents.current.filter((event) => event.runId === runId);
+            earlyEvents.current = [];
+            early.forEach((event) => dispatch({ type: "event", event }));
+        } catch (reason) {
+            dispatch({ type: "error", message: message(reason) });
+        }
+    }, []);
 
-    const respond = useCallback(
-        async (approve: boolean) => {
-            const current = pendingRef.current;
-            if (!current) return;
-            setPending(null);
-            speakerRef.current?.cancel();
-            try {
-                await computerUseRespond(current.requestKey, approve);
-                if (!approve) speak("Okay, I won't.");
-            } catch (reason) {
-                setError(reason instanceof Error ? reason.message : String(reason));
-            }
-        },
-        [speak],
-    );
+    const startRun = useCallback(async () => {
+        const runId = stateRef.current.runId;
+        if (!runId || stateRef.current.phase !== "plan") return;
+        try {
+            await computerUseStart(runId);
+        } catch (reason) {
+            dispatch({ type: "error", message: message(reason) });
+        }
+    }, []);
+
+    const respond = useCallback(async (approve: boolean) => {
+        const approval = stateRef.current.approval;
+        if (!approval) return;
+        try {
+            await computerUseRespond(approval.requestKey, approve);
+        } catch (reason) {
+            dispatch({ type: "error", message: message(reason) });
+        }
+    }, []);
 
     const handleUtterance = useCallback(
-        async (text: string) => {
-            setPartial("");
-            const intent = classifyUtterance(text, pendingRef.current !== null);
+        (text: string) => {
+            const current = stateRef.current;
+            const intent = classifyUtterance(text, {
+                awaitingApproval: current.approval !== null,
+                awaitingStart: current.phase === "plan" || current.redirect !== null,
+                running: runInProgress(current),
+            });
             if (!intent) return;
-            try {
-                if (intent.kind === "stop") {
-                    speakerRef.current?.cancel();
-                    setPending(null);
-                    await computerUseInterrupt();
-                    append({ id: nextId(), who: "you", text });
-                    speak("Stopped.");
-                    setPhase("listening");
+            switch (intent.kind) {
+                case "stop":
+                    void stopRun();
                     return;
-                }
-                if (intent.kind === "approve" || intent.kind === "decline") {
-                    append({ id: nextId(), who: "you", text });
-                    await respond(intent.kind === "approve");
+                case "decline":
+                    void respond(false);
                     return;
-                }
-                append({ id: nextId(), who: "you", text: intent.text });
-                setError(null);
-                setPhase("working");
-                await computerUseSay(intent.text);
-            } catch (reason) {
-                const message = reason instanceof Error ? reason.message : String(reason);
-                setError(message);
-                speak(message);
-                setPhase("listening");
+                case "go":
+                    if (current.redirect) void plan(current.redirect);
+                    else void startRun();
+                    return;
+                case "request":
+                    // Mid-run speech may be music or someone else; it waits for a yes.
+                    if (current.phase === "running") dispatch({ type: "redirectHeard", text: intent.text });
+                    else void plan(intent.text);
             }
         },
-        [append, respond, speak],
+        [plan, respond, startRun, stopRun],
     );
 
-    // Hear and speak only while this mode is on screen.
-    useEffect(() => {
-        if (!active) return;
-        const speaker = new Speaker();
-        const listener = new DuplexListener(speaker, {
-            onUtterance: (text) => void handleUtterance(text),
-            onBargeIn: () => setPartial(""),
-            onPartial: setPartial,
-            onError: setError,
-        });
-        speakerRef.current = speaker;
-        listenerRef.current = listener;
-        listener
-            .start()
-            .then(() => {
-                setPhase("listening");
-                onStreamChange?.(listener.mediaStream);
-            })
-            .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
-        return () => {
-            listener.stop();
-            speaker.cancel();
-            onStreamChange?.(null);
-            speakerRef.current = null;
-            listenerRef.current = null;
-        };
-    }, [active, handleUtterance, onStreamChange]);
+    const voice = useVoice({
+        surface: "notch_do",
+        mode: "toggle",
+        onPartial: (text) => {
+            clearTimer(silenceTimer);
+            if (runInProgress(stateRef.current) && isStopPhrase(text)) {
+                void voiceRef.current?.cancel();
+                void stopRun();
+                return;
+            }
+            dispatch({ type: "partial", text });
+            clearTimer(endpointTimer);
+            endpointTimer.current = window.setTimeout(() => void voiceRef.current?.stop(), ENDPOINT_MS);
+        },
+        onFinal: (text) => {
+            clearTimer(endpointTimer);
+            handleUtterance(text);
+        },
+    });
+    voiceRef.current = voice;
 
-    // Leaving Do mode ends the Codex conversation.
-    useEffect(() => () => void computerUseStop().catch(() => undefined), []);
+    // Opening the notch starts listening; closing it stops the microphone.
+    useEffect(() => {
+        if (active) {
+            if (!runInProgress(stateRef.current)) dispatch({ type: "listening" });
+            return;
+        }
+        clearTimer(endpointTimer);
+        clearTimer(silenceTimer);
+        void voiceRef.current?.cancel();
+    }, [active]);
+
+    // Keep a session open while one is wanted: a new one after each utterance.
+    useEffect(() => {
+        if (!active || voice.isActive || !wantsMicrophone(state)) return;
+        const kind = voice.state.kind;
+        if (kind === "unavailable" || (kind === "error" && voice.state.code !== "cancelled")) return;
+        void voice.start();
+    }, [active, state, voice]);
+
+    // Silence: nothing heard for a while before a request.
+    useEffect(() => {
+        if (voice.state.kind !== "listening" || stateRef.current.phase !== "listening" || stateRef.current.partial) return;
+        if (silenceTimer.current !== null) return;
+        silenceTimer.current = window.setTimeout(() => {
+            silenceTimer.current = null;
+            if (stateRef.current.phase === "listening" && !stateRef.current.partial) {
+                void voiceRef.current?.cancel();
+                dispatch({ type: "silence" });
+            }
+        }, SILENCE_MS);
+    }, [voice.state]);
+
+    // Microphone and recognizer failures are their own notch states.
+    useEffect(() => {
+        const v = voice.state;
+        if (v.kind === "unavailable") {
+            const denied = v.reason === "permission_denied" || v.reason === "permission_restricted";
+            dispatch({ type: denied ? "micDenied" : "voiceUnavailable", message: v.message });
+        } else if (v.kind === "error" && v.code === "permission_denied") {
+            dispatch({ type: "micDenied", message: v.message });
+        } else if (v.kind === "error" && v.code !== "cancelled") {
+            dispatch({ type: "voiceUnavailable", message: v.message });
+        }
+    }, [voice.state]);
+
+    // The plan card starts the run by itself unless stopped or redirected.
+    useEffect(() => {
+        if (state.phase !== "plan" || state.redirect || !state.autoStart) return;
+        const timer = window.setTimeout(() => void startRun(), AUTO_START_MS);
+        return () => window.clearTimeout(timer);
+    }, [state.phase, state.redirect, state.runId, state.autoStart, startRun]);
+
+    // Leaving Do mode ends any run.
+    useEffect(
+        () => () => {
+            clearTimer(endpointTimer);
+            clearTimer(silenceTimer);
+            if (runInProgress(stateRef.current)) void computerUseStop().catch(() => undefined);
+        },
+        [],
+    );
 
     useTauriEvent<ComputerUseEvent>(COMPUTER_USE_EVENT, (event) => {
-        switch (event.kind) {
-            case "message":
-                append({ id: nextId(), who: "fndr", text: event.text });
-                speak(event.text);
-                break;
-            case "action":
-                append({ id: event.itemId, who: "action", text: event.summary, state: "running" });
-                setPhase("working");
-                break;
-            case "actionDone":
-                setLog((current) =>
-                    current.map((entry) =>
-                        entry.who === "action" && entry.id === event.itemId
-                            ? { ...entry, state: event.ok ? "done" : "failed" }
-                            : entry,
-                    ),
-                );
-                break;
-            case "approval":
-                setPending({ requestKey: event.requestKey, summary: event.summary });
-                setPhase("waiting");
-                speak(`Okay to ${event.summary}?`);
-                break;
-            case "approvalResolved":
-                setPending((current) => (current?.requestKey === event.requestKey ? null : current));
-                break;
-            case "turnDone":
-                setPhase("listening");
-                if (event.status === "failed" && event.error) {
-                    setError(event.error);
-                    speak("Something went wrong. " + event.error);
-                }
-                break;
-            case "ended":
-                setPending(null);
-                setPhase("listening");
-                if (event.error) setError(event.error);
-                break;
-            case "ready":
-                break;
+        if (event.runId !== stateRef.current.runId) {
+            earlyEvents.current = [...earlyEvents.current, event].slice(-20);
+            return;
         }
+        dispatch({ type: "event", event });
     });
 
-    const status =
-        phase === "starting"
-            ? "Starting…"
-            : phase === "waiting"
-              ? "Waiting for your okay"
-              : phase === "working"
-                ? "Working — say “stop” anytime"
-                : partial
-                  ? partial
-                  : "Listening — tell me what to do";
+    const reconnect = async () => {
+        try {
+            const started = await codexLoginStart();
+            await openExternalUrl(started.authUrl);
+        } catch (reason) {
+            dispatch({ type: "error", message: message(reason) });
+        }
+    };
+
+    const listenAgain = () => {
+        dispatch({ type: "listening" });
+    };
+
+    const busy = state.phase === "planning" || state.phase === "running";
+    const status = (() => {
+        switch (state.phase) {
+            case "idle":
+            case "listening":
+                return state.partial || "Listening — say what to do";
+            case "silence":
+                return "Didn't hear anything.";
+            case "mic_denied":
+                return "FNDR can't use the microphone.";
+            case "voice_unavailable":
+                return state.error ?? "Voice isn't available right now.";
+            case "planning":
+                return state.usedMemories > 0 ? `Planning with ${state.usedMemories} memories…` : "Planning…";
+            case "plan":
+                if (state.redirect) return "Paused";
+                return state.autoStart ? "Starting. Say “stop” to cancel" : "Ready. Tap Start or say “go”";
+            case "running":
+                return state.partial || "Working — say “stop” anytime";
+            case "finished":
+                return state.result?.summary ?? "Done.";
+            case "failed":
+                return state.error ?? "Something went wrong.";
+            case "stopped":
+                return "Stopped.";
+        }
+    })();
 
     return (
         <div className="notch-operator">
             <p className="notch-operator-status" role="status" aria-live="polite">
-                {phase === "working" ? <ThinkingOrb state="working" size={20} theme="dark" /> : null}
+                {busy ? <ThinkingOrb state="working" size={20} theme="dark" /> : null}
                 <span>{status}</span>
             </p>
 
-            {log.length > 0 ? (
-                <ol className="notch-operator-log">
-                    {log.map((entry) => (
-                        <li key={entry.id} className={`notch-operator-entry notch-operator-${entry.who}`}>
-                            {entry.who === "action" ? (
-                                <>
-                                    <span className={`notch-operator-dot is-${entry.state}`} aria-hidden="true" />
-                                    <span>{entry.text}</span>
-                                </>
-                            ) : (
-                                entry.text
-                            )}
+            {state.transcript ? <p className="notch-operator-heard">“{state.transcript}”</p> : null}
+
+            {state.steps.length > 0 ? (
+                <ol className="notch-operator-steps" aria-label="Plan">
+                    {state.steps.map((step, index) => (
+                        <li
+                            key={`${index}-${step.label}`}
+                            className={`notch-operator-step is-${step.status}${state.current === index ? " is-current" : ""}`}
+                            aria-current={state.current === index ? "step" : undefined}
+                        >
+                            <span className={`notch-operator-dot is-${step.status}`} aria-hidden="true" />
+                            <span className="notch-operator-step-label">{step.label}</span>
+                            {step.detail && step.status !== "running" ? (
+                                <span className="notch-operator-step-detail">{step.detail}</span>
+                            ) : null}
                         </li>
                     ))}
                 </ol>
             ) : null}
 
-            {pending ? (
+            {state.phase === "plan" && !state.redirect && state.autoStart ? (
+                <div className="notch-operator-countdown" aria-hidden="true">
+                    <span style={{ animationDuration: `${AUTO_START_MS}ms` }} />
+                </div>
+            ) : null}
+
+            {state.phase === "running" && state.actions.length > 0 ? (
+                <ul className="notch-operator-log" aria-label="Actions">
+                    {state.actions.map((action) => (
+                        <li key={action.id} className="notch-operator-action">
+                            <span className={`notch-operator-dot is-${action.state}`} aria-hidden="true" />
+                            <span>{action.state === "blocked" ? `Refused: ${action.summary}` : action.summary}</span>
+                        </li>
+                    ))}
+                </ul>
+            ) : null}
+
+            {state.approval ? (
                 <div className="notch-operator-approval" role="alertdialog" aria-label="Approve action">
                     <p>
-                        Okay to <strong>{pending.summary}</strong>?
+                        Okay to <strong>{state.approval.summary}</strong>?
                     </p>
                     <div className="notch-operator-approval-actions">
                         <button type="button" className="notch-operator-btn" onClick={() => void respond(false)}>
                             Don&apos;t
                         </button>
-                        <button
-                            type="button"
-                            className="notch-operator-btn notch-operator-btn-primary"
-                            onClick={() => void respond(true)}
-                        >
+                        <button type="button" className="notch-operator-btn notch-operator-btn-primary" onClick={() => void respond(true)}>
                             Allow
                         </button>
                     </div>
                 </div>
             ) : null}
 
-            {error ? (
-                <p className="notch-voice-error" role="alert">
-                    {error}
-                </p>
+            {state.redirect ? (
+                <div className="notch-operator-approval" role="alertdialog" aria-label="Switch request">
+                    <p>
+                        Switch to <strong>“{state.redirect}”</strong>?
+                    </p>
+                    <div className="notch-operator-approval-actions">
+                        <button type="button" className="notch-operator-btn" onClick={() => dispatch({ type: "redirectDismissed" })}>
+                            Keep going
+                        </button>
+                        <button
+                            type="button"
+                            className="notch-operator-btn notch-operator-btn-primary"
+                            onClick={() => state.redirect && void plan(state.redirect)}
+                        >
+                            Switch
+                        </button>
+                    </div>
+                </div>
             ) : null}
+
+            <div className="notch-operator-controls">
+                {state.phase === "plan" ? (
+                    <>
+                        <button type="button" className="notch-operator-btn" onClick={() => void stopRun()}>
+                            Cancel
+                        </button>
+                        <button type="button" className="notch-operator-btn notch-operator-btn-primary" onClick={() => void startRun()}>
+                            {state.autoStart ? "Start now" : "Start"}
+                        </button>
+                    </>
+                ) : null}
+                {state.phase === "planning" || state.phase === "running" ? (
+                    <button type="button" className="notch-operator-btn notch-operator-stop" onClick={() => void stopRun()}>
+                        Stop
+                    </button>
+                ) : null}
+                {state.phase === "mic_denied" ? (
+                    <button type="button" className="notch-operator-btn" onClick={() => void openSystemSettings("microphone")}>
+                        Open Microphone Settings
+                    </button>
+                ) : null}
+                {state.reconnect ? (
+                    <button type="button" className="notch-operator-btn notch-operator-btn-primary" onClick={() => void reconnect()}>
+                        Reconnect ChatGPT
+                    </button>
+                ) : null}
+                {["silence", "finished", "failed", "stopped", "voice_unavailable"].includes(state.phase) ? (
+                    <button type="button" className="notch-operator-btn" onClick={listenAgain}>
+                        Listen again
+                    </button>
+                ) : null}
+            </div>
 
             <form
                 className="notch-operator-type"
@@ -252,25 +390,16 @@ export function NotchOperator({ active, onStreamChange }: NotchOperatorProps) {
                     const text = draft.trim();
                     if (!text) return;
                     setDraft("");
-                    void handleUtterance(text);
+                    handleUtterance(text);
                 }}
             >
                 <input
                     className="notch-input"
                     value={draft}
-                    placeholder="Or type an instruction"
+                    placeholder="Or type what to do"
                     aria-label="Instruction for FNDR"
                     onChange={(event) => setDraft(event.target.value)}
                 />
-                {phase === "working" || pending ? (
-                    <button
-                        type="button"
-                        className="notch-operator-btn notch-operator-stop"
-                        onClick={() => void handleUtterance("stop")}
-                    >
-                        Stop
-                    </button>
-                ) : null}
             </form>
         </div>
     );

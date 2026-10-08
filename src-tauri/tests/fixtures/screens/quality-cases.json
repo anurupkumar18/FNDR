@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "fixture_id": "chat_mock-01",
+      "required_facts": [
+        "Priya finished the export bug fix and is opening a PR.",
+        "Sam plans to review the PR after lunch."
+      ],
+      "exact_query": "export bug fix PR review after lunch",
+      "paraphrase_query": "what is happening with the export issue and who reviews it next",
+      "grounded_question": "What did Priya finish, and what happens next?",
+      "unsupported_question": "What file size caused the export failure?"
+    },
+    {
+      "fixture_id": "browser_article-04",
+      "required_facts": [
+        "The latest release adds faster search indexing.",
+        "The latest release repairs a memory leak in the background worker."
+      ],
+      "exact_query": "latest release faster search indexing background worker memory leak",
+      "paraphrase_query": "what changed in the newest release for search and the worker",
+      "grounded_question": "What two changes does the latest release include?",
+      "unsupported_question": "Which operating systems does the latest release support?"
+    },
+    {
+      "fixture_id": "pdf_paper-04",
+      "required_facts": [
+        "The fused ranking improves top-five accuracy by twelve percent.",
+        "The comparison is against either signal used alone on a held-out evaluation set."
+      ],
+      "exact_query": "fused ranking top five accuracy twelve percent held out evaluation",
+      "paraphrase_query": "how much better did combining the search signals perform",
+      "grounded_question": "How much did the fused ranking improve top-five accuracy?",
+      "unsupported_question": "How many participants were in the evaluation set?"
+    }
+  ]
+}

@@ -10,6 +10,7 @@ use objc2_foundation::{CGRect, NSArray, NSData, NSDictionary, NSString};
 use regex::Regex;
 
 use std::ffi::c_void;
+use std::io::Cursor;
 use std::sync::{Arc, OnceLock};
 
 // `class!` looks Vision's classes up at runtime, so the framework has to be
@@ -21,6 +22,7 @@ extern "C" {}
 
 const OCR_DROP_THRESHOLD: f32 = 0.40;
 const OCR_LOW_CONF_THRESHOLD: f32 = 0.65;
+const MAX_MINIMUM_TEXT_HEIGHT_PIXELS: f32 = 24.0;
 
 /// Errors that can occur during OCR operations
 #[derive(Debug, thiserror::Error)]
@@ -42,9 +44,9 @@ pub enum OcrError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecognitionLevel {
     /// Fast recognition, lower accuracy
-    Fast = 0,
+    Fast = 1,
     /// Accurate recognition, slower
-    Accurate = 1,
+    Accurate = 0,
 }
 
 /// OCR configuration options
@@ -83,7 +85,9 @@ pub struct OcrConfig {
 impl Default for OcrConfig {
     fn default() -> Self {
         Self {
-            recognition_level: RecognitionLevel::Accurate,
+            // The durable capture baselines were established with Apple's
+            // fast recognizer (the raw enum values were previously reversed).
+            recognition_level: RecognitionLevel::Fast,
             language_correction: true,
             // Use 0.30 so we collect all Apple Vision confidence values before
             // per-line filtering — previously 0.50 biased the average upward.
@@ -93,15 +97,28 @@ impl Default for OcrConfig {
             custom_noise_patterns: Vec::new(),
             remove_duplicates: true,
             preserve_formatting: false,
-            // Any nonzero fraction scales with physical pixels: 0.02 on a
-            // 1964px Retina frame (~39px) drops all normal UI/editor text.
-            // Low-confidence and noise lines are filtered downstream instead.
-            minimum_text_height: 0.0,
+            // Keep the fixture-proven default: removing the Vision height gate
+            // admits small noisy detections that downstream cleanup does not
+            // reliably remove. Retina small-text tuning needs a measured,
+            // resolution-aware profile rather than a global zero threshold.
+            minimum_text_height: 0.02,
         }
     }
 }
 
 impl OcrConfig {
+    /// Recognition profile for transient Screen Guide captures.
+    ///
+    /// Screen Guide must read ordinary browser and editor copy on Retina-sized
+    /// display captures. The durable memory pipeline keeps the stricter 0.02
+    /// default because it has separate cleanup and storage-quality constraints.
+    pub fn screen_guide() -> Self {
+        Self {
+            minimum_text_height: 0.015,
+            ..Self::default()
+        }
+    }
+
     /// Create a fast configuration for real-time processing
     pub fn fast() -> Self {
         Self {
@@ -163,6 +180,23 @@ pub struct RecognizedText {
 
     /// Aggregate preprocessing stats (safe to store)
     pub ocr_stats: OcrAggregateStats,
+
+    /// Exact positioned Apple Vision observations are exposed only to the
+    /// explicitly armed debug Memory Journey. Stable capture never persists
+    /// them and release builds do not contain this field.
+    #[cfg(debug_assertions)]
+    pub debug_positioned_lines: Vec<DebugOcrLine>,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DebugOcrLine {
+    pub text: String,
+    pub confidence: f32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 impl RecognizedText {
@@ -297,6 +331,22 @@ impl OcrEngine {
                 .iter()
                 .map(|line| (line.text.clone(), line.confidence))
                 .collect::<Vec<_>>();
+            #[cfg(debug_assertions)]
+            let debug_positioned_lines = raw_lines
+                .iter()
+                .filter_map(|line| {
+                    let text = normalize_ocr_line(&line.text);
+                    let (x, y) = normalized_top_left_center(line.bounds)?;
+                    (!text.is_empty()).then_some(DebugOcrLine {
+                        text,
+                        confidence: line.confidence,
+                        x,
+                        y,
+                        width: line.bounds.size.width,
+                        height: line.bounds.size.height,
+                    })
+                })
+                .collect();
             let (cleaned_text, ocr_stats_from_all) = preprocess_ocr_for_qwen(&text_and_confidence);
 
             // For the text field, apply noise filter on top of the preprocessed output.
@@ -311,6 +361,8 @@ impl OcrEngine {
                     confidence: avg_confidence_all,
                     block_count,
                     ocr_stats: ocr_stats_from_all,
+                    #[cfg(debug_assertions)]
+                    debug_positioned_lines,
                 },
                 cleaned_text,
             ))
@@ -352,10 +404,17 @@ impl OcrEngine {
     }
 
     unsafe fn recognize_raw_lines(&self, image_data: &[u8]) -> Result<Vec<RawOcrLine>, OcrError> {
+        let (_, image_height) = image::io::Reader::new(Cursor::new(image_data))
+            .with_guessed_format()
+            .map_err(|error| OcrError::ImageProcessingError(error.to_string()))?
+            .into_dimensions()
+            .map_err(|error| OcrError::ImageProcessingError(error.to_string()))?;
+        let minimum_text_height =
+            effective_minimum_text_height(self.config.minimum_text_height, image_height);
         let ns_data =
             NSData::dataWithBytes_length(image_data.as_ptr() as *mut c_void, image_data.len());
         let handler = self.create_image_request_handler(&ns_data)?;
-        let request = self.create_text_request()?;
+        let request = self.create_text_request(minimum_text_height)?;
         self.perform_request(&handler, &request)?;
         self.extract_raw_lines(&request)
     }
@@ -374,7 +433,10 @@ impl OcrEngine {
         Ok(handler)
     }
 
-    unsafe fn create_text_request(&self) -> Result<Retained<AnyObject>, OcrError> {
+    unsafe fn create_text_request(
+        &self,
+        minimum_text_height: f32,
+    ) -> Result<Retained<AnyObject>, OcrError> {
         let cls = class!(VNRecognizeTextRequest);
 
         let request = msg_send_id![cls, alloc];
@@ -388,7 +450,7 @@ impl OcrEngine {
         let _: () = msg_send![&request, setUsesLanguageCorrection: self.config.language_correction];
 
         // Set minimum text height (filters out very small text with low confidence)
-        let _: () = msg_send![&request, setMinimumTextHeight: self.config.minimum_text_height];
+        let _: () = msg_send![&request, setMinimumTextHeight: minimum_text_height];
 
         Ok(request)
     }
@@ -525,6 +587,13 @@ impl OcrEngine {
 
         result
     }
+}
+
+fn effective_minimum_text_height(configured: f32, image_height: u32) -> f32 {
+    if image_height == 0 {
+        return configured;
+    }
+    configured.min(MAX_MINIMUM_TEXT_HEIGHT_PIXELS / image_height as f32)
 }
 
 fn normalized_top_left_center(bounds: CGRect) -> Option<(f64, f64)> {
@@ -903,6 +972,8 @@ mod tests {
             confidence: 0.49,
             block_count: 20,
             ocr_stats: OcrAggregateStats::default(),
+            #[cfg(debug_assertions)]
+            debug_positioned_lines: Vec::new(),
         };
         assert!(!rt.is_low_signal(10));
     }
@@ -914,6 +985,8 @@ mod tests {
             confidence: 0.10, // catastrophically bad
             block_count: 20,
             ocr_stats: OcrAggregateStats::default(),
+            #[cfg(debug_assertions)]
+            debug_positioned_lines: Vec::new(),
         };
         assert!(rt.is_low_signal(10));
     }
@@ -971,12 +1044,33 @@ mod tests {
         assert_eq!(hq.recognition_level, RecognitionLevel::Accurate);
         assert!(hq.language_correction);
         assert_eq!(hq.minimum_text_height, 0.01);
+
+        let screen_guide = OcrConfig::screen_guide();
+        assert_eq!(screen_guide.recognition_level, RecognitionLevel::Fast);
+        assert_eq!(screen_guide.minimum_text_height, 0.015);
+    }
+
+    #[test]
+    fn recognition_levels_match_apple_vision_raw_values() {
+        // VNRequestTextRecognitionLevelAccurate = 0 and Fast = 1.
+        // This contract matters because the Objective-C bridge sends the raw
+        // integer directly to `setRecognitionLevel:`.
+        assert_eq!(RecognitionLevel::Accurate as i64, 0);
+        assert_eq!(RecognitionLevel::Fast as i64, 1);
+    }
+
+    #[test]
+    fn minimum_text_height_caps_the_physical_pixel_cutoff_on_retina_frames() {
+        assert_eq!(effective_minimum_text_height(0.02, 900), 0.02);
+        assert!((effective_minimum_text_height(0.02, 1800) - (24.0 / 1800.0)).abs() < f32::EPSILON);
+        assert_eq!(effective_minimum_text_height(0.01, 1800), 0.01);
+        assert_eq!(effective_minimum_text_height(0.02, 0), 0.02);
     }
 
     #[test]
     fn test_minimum_text_height_default() {
         let config = OcrConfig::default();
-        assert_eq!(config.minimum_text_height, 0.0);
+        assert_eq!(config.minimum_text_height, 0.02);
     }
 
     #[test]

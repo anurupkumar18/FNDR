@@ -3,6 +3,7 @@ import { AppPanels } from "./AppPanels";
 import { isMountedPanelKey, type MountedPanelKey } from "./panels";
 import { BiometricLockScreen } from "./BiometricLockScreen";
 import { HomeHero } from "./HomeHero";
+import { ResumeWork } from "./ResumeWork";
 import type { AppToast } from "./types";
 import { SearchBar } from "@/domains/search/SearchBar";
 import { Timeline } from "@/domains/timeline/Timeline";
@@ -36,6 +37,7 @@ import {
 import { getOnboardingState, type OnboardingState } from "@/shared/ipc/onboarding";
 import { EVAL_UI } from "@/shared/utils/eval-ui";
 import { SidebarDrawer } from "./SidebarDrawer";
+import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import "./styles/App.css";
 
 function nextToastId(): string {
@@ -102,7 +104,7 @@ function App() {
     const handleUnlock = useCallback(() => setBiometricUnlocked(true), []);
 
     const searchAllowed = true;
-    const { results, isLoading, error } = useSearch(
+    const { results, isLoading, error, activityTrace: searchActivityTrace } = useSearch(
         searchAllowed ? query : "",
         timeFilter,
         appFilter
@@ -619,7 +621,7 @@ function App() {
                 </SidebarDrawer>
             )}
 
-                <main className={`app-main ${isFocusMode ? "search-centered" : "has-active-search"}`}>
+                <main className={`app-main ${isFocusMode ? "search-centered" : "has-active-search"}${isHomeActive && !EVAL_UI ? " has-resume" : ""}`}>
                 {isFocusMode ? (
                     <div className="home-hero-stage">
                         <HomeHero
@@ -631,24 +633,11 @@ function App() {
                                 void handleSearchSubmit(q);
                             }}
                         />
-                        {query.trim() && (
-                            <section className="search-shell is-active">
-                                <SearchBar
-                                    value={queryDraft}
-                                    submittedValue={query}
-                                    onChange={setQueryDraft}
-                                    onSubmit={(v) => void handleSearchSubmit(v)}
-                                    timeFilter={timeFilter}
-                                    onTimeFilterChange={setTimeFilter}
-                                    appFilter={appFilter}
-                                    onAppFilterChange={setAppFilter}
-                                    onSetMemoryCardsPanelOpen={(open) => setActivePanel(open ? "memoryCards" : null)}
-                                    appNames={appNames}
-                                    resultCount={visibleResults.length}
-                                    searchResults={visibleResults}
-                                    disabled={!searchAllowed}
-                                />
-                            </section>
+                        {isHomeActive && !EVAL_UI && (
+                            <ResumeWork
+                                onOpenMemory={handleOpenMemoryById}
+                                onOpenVault={() => handleOpenPanel("memoryCards")}
+                            />
                         )}
                     </div>
                 ) : (
@@ -674,6 +663,11 @@ function App() {
                 {!isFocusMode && (
                     <div className="main-layout">
                         <section className="main-column">
+                            {searchActivityTrace && (
+                                <div className="search-activity-trace-wrap">
+                                    <ActivityTrace trace={searchActivityTrace} />
+                                </div>
+                            )}
                             {error && <div className="error-banner">{error}</div>}
 
                             <Timeline
@@ -702,7 +696,8 @@ function App() {
                     activePanel={activePanel}
                     appNames={appNames}
                     appToasts={appToasts}
-                    isCapturePaused={status?.is_paused ?? false}
+                    isCapturePaused={(status?.is_paused ?? false) || (status?.is_incognito ?? false)}
+                    isPrivateMode={status?.is_incognito ?? false}
                     query={query}
                     selectedResult={selectedResult}
                     showCommandPalette={showCommandPalette}

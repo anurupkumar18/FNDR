@@ -29,7 +29,9 @@ pub async fn get_clipboard_history(
     limit: Option<usize>,
     query: Option<String>,
 ) -> Result<Vec<ClipboardEntry>, String> {
-    let limit = limit.unwrap_or(HISTORY_DEFAULT_LIMIT).min(HISTORY_MAX_LIMIT);
+    let limit = limit
+        .unwrap_or(HISTORY_DEFAULT_LIMIT)
+        .min(HISTORY_MAX_LIMIT);
     let nodes = state
         .store
         .get_nodes_by_type(NodeType::Clipboard, HISTORY_SCAN_LIMIT)

@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { searchMemoryCards, type MemoryCard } from "@/shared/ipc/tauri";
 import { SEARCH_LIMITS } from "@/shared/utils/config";
+import {
+    beginActivityTrace,
+    recordActivityStep,
+    type ActivityTraceSnapshot,
+} from "@/shared/activity/activityTrace";
+
+/** Raised only by the renderer's own timer, so the trace can tell it apart from
+ * a backend error whose message happens to mention a timeout. */
+class ClientSearchTimeout extends Error {
+    constructor() {
+        super("Search timed out");
+    }
+}
 
 function getAdaptiveDebounceMs(query: string): number {
     if (!query.trim()) {
@@ -27,6 +40,7 @@ export function useSearch(query: string, timeFilter: string | null, appFilter: s
     const [results, setResults] = useState<MemoryCard[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const requestIdRef = useRef(0);
 
     useEffect(() => {
@@ -38,18 +52,56 @@ export function useSearch(query: string, timeFilter: string | null, appFilter: s
             setResults([]);
             setError(null);
             setIsLoading(false);
+            setActivityTrace(null);
             return;
         }
 
         let cancelled = false;
+        const requestedAtMs = Date.now();
+        let trace = beginActivityTrace({
+            id: `search-${requestId}`,
+            title: "Memory search activity",
+            startedAtMs: requestedAtMs,
+        });
+        trace = recordActivityStep(trace, {
+            id: "queued",
+            label: debounceMs > 0 ? "Waiting for typing to settle" : "Search requested",
+            actor: "FNDR search",
+            status: debounceMs > 0 ? "waiting" : "running",
+            evidence: "frontend-event",
+            atMs: requestedAtMs,
+        });
+        setActivityTrace(trace);
         setIsLoading(true);
         setError(null);
 
         const timer = setTimeout(async () => {
+            const retrievalStartedAtMs = Date.now();
+            setActivityTrace((current) => {
+                if (!current || current.id !== `search-${requestId}`) return current;
+                const withSettledInput = recordActivityStep(current, {
+                    id: "queued",
+                    label: debounceMs > 0 ? "Typing settled" : "Search requested",
+                    actor: "FNDR search",
+                    status: "completed",
+                    evidence: "frontend-event",
+                    atMs: retrievalStartedAtMs,
+                    durationMs: Math.max(0, retrievalStartedAtMs - requestedAtMs),
+                });
+                return recordActivityStep(withSettledInput, {
+                    id: "retrieval",
+                    label: "Requesting memory search",
+                    actor: "FNDR search service",
+                    status: "running",
+                    evidence: "ipc-boundary",
+                    atMs: retrievalStartedAtMs,
+                });
+            });
+            let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
             try {
                 const timeoutMs = getAdaptiveTimeoutMs(trimmedQuery, 0);
                 const timeoutPromise = new Promise<never>((_, reject) => {
-                    setTimeout(() => reject(new Error("Search timed out")), timeoutMs);
+                    timeoutHandle = setTimeout(() => reject(new ClientSearchTimeout()), timeoutMs);
                 });
 
                 const searchPromise = searchMemoryCards(
@@ -64,19 +116,66 @@ export function useSearch(query: string, timeFilter: string | null, appFilter: s
                 if (cancelled || requestId !== requestIdRef.current) {
                     return;
                 }
-                setResults(res.slice(0, SEARCH_LIMITS.resultLimit));
+                const nextResults = res.slice(0, SEARCH_LIMITS.resultLimit);
+                const completedAtMs = Date.now();
+                const routes = Array.from(new Set(
+                    nextResults.flatMap((card) => card.matched_routes ?? []),
+                )).slice(0, 5);
+                const count = nextResults.length;
+                const detail = [
+                    `${count} ${count === 1 ? "memory" : "memories"}`,
+                    routes.length > 0 ? routes.join(" + ") : null,
+                ].filter(Boolean).join(" · ");
+                setResults(nextResults);
+                setActivityTrace((current) => {
+                    if (!current || current.id !== `search-${requestId}`) return current;
+                    const withRetrieval = recordActivityStep(current, {
+                        id: "retrieval",
+                        label: "Memory search request completed",
+                        actor: "FNDR search service",
+                        status: "completed",
+                        evidence: "ipc-boundary",
+                        atMs: completedAtMs,
+                        durationMs: Math.max(0, completedAtMs - retrievalStartedAtMs),
+                    });
+                    return recordActivityStep(withRetrieval, {
+                        id: "result",
+                        label: "Search completed",
+                        actor: "FNDR search service",
+                        status: "completed",
+                        evidence: "result-metadata",
+                        atMs: completedAtMs,
+                        detail,
+                    });
+                });
             } catch (e) {
                 if (cancelled || requestId !== requestIdRef.current) {
                     return;
                 }
                 const errorMessage = e instanceof Error ? e.message : "Search failed";
-                setError(
-                    errorMessage.toLowerCase().includes("timed out")
-                        ? "Search timed out. Try a shorter query or remove filters."
-                        : errorMessage
-                );
+                const timedOut = errorMessage.toLowerCase().includes("timed out");
+                const clientTimedOut = e instanceof ClientSearchTimeout;
+                setError(timedOut
+                    ? "Search timed out. Try a shorter query or remove filters."
+                    : errorMessage);
                 setResults([]);
+                const failedAtMs = Date.now();
+                setActivityTrace((current) => {
+                    if (!current || current.id !== `search-${requestId}`) return current;
+                    return recordActivityStep(current, {
+                        id: "retrieval",
+                        label: clientTimedOut ? "Search timed out" : "Search failed",
+                        // A renderer timeout is not a report from the backend.
+                        actor: clientTimedOut ? "FNDR search" : "FNDR search service",
+                        status: "failed",
+                        evidence: clientTimedOut ? "frontend-event" : "ipc-boundary",
+                        atMs: failedAtMs,
+                        durationMs: Math.max(0, failedAtMs - retrievalStartedAtMs),
+                        detail: clientTimedOut ? "Client timeout" : "Backend request failed",
+                    });
+                });
             } finally {
+                if (timeoutHandle !== null) clearTimeout(timeoutHandle);
                 if (!cancelled && requestId === requestIdRef.current) {
                     setIsLoading(false);
                 }
@@ -89,5 +188,5 @@ export function useSearch(query: string, timeFilter: string | null, appFilter: s
         };
     }, [query, timeFilter, appFilter]);
 
-    return { results, isLoading, error };
+    return { results, isLoading, error, activityTrace };
 }

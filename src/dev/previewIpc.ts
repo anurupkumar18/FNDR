@@ -11,6 +11,7 @@ import type {
     PrivacyAlert,
     PrivacyProof,
     RuntimeMetricsSnapshot,
+    ScreenGuideDiagnosticStatus,
     ScreenGuideSettings,
     Stats,
     Task,
@@ -32,7 +33,8 @@ const previewMemoryCards: MemoryCard[] = [
         context: ["Home", "visual hierarchy", "accessibility"],
         timestamp: previewNow - 24 * 60 * 1000,
         app_name: "Figma",
-        window_title: "FNDR — Home concepts",
+        window_title: "FNDR: Home concepts",
+        project: "FNDR UI overhaul",
         score: 0.96,
         source_count: 7,
         continuity: true,
@@ -56,7 +58,8 @@ const previewMemoryCards: MemoryCard[] = [
         context: ["React", "Tauri mocks", "browser QA"],
         timestamp: previewNow - 76 * 60 * 1000,
         app_name: "Visual Studio Code",
-        window_title: "previewIpc.ts — FNDR",
+        window_title: "previewIpc.ts - FNDR",
+        project: "FNDR UI overhaul",
         score: 0.93,
         source_count: 5,
         raw_snippets: [],
@@ -100,6 +103,7 @@ const previewMemoryCards: MemoryCard[] = [
         timestamp: previewNow - 22 * 60 * 60 * 1000,
         app_name: "Terminal",
         window_title: "FNDR UI audit notes",
+        project: "FNDR UI overhaul",
         score: 0.88,
         source_count: 3,
         raw_snippets: [],
@@ -119,7 +123,7 @@ const previewMemoryCards: MemoryCard[] = [
         context: ["Preview", "PDF"],
         timestamp: previewNow - 40 * 60 * 1000,
         app_name: "Preview",
-        window_title: "re03-preview.pdf – Page 112 of 150",
+        window_title: "re03-preview.pdf - Page 112 of 150",
         reopen_target: "file:///Users/qa/re03-fixtures/re03-preview.pdf",
         reopen_page: 112,
         score: 0.86,
@@ -130,6 +134,61 @@ const previewMemoryCards: MemoryCard[] = [
         files_touched: ["/Users/qa/re03-fixtures/re03-preview.pdf"],
         session_duration_mins: 6,
         topic_categories: ["reopen"],
+        enrichment_status: "reviewed_local",
+        storage_outcome: "enriched_memory_card",
+    },
+    // Yesterday: one project thread with near-duplicate captures, plus a download.
+    ...[26, 26.25, 26.5].map((hoursAgo, index): MemoryCard => ({
+        id: `memory-beta-script-${index + 1}`,
+        title: "Drafted the Beta demo script",
+        summary: "Wrote the four-minute Beta walkthrough: capture, search, Ask, and reopen.",
+        display_summary: "The demo opens on a real question and ends on the reopened source.",
+        action: "Wrote a script",
+        context: ["Beta demo", "script"],
+        timestamp: previewNow - hoursAgo * 60 * 60 * 1000,
+        app_name: "Notes",
+        window_title: "Beta demo script",
+        project: "FNDR Beta demo",
+        score: 0.84,
+        source_count: 1,
+        raw_snippets: [],
+        activity_type: "docs",
+        enrichment_status: "reviewed_local",
+        storage_outcome: "enriched_memory_card",
+    })),
+    {
+        id: "memory-beta-rubric",
+        title: "Checked the Beta judging rubric",
+        summary: "Read how judges score the Beta: a working demo, measured results, and a clear story.",
+        display_summary: "Measured results carry the most weight in the Beta rubric.",
+        action: "Read a rubric",
+        context: ["Beta demo", "rubric"],
+        timestamp: previewNow - 27 * 60 * 60 * 1000,
+        app_name: "Google Chrome",
+        window_title: "Beta rubric",
+        url: "https://example.com/beta-rubric",
+        reopen_target: "https://example.com/beta-rubric",
+        project: "FNDR Beta demo",
+        score: 0.82,
+        source_count: 1,
+        raw_snippets: [],
+        activity_type: "browsing",
+        enrichment_status: "reviewed_local",
+        storage_outcome: "enriched_memory_card",
+    },
+    {
+        id: "memory-beta-download",
+        title: "Downloaded beta-checklist.pdf",
+        summary: "A synthetic checklist PDF arrived in Downloads.",
+        display_summary: "A synthetic checklist PDF arrived in Downloads.",
+        action: "Downloaded a file",
+        context: ["Downloads"],
+        timestamp: previewNow - 29 * 60 * 60 * 1000,
+        app_name: "Finder",
+        window_title: "Downloads",
+        score: 0.7,
+        source_count: 1,
+        raw_snippets: [],
         enrichment_status: "reviewed_local",
         storage_outcome: "enriched_memory_card",
     },
@@ -164,7 +223,7 @@ const previewSimilarResults = [
         id: "similar-home-review",
         timestamp: previewNow - 2 * 60 * 60 * 1000,
         app_name: "Figma",
-        window_title: "FNDR — Contrast concepts",
+        window_title: "FNDR: Contrast concepts",
         session_id: "preview-design-session",
         text: "Compared a stable foreground card against the ambient Film wallpaper.",
         snippet: "Compared foreground contrast options for the FNDR home experience.",
@@ -563,6 +622,9 @@ function previewHermesStatus(codexSignedIn: boolean, configured: boolean): Herme
         recent_memories: [],
         last_error: null,
         install_command: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+        gateway_state: "stopped",
+        gateway_restarts: 0,
+        reconnect_chatgpt: false,
     };
 }
 
@@ -675,6 +737,32 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         show_cursor: true,
     };
     let screenGuideGeneration = 0;
+    let screenGuideDiagnosticArmExpiresAt: number | null = null;
+    let screenGuideDiagnosticStatus: Omit<
+        ScreenGuideDiagnosticStatus,
+        "armed" | "expiresInMs"
+    > = {
+        bundleCount: 0,
+        partialCount: 0,
+        totalBytes: 0,
+        lastResult: null,
+    };
+    const currentScreenGuideDiagnosticStatus = (): ScreenGuideDiagnosticStatus => {
+        const expiresInMs = screenGuideDiagnosticArmExpiresAt === null
+            ? null
+            : Math.max(0, screenGuideDiagnosticArmExpiresAt - Date.now());
+        if (expiresInMs === 0) screenGuideDiagnosticArmExpiresAt = null;
+        return {
+            ...screenGuideDiagnosticStatus,
+            armed: expiresInMs !== null && expiresInMs > 0,
+            expiresInMs: expiresInMs !== null && expiresInMs > 0 ? expiresInMs : null,
+        };
+    };
+    const consumeScreenGuideDiagnosticArm = () => {
+        if (currentScreenGuideDiagnosticStatus().armed) {
+            screenGuideDiagnosticArmExpiresAt = null;
+        }
+    };
     const releasedScreenGuideGenerations = new Set<number>();
     let previewOnboardingState: OnboardingState = {
         step: "complete",
@@ -686,6 +774,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         display_name: "Anurup",
     };
     let previewBlocklist = ["1Password", "bank.example"];
+    let previewAgentNotesEnabled = false;
     let previewPrivacyAlerts: PrivacyAlert[] = [];
     let codexSignedIn = false;
     let agentChats: Array<{ id: string; title: string; createdAt: number; updatedAt: number; messages: Array<{ role: string; content: string; at: number; memories: Array<{ id: string; title: string; appName: string; timestamp: number }> }> }> = [];
@@ -726,6 +815,18 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return previewPrivacyAlerts.map((alert) => ({ ...alert }));
             case "get_blocklist":
                 return [...previewBlocklist];
+            case "get_agent_notes_enabled":
+                return previewAgentNotesEnabled;
+            case "set_agent_notes_enabled": {
+                const enabled = typeof payload === "object" && payload !== null && "enabled" in payload
+                    ? (payload as { enabled?: unknown }).enabled
+                    : null;
+                if (typeof enabled !== "boolean") {
+                    throw new Error("Preview set_agent_notes_enabled requires a boolean.");
+                }
+                previewAgentNotesEnabled = enabled;
+                return undefined;
+            }
             case "set_blocklist": {
                 const apps =
                     typeof payload === "object" && payload !== null && "apps" in payload
@@ -864,6 +965,30 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "list_needs_signal_memory_cards":
                 return clonePreview(previewNeedsSignalCards);
+            case "get_full_graph": {
+                // Synthetic Connections strip: one node per memory, linked to its project.
+                const createdAt = new Date(previewNow).toISOString();
+                const projects = [...new Set(previewCards.map((card) => card.project).filter(Boolean))] as string[];
+                const node = (id: string, nodeType: string, label: string, sourceIds: string[]) => ({
+                    id, node_type: nodeType, label, confidence: 0.9, source_memory_ids: sourceIds,
+                    created_at: createdAt, updated_at: createdAt, stale: false, metadata: {},
+                });
+                return {
+                    nodes: [
+                        ...projects.map((project) => node(`project:${project}`, "project", project, [])),
+                        ...previewCards.map((card) => node(`memory:${card.id}`, "memory", card.title, [card.id])),
+                    ],
+                    edges: previewCards
+                        .filter((card) => card.project)
+                        .map((card) => ({
+                            id: `edge:${card.id}`, source_id: `memory:${card.id}`, target_id: `project:${card.project}`,
+                            edge_type: "part_of_project", confidence: 0.9, conflict_flag: false,
+                            created_at: createdAt, metadata: {},
+                        })),
+                    louvain: {},
+                    cluster_0_name: "",
+                };
+            }
             case "fndr_get_related_memories": {
                 const memoryId =
                     typeof payload === "object" && payload !== null && "memoryId" in payload
@@ -1098,6 +1223,42 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "get_screen_guide_settings":
                 return { ...screenGuideSettings };
+            case "get_screen_guide_diagnostic_status":
+                return currentScreenGuideDiagnosticStatus();
+            case "arm_screen_guide_diagnostic":
+                screenGuideDiagnosticArmExpiresAt = Date.now() + 5 * 60 * 1_000;
+                screenGuideDiagnosticStatus = {
+                    ...screenGuideDiagnosticStatus,
+                    lastResult: null,
+                };
+                return currentScreenGuideDiagnosticStatus();
+            case "delete_screen_guide_diagnostics":
+                screenGuideDiagnosticArmExpiresAt = null;
+                screenGuideDiagnosticStatus = {
+                    bundleCount: 0,
+                    partialCount: 0,
+                    totalBytes: 0,
+                    lastResult: {
+                        kind: "deleted",
+                        code: "diagnostics_deleted",
+                        message: "Preview cleared its synthetic diagnostic state; no files were written.",
+                        screenshotSaved: false,
+                        ocrSaved: false,
+                    },
+                };
+                return currentScreenGuideDiagnosticStatus();
+            case "reveal_screen_guide_diagnostics":
+                if (payload !== undefined) {
+                    throw new Error("Preview reveal_screen_guide_diagnostics accepts no path.");
+                }
+                if (
+                    screenGuideDiagnosticStatus.bundleCount === 0
+                    && screenGuideDiagnosticStatus.partialCount === 0
+                ) {
+                    throw new Error("There are no Screen Guide diagnostics to reveal.");
+                }
+                // Deliberate no-op: the browser preview never opens an OS-owned directory.
+                return currentScreenGuideDiagnosticStatus();
             case "set_screen_guide_settings": {
                 const settings = payloadRecord(payload)?.settings;
                 if (
@@ -1131,6 +1292,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     throw new Error("Preview screen_guide_release requires an active generation.");
                 }
                 releasedScreenGuideGenerations.add(generation);
+                consumeScreenGuideDiagnosticArm();
                 await emitPreviewEventIfAvailable(SCREEN_GUIDE_STATE_EVENT, {
                     phase: "answer",
                     message: "Preview-only response ready; no screen was captured.",
@@ -1139,6 +1301,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "submit_screen_guide_text":
                 requiredString(payload, "text", command);
+                consumeScreenGuideDiagnosticArm();
                 await emitPreviewEventIfAvailable(SCREEN_GUIDE_STATE_EVENT, {
                     phase: "answer",
                     message: "Preview-only response ready; no screen was captured.",

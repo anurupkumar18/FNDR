@@ -4,6 +4,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 vi.mock("./EngineMetricsCard", () => ({
     EngineMetricsCard: () => <section>metrics content</section>,
 }));
+vi.mock("./MemoryJourneyInspector", () => ({
+    default: () => <section>memory journey content</section>,
+}));
 
 import { EngineMetricsPanel } from "./EngineMetricsPanel";
 

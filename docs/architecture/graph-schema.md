@@ -2,6 +2,23 @@
 
 This document describes the **insight** graph persisted in LanceDB alongside memories. It is distinct from the **legacy** graph (`nodes` / `edges` tables with string IDs) used for timeline linking.
 
+## Two `GraphStore` structs, both live
+
+There are two separate `GraphStore` structs in `src-tauri/src/graph/`, and they share that
+name by coincidence, not because one replaces the other:
+
+| | `graph::GraphStore` (`legacy.rs`) | `graph::graph_store::GraphStore` (`graph_store.rs`) |
+| --- | --- | --- |
+| Graph | Legacy timeline graph | Insight graph (this doc) |
+| Tables | `nodes` / `edges`, string ids | `graph_nodes` / `graph_edges`, UUID ids |
+| Lifecycle | Held on `AppState.graph`, used on the capture hot path | Constructed ad-hoc per call, no `AppState` field |
+| Used by | `ingest_memory`, task/session/audio linking | `ipc/commands/graph.rs` Tauri commands, `memory.graph_context` MCP tool, search-card KG-count enrichment |
+
+Neither is dead code and neither is a migration target for the other; both are actively
+maintained and serve different purposes. If you're deciding which one to touch, match the
+table you care about (`nodes`/`edges` vs `graph_nodes`/`graph_edges`) rather than the struct
+name alone.
+
 ## Tables
 
 | Table | Role |
@@ -83,8 +100,8 @@ Spec-name aliases are normalized by `src-tauri/src/graph/edges.rs::edge_aliases:
 
 ## MCP
 
-- `memory.graph_query` — keyword search over **legacy** string-id nodes/edges.
-- `memory.graph_context` — bounded JSON over **insight** `graph_*` tables (summary + optional UUID neighborhood).
+- `memory.graph_query`: keyword search over **legacy** string-id nodes/edges.
+- `memory.graph_context`: bounded JSON over **insight** `graph_*` tables (summary + optional UUID neighborhood).
 
 ## MCP `ContextPack.graph_context`
 
@@ -98,6 +115,6 @@ Bounded JSON (~7500 serialized chars) with top project nodes, top edges, conflic
 
 - Schema & pure algorithms: `src-tauri/src/graph/entities.rs`, `edges.rs`, `schema.rs`, `traversal.rs`, `pathfinding.rs`, `community.rs`
 - Lance I/O: `src-tauri/src/graph/graph_store.rs` (uses `Store`’s opened `graph_nodes_table` / `graph_edges_table`)
-- Retrieval scaffolding: `src-tauri/src/graph/graph_index.rs`, `graph_rerank.rs`
+- Retrieval: `src-tauri/src/graph/graph_index.rs` builds the graph route's index. `retrieve` does not load the insight graph yet, so it plans no graph route (VS-33); the route runs only in tests.
 - Extraction: `src-tauri/src/capture/entity_extractor.rs`
 - Tauri commands: `src-tauri/src/ipc/commands/graph.rs`

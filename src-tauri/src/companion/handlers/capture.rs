@@ -46,7 +46,8 @@ pub async fn control(
         CaptureAction::Incognito => {
             app_state.is_incognito.store(true, Ordering::SeqCst);
             if let Some(app_handle) = app_state.app_handle.read().clone() {
-                crate::ipc::commands::cancel_screen_guide_for_privacy(&app_handle);
+                crate::ipc::commands::cancel_screen_guide_for_private_mode(&app_handle);
+                crate::voice::cancel_for_private_mode(&app_handle);
             }
             tracing::info!(reason, until_ms, "Mobile companion entered incognito");
         }

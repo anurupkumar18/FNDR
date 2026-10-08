@@ -13,9 +13,20 @@ import { resolvePreviewConfig } from "./previewConfig";
 
 afterEach(() => {
     clearMocks();
+    vi.useRealTimers();
 });
 
 describe("development UI preview IPC", () => {
+    it("keeps assistant note consent off until explicitly enabled", async () => {
+        const invoke = createPreviewIpcHandler();
+        await expect(invoke("get_agent_notes_enabled")).resolves.toBe(false);
+        await expect(invoke("set_agent_notes_enabled", { enabled: true })).resolves.toBeUndefined();
+        await expect(invoke("get_agent_notes_enabled")).resolves.toBe(true);
+        await expect(invoke("set_agent_notes_enabled", { enabled: false })).resolves.toBeUndefined();
+        await expect(invoke("get_agent_notes_enabled")).resolves.toBe(false);
+        await expect(invoke("set_agent_notes_enabled", { enabled: "true" })).rejects.toThrow(/boolean/);
+    });
+
     it("defaults visual QA to a stable Film dark scene", () => {
         expect(resolvePreviewConfig("")).toEqual({
             theme: "dark",
@@ -284,6 +295,62 @@ describe("development UI preview IPC", () => {
             invoke("submit_screen_guide_text", { text: "Where is the settings button?" }),
         ).resolves.toBeUndefined();
         await expect(invoke("screen_guide_press")).resolves.toBe(2);
+
+        await expect(invoke("get_screen_guide_diagnostic_status")).resolves.toMatchObject({
+            armed: false,
+            expiresInMs: null,
+            bundleCount: 0,
+            partialCount: 0,
+            totalBytes: 0,
+            lastResult: null,
+        });
+        await expect(invoke("arm_screen_guide_diagnostic")).resolves.toMatchObject({
+            armed: true,
+            expiresInMs: 300_000,
+        });
+        await expect(invoke("delete_screen_guide_diagnostics")).resolves.toMatchObject({
+            armed: false,
+            expiresInMs: null,
+            bundleCount: 0,
+            lastResult: {
+                kind: "deleted",
+                code: "diagnostics_deleted",
+            },
+        });
+    });
+
+    it("models the diagnostic arm as an expiring one-shot without writing preview files", async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-09-28T20:00:00.000Z"));
+        const invoke = createPreviewIpcHandler();
+
+        await expect(invoke("arm_screen_guide_diagnostic")).resolves.toMatchObject({
+            armed: true,
+            expiresInMs: 300_000,
+        });
+        vi.advanceTimersByTime(120_000);
+        await expect(invoke("get_screen_guide_diagnostic_status")).resolves.toMatchObject({
+            armed: true,
+            expiresInMs: 180_000,
+        });
+        vi.advanceTimersByTime(180_000);
+        await expect(invoke("get_screen_guide_diagnostic_status")).resolves.toMatchObject({
+            armed: false,
+            expiresInMs: null,
+        });
+
+        await invoke("arm_screen_guide_diagnostic");
+        await invoke("submit_screen_guide_text", { text: "What is visible?" });
+        await expect(invoke("get_screen_guide_diagnostic_status")).resolves.toMatchObject({
+            armed: false,
+            bundleCount: 0,
+        });
+        await expect(invoke("reveal_screen_guide_diagnostics")).rejects.toThrow(
+            /no Screen Guide diagnostics to reveal/i,
+        );
+        await expect(
+            invoke("reveal_screen_guide_diagnostics", { path: "/tmp/not-allowed" }),
+        ).rejects.toThrow(/accepts no path/i);
     });
 
     it("returns populated Stats, Engine diagnostics, and Privacy Activity fixtures", async () => {

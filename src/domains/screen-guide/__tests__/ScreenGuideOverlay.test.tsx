@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     finishScreenGuideVisual: vi.fn(),
     getScreenGuideCursorPosition: vi.fn(),
     getScreenGuideSettings: vi.fn(),
+    onScreenGuideState: vi.fn(),
     onScreenGuideShortcut: vi.fn(),
     onScreenGuideSubmit: vi.fn(),
     screenGuideMicrophoneStarted: vi.fn(),
@@ -28,6 +29,7 @@ class FakeMediaRecorder {
 
     mimeType = "audio/webm";
     state: RecordingState = "inactive";
+    startArgs: unknown[] | null = null;
     ondataavailable: ((event: { data: Blob }) => void) | null = null;
     onstop: (() => void) | null = null;
 
@@ -35,7 +37,8 @@ class FakeMediaRecorder {
         FakeMediaRecorder.instances.push(this);
     }
 
-    start() {
+    start(...args: unknown[]) {
+        this.startArgs = args;
         this.state = "recording";
     }
 
@@ -100,10 +103,18 @@ describe("ScreenGuideOverlay", () => {
         generation: number;
     }) => void) | null;
     let submitHandler: ((payload: { text: string; generation: number }) => void) | null;
+    let stateHandler: ((payload: {
+        phase: "idle" | "listening" | "transcribing" | "thinking" | "answer" | "error";
+        message?: string | null;
+        generation: number;
+        activity_stage?: "verifying_target" | "reading_text";
+        target_app?: string | null;
+    }) => void) | null;
 
     beforeEach(() => {
         shortcutHandler = null;
         submitHandler = null;
+        stateHandler = null;
         for (const mock of Object.values(mocks)) mock.mockReset();
         mocks.getScreenGuideSettings.mockResolvedValue({
             enabled: true,
@@ -120,6 +131,10 @@ describe("ScreenGuideOverlay", () => {
             submitHandler = handler;
             return vi.fn();
         });
+        mocks.onScreenGuideState.mockImplementation(async (handler) => {
+            stateHandler = handler;
+            return vi.fn();
+        });
         mocks.askScreenGuide.mockResolvedValue({ answer: "Use Save.", point_cue: null });
         mocks.finishScreenGuideVisual.mockResolvedValue(true);
         mocks.screenGuideMicrophoneStarted.mockResolvedValue(undefined);
@@ -131,15 +146,55 @@ describe("ScreenGuideOverlay", () => {
 
     afterEach(() => cleanup());
 
-    it("marks the hidden overlay ready only after both native listeners mount", async () => {
+    it("marks the hidden overlay ready only after its native listeners mount", async () => {
         const { unmount } = render(<ScreenGuideOverlay />);
 
         await waitFor(() => expect(mocks.setScreenGuideOverlayReady).toHaveBeenCalledWith(true));
         expect(mocks.onScreenGuideShortcut).toHaveBeenCalledTimes(1);
         expect(mocks.onScreenGuideSubmit).toHaveBeenCalledTimes(1);
+        expect(mocks.onScreenGuideState).toHaveBeenCalledTimes(1);
 
         unmount();
         await waitFor(() => expect(mocks.setScreenGuideOverlayReady).toHaveBeenCalledWith(false));
+    });
+
+    it("shows privacy-safe backend activity and preserves the exact failed stage", async () => {
+        let rejectAsk: ((reason: Error) => void) | null = null;
+        mocks.askScreenGuide.mockReturnValue(new Promise((_, reject) => {
+            rejectAsk = reject;
+        }));
+
+        render(<ScreenGuideOverlay />);
+        await waitFor(() => expect(stateHandler).not.toBeNull());
+
+        act(() => submitHandler?.({ text: "private question text", generation: 9 }));
+        act(() => stateHandler?.({
+            phase: "thinking",
+            message: "Verifying the target window: Google Chrome…",
+            generation: 9,
+            activity_stage: "verifying_target",
+            target_app: "Google Chrome",
+        }));
+
+        expect(screen.getByText("Verifying the target window"))
+            .toBeInTheDocument();
+        const trace = screen.getByLabelText("Screen Guide activity");
+        expect(trace.parentElement?.closest("[role='status'], [aria-live]")).toBeNull();
+        expect(screen.getByText(/prompt and screen contents stay hidden/i))
+            .toBeInTheDocument();
+        expect(screen.queryByText("private question text")).not.toBeInTheDocument();
+
+        await act(async () => {
+            rejectAsk?.(new Error("macOS did not finish exposing its active window"));
+            await Promise.resolve();
+        });
+
+        expect(await screen.findByText(
+            "Stopped while verifying the target window",
+        )).toBeInTheDocument();
+        expect(screen.getByRole("alert")).toHaveTextContent(
+            "macOS did not finish exposing its active window",
+        );
     });
 
     it("stops an active track before marking an unmounted overlay not ready", async () => {
@@ -163,6 +218,22 @@ describe("ScreenGuideOverlay", () => {
             expect(recorder.stopTrack.mock.invocationCallOrder[0]).toBeLessThan(
                 mocks.setScreenGuideOverlayReady.mock.invocationCallOrder[notReadyCall],
             );
+        } finally {
+            recorder.restore();
+        }
+    });
+
+    it("records one complete clip instead of requesting time-sliced fragments", async () => {
+        const recorder = installFakeMediaRecorder();
+
+        try {
+            const { unmount } = render(<ScreenGuideOverlay />);
+            await waitFor(() => expect(shortcutHandler).not.toBeNull());
+            act(() => shortcutHandler?.({ action: "press", generation: 1 }));
+
+            await waitFor(() => expect(FakeMediaRecorder.instances[0]?.state).toBe("recording"));
+            expect(FakeMediaRecorder.instances[0]?.startArgs).toEqual([]);
+            unmount();
         } finally {
             recorder.restore();
         }

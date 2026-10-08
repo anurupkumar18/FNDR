@@ -2,20 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const getOnboardingState = vi.hoisted(() => vi.fn());
+const useSearchMock = vi.hoisted(() => vi.fn());
+const resumeWork = vi.hoisted(() => vi.fn());
 
 vi.mock("./AppPanels", () => ({
     AppPanels: ({
         activePanel,
         onClosePanel,
+        memoryVaultFocusId,
     }: {
         activePanel: string | null;
         onClosePanel: () => void;
+        memoryVaultFocusId: string | null;
     }) => activePanel
-        ? <button type="button" onClick={onClosePanel}>Close mock panel</button>
+        ? <><button type="button" onClick={onClosePanel}>Close mock panel</button><span data-testid="vault-focus">{memoryVaultFocusId}</span></>
         : null,
 }));
 vi.mock("./BiometricLockScreen", () => ({
-    BiometricLockScreen: () => <div data-testid="biometric-lock" />,
+    BiometricLockScreen: ({ onUnlock }: { onUnlock: () => void }) => <button data-testid="biometric-lock" onClick={onUnlock}>Unlock mock</button>,
 }));
 vi.mock("./HomeHero", () => ({
     HomeHero: ({ onHeroSearch }: { onHeroSearch: (query: string) => void }) => (
@@ -35,7 +39,7 @@ vi.mock("@/domains/workspace/SearchHistoryPanel", () => ({
 }));
 
 vi.mock("@/shared/hooks/useSearch", () => ({
-    useSearch: () => ({ results: [], isLoading: false, error: null }),
+    useSearch: useSearchMock,
 }));
 vi.mock("@/shared/hooks/usePolling", () => ({ usePolling: vi.fn() }));
 vi.mock("@/shared/hooks/useTauriEvent", () => ({ useTauriEvent: vi.fn() }));
@@ -56,6 +60,7 @@ vi.mock("@/shared/ipc/tauri", () => ({
     }),
     getAppNames: vi.fn().mockResolvedValue([]),
     getBlocklist: vi.fn().mockResolvedValue([]),
+    getAgentNotesEnabled: vi.fn().mockResolvedValue(false),
     getMeetingStatus: vi.fn().mockResolvedValue(null),
     getPrivacyAlerts: vi.fn().mockResolvedValue([]),
     onMeetingStatus: vi.fn().mockResolvedValue(() => {}),
@@ -64,6 +69,7 @@ vi.mock("@/shared/ipc/tauri", () => ({
     pauseCapture: vi.fn().mockResolvedValue(undefined),
     resumeCapture: vi.fn().mockResolvedValue(undefined),
     setBlocklist: vi.fn().mockResolvedValue(undefined),
+    setAgentNotesEnabled: vi.fn().mockResolvedValue(undefined),
     getStatus: vi.fn().mockResolvedValue({
         is_capturing: false,
         is_paused: false,
@@ -74,12 +80,22 @@ vi.mock("@/shared/ipc/tauri", () => ({
         },
     }),
     getFunGreeting: vi.fn().mockResolvedValue("Welcome back to FNDR."),
+    resumeWork,
 }));
 
 import App from "./App";
 
 beforeEach(() => {
     getOnboardingState.mockReset();
+    useSearchMock.mockReset();
+    resumeWork.mockReset();
+    resumeWork.mockResolvedValue([]);
+    useSearchMock.mockReturnValue({
+        results: [],
+        isLoading: false,
+        error: null,
+        activityTrace: null,
+    });
 });
 
 afterEach(() => {
@@ -104,6 +120,44 @@ describe("App onboarding gate", () => {
 
         expect(await screen.findByTestId("home")).toBeInTheDocument();
         expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument();
+    });
+
+    it("shows recent work on Home after onboarding", async () => {
+        getOnboardingState.mockResolvedValue(completedOnboarding);
+        resumeWork.mockResolvedValue([{
+            title: "Parser",
+            last_state: "Fixed weekday aliases",
+            age_minutes: 12,
+            next_steps: [],
+            suggested_next_steps: [],
+            evidence: ["parser-memory"],
+            pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+        }]);
+
+        render(<App />);
+
+        expect(await screen.findByRole("heading", { name: "Pick up where you left off" })).toBeInTheDocument();
+        expect(await screen.findByText("Fixed weekday aliases")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "View latest source for Parser" }));
+        expect(screen.getByTestId("vault-focus")).toHaveTextContent("parser-memory");
+        expect(screen.queryByRole("heading", { name: "Pick up where you left off" })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Close mock panel" }));
+        await waitFor(() => expect(resumeWork).toHaveBeenCalledTimes(2));
+    });
+
+    it("does not load recent work before onboarding or biometric unlock", async () => {
+        getOnboardingState.mockResolvedValueOnce({ ...completedOnboarding, step: "welcome" });
+        const setup = render(<App />);
+        await screen.findByTestId("onboarding");
+        expect(resumeWork).not.toHaveBeenCalled();
+        setup.unmount();
+
+        getOnboardingState.mockResolvedValueOnce({ ...completedOnboarding, biometric_enabled: true });
+        render(<App />);
+        await screen.findByTestId("biometric-lock");
+        expect(resumeWork).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("button", { name: "Unlock mock" }));
+        await waitFor(() => expect(resumeWork).toHaveBeenCalledOnce());
     });
 
     it("makes Home inert behind a full-screen panel and restores shell focus after close", async () => {
@@ -133,6 +187,37 @@ describe("App onboarding gate", () => {
         fireEvent.click(screen.getByRole("button", { name: "Run search" }));
 
         await waitFor(() => expect(main).toHaveClass("has-active-search"));
+    });
+
+    it("places the real search activity trace beside the active results workflow", async () => {
+        getOnboardingState.mockResolvedValue(completedOnboarding);
+        useSearchMock.mockReturnValue({
+            results: [],
+            isLoading: true,
+            error: null,
+            activityTrace: {
+                id: "search-7",
+                title: "Memory search activity",
+                status: "running",
+                startedAtMs: 1,
+                finishedAtMs: null,
+                steps: [{
+                    id: "retrieval",
+                    label: "Requesting memory search",
+                    actor: "FNDR search service",
+                    status: "running",
+                    evidence: "ipc-boundary",
+                    atMs: 1,
+                }],
+            },
+        });
+
+        render(<App />);
+        fireEvent.click(await screen.findByRole("button", { name: "Run search" }));
+
+        expect(screen.getByLabelText("Memory search activity")).toHaveTextContent(
+            "Requesting memory search",
+        );
     });
 
     it("makes the workspace inert behind Settings and restores its trigger after Escape", async () => {
